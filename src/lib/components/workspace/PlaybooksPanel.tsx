@@ -5,6 +5,7 @@ import { activeSessionId, writeToSession, isAgentSession } from '$lib/stores/ter
 import { sendChatMessage, getDispatchableAgents } from '$lib/stores/orchestrator';
 import { showToast } from '$lib/stores/notification';
 import { invoke } from '@tauri-apps/api/core';
+import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './PlaybooksPanel.css';
 
 interface PlaybookStep {
@@ -259,23 +260,21 @@ npm test
                       <button className="playbook-step-btn run-btn" onClick={() => handleRunStep(step)}>
                         ▶ Run
                       </button>
-                      <div className="delegate-selector-wrapper">
-                        <button className="playbook-step-btn delegate-btn" onClick={() => void handleDelegateStep(step, selectedAgents[step.id] || 'auto')}>
-                          🤖 Delegate
-                        </button>
-                        {agents.length > 0 && (
-                          <select 
-                            className="playbook-agent-select" 
+                      <button className="playbook-step-btn" onClick={() => void handleDelegateStep(step, selectedAgents[step.id] || 'auto')}>
+                        🤖 Delegate
+                      </button>
+                      {agents.length > 0 && (
+                        <div className="playbook-dropdown-container">
+                          <Dropdown
+                            options={[
+                              { value: 'auto', label: 'Auto-route' },
+                              ...agents.map(a => ({ value: a.command, label: a.name }))
+                            ]}
                             value={selectedAgents[step.id] || 'auto'}
-                            onChange={(e) => setSelectedAgents(prev => ({ ...prev, [step.id]: e.target.value }))}
-                          >
-                            <option value="auto">Auto-route</option>
-                            {agents.map(a => (
-                              <option key={a.command} value={a.command}>{a.name}</option>
-                            ))}
-                          </select>
-                        )}
-                      </div>
+                            onChange={(val) => setSelectedAgents(prev => ({ ...prev, [step.id]: val }))}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))
