@@ -727,6 +727,10 @@
   gap: 9px;
   overflow-y: auto;
   scrollbar-width: none;
+  overscroll-behavior-y: contain;
+  padding: 12px 0;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
 }
 
 .app-shell .room-stack::-webkit-scrollbar {
