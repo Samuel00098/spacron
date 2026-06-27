@@ -142,7 +142,7 @@ export default function TerminalPanel() {
   const totalCells = columns.reduce((sum, column) => sum + column.cells.length, 0);
   const currentLayoutIcon = layouts.find((layout) => layout.id === currentLayout)?.icon ?? '1';
   const shellSessions = useMemo(
-    () => allSessions,
+    () => allSessions.filter((session) => !isAgentSession(session)),
     [allSessions],
   );
 
