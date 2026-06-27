@@ -19,7 +19,7 @@ const LAYOUT_KEY = 'soryq_layout';
 
 const defaultLayout: LayoutState = {
   sidebarVisible: true,
-  sidebarWidth: 260,
+  sidebarWidth: 310,
   activeView: 'terminal',
   lastAuxView: 'preview',
   editorSplitPreview: false,

@@ -86,7 +86,7 @@ export async function restoreSnapshot(snapshot: WorkspaceSnapshot) {
   }
 
   const safeView = sanitiseActiveView(snapshot.activeView);
-  const safeSidebarWidth = Math.max(100, Math.min(600, snapshot.sidebarWidth ?? 260));
+  const safeSidebarWidth = Math.max(100, Math.min(600, snapshot.sidebarWidth ?? 310));
   layout.update((l) => ({
     ...l,
     sidebarWidth: safeSidebarWidth,

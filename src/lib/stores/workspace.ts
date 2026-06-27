@@ -343,7 +343,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       auxPanelWidth: typeof l.auxPanelWidth === 'number' ? Math.max(180, Math.min(2000, l.auxPanelWidth)) : 550,
       auxEditorHeight: typeof l.auxEditorHeight === 'number' ? Math.max(10, Math.min(90, l.auxEditorHeight)) : 50,
       sidebarVisible: Boolean(l.sidebarVisible ?? true),
-      sidebarWidth: typeof l.sidebarWidth === 'number' ? Math.max(100, Math.min(600, l.sidebarWidth)) : 260,
+      sidebarWidth: typeof l.sidebarWidth === 'number' ? Math.max(100, Math.min(600, l.sidebarWidth)) : 310,
       sidebarTab: typeof l.sidebarTab === 'string' ? l.sidebarTab : 'files',
     };
   }
@@ -609,7 +609,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           auxPanelWidth: persisted.layout!.auxPanelWidth ?? 550,
           auxEditorHeight: persisted.layout!.auxEditorHeight ?? 50,
           sidebarVisible: persisted.layout!.sidebarVisible ?? true,
-          sidebarWidth: persisted.layout!.sidebarWidth ?? 260,
+          sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
           sidebarTab: sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
         }));
       }
