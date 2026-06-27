@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { activeSessionId, writeToSession, isAgentSession } from '$lib/stores/terminal';
-import { sendChatMessage } from '$lib/stores/orchestrator';
+import { sendChatMessage, getDispatchableAgents } from '$lib/stores/orchestrator';
 import { showToast } from '$lib/stores/notification';
 import { invoke } from '@tauri-apps/api/core';
 import './PlaybooksPanel.css';
@@ -92,6 +92,7 @@ export default function PlaybooksPanel() {
   const [selectedPlaybook, setSelectedPlaybook] = useState<PlaybookData | null>(null);
   const [hasFolder, setHasFolder] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(false);
+  const [selectedAgents, setSelectedAgents] = useState<Record<string, string>>({});
 
   const projectRoot = project?.root_path ?? '';
   const projectId = project?.id ?? '';
@@ -187,15 +188,24 @@ npm test
     showToast(`Executed step in active terminal: "${step.name}"`, 'success');
   };
 
-  const handleDelegateStep = async (step: PlaybookStep) => {
+  const handleDelegateStep = async (step: PlaybookStep, forcedAgent?: string) => {
     if (!projectId || !projectRoot) {
       showToast('No active project', 'warning');
       return;
     }
+    const agentChoice = forcedAgent && forcedAgent !== 'auto' ? forcedAgent : undefined;
     const promptText = `Please run this command: "${step.command}" in the workspace and ensure it completes successfully.`;
-    showToast(`Delegated step to AI Orchestrator: "${step.name}"`, 'info');
-    await sendChatMessage(projectId, projectRoot, promptText);
+    
+    if (agentChoice) {
+      showToast(`Delegating step to AI Orchestrator (${agentChoice}): "${step.name}"`, 'info');
+      await sendChatMessage(projectId, projectRoot, promptText, { forcedAgent: agentChoice });
+    } else {
+      showToast(`Delegating step to AI Orchestrator (Auto): "${step.name}"`, 'info');
+      await sendChatMessage(projectId, projectRoot, promptText);
+    }
   };
+
+  const agents = getDispatchableAgents(projectId);
 
   return (
     <div className="playbooks-panel">
@@ -249,9 +259,23 @@ npm test
                       <button className="playbook-step-btn run-btn" onClick={() => handleRunStep(step)}>
                         ▶ Run
                       </button>
-                      <button className="playbook-step-btn" onClick={() => void handleDelegateStep(step)}>
-                        🤖 Delegate
-                      </button>
+                      <div className="delegate-selector-wrapper">
+                        <button className="playbook-step-btn delegate-btn" onClick={() => void handleDelegateStep(step, selectedAgents[step.id] || 'auto')}>
+                          🤖 Delegate
+                        </button>
+                        {agents.length > 0 && (
+                          <select 
+                            className="playbook-agent-select" 
+                            value={selectedAgents[step.id] || 'auto'}
+                            onChange={(e) => setSelectedAgents(prev => ({ ...prev, [step.id]: e.target.value }))}
+                          >
+                            <option value="auto">Auto-route</option>
+                            {agents.map(a => (
+                              <option key={a.command} value={a.command}>{a.name}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))
