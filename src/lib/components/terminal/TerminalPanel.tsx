@@ -142,7 +142,7 @@ export default function TerminalPanel() {
   const totalCells = columns.reduce((sum, column) => sum + column.cells.length, 0);
   const currentLayoutIcon = layouts.find((layout) => layout.id === currentLayout)?.icon ?? '1';
   const shellSessions = useMemo(
-    () => allSessions.filter((session) => !isAgentSession(session)),
+    () => allSessions,
     [allSessions],
   );
 
@@ -638,19 +638,9 @@ export default function TerminalPanel() {
   }
 
   useEffect(() => {
-    const evictedAgentPanes: number[] = [];
     paneAssignments.update((current) => {
       let changed = false;
-      const agentIndices: number[] = [];
-      const next = current.map((sessionId, i) => {
-        const session = sessionId !== null ? allSessions.find((entry) => entry.id === sessionId) : null;
-        if (session && isAgentSession(session)) {
-          changed = true;
-          agentIndices.push(i);
-          return null;
-        }
-        return sessionId;
-      });
+      const next = [...current];
 
       for (let i = 0; i < next.length; i += 1) {
         if (next[i] === null) {
@@ -662,19 +652,8 @@ export default function TerminalPanel() {
         }
       }
 
-      // An agent must never occupy a mosaic cell. If one slipped into a pane and
-      // wasn't backfilled by a real shell above, its cell would linger as a ghost
-      // empty "Open terminal" pane (the add-only mosaic reconcile never drops it).
-      // Collect those so we can remove the cells once the store update is done.
-      for (const i of agentIndices) {
-        if (next[i] === null) evictedAgentPanes.push(i);
-      }
       return changed ? next : current;
     });
-
-    if (evictedAgentPanes.length > 0) {
-      removePaneCells(evictedAgentPanes);
-    }
   }, [allSessions, shellSessions]);
 
   useEffect(() => {
@@ -780,10 +759,10 @@ export default function TerminalPanel() {
       <div className="terminal-toolbar">
         <div className="session-tabs" ref={tabsRef}>
           {shellSessions.map((session) => (
-            <div key={session.id} className={`session-tab${activeId === session.id ? ' active' : ''}${session.isRunning ? '' : ' dead'}`}>
-              <button className="tab-main" onClick={() => handleTabClick(session.id)} title={session.title}>
-                <span className={`tab-dot${session.isRunning ? ' running' : ''}`} />
-                <span className="tab-label">{session.title}</span>
+            <div key={session.id} className={`session-tab${activeId === session.id ? ' active' : ''}${session.isRunning ? '' : ' dead'}${isAgentSession(session) ? ' agent-tab' : ''}`}>
+              <button className="tab-main" onClick={() => handleTabClick(session.id)} title={session.agentName || session.title}>
+                <span className={`tab-dot${session.isRunning ? ' running' : ''}${isAgentSession(session) ? ' agent' : ''}`} />
+                <span className="tab-label">{session.agentName || session.title}</span>
               </button>
               <button className="tab-close" onClick={(event) => { event.stopPropagation(); closeSession(session.id); }} title="Close terminal" aria-label="Close terminal">
                 <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
@@ -890,7 +869,7 @@ export default function TerminalPanel() {
                         data-drop-label={isDropTarget ? `Insert ${paneDropState!.over!.edge}` : undefined}
                         style={{ flex: `${cellHeights[colIdx]?.[cellIdx] ?? 100} 1 0%` }}
                       >
-                        {sessionId != null && !isAgentCell ? (
+                        {sessionId != null ? (
                           <TerminalPane
                             key={sessionId}
                             sessionId={sessionId}
@@ -906,15 +885,42 @@ export default function TerminalPanel() {
                             onResizeBottom={cellIdx < column.cells.length - 1 ? (e) => startCellResize(e, colIdx, cellIdx) : undefined}
                           />
                         ) : (
-                          <>
-                            <button className={`empty-pane${activePane === cell.index ? ' active' : ''}`} onClick={() => { focusPane(cell.index); void createTerminalSession(getStartingCwd(), cell.index); }} aria-label="Open terminal">
-                              <span className="empty-pane-icon" aria-hidden="true">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <div className={`empty-pane-container${activePane === cell.index ? ' active' : ''}`}>
+                            <div className="empty-pane-actions">
+                              <button className="empty-action-btn primary" onClick={() => { focusPane(cell.index); void createTerminalSession(getStartingCwd(), cell.index); }}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                   <rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" />
                                 </svg>
-                              </span>
-                              <span className="empty-pane-label">{isAgentCell ? 'Agent is open as a panel' : 'Open terminal'}</span>
-                            </button>
+                                <span>Open Shell</span>
+                              </button>
+                              
+                              {(() => {
+                                const unassignedSessions = allSessions.filter((s) => !assignments.includes(s.id));
+                                if (unassignedSessions.length === 0) return null;
+                                return (
+                                  <div className="attach-dropdown-container">
+                                    <div className="attach-header">Attach Session</div>
+                                    <div className="attach-list">
+                                      {unassignedSessions.map((session) => (
+                                        <button 
+                                          key={session.id} 
+                                          className="attach-item"
+                                          onClick={() => {
+                                            focusPane(cell.index);
+                                            assignToPane(cell.index, session.id);
+                                            activateSessionInPane(session.id);
+                                          }}
+                                        >
+                                          <span className={`attach-dot${session.isRunning ? ' running' : ''}${isAgentSession(session) ? ' agent' : ''}`} />
+                                          <span className="attach-title">{session.agentName || session.title}</span>
+                                          {isAgentSession(session) && <span className="attach-badge">Agent</span>}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
                             {totalCells > 1 && (
                               <button className="empty-pane-close" onClick={(event) => { event.stopPropagation(); closePane(cell.index); }} title="Close pane" aria-label="Close pane">
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -922,7 +928,7 @@ export default function TerminalPanel() {
                                 </svg>
                               </button>
                             )}
-                          </>
+                          </div>
                         )}
                       </div>
                       {cellIdx < column.cells.length - 1 && (

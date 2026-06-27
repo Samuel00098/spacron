@@ -1025,6 +1025,9 @@ export default function TerminalPane({
     isActive && 'active',
     isDead && 'dead',
     isMaximized && 'maximized',
+    sessionInfo?.agentPreset && 'agent-pane',
+    sessionInfo?.agentPreset && `agent-${sessionInfo.agentPreset}`,
+    sessionInfo?.isExecuting && 'agent-executing',
   ]
     .filter(Boolean)
     .join(' ');

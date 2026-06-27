@@ -553,3 +553,140 @@ body.dragging-pane .xterm {
 
 body.dragging-col { cursor: col-resize !important; }
 body.dragging-row { cursor: row-resize !important; }
+
+/* Empty Pane Container & Attach Dropdown */
+.terminal-fullscreen .empty-pane-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 4px;
+  box-sizing: border-box;
+  padding: 16px;
+  overflow: auto;
+}
+
+.terminal-fullscreen .empty-pane-container.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+}
+
+.terminal-fullscreen .empty-pane-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 280px;
+  width: 100%;
+}
+
+.terminal-fullscreen .empty-action-btn.primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.terminal-fullscreen .empty-action-btn.primary:hover {
+  background: color-mix(in srgb, var(--bg-primary) 80%, var(--accent) 8%);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.terminal-fullscreen .attach-dropdown-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  overflow: hidden;
+  max-height: 180px;
+}
+
+.terminal-fullscreen .attach-header {
+  padding: 6px 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+}
+
+.terminal-fullscreen .attach-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.terminal-fullscreen .attach-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.terminal-fullscreen .attach-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.terminal-fullscreen .attach-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+}
+
+.terminal-fullscreen .attach-dot.running {
+  background-color: var(--success);
+  box-shadow: 0 0 4px var(--success);
+}
+
+.terminal-fullscreen .attach-dot.running.agent {
+  background-color: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+}
+
+.terminal-fullscreen .attach-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-fullscreen .attach-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(34, 211, 199, 0.15);
+  color: var(--accent);
+}
+

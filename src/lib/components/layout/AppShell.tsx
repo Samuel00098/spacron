@@ -10,6 +10,7 @@ import SearchPanel from '$lib/components/explorer/SearchPanel.tsx';
 import SourceControl from '$lib/components/explorer/SourceControl.tsx';
 import SnapshotsPanel from './SnapshotsPanel.tsx';
 import TerminalSnippetsPanel from '$lib/components/explorer/TerminalSnippetsPanel.tsx';
+import PlaybooksPanel from '$lib/components/workspace/PlaybooksPanel.tsx';
 import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
@@ -433,7 +434,7 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['files', 'search', 'git', 'snapshots', 'snippets'] as const;
+const LEFT_DRAWER_TOOLS = ['files', 'search', 'git', 'snapshots', 'snippets', 'playbooks'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
   files: { title: 'Files', icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon> },
@@ -441,6 +442,7 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
+  playbooks: { title: 'Playbooks', icon: <Icon><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5V3.5A2.5 2.5 0 0 1 6.5 1h11.5a1.5 1.5 0 0 1 1.5 1.5v15.5H6.5" /></Icon> },
 };
 
 // The RIGHT drawer hosts the layout-backed tools (RIGHT_DRAWER_TOOLS: Toolbox /
@@ -519,6 +521,7 @@ function SidebarContent({ tab }: { tab: SidebarTab }) {
   if (tab === 'git') return <SourceControl />;
   if (tab === 'snapshots') return <SnapshotsPanel />;
   if (tab === 'snippets') return <TerminalSnippetsPanel />;
+  if (tab === 'playbooks') return <PlaybooksPanel />;
   return <FileExplorer />;
 }
 
@@ -2495,6 +2498,7 @@ export default function AppShell() {
       if (tab === 'snapshots') return 'Snapshots';
       if (tab === 'history') return 'History';
       if (tab === 'snippets') return 'Snippets';
+      if (tab === 'playbooks') return 'Playbooks';
       return 'Explorer';
     }
     return ROOM_TITLES[id];

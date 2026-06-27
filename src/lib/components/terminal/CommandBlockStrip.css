@@ -110,3 +110,47 @@
   word-break: break-all;
   scrollbar-width: thin;
 }
+
+/* Command Block Actions (Warp-style Hover Bar) */
+.block-strip .cmd-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+
+.block-strip .cmd-block:hover .cmd-actions {
+  opacity: 1;
+}
+
+.block-strip .cmd-action-btn {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  line-height: 1.2;
+}
+
+.block-strip .cmd-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.block-strip .cmd-action-btn.fix-btn {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.block-strip .cmd-action-btn.fix-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-hover));
+  border-color: var(--accent);
+}
+

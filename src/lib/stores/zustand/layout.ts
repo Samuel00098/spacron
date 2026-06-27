@@ -5,7 +5,7 @@ import { loadJson } from '$lib/utils/storage';
 export type { ActiveView, SidebarTab };
 
 const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube']);
-const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets']);
+const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'playbooks']);
 
 export function sanitiseActiveView(v: unknown, fallback: ActiveView = 'terminal'): ActiveView {
   return VALID_ACTIVE_VIEWS.has(v as ActiveView) ? (v as ActiveView) : fallback;

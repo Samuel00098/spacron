@@ -414,3 +414,53 @@
 .terminal-pane .role-custom-apply:hover {
   opacity: 0.85;
 }
+
+/* Agent Pane Visual Borders & Glows */
+.terminal-pane.agent-pane {
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+/* Custom borders based on agent preset command */
+.terminal-pane.agent-pane.agent-agy,
+.terminal-pane.agent-pane.agent-antigravity {
+  border-color: rgba(34, 211, 199, 0.3);
+}
+
+.terminal-pane.agent-pane.agent-claude {
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.terminal-pane.agent-pane.agent-aider {
+  border-color: rgba(245, 176, 69, 0.3);
+}
+
+/* Active agent panes get intense glows */
+.terminal-pane.agent-pane.active.agent-agy,
+.terminal-pane.agent-pane.active.agent-antigravity {
+  border-color: #22d3c7 !important;
+  box-shadow: 0 0 10px rgba(34, 211, 199, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.terminal-pane.agent-pane.active.agent-claude {
+  border-color: #34d399 !important;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.terminal-pane.agent-pane.active.agent-aider {
+  border-color: #f5b045 !important;
+  box-shadow: 0 0 10px rgba(245, 176, 69, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Pulse animation when the agent is executing */
+@keyframes agentPulse {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; filter: brightness(1.2) saturate(1.2); }
+  100% { opacity: 0.8; }
+}
+
+.terminal-pane.agent-pane.agent-executing {
+  animation: agentPulse 2s infinite ease-in-out;
+}
+
