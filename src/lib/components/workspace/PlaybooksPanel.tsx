@@ -297,6 +297,24 @@ npm test
                 </div>
               ))
             )}
+
+            <div className="playbook-hint-card">
+              <div className="hint-title">💡 Soryq Playbooks Guide</div>
+              <p>
+                Store your markdown files (e.g. <code>deploy.md</code>) in the project playbooks directory:
+              </p>
+              <div className="hint-path">{playbooksPath || '.soryq/playbooks'}</div>
+              <p>
+                Use <code># Playbook Title</code>, step headers like <code>## Step Name</code>, and write executable commands inside code blocks:
+              </p>
+              <pre className="hint-example">
+{`# Setup Guide
+## Install Deps
+\`\`\`bash
+npm install
+\`\`\``}
+              </pre>
+            </div>
           </div>
         )}
       </div>

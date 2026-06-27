@@ -322,3 +322,59 @@
   text-transform: none;
 }
 
+/* Playbooks Hint Card */
+.playbook-hint-card {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.01);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.playbook-hint-card .hint-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.playbook-hint-card p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.playbook-hint-card code {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.playbook-hint-card .hint-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.playbook-hint-card .hint-example {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+
