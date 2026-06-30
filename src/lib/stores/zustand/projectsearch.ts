@@ -28,6 +28,7 @@ interface ProjectSearchState {
   searchResults: SearchResponse | null;
   searchLoading: boolean;
   searchError: string | null;
+  isFloatingSearchOpen: boolean;
   __set: (key: string, value: unknown) => void;
 }
 
@@ -40,5 +41,6 @@ export const useProjectSearchStore = create<ProjectSearchState>((set) => ({
   searchResults: null,
   searchLoading: false,
   searchError: null,
+  isFloatingSearchOpen: false,
   __set: (key, value) => set({ [key]: value } as any),
 }));

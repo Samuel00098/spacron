@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { openQuickCapture, openSettings } from '$lib/stores/layout';
+import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
 import { isTauriRuntime } from '$lib/utils/tauri';
@@ -226,6 +227,28 @@ export default function TitleBar() {
           >
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
             <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+
+        {/* Spotlight Search button */}
+        <button
+          className="icon-btn"
+          onClick={toggleFloatingSearch}
+          aria-label="Search in Files"
+          title="Search in Files (Ctrl+Shift+F)"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
           </svg>
         </button>
 

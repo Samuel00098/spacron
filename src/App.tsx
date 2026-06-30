@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import AppShell from '$lib/components/layout/AppShell.tsx';
 import BackgroundMedia from '$lib/components/shared/BackgroundMedia.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
+import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
 import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
@@ -177,6 +178,7 @@ export default function App() {
       <AppShell />
 
       <CommandPalette />
+      <FloatingSearch />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}

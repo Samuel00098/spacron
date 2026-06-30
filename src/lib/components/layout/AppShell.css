@@ -209,7 +209,88 @@
 }
 
 .app-shell .rooms-table.ambient-focus {
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 480px);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  min-height: 0;
+  overflow: visible;
+  padding: 8px 0;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 8px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row::-webkit-scrollbar {
+  display: none;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
+  width: 220px;
+  height: 84px;
+  min-height: 84px;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 4px;
+  border-radius: 10px;
+  background: rgba(var(--editor-bg-rgb, 30, 30, 40), 0.5);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  border-color: var(--accent);
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  text-align: left;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-preview {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  margin-top: 2px;
+  text-align: left;
 }
 
 .app-shell .rooms-table.ambient-split {
@@ -727,7 +808,7 @@
   gap: 9px;
   overflow-y: auto;
   scrollbar-width: none;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: none;
   padding: 12px 0;
   mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);

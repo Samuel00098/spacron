@@ -1,4 +1,4 @@
-import { writable } from '$lib/stores/storeCompat';
+import { writable, get } from '$lib/stores/storeCompat';
 import { useProjectSearchStore, type SearchResponse } from './zustand/projectsearch';
 
 export type { SearchMatch, SearchFileResult, SearchResponse } from './zustand/projectsearch';
@@ -30,3 +30,9 @@ export const searchInclude = syncWritable<string>('searchInclude', '');
 export const searchResults = syncWritable<SearchResponse | null>('searchResults', null);
 export const searchLoading = syncWritable<boolean>('searchLoading', false);
 export const searchError = syncWritable<string | null>('searchError', null);
+export const isFloatingSearchOpen = syncWritable<boolean>('isFloatingSearchOpen', false);
+
+export function toggleFloatingSearch() {
+  const open = get(isFloatingSearchOpen);
+  isFloatingSearchOpen.set(!open);
+}

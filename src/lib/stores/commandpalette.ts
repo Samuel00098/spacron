@@ -69,6 +69,7 @@ import { saveActiveFile, formatActiveFile } from './editor';
 import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager } from './layout';
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
+import { toggleFloatingSearch } from './projectsearch';
 
 export function initDefaultCommands() {
   const defaultCmds: any[] = [
@@ -105,7 +106,7 @@ export function initDefaultCommands() {
       name: 'Search in Files',
       category: 'View',
       shortcut: 'Ctrl+Shift+F',
-      action: () => toggleSidebarTab('search'),
+      action: () => toggleFloatingSearch(),
     },
     {
       id: 'workspace.env',

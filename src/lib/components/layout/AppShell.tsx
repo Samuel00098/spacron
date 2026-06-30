@@ -28,7 +28,6 @@ import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
-import { useThemeStore } from '$lib/stores/zustand/theme';
 import {
   toggleSidebar,
   setActiveView,
@@ -55,6 +54,7 @@ import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy, createPreviewBrowserTab, ensureProxyRunning } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
+import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import {
   createTerminalSession,
   launchPromptBarVoiceMode,
@@ -435,11 +435,10 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['files', 'search', 'git', 'snapshots', 'snippets', 'playbooks'] as const;
+const LEFT_DRAWER_TOOLS = ['files', 'git', 'snapshots', 'snippets', 'playbooks'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
   files: { title: 'Files', icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon> },
-  search: { title: 'Search', icon: <Icon><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
@@ -588,48 +587,6 @@ export default function AppShell() {
   }
 
   const layoutState = useLayoutStore();
-  const activeTheme = useThemeStore((s) => s.activeTheme);
-  const isJarvis = activeTheme?.id === 'jarvis';
-
-  const playHudSound = useCallback((type: 'click' | 'beep' | 'alert') => {
-    if (!isJarvis) return;
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      const now = ctx.currentTime;
-      if (type === 'click') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(1200, now);
-        osc.frequency.exponentialRampToValueAtTime(800, now + 0.05);
-        gain.gain.setValueAtTime(0.04, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-        osc.start(now);
-        osc.stop(now + 0.05);
-      } else if (type === 'beep') {
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(800, now);
-        osc.frequency.setValueAtTime(1000, now + 0.05);
-        gain.gain.setValueAtTime(0.03, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-        osc.start(now);
-        osc.stop(now + 0.12);
-      } else if (type === 'alert') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(300, now);
-        osc.frequency.linearRampToValueAtTime(100, now + 0.3);
-        gain.gain.setValueAtTime(0.02, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-        osc.start(now);
-        osc.stop(now + 0.3);
-      }
-    } catch (e) {
-      console.warn('AudioContext failed:', e);
-    }
-  }, [isJarvis]);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
@@ -875,27 +832,6 @@ export default function AppShell() {
   if (activeRoom && canvasPositions[activeRoom]) {
     lastActiveRoomRef.current = activeRoom;
   }
-
-  // Trigger HUD sound on activeRoom change
-  useEffect(() => {
-    if (isJarvis && activeRoom) {
-      playHudSound('click');
-    }
-  }, [activeRoom, isJarvis, playHudSound]);
-
-  // Trigger HUD sound on sidebar view change
-  useEffect(() => {
-    if (isJarvis && layoutState.activeView) {
-      playHudSound('beep');
-    }
-  }, [layoutState.activeView, isJarvis, playHudSound]);
-
-  // Trigger HUD sound on utility drawer toggle
-  useEffect(() => {
-    if (isJarvis) {
-      playHudSound('click');
-    }
-  }, [layoutState.sidebarVisible, layoutState.toolboxVisible, isJarvis, playHudSound]);
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
   const splitRoom = activeRoom ? ((secondaryRoom && sideRooms.includes(secondaryRoom)) ? secondaryRoom : (sideRooms[0] ?? null)) : null;
   const stackedRooms = ambientLayout === 'split' && splitRoom
@@ -1730,7 +1666,7 @@ export default function AppShell() {
           toggleYoutubeVisible();
           break;
         case 'openSearch':
-          toggleSidebarTab('search');
+          toggleFloatingSearch();
           break;
         case 'openEnvManager':
           openEnvManager();
@@ -2683,16 +2619,6 @@ export default function AppShell() {
         style={roomStyle}
         onMouseDown={arrangeable ? () => activateGalleryPanel(id) : undefined}
       >
-        {isJarvis && (
-          <>
-            <div className="hud-bracket hud-bracket-tl" />
-            <div className="hud-bracket hud-bracket-tr" />
-            <div className="hud-bracket hud-bracket-bl" />
-            <div className="hud-bracket hud-bracket-br" />
-            <div className="hud-scanline-overlay" />
-            <div className="hud-laser-line" />
-          </>
-        )}
         <header
           className={`room-header${arrangeable ? ' canvas-drag-handle' : ''}`}
           onPointerDown={arrangeable ? (event) => startPanelMove(event, id) : undefined}
@@ -3106,7 +3032,9 @@ export default function AppShell() {
               {renderRoomFrame(activeRoom, true)}
             </div>
             <aside className="room-stack" aria-label="Open rooms">
-              {stackedRooms.map((room) => renderRoomCard(room))}
+              <div className="room-cards-row">
+                {stackedRooms.map((room) => renderRoomCard(room))}
+              </div>
               {renderMinimizedRooms()}
             </aside>
           </>
