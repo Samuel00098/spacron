@@ -2984,11 +2984,23 @@ export default function AppShell() {
       const devTool = ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.activeView)
         ? layoutState.activeView
         : (layoutState.lastAuxView && ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.lastAuxView) ? layoutState.lastAuxView : 'toolbox');
+      
+      const secondaryRooms = visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room));
+      
       return (
         <>
           <div className="focused-room">
             {renderRoomFrame(devTool as RoomId, true)}
           </div>
+          {secondaryRooms.length > 0 && (
+            <div className="ambient-secondary-container">
+              {secondaryRooms.map((room) => (
+                <div key={room} className="ambient-secondary-room">
+                  {renderRoomFrame(room, true)}
+                </div>
+              ))}
+            </div>
+          )}
           {renderMinimizedRooms()}
         </>
       );
@@ -3037,7 +3049,7 @@ export default function AppShell() {
             >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}
 
-              <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0 ? ' preview-solo' : ''}`} aria-label="Soryq ambient layout">
+              <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${((ambientLayout === 'preview' || ambientLayout === 'development') && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ? ` ${ambientLayout}-solo` : ''}`} aria-label="Soryq ambient layout">
                 {renderAmbientLayout()}
               </main>
 
@@ -3065,6 +3077,23 @@ export default function AppShell() {
                     <div className="room-dock-separator" />
                     <div className="room-dock-group utilities">
                       {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                      <div className="room-dock-separator-mini" style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.08)', margin: '0 6px' }} />
+                      <ActivityButton
+                        item={{
+                          id: 'terminal',
+                          title: 'Toggle Terminal panel',
+                          active: terminalRoomOpen && !minimizedRooms.has('terminal'),
+                          onClick: () => {
+                            if (terminalRoomOpen && !minimizedRooms.has('terminal')) {
+                              minimizeRoom('terminal');
+                            } else {
+                              setTerminalRoomOpen(true);
+                              restoreRoom('terminal');
+                            }
+                          },
+                          icon: <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>
+                        }}
+                      />
                     </div>
                   </>
                 ) : (

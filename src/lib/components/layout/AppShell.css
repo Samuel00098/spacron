@@ -249,8 +249,7 @@
   padding-bottom: var(--overlay-clear);
 }
 
-.app-shell .rooms-table.ambient-focus,
-.app-shell .rooms-table.ambient-development {
+.app-shell .rooms-table.ambient-focus {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 16px;
@@ -258,8 +257,7 @@
   align-items: start;
 }
 
-.app-shell .rooms-table.ambient-focus .focused-room,
-.app-shell .rooms-table.ambient-development .focused-room {
+.app-shell .rooms-table.ambient-focus .focused-room {
   width: 95%;
   max-width: 1320px;
   aspect-ratio: 1.65;
@@ -361,8 +359,30 @@
 }
 
 .app-shell .rooms-table.ambient-development {
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 560px);
+}
+
+.app-shell .rooms-table.ambient-development.development-solo {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.app-shell .rooms-table.ambient-development .focused-room {
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  width: 100%;
+  height: 100%;
+}
+
+.app-shell .rooms-table.ambient-development .focused-room > * {
+  max-width: 1440px;
+  width: 100%;
+  height: 100%;
+  margin: 0 auto;
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border);
+  overflow: hidden;
 }
 
 /* Preview mode: the live app preview takes the stage with the terminal alongside.
