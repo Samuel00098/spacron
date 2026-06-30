@@ -848,4 +848,35 @@ samp {
   box-shadow: 0 0 25px rgba(0, 240, 255, 0.25) !important;
 }
 
+/* ── JARVIS COCKPIT LAYOUT OVERRIDES ────── */
+
+/* Change workspace container to flex row to place side panels side-by-side with editor */
+.jarvis-theme .rooms-workspace {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 16px !important;
+  padding-bottom: var(--overlay-clear, 128px) !important;
+}
+
+/* Position left and right utility drawers relatively instead of absolute overlays */
+.jarvis-theme .utility-drawer {
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  height: 100% !important;
+  z-index: 5 !important;
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.1) !important;
+  border: 1px solid var(--jarvis-blue) !important;
+  flex-shrink: 0 !important;
+}
+
+/* Let the rooms table occupy all remaining central space */
+.jarvis-theme .rooms-table {
+  flex: 1 1 0% !important;
+  height: 100% !important;
+  padding-bottom: 0 !important; /* clear default padding since parent handles it now */
+}
+
 
