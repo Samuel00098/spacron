@@ -2971,7 +2971,6 @@ export default function AppShell() {
             );
           })}
         </div>
-        {renderMinimizedRooms()}
       </aside>
     );
   }
@@ -3006,7 +3005,7 @@ export default function AppShell() {
                 <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
                 <path d="M3 3v5h5" />
               </svg>
-            </button>
+             </button>
             <div className="canvas-control-divider" />
             <button
               type="button"
@@ -3077,6 +3076,7 @@ export default function AppShell() {
             {renderRoomFrame(splitRoom, true)}
           </div>
           {renderSplitSwitcher()}
+          {renderMinimizedRooms()}
         </>
       );
     }
@@ -3088,12 +3088,14 @@ export default function AppShell() {
             <div className="focused-room">
               {renderRoomFrame(activeRoom, true)}
             </div>
-            <aside className="room-stack" aria-label="Open rooms">
-              <div className="room-cards-row">
-                {stackedRooms.map((room) => renderRoomCard(room))}
-              </div>
-              {renderMinimizedRooms()}
-            </aside>
+            {stackedRooms.length > 0 && (
+              <aside className="room-stack" aria-label="Open rooms">
+                <div className="room-cards-row">
+                  {stackedRooms.map((room) => renderRoomCard(room))}
+                </div>
+              </aside>
+            )}
+            {renderMinimizedRooms()}
           </>
         ) : (
           <>
