@@ -799,7 +799,7 @@ export function createNewWorkspace(name?: string) {
   const id = `ws-${Date.now()}`;
   const newWorkspace: Workspace = {
     id,
-    name: name?.trim() || 'New Workspace',
+    name: name?.trim() || 'New Collection',
     project_paths: [],
     active_project_path: null,
     last_opened: Date.now().toString(),
@@ -943,7 +943,7 @@ export async function addFolderToWorkspace(path: string) {
           // first folder. Once a workspace has a real name, leave it untouched —
           // adding more projects must not rewrite the user's chosen name.
           let wsName = w.name;
-          if (w.name === 'New Workspace' || w.name.trim() === '' || w.name === 'Empty Workspace') {
+          if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name.trim() === '' || w.name === 'Empty Collection' || w.name === 'Empty Workspace') {
             wsName = getFilename(path);
           }
 
@@ -1150,7 +1150,7 @@ export function moveProjectToWorkspace(projectPath: string, targetWorkspaceId: s
         const paths = w.project_paths.includes(projectPath) ? w.project_paths : [...w.project_paths, projectPath];
         // Only auto-name the target if it's still an unnamed placeholder.
         let newName = w.name;
-        if (w.name === 'New Workspace' || w.name === 'Empty Workspace' || w.name.trim() === '') {
+        if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name === 'Empty Collection' || w.name === 'Empty Workspace' || w.name.trim() === '') {
           newName = folderName;
         }
         return { ...w, name: newName, project_paths: paths };
