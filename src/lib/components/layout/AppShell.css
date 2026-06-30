@@ -212,6 +212,19 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 16px;
+  justify-items: center;
+  align-items: center;
+}
+
+.app-shell .rooms-table.ambient-focus .focused-room {
+  width: 95%;
+  max-width: 1080px;
+  aspect-ratio: 1.6;
+  max-height: min(650px, 64vh);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border);
+  overflow: hidden;
 }
 
 .app-shell .rooms-table.ambient-focus .room-stack {
@@ -244,19 +257,21 @@
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
-  width: 220px;
-  height: 84px;
-  min-height: 84px;
+  width: 180px;
+  height: 52px;
+  min-height: 52px;
   flex-shrink: 0;
-  padding: 10px 12px;
-  flex-direction: column;
+  padding: 0 14px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   justify-content: flex-start;
-  align-items: flex-start;
-  gap: 4px;
+  gap: 10px;
   border-radius: 10px;
   background: rgba(var(--editor-bg-rgb, 30, 30, 40), 0.5);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
+  transition: all 0.18s ease;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card:hover {
@@ -264,33 +279,38 @@
   border-color: var(--accent);
 }
 
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-header {
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
+  width: auto;
+  flex-shrink: 0;
 }
 
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-name {
-  font-size: 13px;
-  font-weight: 600;
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-kind {
+  display: none;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-icon {
+  font-size: 16px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-name {
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  width: 100%;
+  flex: 1;
   text-align: left;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card-preview {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  width: 100%;
-  margin-top: 2px;
-  text-align: left;
+  display: none;
 }
 
 .app-shell .rooms-table.ambient-split {
