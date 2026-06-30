@@ -151,7 +151,7 @@ export default function WelcomeScreen() {
         <div className="launchpad-row">
           <button className="action-btn primary" onClick={() => newWorkspacePromptOpen.set(true)}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg></span>
-            <span className="action-label">New Workspace</span>
+            <span className="action-label">New Collection</span>
             <kbd>Ctrl+N</kbd>
           </button>
           <button className="action-btn secondary" onClick={() => void openProject()}>
@@ -170,7 +170,7 @@ export default function WelcomeScreen() {
         <section className="dashboard-block recents-block">
           <div className="block-header">
             <div className="header-title-group">
-              <span className="section-label">Recent Workspaces</span>
+              <span className="section-label">Recent Collections</span>
               {search && <span className="search-pill">Filtered: "{search}"</span>}
             </div>
             {workspaces.length > 0 && <button className="text-btn danger" onClick={clearAllApplicationState}>Clear all</button>}
@@ -196,8 +196,8 @@ export default function WelcomeScreen() {
             </div>
           ) : (
             <div className="empty-state">
-              <p>No Recent Workspaces</p>
-              <span>Open a workspace to get started</span>
+              <p>No Recent Collections</p>
+              <span>Open a collection to get started</span>
             </div>
           )}
         </section>
@@ -207,7 +207,7 @@ export default function WelcomeScreen() {
           <div className="shortcuts-bar">
             <div className="shortcuts-inline">
               {[
-                ['New workspace', 'Ctrl+N'],
+                ['New collection', 'Ctrl+N'],
                 ['Open folder', 'Ctrl+O'],
                 ['Open settings', 'Ctrl+,'],
                 ['Command palette', 'Ctrl+Shift+P'],
@@ -280,7 +280,7 @@ function RecentWorkspaceRow({
           <span className="recent-name">{workspace.name}</span>
         )}
         <span className="recent-path" title={workspace.project_paths.join(', ')}>
-          {workspace.project_paths.length === 0 ? 'Empty workspace' : workspace.project_paths.map(shortPath).join(', ')}
+          {workspace.project_paths.length === 0 ? 'Empty collection' : workspace.project_paths.map(shortPath).join(', ')}
         </span>
       </span>
       <span className="recent-actions">

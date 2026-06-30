@@ -49,6 +49,11 @@ export const activeProject = derived(
 );
 
 export const newWorkspacePromptOpen = syncWritable<boolean>('newWorkspacePromptOpen', false);
+export const isProjectHUDOpen = syncWritable<boolean>('isProjectHUDOpen', false);
+
+export function toggleProjectHUD() {
+  isProjectHUDOpen.update((open) => !open);
+}
 
 export const openProjectsList = derived(
   [projects, openProjectIds],
@@ -817,6 +822,8 @@ export async function openWorkspace(workspaceId: string) {
   // mid-switch would write transitional/cleared state under the wrong id.
   cancelPendingProjectAutosave();
 
+  isProjectHUDOpen.set(false);
+
   // Set as active
   activeWorkspaceId.set(workspaceId);
 
@@ -1052,6 +1059,7 @@ export function switchToProject(projectId: string) {
 
   const p = get(projects).get(projectId);
   if (p) {
+    isProjectHUDOpen.set(false);
     activeProjectId.set(projectId);
     setActiveTerminalProject(projectId);
     
@@ -1158,5 +1166,39 @@ export function moveProjectToWorkspace(projectPath: string, targetWorkspaceId: s
       closeProject(id);
       break;
     }
+  }
+}
+
+export function removeProjectFromCollection(workspaceId: string, projectPath: string) {
+  const activeWsId = get(activeWorkspaceId);
+  const allProjects = get(projects);
+  const activeProj = Array.from(allProjects.values()).find((p) => p.root_path === projectPath);
+
+  if (workspaceId === activeWsId && activeProj) {
+    closeProject(activeProj.id);
+  } else {
+    recentWorkspaces.update((wsList) =>
+      wsList.map((w) => {
+        if (w.id === workspaceId) {
+          const paths = w.project_paths.filter((x) => x !== projectPath);
+          return {
+            ...w,
+            project_paths: paths,
+            active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
+          };
+        }
+        return w;
+      })
+    );
+  }
+}
+
+export function deleteCollection(workspaceId: string) {
+  recentWorkspaces.update((wsList) => wsList.filter((w) => w.id !== workspaceId));
+  if (get(activeWorkspaceId) === workspaceId) {
+    activeWorkspaceId.set(null);
+    clearAllStores();
+    projects.set(new Map());
+    openProjectIds.set([]);
   }
 }

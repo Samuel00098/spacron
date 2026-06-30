@@ -48,7 +48,7 @@ import {
   openEnvManager,
   terminalRoomOpen as terminalRoomOpenStore,
 } from '$lib/stores/layout';
-import { openProject } from '$lib/stores/workspace';
+import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
 import { toggleCommandPalette } from '$lib/stores/commandpalette';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy, createPreviewBrowserTab, ensureProxyRunning } from '$lib/stores/preview';
@@ -1648,6 +1648,9 @@ export default function AppShell() {
       event.preventDefault();
 
       switch (matched.id) {
+        case 'toggleProjectHUD':
+          toggleProjectHUD();
+          break;
         case 'commandPalette':
           toggleCommandPalette();
           break;

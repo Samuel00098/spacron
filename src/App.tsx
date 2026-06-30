@@ -10,6 +10,7 @@ import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import MicrophonePermissionDialog from '$lib/components/shared/MicrophonePermissionDialog.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
+import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
@@ -179,6 +180,7 @@ export default function App() {
 
       <CommandPalette />
       <FloatingSearch />
+      <ProjectHUD />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}

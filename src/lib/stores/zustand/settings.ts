@@ -41,6 +41,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
   const defaultShortcuts: KeyboardShortcut[] = [
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
+    { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', keys: 'Ctrl+K' },
     { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
@@ -261,6 +262,7 @@ const defaults: SettingsValues = {
   userShortcuts: [
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
+    { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', keys: 'Ctrl+K' },
     { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },

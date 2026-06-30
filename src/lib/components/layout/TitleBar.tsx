@@ -8,8 +8,7 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
-import WorkspaceSwitcher from '$lib/components/workspace/WorkspaceSwitcher.tsx';
-import ProjectSwitcher from '$lib/components/workspace/ProjectSwitcher.tsx';
+import { toggleProjectHUD } from '$lib/stores/workspace';
 import AmbientSwitcher from '$lib/components/layout/AmbientSwitcher.tsx';
 import packageJson from '../../../../package.json';
 import './TitleBar.css';
@@ -186,16 +185,26 @@ export default function TitleBar() {
 
       {/* Centre breadcrumb (drag region) */}
       <div
-        className={`titlebar-center${workspace ? ' left-align' : ''}`}
+        className="titlebar-center left-align"
         data-tauri-drag-region
       >
-        {workspace && (
-          <div className="titlebar-controls-container" style={controlsContainerStyle}>
-            <WorkspaceSwitcher />
-            <div className="tb-divider" style={dividerStyle}></div>
-            <ProjectSwitcher />
-          </div>
-        )}
+        <div className="titlebar-controls-container" style={controlsContainerStyle}>
+          <button
+            className="titlebar-hud-trigger"
+            onClick={toggleProjectHUD}
+            title="Search projects and collections (Ctrl+K)"
+          >
+            <svg className="hud-trigger-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span className="hud-trigger-text">
+              <span className="hud-trigger-collection">{workspace?.name || 'Select Collection'}</span>
+              {project && <span className="hud-trigger-separator">/</span>}
+              {project && <span className="hud-trigger-project">{project.name}</span>}
+            </span>
+            <kbd className="hud-trigger-kbd">Ctrl K</kbd>
+          </button>
+        </div>
       </div>
 
       {/* Right side: Mode switcher + Settings + Window controls */}
