@@ -427,6 +427,23 @@
   box-shadow: var(--glass-shadow, 0 18px 50px -24px rgba(0, 0, 0, 0.55));
 }
 
+@keyframes room-panel-spawn {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(16px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+
+.app-shell .ambient-canvas .room-panel.arrangeable {
+  animation: room-panel-spawn 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 /* In auto-grid mode panels glide to their computed slot when the board reflows
    (a room opens, closes, or one panel is resized). Live drag/resize opt out of
    this transition below so the panel under the cursor never lags. */

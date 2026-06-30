@@ -257,6 +257,48 @@ function computeFreeformGrid<T extends string>(
   const count = rooms.length;
   if (count === 0) return out;
 
+  // Dedicated vibe coding layout: place orchestrator on the left, agent CLIs horizontally to the right
+  if (rooms.includes('orchestrator' as T)) {
+    const sizeOf = (room: T) => {
+      if (sizes[room]) return sizes[room];
+      if (room === 'orchestrator') return { width: 480, height: 640 };
+      if (room.toString().startsWith('agent:')) return { width: 640, height: 480 };
+      return defaultSize;
+    };
+
+    const orchSize = sizeOf('orchestrator' as T);
+    const otherRooms = rooms.filter((r) => r !== 'orchestrator');
+    const gap = 24;
+
+    let totalOthersW = 0;
+    otherRooms.forEach((r) => {
+      totalOthersW += sizeOf(r).width + gap;
+    });
+    if (otherRooms.length > 0) totalOthersW -= gap;
+
+    const totalW = orchSize.width + (otherRooms.length > 0 ? gap : 0) + totalOthersW;
+    const startX = centerX - totalW / 2;
+
+    // Position orchestrator
+    out['orchestrator'] = {
+      x: startX,
+      y: centerY - orchSize.height / 2,
+    };
+
+    // Position agent CLI panels to the right
+    let curX = startX + orchSize.width + gap;
+    otherRooms.forEach((r) => {
+      const size = sizeOf(r);
+      out[r] = {
+        x: curX,
+        y: centerY - size.height / 2,
+      };
+      curX += size.width + gap;
+    });
+
+    return out;
+  }
+
   const coords = getFreeformCoordinates(count);
   const sizeOf = (room: T) => sizes[room] ?? defaultSize;
 
@@ -756,15 +798,22 @@ export default function AppShell() {
   }, [agentRoomIds]);
 
   const openRooms = useMemo<RoomId[]>(
-    () => [
-      // 'workspace' and 'orchestrator' are no longer center rooms — their content
-      // renders in the LEFT utility drawer (Files/Search/…, plus Orchestrator
-      // as a tab). See renderLeftUtilityDrawer.
-      ...(terminalRoomOpen ? (['terminal'] as RoomId[]) : []),
-      ...agentRoomIds,
-      ...visiblePanels.map((panel) => panel.id),
-    ],
-    [agentRoomIds, terminalRoomOpen, visiblePanels],
+    () => {
+      const list = [
+        // 'workspace' and 'orchestrator' are no longer center rooms — their content
+        // renders in the LEFT utility drawer (Files/Search/…, plus Orchestrator
+        // as a tab). See renderLeftUtilityDrawer.
+        ...(terminalRoomOpen ? (['terminal'] as RoomId[]) : []),
+        ...agentRoomIds,
+        ...visiblePanels.map((panel) => panel.id),
+      ];
+      if (ambientLayout === 'gallery') {
+        // Vibe coding canvas: only show orchestrator and active agent CLI terminals
+        return ['orchestrator', ...list.filter((room) => isAgentRoomId(room))];
+      }
+      return list;
+    },
+    [agentRoomIds, terminalRoomOpen, visiblePanels, ambientLayout],
   );
 
   const visibleRooms = useMemo(
@@ -823,8 +872,16 @@ export default function AppShell() {
   }, [ambientLayout, orderedVisibleRooms, canvasViewportSize]);
 
   const getRoomDefaultSize = useCallback((room: RoomId): GallerySize => {
+    if (ambientLayout === 'gallery') {
+      if (room === 'orchestrator') {
+        return { width: 480, height: 640 };
+      }
+      if (isAgentRoomId(room)) {
+        return { width: 640, height: 480 };
+      }
+    }
     return getRoomDefaultSizeHelper(room, canvasRoomClusters);
-  }, [canvasRoomClusters, getRoomDefaultSizeHelper]);
+  }, [ambientLayout, canvasRoomClusters, getRoomDefaultSizeHelper]);
 
   const activeRoom = focusedRoom && visibleRooms.includes(focusedRoom)
     ? focusedRoom

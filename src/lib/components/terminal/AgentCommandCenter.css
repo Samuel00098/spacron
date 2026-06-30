@@ -489,3 +489,8 @@
 .orc .orc-resize-handle:hover {
   opacity: 1;
 }
+
+/* Hide internal header when rendered inside the room-content of a canvas room panel */
+.room-content .orc .orc-header {
+  display: none;
+}
