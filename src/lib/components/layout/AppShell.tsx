@@ -28,6 +28,7 @@ import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
+import { useThemeStore } from '$lib/stores/zustand/theme';
 import {
   toggleSidebar,
   setActiveView,
@@ -587,6 +588,48 @@ export default function AppShell() {
   }
 
   const layoutState = useLayoutStore();
+  const activeTheme = useThemeStore((s) => s.activeTheme);
+  const isJarvis = activeTheme?.id === 'jarvis';
+
+  const playHudSound = useCallback((type: 'click' | 'beep' | 'alert') => {
+    if (!isJarvis) return;
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      if (type === 'click') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1200, now);
+        osc.frequency.exponentialRampToValueAtTime(800, now + 0.05);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+        osc.start(now);
+        osc.stop(now + 0.05);
+      } else if (type === 'beep') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.setValueAtTime(1000, now + 0.05);
+        gain.gain.setValueAtTime(0.03, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.12);
+      } else if (type === 'alert') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+        gain.gain.setValueAtTime(0.02, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+      }
+    } catch (e) {
+      console.warn('AudioContext failed:', e);
+    }
+  }, [isJarvis]);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
@@ -832,6 +875,27 @@ export default function AppShell() {
   if (activeRoom && canvasPositions[activeRoom]) {
     lastActiveRoomRef.current = activeRoom;
   }
+
+  // Trigger HUD sound on activeRoom change
+  useEffect(() => {
+    if (isJarvis && activeRoom) {
+      playHudSound('click');
+    }
+  }, [activeRoom, isJarvis, playHudSound]);
+
+  // Trigger HUD sound on sidebar view change
+  useEffect(() => {
+    if (isJarvis && layoutState.activeView) {
+      playHudSound('beep');
+    }
+  }, [layoutState.activeView, isJarvis, playHudSound]);
+
+  // Trigger HUD sound on utility drawer toggle
+  useEffect(() => {
+    if (isJarvis) {
+      playHudSound('click');
+    }
+  }, [layoutState.sidebarVisible, layoutState.toolboxVisible, isJarvis, playHudSound]);
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
   const splitRoom = activeRoom ? ((secondaryRoom && sideRooms.includes(secondaryRoom)) ? secondaryRoom : (sideRooms[0] ?? null)) : null;
   const stackedRooms = ambientLayout === 'split' && splitRoom
@@ -2619,6 +2683,16 @@ export default function AppShell() {
         style={roomStyle}
         onMouseDown={arrangeable ? () => activateGalleryPanel(id) : undefined}
       >
+        {isJarvis && (
+          <>
+            <div className="hud-bracket hud-bracket-tl" />
+            <div className="hud-bracket hud-bracket-tr" />
+            <div className="hud-bracket hud-bracket-bl" />
+            <div className="hud-bracket hud-bracket-br" />
+            <div className="hud-scanline-overlay" />
+            <div className="hud-laser-line" />
+          </>
+        )}
         <header
           className={`room-header${arrangeable ? ' canvas-drag-handle' : ''}`}
           onPointerDown={arrangeable ? (event) => startPanelMove(event, id) : undefined}

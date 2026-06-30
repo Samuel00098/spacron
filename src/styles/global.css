@@ -713,3 +713,139 @@ samp {
   font-family: var(--editor-font-family, monospace) !important;
 }
 
+/* ── JARVIS HUD STYLES ──────────────────── */
+
+/* HUD Grid & Typography overrides */
+:root:has(.jarvis-theme),
+.jarvis-theme {
+  --jarvis-blue: #00f0ff;
+  --jarvis-amber: #ff9f00;
+  --jarvis-red: #ff003c;
+  --jarvis-neon-green: #39ff14;
+  --editor-font-family: 'Orbitron', 'JetBrains Mono', monospace !important;
+}
+
+/* Pulsing neon border and glowing shadow on active elements */
+.jarvis-theme .pane-container.active-pane,
+.jarvis-theme .active-editor-pane,
+.jarvis-theme .active-terminal-pane,
+.jarvis-theme .tab-btn.active,
+.jarvis-theme .cm-focused {
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.15), inset 0 0 4px rgba(0, 240, 255, 0.1) !important;
+  border-color: var(--jarvis-blue) !important;
+}
+
+/* CRT Scanlines Overlay */
+.jarvis-theme .hud-scanline-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.25) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.06),
+    rgba(0, 255, 0, 0.02),
+    rgba(0, 0, 255, 0.06)
+  );
+  background-size: 100% 4px, 6px 100%;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0.15;
+}
+
+/* Moving scanline laser */
+.jarvis-theme .hud-laser-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: rgba(0, 240, 255, 0.5);
+  box-shadow: 0 0 8px var(--jarvis-blue);
+  z-index: 11;
+  pointer-events: none;
+  opacity: 0.4;
+  animation: hudLaserScan 6s linear infinite;
+}
+
+@keyframes hudLaserScan {
+  0% { top: 0%; }
+  100% { top: 100%; }
+}
+
+/* Floating Corner Brackets for panels */
+.jarvis-theme .hud-bracket {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-color: var(--jarvis-blue);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0.7;
+  transition: all 0.25s ease;
+}
+.jarvis-theme .hud-bracket-tl { top: 4px; left: 4px; border-width: 2px 0 0 2px; }
+.jarvis-theme .hud-bracket-tr { top: 4px; right: 4px; border-width: 2px 2px 0 0; }
+.jarvis-theme .hud-bracket-bl { bottom: 4px; left: 4px; border-width: 0 0 2px 2px; }
+.jarvis-theme .hud-bracket-br { bottom: 4px; right: 4px; border-width: 0 2px 2px 0; }
+
+/* Pulse active panel brackets */
+.jarvis-theme .active-pane .hud-bracket,
+.jarvis-theme .pane-container:hover .hud-bracket {
+  opacity: 1;
+  border-color: var(--jarvis-blue);
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 4px var(--jarvis-blue));
+}
+
+/* Futuristic digital grid background for the entire shell */
+.jarvis-theme .appshell {
+  background-image: 
+    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+  background-size: 30px 30px;
+  background-position: center;
+  position: relative;
+}
+
+/* Custom telemetry widgets */
+.jarvis-theme .hud-telemetry-gauge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.jarvis-theme .hud-ring {
+  transform-origin: center;
+  animation: hudRotate 10s linear infinite;
+}
+.jarvis-theme .hud-ring-reverse {
+  transform-origin: center;
+  animation: hudRotateReverse 15s linear infinite;
+}
+
+@keyframes hudRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes hudRotateReverse {
+  0% { transform: rotate(360deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* Glassmorphic settings modal override */
+.jarvis-theme .modal-content,
+.jarvis-theme .settings-modal,
+.jarvis-theme .command-palette {
+  background: rgba(4, 8, 18, 0.85) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid var(--jarvis-blue) !important;
+  box-shadow: 0 0 25px rgba(0, 240, 255, 0.25) !important;
+}
+
+
