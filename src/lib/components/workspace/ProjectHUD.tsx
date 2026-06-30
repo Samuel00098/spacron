@@ -346,7 +346,7 @@ export default function ProjectHUD() {
                         onMouseEnter={() => setHoveredIndex(globalIdx)}
                       >
                         <div className="project-hud-card-avatar">
-                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="hud-folder-icon">
+                          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="hud-folder-icon">
                             <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2H3V6z" fill="currentColor" fillOpacity="0.12" />
                             <path d="M3 10h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8z" fill="currentColor" fillOpacity="0.25" />
                             <circle cx="12" cy="15" r="1.5" fill="currentColor" className="hud-folder-core" />
