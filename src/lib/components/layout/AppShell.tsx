@@ -15,7 +15,7 @@ import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
-import AgentCommandCenter from '$lib/components/terminal/AgentCommandCenter.tsx';
+
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
 import ContainersPanel from '$lib/components/containers/ContainersPanelLazy.tsx';
 import DbExplorerPanel from '$lib/components/db/DbExplorerPanelLazy.tsx';
@@ -68,7 +68,7 @@ import {
   writeToSession,
   commandHistory,
 } from '$lib/stores/terminal';
-import { agentCenterOpen } from '$lib/stores/orchestrator';
+
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import type { ActiveView, SidebarTab } from '$lib/types/layout';
@@ -87,11 +87,12 @@ type AuxPanelId =
   | 'db'
   | 'containers'
   | 'toolbox'
-  | 'youtube';
+  | 'youtube'
+  | 'env';
 
 type AgentRoomId = `agent:${number}`;
-type RoomId = 'workspace' | 'terminal' | 'orchestrator' | AuxPanelId | AgentRoomId;
-type AmbientLayout = 'focus' | 'split' | 'gallery' | 'preview';
+type RoomId = 'workspace' | 'terminal' | AuxPanelId | AgentRoomId;
+type AmbientLayout = 'focus' | 'development' | 'gallery' | 'preview';
 type GallerySize = { width: number; height: number };
 
 type ActivityItem = {
@@ -105,7 +106,6 @@ type ActivityItem = {
 const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   workspace: 'Workspace',
   terminal: 'Terminal',
-  orchestrator: 'Orchestrator',
   editor: 'Editor',
   preview: 'Preview',
   review: 'Review',
@@ -115,6 +115,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   containers: 'Containers',
   toolbox: 'Toolbox',
   youtube: 'YouTube',
+  env: 'Environment',
 };
 
 function isAgentRoomId(id: RoomId): id is AgentRoomId {
@@ -135,6 +136,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ReturnType<typeof useLayou
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
   youtube: 'youtubeVisible',
+  env: 'envVisible',
 };
 
 const GALLERY_MIN_WIDTH = 280;
@@ -257,47 +259,6 @@ function computeFreeformGrid<T extends string>(
   const count = rooms.length;
   if (count === 0) return out;
 
-  // Dedicated vibe coding layout: place orchestrator on the left, agent CLIs horizontally to the right
-  if (rooms.includes('orchestrator' as T)) {
-    const sizeOf = (room: T) => {
-      if (sizes[room]) return sizes[room];
-      if (room === 'orchestrator') return { width: 480, height: 640 };
-      if (room.toString().startsWith('agent:')) return { width: 640, height: 480 };
-      return defaultSize;
-    };
-
-    const orchSize = sizeOf('orchestrator' as T);
-    const otherRooms = rooms.filter((r) => r !== 'orchestrator');
-    const gap = 24;
-
-    let totalOthersW = 0;
-    otherRooms.forEach((r) => {
-      totalOthersW += sizeOf(r).width + gap;
-    });
-    if (otherRooms.length > 0) totalOthersW -= gap;
-
-    const totalW = orchSize.width + (otherRooms.length > 0 ? gap : 0) + totalOthersW;
-    const startX = centerX - totalW / 2;
-
-    // Position orchestrator
-    out['orchestrator'] = {
-      x: startX,
-      y: centerY - orchSize.height / 2,
-    };
-
-    // Position agent CLI panels to the right
-    let curX = startX + orchSize.width + gap;
-    otherRooms.forEach((r) => {
-      const size = sizeOf(r);
-      out[r] = {
-        x: curX,
-        y: centerY - size.height / 2,
-      };
-      curX += size.width + gap;
-    });
-
-    return out;
-  }
 
   const coords = getFreeformCoordinates(count);
   const sizeOf = (room: T) => sizes[room] ?? defaultSize;
@@ -488,13 +449,11 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
 };
 
 // The RIGHT drawer hosts the layout-backed tools (RIGHT_DRAWER_TOOLS: Toolbox /
-// HTTP / DB / Containers / Env) PLUS Orchestrator, which renders its own panel
-// in the drawer body.
-type RightTool = RightDrawerTool | 'orchestrator';
-const RIGHT_TOOLS_ALL: RightTool[] = [...RIGHT_DRAWER_TOOLS, 'orchestrator'];
+// HTTP / DB / Containers / Env).
+type RightTool = RightDrawerTool;
+const RIGHT_TOOLS_ALL: RightTool[] = [...RIGHT_DRAWER_TOOLS];
 const RIGHT_TOOL_META: Record<RightTool, { title: string; icon: React.ReactNode }> = {
   ...DRAWER_TOOL_META,
-  orchestrator: { title: 'Orchestrator', icon: <Icon><rect x="3" y="11" width="18" height="10" rx="2" /><path d="M12 7v4" /><circle cx="12" cy="5" r="2" /><path d="M8 16h.01M16 16h.01" /></Icon> },
 };
 
 function XIcon() {
@@ -554,6 +513,13 @@ function PanelHost({ id }: { id: AuxPanelId }) {
   if (id === 'tasks') return <TasksPanel />;
   if (id === 'preview') return <PreviewPanel />;
   if (id === 'youtube') return <YouTubePanel />;
+  if (id === 'env') {
+    return (
+      <Suspense fallback={null}>
+        <EnvManager embedded />
+      </Suspense>
+    );
+  }
 
   return null;
 }
@@ -646,7 +612,7 @@ export default function AppShell() {
       toggleSidebarTab('files');
     }
   }, [showSnapshotsTab, layoutState.sidebarTab]);
-  const centerOpen = useStore(agentCenterOpen);
+
   const activeFile = useEditorStore((s) => s.activeFile);
   const auxTabsRef = useAction<HTMLDivElement>(clampHorizontalScroll);
   const layoutCommand = useStore(layoutControlCommand);
@@ -745,6 +711,20 @@ export default function AppShell() {
   const lastLayoutCommandNonce = useRef(0);
 
   const roomsTableRef = useRef<HTMLElement | null>(null);
+  const overlaysRef = useRef<HTMLDivElement | null>(null);
+  const [overlaysHeight, setOverlaysHeight] = useState(128);
+
+  useEffect(() => {
+    const el = overlaysRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setOverlaysHeight(Math.ceil(entry.contentRect.height));
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const allTerminalSessions = useStore(terminalSessions);
   const terminalPaneAssignments = useStore(paneAssignments);
   const history = useStore(commandHistory);
@@ -800,16 +780,15 @@ export default function AppShell() {
   const openRooms = useMemo<RoomId[]>(
     () => {
       const list = [
-        // 'workspace' and 'orchestrator' are no longer center rooms — their content
-        // renders in the LEFT utility drawer (Files/Search/…, plus Orchestrator
-        // as a tab). See renderLeftUtilityDrawer.
+        // 'workspace' is no longer a center room — its content
+        // renders in the LEFT utility drawer (Files/Search/…).
         ...(terminalRoomOpen ? (['terminal'] as RoomId[]) : []),
         ...agentRoomIds,
         ...visiblePanels.map((panel) => panel.id),
       ];
       if (ambientLayout === 'gallery') {
-        // Vibe coding canvas: only show orchestrator and active agent CLI terminals
-        return ['orchestrator', ...list.filter((room) => isAgentRoomId(room))];
+        // Vibe coding canvas: only show active agent CLI terminals
+        return list.filter((room) => isAgentRoomId(room));
       }
       return list;
     },
@@ -873,9 +852,6 @@ export default function AppShell() {
 
   const getRoomDefaultSize = useCallback((room: RoomId): GallerySize => {
     if (ambientLayout === 'gallery') {
-      if (room === 'orchestrator') {
-        return { width: 480, height: 640 };
-      }
       if (isAgentRoomId(room)) {
         return { width: 640, height: 480 };
       }
@@ -891,9 +867,7 @@ export default function AppShell() {
   }
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
   const splitRoom = activeRoom ? ((secondaryRoom && sideRooms.includes(secondaryRoom)) ? secondaryRoom : (sideRooms[0] ?? null)) : null;
-  const stackedRooms = ambientLayout === 'split' && splitRoom
-    ? sideRooms.filter((room) => room !== splitRoom)
-    : sideRooms;
+  const stackedRooms = sideRooms;
 
   // Apply layout commands from the orchestrator (or any other controller). The
   // nonce guard makes a repeated identical command (e.g. "focus terminal" twice)
@@ -981,7 +955,7 @@ export default function AppShell() {
   const resizing = sidebarResizing || auxResizing || auxRowResizing || rightDrawerResizing;
 
   function auxMaxWidth(width = windowWidth) {
-    const sidebar = 48 + (layoutState.sidebarVisible ? layoutState.sidebarWidth : 0);
+    const sidebar = 48; // Sidebar is a pop-up and doesn't push panels anymore
     return width / (zoom / 100) - sidebar - 250 - 60;
   }
 
@@ -1699,7 +1673,7 @@ export default function AppShell() {
           setFocusedRoom('preview');
           break;
         case 'goToOrchestrator':
-          toggleRightTool('orchestrator');
+          // Orchestrator panel removed — no-op
           break;
         case 'goToReview':
           toggleReviewVisible();
@@ -1776,7 +1750,7 @@ export default function AppShell() {
           setCanvasView({ x: 0, y: 0, zoom: 1 });
           break;
         case 'cycleAmbientLayout': {
-          const MODE_ORDER: AmbientLayout[] = ['focus', 'split', 'gallery', 'preview'];
+          const MODE_ORDER: AmbientLayout[] = ['focus', 'gallery', 'preview', 'development'];
           const currentIdx = MODE_ORDER.indexOf(ambientLayout);
           const nextIdx = (currentIdx + 1) % MODE_ORDER.length;
           switchAmbientLayout(MODE_ORDER[nextIdx]);
@@ -1828,52 +1802,51 @@ export default function AppShell() {
   function renderLeftUtilityDrawer() {
     if (!leftDrawerOpen) return null;
     return (
-      <aside
-        className={`utility-drawer left-utility-drawer bento-card${sidebarResizing ? ' resizing' : ''}`}
-        style={{ width: `${layoutState.sidebarWidth}px` }}
-        aria-label="Workspace navigation"
-      >
-        <header className="drawer-header">
-          <div className="drawer-tabs">
-            {leftDrawerTools.map((tool) => (
-              <button
-                key={tool}
-                className={`drawer-tab-btn${leftActiveTool === tool ? ' active' : ''}`}
-                onClick={() => selectLeftTool(tool)}
-                title={LEFT_TOOL_META[tool].title}
-                aria-label={LEFT_TOOL_META[tool].title}
-              >
-                {LEFT_TOOL_META[tool].icon}
-              </button>
-            ))}
-          </div>
-          <button
-            className="drawer-close-btn"
-            onClick={() => closeLeftDrawer()}
-            title="Close panel"
-            aria-label="Close panel"
-          >
-            <XIcon />
-          </button>
-        </header>
-        <div className="drawer-body">
-          <SidebarContent tab={layoutState.sidebarTab} />
-        </div>
+      <>
         <div
-          className="left-drawer-resize-handle"
-          onMouseDown={startSidebarResize}
-          role="separator"
-          aria-label="Resize panel"
+          className="sidebar-popup-backdrop"
+          onClick={closeLeftDrawer}
+          role="presentation"
         />
-      </aside>
+        <aside
+          className="utility-drawer left-utility-drawer bento-card"
+          aria-label="Workspace navigation"
+        >
+          <header className="drawer-header">
+            <div className="drawer-tabs">
+              {leftDrawerTools.map((tool) => (
+                <button
+                  key={tool}
+                  className={`drawer-tab-btn${leftActiveTool === tool ? ' active' : ''}`}
+                  onClick={() => selectLeftTool(tool)}
+                  title={LEFT_TOOL_META[tool].title}
+                  aria-label={LEFT_TOOL_META[tool].title}
+                >
+                  {LEFT_TOOL_META[tool].icon}
+                </button>
+              ))}
+            </div>
+            <button
+              className="drawer-close-btn"
+              onClick={() => closeLeftDrawer()}
+              title="Close panel"
+              aria-label="Close panel"
+            >
+              <XIcon />
+            </button>
+          </header>
+          <div className="drawer-body">
+            <SidebarContent tab={layoutState.sidebarTab} />
+          </div>
+        </aside>
+      </>
     );
   }
 
   // --- RIGHT utility drawer (summoned tools) ------------------------------
-  // The layout-backed tools (Toolbox/HTTP/DB/Containers/Env) PLUS Orchestrator
-  // (backed by `agentCenterOpen`, a separate store). One derived "active tool" +
-  // one selection handler that updates every backing flag together (React
-  // batches them) → switching only swaps the body, no glitch.
+  // The layout-backed tools (Toolbox/HTTP/DB/Containers/Env). One derived
+  // "active tool" + one selection handler that updates every backing flag
+  // together (React batches them) → switching only swaps the body, no glitch.
   const rightActiveTool: RightTool | null = layoutState.toolboxVisible
     ? 'toolbox'
     : layoutState.httpVisible
@@ -1884,23 +1857,14 @@ export default function AppShell() {
           ? 'containers'
           : layoutState.envManagerOpen
             ? 'env'
-            : centerOpen
-              ? 'orchestrator'
-              : null;
+            : null;
   const rightDrawerOpen = rightActiveTool !== null;
 
   function selectRightTool(tool: RightTool) {
-    if (tool === 'orchestrator') {
-      useLayoutStore.getState().setRightDrawerTool(null);
-      agentCenterOpen.set(true);
-    } else {
-      useLayoutStore.getState().setRightDrawerTool(tool);
-      agentCenterOpen.set(false);
-    }
+    useLayoutStore.getState().setRightDrawerTool(tool);
   }
   function closeRightDrawer() {
     useLayoutStore.getState().setRightDrawerTool(null);
-    agentCenterOpen.set(false);
   }
   function toggleRightTool(tool: RightTool) {
     if (rightActiveTool === tool) closeRightDrawer();
@@ -1908,50 +1872,7 @@ export default function AppShell() {
   }
 
   function renderRightUtilityDrawer() {
-    if (!rightDrawerOpen) return null;
-    return (
-      <aside
-        className={`utility-drawer right-utility-drawer bento-card${rightDrawerResizing ? ' resizing' : ''}`}
-        style={{ width: `${layoutState.rightDrawerWidth}px` }}
-        aria-label="Utility drawer"
-      >
-        <div className="right-drawer-resize-handle" onMouseDown={startRightDrawerResize} />
-        <header className="drawer-header">
-          <div className="drawer-tabs">
-            {RIGHT_TOOLS_ALL.map((tool) => (
-              <button
-                key={tool}
-                className={`drawer-tab-btn${rightActiveTool === tool ? ' active' : ''}`}
-                onClick={() => selectRightTool(tool)}
-                title={RIGHT_TOOL_META[tool].title}
-                aria-label={RIGHT_TOOL_META[tool].title}
-              >
-                {RIGHT_TOOL_META[tool].icon}
-              </button>
-            ))}
-          </div>
-          <button
-            className="drawer-close-btn"
-            onClick={() => closeRightDrawer()}
-            title="Close drawer"
-            aria-label="Close drawer"
-          >
-            <XIcon />
-          </button>
-        </header>
-        <div className="drawer-body">
-          {rightActiveTool === 'orchestrator' ? (
-            <AgentCommandCenter />
-          ) : rightActiveTool === 'env' ? (
-            <Suspense fallback={null}>
-              <EnvManager embedded />
-            </Suspense>
-          ) : (
-            <PanelHost id={rightActiveTool} />
-          )}
-        </div>
-      </aside>
-    );
+    return null;
   }
 
   function startAuxResize(event: React.MouseEvent) {
@@ -2141,11 +2062,7 @@ export default function AppShell() {
         if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
         return;
       }
-      if (id === 'orchestrator') {
-        agentCenterOpen.set(false);
-        if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
-        return;
-      }
+
       if (isAgentRoomId(id)) {
         void killSession(getAgentRoomSessionId(id));
         if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
@@ -2567,7 +2484,6 @@ export default function AppShell() {
       return session?.agentPreset ?? 'agent';
     }
     if (id === 'terminal') return 'terminal';
-    if (id === 'orchestrator') return 'assistant';
     if (id === 'workspace') return layoutState.sidebarTab;
     return 'tool';
   }
@@ -2581,8 +2497,6 @@ export default function AppShell() {
         return <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon>;
       case 'terminal':
         return <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>;
-      case 'orchestrator':
-        return <Icon><rect x="3" y="11" width="18" height="10" rx="2" /><path d="M12 7v4" /><circle cx="12" cy="5" r="2" /><path d="M8 16h.01M16 16h.01" /></Icon>;
       case 'editor':
         return <Icon><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></Icon>;
       case 'preview':
@@ -2606,7 +2520,6 @@ export default function AppShell() {
 
   function renderRoomContent(id: RoomId) {
     if (id === 'workspace') return <SidebarContent tab={layoutState.sidebarTab} />;
-    if (id === 'orchestrator') return <AgentCommandCenter />;
     if (isAgentRoomId(id)) {
       const sessionId = getAgentRoomSessionId(id);
       const session = allTerminalSessions.find((entry) => entry.id === sessionId);
@@ -2807,9 +2720,7 @@ export default function AppShell() {
         </div>
       );
     }
-    if (id === 'orchestrator') {
-      return <div className="room-card-preview">Agent chat mode active</div>;
-    }
+
     if (id === 'preview') {
       return <div className="room-card-preview">Live markdown & web preview</div>;
     }
@@ -3066,16 +2977,15 @@ export default function AppShell() {
       );
     }
 
-    if (ambientLayout === 'split' && activeRoom && splitRoom) {
+    if (ambientLayout === 'development') {
+      const devTool = ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.activeView)
+        ? layoutState.activeView
+        : (layoutState.lastAuxView && ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.lastAuxView) ? layoutState.lastAuxView : 'toolbox');
       return (
         <>
           <div className="focused-room">
-            {renderRoomFrame(activeRoom, true)}
+            {renderRoomFrame(devTool as RoomId, true)}
           </div>
-          <div className="ambient-secondary-room">
-            {renderRoomFrame(splitRoom, true)}
-          </div>
-          {renderSplitSwitcher()}
           {renderMinimizedRooms()}
         </>
       );
@@ -3116,7 +3026,12 @@ export default function AppShell() {
         {workspaceId ? (
           <div className="zoom-content">
             {projectSwitching && <div className="project-switching-overlay" />}
-            <div className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}>
+            <div
+              className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
+              style={{
+                '--overlay-clear': `${overlaysHeight + 12}px`,
+              } as React.CSSProperties}
+            >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}
 
               <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0 ? ' preview-solo' : ''}`} aria-label="Soryq ambient layout">
@@ -3127,23 +3042,43 @@ export default function AppShell() {
 
               {renderRightUtilityDrawer()}
 
-              <div className="workspace-overlays">
+              <div ref={overlaysRef} className="workspace-overlays">
               <nav className="room-dock bento-card" aria-label="Room launcher">
-                <div className="room-dock-group nav">
-                  {leftNavDockItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group tools">
-                  {roomLauncherItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group">
-                  {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group utilities">
-                  {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
+                {ambientLayout === 'development' ? (
+                  <>
+                    <div className="room-dock-group">
+                      <button
+                        className="svt-btn back-btn"
+                        onClick={() => {
+                          useLayoutStore.getState().setActiveView('terminal');
+                          switchAmbientLayout('focus');
+                        }}
+                        title="Back to Workspace"
+                        aria-label="Back to Workspace"
+                      >
+                        <Icon><polyline points="15 18 9 12 15 6" /></Icon>
+                      </button>
+                    </div>
+                    <div className="room-dock-separator" />
+                    <div className="room-dock-group utilities">
+                      {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="room-dock-group nav">
+                      {leftNavDockItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                    </div>
+                    <div className="room-dock-separator" />
+                    <div className="room-dock-group tools">
+                      {roomLauncherItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                    </div>
+                    <div className="room-dock-separator" />
+                    <div className="room-dock-group">
+                      {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                    </div>
+                  </>
+                )}
               </nav>
               <div className="composer-strip">
                 <FloatingPromptBar />

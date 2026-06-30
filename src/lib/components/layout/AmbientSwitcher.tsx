@@ -17,11 +17,6 @@ const AMBIENT_LAYOUTS: Array<{ id: AmbientLayout; label: string; icon: React.Rea
     icon: <Icon><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M9 9h6v6H9z" /></Icon>,
   },
   {
-    id: 'split',
-    label: 'Split',
-    icon: <Icon><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M12 4v16" /></Icon>,
-  },
-  {
     id: 'gallery',
     label: 'Canvas',
     icon: <Icon><rect x="2.5" y="4" width="9" height="7" rx="1.5" /><rect x="13.5" y="7" width="8" height="9" rx="1.5" /><rect x="6" y="14" width="7" height="6" rx="1.5" /></Icon>,
@@ -30,6 +25,11 @@ const AMBIENT_LAYOUTS: Array<{ id: AmbientLayout; label: string; icon: React.Rea
     id: 'preview',
     label: 'Preview',
     icon: <Icon><rect x="2.5" y="4" width="19" height="13" rx="2" /><path d="M10 8.5l4 2.5-4 2.5z" /><path d="M8 20.5h8" /></Icon>,
+  },
+  {
+    id: 'development',
+    label: 'Development',
+    icon: <Icon><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /><line x1="14" y1="4" x2="10" y2="20" /></Icon>,
   },
 ];
 

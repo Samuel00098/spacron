@@ -49,8 +49,8 @@ export type OrchestratorAction =
   /** Change an application setting or the active theme (the things the user can
    *  set manually in Settings). `setting` names the option; `value` is its new value. */
   | { kind: 'setting'; setting: string; value: string | number | boolean }
-  /** Switch the workspace's ambient arrangement (Focus = one room, Split = two, Canvas = freeform board, Preview = app preview + terminal). */
-  | { kind: 'layout'; mode: 'focus' | 'split' | 'gallery' | 'preview' }
+  /** Switch the workspace's ambient arrangement (Focus = one room, Development = dev tools, Canvas = freeform board, Preview = app preview + terminal). */
+  | { kind: 'layout'; mode: 'focus' | 'development' | 'gallery' | 'preview' }
   /** Focus / minimize / restore / close a specific room (panel or agent) by name. */
   | { kind: 'room'; op: 'focus' | 'minimize' | 'restore' | 'close'; target: string }
   /** Control the Canvas board: zoom, fit everything on screen, or lock/unlock the
@@ -95,7 +95,7 @@ export interface AppStateRef {
   visiblePanels?: string[];
   /** The workspace's room layout: ambient arrangement + the open rooms. */
   layout?: {
-    ambient: 'focus' | 'split' | 'gallery' | 'preview';
+    ambient: 'focus' | 'development' | 'gallery' | 'preview';
     rooms: Array<{ title: string; focused: boolean; minimized: boolean }>;
   };
   sidebar?: { open: boolean; tab?: string };
@@ -660,8 +660,8 @@ function buildSystemPrompt(
     '    Manage the task board. "add a task to …" → create; "mark X done" / "move X to in progress" → done/doing (match the existing item by title); "remove the X task" → delete.',
     '- {"kind": "setting", "setting": "<setting name>", "value": <string | number | boolean>}',
     '    Change a setting the user can normally set in Settings — including the THEME. "switch to the Dracula theme" / "use a light theme" → setting "theme" with the theme name as value (pick the closest name from the themes listed in the app state). Other settings you can set: appearance ("system"|"light"|"dark"), fontSize (number), tabSize (number), wordWrap (true|false), minimap (true|false), vimMode (true|false), formatOnSave (true|false), enableLsp (true|false), showHidden (true|false), notificationsEnabled (true|false), aiGhostTextEnabled (true|false), uiZoom (number, 50-200), interfaceTransparency (number, 0-100), terminalFontSize (number). Match the user\'s request to the closest setting and a valid value. The current values are shown in the app state; report from there when asked what a setting is.',
-    '- {"kind": "layout", "mode": "focus"|"split"|"gallery"|"preview"}',
-    '    Rearrange the whole workspace. Focus = one big room; Split = two rooms side by side; Canvas (mode "gallery") = a freeform, pan/zoom board with every open room; Preview = the live app preview (dev server) with the terminal alongside, for testing web apps. "focus mode" → focus; "split the view" → split; "show everything" / "canvas" / "gallery" / "the board" → gallery; "preview" / "test the app" / "preview mode" / "run the app" → preview.',
+    '- {"kind": "layout", "mode": "focus"|"development"|"gallery"|"preview"}',
+    '    Rearrange the whole workspace. Focus = one big room; Development = dedicated dev tools page; Canvas (mode "gallery") = a freeform, pan/zoom board with every open room; Preview = the live app preview (dev server) with the terminal alongside, for testing web apps. "focus mode" → focus; "dev tools" / "development page" → development; "show everything" / "canvas" / "gallery" / "the board" → gallery; "preview" / "test the app" / "preview mode" / "run the app" → preview.',
     '- {"kind": "room", "op": "focus"|"minimize"|"restore"|"close", "target": "<room name>"}',
     '    Act on one room. Rooms are the workspace, terminal, an agent (by its name), or a panel (editor, preview, review, http, tasks, db, containers, toolbox, pet). "focus the terminal" → focus terminal; "minimize the editor" → minimize editor; "close the preview" → close preview. Use the workspace layout shown in the app state to pick the right room name.',
     '- {"kind": "canvas", "op": "zoom-in"|"zoom-out"|"fit"|"lock"|"unlock"}',
@@ -793,8 +793,8 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
   }
   if (kind === 'layout') {
     const mode = str(obj.mode).toLowerCase();
-    if (mode === 'focus' || mode === 'split' || mode === 'gallery' || mode === 'preview') {
-      return { kind: 'layout', mode };
+    if (mode === 'focus' || mode === 'development' || mode === 'gallery' || mode === 'preview') {
+      return { kind: 'layout', mode: mode as any };
     }
     return null;
   }

@@ -1,6 +1,6 @@
 export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settings';
 
-export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube';
+export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env';
 
 export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'playbooks';
 
@@ -20,6 +20,7 @@ export interface LayoutState {
   dbVisible: boolean;
   containersVisible: boolean;
   toolboxVisible: boolean;
+  envVisible: boolean;
   youtubeVisible: boolean;
   auxPanelWidth: number;
   auxEditorHeight: number; // percentage split between editor and preview panes

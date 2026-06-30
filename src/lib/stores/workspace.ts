@@ -322,7 +322,9 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   const terminalLayout = typeof r.terminalLayout === 'string' ? r.terminalLayout : undefined;
 
   const ambient: AmbientLayout | undefined =
-    r.ambient === 'focus' || r.ambient === 'split' || r.ambient === 'gallery' ? r.ambient : undefined;
+    r.ambient === 'focus' || r.ambient === 'development' || r.ambient === 'gallery' || r.ambient === 'preview'
+      ? r.ambient
+      : (r.ambient === 'split' ? 'development' : undefined);
 
   // Sanitise layout sub-object: clamp numerics, strip unknown view names
   let layout: PersistedProjectState['layout'] | undefined;

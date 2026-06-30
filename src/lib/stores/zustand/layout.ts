@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
 import { loadJson } from '$lib/utils/storage';
+import { requestAmbientLayout } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
-const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube']);
+const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env']);
 const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'playbooks']);
 
 export function sanitiseActiveView(v: unknown, fallback: ActiveView = 'terminal'): ActiveView {
@@ -33,6 +34,7 @@ const defaultLayout: LayoutState = {
   dbVisible: false,
   containersVisible: false,
   toolboxVisible: false,
+  envVisible: false,
   youtubeVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
@@ -138,6 +140,7 @@ const AUX_VIEW_FLAGS = {
   db: 'dbVisible',
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
+  env: 'envVisible',
   // NOTE: `youtube` is intentionally NOT listed here. It is a free-floating
   // pop-up window (see FloatingYouTube), not an aux room — keeping it out of the
   // aux-flag system means opening another panel never force-closes it, and the
@@ -185,10 +188,23 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   openQuickCapture: () => set({ quickCaptureOpen: true }),
   closeQuickCapture: () => set({ quickCaptureOpen: false }),
 
-  // Env lives in the right utility drawer, so opening it selects the env tool
-  // (clearing the other drawer tools) and closing it clears the drawer.
-  openEnvManager: () => set((l) => { const next = showRightDrawerTool(l, 'env'); persistLayout(next); return next; }),
-  closeEnvManager: () => set((l) => { const next = showRightDrawerTool(l, null); persistLayout(next); return next; }),
+  // Env lives in the main stage in development mode.
+  openEnvManager: () => {
+    set((l) => {
+      const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+      persistLayout(next);
+      return next;
+    });
+    requestAmbientLayout('development');
+  },
+  closeEnvManager: () => {
+    set((l) => {
+      const next = { ...l, activeView: 'terminal' as const, envVisible: false };
+      persistLayout(next);
+      return next;
+    });
+    requestAmbientLayout('focus');
+  },
 
   toggleSidebar: () => {
     set((s) => {
@@ -230,8 +246,9 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'http') {
-        const next: LayoutState = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true };
+        const next: LayoutState = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
+        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'tasks') {
@@ -240,18 +257,27 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'db') {
-        const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true };
+        const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
+        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'containers') {
-        const next: LayoutState = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true };
+        const next: LayoutState = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
+        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'toolbox') {
-        const next: LayoutState = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true };
+        const next: LayoutState = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
         persistLayout(next);
+        queueMicrotask(() => requestAmbientLayout('development'));
+        return next;
+      }
+      if (view === 'env') {
+        const next: LayoutState = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+        persistLayout(next);
+        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'youtube') {
@@ -311,55 +337,118 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   },
 
   toggleHttpVisible: () => {
-    set((l) => {
-      const next = showRightDrawerTool(l, l.httpVisible ? null : 'http');
-      persistLayout(next);
-      return next;
-    });
+    const active = getState().activeView === 'http';
+    if (active) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, httpVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('focus');
+    } else {
+      set((l) => {
+        const next = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('development');
+    }
   },
 
   toggleTasksVisible: () => {
     set((l) => {
       const next: LayoutState = l.tasksVisible
         ? { ...l, tasksVisible: false, activeView: 'terminal' as const }
-        : { ...l, tasksVisible: true, lastAuxView: 'tasks' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'tasks' as const };
+        : { ...l, tasksVisible: true, lastAuxView: 'tasks' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'tasks' as const };
       persistLayout(next);
       return next;
     });
   },
 
   toggleDbVisible: () => {
-    set((l) => {
-      const next = showRightDrawerTool(l, l.dbVisible ? null : 'db');
-      persistLayout(next);
-      return next;
-    });
+    const active = getState().activeView === 'db';
+    if (active) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, dbVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('focus');
+    } else {
+      set((l) => {
+        const next = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('development');
+    }
   },
 
   toggleContainersVisible: () => {
-    set((l) => {
-      const next = showRightDrawerTool(l, l.containersVisible ? null : 'containers');
-      persistLayout(next);
-      return next;
-    });
+    const active = getState().activeView === 'containers';
+    if (active) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, containersVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('focus');
+    } else {
+      set((l) => {
+        const next = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('development');
+    }
   },
 
   toggleToolboxVisible: () => {
-    set((l) => {
-      const next = showRightDrawerTool(l, l.toolboxVisible ? null : 'toolbox');
-      persistLayout(next);
-      return next;
-    });
+    const active = getState().activeView === 'toolbox';
+    if (active) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, toolboxVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('focus');
+    } else {
+      set((l) => {
+        const next = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('development');
+    }
   },
 
   // Force the drawer to a specific tool (used by the drawer's own tab strip), or
   // null to close it. Unlike the toggles, selecting the active tab does not close.
   setRightDrawerTool: (tool: RightDrawerTool | null) => {
-    set((l) => {
-      const next = showRightDrawerTool(l, tool);
-      persistLayout(next);
-      return next;
-    });
+    if (tool === null) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('focus');
+    } else {
+      set((l) => {
+        const next = {
+          ...l,
+          activeView: tool as ActiveView,
+          lastAuxView: tool as ActiveView,
+          httpVisible: tool === 'http',
+          dbVisible: tool === 'db',
+          containersVisible: tool === 'containers',
+          toolboxVisible: tool === 'toolbox',
+          envVisible: tool === 'env'
+        };
+        persistLayout(next);
+        return next;
+      });
+      requestAmbientLayout('development');
+    }
   },
 
   setRightDrawerWidth: (width: number) => {
