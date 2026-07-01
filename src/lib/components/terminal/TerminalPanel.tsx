@@ -4,21 +4,28 @@ import {
   activePaneIndex,
   activeSessionId,
   activateSessionInPane,
-  assignToPane,
-  createTerminalSession,
-  focusPane,
+  assignToPane as assignToPaneOrig,
+  createTerminalSession as createTerminalSessionOrig,
+  focusPane as focusPaneOrig,
   getLayoutPaneCount,
   gridLayout,
   isAgentSession,
   killSession,
-  paneAssignments,
-  registerMosaicClose,
-  registerMosaicGrow,
+  paneAssignments as paneAssignmentsOrig,
+  registerMosaicClose as registerMosaicCloseOrig,
+  registerMosaicGrow as registerMosaicGrowOrig,
   sessions,
-  setGridLayout,
-  setTerminalMosaic,
+  setGridLayout as setGridLayoutOrig,
+  setTerminalMosaic as setTerminalMosaicOrig,
   terminalMosaic,
+  devSessions,
+  devActiveSessionId,
+  devPaneAssignments,
+  devActivePaneIndex,
+  devGridLayout,
+  devTerminalMosaic,
   type GridLayout,
+  type TerminalMosaic,
 } from '$lib/stores/terminal';
 import { activeProject } from '$lib/stores/workspace';
 import { activeFile } from '$lib/stores/editor';
@@ -77,16 +84,47 @@ function dispatchPaneResizeEnd() {
 // the drag itself from a plain mousedown on the pane titlebar.
 const PANE_DRAG_THRESHOLD = 5;
 
-export default function TerminalPanel() {
-  const allSessions = useStore(sessions);
-  const activeId = useStore(activeSessionId);
-  const assignments = useStore(paneAssignments);
-  const activePane = useStore(activePaneIndex);
-  const currentLayout = useStore(gridLayout);
-  const storeMosaic = useStore(terminalMosaic);
+export default function TerminalPanel({ devMode = false }: { devMode?: boolean } = {}) {
+  const allSessions = useStore(devMode ? devSessions : sessions);
+  const activeId = useStore(devMode ? devActiveSessionId : activeSessionId);
+  const assignments = useStore(devMode ? devPaneAssignments : paneAssignmentsOrig);
+  const activePane = useStore(devMode ? devActivePaneIndex : activePaneIndex);
+  const currentLayout = useStore(devMode ? devGridLayout : gridLayout);
+  const storeMosaic = useStore(devMode ? devTerminalMosaic : terminalMosaic);
   const project = useStore(activeProject);
   const file = useStore(activeFile);
   const tabsRef = useAction<HTMLDivElement>(clampHorizontalScroll);
+
+  const paneAssignments = devMode ? devPaneAssignments : paneAssignmentsOrig;
+
+  // Shadow imported functions to automatically append devMode parameter
+  const createTerminalSession = useCallback((cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null }) => {
+    return createTerminalSessionOrig(cwd, targetPaneIndex, projectId, { ...opts, isDev: devMode });
+  }, [devMode]);
+
+  const focusPane = useCallback((paneIdx: number) => {
+    return focusPaneOrig(paneIdx, devMode);
+  }, [devMode]);
+
+  const setGridLayout = useCallback((layout: GridLayout) => {
+    return setGridLayoutOrig(layout, devMode);
+  }, [devMode]);
+
+  const setTerminalMosaic = useCallback((mosaic: TerminalMosaic | null) => {
+    return setTerminalMosaicOrig(mosaic, devMode);
+  }, [devMode]);
+
+  const assignToPane = useCallback((paneIdx: number, sessionId: number | null) => {
+    return assignToPaneOrig(paneIdx, sessionId, devMode);
+  }, [devMode]);
+
+  const registerMosaicGrow = useCallback((fn: (() => number) | null) => {
+    return registerMosaicGrowOrig(fn, devMode);
+  }, [devMode]);
+
+  const registerMosaicClose = useCallback((fn: ((paneIndex: number) => void) | null) => {
+    return registerMosaicCloseOrig(fn, devMode);
+  }, [devMode]);
 
   // Prefer a persisted hand-built arrangement so it survives a remount (e.g. the
   // workspace ambient mode switching tears this panel down and rebuilds it
@@ -846,6 +884,7 @@ export default function TerminalPanel() {
                 onActivate={() => focusPane(maximizedCell.index)}
                 onClose={() => closePane(maximizedCell.index)}
                 onMaximize={() => setMaximizedPaneIndex(null)}
+                devMode={devMode}
               />
             )}
           </div>
@@ -883,6 +922,7 @@ export default function TerminalPanel() {
                             onResizeRight={colIdx < columns.length - 1 ? (e) => startColResize(e, colIdx) : undefined}
                             onResizeTop={cellIdx > 0 ? (e) => startCellResize(e, colIdx, cellIdx - 1) : undefined}
                             onResizeBottom={cellIdx < column.cells.length - 1 ? (e) => startCellResize(e, colIdx, cellIdx) : undefined}
+                            devMode={devMode}
                           />
                         ) : (
                           <div className={`empty-pane-container${activePane === cell.index ? ' active' : ''}`}>

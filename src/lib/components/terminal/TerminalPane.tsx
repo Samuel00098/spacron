@@ -15,7 +15,7 @@ import {
   unregisterExitCallback,
   getSessionOutputBuffer,
   resizeSession,
-  sessions,
+  sessions as sessionsOrig,
   killSession,
   setSessionExecuting,
   setSessionRole,
@@ -23,14 +23,16 @@ import {
   applyOscPaneTitle,
   appendToCommandBlock,
   finalizeCommandBlockWithExit,
-  paneAssignments,
-  createTerminalSession,
+  paneAssignments as paneAssignmentsOrig,
+  createTerminalSession as createTerminalSessionOrig,
   terminalInputRequest,
   getSessionLabel,
   getAgentDisplayName,
   getSessionPaneDisplayTitle,
   getSessionPaneSecondaryTitle,
   activateSessionInPane,
+  devSessions,
+  devPaneAssignments,
 } from '$lib/stores/terminal';
 import {
   terminalFontSize,
@@ -125,10 +127,6 @@ async function openUrlInPreview(rawUrl: string) {
   setActiveView('preview');
 }
 
-function isSessionExecutingNow(id: number) {
-  return get(sessions).find((session) => session.id === id)?.isExecuting ?? false;
-}
-
 export default function TerminalPane({
   sessionId,
   paneIndex,
@@ -142,6 +140,7 @@ export default function TerminalPane({
   onResizeRight,
   onResizeTop,
   onResizeBottom,
+  devMode = false,
 }: {
   sessionId: number;
   paneIndex: number;
@@ -155,7 +154,19 @@ export default function TerminalPane({
   onResizeRight?: (e: React.MouseEvent) => void;
   onResizeTop?: (e: React.MouseEvent) => void;
   onResizeBottom?: (e: React.MouseEvent) => void;
+  devMode?: boolean;
 }) {
+  const sessions = devMode ? devSessions : sessionsOrig;
+  const paneAssignments = devMode ? devPaneAssignments : paneAssignmentsOrig;
+
+  function isSessionExecutingNow(id: number) {
+    return get(sessions).find((session) => session.id === id)?.isExecuting ?? false;
+  }
+
+  const createTerminalSession = (cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null }) => {
+    return createTerminalSessionOrig(cwd, targetPaneIndex, projectId, { ...opts, isDev: devMode });
+  };
+
   const allSessions = useStore(sessions);
   const activeThemeValue = useStore(activeTheme);
   const fontFamily = useStore(resolvedFontFamily);

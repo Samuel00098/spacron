@@ -91,7 +91,7 @@ type AuxPanelId =
   | 'env';
 
 type AgentRoomId = `agent:${number}`;
-type RoomId = 'workspace' | 'terminal' | AuxPanelId | AgentRoomId;
+type RoomId = 'workspace' | 'terminal' | 'dev-terminal' | AuxPanelId | AgentRoomId;
 type AmbientLayout = 'focus' | 'development' | 'gallery' | 'preview';
 type GallerySize = { width: number; height: number };
 
@@ -106,6 +106,7 @@ type ActivityItem = {
 const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   workspace: 'Workspace',
   terminal: 'Terminal',
+  'dev-terminal': 'Terminal',
   editor: 'Editor',
   preview: 'Preview',
   review: 'Review',
@@ -630,6 +631,7 @@ export default function AppShell() {
   const [layoutSwitching, setLayoutSwitching] = useState(false);
   const terminalRoomOpen = useStore(terminalRoomOpenStore);
   const setTerminalRoomOpen = (val: boolean) => terminalRoomOpenStore.set(val);
+  const [devTerminalRoomOpen, setDevTerminalRoomOpen] = useState(false);
   const [roomOrder, setRoomOrder] = useState<RoomId[]>(['workspace', 'terminal']);
   const [draggingRoom, setDraggingRoom] = useState<RoomId | null>(null);
   const [resizingRoom, setResizingRoom] = useState<RoomId | null>(null);
@@ -783,6 +785,7 @@ export default function AppShell() {
         // 'workspace' is no longer a center room — its content
         // renders in the LEFT utility drawer (Files/Search/…).
         ...(terminalRoomOpen ? (['terminal'] as RoomId[]) : []),
+        ...(devTerminalRoomOpen ? (['dev-terminal'] as RoomId[]) : []),
         ...agentRoomIds,
         ...visiblePanels.map((panel) => panel.id),
       ];
@@ -792,7 +795,7 @@ export default function AppShell() {
       }
       return list;
     },
-    [agentRoomIds, terminalRoomOpen, visiblePanels, ambientLayout],
+    [agentRoomIds, terminalRoomOpen, devTerminalRoomOpen, visiblePanels, ambientLayout],
   );
 
   const visibleRooms = useMemo(
@@ -2065,6 +2068,11 @@ export default function AppShell() {
         if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
         return;
       }
+      if (id === 'dev-terminal') {
+        setDevTerminalRoomOpen(false);
+        if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
+        return;
+      }
 
       if (isAgentRoomId(id)) {
         void killSession(getAgentRoomSessionId(id));
@@ -2467,6 +2475,7 @@ export default function AppShell() {
       const session = getAgentSessionForRoom(id);
       return session ? getSessionPromptTargetLabel(session, allTerminalSessions) : 'Agent';
     }
+    if (id === 'dev-terminal') return 'Terminal';
     if (id === 'workspace') {
       const tab = layoutState.sidebarTab;
       if (tab === 'git') return 'Source Control';
@@ -2486,7 +2495,7 @@ export default function AppShell() {
       const session = getAgentSessionForRoom(id);
       return session?.agentPreset ?? 'agent';
     }
-    if (id === 'terminal') return 'terminal';
+    if (id === 'terminal' || id === 'dev-terminal') return 'terminal';
     if (id === 'workspace') return layoutState.sidebarTab;
     return 'tool';
   }
@@ -2499,6 +2508,7 @@ export default function AppShell() {
       case 'workspace':
         return <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon>;
       case 'terminal':
+      case 'dev-terminal':
         return <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>;
       case 'editor':
         return <Icon><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></Icon>;
@@ -2550,6 +2560,14 @@ export default function AppShell() {
       return (
         <div className="terminal-room-body">
           <TerminalPanel />
+          {projectSwitching && <div className="project-switch-overlay" />}
+        </div>
+      );
+    }
+    if (id === 'dev-terminal') {
+      return (
+        <div className="terminal-room-body dev-terminal">
+          <TerminalPanel devMode={true} />
           {projectSwitching && <div className="project-switch-overlay" />}
         </div>
       );
@@ -2985,7 +3003,7 @@ export default function AppShell() {
         ? layoutState.activeView
         : (layoutState.lastAuxView && ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.lastAuxView) ? layoutState.lastAuxView : 'toolbox');
       
-      const secondaryRooms = visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room));
+      const secondaryRooms = visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room));
       
       return (
         <>
@@ -3049,7 +3067,12 @@ export default function AppShell() {
             >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}
 
-              <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${((ambientLayout === 'preview' || ambientLayout === 'development') && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ? ` ${ambientLayout}-solo` : ''}`} aria-label="Soryq ambient layout">
+              <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
+                (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
+                (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
+                  ? ` ${ambientLayout}-solo`
+                  : ''
+              }`} aria-label="Soryq ambient layout">
                 {renderAmbientLayout()}
               </main>
 
@@ -3080,15 +3103,15 @@ export default function AppShell() {
                       <div className="room-dock-separator-mini" style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.08)', margin: '0 6px' }} />
                       <ActivityButton
                         item={{
-                          id: 'terminal',
+                          id: 'dev-terminal',
                           title: 'Toggle Terminal panel',
-                          active: terminalRoomOpen && !minimizedRooms.has('terminal'),
+                          active: devTerminalRoomOpen && !minimizedRooms.has('dev-terminal'),
                           onClick: () => {
-                            if (terminalRoomOpen && !minimizedRooms.has('terminal')) {
-                              minimizeRoom('terminal');
+                            if (devTerminalRoomOpen && !minimizedRooms.has('dev-terminal')) {
+                              minimizeRoom('dev-terminal');
                             } else {
-                              setTerminalRoomOpen(true);
-                              restoreRoom('terminal');
+                              setDevTerminalRoomOpen(true);
+                              restoreRoom('dev-terminal');
                             }
                           },
                           icon: <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>

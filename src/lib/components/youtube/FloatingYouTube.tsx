@@ -95,25 +95,21 @@ function clampToViewportFull(s: WindowState): WindowState {
 
 export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
   const [state, setState] = useState<WindowState>(loadState);
-  const [interacting, setInteracting] = useState<null | 'move' | 'resize'>(null);
+  const [interacting, setInteracting] = useState<null | 'resize'>(null);
 
   // Drag/resize bookkeeping — the live gesture writes here, committing to React
   // state on each pointermove so the window tracks the cursor 1:1.
   const gestureRef = useRef<{
-    mode: 'move' | 'resize';
+    mode: 'resize';
     /** For resize gestures: which edges/corner the drag moves. */
     dir: ResizeDir | null;
     startX: number;
     startY: number;
-    origX: number;
-    origY: number;
     origW: number;
     origH: number;
   } | null>(null);
 
-  // Persist geometry + opacity (debounced via rAF would be overkill — this only
-  // fires at the end of gestures and on opacity changes, not per pointermove
-  // because state updates already batch within a frame).
+  // Persist geometry + opacity
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -122,19 +118,12 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
     }
   }, [state]);
 
-  // Re-clamp if the OS window shrinks so the pop-up can't get stranded off-screen.
-  useEffect(() => {
-    const onResize = () => setState((s) => clampToViewport(s));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
   // Listen for global restore event (e.g. from clicking dock when minimized)
   useEffect(() => {
     const handleRestore = () => {
       setState((s) => {
         if (s.minimized) {
-          return clampToViewportFull({ ...s, minimized: false });
+          return { ...s, minimized: false };
         }
         return s;
       });
@@ -142,26 +131,6 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
     window.addEventListener('soryq-youtube-restore', handleRestore);
     return () => window.removeEventListener('soryq-youtube-restore', handleRestore);
   }, []);
-
-  const startMove = useCallback(
-    (e: React.PointerEvent) => {
-      // Ignore drags that start on a control (close button, opacity slider).
-      if ((e.target as HTMLElement).closest('.fy-control')) return;
-      e.preventDefault();
-      gestureRef.current = {
-        mode: 'move',
-        dir: null,
-        startX: e.clientX,
-        startY: e.clientY,
-        origX: state.x,
-        origY: state.y,
-        origW: state.width,
-        origH: state.height,
-      };
-      setInteracting('move');
-    },
-    [state],
-  );
 
   const startResize = useCallback(
     (e: React.PointerEvent, dir: ResizeDir) => {
@@ -172,8 +141,6 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
         dir,
         startX: e.clientX,
         startY: e.clientY,
-        origX: state.x,
-        origY: state.y,
         origW: state.width,
         origH: state.height,
       };
@@ -193,29 +160,20 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
       if (!g) return;
       const dx = e.clientX - g.startX;
       const dy = e.clientY - g.startY;
-      if (g.mode === 'move') {
-        setState((s) => clampToViewport({ ...s, x: g.origX + dx, y: g.origY + dy }));
-      } else {
-        const dir = g.dir ?? 'se';
-        const east = dir.includes('e');
+      if (g.mode === 'resize') {
+        const dir = g.dir ?? 'nw';
         const west = dir.includes('w');
         const north = dir.includes('n');
-        const south = dir.includes('s');
 
-        let { x, y, width, height } = { x: g.origX, y: g.origY, width: g.origW, height: g.origH };
-        // Right / bottom edges grow the box outward from its top-left anchor.
-        if (east) width = Math.max(MIN_W, g.origW + dx);
-        if (south) height = Math.max(MIN_H, g.origH + dy);
-        // Left / top edges move the anchor too, so the opposite edge stays put.
+        let { width, height } = { width: g.origW, height: g.origH };
+        // Left / top edges grow the box outward from the bottom-right anchor.
         if (west) {
           width = Math.max(MIN_W, g.origW - dx);
-          x = g.origX + (g.origW - width);
         }
         if (north) {
           height = Math.max(MIN_H, g.origH - dy);
-          y = g.origY + (g.origH - height);
         }
-        setState((s) => ({ ...s, x, y, width, height }));
+        setState((s) => ({ ...s, width, height }));
       }
     }
 
@@ -238,8 +196,6 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
     <section
       className={`floating-youtube${interacting ? ' fy-interacting' : ''}${minimized ? ' fy-minimized' : ''}`}
       style={{
-        left: `${state.x}px`,
-        top: `${state.y}px`,
         width: minimized ? `${MIN_W}px` : `${state.width}px`,
         // When minimized the window collapses to its title bar — let height be
         // intrinsic rather than forcing the saved player height.
@@ -250,22 +206,7 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
     >
       <header
         className="fy-titlebar"
-        onPointerDown={startMove}
-        onDoubleClick={() => setState((s) => {
-          const nextMinimized = !s.minimized;
-          if (nextMinimized) {
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
-            return {
-              ...s,
-              minimized: true,
-              x: Math.max(16, vw - MIN_W - 24),
-              y: Math.max(16, vh - 40 - 96),
-            };
-          } else {
-            return clampToViewportFull({ ...s, minimized: false });
-          }
-        })}
+        onDoubleClick={() => setState((s) => ({ ...s, minimized: !s.minimized }))}
       >
         <span className="fy-title">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -292,21 +233,7 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
           </label>
           <button
             className="fy-control fy-minimize"
-            onClick={() => setState((s) => {
-              const nextMinimized = !s.minimized;
-              if (nextMinimized) {
-                const vw = window.innerWidth;
-                const vh = window.innerHeight;
-                return {
-                  ...s,
-                  minimized: true,
-                  x: Math.max(16, vw - MIN_W - 24),
-                  y: Math.max(16, vh - 40 - 96),
-                };
-              } else {
-                return clampToViewportFull({ ...s, minimized: false });
-              }
-            })}
+            onClick={() => setState((s) => ({ ...s, minimized: !s.minimized }))}
             title={minimized ? 'Restore player' : 'Minimize player'}
             aria-label={minimized ? 'Restore player' : 'Minimize player'}
             aria-pressed={minimized}
@@ -349,10 +276,9 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
         {interacting && <div className="fy-shield" />}
       </div>
 
-      {/* Eight resize handles — four edges and four corners — so the window can
-          be grabbed from any side or angle. Hidden while minimized. */}
+      {/* Resize handles - restricted to n, w, nw to anchor the bottom-right corner */}
       {!minimized &&
-        (['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as ResizeDir[]).map((dir) => (
+        (['n', 'w', 'nw'] as ResizeDir[]).map((dir) => (
           <div
             key={dir}
             className={`fy-resize fy-resize-${dir}`}

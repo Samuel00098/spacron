@@ -5,6 +5,12 @@
 
 .floating-youtube {
   position: fixed;
+  right: 24px;
+  bottom: 108px;
+  left: auto !important;
+  top: auto !important;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 160px);
   z-index: 120; /* above the room dock (z 8) / composer overlays, below modals (9999) */
   display: flex;
   flex-direction: column;
@@ -28,7 +34,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 7px 8px 7px 12px;
-  cursor: grab;
+  cursor: default;
   /* Opaque frosted header so the title + controls stay readable even when the
      video body below is faded to near-transparent. */
   background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
@@ -36,10 +42,6 @@
   -webkit-backdrop-filter: blur(22px) saturate(1.1);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
-}
-
-.floating-youtube.fy-interacting .fy-titlebar {
-  cursor: grabbing;
 }
 
 .floating-youtube .fy-title {
