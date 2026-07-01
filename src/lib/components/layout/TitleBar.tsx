@@ -189,21 +189,23 @@ export default function TitleBar() {
         data-tauri-drag-region
       >
         <div className="titlebar-controls-container" style={controlsContainerStyle}>
-          <button
-            className="titlebar-hud-trigger"
-            onClick={toggleProjectHUD}
-            title="Search projects and collections (Ctrl+K)"
-          >
-            <svg className="hud-trigger-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            <span className="hud-trigger-text">
-              <span className="hud-trigger-collection">{workspace?.name || 'Select Collection'}</span>
-              {project && <span className="hud-trigger-separator">/</span>}
-              {project && <span className="hud-trigger-project">{project.name}</span>}
-            </span>
-            <kbd className="hud-trigger-kbd">Ctrl K</kbd>
-          </button>
+          {workspaceId && (
+            <button
+              className="titlebar-hud-trigger"
+              onClick={toggleProjectHUD}
+              title="Search projects and collections (Ctrl+K)"
+            >
+              <svg className="hud-trigger-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="hud-trigger-text">
+                <span className="hud-trigger-collection">{workspace?.name || 'Select Collection'}</span>
+                {project && <span className="hud-trigger-separator">/</span>}
+                {project && <span className="hud-trigger-project">{project.name}</span>}
+              </span>
+              <kbd className="hud-trigger-kbd">Ctrl K</kbd>
+            </button>
+          )}
         </div>
       </div>
 
@@ -217,71 +219,77 @@ export default function TitleBar() {
           </>
         )}
 
-        {/* Quick Capture button */}
-        <button
-          className="icon-btn tb-collapse-1"
-          onClick={openQuickCapture}
-          aria-label="Quick Capture"
-          title="Quick Capture (Ctrl+Shift+Space)"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-          </svg>
-        </button>
+        {workspaceId && (
+          <>
+            {/* Quick Capture button */}
+            <button
+              className="icon-btn tb-collapse-1"
+              onClick={openQuickCapture}
+              aria-label="Quick Capture"
+              title="Quick Capture (Ctrl+Shift+Space)"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+            </button>
 
-        {/* Spotlight Search button */}
-        <button
-          className="icon-btn"
-          onClick={toggleFloatingSearch}
-          aria-label="Search in Files"
-          title="Search in Files (Ctrl+Shift+F)"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.3-4.3" />
-          </svg>
-        </button>
+            {/* Spotlight Search button */}
+            <button
+              className="icon-btn"
+              onClick={toggleFloatingSearch}
+              aria-label="Search in Files"
+              title="Search in Files (Ctrl+Shift+F)"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.3-4.3" />
+              </svg>
+            </button>
+          </>
+        )}
 
         {/* Settings button */}
-        <button
-          className="icon-btn"
-          onClick={openSettings}
-          aria-label="Settings"
-          title="Settings (Ctrl+,)"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+        {workspaceId && (
+          <button
+            className="icon-btn"
+            onClick={openSettings}
+            aria-label="Settings"
+            title="Settings (Ctrl+,)"
           >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+        )}
 
         {/* Window controls — rendered unconditionally, matching the original
             markup (the isMac detection exists but did not gate them). */}
