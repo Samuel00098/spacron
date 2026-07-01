@@ -795,7 +795,8 @@ export default function FloatingPromptBar() {
 
     activateSessionInPane(target.id);
     if (!target.agentPreset) {
-      requestRoomControl('focus', 'terminal');
+      const isDevLayout = get(layoutSnapshot).ambient === 'development';
+      requestRoomControl('focus', isDevLayout ? 'dev-terminal' : 'terminal');
     }
     const taskSummary = target.agentPreset ? summarizeTerminalTask(finalText) : '';
     sendPromptToTarget(target.id, finalText, target.agentPreset);

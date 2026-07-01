@@ -57,7 +57,7 @@ import {
 } from '$lib/services/orchestrator/activity-log';
 import { type AgentTurnOutcome } from '$lib/services/orchestrator/agent-turn-watch';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
-import { requestAmbientLayout, requestRoomControl, requestCanvasControl } from '$lib/stores/layoutControl';
+import { requestAmbientLayout, requestRoomControl, requestCanvasControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
   leaseOrchestratorTerminal,
   releaseOrchestratorTerminal,
@@ -932,8 +932,8 @@ function resolveProjectFilePath(path: string, rootPath: string): string {
 }
 
 /** Find a plain shell terminal to run a command in, creating one if needed. */
-async function ensureRunTerminal(projectId: string, rootPath: string): Promise<number | null> {
-  const sessions = getTerminalProjectState(projectId).sessions;
+async function ensureRunTerminal(projectId: string, rootPath: string, isDev = false): Promise<number | null> {
+  const sessions = getTerminalProjectState(projectId, isDev).sessions;
   // Never reuse a pane that is an agent, busy, or running a detected long-lived
   // process (dev server / build) — running a command there would clobber it.
   const reusable = sessions.filter(
@@ -941,7 +941,7 @@ async function ensureRunTerminal(projectId: string, rootPath: string): Promise<n
   );
   const shell = reusable.find((s) => !s.isExecuting) ?? reusable[0];
   if (shell) return shell.id;
-  return await createTerminalSession(rootPath || undefined, undefined, projectId);
+  return await createTerminalSession(rootPath || undefined, undefined, projectId, { isDev });
 }
 
 function executeTaskAction(action: Extract<OrchestratorAction, { kind: 'task' }>, projectId: string): boolean {
@@ -984,7 +984,15 @@ export async function executeAppAction(
   switch (action.kind) {
     case 'navigate': {
       const v = action.view.trim().toLowerCase();
-      if (v === 'terminal') { showTerminal(); return true; }
+      if (v === 'terminal') {
+        const isDev = get(layoutSnapshot).ambient === 'development';
+        if (isDev) {
+          requestRoomControl('focus', 'dev-terminal');
+        } else {
+          showTerminal();
+        }
+        return true;
+      }
       if (v === 'settings') { openSettings(); return true; }
       if (!NAVIGABLE_VIEWS.includes(v as (typeof NAVIGABLE_VIEWS)[number])) {
         showToast(`I don't know a "${action.view}" view`, 'warning', 3500);
@@ -1019,13 +1027,16 @@ export async function executeAppAction(
     case 'run': {
       const command = action.command.trim();
       if (!command) return false;
-      const sid = await ensureRunTerminal(projectId, rootPath);
+      const isDev = get(layoutSnapshot).ambient === 'development';
+      const sid = await ensureRunTerminal(projectId, rootPath, isDev);
       if (sid == null) {
         showToast('No terminal available to run that', 'error', 4000);
         return false;
       }
-      showTerminal();
-      requestRoomControl('focus', 'terminal');
+      if (!isDev) {
+        showTerminal();
+      }
+      requestRoomControl('focus', isDev ? 'dev-terminal' : 'terminal');
       sendPromptToSession(sid, command);
       return true;
     }
