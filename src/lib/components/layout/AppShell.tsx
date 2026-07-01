@@ -904,13 +904,16 @@ export default function AppShell() {
       if (['last', 'it', 'that', 'that one', 'focused', 'active', 'current'].includes(wanted)) {
         return activeRoom;
       }
+      const isDevLayout = ambientLayout === 'development';
+      const targetTerminalId: RoomId = isDevLayout ? 'dev-terminal' : 'terminal';
+
       const direct = openRooms.find((id) => id.toLowerCase() === wanted);
       if (direct) return direct;
       const synonyms: Record<string, RoomId> = {
         files: 'workspace', sidebar: 'workspace', explorer: 'workspace',
-        console: 'terminal', shell: 'terminal',
+        console: targetTerminalId, shell: targetTerminalId, terminal: targetTerminalId,
       };
-      if (synonyms[wanted] && openRooms.includes(synonyms[wanted])) return synonyms[wanted];
+      if (synonyms[wanted]) return synonyms[wanted];
       return (
         openRooms.find((id) => {
           const labels = [roomTitle(id), roomKind(id), id].map((label) => label.toLowerCase());
@@ -1954,6 +1957,7 @@ export default function AppShell() {
       });
       setFocusedRoom(id);
       if (id === 'terminal') setTerminalRoomOpen(true);
+      if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
     });
   }
 
@@ -1965,6 +1969,7 @@ export default function AppShell() {
         return next;
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
+      if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
       if (activeRoom && activeRoom !== id) {
         setSecondaryRoom(activeRoom);
       }
@@ -1980,6 +1985,7 @@ export default function AppShell() {
         return next;
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
+      if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
       if (id === activeRoom) {
         if (splitRoom) {
           setFocusedRoom(splitRoom);
@@ -2003,6 +2009,7 @@ export default function AppShell() {
       return next;
     });
     if (id === 'terminal') setTerminalRoomOpen(true);
+    if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
     setFocusedRoom(id);
     setGalleryScrollRoom(id);
   }

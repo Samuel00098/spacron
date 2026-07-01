@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
-import { activeSessionId, sendPromptToSession } from '$lib/stores/terminal';
+import { activeSessionId, devActiveSessionId, sendPromptToSession } from '$lib/stores/terminal';
 import {
   addSnippet,
   deleteSnippet,
@@ -12,6 +12,7 @@ import {
   type ShellSnippet,
 } from '$lib/stores/snippets';
 import { useStore } from '$lib/react/useStore';
+import { layoutSnapshot } from '$lib/stores/layoutControl';
 import './TerminalSnippetsPanel.css';
 
 type Scope = 'global' | 'project';
@@ -62,7 +63,8 @@ function RunIcon() {
 
 export default function TerminalSnippetsPanel() {
   const project = useStore(activeProject);
-  const sessionId = useStore(activeSessionId);
+  const isDev = useStore(layoutSnapshot).ambient === 'development';
+  const sessionId = useStore(isDev ? devActiveSessionId : activeSessionId);
   const allSnippets = useStore(snippets);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentScope, setCurrentScope] = useState<Scope>('global');

@@ -5,7 +5,7 @@ import { showToast } from '$lib/stores/notification';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { ensureIdleOrCreateTerminal, sendPromptToSession, setActiveSession } from '$lib/stores/terminal';
 import { showTerminal } from '$lib/stores/layout';
-import { requestRoomControl } from '$lib/stores/layoutControl';
+import { requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import { useStore } from '$lib/react/useStore';
 import { useAction } from '$lib/react/useAction';
 import './EmbeddedPanel.css';
@@ -125,12 +125,15 @@ export default function EmbeddedPanel() {
       return;
     }
 
-    const sessionId = await ensureIdleOrCreateTerminal(proj.root_path, proj.id);
+    const isDev = get(layoutSnapshot).ambient === 'development';
+    const sessionId = await ensureIdleOrCreateTerminal(proj.root_path, proj.id, isDev);
     if (sessionId === null) return;
 
     setActiveSession(sessionId);
-    showTerminal();
-    requestRoomControl('focus', 'terminal');
+    if (!isDev) {
+      showTerminal();
+    }
+    requestRoomControl('focus', isDev ? 'dev-terminal' : 'terminal');
     sendPromptToSession(sessionId, value);
     showToast('Embedded command sent to terminal', 'success');
   }
