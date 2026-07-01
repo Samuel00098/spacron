@@ -294,7 +294,7 @@ export default function ProjectHUD() {
                     </button>
                     
                     <button
-                      className="hud-action-btn"
+                      className="hud-action-btn add-btn"
                       onClick={async () => {
                         // Activate workspace first if not active
                         if (activeWsId !== ws.id) {
@@ -347,9 +347,7 @@ export default function ProjectHUD() {
                       >
                         <div className="project-hud-card-avatar">
                           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="hud-folder-icon">
-                            <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2H3V6z" fill="currentColor" fillOpacity="0.12" />
-                            <path d="M3 10h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8z" fill="currentColor" fillOpacity="0.25" />
-                            <circle cx="12" cy="15" r="1.5" fill="currentColor" className="hud-folder-core" />
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="currentColor" fillOpacity="0.15" />
                           </svg>
                         </div>
                         <div className="project-hud-card-info">

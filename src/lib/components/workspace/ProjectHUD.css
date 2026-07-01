@@ -173,9 +173,9 @@
 .hud-collection-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  gap: 6px;
+  opacity: 0.72;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hud-collection-header:hover .hud-collection-actions {
@@ -183,27 +183,41 @@
 }
 
 .hud-action-btn {
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  width: 24px;
-  height: 24px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   color: var(--text-muted);
-  transition: all 0.15s;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hud-action-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.hud-action-btn.add-btn {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.hud-action-btn.add-btn:hover {
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
 }
 
 .hud-action-btn.danger:hover {
   background: rgba(248, 113, 113, 0.15);
   color: var(--error);
+  border-color: rgba(248, 113, 113, 0.3);
 }
 
 /* Projects Grid */
@@ -562,4 +576,90 @@
     transform: translateY(0) scale(1);
     opacity: 1;
   }
+}
+
+/* ── Light Theme Overrides ── */
+:root.light-theme .hud-search-input {
+  color: #111116;
+}
+
+:root.light-theme .hud-search-input::placeholder {
+  color: #6a6a7a;
+}
+
+:root.light-theme .hud-esc-badge {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #555566;
+}
+
+:root.light-theme .hud-collection-title {
+  color: #333340;
+}
+
+:root.light-theme .project-hud-card {
+  background: rgba(255, 255, 255, 0.35);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+}
+
+:root.light-theme .project-hud-card.hovered {
+  background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+:root.light-theme .project-hud-card.active {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--accent);
+  box-shadow: 0 4px 12px rgba(var(--accent-rgb, 174, 182, 194), 0.12), inset 0 0 0 1px var(--accent);
+}
+
+:root.light-theme .project-hud-card-name {
+  color: #111116;
+}
+
+:root.light-theme .project-hud-card-path {
+  color: #555566;
+}
+
+:root.light-theme .hud-new-collection-input {
+  background: rgba(255, 255, 255, 0.6) !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #111116 !important;
+}
+
+:root.light-theme .hud-new-collection-input:focus {
+  border-color: var(--accent) !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.04) !important;
+}
+
+:root.light-theme .hud-action-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: #555566;
+}
+
+:root.light-theme .hud-action-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #111116;
+}
+
+:root.light-theme .hud-action-btn.add-btn {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: color-mix(in srgb, var(--accent) 80%, black);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+:root.light-theme .hud-action-btn.add-btn:hover {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+:root.light-theme .hud-shortcuts-help kbd {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #555566;
 }
