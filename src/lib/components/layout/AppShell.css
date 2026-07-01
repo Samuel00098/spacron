@@ -82,29 +82,54 @@
 
 .app-shell .right-utility-drawer {
   right: 0;
-  box-shadow: -14px 0 44px rgba(0, 0, 0, 0.34);
+  /* Liquid glass: frosted translucency */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 40%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    -14px 0 44px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset -1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 40%, transparent);
+}
+
+:root.solid-theme .app-shell .right-utility-drawer {
+  background: var(--bg-secondary) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root.light-theme .app-shell .right-utility-drawer {
+  background: rgba(var(--bg-primary-rgb, 255, 255, 255), 0.88);
+  border-left-color: rgba(0, 0, 0, 0.08);
 }
 
 .app-shell .left-utility-drawer {
   position: fixed !important;
-  top: 14vh !important;
+  top: 10vh !important;
   left: 50% !important;
   transform: translateX(-50%) scale(1) !important;
-  width: 720px !important;
-  height: 540px !important;
+  width: 960px !important;
+  height: 640px !important;
   bottom: auto !important;
   max-width: 92vw;
   max-height: 78vh;
   border-radius: 18px !important;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, rgba(255, 255, 255, 0.14)) !important;
-  background: color-mix(in srgb, var(--bg-secondary) 72%, transparent) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
-  box-shadow: 0 32px 64px -16px rgba(0, 0, 0, 0.7),
-              inset 0 1px 0 rgba(255, 255, 255, 0.15),
-              inset 0 0 1px rgba(255, 255, 255, 0.2) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: 
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent) !important;
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
+  box-shadow: 
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
+    0 32px 64px -16px rgba(0, 0, 0, 0.7) !important;
   z-index: 999 !important;
-  animation: sidebarModalScaleUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: sidebarModalScaleUp 0.3s cubic-bezier(0.34, 1.3, 0.64, 1);
 }
 
 .sidebar-popup-backdrop {
@@ -245,7 +270,8 @@
    deliberately omits this so windows can be placed behind the bar. */
 .app-shell .rooms-table.ambient-focus,
 .app-shell .rooms-table.ambient-development,
-.app-shell .rooms-table.ambient-preview {
+.app-shell .rooms-table.ambient-preview,
+.app-shell .rooms-table.ambient-vibe {
   padding-bottom: var(--overlay-clear);
 }
 
@@ -414,8 +440,70 @@
 }
 
 .app-shell .rooms-table.ambient-gallery {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
   overflow: hidden;
+  padding: 8px;
+  padding-bottom: var(--overlay-clear);
+}
+
+.app-shell .split-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-shell .split-primary:only-child {
+  grid-column: 1 / -1;
+}
+
+.app-shell .split-primary,
+.app-shell .split-secondary {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.app-shell .rooms-table.ambient-vibe {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  overflow: hidden;
+  padding: 8px;
+  padding-bottom: var(--overlay-clear);
+}
+
+.app-shell .vibe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+  align-content: start;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.app-shell .vibe-cell {
+  min-width: 0;
+  min-height: 200px;
+  display: flex;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.app-shell .vibe-empty-msg {
+  margin: auto;
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .app-shell .focused-room {
@@ -453,109 +541,7 @@
   min-height: 0;
 }
 
-/* Freeform "Canvas" mode — a window screen, not a drawing surface. The viewport
-   clips and captures pan/zoom gestures; the world inside it is translated/scaled
-   so window panels can sit at any coordinate. The surface itself is plain so it
-   reads as an open desktop the windows float on, not a sketch board. */
-.app-shell .ambient-canvas {
-  position: relative;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: 12px;
-  cursor: grab;
-  touch-action: none;
-  background: transparent;
-  transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-}
 
-.app-shell .ambient-canvas.panning {
-  cursor: grabbing;
-}
-
-.app-shell .ambient-canvas-world {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-  will-change: transform;
-}
-
-.app-shell .ambient-canvas .room-panel {
-  /* Positioned via inline left/top/width/height in world coordinates. */
-  position: absolute;
-  resize: none;
-  box-shadow: var(--glass-shadow, 0 18px 50px -24px rgba(0, 0, 0, 0.55));
-}
-
-@keyframes room-panel-spawn {
-  from {
-    opacity: 0;
-    transform: scale(0.92) translateY(16px);
-    filter: blur(2px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-    filter: blur(0);
-  }
-}
-
-.app-shell .ambient-canvas .room-panel.arrangeable {
-  animation: room-panel-spawn 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-
-/* In auto-grid mode panels glide to their computed slot when the board reflows
-   (a room opens, closes, or one panel is resized). Live drag/resize opt out of
-   this transition below so the panel under the cursor never lags. */
-.app-shell .ambient-canvas.auto-grid .room-panel.arrangeable {
-  transition:
-    left 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    top 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    width 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    height 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.app-shell .ambient-canvas.auto-grid .room-panel.arrangeable.resizing {
-  transition:
-    left 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    top 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.18s ease;
-}
-
-/* Enable smooth transitions when panels glide to their clean positions (e.g. on opening or resetting)
-   while avoiding transitions during pointer dragging or resizing to eliminate cursor lag. */
-.app-shell .ambient-canvas .room-panel.arrangeable:not(.dragging):not(.resizing) {
-  transition:
-    left 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    top 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    width 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    height 0.34s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-/* Every canvas header is a drag handle (dragging a panel in grid mode breaks the
-   board out into free-form so the move sticks). */
-.app-shell .ambient-canvas .room-header.canvas-drag-handle {
-  cursor: grab;
-}
-
-.app-shell .ambient-canvas .room-panel.dragging .room-header.canvas-drag-handle {
-  cursor: grabbing;
-}
-
-.app-shell .ambient-canvas .minimized-room-stack {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 30;
-  max-width: max(180px, calc(50vw - 380px));
-}
 
 .app-shell .persistent-preview-container {
   position: absolute;
@@ -566,84 +552,6 @@
   box-sizing: border-box;
 }
 
-/* Floating zoom + fit control cluster, pinned to the canvas (not the world, so
-   it stays put while panning/zooming). */
-.app-shell .ambient-canvas-controls {
-  position: absolute;
-  right: 14px;
-  top: 14px;
-  z-index: 20;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px;
-  border-radius: 10px;
-}
-
-.app-shell .canvas-zoom-btn {
-  appearance: none;
-  width: 30px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
-}
-
-.app-shell .canvas-zoom-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.app-shell .canvas-zoom-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.app-shell .canvas-grid-btn.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.app-shell .canvas-grid-btn.active:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
-  color: var(--accent);
-}
-
-.app-shell .canvas-control-divider {
-  width: 1px;
-  align-self: stretch;
-  margin: 4px 2px;
-  background: var(--border-subtle);
-}
-
-.app-shell .canvas-zoom-label {
-  appearance: none;
-  min-width: 52px;
-  height: 28px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
-}
-
-.app-shell .canvas-zoom-label:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
 .app-shell .room-panel {
   flex: 1;
   min-width: 0;
@@ -652,6 +560,17 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 10px;
+  /* Liquid glass: frosted translucency */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, transparent 50%, rgba(255, 255, 255, 0.015) 100%),
+    color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   animation: shell-panel-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: center bottom;
   will-change: transform, opacity;
@@ -661,6 +580,18 @@
     transform 0.38s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.22s ease,
     filter 0.22s ease;
+}
+
+:root.solid-theme .app-shell .room-panel {
+  background: var(--bg-primary) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+:root.light-theme .app-shell .room-panel {
+  background: rgba(var(--bg-primary-rgb, 255, 255, 255), 0.88);
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 .app-shell .room-panel.featured {
@@ -690,43 +621,7 @@
   background: color-mix(in srgb, var(--bg-secondary) 54%, transparent);
 }
 
-.app-shell .room-panel.arrangeable {
-  transition: opacity 0.16s ease, transform 0.16s ease, border-color 0.16s ease;
-}
 
-.app-shell .room-panel.dragging {
-  opacity: 0.55;
-  transform: scale(0.985);
-  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
-}
-
-/* On the canvas a dragged panel follows the cursor 1:1 via left/top, so keep it
-   crisp (no scale wobble, no transform/position transition) and lift it with a
-   stronger shadow + accent ring instead. */
-.app-shell .ambient-canvas .room-panel.dragging {
-  opacity: 1;
-  transform: none;
-  transition: none;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
-    0 30px 70px -30px rgba(0, 0, 0, 0.7);
-}
-
-.app-shell .ambient-canvas .room-panel.resizing {
-  transition: none;
-}
-
-.app-shell .room-panel.resizing {
-  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
-  transition: none;
-  will-change: width, height;
-}
-
-.app-shell .ambient-canvas .room-panel.scroll-armed {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
-    var(--glass-shadow, 0 18px 50px -22px rgba(0, 0, 0, 0.5));
-}
 
 .app-shell .room-title {
   min-width: 0;
@@ -777,68 +672,7 @@
   background: currentColor;
 }
 
-.app-shell .room-resize-grip {
-  appearance: none;
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  z-index: 8;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 6px;
-  background:
-    linear-gradient(135deg, transparent 0 48%, color-mix(in srgb, var(--text-muted) 76%, transparent) 50% 57%, transparent 59%),
-    linear-gradient(135deg, transparent 0 66%, color-mix(in srgb, var(--text-muted) 76%, transparent) 68% 75%, transparent 77%);
-  cursor: nwse-resize;
-  opacity: 0.76;
-}
 
-.app-shell .room-resize-grip:hover,
-.app-shell .room-panel.resizing .room-resize-grip {
-  opacity: 1;
-  background-color: color-mix(in srgb, var(--bg-hover) 86%, transparent);
-}
-
-/* Free-form mode: invisible edge + corner resize hit-targets so a panel can be
-   grabbed from any side or angle. Corners sit above the edges, and all sit
-   below the bottom-right grip so that classic handle stays clickable. */
-.app-shell .room-resize-edge {
-  position: absolute;
-  z-index: 7;
-}
-
-/* Edges — thin strips inset from the corners. */
-.app-shell .room-resize-n,
-.app-shell .room-resize-s {
-  left: 12px;
-  right: 12px;
-  height: 9px;
-  cursor: ns-resize;
-}
-.app-shell .room-resize-e,
-.app-shell .room-resize-w {
-  top: 12px;
-  bottom: 12px;
-  width: 9px;
-  cursor: ew-resize;
-}
-.app-shell .room-resize-n { top: -5px; }
-.app-shell .room-resize-s { bottom: -5px; }
-.app-shell .room-resize-e { right: -5px; }
-.app-shell .room-resize-w { left: -5px; }
-
-/* Corners — small squares overlapping both adjacent edges. */
-.app-shell .room-resize-ne,
-.app-shell .room-resize-nw,
-.app-shell .room-resize-sw {
-  width: 18px;
-  height: 18px;
-  z-index: 8;
-}
-.app-shell .room-resize-ne { top: -5px; right: -5px; cursor: nesw-resize; }
-.app-shell .room-resize-nw { top: -5px; left: -5px; cursor: nwse-resize; }
-.app-shell .room-resize-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
 
 .app-shell .room-kind,
 .app-shell .room-card-kind {
@@ -1097,7 +931,6 @@
 
 @starting-style {
   .app-shell .ambient-secondary-room,
-  .app-shell .ambient-canvas,
   .app-shell .room-stack,
   .app-shell .split-switcher {
     opacity: 0;
@@ -1476,9 +1309,29 @@
   height: 30px;
   padding: 2px;
   border-radius: 9px;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, transparent 50%, rgba(255, 255, 255, 0.02) 100%),
+    color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   flex-shrink: 0;
+}
+
+:root.solid-theme .app-shell .ambient-switcher {
+  background: var(--bg-primary) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+:root.light-theme .app-shell .ambient-switcher {
+  background: rgba(var(--bg-primary-rgb, 255, 255, 255), 0.88);
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 .app-shell .ambient-switch-btn {
@@ -2063,7 +1916,6 @@
   .app-shell .composer-strip .floating-prompt-bar,
   .app-shell .rooms-table.layout-switching .focused-room,
   .app-shell .rooms-table.layout-switching .ambient-secondary-room,
-  .app-shell .rooms-table.layout-switching .ambient-canvas,
   .app-shell .rooms-table.layout-switching .room-stack,
   .app-shell .rooms-table.layout-switching .split-switcher {
     animation-duration: 0.001ms !important;

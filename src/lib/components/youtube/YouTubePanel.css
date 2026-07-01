@@ -5,12 +5,15 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  /* Translucent frosted-glass body so the canvas/wallpaper shows through. */
-  background: color-mix(in srgb, var(--bg-primary) 74%, transparent);
-  backdrop-filter: blur(20px) saturate(1.1);
-  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a diagonal gloss sheen reflection */
+  background: 
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
+    color-mix(in srgb, var(--bg-primary) calc(var(--frost-surface, 0.55) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   color: var(--text-primary);
   overflow: hidden;
+  border-radius: inherit;
 }
 
 .youtube-panel .yt-toolbar {

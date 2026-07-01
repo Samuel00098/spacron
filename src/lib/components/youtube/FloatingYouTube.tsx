@@ -197,9 +197,7 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
       className={`floating-youtube${interacting ? ' fy-interacting' : ''}${minimized ? ' fy-minimized' : ''}`}
       style={{
         width: minimized ? `${MIN_W}px` : `${state.width}px`,
-        // When minimized the window collapses to its title bar — let height be
-        // intrinsic rather than forcing the saved player height.
-        ...(minimized ? {} : { height: `${state.height}px` }),
+        height: minimized ? '38px' : `${state.height}px`,
       }}
       role="dialog"
       aria-label="YouTube pop-up player"

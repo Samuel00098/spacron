@@ -16,12 +16,24 @@
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* The frame itself is transparent so that when the body's opacity is lowered
-     the actual app shows through the video — not a frosted backdrop. The title
-     bar carries its own opaque background (below) so the controls stay legible. */
-  background: transparent;
-  border: 1px solid var(--border);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a diagonal gloss sheen reflection */
+  background: 
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
+    color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)), /* bright top rim catch */
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18), /* dark bottom rim shade */
+    var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
+  transition: 
+    width 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    height 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .floating-youtube.fy-interacting {
@@ -35,12 +47,9 @@
   gap: 8px;
   padding: 7px 8px 7px 12px;
   cursor: default;
-  /* Opaque frosted header so the title + controls stay readable even when the
-     video body below is faded to near-transparent. */
-  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
-  backdrop-filter: blur(22px) saturate(1.1);
-  -webkit-backdrop-filter: blur(22px) saturate(1.1);
-  border-bottom: 1px solid var(--border);
+  /* Frosted header that blends with the container */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%), color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.55) * 100%), transparent);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex: 0 0 auto;
 }
 
@@ -87,17 +96,21 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1), 
+              color 0.2s cubic-bezier(0.16, 1, 0.3, 1), 
+              transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .floating-youtube .fy-minimize:hover {
   background: color-mix(in srgb, var(--text-primary) 12%, transparent);
   color: var(--text-primary);
+  transform: scale(1.06);
 }
 
 .floating-youtube .fy-close:hover {
   background: color-mix(in srgb, var(--danger, #e5484d) 22%, transparent);
   color: var(--text-primary);
+  transform: scale(1.06);
 }
 
 /* Minimized: the section height collapses to the title bar (height is intrinsic
