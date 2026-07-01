@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
-import { activeSessionId, writeToSession, isAgentSession } from '$lib/stores/terminal';
+import { activeSessionId, devActiveSessionId, writeToSession, isAgentSession } from '$lib/stores/terminal';
 import { sendChatMessage, getDispatchableAgents } from '$lib/stores/orchestrator';
 import { showToast } from '$lib/stores/notification';
 import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
+import { layoutSnapshot } from '$lib/stores/layoutControl';
 import './PlaybooksPanel.css';
 
 interface PlaybookStep {
@@ -87,7 +88,8 @@ function parsePlaybook(content: string, filename: string, path: string): Playboo
 
 export default function PlaybooksPanel() {
   const project = useStore(activeProject);
-  const activeId = useStore(activeSessionId);
+  const isDev = useStore(layoutSnapshot).ambient === 'development';
+  const activeId = useStore(isDev ? devActiveSessionId : activeSessionId);
   
   const [playbooks, setPlaybooks] = useState<PlaybookData[]>([]);
   const [selectedPlaybook, setSelectedPlaybook] = useState<PlaybookData | null>(null);

@@ -4,8 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   activeSessionId,
+  devActiveSessionId,
   manualPromptTargetId,
   sessions,
+  devSessions,
   commandHistory,
   addHistoryEntry,
   setSessionExecuting,
@@ -34,11 +36,11 @@ import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voi
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
+import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
   orchestratorTasks,
   sendChatMessage,
   chatMessages,
-  agentCenterOpen,
   agentForcedAgent,
   agentVoiceModeActive,
   type ChatMessage,
@@ -169,16 +171,16 @@ function useSyncedState<T>(initialValue: T) {
 }
 
 export default function FloatingPromptBar() {
-  const $activeSessionId = useStore(activeSessionId);
+  const isDev = useStore(layoutSnapshot).ambient === 'development';
+  const $activeSessionId = useStore(isDev ? devActiveSessionId : activeSessionId);
   const $manualPromptTargetId = useStore(manualPromptTargetId);
-  const $sessions = useStore(sessions);
+  const $sessions = useStore(isDev ? devSessions : sessions);
   const $commandHistory = useStore(commandHistory);
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
   const $activeProject = useStore(activeProject);
   const $orchestratorTasks = useStore(orchestratorTasks);
   const $chatMessages = useStore(chatMessages);
-  const $agentCenterOpen = useStore(agentCenterOpen);
   const $promptBarInput = useStore(promptBarInput);
   const $promptBarImage = useStore(promptBarImage);
   const $promptBarFocusRequest = useStore(promptBarFocusRequest);
@@ -206,6 +208,8 @@ export default function FloatingPromptBar() {
   const barElRef = useRef<HTMLDivElement | null>(null);
   const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(null);
   const [lastExplorerDragPoint, setLastExplorerDragPoint] = useState<{ x: number; y: number } | null>(null);
+  // Guard: when the React drop handler fires first, suppress the document-level handler
+  const internalDropHandledRef = useRef(false);
   const [, setIsHovered] = useState(false);
   const [, setIsFocused] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -215,7 +219,6 @@ export default function FloatingPromptBar() {
   const voiceDraftBaseRef = useRef('');
   const [voiceDraftText, setVoiceDraftText, voiceDraftTextRef] = useSyncedState('');
   const [isAgentMode, setIsAgentMode] = useState(true);
-  const prevoiceCenterRef = useRef(false);
   const voiceHeldRef = useRef(false);
   const [agentSending, setAgentSending, agentSendingRef] = useSyncedState(false);
   const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] = useSyncedState(false);
@@ -223,6 +226,8 @@ export default function FloatingPromptBar() {
   const lastSpokenMessageKeyRef = useRef<string | null>(null);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const transcriptElRef = useRef<HTMLDivElement | null>(null);
+  const transcriptStuckToBottomRef = useRef(true);
 
   const hasPromptText = inputValue.trim().length > 0;
   const isActive = true;
@@ -379,13 +384,14 @@ export default function FloatingPromptBar() {
   }, []);
 
   const resolvePromptTarget = useCallback(() => {
-    const allSessions = get(sessions);
+    const isDevLayout = get(layoutSnapshot).ambient === 'development';
+    const allSessions = get(isDevLayout ? devSessions : sessions);
     const pinnedId = get(manualPromptTargetId);
     if (pinnedId !== null) {
       const manual = allSessions.find((s) => s.id === pinnedId && s.isRunning);
       if (manual) return manual;
     }
-    const currentActiveSessionId = get(activeSessionId);
+    const currentActiveSessionId = get(isDevLayout ? devActiveSessionId : activeSessionId);
     const currentActiveTerminal = allSessions.find((session) => session.id === currentActiveSessionId) ?? null;
     // The focused pane wins only when it's itself an agent (the one you're looking
     // at). Otherwise prefer the most recently used running agent over a non-agent
@@ -415,14 +421,11 @@ export default function FloatingPromptBar() {
       return;
     }
     setIsAgentMode(true);
-    if (projectChatMessages.length > 0 || waitingTaskCount > 0) {
-      agentCenterOpen.set(true);
-    }
     setHistoryOpen(false);
     setTargetPickerOpen(false);
     setSpawnOpen(false);
     focusInput();
-  }, [isAgentMode, projectChatMessages, waitingTaskCount, focusInput]);
+  }, [isAgentMode, focusInput]);
 
   const handleShellFocusOut = useCallback((event: React.FocusEvent) => {
     setIsFocused(false);
@@ -671,9 +674,6 @@ export default function FloatingPromptBar() {
     setIsTtsSpeaking(false);
     lastSpokenMessageKeyRef.current = null;
     stopSpeaking();
-    // Restore the command center to exactly its pre-voice state (open or closed)
-    // so leaving voice mode is predictable rather than leaving it stuck open.
-    agentCenterOpen.set(prevoiceCenterRef.current);
     setVoiceLocked(false);
     setVoiceHeld(false);
     setVoiceStopping(true);
@@ -689,8 +689,6 @@ export default function FloatingPromptBar() {
       openSettings();
       return;
     }
-    prevoiceCenterRef.current = get(agentCenterOpen);
-    agentCenterOpen.set(false);
     // Seed with the current last assistant message so entering voice mode opens
     // straight into listening instead of re-speaking the reply already on screen.
     const lastMsg = projectChatMessages.at(-1);
@@ -714,7 +712,6 @@ export default function FloatingPromptBar() {
   const toggleAgentMode = useCallback(() => {
     if (isAgentMode) {
       if (voiceModeActive) stopAgentVoice();
-      agentCenterOpen.set(false);
       setIsAgentMode(false);
       focusInput();
       return;
@@ -730,12 +727,6 @@ export default function FloatingPromptBar() {
     const finalText = appendAttachmentPaths(promptText, paths);
     if (!finalText) return;
     setInputValue('');
-    // In voice mode the orb overlay owns the screen, so don't pop the command
-    // center open behind it — stopAgentVoice restores its prior state on exit.
-    if (!voiceModeActive) {
-      agentCenterOpen.set(true);
-      requestRoomControl('focus', 'orchestrator');
-    }
     setAgentSending(true);
     try {
       await sendChatMessage($activeProject.id, $activeProject.root_path, finalText, {
@@ -744,15 +735,12 @@ export default function FloatingPromptBar() {
       });
     } finally {
       setAgentSending(false);
-      // Resume listening once dispatch finishes if the spoken reply already ended
-      // (TTS may run and complete during the background recon/spawn above). If TTS
-      // is still playing, speakResponse's finally handles the restart instead.
       resumeVoiceLoopRef.current();
     }
     resetHistoryCursor();
       requestAnimationFrame(adjustInputHeight);
       focusInput();
-  }, [$activeProject, materializeAttachments, appendAttachmentPaths, inputValueRef, voiceModeActive, resetHistoryCursor, adjustInputHeight, focusInput]);
+  }, [$activeProject, materializeAttachments, appendAttachmentPaths, inputValueRef, resetHistoryCursor, adjustInputHeight, focusInput]);
 
   useEffect(() => {
     submitAgentMessageRef.current = submitAgentMessage;
@@ -781,9 +769,14 @@ export default function FloatingPromptBar() {
 
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
   useEffect(() => {
-    if (!isAgentMode || voiceModeActive) return;
-    if (waitingTaskCount > 0) agentCenterOpen.set(true);
+    void waitingTaskCount; // subscribe but don't open panel — orchestrator panel removed
   }, [isAgentMode, voiceModeActive, waitingTaskCount]);
+
+  // Auto-scroll transcript to bottom whenever the displayed content changes
+  useEffect(() => {
+    const el = transcriptElRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [projectChatMessages.length, voiceDraftText, isListening, agentSending]);
 
   const submitPrompt = useCallback(async () => {
     if (isAgentMode) { await submitAgentMessage(); return; }
@@ -1154,6 +1147,10 @@ export default function FloatingPromptBar() {
 
     event.preventDefault();
     event.stopPropagation();
+    // Signal to the document-level handler (which fires after React's synthetic
+    // event) that this drop was already handled — prevents the path being added twice.
+    internalDropHandledRef.current = true;
+    queueMicrotask(() => { internalDropHandledRef.current = false; });
     updateExplorerDragPoint(event.clientX, event.clientY);
     setIsDragOver(false);
     attachPathsToInput([droppedPath]);
@@ -1279,17 +1276,21 @@ export default function FloatingPromptBar() {
 
     if (event.key !== 'Alt' || event.location !== KeyboardEvent.DOM_KEY_LOCATION_LEFT || event.repeat || isRefining) return;
 
-    // For starting, require focus to be within the prompt bar
+    // In agent mode, Alt always toggles voice regardless of focus —
+    // the transcript area doesn't hold keyboard focus so the old focus
+    // guard would prevent the shortcut from ever firing.
+    if (isAgentMode) {
+      event.preventDefault();
+      toggleAgentVoiceMode();
+      return;
+    }
+
+    // In non-agent mode, require focus to be within the prompt bar
     const activeElement = document.activeElement;
     if (!shellElRef.current || !activeElement || !shellElRef.current.contains(activeElement)) return;
 
     event.preventDefault();
-
-    if (isAgentMode) {
-      toggleAgentVoiceMode();
-    } else {
-      void toggleVoiceInput();
-    }
+    void toggleVoiceInput();
   }, [voiceModeActive, isAgentMode, isListening, isRefining, stopAgentVoice, toggleAgentVoiceMode, toggleVoiceInput]);
 
   const handleExplorerDragStart = useCallback((event: Event) => {
@@ -1341,6 +1342,13 @@ export default function FloatingPromptBar() {
   }, [draggedExplorerPath, updateExplorerDragPoint]);
 
   const handleDocumentDrop = useCallback((event: DragEvent) => {
+    // Skip if the React synthetic handler already processed this drop (prevents duplicates).
+    if (internalDropHandledRef.current) {
+      setDraggedExplorerPath(null);
+      setLastExplorerDragPoint(null);
+      setIsDragOver(false);
+      return;
+    }
     const droppedPath =
       draggedExplorerPath ||
       event.dataTransfer?.getData('application/x-soryq-path')?.trim() ||
@@ -1504,20 +1512,7 @@ export default function FloatingPromptBar() {
             )}
             {isVoiceActive && (
               <div className="voice-mode-inner">
-                {/* Stop Button */}
-                <button
-                  className="voice-close-btn"
-                  onClick={stopAgentVoice}
-                  aria-label="End voice mode"
-                  title="End voice mode"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-
-                {/* Orb */}
+                {/* Compact orb — left side only, no text here */}
                 <div className={`orb-wrap ${
                   isListening
                     ? 'listening'
@@ -1553,104 +1548,85 @@ export default function FloatingPromptBar() {
                     )}
                   </div>
                 </div>
-
-                {/* Status + live transcript / last response preview */}
-                <div className="text-col">
-                  <p className={`status ${
-                    isListening
-                      ? 'listening'
-                      : isTtsSpeaking
-                        ? 'speaking'
-                        : isRefining || agentSending
-                          ? 'thinking'
-                          : 'idle'
-                  }`}>{
-                    isListening
-                      ? STATUS.listening
-                      : isTtsSpeaking
-                        ? STATUS.speaking
-                        : isRefining || agentSending
-                          ? STATUS.thinking
-                          : STATUS.idle
-                  }</p>
-                  {(isListening ? voiceDraftText : isTtsSpeaking ? lastAssistantDisplay : '') && (
-                    <p className="live-text">{isListening ? voiceDraftText : isTtsSpeaking ? lastAssistantDisplay : ''}</p>
-                  )}
-                </div>
+                {/* Stop button */}
+                <button
+                  className="voice-close-btn"
+                  onClick={stopAgentVoice}
+                  aria-label="End voice mode"
+                  title="End voice mode"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
             )}
-            <button
-              className={`agent-toggle${isAgentMode ? ' active' : ''}`}
-              onClick={toggleAgentMode}
-              title={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
-              aria-label={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="11" width="18" height="10" rx="2" />
-                <path d="M12 7v4" />
-                <circle cx="12" cy="5" r="2" />
-                <path d="M8 16h.01M16 16h.01" />
-                <path d="M5 11V9a7 7 0 0 1 14 0v2" />
-              </svg>
-              {waitingTaskCount > 0 && !isAgentMode && (
-                <span className="agent-toggle-badge">{waitingTaskCount}</span>
-              )}
-            </button>
+            {!voiceModeActive && (
+              <>
+                <button
+                  className={`agent-toggle${isAgentMode ? ' active' : ''}`}
+                  onClick={toggleAgentMode}
+                  title={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
+                  aria-label={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="10" rx="2" />
+                    <path d="M12 7v4" />
+                    <circle cx="12" cy="5" r="2" />
+                    <path d="M8 16h.01M16 16h.01" />
+                    <path d="M5 11V9a7 7 0 0 1 14 0v2" />
+                  </svg>
+                  {waitingTaskCount > 0 && !isAgentMode && (
+                    <span className="agent-toggle-badge">{waitingTaskCount}</span>
+                  )}
+                </button>
 
-            <button
-              className={`spawn-toggle${spawnOpen ? ' active' : ''}`}
-              onClick={() => {
-                setSpawnOpen((v) => {
-                  const next = !v;
-                  if (!next) setSpawnCounts(new Map());
-                  return next;
-                });
-                setHistoryOpen(false);
-                setTargetPickerOpen(false);
-              }}
-              title="Spawn agents"
-              aria-label="Spawn agents"
-              disabled={!$activeProject}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              {totalSpawnCount > 0 && (
-                <span className="spawn-toggle-badge">{totalSpawnCount}</span>
-              )}
-            </button>
+                <button
+                  className={`spawn-toggle${spawnOpen ? ' active' : ''}`}
+                  onClick={() => {
+                    setSpawnOpen((v) => {
+                      const next = !v;
+                      if (!next) setSpawnCounts(new Map());
+                      return next;
+                    });
+                    setHistoryOpen(false);
+                    setTargetPickerOpen(false);
+                  }}
+                  title="Spawn agents"
+                  aria-label="Spawn agents"
+                  disabled={!$activeProject}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  {totalSpawnCount > 0 && (
+                    <span className="spawn-toggle-badge">{totalSpawnCount}</span>
+                  )}
+                </button>
 
-            <button
-              className="attach-toggle"
-              onClick={attachFiles}
-              title="Attach files"
-              aria-label="Attach files"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-            </button>
-
-            <button
-              className={`voice-toggle${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}${isAgentMode ? ' agent-voice' : ''}`}
-              onClick={toggleVoiceInput}
-              title={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
-              aria-label={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
-            >
-              {isRefining ? (
-                <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-                  <polyline points="21 3 21 8 16 8" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                  <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                  <line x1="12" x2="12" y1="19" y2="22" />
-                </svg>
-              )}
-            </button>
+                <button
+                  className={`voice-toggle${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}${isAgentMode ? ' agent-voice' : ''}`}
+                  onClick={toggleVoiceInput}
+                  title={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
+                  aria-label={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
+                >
+                  {isRefining ? (
+                    <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                      <polyline points="21 3 21 8 16 8" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                      <line x1="12" x2="12" y1="19" y2="22" />
+                    </svg>
+                  )}
+                </button>
+              </>
+            )}
 
             <div className="prompt-copy">
               {spawnOpen && spawnPresets.length > 0 && (
@@ -1701,52 +1677,62 @@ export default function FloatingPromptBar() {
               <div className="prompt-meta">
                 {isAgentMode ? (
                   <>
-                    <button
-                      className="prompt-target agent-chat-open-btn"
-                      onClick={() => agentCenterOpen.set(!$agentCenterOpen)}
-                      title="Toggle agent panel"
-                    >
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
-                      </svg>
-                      Agent mode
-                      {waitingTaskCount > 0 && (
-                        <span className="agent-meta-badge">{waitingTaskCount} waiting</span>
-                      )}
-                    </button>
-                    <div className="agent-voice-controls">
-                      <button
-                        className={`agent-voice-mode-btn${voiceModeActive ? ' active' : ''}${isTtsSpeaking ? ' speaking' : ''}`}
-                        onClick={toggleAgentVoiceMode}
-                        title={voiceModeActive ? (isTtsSpeaking ? 'Speaking…' : 'Voice mode on — click to stop') : 'Enable voice conversation mode'}
-                        aria-label={voiceModeActive ? 'Stop voice mode' : 'Enable voice mode'}
-                      >
-                        {isTtsSpeaking ? (
-                          <svg className="pulse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                          </svg>
-                        ) : (
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
-                          </svg>
-                        )}
-                      </button>
-                      <span className="prompt-hint">
-                        {isListening
-                          ? 'Listening...'
-                          : isRefining
-                            ? 'Refining...'
-                            : agentSending
-                              ? 'Sending...'
-                              : isTtsSpeaking
-                                ? 'Speaking...'
-                                : voiceModeActive && isAgentMode
-                                  ? 'Voice mode on - speak naturally'
-                                  : 'Enter to send - Hold Alt to speak'}
-                      </span>
+                    {/* "Now playing" — one moment at a time, no history */}
+                    <div className="voice-transcript" ref={transcriptElRef}>
+                      {(() => {
+                        // Only show content while voice mode is active;
+                        // clears to the idle hint as soon as voice ends.
+                        if (!voiceModeActive) {
+                          return (
+                            <div className="transcript-empty">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
+                                <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                              </svg>
+                              <span>Press <kbd>Alt</kbd> or tap the mic to speak</span>
+                            </div>
+                          );
+                        }
+                        // 1. User is speaking — show live draft or a placeholder if no transcript yet
+                        if (isListening) {
+                          return (
+                            <p className="transcript-now user draft">
+                              {voiceDraftText ? `${voiceDraftText}…` : 'Listening…'}
+                            </p>
+                          );
+                        }
+                        // 2. Transition: user done, agent thinking — show nothing
+                        //    (the orb already conveys this state)
+                        if (isRefining || agentSending) {
+                          return null;
+                        }
+                        // 3. Latest assistant reply
+                        const lastMsg = projectChatMessages.at(-1);
+                        if (lastMsg?.role === 'assistant') {
+                          if (lastMsg.pending) {
+                            return (
+                              <span className="orc-typing"><span /><span /><span /></span>
+                            );
+                          }
+                          if (lastMsg.completion) {
+                            const icon = lastMsg.completion.status === 'done' ? '✅' : lastMsg.completion.status === 'failed' ? '❌' : '⚠️';
+                            const verb = lastMsg.completion.status === 'done' ? 'finished' : lastMsg.completion.status === 'failed' ? 'failed' : 'needs input';
+                            return (
+                              <p className="transcript-now assistant">
+                                {icon} {lastMsg.completion.agentName} {verb}: {lastMsg.completion.taskTitle}
+                              </p>
+                            );
+                          }
+                          return (
+                            <p className="transcript-now assistant">{lastMsg.text}</p>
+                          );
+                        }
+                        // 4. Voice mode on but no message yet
+                        return (
+                          <span className="orc-typing"><span /><span /><span /></span>
+                        );
+                      })()}
                     </div>
                   </>
                 ) : (
@@ -1761,7 +1747,7 @@ export default function FloatingPromptBar() {
                         <polyline points="6 9 12 15 18 9" />
                       </svg>
                     </button>
-                    <span className="prompt-hint">Enter to send, Up/Down for history, mic to dictate</span>
+                    <span className="prompt-hint">Enter to send · Up/Down history · mic to dictate · drag file to attach</span>
                   </>
                 )}
               </div>
@@ -1812,17 +1798,18 @@ export default function FloatingPromptBar() {
                 </div>
               )}
 
+              {/* Input: hidden in agent mode (voice-only), shown in terminal mode */}
               <textarea
                 ref={inputElRef}
                 value={inputValue}
-                className="prompt-input"
+                className={`prompt-input${isAgentMode ? ' agent-mode-hidden' : ''}`}
                 placeholder={
                   isAgentMode
                     ? ($activeProject ? 'Ask your agent…' : 'Open a project to use agent mode')
                     : (canSend ? 'Prompt the active terminal...' : 'Open or focus a terminal to send prompts')
                 }
                 rows={1}
-                disabled={!canSend}
+                disabled={isAgentMode ? !canSend : false}
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
@@ -1830,14 +1817,17 @@ export default function FloatingPromptBar() {
               />
             </div>
 
-            <button
-              className="send-btn"
-              onClick={submitPrompt}
-              disabled={!canSend || (!inputValue.trim() && pastedImages.length === 0)}
-              title={isAgentMode ? 'Send to agent' : (preferredAgentTerminal ? 'Send prompt to AI agent terminal' : 'Send prompt to active terminal')}
-            >
-              Send
-            </button>
+            {/* Send button is hidden in agent mode — voice is the primary input there */}
+            {!isAgentMode && (
+              <button
+                className="send-btn"
+                onClick={submitPrompt}
+                disabled={!canSend || (!inputValue.trim() && pastedImages.length === 0)}
+                title={preferredAgentTerminal ? 'Send prompt to AI agent terminal' : 'Send prompt to active terminal'}
+              >
+                Send
+              </button>
+            )}
           </div>
         </>
       )}

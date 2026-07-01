@@ -7,7 +7,8 @@ import { get } from '$lib/stores/storeCompat';
 import { closeEnvManager } from '$lib/stores/layout';
 import { activeProjectId } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
-import { activeSessionId, writeToSession } from '$lib/stores/terminal';
+import { activeSessionId, devActiveSessionId, writeToSession } from '$lib/stores/terminal';
+import { layoutSnapshot } from '$lib/stores/layoutControl';
 import './EnvManager.css';
 
 interface Row {
@@ -125,7 +126,8 @@ export default function EnvManager({ embedded = false }: { embedded?: boolean })
   // Build shell-appropriate assignment lines and write them to the active
   // terminal. PowerShell on Windows, POSIX export elsewhere.
   function injectToTerminal() {
-    const sid = get(activeSessionId);
+    const isDev = get(layoutSnapshot).ambient === 'development';
+    const sid = get(isDev ? devActiveSessionId : activeSessionId);
     if (sid == null) {
       showToast('Open a terminal first', 'error');
       return;

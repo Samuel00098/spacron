@@ -59,6 +59,7 @@ import {
   createTerminalSession,
   launchPromptBarVoiceMode,
   activeSessionId,
+  devActiveSessionId,
   getSessionPromptTargetLabel,
   isAgentSession,
   killSession,
@@ -605,6 +606,12 @@ export default function AppShell() {
   useEffect(() => {
     activeSessionIdRef.current = currentActiveSessionId;
   }, [currentActiveSessionId]);
+
+  const currentDevActiveSessionId = useStore(devActiveSessionId);
+  const devActiveSessionIdRef = useRef(currentDevActiveSessionId);
+  useEffect(() => {
+    devActiveSessionIdRef.current = currentDevActiveSessionId;
+  }, [currentDevActiveSessionId]);
   const zoom = useSettingsStore((s) => s.uiZoom);
   const showSnapshotsTab = useSettingsStore((s) => s.showSnapshotsTab);
 
@@ -1637,11 +1644,17 @@ export default function AppShell() {
       if (matched.id.startsWith('custom_') && matched.command) {
         event.preventDefault();
         const runCustomCommand = async () => {
-          setTerminalRoomOpen(true);
-          setFocusedRoom('terminal');
-          let sesId = activeSessionIdRef.current;
+          const isDev = ambientLayout === 'development';
+          if (isDev) {
+            setDevTerminalRoomOpen(true);
+            setFocusedRoom('dev-terminal');
+          } else {
+            setTerminalRoomOpen(true);
+            setFocusedRoom('terminal');
+          }
+          let sesId = isDev ? devActiveSessionIdRef.current : activeSessionIdRef.current;
           if (sesId === null) {
-            sesId = await createTerminalSession();
+            sesId = await createTerminalSession(undefined, undefined, undefined, { isDev });
           }
           if (sesId !== null) {
             writeToSession(sesId, matched.command + '\r');
@@ -1717,12 +1730,20 @@ export default function AppShell() {
         case 'openFolder':
           openProject();
           break;
-        case 'newTerminal':
-          setActiveView('terminal');
-          setTerminalRoomOpen(true);
-          setFocusedRoom('terminal');
-          createTerminalSession();
+        case 'newTerminal': {
+          const isDev = ambientLayout === 'development';
+          if (isDev) {
+            setDevTerminalRoomOpen(true);
+            setFocusedRoom('dev-terminal');
+            createTerminalSession(undefined, undefined, undefined, { isDev: true });
+          } else {
+            setActiveView('terminal');
+            setTerminalRoomOpen(true);
+            setFocusedRoom('terminal');
+            createTerminalSession();
+          }
           break;
+        }
         case 'formatDocument':
           formatActiveFile();
           break;

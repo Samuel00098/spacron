@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
+import { get } from '$lib/stores/storeCompat';
 import { ensureIdleOrCreateTerminal, setActiveSession, writeToSession } from '$lib/stores/terminal';
 import { showTerminal } from '$lib/stores/layout';
-import { requestRoomControl } from '$lib/stores/layoutControl';
+import { requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import { showToast } from '$lib/stores/notification';
 import { useStore } from '$lib/react/useStore';
 import './ContainersPanel.css';
@@ -60,15 +61,18 @@ export default function ContainersPanel() {
 
     setBusyLabel(action.label);
     try {
-      const sessionId = await ensureIdleOrCreateTerminal(projectRoot, projectId);
+      const isDev = get(layoutSnapshot).ambient === 'development';
+      const sessionId = await ensureIdleOrCreateTerminal(projectRoot, projectId, isDev);
       if (sessionId == null) {
         showToast('Could not open a terminal for Docker.', 'error');
         return;
       }
 
       setActiveSession(sessionId);
-      showTerminal();
-      requestRoomControl('focus', 'terminal');
+      if (!isDev) {
+        showTerminal();
+      }
+      requestRoomControl('focus', isDev ? 'dev-terminal' : 'terminal');
       writeToSession(sessionId, `${action.command}\r`);
       showToast(`${action.label} sent to terminal.`, 'success');
     } catch (err) {
