@@ -65,7 +65,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const handleSpawnConfirm = useCallback(async () => {
     const entries = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
     if (!entries.length) return;
-    setSpawning(true);
+
+    // Close the popup immediately so that the background spawning process
+    // can run without modal overlays flickering on top of tab changes.
+    onclose();
 
     const cwd = project?.root_path;
     const projectId = project?.id;
@@ -111,8 +114,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       }
     } catch (err) {
       console.error('Failed spawning agents:', err);
-    } finally {
-      setSpawning(false);
     }
 
     if (!total) {
@@ -122,7 +123,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           : 'Open a project first to spawn an agent',
         'warning'
       );
-      onclose();
       return;
     }
 
@@ -138,8 +138,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-
-    onclose();
   }, [spawnCounts, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
