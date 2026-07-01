@@ -77,8 +77,8 @@ useLayoutStore.subscribe((state) => {
 // looks smooth.
 export function openSettings() { useLayoutStore.getState().openSettings(); }
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
-export function openQuickCapture() { withTransition(() => { useLayoutStore.getState().openQuickCapture(); }); }
-export function closeQuickCapture() { withTransition(() => { useLayoutStore.getState().closeQuickCapture(); }); }
+export function openQuickCapture() { useLayoutStore.getState().openQuickCapture(); }
+export function closeQuickCapture() { useLayoutStore.getState().closeQuickCapture(); }
 export function openAgentSpawn() { useLayoutStore.getState().openAgentSpawn(); }
 export function closeAgentSpawn() { useLayoutStore.getState().closeAgentSpawn(); }
 export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }

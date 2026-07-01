@@ -35,13 +35,12 @@
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
     var(--glass-shadow, 0 24px 60px rgba(0, 0, 0, 0.4));
   overflow: hidden;
-  animation: qc-slide-in 0.26s cubic-bezier(0.34, 1.3, 0.64, 1);
-  view-transition-name: soryq-quick-capture-card;
+  animation: qc-scale-up 0.28s cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
-@keyframes qc-slide-in {
-  from { transform: translateY(-12px); opacity: 0; }
-  to   { transform: translateY(0);     opacity: 1; }
+@keyframes qc-scale-up {
+  from { transform: scale(0.96) translateY(-8px); opacity: 0; }
+  to   { transform: scale(1) translateY(0);       opacity: 1; }
 }
 
 .qc-backdrop .qc-header {
