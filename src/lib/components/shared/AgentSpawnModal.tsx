@@ -13,6 +13,7 @@ import {
   setSessionWorktree,
 } from '$lib/stores/terminal';
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
+import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
 import './AgentSpawnModal.css';
 
@@ -98,6 +99,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
           if (id !== null) {
             takenNames.push(name);
+            applyOrchestratorAgentName(id, name);
             if (worktree) setSessionWorktree(id, worktree);
             spawnedNames.push(name);
             lastId = id;

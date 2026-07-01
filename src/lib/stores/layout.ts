@@ -79,8 +79,8 @@ export function openSettings() { useLayoutStore.getState().openSettings(); }
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
 export function openQuickCapture() { withTransition(() => { useLayoutStore.getState().openQuickCapture(); }); }
 export function closeQuickCapture() { withTransition(() => { useLayoutStore.getState().closeQuickCapture(); }); }
-export function openAgentSpawn() { withTransition(() => { useLayoutStore.getState().openAgentSpawn(); }); }
-export function closeAgentSpawn() { withTransition(() => { useLayoutStore.getState().closeAgentSpawn(); }); }
+export function openAgentSpawn() { useLayoutStore.getState().openAgentSpawn(); }
+export function closeAgentSpawn() { useLayoutStore.getState().closeAgentSpawn(); }
 export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }
 export function closeEnvManager() { withTransition(() => { useLayoutStore.getState().closeEnvManager(); }); }
 export function toggleSidebar() { withTransition(() => { useLayoutStore.getState().toggleSidebar(); }); }
