@@ -713,170 +713,178 @@ samp {
   font-family: var(--editor-font-family, monospace) !important;
 }
 
-/* ── JARVIS HUD STYLES ──────────────────── */
+/* ── Apple-Inspired Liquid Glass Spring Micro-Animations & Sliders ── */
 
-/* HUD Grid & Typography overrides */
-:root:has(.jarvis-theme),
-.jarvis-theme {
-  --jarvis-blue: #00f0ff;
-  --jarvis-amber: #ff9f00;
-  --jarvis-red: #ff003c;
-  --jarvis-neon-green: #39ff14;
-  --editor-font-family: 'Orbitron', 'JetBrains Mono', monospace !important;
+/* 1. Tactile spring scale-up on hover and scale-down on active press */
+button:hover:not(:disabled),
+a:hover,
+.room-card:hover,
+.ambient-switch-btn:hover,
+.svt-btn:hover,
+.icon-btn:hover:not(:disabled),
+.nav-btn:hover:not(:disabled),
+.file-node:hover,
+.drawer-tab-btn:hover,
+.drawer-close-btn:hover,
+.yt-mode-btn:hover,
+.yt-go:hover:not(:disabled),
+.yt-icon-btn:hover,
+.settings-toggle:hover {
+  transform: scale(1.025) translateY(-0.5px);
+  filter: brightness(1.04);
 }
 
-/* Pulsing neon border and glowing shadow on active elements */
-.jarvis-theme .pane-container.active-pane,
-.jarvis-theme .active-editor-pane,
-.jarvis-theme .active-terminal-pane,
-.jarvis-theme .tab-btn.active,
-.jarvis-theme .cm-focused {
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.15), inset 0 0 4px rgba(0, 240, 255, 0.1) !important;
-  border-color: var(--jarvis-blue) !important;
+button:active:not(:disabled),
+a:active,
+.room-card:active,
+.ambient-switch-btn:active,
+.svt-btn:active,
+.icon-btn:active:not(:disabled),
+.nav-btn:active:not(:disabled),
+.file-node:active,
+.drawer-tab-btn:active,
+.drawer-close-btn:active,
+.yt-mode-btn:active,
+.yt-go:active:not(:disabled),
+.yt-icon-btn:active,
+.settings-toggle:active {
+  transform: scale(0.96) translateY(0.5px) !important;
+  filter: brightness(0.94) !important;
+  transition: transform 0.08s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
-/* CRT Scanlines Overlay */
-.jarvis-theme .hud-scanline-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
+/* 2. Unified spring easing transition parameters for interactive transforms */
+button,
+a,
+.room-card,
+.ambient-switch-btn,
+.svt-btn,
+.icon-btn,
+.nav-btn,
+.file-node,
+.drawer-tab-btn,
+.drawer-close-btn,
+.yt-mode-btn,
+.yt-go,
+.yt-icon-btn,
+.settings-toggle {
+  transition: 
+    background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.32s cubic-bezier(0.34, 1.4, 0.64, 1),
+    box-shadow 0.32s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* 3. Icon (SVG) Micro-Animations inside hovered parent elements */
+button:hover svg,
+a:hover svg,
+.file-node:hover svg,
+.svt-btn:hover svg,
+.nav-btn:hover svg,
+.icon-btn:hover svg,
+.drawer-tab-btn:hover svg,
+.drawer-close-btn:hover svg,
+.yt-mode-btn:hover svg,
+.yt-icon-btn:hover svg {
+  transform: scale(1.08);
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Sync/cog/settings icons rotate smoothly on hover */
+button:hover svg[class*="sync"],
+button:hover svg[class*="refresh"],
+button:hover svg[class*="cog"],
+button:hover svg[class*="settings"],
+.icon-btn:hover svg[class*="sync"],
+.icon-btn:hover svg[class*="refresh"],
+.icon-btn:hover svg[class*="cog"],
+.icon-btn:hover svg[class*="settings"] {
+  transform: rotate(60deg) scale(1.08);
+}
+
+/* Chevron/arrow icons slide in the direction they point */
+button:hover svg[class*="chevron-right"],
+button:hover svg[class*="arrow-right"],
+.icon-btn:hover svg[class*="chevron-right"],
+.icon-btn:hover svg[class*="arrow-right"] {
+  transform: translateX(2px) scale(1.08);
+}
+button:hover svg[class*="chevron-left"],
+button:hover svg[class*="arrow-left"],
+.icon-btn:hover svg[class*="chevron-left"],
+.icon-btn:hover svg[class*="arrow-left"] {
+  transform: translateX(-2px) scale(1.08);
+}
+button:hover svg[class*="chevron-up"],
+button:hover svg[class*="arrow-up"],
+.icon-btn:hover svg[class*="chevron-up"],
+.icon-btn:hover svg[class*="arrow-up"] {
+  transform: translateY(-2px) scale(1.08);
+}
+button:hover svg[class*="chevron-down"],
+button:hover svg[class*="arrow-down"],
+.icon-btn:hover svg[class*="chevron-down"],
+.icon-btn:hover svg[class*="arrow-down"] {
+  transform: translateY(2px) scale(1.08);
+}
+
+/* 4. Apple-style Liquid Glass Sliders (Range inputs) */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
-  height: 100%;
-  background: linear-gradient(
-    rgba(18, 16, 16, 0) 50%,
-    rgba(0, 0, 0, 0.25) 50%
-  ), linear-gradient(
-    90deg,
-    rgba(255, 0, 0, 0.06),
-    rgba(0, 255, 0, 0.02),
-    rgba(0, 0, 255, 0.06)
-  );
-  background-size: 100% 4px, 6px 100%;
-  z-index: 10;
-  pointer-events: none;
-  opacity: 0.15;
+  height: 6px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-radius: 99px !important;
+  outline: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
-/* Moving scanline laser */
-.jarvis-theme .hud-laser-line {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 2px;
-  background: rgba(0, 240, 255, 0.5);
-  box-shadow: 0 0 8px var(--jarvis-blue);
-  z-index: 11;
-  pointer-events: none;
-  opacity: 0.4;
-  animation: hudLaserScan 6s linear infinite;
+input[type='range']:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
 }
 
-@keyframes hudLaserScan {
-  0% { top: 0%; }
-  100% { top: 100%; }
+/* WebKit thumb */
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 50% !important;
+  background: var(--text-primary, #ffffff) !important;
+  border: 1px solid rgba(0, 0, 0, 0.25) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+  cursor: pointer !important;
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), background-color 0.2s ease !important;
 }
 
-/* Floating Corner Brackets for panels */
-.jarvis-theme .hud-bracket {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-color: var(--jarvis-blue);
-  border-style: solid;
-  pointer-events: none;
-  z-index: 5;
-  opacity: 0.7;
-  transition: all 0.25s ease;
-}
-.jarvis-theme .hud-bracket-tl { top: 4px; left: 4px; border-width: 2px 0 0 2px; }
-.jarvis-theme .hud-bracket-tr { top: 4px; right: 4px; border-width: 2px 2px 0 0; }
-.jarvis-theme .hud-bracket-bl { bottom: 4px; left: 4px; border-width: 0 0 2px 2px; }
-.jarvis-theme .hud-bracket-br { bottom: 4px; right: 4px; border-width: 0 2px 2px 0; }
-
-/* Pulse active panel brackets */
-.jarvis-theme .active-pane .hud-bracket,
-.jarvis-theme .pane-container:hover .hud-bracket {
-  opacity: 1;
-  border-color: var(--jarvis-blue);
-  transform: scale(1.1);
-  filter: drop-shadow(0 0 4px var(--jarvis-blue));
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.2) !important;
+  background: var(--accent, #ffffff) !important;
 }
 
-/* Futuristic digital grid background for the entire shell */
-.jarvis-theme .appshell {
-  background-image: 
-    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
-  background-size: 30px 30px;
-  background-position: center;
-  position: relative;
+input[type='range']::-webkit-slider-thumb:active {
+  transform: scale(0.95) !important;
+  background: var(--accent-hover, #ffffff) !important;
 }
 
-/* Custom telemetry widgets */
-.jarvis-theme .hud-telemetry-gauge {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Light theme slider track override */
+:root.light-theme input[type='range'] {
+  background: rgba(0, 0, 0, 0.06) !important;
 }
-.jarvis-theme .hud-ring {
-  transform-origin: center;
-  animation: hudRotate 10s linear infinite;
-}
-.jarvis-theme .hud-ring-reverse {
-  transform-origin: center;
-  animation: hudRotateReverse 15s linear infinite;
+:root.light-theme input[type='range']:hover {
+  background: rgba(0, 0, 0, 0.1) !important;
 }
 
-@keyframes hudRotate {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+/* 5. Smooth spring physics for all toggle switches */
+.settings-toggle {
+  transition: background-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1), border-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) !important;
 }
-@keyframes hudRotateReverse {
-  0% { transform: rotate(360deg); }
-  100% { transform: rotate(0deg); }
+.settings-toggle-dot {
+  transition: transform 0.28s cubic-bezier(0.34, 1.3, 0.64, 1), background-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) !important;
 }
-
-/* Glassmorphic settings modal override */
-.jarvis-theme .modal-content,
-.jarvis-theme .settings-modal,
-.jarvis-theme .command-palette {
-  background: rgba(4, 8, 18, 0.85) !important;
-  backdrop-filter: blur(16px) !important;
-  border: 1px solid var(--jarvis-blue) !important;
-  box-shadow: 0 0 25px rgba(0, 240, 255, 0.25) !important;
-}
-
-/* ── JARVIS COCKPIT LAYOUT OVERRIDES ────── */
-
-/* Change workspace container to flex row to place side panels side-by-side with editor */
-.jarvis-theme .rooms-workspace {
-  display: flex !important;
-  flex-direction: row !important;
-  gap: 16px !important;
-  padding-bottom: var(--overlay-clear, 128px) !important;
-}
-
-/* Position left and right utility drawers relatively instead of absolute overlays */
-.jarvis-theme .utility-drawer {
-  position: relative !important;
-  left: auto !important;
-  right: auto !important;
-  top: auto !important;
-  bottom: auto !important;
-  height: 100% !important;
-  z-index: 5 !important;
-  box-shadow: 0 0 15px rgba(0, 240, 255, 0.1) !important;
-  border: 1px solid var(--jarvis-blue) !important;
-  flex-shrink: 0 !important;
-}
-
-/* Let the rooms table occupy all remaining central space */
-.jarvis-theme .rooms-table {
-  flex: 1 1 0% !important;
-  height: 100% !important;
-  padding-bottom: 0 !important; /* clear default padding since parent handles it now */
-}
-
 
