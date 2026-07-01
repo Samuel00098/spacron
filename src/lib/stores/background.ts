@@ -153,10 +153,10 @@ export function applyInterfaceFrost(transparency: number): void {
       root.classList.remove('solid-theme');
       const t = Math.min(100, Math.max(0, transparency)) / 100;
 
-      // Make the glass layers translucent (never completely transparent, keeping that premium feel)
-      const base = 0.84 - t * 0.36; // At t=0.01 it is ~0.84, at t=1 it is ~0.48
-      const chrome = Math.min(0.92, base + 0.08); // At t=1, chrome is ~0.56
-      const surface = Math.min(0.95, base + 0.16); // At t=1, surface is ~0.64
+      // Make the glass layers translucent (guarantees readability even at 100% transparency)
+      const base = 0.84 - t * 0.28; // At t=1, base is 0.56
+      const chrome = Math.min(0.92, base + 0.08); // At t=1, chrome is 0.64
+      const surface = Math.min(0.95, base + 0.16); // At t=1, surface is 0.72
 
       // Apple's liquid glass relies on deep blur to maintain text readability.
       // We scale the blur *upwards* as transparency increases, from 30px to 50px.
