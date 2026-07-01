@@ -26,13 +26,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const isDev = layout.ambient === 'development';
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
-  const [filterText, setFilterText] = useState('');
   const [spawning, setSpawning] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    searchInputRef.current?.focus();
-  }, []);
 
   const spawnPresets = useMemo(() => {
     void $customAgents;
@@ -40,16 +34,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     if (!project) return [];
     return getPresetRuns(project.id).filter((r) => r.isAgent);
   }, [$customAgents, $removedPresetAgents, project]);
-
-  const filteredPresets = useMemo(() => {
-    const query = filterText.trim().toLowerCase();
-    if (!query) return spawnPresets;
-    return spawnPresets.filter(
-      (p) =>
-        p.name.toLowerCase().includes(query) ||
-        p.command.toLowerCase().includes(query)
-    );
-  }, [spawnPresets, filterText]);
 
   const totalSpawnCount = useMemo(
     () => Array.from(spawnCounts.values()).reduce((a, b) => a + b, 0),
@@ -207,23 +191,11 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           </button>
         </header>
 
-        <div className="asm-search-box">
-          <input
-            className="asm-search-input"
-            type="text"
-            placeholder="Search agent presets..."
-            ref={searchInputRef}
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
-            disabled={spawning}
-          />
-        </div>
-
         <div className="asm-preset-list">
-          {filteredPresets.length === 0 ? (
+          {spawnPresets.length === 0 ? (
             <div className="asm-empty">No matching agent presets found.</div>
           ) : (
-            filteredPresets.map((preset) => {
+            spawnPresets.map((preset) => {
               const count = spawnCounts.get(preset.command) ?? 0;
               return (
                 <div key={preset.id} className={`asm-preset-row${count > 0 ? ' selected' : ''}`}>
