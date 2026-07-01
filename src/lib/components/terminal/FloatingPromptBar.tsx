@@ -23,14 +23,7 @@ import {
   getSessionLabel,
   getSessionPromptTargetLabel,
   isAgentSession,
-  spawnAgentPreset,
-  setSessionWorktree,
 } from '$lib/stores/terminal';
-import { getPresetRuns } from '$lib/stores/runs';
-import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
-import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
-import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
@@ -176,8 +169,6 @@ export default function FloatingPromptBar() {
   const $manualPromptTargetId = useStore(manualPromptTargetId);
   const $sessions = useStore(isDev ? devSessions : sessions);
   const $commandHistory = useStore(commandHistory);
-  const $customAgents = useStore(customAgents);
-  const $removedPresetAgents = useStore(removedPresetAgents);
   const $activeProject = useStore(activeProject);
   const $orchestratorTasks = useStore(orchestratorTasks);
   const $chatMessages = useStore(chatMessages);
@@ -198,12 +189,6 @@ export default function FloatingPromptBar() {
   const [voiceLocked, setVoiceLocked] = useSyncedState(false);
   const [voiceHeld, setVoiceHeld] = useSyncedState(false);
   const [voiceStopping, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
-  const [spawnOpen, setSpawnOpen] = useState(false);
-  const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
-  const totalSpawnCount = useMemo(
-    () => Array.from(spawnCounts.values()).reduce((a, b) => a + b, 0),
-    [spawnCounts]
-  );
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
   const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(null);
@@ -266,14 +251,7 @@ export default function FloatingPromptBar() {
       .slice(0, 160);
   }, [lastAssistantRaw]);
 
-  // Reading customAgents + removedPresetAgents keeps this reactive:
-  // adding/removing/hiding agents in Settings re-derives the spawn list.
-  const spawnPresets = useMemo(() => {
-    void $customAgents;
-    void $removedPresetAgents;
-    if (!$activeProject) return [];
-    return getPresetRuns($activeProject.id).filter((r) => r.isAgent);
-  }, [$customAgents, $removedPresetAgents, $activeProject]);
+
 
   const activeTerminal = useMemo(
     () => $sessions.find((session) => session.id === $activeSessionId) ?? null,
@@ -358,8 +336,6 @@ export default function FloatingPromptBar() {
     draftBeforeHistoryRef.current = '';
     setHistoryOpen(false);
     setTargetPickerOpen(false);
-    setSpawnOpen(false);
-    setSpawnCounts(new Map());
     requestAnimationFrame(adjustInputHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [$activeProject]);
@@ -380,7 +356,6 @@ export default function FloatingPromptBar() {
   const toggleTargetPicker = useCallback(() => {
     setTargetPickerOpen((v) => !v);
     setHistoryOpen(false);
-    setSpawnOpen(false);
   }, []);
 
   const resolvePromptTarget = useCallback(() => {
@@ -412,8 +387,8 @@ export default function FloatingPromptBar() {
   }, [focusInput]);
 
   const canStayOpen = useCallback(() => {
-    return hasPromptText || historyOpen || targetPickerOpen || spawnOpen || isListening || isRefining || isDragOver || (!draggedExplorerPath && isGlobalFileDrag) || voiceModeActive;
-  }, [hasPromptText, historyOpen, targetPickerOpen, spawnOpen, isListening, isRefining, isDragOver, draggedExplorerPath, isGlobalFileDrag, voiceModeActive]);
+    return hasPromptText || historyOpen || targetPickerOpen || isListening || isRefining || isDragOver || (!draggedExplorerPath && isGlobalFileDrag) || voiceModeActive;
+  }, [hasPromptText, historyOpen, targetPickerOpen, isListening, isRefining, isDragOver, draggedExplorerPath, isGlobalFileDrag, voiceModeActive]);
 
   const enterAgentMode = useCallback(() => {
     if (isAgentMode) {
@@ -423,7 +398,6 @@ export default function FloatingPromptBar() {
     setIsAgentMode(true);
     setHistoryOpen(false);
     setTargetPickerOpen(false);
-    setSpawnOpen(false);
     focusInput();
   }, [isAgentMode, focusInput]);
 
@@ -438,98 +412,7 @@ export default function FloatingPromptBar() {
     sendPromptToSession(sessionId, text, agentPreset);
   }, []);
 
-  const incrementSpawn = useCallback((command: string) => {
-    setSpawnCounts((prev) => {
-      const next = new Map(prev);
-      next.set(command, (next.get(command) ?? 0) + 1);
-      return next;
-    });
-  }, []);
 
-  const decrementSpawn = useCallback((command: string) => {
-    setSpawnCounts((prev) => {
-      const next = new Map(prev);
-      const count = next.get(command) ?? 0;
-      if (count <= 1) {
-        next.delete(command);
-      } else {
-        next.set(command, count - 1);
-      }
-      return next;
-    });
-  }, []);
-
-  // Spawn the selected agents into terminal panes. Each spawned agent gets a
-  // friendly assistant name (same pool as orchestrator agents, so it's easy to
-  // address) and receives the standing operating brief automatically — the
-  // agent-charter auto-brief fires once the CLI is ready, and it reads the
-  // name set here so the charter opens with "you are <name>".
-  const handleSpawnConfirm = useCallback(async () => {
-    const entries = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
-    if (!entries.length) return;
-    setSpawnOpen(false);
-    setSpawnCounts(new Map());
-    const cwd = $activeProject?.root_path;
-    const projectId = $activeProject?.id;
-    const takenNames = get(sessions)
-      .filter((s) => s.isRunning && s.agentName)
-      .map((s) => s.agentName as string);
-    let lastId: number | null = null;
-    let total = 0;
-    const spawnedNames: string[] = [];
-    for (const [cmd, count] of entries) {
-      for (let i = 0; i < count; i++) {
-        // Pick the name up front so the agent's isolated worktree branch carries
-        // it (e.g. soryq/iris-…). Each agent gets its own worktree so several can
-        // edit the same project at once; non-git projects fall back to the root.
-        const name = pickAssistantName(takenNames);
-        let worktree = projectId
-          ? await createTaskWorktree({
-              projectId,
-              taskId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-              label: name,
-            })
-          : null;
-        let id = await spawnAgentPreset(cmd, worktree?.path ?? cwd);
-        // If the isolated worktree couldn't start a shell, don't fail the spawn —
-        // drop the worktree and retry in the project root so the agent still opens
-        // (it just shares the working tree, like before isolation).
-        if (id === null && worktree) {
-          if (projectId) void removeTaskWorktree(projectId, worktree, false);
-          worktree = null;
-          id = await spawnAgentPreset(cmd, cwd);
-        }
-        if (id !== null) {
-          takenNames.push(name);
-          applyOrchestratorAgentName(id, name);
-          if (worktree) setSessionWorktree(id, worktree);
-          spawnedNames.push(name);
-          lastId = id;
-          total++;
-        } else if (worktree && projectId) {
-          // Spawn failed entirely — don't leave an orphaned worktree behind.
-          void removeTaskWorktree(projectId, worktree, false);
-        }
-      }
-    }
-    if (!total) {
-      showToast(
-        projectId ? "Couldn't start the agent — see the console for details" : 'Open a project first to spawn an agent',
-        'warning'
-      );
-      return;
-    }
-    // In terminal mode, point the prompt bar at the freshly spawned agent. Agent
-    // mode keeps its own routing, so don't pin a manual target from there.
-    if (lastId !== null && !isAgentMode) manualPromptTargetId.set(lastId);
-    showToast(
-      total === 1 ? `Spawned ${spawnedNames[0]}` : `Spawned ${total} agents: ${spawnedNames.join(', ')}`,
-      'info',
-      undefined,
-      true
-    );
-    focusInput();
-  }, [spawnCounts, $activeProject, isAgentMode, focusInput]);
 
   const saveImageToDisk = useCallback(async (img: PastedImage, projectPath: string): Promise<string | null> => {
     try {
@@ -1245,16 +1128,14 @@ export default function FloatingPromptBar() {
   }, [inputValue, adjustInputHeight]);
 
   const handleDocumentPointerDown = useCallback((event: MouseEvent) => {
-    if (!historyOpen && !targetPickerOpen && !spawnOpen && !isExpanded) return;
+    if (!historyOpen && !targetPickerOpen && !isExpanded) return;
     const target = event.target as Node | null;
     if (shellElRef.current && target && !shellElRef.current.contains(target)) {
       if (!canStayOpen()) setIsExpanded(false);
       setHistoryOpen(false);
       setTargetPickerOpen(false);
-      setSpawnOpen(false);
-      setSpawnCounts(new Map());
     }
-  }, [historyOpen, targetPickerOpen, spawnOpen, isExpanded, canStayOpen]);
+  }, [historyOpen, targetPickerOpen, isExpanded, canStayOpen]);
 
   const handleGlobalVoiceShortcut = useCallback((event: KeyboardEvent) => {
     // 1. If voice mode is active, Escape or Alt exits voice mode
@@ -1583,29 +1464,7 @@ export default function FloatingPromptBar() {
                   )}
                 </button>
 
-                <button
-                  className={`spawn-toggle${spawnOpen ? ' active' : ''}`}
-                  onClick={() => {
-                    setSpawnOpen((v) => {
-                      const next = !v;
-                      if (!next) setSpawnCounts(new Map());
-                      return next;
-                    });
-                    setHistoryOpen(false);
-                    setTargetPickerOpen(false);
-                  }}
-                  title="Spawn agents"
-                  aria-label="Spawn agents"
-                  disabled={!$activeProject}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  {totalSpawnCount > 0 && (
-                    <span className="spawn-toggle-badge">{totalSpawnCount}</span>
-                  )}
-                </button>
+
 
                 <button
                   className={`voice-toggle${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}${isAgentMode ? ' agent-voice' : ''}`}
@@ -1630,51 +1489,7 @@ export default function FloatingPromptBar() {
             )}
 
             <div className="prompt-copy">
-              {spawnOpen && spawnPresets.length > 0 && (
-                <div className="spawn-picker">
-                  <div className="spawn-header">Spawn Agents</div>
-                  {spawnPresets.map((preset) => {
-                    const count = spawnCounts.get(preset.command) ?? 0;
-                    return (
-                      <div key={preset.id} className={`spawn-row${count > 0 ? ' selected' : ''}`}>
-                        <div className="spawn-counter">
-                          <button
-                            className="counter-btn"
-                            onClick={() => decrementSpawn(preset.command)}
-                            disabled={count === 0}
-                            title="Spawn fewer"
-                            aria-label={`Spawn fewer ${preset.name}`}
-                          >−</button>
-                          <span className="counter-value">{count}</span>
-                          <button
-                            className="counter-btn"
-                            onClick={() => incrementSpawn(preset.command)}
-                            title="Spawn more"
-                            aria-label={`Spawn more ${preset.name}`}
-                          >+</button>
-                        </div>
-                        <button
-                          className="spawn-item"
-                          onClick={() => incrementSpawn(preset.command)}
-                          title="Add one"
-                        >
-                          <span className="spawn-name">{preset.name}</span>
-                          <span className="spawn-cmd">{preset.command}</span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <div className="spawn-footer">
-                    <button
-                      className="spawn-confirm"
-                      onClick={handleSpawnConfirm}
-                      disabled={totalSpawnCount === 0}
-                    >
-                      Spawn{totalSpawnCount > 0 ? ` ${totalSpawnCount}` : ''}
-                    </button>
-                  </div>
-                </div>
-              )}
+
               <div className="prompt-meta">
                 {isAgentMode ? (
                   <>

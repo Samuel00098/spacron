@@ -124,9 +124,12 @@ interface LayoutActions {
   closeQuickCapture: () => void;
   openEnvManager: () => void;
   closeEnvManager: () => void;
+  openAgentSpawn: () => void;
+  closeAgentSpawn: () => void;
   settingsOpen: boolean;
   quickCaptureOpen: boolean;
   envManagerOpen: boolean;
+  agentSpawnOpen: boolean;
 }
 
 // Maps each aux ActiveView to its visibility flag. Adding a panel here wires it
@@ -181,12 +184,16 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   settingsOpen: false,
   quickCaptureOpen: false,
   envManagerOpen: false,
+  agentSpawnOpen: false,
 
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
 
   openQuickCapture: () => set({ quickCaptureOpen: true }),
   closeQuickCapture: () => set({ quickCaptureOpen: false }),
+
+  openAgentSpawn: () => set({ agentSpawnOpen: true }),
+  closeAgentSpawn: () => set({ agentSpawnOpen: false }),
 
   // Env lives in the main stage in development mode.
   openEnvManager: () => {

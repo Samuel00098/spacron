@@ -59,6 +59,7 @@ export const layout: Writable<LayoutState> = {
 export const settingsOpen = writable(false);
 export const quickCaptureOpen = writable(false);
 export const envManagerOpen = writable(false);
+export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
 
 // Mirror the modal flags out of Zustand for non-React (writable) consumers.
@@ -66,6 +67,7 @@ useLayoutStore.subscribe((state) => {
   settingsOpen.set(state.settingsOpen);
   quickCaptureOpen.set(state.quickCaptureOpen);
   envManagerOpen.set(state.envManagerOpen);
+  agentSpawnOpen.set(state.agentSpawnOpen);
 });
 
 // Settings open/close intentionally skips the page-wide view transition. The
@@ -77,6 +79,8 @@ export function openSettings() { useLayoutStore.getState().openSettings(); }
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
 export function openQuickCapture() { withTransition(() => { useLayoutStore.getState().openQuickCapture(); }); }
 export function closeQuickCapture() { withTransition(() => { useLayoutStore.getState().closeQuickCapture(); }); }
+export function openAgentSpawn() { withTransition(() => { useLayoutStore.getState().openAgentSpawn(); }); }
+export function closeAgentSpawn() { withTransition(() => { useLayoutStore.getState().closeAgentSpawn(); }); }
 export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }
 export function closeEnvManager() { withTransition(() => { useLayoutStore.getState().closeEnvManager(); }); }
 export function toggleSidebar() { withTransition(() => { useLayoutStore.getState().toggleSidebar(); }); }

@@ -7,6 +7,7 @@ import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
 import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
+import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import MicrophonePermissionDialog from '$lib/components/shared/MicrophonePermissionDialog.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
@@ -17,6 +18,8 @@ import {
   closeSettings,
   quickCaptureOpen,
   closeQuickCapture,
+  agentSpawnOpen,
+  closeAgentSpawn,
 } from '$lib/stores/layout';
 import {
   newWorkspacePromptOpen,
@@ -72,6 +75,7 @@ function zoomOut() {
 export default function App() {
   const isSettingsOpen = useStore(settingsOpen);
   const isQuickCaptureOpen = useStore(quickCaptureOpen);
+  const isAgentSpawnOpen = useStore(agentSpawnOpen);
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
   const permissionRequest = usePermissionsStore((s) => s.pendingPermissionRequest);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
@@ -186,6 +190,8 @@ export default function App() {
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}
 
       {isQuickCaptureOpen && <QuickCaptureModal onclose={closeQuickCapture} />}
+
+      {isAgentSpawnOpen && <AgentSpawnModal onclose={closeAgentSpawn} />}
 
       {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
 

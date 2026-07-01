@@ -45,6 +45,8 @@ import {
   RIGHT_DRAWER_TOOLS,
   toggleYoutubeVisible,
   openQuickCapture,
+  openAgentSpawn,
+  closeAgentSpawn,
   openEnvManager,
   terminalRoomOpen as terminalRoomOpenStore,
 } from '$lib/stores/layout';
@@ -1756,6 +1758,9 @@ export default function AppShell() {
         case 'quickCapture':
           openQuickCapture();
           break;
+        case 'spawnAgent':
+          openAgentSpawn();
+          break;
         case 'openDailyNote':
           if (project) {
             void openDailyNote(project, true);
@@ -2404,6 +2409,16 @@ export default function AppShell() {
   ];
 
   const bottomItems: ActivityItem[] = [
+    {
+      id: 'spawnAgent',
+      title: 'Spawn Agents',
+      active: layoutState.agentSpawnOpen,
+      onClick: () => {
+        if (layoutState.agentSpawnOpen) closeAgentSpawn();
+        else openAgentSpawn();
+      },
+      icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>,
+    },
     {
       id: 'excalidraw',
       title: 'Sketch (Excalidraw)',
@@ -3143,6 +3158,18 @@ export default function AppShell() {
                             }
                           },
                           icon: <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>
+                        }}
+                      />
+                      <ActivityButton
+                        item={{
+                          id: 'spawnAgent',
+                          title: 'Spawn Agents',
+                          active: layoutState.agentSpawnOpen,
+                          onClick: () => {
+                            if (layoutState.agentSpawnOpen) closeAgentSpawn();
+                            else openAgentSpawn();
+                          },
+                          icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
                         }}
                       />
                     </div>

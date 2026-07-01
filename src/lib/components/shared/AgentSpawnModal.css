@@ -1,0 +1,242 @@
+.asm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: asmFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.asm-card {
+  width: 460px;
+  max-width: calc(100vw - 40px);
+  max-height: 80vh;
+  background: rgba(var(--editor-bg-rgb, 24, 24, 30), var(--frost-chrome, 0.62));
+  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow, 0 24px 60px rgba(0, 0, 0, 0.4)), inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: asmSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.asm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+
+.asm-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-color, #e0e0e0);
+}
+
+.asm-title-icon {
+  color: var(--accent, #3b82f6);
+}
+
+.asm-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted, #808080);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.asm-close-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-color, #fff);
+}
+
+.asm-search-box {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+}
+
+.asm-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  color: var(--text-color, #e0e0e0);
+  font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.asm-search-input:focus {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.asm-preset-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 200px;
+  max-height: 400px;
+}
+
+.asm-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted, #808080);
+  font-size: 13px;
+}
+
+.asm-preset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.asm-preset-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.asm-preset-row.selected {
+  background: rgba(59, 130, 246, 0.04);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.asm-preset-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 65%;
+}
+
+.asm-preset-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color, #e0e0e0);
+}
+
+.asm-preset-desc {
+  font-size: 11px;
+  color: var(--text-muted, #808080);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asm-preset-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.asm-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-color, #e0e0e0);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.asm-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.asm-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.asm-count-value {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 16px;
+  text-align: center;
+  color: var(--text-color, #e0e0e0);
+}
+
+.asm-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.asm-hint {
+  font-size: 11px;
+  color: var(--text-muted, #808080);
+}
+
+.asm-confirm-btn {
+  padding: 8px 18px;
+  background: var(--accent, #3b82f6);
+  border: none;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+  transition: background 0.15s, opacity 0.15s, transform 0.1s;
+}
+
+.asm-confirm-btn:hover:not(:disabled) {
+  background: var(--accent-hover, #2563eb);
+}
+
+.asm-confirm-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.asm-confirm-btn:disabled {
+  background: var(--text-muted, #404040);
+  color: rgba(255, 255, 255, 0.3);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+@keyframes asmFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes asmSlideUp {
+  from { transform: translateY(12px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
