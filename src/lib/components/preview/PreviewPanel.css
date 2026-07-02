@@ -1122,7 +1122,7 @@
   left: 0;
   z-index: 60;
   width: 340px;
-  max-width: 80vw;
+  max-width: calc(80 * var(--app-vw, 1vw));
   max-height: 380px;
   display: flex;
   flex-direction: column;

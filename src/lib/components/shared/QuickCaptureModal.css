@@ -10,7 +10,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 18vh;
+  padding-top: calc(18 * var(--app-vh, 1vh));
   animation: qc-fade-in 0.12s ease;
 }
 
@@ -21,7 +21,7 @@
 
 .qc-backdrop .qc-card {
   width: 480px;
-  max-width: calc(100vw - 40px);
+  max-width: calc(100 * var(--app-vw, 1vw) - 40px);
   background: 
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
     rgba(var(--editor-bg-rgb, 24, 24, 30), var(--frost-chrome, 0.62));

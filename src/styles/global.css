@@ -353,8 +353,23 @@ body::after {
 }
 
 #app {
-  height: 100%;
-  width: 100%;
+  /* Global UI scaling (see src/lib/utils/uiScale.ts). `--ui-scale` grows/shrinks
+     the whole interface with the window. We inverse-size to `100% / scale` and
+     then `zoom` back up by `scale`, so the app always fills the window exactly
+     regardless of scale (no overflow), while `zoom` re-rasterizes for crisp text
+     and reflows layout. `zoom` is a Chromium/WebView2 property. */
+  height: calc(100% / var(--ui-scale, 1));
+  width: calc(100% / var(--ui-scale, 1));
+  zoom: var(--ui-scale, 1);
+  /* Zoom-corrected viewport units. Raw vw/vh are NOT compensated by an
+     ancestor's `zoom`, so inside #app they render `--ui-scale`× too big and
+     overflow the window when scaled up. Any rule inside #app that needs
+     viewport-relative sizing must use these instead:
+       92vw  →  calc(92 * var(--app-vw, 1vw))
+     (`.zoom-content` in AppShell.css re-derives them to also divide out the
+     user zoom level.) */
+  --app-vw: calc(1vw / var(--ui-scale, 1));
+  --app-vh: calc(1vh / var(--ui-scale, 1));
   display: flex;
   flex-direction: column;
 }

@@ -7,7 +7,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(12px, 5vh, 60px) clamp(12px, 5vw, 60px);
+  padding: clamp(12px, calc(5 * var(--app-vh, 1vh)), 60px) clamp(12px, calc(5 * var(--app-vw, 1vw)), 60px);
 }
 
 /* Embedded mode: hosted inside the right utility drawer, not as a modal. Strip
@@ -49,7 +49,7 @@
   border-radius: 14px;
   box-shadow: var(--glass-shadow, var(--shadow-lg)), inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07));
   overflow: hidden;
-  view-transition-name: soryq-env-modal;
+  view-transition-name: spacron-env-modal;
 }
 
 .env-overlay .env-header {

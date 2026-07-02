@@ -65,7 +65,7 @@
 .image-viewer .image-frame img {
   display: block;
   max-width: min(100%, 1200px);
-  max-height: calc(100vh - 220px);
+  max-height: calc(100 * var(--app-vh, 1vh) - 220px);
   width: auto;
   height: auto;
   object-fit: contain;

@@ -1,8 +1,11 @@
 .app-shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  /* 100% of #app, which is inverse-sized against the global `zoom` so it always
+     equals the window exactly. 100vw/100vh here would NOT be compensated by the
+     ancestor zoom and would overflow the screen when the UI scales up. */
+  height: 100%;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -17,6 +20,10 @@
 .app-shell .zoom-content {
   --zoom-factor: calc(var(--ui-zoom-percent, 100) / 100);
   zoom: var(--zoom-factor);
+  /* Re-derive the zoom-corrected viewport units (see #app in global.css) so
+     descendants also divide out the user zoom level applied here. */
+  --app-vw: calc(1vw / (var(--ui-scale, 1) * var(--zoom-factor)));
+  --app-vh: calc(1vh / (var(--ui-scale, 1) * var(--zoom-factor)));
   width: 100%;
   height: 100%;
   display: flex;
@@ -116,14 +123,14 @@
 
 .app-shell .left-utility-drawer {
   position: fixed !important;
-  top: 10vh !important;
+  top: calc(10 * var(--app-vh, 1vh)) !important;
   left: 50% !important;
   transform: translateX(-50%) scale(1) !important;
   width: 960px !important;
   height: 640px !important;
   bottom: auto !important;
-  max-width: 92vw;
-  max-height: 78vh;
+  max-width: calc(92 * var(--app-vw, 1vw));
+  max-height: calc(78 * var(--app-vh, 1vh));
   border-radius: 18px !important;
   border: 1px solid rgba(255, 255, 255, 0.12) !important;
   background: 
@@ -295,7 +302,7 @@
   width: 95%;
   max-width: 1320px;
   aspect-ratio: 1.65;
-  max-height: min(100%, 780px, 72vh);
+  max-height: min(100%, 780px, calc(72 * var(--app-vh, 1vh)));
   border-radius: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   border: 1px solid var(--border);
@@ -1117,7 +1124,7 @@
   left: 20px;
   bottom: 20px;
   z-index: 30;
-  max-width: max(180px, calc(50vw - 380px));
+  max-width: max(180px, calc(50 * var(--app-vw, 1vw) - 380px));
   justify-self: start;
 }
 
@@ -1288,7 +1295,7 @@
 .app-shell .room-dock {
   /* Own view-transition group so the dock is lifted out of the root snapshot and
      stays visually fixed while the rooms morph between layouts. */
-  view-transition-name: soryq-room-dock;
+  view-transition-name: spacron-room-dock;
   /* See-through dock: drop the opaque bento fill to a low-alpha tint so the panel
      behind shows through, while the inherited backdrop blur keeps the icons
      legible (frosted glass). Tune --frost-dock to taste. */
@@ -1550,12 +1557,12 @@
    barely move, so keep root a gentle opacity settle with no scale and no
    full-screen blur. (Ambient mode switches no longer use view transitions —
    they animate the live DOM directly — so this only affects overlays now.) */
-@keyframes soryq-view-old {
+@keyframes spacron-view-old {
   0% { opacity: 1; }
   100% { opacity: 0.55; }
 }
 
-@keyframes soryq-view-new {
+@keyframes spacron-view-new {
   0% { opacity: 0.55; }
   100% { opacity: 1; }
 }
@@ -1579,39 +1586,39 @@
 
 /* Modals appear/disappear rather than morphing between two layouts, so a gentle
    scale pop reads better than a flat fade. */
-.app-shell ::view-transition-new(soryq-settings-modal),
-.app-shell ::view-transition-new(soryq-env-modal),
-.app-shell ::view-transition-new(soryq-command-palette),
-.app-shell ::view-transition-new(soryq-quick-capture-card),
-.app-shell ::view-transition-new(soryq-workspace-modal),
-.app-shell ::view-transition-new(soryq-mic-dialog) {
+.app-shell ::view-transition-new(spacron-settings-modal),
+.app-shell ::view-transition-new(spacron-env-modal),
+.app-shell ::view-transition-new(spacron-command-palette),
+.app-shell ::view-transition-new(spacron-quick-capture-card),
+.app-shell ::view-transition-new(spacron-workspace-modal),
+.app-shell ::view-transition-new(spacron-mic-dialog) {
   animation: modal-pop-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.app-shell ::view-transition-old(soryq-settings-modal),
-.app-shell ::view-transition-old(soryq-env-modal),
-.app-shell ::view-transition-old(soryq-command-palette),
-.app-shell ::view-transition-old(soryq-quick-capture-card),
-.app-shell ::view-transition-old(soryq-workspace-modal),
-.app-shell ::view-transition-old(soryq-mic-dialog) {
+.app-shell ::view-transition-old(spacron-settings-modal),
+.app-shell ::view-transition-old(spacron-env-modal),
+.app-shell ::view-transition-old(spacron-command-palette),
+.app-shell ::view-transition-old(spacron-quick-capture-card),
+.app-shell ::view-transition-old(spacron-workspace-modal),
+.app-shell ::view-transition-old(spacron-mic-dialog) {
   animation: modal-pop-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 /* Persistent chrome doesn't change between modes — skip the crossfade so it
    stays perfectly steady (no faint opacity dip) while rooms morph around it. */
-.app-shell ::view-transition-old(soryq-room-dock),
-.app-shell ::view-transition-new(soryq-room-dock),
-.app-shell ::view-transition-old(soryq-composer),
-.app-shell ::view-transition-new(soryq-composer) {
+.app-shell ::view-transition-old(spacron-room-dock),
+.app-shell ::view-transition-new(spacron-room-dock),
+.app-shell ::view-transition-old(spacron-composer),
+.app-shell ::view-transition-new(spacron-composer) {
   animation: none;
   mix-blend-mode: normal;
 }
 
 .app-shell ::view-transition-old(root) {
-  animation: soryq-view-old 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: spacron-view-old 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .app-shell ::view-transition-new(root) {
-  animation: soryq-view-new 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: spacron-view-new 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes panel-fade-out {
@@ -1672,7 +1679,7 @@
      switches instead of fading with the background. Floats over the workspace
      with no band/background of its own — just the prompt pill on top of the
      content behind it. */
-  view-transition-name: soryq-composer;
+  view-transition-name: spacron-composer;
   flex-shrink: 0;
   width: min(720px, 100%);
   padding: 0;
@@ -1790,7 +1797,7 @@
   .app-shell .rooms-table.ambient-focus .focused-room,
   .app-shell .rooms-table.ambient-development .focused-room {
     width: 100%;
-    max-height: min(100%, 580px, 65vh);
+    max-height: min(100%, 580px, calc(65 * var(--app-vh, 1vh)));
   }
 
   /* When minimized chips are present in focus mode, allow the room-stack row to

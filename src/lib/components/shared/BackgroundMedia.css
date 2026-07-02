@@ -5,8 +5,10 @@
   position: fixed;
   inset: calc(-3 * var(--user-bg-blur, 0px));
   z-index: -2;
-  width: calc(100vw + 6 * var(--user-bg-blur, 0px));
-  height: calc(100vh + 6 * var(--user-bg-blur, 0px));
+  /* Zoom-corrected viewport units (see #app in global.css): with raw vw/vh the
+     video under-covers the window whenever --ui-scale < 1. */
+  width: calc(100 * var(--app-vw, 1vw) + 6 * var(--user-bg-blur, 0px));
+  height: calc(100 * var(--app-vh, 1vh) + 6 * var(--user-bg-blur, 0px));
   object-fit: cover;
   object-position: center center;
   opacity: var(--user-bg-opacity, 1);

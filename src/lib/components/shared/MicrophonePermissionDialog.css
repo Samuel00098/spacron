@@ -21,7 +21,7 @@
 
 .dialog {
   width: 360px;
-  max-width: calc(100vw - 48px);
+  max-width: calc(100 * var(--app-vw, 1vw) - 48px);
   background: rgba(var(--editor-bg-rgb, 24, 24, 30), var(--frost-chrome, 0.62));
   backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
@@ -38,7 +38,7 @@
   padding: 32px 28px 24px;
   gap: 0;
   text-align: center;
-  view-transition-name: soryq-mic-dialog;
+  view-transition-name: spacron-mic-dialog;
 }
 
 @keyframes slide-up {

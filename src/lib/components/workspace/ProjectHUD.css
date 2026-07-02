@@ -13,7 +13,7 @@
   align-items: flex-start;
   justify-content: center;
   z-index: 10000;
-  padding-top: 10vh;
+  padding-top: calc(10 * var(--app-vh, 1vh));
   animation: hudFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -24,8 +24,8 @@
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 14px;
   width: 840px;
-  max-width: 92vw;
-  max-height: 75vh;
+  max-width: calc(92 * var(--app-vw, 1vw));
+  max-height: calc(75 * var(--app-vh, 1vh));
   display: flex;
   flex-direction: column;
   box-shadow:

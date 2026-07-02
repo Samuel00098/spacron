@@ -9,8 +9,8 @@
   bottom: 108px;
   left: auto !important;
   top: auto !important;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 160px);
+  max-width: calc(100 * var(--app-vw, 1vw) - 48px);
+  max-height: calc(100 * var(--app-vh, 1vh) - 160px);
   z-index: 120; /* above the room dock (z 8) / composer overlays, below modals (9999) */
   display: flex;
   flex-direction: column;

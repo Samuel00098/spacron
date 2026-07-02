@@ -13,8 +13,8 @@
 
 .asm-card {
   width: 460px;
-  max-width: calc(100vw - 40px);
-  max-height: 80vh;
+  max-width: calc(100 * var(--app-vw, 1vw) - 40px);
+  max-height: calc(80 * var(--app-vh, 1vh));
   background: 
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
     rgba(var(--editor-bg-rgb, 24, 24, 30), var(--frost-chrome, 0.62));

@@ -39,11 +39,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  background: var(--bg-secondary);
   color: var(--accent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  box-shadow: var(--glass-shadow, 0 20px 44px -18px rgba(0, 0, 0, 0.6)), inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -76,10 +74,8 @@
   flex-direction: column;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 16px;
-  background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  box-shadow: var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65)), inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13));
+  background: var(--bg-secondary);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 
@@ -184,14 +180,12 @@
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   border-radius: 22px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, white 7%, transparent), transparent 62%),
-    color-mix(in srgb, var(--bg-secondary) 84%, transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+    linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent 62%),
+    var(--bg-secondary);
   box-shadow:
     0 22px 50px -24px rgba(0, 0, 0, 0.72),
     0 10px 22px -18px color-mix(in srgb, var(--accent) 34%, transparent),
-    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
     inset 0 -1px 0 rgba(0, 0, 0, 0.16);
   transition:
     border-color 0.18s ease,
@@ -237,8 +231,7 @@
   color: var(--accent);
   pointer-events: none;
   z-index: 5;
-  background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
-  backdrop-filter: blur(6px);
+  background: var(--bg-secondary);
 }
 
 .floating-prompt-shell .floating-prompt-bar.drag-over .drop-overlay {
@@ -408,8 +401,7 @@
   bottom: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
-  backdrop-filter: blur(18px);
+  background: var(--bg-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 14px;
   padding: 6px;
@@ -466,8 +458,7 @@
   bottom: calc(100% + 6px);
   left: 0;
   right: 0;
-  background: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
-  backdrop-filter: blur(18px);
+  background: var(--bg-secondary);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 14px;
   padding: 6px;
@@ -628,10 +619,7 @@
   flex-shrink: 0;
   font-size: 10px;
   color: var(--text-muted);
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .floating-prompt-shell .image-chips {
@@ -988,21 +976,17 @@
   animation: agentBarGlow 2s ease-in-out infinite !important;
 }
 
-.floating-prompt-shell .floating-prompt-bar.voice-active > *:not(.voice-mode-inner):not(.drop-overlay) {
-  display: none !important;
-}
-
-/* Inline Voice Mode Inner Layout */
+/* In voice-active mode the orb strip sits on the LEFT;
+   .prompt-copy (transcript + controls) fills the rest — nothing is hidden. */
+/* Compact orb strip: orb icon + stop button stacked vertically */
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  width: 100%;
-  position: relative;
-  min-height: 24px;
-  /* Shift content a bit to the left */
-  padding-right: 48px;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 32px;
 }
 
 /* Orb */
@@ -1016,8 +1000,8 @@
 }
 
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1025,110 +1009,16 @@
   transition: background 0.3s, box-shadow 0.3s;
 }
 
-/* Custom breathing & glowing animations for the voice mode orb */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap.listening .orb {
-  animation: promptOrbListen 1.2s ease-in-out infinite;
-}
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap.speaking .orb {
-  animation: promptOrbSpeak 1.5s ease-in-out infinite;
-}
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap.thinking .orb {
-  animation: promptOrbThink 2s ease-in-out infinite;
-}
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap.idle .orb {
-  animation: promptOrbIdle 3.5s ease-in-out infinite;
-}
-
-@keyframes promptOrbListen {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.45), 0 0 14px rgba(239, 68, 68, 0.2);
-  }
-  50% {
-    transform: scale(1.1);
-    box-shadow: 0 0 18px rgba(239, 68, 68, 0.8), 0 0 30px rgba(239, 68, 68, 0.4);
-  }
-}
-
-@keyframes promptOrbSpeak {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
-  }
-  50% {
-    transform: scale(1.08);
-    box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 80%, transparent), 0 0 30px color-mix(in srgb, var(--accent) 40%, transparent);
-  }
-}
-
-@keyframes promptOrbThink {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 4px rgba(107, 114, 128, 0.15);
-  }
-  50% {
-    transform: scale(1.05);
-    box-shadow: 0 0 12px rgba(107, 114, 128, 0.4);
-  }
-}
-
-@keyframes promptOrbIdle {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent);
-  }
-  50% {
-    transform: scale(1.04);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 24px color-mix(in srgb, var(--accent) 20%, transparent);
-  }
-}
-
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb svg {
-  width: 13px;
-  height: 13px;
-}
-
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .ring {
-  display: none;
-}
-
-/* Text Column beside the orb */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .text-col {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  gap: 1px;
-  min-width: 0;
-  max-width: calc(100% - 60px);
-}
-
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .status {
+.floating-prompt-shell .voice-transcript {
+  max-height: 80px;
+  overflow-y: auto;
   font-size: 11px;
-  font-weight: 600;
-  margin: 0;
-  line-height: 1.2;
 }
 
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .live-text {
-  font-size: 11px;
-  margin: 0;
-  text-align: left;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 280px;
-}
-
-/* Close button on the far right */
+/* Close button — small, below the orb */
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner .voice-close-btn {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 5px;
   border: 1px solid var(--border);
   background: transparent;
@@ -1138,6 +1028,7 @@
   justify-content: center;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
 }
 
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner .voice-close-btn:hover {
@@ -1359,8 +1250,7 @@
   position: fixed;
   inset: 0;
   z-index: 99999;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1370,8 +1260,8 @@
 
 .image-preview-content {
   position: relative;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(90 * var(--app-vw, 1vw));
+  max-height: calc(90 * var(--app-vh, 1vh));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1379,7 +1269,7 @@
 
 .image-preview-img {
   max-width: 100%;
-  max-height: 90vh;
+  max-height: calc(90 * var(--app-vh, 1vh));
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1419,3 +1309,96 @@
   from { transform: scale(0.9); }
   to { transform: scale(1); }
 }
+
+/* ── Voice Transcript ─────────────────────────────────────────────────────── */
+
+/* Hide the textarea in agent mode — speech replaces typing */
+.prompt-input.agent-mode-hidden {
+  display: none;
+}
+
+.voice-transcript {
+  width: 100%;
+  /* Capped height: shows ~2-3 lines, scrolls to the latest */
+  max-height: 52px;
+  min-height: 22px;
+  overflow-y: auto;
+  scrollbar-width: none; /* hide scrollbar — content just flows */
+  padding: 2px 2px 0;
+}
+
+/* Empty state */
+.transcript-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  opacity: 0.7;
+}
+
+.transcript-empty svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.transcript-empty kbd {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+
+/* "Now playing" single-moment text */
+.transcript-now {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.transcript-now.user {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.transcript-now.draft {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.transcript-now.assistant {
+  color: var(--text-secondary);
+}
+
+/* Typing indicator (reused class from AgentCommandCenter) */
+.orc-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0;
+}
+
+.orc-typing span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: orbDot 1.2s ease-in-out infinite;
+}
+
+.orc-typing span:nth-child(2) { animation-delay: 0.2s; }
+.orc-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes orbDot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+

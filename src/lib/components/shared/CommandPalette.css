@@ -11,7 +11,7 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 15vh;
+  padding-top: calc(15 * var(--app-vh, 1vh));
   z-index: 9999;
 }
 
@@ -27,9 +27,9 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  max-height: min(400px, 70vh);
+  max-height: min(400px, calc(70 * var(--app-vh, 1vh)));
   animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  view-transition-name: soryq-command-palette;
+  view-transition-name: spacron-command-palette;
 }
 
 @keyframes scaleUp {
