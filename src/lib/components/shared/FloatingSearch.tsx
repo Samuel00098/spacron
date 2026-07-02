@@ -61,6 +61,7 @@ export default function FloatingSearch() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isKeyboardSelectionRef = useRef<boolean>(false);
 
   // Flatten matches for keyboard navigation
   const flatMatches = useMemo(() => {
@@ -95,6 +96,7 @@ export default function FloatingSearch() {
         includeGlob: get(searchInclude).trim() || null,
       });
       searchResults.set(response);
+      isKeyboardSelectionRef.current = true;
       setSelectedIndex(0);
     } catch (err) {
       searchError.set(String(err));
@@ -133,16 +135,21 @@ export default function FloatingSearch() {
     isFloatingSearchOpen.set(false);
   }
 
-  // Keyboard navigation & global window listening when open
+  // 1. Initial reset and focus when search is opened
   useEffect(() => {
     if (!isOpen) return;
-
-    // Reset selection and auto-focus input
+    isKeyboardSelectionRef.current = true;
     setSelectedIndex(0);
     const t = setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 50);
+    return () => clearTimeout(t);
+  }, [isOpen]);
+
+  // 2. Keyboard navigation & global window listening when open
+  useEffect(() => {
+    if (!isOpen) return;
 
     function handleGlobalKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -151,11 +158,13 @@ export default function FloatingSearch() {
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (flatMatches.length > 0) {
+          isKeyboardSelectionRef.current = true;
           setSelectedIndex((i) => (i + 1) % flatMatches.length);
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (flatMatches.length > 0) {
+          isKeyboardSelectionRef.current = true;
           setSelectedIndex((i) => (i - 1 + flatMatches.length) % flatMatches.length);
         }
       } else if (e.key === 'Enter') {
@@ -169,13 +178,14 @@ export default function FloatingSearch() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => {
-      clearTimeout(t);
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
   }, [isOpen, flatMatches, selectedIndex]);
 
   // Scroll selected match into view
   useEffect(() => {
+    if (!isKeyboardSelectionRef.current) return;
+    isKeyboardSelectionRef.current = false; // Reset
     if (!resultsRef.current) return;
     const selectedEl = resultsRef.current.querySelector('.match-row-spotlight.selected');
     if (selectedEl) {
@@ -201,7 +211,7 @@ export default function FloatingSearch() {
               ref={inputRef}
               className="search-input-spotlight"
               type="text"
-              placeholder="Search in files (Spotlight style)..."
+              placeholder="Search in files..."
               value={query}
               onChange={(event) => {
                 searchQuery.set(event.target.value);

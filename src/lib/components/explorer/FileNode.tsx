@@ -99,12 +99,12 @@ export default function FileNode({ node }: { node: FileNodeType }) {
       drag.active = true;
       suppressClick.current = true;
       window.dispatchEvent(
-        new CustomEvent('soryq-explorer-drag-start', { detail: { path: drag.path } }),
+        new CustomEvent('spacron-explorer-drag-start', { detail: { path: drag.path } }),
       );
     }
 
     window.dispatchEvent(
-      new CustomEvent('soryq-explorer-drag-move', {
+      new CustomEvent('spacron-explorer-drag-move', {
         detail: { path: drag.path, clientX: event.clientX, clientY: event.clientY },
       }),
     );
@@ -119,7 +119,7 @@ export default function FileNode({ node }: { node: FileNodeType }) {
 
     event.preventDefault();
     window.dispatchEvent(
-      new CustomEvent('soryq-explorer-drag-end', {
+      new CustomEvent('spacron-explorer-drag-end', {
         detail: { path: drag.path, clientX: event.clientX, clientY: event.clientY },
       }),
     );

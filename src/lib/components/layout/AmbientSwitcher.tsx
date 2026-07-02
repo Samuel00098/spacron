@@ -18,8 +18,13 @@ const AMBIENT_LAYOUTS: Array<{ id: AmbientLayout; label: string; icon: React.Rea
   },
   {
     id: 'gallery',
-    label: 'Canvas',
-    icon: <Icon><rect x="2.5" y="4" width="9" height="7" rx="1.5" /><rect x="13.5" y="7" width="8" height="9" rx="1.5" /><rect x="6" y="14" width="7" height="6" rx="1.5" /></Icon>,
+    label: 'Split',
+    icon: <Icon><rect x="2.5" y="4" width="8" height="16" rx="1.3" /><rect x="13.5" y="4" width="8" height="16" rx="1.3" /><line x1="12" y1="4" x2="12" y2="20" /></Icon>,
+  },
+  {
+    id: 'vibe',
+    label: 'Vibe',
+    icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1.2" /><rect x="14" y="3" width="7" height="7" rx="1.2" /><rect x="3" y="14" width="7" height="7" rx="1.2" /><rect x="14" y="14" width="7" height="7" rx="1.2" /></Icon>,
   },
   {
     id: 'preview',

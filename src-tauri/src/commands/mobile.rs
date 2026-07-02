@@ -107,7 +107,7 @@ fn emulator_program() -> String {
 /// Turn a failed `Command::output()` (missing binary, etc.) into a friendly msg.
 fn missing_tool(tool: &str, err: std::io::Error) -> String {
     if err.kind() == std::io::ErrorKind::NotFound {
-        format!("`{tool}` was not found on your PATH. Install it and restart Soryq.")
+        format!("`{tool}` was not found on your PATH. Install it and restart Spacron.")
     } else {
         format!("Failed to run `{tool}`: {err}")
     }

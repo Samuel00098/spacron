@@ -29,7 +29,7 @@ export interface CustomAgent {
   readsRulesFile: boolean;
 }
 
-const STORAGE_KEY = 'soryq_custom_agents';
+const STORAGE_KEY = 'spacron_custom_agents';
 
 export const customAgents = writable<CustomAgent[]>(loadJson<CustomAgent[]>(STORAGE_KEY, []));
 
@@ -100,7 +100,7 @@ export function deleteCustomAgent(id: string): void {
   customAgents.update((all) => all.filter((a) => a.id !== id));
 }
 
-const REMOVED_PRESETS_KEY = 'soryq_removed_preset_agents';
+const REMOVED_PRESETS_KEY = 'spacron_removed_preset_agents';
 
 export const removedPresetAgents = writable<string[]>(loadJson<string[]>(REMOVED_PRESETS_KEY, []));
 

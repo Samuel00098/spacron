@@ -42,7 +42,7 @@ fn active_downloads() -> &'static Mutex<HashSet<String>> {
 fn get_models_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("soryq")
+        .join("spacron")
         .join("models")
 }
 

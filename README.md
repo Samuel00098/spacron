@@ -1,7 +1,7 @@
-# Soryq
+# Spacron
 
 <p align="center">
-  <img src="static/icon.png" width="80" height="80" alt="Soryq Logo"><br>
+  <img src="static/icon.png" width="80" height="80" alt="Spacron Logo"><br>
   <strong>A lightweight, terminal-first developer workspace for keyboard-centric professionals.</strong>
 </p>
 
@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript" alt="TypeScript">
 </p>
 
-Soryq is a cross-platform desktop application that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, and git integration — all unified inside a single keyboard-driven window. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, no background cloud services, sub-second startup.
+Spacron is a cross-platform desktop application that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, and git integration — all unified inside a single keyboard-driven window. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, no background cloud services, sub-second startup.
 
 ---
 
@@ -31,28 +31,28 @@ Soryq is a cross-platform desktop application that combines a real PTY terminal 
 
 ## 📦 Installation
 
-Download the latest build for your platform from the **[official website](https://soryq.app)**.
+Download the latest build for your platform from the **[official website](https://spacron.app)**.
 
 ### Windows
 Run the `.exe` setup installer.
 
 ### macOS
-Open the Apple Silicon `.dmg` disk image and drag Soryq into Applications.
+Open the Apple Silicon `.dmg` disk image and drag Spacron into Applications.
 
 ### Linux
 Download the `.AppImage`, make it executable, and run it:
 ```bash
-chmod +x Soryq_x86_64.AppImage
-./Soryq_x86_64.AppImage
+chmod +x Spacron_x86_64.AppImage
+./Spacron_x86_64.AppImage
 ```
 
-Soryq ships **signed auto-updates**, so it keeps itself current after install.
+Spacron ships **signed auto-updates**, so it keeps itself current after install.
 
 ---
 
 ## 🚀 Quick Start
 
-1. **Open Soryq.** Set up your theme and shortcuts inside the onboarding tour.
+1. **Open Spacron.** Set up your theme and shortcuts inside the onboarding tour.
 2. **Create a Workspace** (`Ctrl+N`) or open an existing code directory (`Ctrl+O`).
 3. **Launch your Dev Server** inside the terminal (e.g., `npm run dev`).
 4. **Activate the Preview Proxy** (`Ctrl+Alt+P`) to launch the live preview split pane with the DOM Inspector.
@@ -63,7 +63,7 @@ Soryq ships **signed auto-updates**, so it keeps itself current after install.
 
 ## 📊 Feature Comparison
 
-| Feature | Soryq | VS Code | Warp |
+| Feature | Spacron | VS Code | Warp |
 |---|---|---|---|
 | **Startup Speed** | **Sub-second (Native)** | 3–5 seconds | Fast |
 | **Workspace Shell** | **Tauri 2 (Rust)** | Electron (Node) | Native (Rust) |
@@ -76,7 +76,7 @@ Soryq ships **signed auto-updates**, so it keeps itself current after install.
 
 ## ⌨️ Shortcut Cheat Sheet
 
-Below are Soryq's default keyboard shortcuts. You can customize them in the settings panel (`Ctrl+,`).
+Below are Spacron's default keyboard shortcuts. You can customize them in the settings panel (`Ctrl+,`).
 
 | Command | Shortcut | Category |
 |---|---|---|
@@ -99,8 +99,8 @@ Below are Soryq's default keyboard shortcuts. You can customize them in the sett
 For detailed instructions on setting up MSVC compiler tools, Apple signing certificates, or Linux webkit libraries, read **[docs/BUILDING.md](docs/BUILDING.md)**.
 
 ```bash
-git clone https://github.com/Samuel00098/soryq.git
-cd soryq
+git clone https://github.com/Samuel00098/spacron.git
+cd spacron
 npm install
 npm run tauri dev
 ```
@@ -109,6 +109,6 @@ npm run tauri dev
 
 ## 📄 License
 
-Soryq is open source under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for the full terms.
+Spacron is open source under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for the full terms.
 
 Copyright © 2026 Samuel Solesi

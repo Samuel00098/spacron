@@ -33,7 +33,7 @@ code-editor-report-*.md
 
 # Scratch screenshots
 devdock-ui-check.png
-soryq-current.png
+spacron-current.png
 
 # AI / IDE tool local configs — machine-specific, never commit
 .claude/
@@ -45,5 +45,5 @@ src-tauri/cargo_check.log
 src-tauri/cargo_output*.txt
 
 # Per-project local data (daily notes, tasks) written by the app at runtime
-.soryq/
+.spacron/
 /.worktrees/

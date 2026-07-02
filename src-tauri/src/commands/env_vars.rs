@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tauri::State;
 
-// Same service the AI key vault uses, so all of Soryq's secrets live under one
+// Same service the AI key vault uses, so all of Spacron's secrets live under one
 // keychain service. Env vaults are namespaced by project id in the account.
-const KEYCHAIN_SERVICE: &str = "com.samue.soryq";
+const KEYCHAIN_SERVICE: &str = "com.samue.spacron";
 
 fn vault_entry(project_id: &str) -> Result<Entry, String> {
     Entry::new(KEYCHAIN_SERVICE, &format!("env-vault::{project_id}"))

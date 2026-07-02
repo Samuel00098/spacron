@@ -1,8 +1,5 @@
 import { gallery } from '@/lib/config';
 
-// "A closer look" — a grid of real app captures. Each tile renders a framed
-// screenshot once its `ready` flag is true (see config → gallery), and a
-// polished, labelled placeholder until then, so the section always looks done.
 export function Screenshots() {
   const shots = gallery.show ? gallery.shots : [];
   if (shots.length === 0) return null;
@@ -14,7 +11,7 @@ export function Screenshots() {
           <span className="eyebrow">A closer look</span>
           <h2 className="section-title">Every surface, one window.</h2>
           <p className="section-sub">
-            Real captures of Soryq at work — terminal, editor, live preview, AI, and Git, each a
+            Real captures of Spacron at work — terminal, editor, live preview, AI, and Git, each a
             keystroke away.
           </p>
         </div>
@@ -25,10 +22,13 @@ export function Screenshots() {
             return (
               <figure
                 key={s.file}
-                className={`shot glass reveal flex flex-col overflow-hidden p-3 transition-[transform,border-color] duration-200 hover:-translate-y-1 hover:border-[var(--glass-border-strong)] ${
+                className={`shot glass reveal-lift flex flex-col overflow-hidden p-3 transition-all duration-300 hover:-translate-y-1.5 hover:border-[var(--glass-border-strong)] hover:shadow-[var(--glow-accent),var(--shadow-sm)] ${
                   feature ? 'sm:col-span-2 lg:col-span-6' : 'lg:col-span-3'
                 }`}
-                style={{ ['--c' as string]: s.accent }}
+                style={{
+                  ['--c' as string]: s.accent,
+                  transitionDelay: `${0.05 + i * 0.06}s`,
+                }}
               >
                 <div className="relative overflow-hidden rounded-xl border border-[var(--glass-border)] bg-black/35">
                   <div className="flex items-center gap-[7px] border-b border-[var(--glass-border)] bg-white/[0.03] px-3 py-2.5" aria-hidden="true">

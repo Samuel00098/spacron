@@ -484,7 +484,7 @@ export default function SourceControl() {
         {!githubTokenSaved && (
           <>
             <input className="publish-input" type="password" placeholder="Personal access token (ghp_...)" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} autoComplete="off" />
-            <button className="publish-help" onClick={() => invoke('preview_open_in_browser', { url: 'https://github.com/settings/tokens/new?scopes=repo&description=Soryq' }).catch(() => {})}>
+            <button className="publish-help" onClick={() => invoke('preview_open_in_browser', { url: 'https://github.com/settings/tokens/new?scopes=repo&description=Spacron' }).catch(() => {})}>
               Create a token with 'repo' scope -&gt;
             </button>
           </>

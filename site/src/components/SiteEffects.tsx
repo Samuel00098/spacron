@@ -2,18 +2,6 @@
 
 import { useEffect } from 'react';
 
-/**
- * Global decorative/behavioural effects, ported from the old Astro Layout
- * inline script:
- *  - reveal-on-scroll (adds `.in` to `.reveal` elements as they enter view)
- *  - top scroll-progress rail (rAF-batched)
- *  - drifting constellation network on the `.fx-net` canvas, with cursor
- *    parallax; paused when the tab is hidden, single static frame under
- *    prefers-reduced-motion or on small/touch screens.
- *
- * Renders nothing — it only wires up listeners against elements rendered in the
- * root layout / sections.
- */
 export function SiteEffects() {
   useEffect(() => {
     const cleanups: Array<() => void> = [];
@@ -30,7 +18,7 @@ export function SiteEffects() {
       },
       { threshold: 0.12 },
     );
-    document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+    document.querySelectorAll('.reveal, .reveal-lift').forEach((el) => io.observe(el));
     cleanups.push(() => io.disconnect());
 
     // ── Top scroll-progress rail ────────────────────────────────────────────
@@ -55,6 +43,28 @@ export function SiteEffects() {
         window.removeEventListener('scroll', onScroll);
         window.removeEventListener('resize', onScroll);
       });
+    }
+
+    // ── Orb scroll parallax ──────────────────────────────────────────────────
+    const orbs = document.querySelectorAll<HTMLElement>('.orb');
+    if (orbs.length > 0 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      let ticking = false;
+      const onScroll = () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+          ticking = false;
+          const sy = window.scrollY;
+          const speeds = [0.03, -0.04, 0.025, -0.035];
+          orbs.forEach((orb, i) => {
+            const speed = speeds[i % speeds.length];
+            orb.style.transform = `translate3d(0, ${sy * speed}px, 0)`;
+          });
+        });
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+      cleanups.push(() => window.removeEventListener('scroll', onScroll));
     }
 
     // ── Constellation network ───────────────────────────────────────────────
@@ -120,8 +130,9 @@ export function SiteEffects() {
             const dy = pts[i].y - pts[j].y;
             const d2 = dx * dx + dy * dy;
             if (d2 < LINK * LINK) {
-              const a = (1 - Math.sqrt(d2) / LINK) * 0.5;
-              ctx.strokeStyle = `rgba(174, 182, 194, ${a})`;
+              const a = (1 - Math.sqrt(d2) / LINK) * 0.55;
+              // Use light cyan/teal for the constellation connection lines
+              ctx.strokeStyle = `rgba(34, 211, 199, ${a * 0.35})`;
               ctx.lineWidth = 1;
               ctx.beginPath();
               ctx.moveTo(pts[i].x, pts[i].y);
@@ -139,8 +150,9 @@ export function SiteEffects() {
             const dy = p.y - my;
             const d2 = dx * dx + dy * dy;
             if (d2 < CURSOR * CURSOR) {
-              const a = (1 - Math.sqrt(d2) / CURSOR) * 0.5;
-              ctx.strokeStyle = `rgba(154, 163, 176, ${a})`;
+              const a = (1 - Math.sqrt(d2) / CURSOR) * 0.6;
+              // Mouse cursor pulls connection lines in sky blue
+              ctx.strokeStyle = `rgba(96, 165, 250, ${a * 0.45})`;
               ctx.lineWidth = 1;
               ctx.beginPath();
               ctx.moveTo(mx, my);
@@ -150,7 +162,8 @@ export function SiteEffects() {
           }
         }
 
-        ctx.fillStyle = 'rgba(199, 205, 214, 0.7)';
+        // Draw points
+        ctx.fillStyle = 'rgba(34, 211, 199, 0.6)';
         for (const p of pts) {
           ctx.beginPath();
           ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
@@ -197,7 +210,7 @@ export function SiteEffects() {
       if (reduceMotion || lowPower) {
         draw(false);
       } else if ('requestIdleCallback' in window) {
-        (window as Window).requestIdleCallback(start, { timeout: 1200 });
+        (window as any).requestIdleCallback(start, { timeout: 1200 });
       } else {
         start();
       }
@@ -216,3 +229,4 @@ export function SiteEffects() {
 
   return null;
 }
+

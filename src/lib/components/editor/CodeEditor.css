@@ -12,6 +12,35 @@
 }
 .editor-layout .cm-editor {
   height: 100%;
+  background: rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-surface, 0.72));
+  position: relative;
+}
+
+/* Liquid glass sheen on editor content area */
+:root:not(.solid-theme) .editor-layout .cm-editor::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.04) 0%, transparent 35%),
+    radial-gradient(150% 120% at -8% -5%, color-mix(in srgb, var(--accent) 4%, transparent) 0%, transparent 50%);
+  mix-blend-mode: screen;
+}
+
+/* Ensure CodeMirror content renders above the overlay */
+:root:not(.solid-theme) .editor-layout .cm-editor .cm-scroller,
+:root:not(.solid-theme) .editor-layout .cm-editor .cm-gutters {
+  position: relative;
+  z-index: 2;
+}
+
+/* Inner glass rim for editor */
+:root:not(.solid-theme) .editor-layout .code-editor-container {
+  border-radius: 0;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.12)) 30%, transparent);
 }
 .editor-layout .minimap-container {
   width: 80px;

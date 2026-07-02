@@ -49,7 +49,7 @@ export interface HttpResponse {
   ok: boolean;
 }
 
-const STORAGE_KEY = 'soryq_http_requests';
+const STORAGE_KEY = 'spacron_http_requests';
 
 // Header keys whose values are masked before writing to localStorage.
 // In-memory values stay intact; only the persisted copy is masked so tokens

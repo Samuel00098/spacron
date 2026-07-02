@@ -15,14 +15,14 @@ export const snippets = writable<ShellSnippet[]>([]);
 const projectPaths = new Map<string, string>();
 
 export function getSnippetsPath(rootPath: string): string {
-  return `${rootPath}/.soryq/snippets.json`;
+  return `${rootPath}/.spacron/snippets.json`;
 }
 
 // Load global snippets
 export function loadGlobalSnippets() {
   let loaded: ShellSnippet[] = [];
   try {
-    const raw = localStorage.getItem('soryq_global_snippets');
+    const raw = localStorage.getItem('spacron_global_snippets');
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) loaded = parsed;
@@ -39,7 +39,7 @@ export function loadGlobalSnippets() {
 // Save global snippets
 function saveGlobalSnippets() {
   const globals = get(snippets).filter(s => s.projectId === undefined);
-  localStorage.setItem('soryq_global_snippets', JSON.stringify(globals));
+  localStorage.setItem('spacron_global_snippets', JSON.stringify(globals));
 }
 
 // Load project-specific snippets
@@ -66,7 +66,7 @@ export async function loadProjectSnippets(project: { id: string; root_path: stri
 async function flushProjectSnippets(projectId: string): Promise<void> {
   const rootPath = projectPaths.get(projectId);
   if (!rootPath) return;
-  const dir = `${rootPath}/.soryq`;
+  const dir = `${rootPath}/.spacron`;
   const path = getSnippetsPath(rootPath);
   const projectSnippets = get(snippets).filter(s => s.projectId === projectId);
   // Strip the projectId field before saving to file so it's clean and portable

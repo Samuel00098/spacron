@@ -16,7 +16,7 @@ export function Demo() {
           </p>
         </div>
 
-        <div className="player glass reveal relative mx-auto max-w-[960px] overflow-hidden p-3.5">
+        <div className="player glass reveal-lift relative mx-auto max-w-[960px] overflow-hidden p-3.5">
           <div className="bloom inset-x-[10%] -top-[30%] h-[320px]" aria-hidden="true" />
 
           {media.videoReady ? (
@@ -32,17 +32,18 @@ export function Demo() {
             </video>
           ) : (
             <div
-              className="relative flex aspect-[16/10] flex-col items-center justify-center gap-[18px] rounded-xl border border-[var(--glass-border)] bg-cover bg-center"
+              className="relative flex aspect-[16/10] flex-col items-center justify-center gap-[18px] rounded-xl border border-[var(--glass-border)] bg-cover bg-center transition-transform duration-200 hover:scale-[1.005]"
               style={{
                 backgroundColor: 'rgba(0,0,0,0.4)',
                 backgroundImage: hasPoster ? `url(${poster})` : undefined,
               }}
             >
               <span
-                className="grid h-[72px] w-[72px] place-items-center rounded-full pl-1 text-[#04201d]"
+                className="grid h-[72px] w-[72px] place-items-center rounded-full pl-1"
                 style={{
-                  background: 'linear-gradient(135deg, var(--teal-bright), var(--sky))',
-                  boxShadow: '0 12px 40px -8px rgba(154, 163, 176, 0.6)',
+                  background: 'linear-gradient(135deg, var(--accent-bright), var(--accent-soft))',
+                  boxShadow: '0 12px 40px -8px rgba(141, 154, 172, 0.6)',
+                  color: '#0a0c10',
                 }}
                 aria-hidden="true"
               >

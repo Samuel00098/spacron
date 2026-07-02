@@ -2,7 +2,7 @@ export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settin
 
 export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env';
 
-export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'playbooks';
+export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'review';
 
 export interface LayoutState {
   sidebarVisible: boolean;

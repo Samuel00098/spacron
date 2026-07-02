@@ -295,23 +295,23 @@ export default function AppShell() {
     if (
       startViewTransition &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
-      !(window as any).__soryq_transitioning
+      !(window as any).__spacron_transitioning
     ) {
-      (window as any).__soryq_transitioning = true;
+      (window as any).__spacron_transitioning = true;
       try {
         const transition = startViewTransition.call(document, () => {
           flushSync(action);
         });
         transition.finished?.finally(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         }).catch(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         });
         setTimeout(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         }, 1000);
       } catch (e) {
-        (window as any).__soryq_transitioning = false;
+        (window as any).__spacron_transitioning = false;
         action();
       }
     } else {
@@ -1003,7 +1003,7 @@ export default function AppShell() {
     useLayoutStore.setState((state) => {
       const next = { ...state, ...patch };
       if (typeof window !== 'undefined') {
-        localStorage.setItem('soryq_layout', JSON.stringify(next));
+        localStorage.setItem('spacron_layout', JSON.stringify(next));
       }
       return next;
     });
@@ -1456,7 +1456,7 @@ export default function AppShell() {
         key={id}
         className={`room-panel bento-card${featured ? ' featured active-glow' : ''}`}
         data-room-id={id}
-        style={{ viewTransitionName: `soryq-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
+        style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
       >
         <header className="room-header">
           <button className="room-title" onClick={() => focusRoom(id)} title={`Focus ${title}`}>
@@ -1849,7 +1849,7 @@ export default function AppShell() {
                 (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                   ? ` ${ambientLayout}-solo`
                   : ''
-              }`} aria-label="Soryq ambient layout">
+              }`} aria-label="Spacron ambient layout">
                 {renderAmbientLayout()}
               </main>
 

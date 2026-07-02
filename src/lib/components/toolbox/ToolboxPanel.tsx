@@ -126,7 +126,7 @@ export default function ToolboxPanel() {
   // Regex state
   const [regexPattern, setRegexPattern] = useState('([a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,6})');
   const [regexFlags, setRegexFlags] = useState('g');
-  const [regexText, setRegexText] = useState('Contact us at support@soryq.dev or admin@soryq.dev.');
+  const [regexText, setRegexText] = useState('Contact us at support@spacron.dev or admin@spacron.dev.');
   const [regexReplace, setRegexReplace] = useState('[email]');
 
   const regexMatches = useMemo(() => {

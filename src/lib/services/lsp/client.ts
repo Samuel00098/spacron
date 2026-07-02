@@ -24,7 +24,7 @@ import type { Extension } from '@codemirror/state';
 import { showToast, dismissToast, toasts } from '$lib/stores/notification';
 import { get } from '$lib/stores/storeCompat';
 
-/** Soryq language ids (from `detectLanguage`) that we offer LSP for. */
+/** Spacron language ids (from `detectLanguage`) that we offer LSP for. */
 const SUPPORTED = new Set(['typescript', 'javascript', 'rust', 'python', 'go']);
 
 type ServerStatus = {
@@ -238,7 +238,7 @@ export async function createLspExtension(
   };
 }
 
-/** Whether LSP autocomplete is offered for a given Soryq language id. */
+/** Whether LSP autocomplete is offered for a given Spacron language id. */
 export function lspSupportsLanguage(language: string): boolean {
   return SUPPORTED.has(language);
 }

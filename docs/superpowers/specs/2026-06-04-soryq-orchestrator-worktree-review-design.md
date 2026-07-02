@@ -1,7 +1,7 @@
-# Soryq Orchestrator Worktree + Review Slice
+# Spacron Orchestrator Worktree + Review Slice
 
 ## Goal
-Make Soryq’s agent orchestrator behave like the intended workflow for code-changing work: create an isolated task runtime, run one agent in one leased terminal, keep edits in a task-scoped worktree, and require explicit review before completion.
+Make Spacron’s agent orchestrator behave like the intended workflow for code-changing work: create an isolated task runtime, run one agent in one leased terminal, keep edits in a task-scoped worktree, and require explicit review before completion.
 
 ## Why this slice
 The current implementation in `src/lib/stores/orchestrator.ts` is a phase-1 direct dispatcher:
@@ -10,7 +10,7 @@ The current implementation in `src/lib/stores/orchestrator.ts` is a phase-1 dire
 - the goal is auto-sent into the agent terminal
 - terminal exit is treated as completion
 
-That is useful, but it does not match the intended architecture in `docs/superpowers/specs/2026-06-04-soryq-agent-orchestrator-architecture.md`.
+That is useful, but it does not match the intended architecture in `docs/superpowers/specs/2026-06-04-spacron-agent-orchestrator-architecture.md`.
 
 Missing behavior:
 - no worktree-backed execution for code-changing work
@@ -29,7 +29,7 @@ BridgeMind’s public workflow is structurally closer to:
 
 BridgeMind’s public docs clearly expose task lifecycle and shared project/task context through BridgeMCP, but do not clearly document automatic git worktree creation per task.
 
-Soryq should follow the stronger local-first variant:
+Spacron should follow the stronger local-first variant:
 - keep BridgeMind’s explicit review boundary
 - add per-task worktree isolation as the default for code-changing work
 - keep one-terminal-one-task leasing visible in the UI
@@ -171,7 +171,7 @@ In review:
 ## Concrete code changes
 ### `src/lib/stores/orchestrator.ts`
 Keep responsibility for:
-- persistence to `.soryq/orchestrator.json`
+- persistence to `.spacron/orchestrator.json`
 - per-project chat transcript
 - wiring UI actions to orchestration services
 - exposing the public store API used by the panel

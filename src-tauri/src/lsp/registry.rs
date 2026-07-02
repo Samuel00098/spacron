@@ -4,7 +4,7 @@ use std::path::PathBuf;
 /// needs to talk LSP over stdio.
 #[derive(Clone, Debug)]
 pub struct ServerDef {
-    /// The Soryq language id (matches `detectLanguage` on the frontend).
+    /// The Spacron language id (matches `detectLanguage` on the frontend).
     pub language: &'static str,
     /// Base command name to resolve on PATH (without extension).
     pub command: &'static str,

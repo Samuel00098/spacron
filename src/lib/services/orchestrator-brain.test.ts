@@ -29,27 +29,6 @@ const currentAiModel = vi.hoisted(() => {
     },
   };
 });
-const voicePersonality = vi.hoisted(() => {
-  let value = 'helpful';
-  return {
-    subscribe(run: (value: string) => void) {
-      run(value);
-      return () => {};
-    },
-    set(next: string) {
-      value = next;
-    },
-  };
-});
-const getVoicePersonalityDef = vi.hoisted(() =>
-  vi.fn((_id: string) => ({
-    id: 'helpful',
-    label: 'Helpful Assistant',
-    description: 'A calm, friendly, and knowledgeable assistant.',
-    systemPrompt: 'You are a calm, friendly, and knowledgeable assistant.',
-  }))
-);
-
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('$lib/services/ai-keychain', () => ({ isProviderApiKeyConfiguredLocal }));
 vi.mock('$lib/stores/settings', () => ({
@@ -58,8 +37,6 @@ vi.mock('$lib/stores/settings', () => ({
   getProviderDef,
   isLocalProvider,
   getProviderBaseUrl,
-  voicePersonality,
-  getVoicePersonalityDef,
 }));
 
 import { routeOrchestratorRequest, resolveAgentCommand } from './orchestrator-brain';

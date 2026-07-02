@@ -26,7 +26,7 @@ export default class ReactErrorBoundary extends Component<ReactErrorBoundaryProp
     return (
       <div className="migration-fallback full-screen">
         <div className="migration-fallback-panel">
-          <span className="migration-fallback-kicker">Soryq recovered from a UI error</span>
+          <span className="migration-fallback-kicker">Spacron recovered from a UI error</span>
           <h1>Something in the workspace UI failed to render.</h1>
           <p>{this.state.error.message || 'An unexpected render error occurred.'}</p>
           <button onClick={() => window.location.reload()}>Reload app</button>

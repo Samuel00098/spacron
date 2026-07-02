@@ -1,7 +1,60 @@
 # Changelog
 
-All notable changes to Soryq will be documented here.
+All notable changes to Spacron will be documented here.
 
+
+## [v0.4.9] - 2026-07-02
+
+A large workspace-shell release: a new Project Launcher, a dedicated Development page with a morphing dock, several new layout modes (Jarvis HUD Cockpit, vibe-coding canvas, redesigned focus), a Playbooks-driven terminal, and a top-to-bottom liquid-glass polish pass.
+
+### Added
+
+- **Project Launcher HUD & Hybrid Collections** — the entry screen is now a Project Launcher built from spacious vertical cards with glowing folder-icon avatars, backed by a "Hybrid Collections" model for grouping workspaces. The workspace naming/creation modals were rebranded to match, and an "add folder" button is always visible in the launcher.
+
+- **Dedicated Development page with a morphing dock** — the old split layout is now a dedicated development page whose dock morphs dynamically to the active task, with a dockable terminal. In development mode the page tools, keyboard shortcuts, the global prompt bar, embedded panel tools, and terminal snippet commands all route to an isolated dev-terminal so they never leak into your real project sessions.
+
+- **Playbooks** — a new tmux/warp-inspired Playbooks panel for saved, repeatable agent workflows. Each playbook can override which agent executes it (via a premium custom Dropdown selector), and an inline markdown hint card guides you through authoring them.
+
+- **tmux / warp-style terminal** — detached PTY sessions, per-agent visual glows so you can see at a glance which pane an agent owns, and inline block diagnostics.
+
+- **Glassmorphic agent spawn modal** — agent spawning moved out of the prompt bar into a dedicated, dock-triggered glassmorphic modal dialog.
+
+- **New layout modes** — a **Jarvis HUD Cockpit** side-by-side layout (with its own theme/layout style mode), a **vibe-coding canvas** layout tuned for agents and CLIs, and a redesigned **focus** layout that stacks panels horizontally below a larger rectangular stage with a Spotlight-style floating search bar.
+
+### Changed
+
+- **Premium liquid-glass pass** — Apple-like translucency and smooth spring transitions across modals, search, and the floating YouTube panel; global tactile button physics, liquid range inputs, toggle spring sliders, and icon micro-animations. Light mode gains its own liquid-glass treatment with a minimum opacity threshold so text stays readable at full transparency.
+
+- **Quick Capture animation** — replaced the page-wide View Transitions with a sleeker, self-contained spring scale animation.
+
+- **ProjectHUD card redesign** — cards use a spacious vertical layout with folder-icon avatars (circular avatar backgrounds and hardcoded blue accents removed) and larger folder icons.
+
+- **Roomier default sidebar** — the default layout `sidebarWidth` was raised to 310px for better responsiveness.
+
+- **Cleaner welcome screen** — the Settings button is hidden from the TitleBar while the welcome screen is active.
+
+### Fixed
+
+- **UI fills the window under the global zoom** — `#app` is now sized at a plain 100% under the global zoom, and viewport-unit sizing inside the zoomed shell was corrected, so the layout no longer overflows or under-fills the window.
+
+- **Overlay clearance on workspace mount** — the AppShell ResizeObserver effect now runs on `workspaceId` mount so overlay clearance is calculated correctly from the first paint.
+
+- **Agent spawn modal flicker** — the spawn modal now closes immediately on confirm (no background flash), agent-name assignment is restored, and the layout view-transition flash on toggle is bypassed.
+
+- **Dev-mode focus & routing leaks** — fixed prompt-bar room focus and agent-run targeting leaking into the standard terminal in development mode.
+
+- **Tab strip clashes** — agent sessions are excluded from the top tab strip so they no longer clash with active tabs.
+
+- **Layout scroll & overlap** — fixed left-side scroll cut-off in the room-cards row (now centered safely), focus-panel overlap, and minimized panels now sit at the bottom-left corner with horizontal scrolling.
+
+- **Factory reset dialog** — added the missing `dialog:allow-ask` capability so the factory-reset confirmation dialog can open.
+
+## [v0.4.8] - 2026-06-27
+
+### Changed
+
+- **Onboarding walkthrough redesign** — replaced generic checkmarks with 15 custom theme-aware feature icons, refined copywriting across all slides to make them benefit-focused, and replaced simplified illustrations with high-fidelity, interactive dashboard visuals (representing editors, terminals, LSP diagnostics, git graphs, and a command palette simulator).
+- **Theme picker spacing** — re-organized the starting theme picker into a clean, spacious 2-row, 3-column swatch grid.
 
 ## [v0.4.7] - 2026-06-27
 
@@ -33,7 +86,7 @@ All notable changes to Soryq will be documented here.
 
 ## [v0.4.4] - 2026-06-26
 
-This release is a large rebuild of the Soryq interface on React, with a new infinite-canvas workspace, on-device voice, and a substantially upgraded Sketch Canvas and Settings experience.
+This release is a large rebuild of the Spacron interface on React, with a new infinite-canvas workspace, on-device voice, and a substantially upgraded Sketch Canvas and Settings experience.
 
 ### Added
 
@@ -252,7 +305,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 ### Changed
 
-- **Sketch Canvas grid and background follow the app theme** — in transparent and grid background modes the canvas grid, dots, and backdrop now read the active Soryq theme palette (and match it on export), and the canvas no longer stacks an opaque slab over the frosted wallpaper.
+- **Sketch Canvas grid and background follow the app theme** — in transparent and grid background modes the canvas grid, dots, and backdrop now read the active Spacron theme palette (and match it on export), and the canvas no longer stacks an opaque slab over the frosted wallpaper.
 
 - **Embedded commands open their own terminal** — Arduino / PlatformIO / Raspberry Pi commands now run in a fresh, project-scoped terminal session instead of reusing whatever pane is focused, so they can't interrupt something you're already running.
 
@@ -286,7 +339,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 - **Containers panel** — a new Docker / Compose toolbox panel (its own activity-bar view) with one-click actions that run straight into a terminal session: check Docker & Compose availability, `compose up --build`, `compose down`, list running containers, and tail compose logs.
 
-- **Orchestrator memory** — the agent orchestrator now keeps a per-project memory of completed work in `.soryq/orchestrator-memory.json`. Finished task summaries are remembered (capped at 40 entries, deduplicated), loaded when a project opens, and folded into the brain's context so follow-up requests build on what's already been done instead of starting cold.
+- **Orchestrator memory** — the agent orchestrator now keeps a per-project memory of completed work in `.spacron/orchestrator-memory.json`. Finished task summaries are remembered (capped at 40 entries, deduplicated), loaded when a project opens, and folded into the brain's context so follow-up requests build on what's already been done instead of starting cold.
 
 - **Task-panel awareness for the orchestrator** — the brain now reads your Kanban board (In progress / To do / Done) as project truth. When you ask "what should I do next?" it recommends what to tackle and what can wait, prioritising in-progress work over the backlog, and dispatched agents receive a compact task-panel context block so they share the same picture without you re-explaining it.
 
@@ -408,7 +461,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 - **Project-wide search (Ctrl+Shift+F)** — a new `Search` tab in the sidebar (`SearchPanel`) finds text across every open project root. Searches honour `.gitignore` (but never descend into `.git`), support case-sensitive, whole-word, and regular-expression modes, and take an optional comma-separated include-glob filter (e.g. `*.rs, src/**/*.ts`). Results are grouped by file with line/column positions. Backed by a new Rust `search_in_project` command built on the `ignore` walker, with caps on file size (2 MB), per-file matches (200), total matches (5 000), and line length (500 chars) so a pathological query can't lock up the UI.
 
-- **Environment variable manager (Ctrl+Shift+E)** — a new `EnvManager` overlay stores per-project environment variables in the OS keychain (namespaced by project id under the same `com.samue.soryq` service as the AI and GitHub secrets). Variables can be added, edited, removed, or imported in bulk from the project's root `.env` file. Backed by new Rust commands `env_vault_get`, `env_vault_set`, and `env_vault_import_dotenv`, with variable-name validation and a minimal `.env` parser (handles `export`, `#` comments, and quoted values).
+- **Environment variable manager (Ctrl+Shift+E)** — a new `EnvManager` overlay stores per-project environment variables in the OS keychain (namespaced by project id under the same `com.samue.spacron` service as the AI and GitHub secrets). Variables can be added, edited, removed, or imported in bulk from the project's root `.env` file. Backed by new Rust commands `env_vault_get`, `env_vault_set`, and `env_vault_import_dotenv`, with variable-name validation and a minimal `.env` parser (handles `export`, `#` comments, and quoted values).
 
 - **HTTP Client variable substitution** — requests now expand `{{VAR}}` placeholders from the active project's environment vault in the URL, headers, and body before sending. Unknown placeholders are left intact so a typo is visible rather than silently blanked.
 
@@ -510,7 +563,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 ### Changed
 
-- **Interface starts opaque by default** — the `interfaceTransparency` default (used by fresh installs and "Reset to default") is now `0` instead of `50`, so Soryq launches in the solid-background, blur-disabled performance mode out of the box. Existing users keep whatever transparency level they've already set; only new profiles and explicit resets are affected.
+- **Interface starts opaque by default** — the `interfaceTransparency` default (used by fresh installs and "Reset to default") is now `0` instead of `50`, so Spacron launches in the solid-background, blur-disabled performance mode out of the box. Existing users keep whatever transparency level they've already set; only new profiles and explicit resets are affected.
 - **Release builds publish on tag push** — the release workflow now triggers automatically on a tag push and is pinned to npm. `bun.lock` was removed so `tauri-action` no longer auto-detects Bun (which the CI runners don't install), and `tauriScript` explicitly invokes npm so the release build matches the `npm ci` / `npm run build` path used everywhere else.
 
 ### Fixed
@@ -599,7 +652,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 ### Fixed
 
 - **File explorer click-away dismissal** — inline new-file/new-folder inputs, inline rename inputs, and the file-explorer context menu now dismiss cleanly when you click elsewhere. They no longer linger onscreen or implicitly confirm from a blur.
-- **Agent conversation summaries in pane headers** — when an agent run completes, Soryq now flushes any buffered terminal output before finalizing the command block, summarizes the completed response, and writes that summary back into session state. This fixes panes getting stuck on generic project-folder titles like `Freedom` instead of the agent's actual conversation summary.
+- **Agent conversation summaries in pane headers** — when an agent run completes, Spacron now flushes any buffered terminal output before finalizing the command block, summarizes the completed response, and writes that summary back into session state. This fixes panes getting stuck on generic project-folder titles like `Freedom` instead of the agent's actual conversation summary.
 - **Pasted and injected image attachments under CSP** — prompt-bar image chips now decode `data:` URLs locally instead of trying to `fetch(dataUrl)`, which Chromium routed through `connect-src` and blocked. Images inserted from paste or preview capture now attach reliably under the app's CSP.
 - **Source Control AI actions now respect provider configuration** — commit-message generation now shows the correct setup guidance for the selected provider, including missing local server URLs for Ollama and LM Studio.
 - **Explorer selection state is cleaned up correctly across restores/resets** — workspace restore and full-store resets now rebuild and clear the multi-selection set consistently instead of only tracking the single active path.
@@ -614,7 +667,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 ### Added
 
-- **Attach images from the file picker** — picking an image through the prompt bar's attach-files dialog now adds it as a preview chip (the same thumbnails you get from pasting or drag-and-drop) instead of inserting a raw path string. The chip references the exact file on disk, so the agent reads the original image rather than a re-saved copy, and images can be attached even with no project open (only pasted images, which must be written to `.soryq/attachments`, still require one). Non-image files are still inserted as plain paths, now routed through the shared quoting helper so they're only quoted when the path contains spaces. Backed by `img-src blob:` in the Content-Security-Policy so the in-memory preview can render.
+- **Attach images from the file picker** — picking an image through the prompt bar's attach-files dialog now adds it as a preview chip (the same thumbnails you get from pasting or drag-and-drop) instead of inserting a raw path string. The chip references the exact file on disk, so the agent reads the original image rather than a re-saved copy, and images can be attached even with no project open (only pasted images, which must be written to `.spacron/attachments`, still require one). Non-image files are still inserted as plain paths, now routed through the shared quoting helper so they're only quoted when the path contains spaces. Backed by `img-src blob:` in the Content-Security-Policy so the in-memory preview can render.
 - **Wider image-format coverage** — the image detector and MIME mapping now recognise APNG, SVG, the `.jpe`/`.jfif` JPEG aliases, and `.cur` cursors, and pasted clipboard images map their MIME type to a clean file extension (so `image/svg+xml` saves as `.svg` instead of a mangled `svgxml`).
 
 ### Changed
@@ -644,7 +697,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 ### Added
 
 - **File explorer — inline new file / folder** — creating a file or folder now shows a focused inline input nested directly beneath the target folder, rather than a single input pinned to the workspace root. The target folder auto-expands so the input is visible, and the create state now lives in the explorer store so it behaves identically from the header buttons, the right-click context menu, and the keyboard. Confirm with Enter or by clicking away; cancel with Escape.
-- **Native desktop notifications** — background notifications now go through the Tauri notification plugin (`@tauri-apps/plugin-notification`) instead of the WebView's `Notification` API, with the matching `notification:default` capability and Rust plugin registration. OS notifications are raised only when the app window is unfocused — when Soryq is in the foreground the in-app toast already covers it — and the granted permission is cached so the OS isn't re-queried on every toast.
+- **Native desktop notifications** — background notifications now go through the Tauri notification plugin (`@tauri-apps/plugin-notification`) instead of the WebView's `Notification` API, with the matching `notification:default` capability and Rust plugin registration. OS notifications are raised only when the app window is unfocused — when Spacron is in the foreground the in-app toast already covers it — and the granted permission is cached so the OS isn't re-queried on every toast.
 
 ### Fixed
 
@@ -692,7 +745,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 ### Changed — License
 
-- **Relicensed to AGPL-3.0-only** — Soryq is now licensed under the GNU Affero General Public License v3.0 (reverting the brief Apache-2.0 switch). The `LICENSE` file, README, `package.json`, and `Cargo.toml` are updated to match.
+- **Relicensed to AGPL-3.0-only** — Spacron is now licensed under the GNU Affero General Public License v3.0 (reverting the brief Apache-2.0 switch). The `LICENSE` file, README, `package.json`, and `Cargo.toml` are updated to match.
 
 ## [0.1.3] - 2026-05-29
 
@@ -727,7 +780,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 - **Persisted state sanitisation** — `loadProjectStateFromStorage` now validates all fields before they flow to Tauri invoke calls: file paths reject null bytes and control characters (`\x00–\x1f`), terminal role values are restricted to `/^[\w\-. ]{0,63}$/` (blocking terminal escape-code injection), and the layout sub-object has its numeric fields range-clamped (`sidebarWidth` 100–600, `auxPanelWidth` 700–2000, `auxEditorHeight` 10–90).
 - **Snapshot value validation** — `sidebarWidth` clamped to `[100, 600]`; `targetPort` validated to `[1024, 65535]`; `previewUrl` restricted to relative paths or `localhost`/`127.0.0.1` URLs, preventing a crafted snapshot from redirecting the preview proxy to an unintended port.
 - **Layout store allowlists** — `sanitiseActiveView()` and `sanitiseSidebarTab()` added as explicit Set-based allowlist validators, applied at all three restore paths (snapshot restore, cached project restore, persisted project restore). Unknown values fall back to safe defaults rather than being applied as-is.
-- **Scoped localStorage clear** — "Reset App Data" now removes only `soryq_*` and `forge_*` prefixed keys instead of calling `localStorage.clear()`, which would have wiped any other data stored under the same WebView origin.
+- **Scoped localStorage clear** — "Reset App Data" now removes only `spacron_*` and `forge_*` prefixed keys instead of calling `localStorage.clear()`, which would have wiped any other data stored under the same WebView origin.
 - **Snapshot IDs** — replaced `Math.random()` with `crypto.randomUUID()` for cryptographically random snapshot identifiers.
 - **Error messages** — rename and delete error toasts now use `err?.message` instead of the raw error object, preventing potential path disclosure in error strings.
 - **Permission request race condition** — calling `requestPermission` a second time before the user responds to the first no longer leaves the original promise permanently unresolved; the in-flight request is now auto-denied before the new one is shown.
@@ -738,9 +791,9 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 - **AI commit message generation** — sparkle button in the Source Control panel generates a conventional commits message (subject line + body) from the current diff and untracked file list using OpenRouter. Uses the same model selected for voice refinement.
 - **Quick Capture** — Ctrl+Shift+Space opens a modal to rapidly capture notes into the current project without switching panels.
-- **Daily Notes** — Ctrl+Shift+D opens a per-project daily note. Notes are stored in `.soryq/` alongside other project data.
+- **Daily Notes** — Ctrl+Shift+D opens a per-project daily note. Notes are stored in `.spacron/` alongside other project data.
 - **Onboarding walkthrough** — first-time users see an interactive guide covering the key panels and shortcuts.
-- **Tasks panel — Kanban layout** — Tasks moved from the sidebar into a full right-panel Kanban board with three columns (To Do, In Progress, Done), colour-coded badges, and drag-and-drop support. Tasks are persisted per-project in `.soryq/tasks.json`.
+- **Tasks panel — Kanban layout** — Tasks moved from the sidebar into a full right-panel Kanban board with three columns (To Do, In Progress, Done), colour-coded badges, and drag-and-drop support. Tasks are persisted per-project in `.spacron/tasks.json`.
 - **Voice refinement** — AI-powered cleanup of dictated voice transcripts using OpenRouter. Strips filler words, converts spoken symbols to their character equivalents (`fat arrow` → `=>`, `double equals` → `==`, etc.), preserves technical identifiers verbatim, and structures multi-step instructions into lists. Falls back to local cleanup when no API key is set.
 - **OpenRouter API key management** — new AI & Voice section in Settings for saving the OpenRouter key, picking the preferred model, and toggling voice refinement on/off.
 - **Voice refinement feedback** — mic button shows a teal spinner while the AI is processing (distinct from the red recording state). A "Prompt refined by AI" toast confirms when the AI call succeeded vs fell back to local cleanup.
@@ -750,7 +803,7 @@ This release is a large rebuild of the Soryq interface on React, with a new infi
 
 - **Auxiliary panel architecture** — right panel now supports three concurrent views (editor, preview, tasks, HTTP client, review) with tabbed switching and animated pill-style active indicator. Default panel width increased from 400 px to 700 px.
 - **Sidebar navigation** — active tab now has an animated pill indicator.
-- **OpenRouter key storage** — moved from OS keychain (unreliable on Windows) to `localStorage`, which is sandboxed to the app and works consistently. The key migrates automatically from the old `forge_openrouter_api_key` key to `soryq_openrouter_api_key` on first launch.
+- **OpenRouter key storage** — moved from OS keychain (unreliable on Windows) to `localStorage`, which is sandboxed to the app and works consistently. The key migrates automatically from the old `forge_openrouter_api_key` key to `spacron_openrouter_api_key` on first launch.
 - **Voice refinement prompt** — completely rewritten for developer context: understands prompts directed at AI coding agents, terminal commands, and technical notes. Tone is direct and friendly.
 - **Commit message prompt** — generates a proper subject line + blank line + detailed body instead of a single line. Token limit raised to 512.
 - **Settings — AI & Voice** — key description updated to reflect localStorage storage. Status text updated ("Key saved. AI features are ready." / "No key saved yet."). Key input now accepts Enter to save.

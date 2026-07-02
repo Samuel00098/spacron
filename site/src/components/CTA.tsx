@@ -12,7 +12,7 @@ export function CTA() {
   return (
     <section className="!py-[clamp(40px,7vw,80px)]">
       <div className="container">
-        <div className="cta glass reveal relative overflow-hidden px-6 py-[clamp(40px,6vw,72px)] text-center">
+        <div className="cta glass reveal-lift relative overflow-hidden px-6 py-[clamp(40px,6vw,72px)] text-center transition-all duration-300 hover:shadow-[var(--glow-accent),var(--shadow-sm)]">
           <div className="bloom inset-x-[10%] -top-[40%] h-[320px]" aria-hidden="true" />
           <h2 className="relative text-[clamp(1.8rem,4.5vw,2.8rem)] font-extrabold tracking-[-0.02em]">
             Ship faster, in one window.
@@ -23,7 +23,7 @@ export function CTA() {
           </p>
           <div className="relative mt-7 flex flex-wrap justify-center gap-3.5">
             <a className="btn btn-primary" href="#download">
-              <DownloadIcon /> Download Soryq
+              <DownloadIcon /> Download Spacron
             </a>
             <a className="btn btn-ghost" href="/changelog">
               See what&apos;s new

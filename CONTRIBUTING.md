@@ -1,4 +1,4 @@
-# Contributing to Soryq
+# Contributing to Spacron
 
 Thanks for taking the time to contribute! Whether it's a bug report, a feature idea, or a pull request — all contributions are welcome.
 
@@ -7,7 +7,7 @@ Thanks for taking the time to contribute! Whether it's a bug report, a feature i
 Open an issue and include:
 - What you were doing when the bug happened
 - What you expected vs what actually happened
-- Your OS and Soryq version
+- Your OS and Spacron version
 - Any error messages or screenshots
 
 ## Suggesting features
@@ -27,8 +27,8 @@ Open an issue with the `enhancement` label. Describe the problem you're trying t
 **Prerequisites:** Node.js 20+, Rust (stable), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform.
 
 ```bash
-git clone https://github.com/Samuel00098/soryq.git
-cd soryq
+git clone https://github.com/Samuel00098/spacron.git
+cd spacron
 npm install
 npm run tauri dev
 ```
@@ -52,4 +52,4 @@ src/lib/services/     # Frontend services (voice, keychain, etc.)
 
 ## License
 
-Soryq is open source under the **Apache License 2.0** (see [LICENSE](LICENSE)). By contributing, you agree that your contributions will be licensed under the same license.
+Spacron is open source under the **Apache License 2.0** (see [LICENSE](LICENSE)). By contributing, you agree that your contributions will be licensed under the same license.

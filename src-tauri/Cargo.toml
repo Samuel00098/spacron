@@ -1,13 +1,13 @@
 [package]
-name = "soryq"
-version = "0.4.8"
+name = "spacron"
+version = "0.4.9"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"
 license = "Apache-2.0"
 
 [lib]
-name = "soryq_lib"
+name = "spacron_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

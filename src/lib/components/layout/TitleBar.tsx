@@ -96,7 +96,7 @@ export default function TitleBar() {
           {!iconError ? (
             <img
               src={iconSrc}
-              alt="Soryq"
+              alt="Spacron"
               className="titlebar-app-icon"
               onError={() => setIconError(true)}
             />

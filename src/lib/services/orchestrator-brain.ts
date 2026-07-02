@@ -7,8 +7,6 @@ import {
   getProviderDef,
   isLocalProvider,
   getProviderBaseUrl,
-  voicePersonality,
-  getVoicePersonalityDef,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 
@@ -95,7 +93,7 @@ export interface AppStateRef {
   visiblePanels?: string[];
   /** The workspace's room layout: ambient arrangement + the open rooms. */
   layout?: {
-    ambient: 'focus' | 'development' | 'gallery' | 'preview';
+    ambient: 'focus' | 'development' | 'gallery' | 'vibe' | 'preview';
     rooms: Array<{ title: string; focused: boolean; minimized: boolean }>;
   };
   sidebar?: { open: boolean; tab?: string };
@@ -613,7 +611,7 @@ function buildSystemPrompt(
         .join('\n')
     : '(none awaiting review)';
   return [
-    "You are Soryq's in-app assistant. The user talks to you in natural language. You can see the whole application — the active page, open editor files and cursor, terminals, preview, git branch, the task board — shown under \"Application state\" in the user message. You do two kinds of things: (1) DRIVE THE APP directly (navigate pages, open files, run the preview, manage tasks), and (2) DELEGATE coding work to a fleet of local terminal agents you spawn and direct. Answer questions about anything you can see, and take the right actions to do what the user asks inside the app.",
+    "You are Spacron's in-app assistant. The user talks to you in natural language. You can see the whole application — the active page, open editor files and cursor, terminals, preview, git branch, the task board — shown under \"Application state\" in the user message. You do two kinds of things: (1) DRIVE THE APP directly (navigate pages, open files, run the preview, manage tasks), and (2) DELEGATE coding work to a fleet of local terminal agents you spawn and direct. Answer questions about anything you can see, and take the right actions to do what the user asks inside the app.",
     '',
     ...(profile.length
       ? [
@@ -697,7 +695,6 @@ function buildSystemPrompt(
           '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
           '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
           '- Terminal output for running agents is shown above. Reference it in your replies: say what the agents just outputted, mention their last action, or summarize progress. Do NOT recite the raw output verbatim — paraphrase naturally.',
-          `- PERSONALITY: Speak in a natural, human-like way according to these personality instructions: ${getVoicePersonalityDef(get(voicePersonality)).systemPrompt}`,
         ]
       : []),
   ].join('\n');

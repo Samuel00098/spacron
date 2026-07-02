@@ -1,13 +1,13 @@
-# Soryq — Market & Positioning Report (June 2026)
+# Spacron — Market & Positioning Report (June 2026)
 
-*Prepared for: deciding how Soryq enters a crowded AI-developer-tools market.*
-*Question it answers: who else is out there, what do they all do the same, and what is the one angle that makes Soryq worth coming back to?*
+*Prepared for: deciding how Spacron enters a crowded AI-developer-tools market.*
+*Question it answers: who else is out there, what do they all do the same, and what is the one angle that makes Spacron worth coming back to?*
 
 ---
 
 ## 0. TL;DR — the one-line wedge
 
-> **Soryq is the native, local-first "agent cockpit": you talk to one orchestrator that drives your whole workspace and runs a fleet of coding agents — on your own keys, on your own machine, with a workspace that has personality.**
+> **Spacron is the native, local-first "agent cockpit": you talk to one orchestrator that drives your whole workspace and runs a fleet of coding agents — on your own keys, on your own machine, with a workspace that has personality.**
 
 Three things are true about the 2026 market at once, and **no shipping product sits in the middle of all three**:
 
@@ -15,19 +15,19 @@ Three things are true about the 2026 market at once, and **no shipping product s
 2. **Orchestrators** (Conductor, Vibe Kanban, Antigravity, Warp) run *parallel agents* — but you steer them by clicking, typing, and managing Kanban cards. None are voice-first, and the most-loved ones are *dying* (more on that below).
 3. **The big IDEs** (Cursor, Windsurf, Antigravity) are **cloud-credit-metered and model-locked** — the #1 recurring complaint in every 2026 review is "credit/usage limits."
 
-Soryq is the only thing that is **voice-driven + multi-agent + native + bring-your-own-key/local-first + has personality**. That intersection is empty. That's the market entry.
+Spacron is the only thing that is **voice-driven + multi-agent + native + bring-your-own-key/local-first + has personality**. That intersection is empty. That's the market entry.
 
 > ⚠️ **Reality check (revised twice after deeper research):** the intersection is **not** empty — two competitors sit in it.
 > - **CNVS.dev** is the *closest* — its tagline is literally *"Command an army of agents with your voice,"* it's voice-directed parallel agents **on a canvas**, sells on **"own forever"** (one-time, anti-subscription), and gives agents **named characters** (Marshall/Chase/Ada/Hero). It hits voice + fleet + one-time + personality + canvas all at once.
 > - **BridgeSpace / BridgeMind** closes most of the same gap (native agent workspace + voice + multi-agent + knowledge-graph memory + a real community).
 >
-> So the honest wedge is **narrower and sharper**. What neither CNVS nor BridgeSpace has, and Soryq does: **(1) cross-platform** (CNVS is macOS-only); **(2) truly local / offline** — both orchestrate *cloud* agents, whereas Soryq runs **BYO-key + fully-local (Ollama/LM Studio) + on-device offline voice**; **(3) a real unified IDE workspace** (terminal grid + editor + preview/DOM inspector + git + DB), not just an agent canvas. **Lead with "your machine, your keys, works offline" — that is the one claim the closest competitors structurally can't make.** See Camp E.
+> So the honest wedge is **narrower and sharper**. What neither CNVS nor BridgeSpace has, and Spacron does: **(1) cross-platform** (CNVS is macOS-only); **(2) truly local / offline** — both orchestrate *cloud* agents, whereas Spacron runs **BYO-key + fully-local (Ollama/LM Studio) + on-device offline voice**; **(3) a real unified IDE workspace** (terminal grid + editor + preview/DOM inspector + git + DB), not just an agent canvas. **Lead with "your machine, your keys, works offline" — that is the one claim the closest competitors structurally can't make.** See Camp E.
 
 ---
 
 ## 1. The landscape, grouped
 
-The market has split into four camps. Soryq overlaps a little with each, but belongs to none — which is exactly the gap.
+The market has split into four camps. Spacron overlaps a little with each, but belongs to none — which is exactly the gap.
 
 ### Camp A — Electron AI IDEs (the giants)
 **Cursor, Windsurf**
@@ -36,7 +36,7 @@ The market has split into four camps. Soryq overlaps a little with each, but bel
 - **Windsurf** — `Cascade` agent built on in-house `SWE-1.5`; pulls codebase context automatically, runs long multi-file tasks with fewer interruptions. Moved to a $20/mo quota model (Mar 2026). Standalone editor **+ plugins for 40+ IDEs** (JetBrains, Vim, Xcode). Acquired by Cognition (~$3B).
 
 **Shared DNA:** Electron shell (heavy), proprietary model + cloud, subscription + usage credits, "AI inside an editor."
-**Their weakness Soryq exploits:** weight, credit anxiety, vendor lock-in, no voice, no native footprint.
+**Their weakness Spacron exploits:** weight, credit anxiety, vendor lock-in, no voice, no native footprint.
 
 ### Camp B — Native-Rust editors/terminals (the philosophical cousins)
 **Zed, Warp**
@@ -44,8 +44,8 @@ The market has split into four camps. Soryq overlaps a little with each, but bel
 - **Zed** — native Rust, GPU-rendered, *the* speed flex: ~0.6s cold start, ~222MB idle RAM, 2ms input latency vs Cursor's 4.5s / 3.5GB. Now ships **parallel agents in one window**, "Terminal Threads" (run Claude Code/Amp as a sidebar agent), own autocomplete model (Zeta), 15 LLM providers.
 - **Warp** — native Rust (98%) "Agentic Development Environment." **Multi-threaded agent management**, `Oz` platform orchestrates parallel cloud agents at the terminal layer, connects external CLI agents (Claude Code, Codex, Gemini). Open-sourced May 2026.
 
-**Shared DNA with Soryq:** native, fast, lean, multi-provider, multi-agent. **This is Soryq's closest competition on architecture.**
-**Their weakness Soryq exploits:** Zed is an *editor that grew agents*; Warp is a *terminal that grew agents*. Neither is **voice-first**, neither has **offline local voice**, neither has **personality/retention design**, and Warp's orchestration is cloud (Oz). Soryq is a *workspace built around the orchestrator from day one*.
+**Shared DNA with Spacron:** native, fast, lean, multi-provider, multi-agent. **This is Spacron's closest competition on architecture.**
+**Their weakness Spacron exploits:** Zed is an *editor that grew agents*; Warp is a *terminal that grew agents*. Neither is **voice-first**, neither has **offline local voice**, neither has **personality/retention design**, and Warp's orchestration is cloud (Oz). Spacron is a *workspace built around the orchestrator from day one*.
 
 ### Camp C — Agent-first IDEs (the new wave)
 **Google Antigravity, AWS Kiro, ByteDance Trae**
@@ -54,7 +54,7 @@ The market has split into four camps. Soryq overlaps a little with each, but bel
 - **Kiro** — AWS, **spec-first**: enforces structure/spec before execution.
 
 **Shared DNA:** parallel specialized agents, artifact-driven, big-vendor backing.
-**Their weakness Soryq exploits:** all cloud + big-vendor model lock; reviews ding them for "credit/usage limits, weaker fallback models, UI bugs." None are local-first, none are voice-first, none are yours.
+**Their weakness Spacron exploits:** all cloud + big-vendor model lock; reviews ding them for "credit/usage limits, weaker fallback models, UI bugs." None are local-first, none are voice-first, none are yours.
 
 ### Camp D — Cloud vibecoding builders (where vibecoders are today)
 **Lovable, Bolt.new, v0, Replit Agent**
@@ -62,23 +62,23 @@ The market has split into four camps. Soryq overlaps a little with each, but bel
 - Prompt → full app, in the browser. Lovable (full-stack + Stripe + GitHub sync), Bolt (framework flexibility), v0 (polished Next.js UIs), Replit Agent (most autonomous, 30+ integrations).
 
 **Shared DNA:** browser-based, prompt-to-app, frictionless start, **but you don't really own a local dev environment** — code ownership/handoff is the recurring friction.
-**Their weakness Soryq exploits:** vibecoders love the magic but hit a wall the moment they need a *real* local workspace, a terminal, git, and control. Soryq is **"where vibecoders graduate to"** — same conversational magic, but on a real machine with real tooling and real ownership.
+**Their weakness Spacron exploits:** vibecoders love the magic but hit a wall the moment they need a *real* local workspace, a terminal, git, and control. Spacron is **"where vibecoders graduate to"** — same conversational magic, but on a real machine with real tooling and real ownership.
 
 ### Camp E — Agent-native desktop workspaces (the *direct* competitors)
 **BridgeSpace (BridgeMind), OpenAI Codex desktop, Conductor, Backgrind**
 
-This is the camp Soryq actually lives in, and it filled up fast in 2026.
+This is the camp Spacron actually lives in, and it filled up fast in 2026.
 
-- **CNVS.dev** — ⭐ **Soryq's closest competitor by concept.** Tagline: *"Command an army of agents with your voice."* A macOS app that runs **Claude, Cursor, Codex, GPT, and Gemini in parallel on one canvas**, directed by **voice**; you direct, they build, you ship. Agents are presented as **named characters** (Marshall, Chase, Ada, Hero) — personality baked in. Aesthetic: command-line-inspired, monospaced, neutral/minimal, status glyphs (✓ ✻ ⟳), terminal-style live activity logs — "purposeful, no-nonsense, considered craftsmanship." Pricing leans hard on **"own CNVS forever"** vs subscription fatigue. **Its weaknesses Soryq exploits:** macOS-only, and it orchestrates **cloud** agents — no local/offline mode, no BYO-key-to-your-own-runtime story, and it's an agent canvas rather than a full IDE workspace.
-- **BridgeSpace / BridgeMind** — ⭐ **Soryq's closest competitor by feature surface.** A native desktop "command center for vibe coding": **1–16 terminal panes** (each command captured as a visual block), code editor, file browser, and an AI agent task board in one window. You define a goal and assign agent **roles** (builder, reviewer, scout, coordinator); the team divides work, communicates through a **shared mailbox**, and ships in parallel. **BridgeMemory** is a persistent knowledge graph (`.bridgememory/`, MCP-backed, wikilinks + force-directed graph view). Part of a **4-product suite** — BridgeCode (CLI), BridgeVoice (privacy-first voice *dictation*, 99+ languages), BridgeMCP (agent collab), BridgeSpace. **V3 live, $20/mo ($16 annual).** Founder Matthew Miller; strong community engine (84k+ YouTube, 12k+ Discord) — a *movement*, not just a tool.
+- **CNVS.dev** — ⭐ **Spacron's closest competitor by concept.** Tagline: *"Command an army of agents with your voice."* A macOS app that runs **Claude, Cursor, Codex, GPT, and Gemini in parallel on one canvas**, directed by **voice**; you direct, they build, you ship. Agents are presented as **named characters** (Marshall, Chase, Ada, Hero) — personality baked in. Aesthetic: command-line-inspired, monospaced, neutral/minimal, status glyphs (✓ ✻ ⟳), terminal-style live activity logs — "purposeful, no-nonsense, considered craftsmanship." Pricing leans hard on **"own CNVS forever"** vs subscription fatigue. **Its weaknesses Spacron exploits:** macOS-only, and it orchestrates **cloud** agents — no local/offline mode, no BYO-key-to-your-own-runtime story, and it's an agent canvas rather than a full IDE workspace.
+- **BridgeSpace / BridgeMind** — ⭐ **Spacron's closest competitor by feature surface.** A native desktop "command center for vibe coding": **1–16 terminal panes** (each command captured as a visual block), code editor, file browser, and an AI agent task board in one window. You define a goal and assign agent **roles** (builder, reviewer, scout, coordinator); the team divides work, communicates through a **shared mailbox**, and ships in parallel. **BridgeMemory** is a persistent knowledge graph (`.bridgememory/`, MCP-backed, wikilinks + force-directed graph view). Part of a **4-product suite** — BridgeCode (CLI), BridgeVoice (privacy-first voice *dictation*, 99+ languages), BridgeMCP (agent collab), BridgeSpace. **V3 live, $20/mo ($16 annual).** Founder Matthew Miller; strong community engine (84k+ YouTube, 12k+ Discord) — a *movement*, not just a tool.
 - **OpenAI Codex desktop** (macOS/Windows, Feb 2026) — a multi-agent command center; organizes work into **parallel threads by project** with built-in git. Plus Codex Cloud for async delegation and a Windows client (May 29, 2026).
 - **Conductor** (Melty Labs, Mac) — runs Claude Code + Codex in parallel, **git-worktree per agent**, diff-first review, kept fully local.
 - **Backgrind** — keeps agents usable over *any* app via overlays, voice input, and parallel workspaces.
 
 *(Also notable: Windsurf rebranded to **Devin Desktop**, June 2, 2026, under Cognition.)*
 
-**Shared DNA with Soryq:** native desktop, multi-pane terminals, parallel agents, task board, persistent memory, voice. **BridgeSpace in particular is feature-for-feature the nearest thing to Soryq.**
-**Their weakness Soryq exploits:** BridgeSpace is a **subscription platform** ($20/mo, locked to BridgeMind) — Soryq is **BYO-key, no meter, runs fully local**. BridgeVoice is **dictation**; Soryq's voice **orchestrates the whole app + the fleet**. BridgeMind is **four separate products**; Soryq is **one unified window**. None of them has **personality/retention design**. Soryq's gaps the other way: **no community/movement yet** (BridgeMind's real moat), and no agent-*roles*/shared-mailbox or knowledge-graph memory — both worth considering.
+**Shared DNA with Spacron:** native desktop, multi-pane terminals, parallel agents, task board, persistent memory, voice. **BridgeSpace in particular is feature-for-feature the nearest thing to Spacron.**
+**Their weakness Spacron exploits:** BridgeSpace is a **subscription platform** ($20/mo, locked to BridgeMind) — Spacron is **BYO-key, no meter, runs fully local**. BridgeVoice is **dictation**; Spacron's voice **orchestrates the whole app + the fleet**. BridgeMind is **four separate products**; Spacron is **one unified window**. None of them has **personality/retention design**. Spacron's gaps the other way: **no community/movement yet** (BridgeMind's real moat), and no agent-*roles*/shared-mailbox or knowledge-graph memory — both worth considering.
 
 ---
 
@@ -93,11 +93,11 @@ This is the camp Soryq actually lives in, and it filled up fast in 2026.
 
 ---
 
-## 3. Where Soryq actually stands (from the codebase, not the old README)
+## 3. Where Spacron actually stands (from the codebase, not the old README)
 
-Soryq today is more than the "lightweight terminal workspace" the README sells. The real product:
+Spacron today is more than the "lightweight terminal workspace" the README sells. The real product:
 
-| Capability | Soryq | What it maps to in the market |
+| Capability | Spacron | What it maps to in the market |
 |---|---|---|
 | **Native Tauri 2 / Rust shell, ~40–80MB, sub-second** | ✅ | Beats Cursor/Windsurf (Electron); on par with / lighter than Zed (222MB) & Warp |
 | **Voice orchestrator that drives the *whole app*** (navigate, open files, run, preview, layout, tasks, settings) | ✅ | **No competitor does this** |
@@ -110,10 +110,10 @@ Soryq today is more than the "lightweight terminal workspace" the README sells. 
 
 ---
 
-## 4. The angle — how Soryq enters
+## 4. The angle — how Spacron enters
 
 **Positioning statement:**
-> *Soryq is your AI engineering cockpit. One orchestrator you talk to, a fleet of agents you command, a whole workspace it can drive — running on your keys, on your machine, no credit meter, no cloud lock-in. And it's the only one you'll actually look forward to opening.*
+> *Spacron is your AI engineering cockpit. One orchestrator you talk to, a fleet of agents you command, a whole workspace it can drive — running on your keys, on your machine, no credit meter, no cloud lock-in. And it's the only one you'll actually look forward to opening.*
 
 Four pillars to lead with, in priority order:
 
@@ -128,16 +128,16 @@ Four pillars to lead with, in priority order:
 **Target user (sharpened):** the **"graduating vibecoder" and the power-dev who's tired of the meter.** Someone who loved talking an app into existence in Lovable/Bolt but wants real local tooling and ownership — *or* a Cursor/Windsurf user burned by credit limits and Electron bloat who wants native speed + their own keys.
 
 **One-sentence pitch for the homepage:**
-> *Talk to one orchestrator. Command a fleet of agents. Own every key. Soryq is the native AI workspace you'll actually want to come back to.*
+> *Talk to one orchestrator. Command a fleet of agents. Own every key. Spacron is the native AI workspace you'll actually want to come back to.*
 
 ---
 
 ## 5. Risks / honest caveats
 
-- **BridgeSpace is already here and very close.** It's the most direct threat — native, multi-agent, voice, memory, and a real community. Soryq cannot win on "native agent workspace" alone; it must win on **BYO-key/no-meter + whole-app voice orchestration + personality**, and should seriously consider matching their **agent-roles + shared-mailbox** and **knowledge-graph memory** ideas.
-- **Community is a moat Soryq doesn't have.** BridgeMind's 84k YouTube / 12k Discord is a real advantage. A great product with no audience loses to a good product with a movement. Factor distribution in from day one.
-- **Zed and Warp are converging on the same native + multi-agent space.** Soryq must win on **voice + local voice + personality** specifically — not on "native" or "multi-agent" alone, which they'll match.
-- **The orchestration niche keeps dying** (Crystal, Vibe Kanban). That's *proven demand with weak supply* — opportunity — but also a warning that monetization is hard. BYO-key (no model costs to subsidize) is actually an advantage here: Soryq doesn't burn cash per token like the credit-resellers do, so a one-time / flat license is viable where theirs isn't.
+- **BridgeSpace is already here and very close.** It's the most direct threat — native, multi-agent, voice, memory, and a real community. Spacron cannot win on "native agent workspace" alone; it must win on **BYO-key/no-meter + whole-app voice orchestration + personality**, and should seriously consider matching their **agent-roles + shared-mailbox** and **knowledge-graph memory** ideas.
+- **Community is a moat Spacron doesn't have.** BridgeMind's 84k YouTube / 12k Discord is a real advantage. A great product with no audience loses to a good product with a movement. Factor distribution in from day one.
+- **Zed and Warp are converging on the same native + multi-agent space.** Spacron must win on **voice + local voice + personality** specifically — not on "native" or "multi-agent" alone, which they'll match.
+- **The orchestration niche keeps dying** (Crystal, Vibe Kanban). That's *proven demand with weak supply* — opportunity — but also a warning that monetization is hard. BYO-key (no model costs to subsidize) is actually an advantage here: Spacron doesn't burn cash per token like the credit-resellers do, so a one-time / flat license is viable where theirs isn't.
 - **The README undersells the product.** Public positioning still says "terminal-first workspace." It should be re-led around the orchestrator + voice angle to match the wedge above. *(Noted as an unrelated follow-up, not changed in this task.)*
 
 ---

@@ -6,7 +6,7 @@ import { requestAmbientLayout } from '../layoutControl';
 export type { ActiveView, SidebarTab };
 
 const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env']);
-const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'playbooks']);
+const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'review']);
 
 export function sanitiseActiveView(v: unknown, fallback: ActiveView = 'terminal'): ActiveView {
   return VALID_ACTIVE_VIEWS.has(v as ActiveView) ? (v as ActiveView) : fallback;
@@ -16,7 +16,7 @@ export function sanitiseSidebarTab(v: unknown, fallback: SidebarTab = 'files'): 
   return VALID_SIDEBAR_TABS.has(v as SidebarTab) ? (v as SidebarTab) : fallback;
 }
 
-const LAYOUT_KEY = 'soryq_layout';
+const LAYOUT_KEY = 'spacron_layout';
 
 const defaultLayout: LayoutState = {
   sidebarVisible: true,
@@ -473,11 +473,11 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   toggleYoutubeVisible: () => {
     if (getState().youtubeVisible) {
       try {
-        const raw = localStorage.getItem('soryq_youtube_window');
+        const raw = localStorage.getItem('spacron_youtube_window');
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed.minimized) {
-            window.dispatchEvent(new CustomEvent('soryq-youtube-restore'));
+            window.dispatchEvent(new CustomEvent('spacron-youtube-restore'));
             return;
           }
         }

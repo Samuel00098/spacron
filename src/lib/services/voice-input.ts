@@ -14,6 +14,7 @@ import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 
 export type VoiceInputCallbacks = {
   onStart?: () => void;
+  onSpeechStart?: () => void;
   onResult: (transcript: string) => void;
   onEnd?: () => void;
   onError?: (message: string) => void;
@@ -49,7 +50,7 @@ const GOOGLE_VAD_RMS_THRESHOLD = 0.025;
 // How long of a silence ends an utterance. Kept tight so transcription fires
 // quickly after the user stops talking; still long enough to ride out the
 // natural mid-sentence pauses that would otherwise cut the user off.
-const GOOGLE_VAD_SILENCE_MS = 650;
+const GOOGLE_VAD_SILENCE_MS = 2500;
 
 function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
@@ -477,7 +478,10 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
             if (rms >= GOOGLE_VAD_RMS_THRESHOLD) {
               highRmsCount++;
               if (input.length < 128 || highRmsCount >= 2) {
-                speechDetected = true;
+                if (!speechDetected) {
+                  speechDetected = true;
+                  callbacks.onSpeechStart?.();
+                }
               }
               clearSilenceTimer();
               return;

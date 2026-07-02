@@ -4,8 +4,6 @@ import { site, productionUrl } from '@/lib/config';
 import { SiteEffects } from '@/components/SiteEffects';
 import './globals.css';
 
-// Self-hosted via next/font — no render-blocking Google CDN request, no layout
-// shift; the variables are consumed by globals.css (--font-inter / --font-jetbrains).
 const inter = Inter({
   subsets: ['latin'],
   weight: ['400', '600', '700', '800'],
@@ -19,9 +17,6 @@ const jetbrains = JetBrains_Mono({
   display: 'swap',
 });
 
-// Social cards must be a raster image (1200×630) — SVG isn't rendered by
-// Twitter/X, Facebook, LinkedIn, Slack, etc. Regenerate from `og-source.svg`
-// with sharp if the brand art changes.
 export const metadata: Metadata = {
   metadataBase: new URL(productionUrl),
   title: {
@@ -66,7 +61,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} ${jetbrains.variable}`}>
       <body>
-        {/* Animated mesh-gradient background (decorative, see globals.css). */}
         <div className="site-bg" aria-hidden="true">
           <span className="orb orb-1" />
           <span className="orb orb-2" />
@@ -86,7 +80,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {children}
 
         <div className="hud-readout mono" aria-hidden="true">
-          <span className="hud-dot" /> Soryq // v{site.version}
+          <span className="hud-dot" /> Spacron // v{site.version}
         </div>
 
         <SiteEffects />

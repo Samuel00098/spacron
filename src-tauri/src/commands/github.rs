@@ -13,7 +13,7 @@ use tauri::State;
 use crate::commands::workspace::{classify_push_error, git_base, sanitize_git_error};
 use crate::state::AppState;
 
-const KEYCHAIN_SERVICE: &str = "com.samue.soryq";
+const KEYCHAIN_SERVICE: &str = "com.samue.spacron";
 const GITHUB_TOKEN_USERNAME: &str = "github_token";
 const GITHUB_API: &str = "https://api.github.com";
 
@@ -221,7 +221,7 @@ pub async fn workspace_github_create_repo(
     // 1. Create the repository on GitHub.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("Soryq")
+        .user_agent("Spacron")
         .build()
         .map_err(|e| format!("Failed to prepare the request: {e}"))?;
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-const STORAGE_KEY = 'soryq_sketch_open_projects';
+const STORAGE_KEY = 'spacron_sketch_open_projects';
 
 type SketchOpenByProject = Record<string, boolean>;
 

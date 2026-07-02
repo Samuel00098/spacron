@@ -6,7 +6,7 @@ import { writable } from '$lib/stores/storeCompat';
 // functions (switchAmbientLayout / focusRoom / minimizeRoom / …) and publishes a
 // read-only snapshot back so the orchestrator brain can see the current layout.
 
-export type AmbientLayout = 'focus' | 'development' | 'gallery' | 'preview';
+export type AmbientLayout = 'focus' | 'development' | 'gallery' | 'vibe' | 'preview';
 export type RoomOp = 'focus' | 'minimize' | 'restore' | 'close';
 // Canvas-specific controls: pan/zoom of the freeform board plus the auto-arrange
 // grid toggle (lock = grid on / panels fixed, unlock = freeform drag & resize).

@@ -235,6 +235,39 @@
     radial-gradient(140% 120% at 0% 0%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 48%),
     transparent;
   transition: opacity 0.15s, filter 0.15s;
+  position: relative;
+}
+
+/* Liquid glass sheen overlay — specular diagonal reflection + vignette */
+:root:not(.solid-theme) .terminal-pane .xterm-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    /* Specular diagonal reflection across the top-left corner */
+    linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 18%, transparent 42%),
+    /* Subtle ambient bloom from accent color */
+    radial-gradient(160% 140% at -5% -8%, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 55%),
+    /* Bottom-right vignette for depth */
+    radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, 0.12) 0%, transparent 60%);
+  mix-blend-mode: screen;
+}
+
+/* Inner glow border — frosted glass rim inside the terminal content area */
+:root:not(.solid-theme) .terminal-pane .xterm-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.12)) 50%, transparent),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+    inset 1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 30%, transparent),
+    inset -1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 30%, transparent);
 }
 
 .terminal-pane:not(.active):not(.dead) .xterm-container {
@@ -245,6 +278,12 @@
 .terminal-pane .xterm-container .xterm,
 .terminal-pane .xterm-container .xterm-rows {
   font-family: var(--terminal-font-family, monospace) !important;
+}
+
+/* Safety net: ensure xterm content renders above glass overlay pseudo-elements */
+.terminal-pane .xterm-container .xterm {
+  position: relative;
+  z-index: 3;
 }
 
 .terminal-pane .xterm-container .xterm {

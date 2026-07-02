@@ -320,7 +320,7 @@ async function buildProjectTree(
   maxEntries: number,
 ): Promise<string> {
   const entries: string[] = [];
-  const SKIP_DIRS = new Set(['node_modules', '.git', '.soryq', 'dist', 'build', '.next', '__pycache__', 'target', '.vscode', '.idea']);
+  const SKIP_DIRS = new Set(['node_modules', '.git', '.spacron', 'dist', 'build', '.next', '__pycache__', 'target', '.vscode', '.idea']);
   const SKIP_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.ttf', '.woff', '.woff2', '.eot']);
 
   async function walk(dir: string, depth: number) {

@@ -28,8 +28,6 @@ const points = [
 export function Hero() {
   const termRef = useRef<HTMLDivElement>(null);
 
-  // Live-typing terminal. Falls back to the static markup (command + output
-  // already visible) when motion is reduced.
   useEffect(() => {
     const term = termRef.current;
     const typedEl = term?.querySelector<HTMLElement>('[data-typed]');
@@ -40,7 +38,7 @@ export function Hero() {
     const seq = [
       { cmd: 'npm run dev', out: ['VITE ready in 312 ms', '➜ Local: http://localhost:5173'] },
       { cmd: 'git commit -m "ship it"', out: ['[main 9f2c1a] ship it', '3 files changed, 48 insertions(+)'] },
-      { cmd: 'cargo build --release', out: ['Compiling soryq v0.4.4', 'Finished release in 4.2s'] },
+      { cmd: 'cargo build --release', out: ['Compiling spacron v0.4.4', 'Finished release in 4.2s'] },
     ];
     term.classList.add('typing');
     let cancelled = false;
@@ -55,9 +53,9 @@ export function Hero() {
         for (const ch of step.cmd) {
           if (cancelled) return;
           typedEl.textContent += ch;
-          await sleep(42 + Math.random() * 48);
+          await sleep(32 + Math.random() * 40);
         }
-        await sleep(360);
+        await sleep(280);
         for (const line of step.out) {
           if (cancelled) return;
           const div = document.createElement('div');
@@ -66,9 +64,9 @@ export function Hero() {
           div.textContent = line;
           outEl.appendChild(div);
           requestAnimationFrame(() => div.classList.add('show'));
-          await sleep(240);
+          await sleep(180);
         }
-        await sleep(2100);
+        await sleep(1600);
         i++;
       }
     })();
@@ -83,22 +81,34 @@ export function Hero() {
       <div className="container grid items-center gap-14 lg:grid-cols-[1.05fr_0.95fr]">
         <div>
           <a
-            className="mb-6 inline-flex items-center gap-2 rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] px-3 py-1.5 text-[0.82rem] text-soft transition-colors hover:border-[var(--glass-border-strong)] hover:text-ink"
+            className="hero-badge"
             href="/changelog"
           >
-            <span className="h-[7px] w-[7px] rounded-full bg-green shadow-[0_0_10px_var(--green)]" />
+            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent)] px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-[0.06em] text-[var(--bg-0)]">
+              New
+            </span>
             v{site.version} is out — see what&apos;s new
           </a>
 
-          <h1 className="text-[clamp(2.3rem,5.2vw,3.7rem)] font-extrabold leading-[1.05] tracking-[-0.03em]">
-            The terminal-first workspace that <span className="text-gradient">stays out of your way</span>.
-          </h1>
+          <div className="relative">
+            <div
+              className="absolute -inset-x-[20%] -top-[15%] -bottom-[20%] -z-10"
+              style={{
+                background: 'radial-gradient(50% 60% at 50% 30%, rgba(205, 213, 224, 0.20), transparent 70%)',
+                filter: 'blur(60px)',
+              }}
+              aria-hidden="true"
+            />
+            <h1 className="text-[clamp(2.3rem,5.2vw,3.7rem)] font-extrabold leading-[1.05] tracking-[-0.03em]">
+              The terminal-first workspace that <span className="text-gradient">stays out of your way</span>.
+            </h1>
+          </div>
 
           <p className="mt-[22px] max-w-[52ch] text-[1.12rem] text-soft">{site.description}</p>
 
           <div className="mt-8 flex flex-wrap gap-3.5">
             <a className="btn btn-primary" href="#download">
-              <DownloadIcon /> Download Soryq
+              <DownloadIcon /> Download Spacron
             </a>
             <a className="btn btn-ghost" href="/changelog">
               <ChangesIcon /> See what&apos;s new
@@ -114,14 +124,13 @@ export function Hero() {
           </ul>
         </div>
 
-        {/* App-window mockup mirroring Soryq's 3-pane layout */}
         <div className="reveal relative">
           <div className="mock glass">
             <div className="mock-titlebar">
               <span className="tl tl-r" />
               <span className="tl tl-y" />
               <span className="tl tl-g" />
-              <span className="mock-title mono">soryq · ~/projects/app</span>
+              <span className="mock-title mono">spacron · ~/projects/app</span>
             </div>
 
             {media.screenshotReady ? (
@@ -129,7 +138,7 @@ export function Hero() {
               <img
                 className="mock-shot"
                 src={media.screenshot}
-                alt="Soryq running with a terminal grid, code editor, and live preview"
+                alt="Spacron running with a terminal grid, code editor, and live preview"
               />
             ) : (
               <div className="mock-body" ref={termRef} data-term>
@@ -164,8 +173,8 @@ export function Hero() {
             )}
           </div>
           <div
-            className="absolute inset-[10%_5%] -z-10 blur-[50px]"
-            style={{ background: 'radial-gradient(60% 60% at 50% 40%, rgba(174, 182, 194, 0.38), transparent 70%)' }}
+            className="absolute inset-[10%_5%] -z-10 blur-[60px] opacity-80"
+            style={{ background: 'radial-gradient(60% 60% at 50% 40%, rgba(184, 196, 212, 0.35), transparent 70%)' }}
             aria-hidden="true"
           />
         </div>

@@ -20,4 +20,4 @@ What actually happened. Include any error messages or screenshots.
 
 **Environment**
 - OS: [e.g. Windows 11, macOS 14]
-- Soryq version: [e.g. 0.1.1]
+- Spacron version: [e.g. 0.1.1]

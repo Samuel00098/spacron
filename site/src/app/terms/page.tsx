@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 const updated = 'June 14, 2026';
-// NOTE: Starting point tailored to how Soryq actually works — review with counsel
+// NOTE: Starting point tailored to how Spacron actually works — review with counsel
 // and fill in your operating entity + governing jurisdiction before launch.
 
 export default function TermsPage() {

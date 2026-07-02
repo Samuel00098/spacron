@@ -18,7 +18,6 @@ export function Comparison() {
         </div>
 
         <div className="glass reveal overflow-hidden" role="table" aria-label="Feature comparison">
-          {/* Horizontal scroll wrapper for narrow screens */}
           <div className="min-w-full overflow-x-auto">
             <div className="min-w-[460px]">
               <div className={`grid ${cols} border-b border-[var(--glass-border)]`} role="row">
@@ -27,7 +26,7 @@ export function Comparison() {
                   <div
                     key={col}
                     className={`flex items-center bg-white/[0.03] px-[18px] py-4 text-[0.95rem] font-bold ${
-                      i === 0 ? 'text-[var(--teal-bright)]' : 'text-ink'
+                      i === 0 ? 'text-[var(--accent-bright)]' : 'text-ink'
                     }`}
                     role="columnheader"
                   >
@@ -37,7 +36,7 @@ export function Comparison() {
               </div>
 
               {c.rows.map((r) => (
-                <div key={r.label} className={`grid ${cols} border-b border-[var(--glass-border)] last:border-b-0`} role="row">
+                <div key={r.label} className={`grid ${cols} border-b border-[var(--glass-border)] last:border-b-0 transition-colors duration-200 hover:bg-white/[0.02]`} role="row">
                   <div className="flex items-center px-[18px] py-4 text-[0.92rem] font-semibold text-ink" role="rowheader">
                     {r.label}
                   </div>
@@ -46,7 +45,7 @@ export function Comparison() {
                       key={i}
                       className={`flex items-center gap-[7px] px-[18px] py-4 text-[0.92rem] ${
                         i === r.win ? 'font-semibold text-ink' : 'text-soft'
-                      } ${i === 0 ? 'cmp-soryq-col' : ''}`}
+                      } ${i === 0 ? 'cmp-spacron-col' : ''}`}
                       role="cell"
                     >
                       {i === r.win && <Check />}

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { loadJson } from '$lib/utils/storage';
 
-const STORAGE_KEY = 'soryq_workspace_snapshots';
+const STORAGE_KEY = 'spacron_workspace_snapshots';
 
 export type PaneSnapshotInfo = {
   role?: string | null;

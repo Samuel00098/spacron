@@ -1037,7 +1037,7 @@ export default function PreviewPanel() {
         showToast('Screenshot copied to clipboard', 'success');
       } catch {
         const label = viewportMode === 'mobile' ? 'mobile' : viewportMode === 'tablet' ? 'tablet' : 'preview';
-        const name = `soryq-${label}-${Date.now()}.png`;
+        const name = `spacron-${label}-${Date.now()}.png`;
         try {
           const link = document.createElement('a');
           link.download = name;
@@ -1447,7 +1447,7 @@ export default function PreviewPanel() {
 
         <span
           className="preview-trust-pill"
-          title="External pages load through Soryq's embedded proxy. Local dev preview uses the active project's configured port."
+          title="External pages load through Spacron's embedded proxy. Local dev preview uses the active project's configured port."
         >
           Sandboxed preview
         </span>

@@ -1,4 +1,4 @@
-# Soryq Command Center — Architecture & Design
+# Spacron Command Center — Architecture & Design
 
 ## The Core Idea
 
@@ -219,7 +219,7 @@ Return a JSON list of reconnaissance actions needed.
 ]
 ```
 
-**Orchestrator executes these against Soryq's existing commands, then crafts:**
+**Orchestrator executes these against Spacron's existing commands, then crafts:**
 
 ```
 🧠 Reconnaissance Complete:
@@ -242,7 +242,7 @@ Prompt for Claude Code:
 
 ## 4. PTY / Claude Code Integration
 
-Building on Soryq's existing `terminal_create` and `terminal_write`:
+Building on Spacron's existing `terminal_create` and `terminal_write`:
 
 ### Launching Claude Code non-interactively
 
@@ -269,7 +269,7 @@ pub fn dispatch_agent(
     );
 
     // Spawn a PTY session running this command
-    // (Soryq's existing terminal_create infrastructure)
+    // (Spacron's existing terminal_create infrastructure)
     let on_data = Channel::new(move |data| {
         // Forward output to the frontend
         // Also check for completion markers
@@ -355,7 +355,7 @@ The approval gates operate at two levels:
 
 ## 6. Svelte Frontend: Command Center Panel
 
-A dedicated panel in Soryq's UI. Rough sketch:
+A dedicated panel in Spacron's UI. Rough sketch:
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -460,11 +460,11 @@ The key UI states:
 
 ## 9. How It's Different From Other Orchestrators
 
-| Other orchestrators | Soryq Command Center |
+| Other orchestrators | Spacron Command Center |
 |---|---|
 | "Agent A, do task. Agent B, do task." | "Let me understand the problem first, then craft a precise prompt." |
 | Dispatch without context | Reconnaissance-first: reads files, checks git, gathers context |
-| Generic routing | Deep integration with the workspace (Soryq's own FS, git, terminal) |
+| Generic routing | Deep integration with the workspace (Spacron's own FS, git, terminal) |
 | Agents figure out context themselves (wasting tokens) | Agents receive fully-contextualized prompts (first-try success) |
 | No visibility into agent work | Live stream per agent, approval gates, structured reports |
 | Web-based or CLI-only | Native Tauri app with Svelte UI + terminal grid |

@@ -23,8 +23,8 @@ export type HistoryEntry = {
 
 export type ScrollPos = { x: number; y: number };
 
-const HISTORY_KEY = 'soryq_preview_history';
-const SCROLL_KEY = 'soryq_preview_scroll';
+const HISTORY_KEY = 'spacron_preview_history';
+const SCROLL_KEY = 'spacron_preview_scroll';
 const HISTORY_LIMIT = 200;
 const SCROLL_LIMIT = 400;
 

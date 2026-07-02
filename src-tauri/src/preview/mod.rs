@@ -245,17 +245,17 @@ const INSPECTOR_SNIPPET: &str = r#"<script>
 })();
 </script>"#;
 
-const SCROLL_FLAG: &str = "soryq-scroll-sync";
+const SCROLL_FLAG: &str = "spacron-scroll-sync";
 // Tiny, self-contained scroll-position bridge injected into *every* proxied HTML
 // page (local dev and external alike). The preview iframe is cross-origin to the
 // app, so the parent cannot read or set the document's scroll directly — this
 // reports the offset to the parent (which persists it per-URL) and restores it
 // on request after the page loads. Posts to the parent with '*' since the value
 // is non-sensitive; the parent validates the message's real origin.
-const SCROLL_SNIPPET: &str = r#"<script data-soryq-scroll-sync>
+const SCROLL_SNIPPET: &str = r#"<script data-spacron-scroll-sync>
 (() => {
-    if (window.__soryqScrollSync) return;
-    window.__soryqScrollSync = true;
+    if (window.__spacronScrollSync) return;
+    window.__spacronScrollSync = true;
     let raf = 0;
     const report = () => {
         raf = 0;
@@ -286,7 +286,7 @@ const SCROLL_SNIPPET: &str = r#"<script data-soryq-scroll-sync>
 })();
 </script>"#;
 
-const NAV_FLAG: &str = "soryq-nav-rewrite";
+const NAV_FLAG: &str = "spacron-nav-rewrite";
 // Navigation rewriter injected into *external* proxied pages only. The proxy
 // serves external sites under its own loopback origin
 // (http://127.0.0.1:{proxy_port}/proxy/{scheme}/{host}/...) and strips their
@@ -300,10 +300,10 @@ const NAV_FLAG: &str = "soryq-nav-rewrite";
 // stripped). It also unwraps DuckDuckGo's /l/?uddg= redirect to land directly on
 // the destination instead of chasing the tracker hop. Posts to '*'-free; it only
 // rewrites same-document navigations and never touches the parent window.
-const NAV_SNIPPET: &str = r#"<script data-soryq-nav-rewrite>
+const NAV_SNIPPET: &str = r#"<script data-spacron-nav-rewrite>
 (() => {
-    if (window.__soryqNavRewrite) return;
-    window.__soryqNavRewrite = true;
+    if (window.__spacronNavRewrite) return;
+    window.__spacronNavRewrite = true;
     const proxyOrigin = location.origin;
     const unwrap = (u) => {
         // DuckDuckGo wraps each result in //duckduckgo.com/l/?uddg=<real-url>.
@@ -353,7 +353,7 @@ const NAV_SNIPPET: &str = r#"<script data-soryq-nav-rewrite>
     // and Back/Forward history track navigation like a real browser. The iframe is
     // cross-origin to the app shell, so the parent cannot read our location
     // directly — postMessage is the only channel. On the first load we trust the
-    // server-injected <meta name="soryq-location"> (it holds the post-redirect
+    // server-injected <meta name="spacron-location"> (it holds the post-redirect
     // URL the proxy actually fetched); for in-page history changes we decode our
     // own proxy URL instead, since the meta only reflects the initial load.
     const decodeSelf = () => {
@@ -366,7 +366,7 @@ const NAV_SNIPPET: &str = r#"<script data-soryq-nav-rewrite>
         try { parent.postMessage({ type: 'forge-preview:location', url: url }, '*'); } catch (e) {}
     };
     const reportInitial = () => {
-        const meta = document.querySelector('meta[name="soryq-location"]');
+        const meta = document.querySelector('meta[name="spacron-location"]');
         report(meta && meta.content ? meta.content : decodeSelf());
     };
     const reportDynamic = () => report(decodeSelf());
@@ -611,7 +611,7 @@ fn preview_local_http_client() -> Client {
 fn preview_http_client_builder() -> reqwest::ClientBuilder {
     Client::builder()
         .user_agent(concat!(
-            "soryq/",
+            "spacron/",
             env!("CARGO_PKG_VERSION"),
             " (preview-proxy)"
         ))
@@ -820,7 +820,7 @@ fn is_first_party_host(host: &str) -> bool {
 /// same-origin non-GET requests). We allow a request only when it has no `Origin`
 /// (top-level navigations the embedded preview performs, and most same-origin
 /// GETs) or when the `Origin` is first-party — loopback or `*.localhost`, which
-/// covers both the Soryq main webview and the proxied page's own subresources
+/// covers both the Spacron main webview and the proxied page's own subresources
 /// (served from the proxy origin). A page on `https://evil.example` is rejected
 /// because its `Origin` host is not first-party. `Origin: null` (sandboxed /
 /// `data:` documents) is rejected too, since it is never something we emit.
@@ -1304,7 +1304,7 @@ fn should_strip_preview_header(key_lower: &str) -> bool {
             | "x-frame-options"
             // HSTS is scoped to the host that receives this proxied response. If
             // a dev server sends it, the WebView can cache HTTPS-only state for
-            // Soryq's plain-HTTP loopback proxy (127.0.0.1), breaking later
+            // Spacron's plain-HTTP loopback proxy (127.0.0.1), breaking later
             // preview loads even though the target app works in a normal browser.
             | "strict-transport-security"
             // CSP authored for the dev origin breaks asset loading under the proxy
@@ -1447,11 +1447,11 @@ fn html_escape_attr(value: &str) -> String {
 /// reporter can hand it to the app shell's address bar. Inserting before
 /// `</head>` keeps it in the head where it parses before any body script runs.
 fn inject_location_meta(html: &str, final_url: &str) -> String {
-    if html.contains("name=\"soryq-location\"") {
+    if html.contains("name=\"spacron-location\"") {
         return html.to_string();
     }
     let meta = format!(
-        "<meta name=\"soryq-location\" content=\"{}\">",
+        "<meta name=\"spacron-location\" content=\"{}\">",
         html_escape_attr(final_url)
     );
 
@@ -1678,7 +1678,7 @@ mod tests {
         assert!(proxy_request_allowed(&headers_with_origin(Some(
             "http://localhost:5173"
         ))));
-        // The Soryq main webview (Tauri custom protocol).
+        // The Spacron main webview (Tauri custom protocol).
         assert!(proxy_request_allowed(&headers_with_origin(Some(
             "http://tauri.localhost"
         ))));

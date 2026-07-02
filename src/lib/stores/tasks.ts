@@ -18,7 +18,7 @@ export const tasks = writable<Task[]>([]);
 const projectPaths = new Map<string, string>();
 
 export function getTasksPath(rootPath: string): string {
-  return `${rootPath}/.soryq/tasks.json`;
+  return `${rootPath}/.spacron/tasks.json`;
 }
 
 export async function loadProjectTasks(project: { id: string; root_path: string }): Promise<void> {
@@ -41,7 +41,7 @@ export async function loadProjectTasks(project: { id: string; root_path: string 
 async function flushProjectTasks(projectId: string): Promise<void> {
   const rootPath = projectPaths.get(projectId);
   if (!rootPath) return;
-  const dir = `${rootPath}/.soryq`;
+  const dir = `${rootPath}/.spacron`;
   const path = getTasksPath(rootPath);
   const projectTasks = get(tasks).filter(t => t.projectId === projectId);
   try {

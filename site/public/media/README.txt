@@ -4,7 +4,7 @@ shows a polished placeholder, so it always looks finished.
 
 ────────────────────────────────────────────────────────────────────────────
 1) HERO SCREENSHOT  (the big window in the hero)
-   File:  screenshot.png   (a clean capture of Soryq running; ~1200px+ wide,
+   File:  screenshot.png   (a clean capture of Spacron running; ~1200px+ wide,
                             16:10-ish looks best)
    Then:  set  media.screenshotReady = true   in src/config.ts
    Result: the hero swaps its CSS mockup for your real screenshot.

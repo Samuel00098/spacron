@@ -204,7 +204,7 @@ describe('createVoiceInputSession', () => {
       inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
     });
 
-    await vi.advanceTimersByTimeAsync(950);
+    await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
 
     expect(onProcessingStart).toHaveBeenCalledTimes(1);
@@ -244,7 +244,7 @@ describe('createVoiceInputSession', () => {
       inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
     });
 
-    await vi.advanceTimersByTimeAsync(950);
+    await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
 
     expect(invoke).toHaveBeenCalledWith('ai_transcribe_audio', expect.objectContaining({
@@ -282,7 +282,7 @@ describe('createVoiceInputSession', () => {
       inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
     });
 
-    await vi.advanceTimersByTimeAsync(950);
+    await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
 
     expect(invoke).toHaveBeenCalledWith('ai_transcribe_audio', expect.objectContaining({
@@ -317,7 +317,7 @@ describe('createVoiceInputSession', () => {
       inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
     });
 
-    await vi.advanceTimersByTimeAsync(950);
+    await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
 
     expect(isProviderApiKeyConfiguredLocal).not.toHaveBeenCalledWith('lmstudio');

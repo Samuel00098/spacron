@@ -23,7 +23,7 @@ export default function NotesPanel() {
   const voiceDraftTextRef = useRef('');
   const contentRef = useRef('');
 
-  // Load from .soryq/scratch.md when project changes
+  // Load from .spacron/scratch.md when project changes
   useEffect(() => {
     if (!project) {
       contentRef.current = '';

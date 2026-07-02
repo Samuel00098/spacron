@@ -55,7 +55,7 @@ export default function VoiceConversationOverlay({
         ? 'thinking'
         : 'idle';
 
-  const displayText = isListening ? voiceDraftText : isTtsSpeaking ? lastAssistantDisplay : '';
+  const displayText = isListening ? voiceDraftText : lastAssistantDisplay;
 
   return (
     <div className={`overlay${compact ? ' compact' : ''}`} role="dialog" aria-label="Voice conversation">

@@ -21,11 +21,11 @@ function getDailyTemplate(date: string): string {
 }
 
 function alreadyOpenedKey(projectId: string, date: string): string {
-  return `soryq_daily_opened_${projectId}_${date}`;
+  return `spacron_daily_opened_${projectId}_${date}`;
 }
 
 export function getDailyNotePath(rootPath: string, date = getTodayString()): string {
-  return `${rootPath}/.soryq/daily/${date}.md`;
+  return `${rootPath}/.spacron/daily/${date}.md`;
 }
 
 export async function openDailyNote(
@@ -37,7 +37,7 @@ export async function openDailyNote(
 
   if (!force && typeof localStorage !== 'undefined' && localStorage.getItem(key)) return;
 
-  const dir = `${project.root_path}/.soryq/daily`;
+  const dir = `${project.root_path}/.spacron/daily`;
   const filePath = getDailyNotePath(project.root_path, today);
 
   // Ensure directory exists

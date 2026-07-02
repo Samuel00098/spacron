@@ -7,8 +7,8 @@ use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const KEYCHAIN_SERVICE: &str = "com.samue.soryq";
-const APP_TITLE: &str = "Soryq";
+const KEYCHAIN_SERVICE: &str = "com.samue.spacron";
+const APP_TITLE: &str = "Spacron";
 
 /// Pooled HTTP clients keyed by their total-timeout (ms).
 ///
@@ -644,7 +644,7 @@ async fn run_completion(
             // only send them where they belong.
             if provider == "openrouter" {
                 request = request
-                    .header("HTTP-Referer", "https://soryq.app")
+                    .header("HTTP-Referer", "https://spacron.app")
                     .header("X-Title", APP_TITLE);
             }
 
@@ -816,9 +816,9 @@ pub async fn ai_transcribe_audio(
             let response = client
                 .post(OPENAI_STT_URL)
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .header(reqwest::header::CONTENT_TYPE, "multipart/form-data; boundary=soryq-openai-stt")
+                .header(reqwest::header::CONTENT_TYPE, "multipart/form-data; boundary=spacron-openai-stt")
                 .body(build_audio_transcription_multipart_body(
-                    "soryq-openai-stt",
+                    "spacron-openai-stt",
                     &model,
                     &mime_type,
                     audio_format,
@@ -854,7 +854,7 @@ pub async fn ai_transcribe_audio(
             let response = client
                 .post(OPENROUTER_AUDIO_TRANSCRIPT_URL)
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .header("HTTP-Referer", "https://soryq.app")
+                .header("HTTP-Referer", "https://spacron.app")
                 .header("X-Title", APP_TITLE)
                 .json(&json!({
                     "model": model,
@@ -893,7 +893,7 @@ pub async fn ai_transcribe_audio(
             let Some(base) = base_url.as_deref() else {
                 return Err("Server URL is not set.".to_string());
             };
-            let boundary = "soryq-audio-transcription-boundary";
+            let boundary = "spacron-audio-transcription-boundary";
             let response = client
                 .post(local_endpoint(base, "/audio/transcriptions"))
                 .header(
@@ -1176,7 +1176,7 @@ pub async fn list_provider_models(
             }
             if provider == "openrouter" {
                 request = request
-                    .header("HTTP-Referer", "https://soryq.app")
+                    .header("HTTP-Referer", "https://spacron.app")
                     .header("X-Title", APP_TITLE);
             }
             let response = request
@@ -1357,7 +1357,7 @@ pub async fn tts_speak(
             let response = client
                 .post(OPENROUTER_TTS_URL)
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .header("HTTP-Referer", "https://soryq.app")
+                .header("HTTP-Referer", "https://spacron.app")
                 .header("X-Title", APP_TITLE)
                 .json(&json!({
                     "model": if model.is_empty() { OPENROUTER_TTS_MODEL } else { &model },

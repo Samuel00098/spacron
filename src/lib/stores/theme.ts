@@ -206,14 +206,6 @@ export function applyThemeToCSS(theme: Theme | null) {
     root.classList.remove('light-theme');
   }
 
-  // Remove previous specific theme-id classes (excluding layout/base themes)
-  const classesToRemove = Array.from(root.classList).filter(c => c.endsWith('-theme') && c !== 'light-theme' && c !== 'dark-theme' && c !== 'solid-theme');
-  for (const c of classesToRemove) {
-    root.classList.remove(c);
-  }
-  // Add current specific theme-id class
-  root.classList.add(`${theme.id}-theme`);
-
   const isInitialLoad = !root.classList.contains('theme-initialized');
   if (!isInitialLoad) {
     root.classList.add('theme-transitioning');

@@ -13,8 +13,6 @@ export function Pricing() {
   const isLive = pricing.status === 'live' && pricing.price;
   const [email, setEmail] = useState('');
 
-  // Waitlist: opens the user's mail client pre-addressed. Swap for a real form
-  // endpoint (Formspree, ConvertKit, Buttondown…) when you're ready.
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const subject = encodeURIComponent(`Notify me when ${site.name} licenses launch`);
@@ -35,12 +33,12 @@ export function Pricing() {
           </p>
         </div>
 
-        <div className="card glass reveal relative mx-auto max-w-[460px] overflow-hidden p-8 text-center sm:px-8 sm:py-10">
+        <div className="card glass reveal-lift relative mx-auto max-w-[460px] overflow-hidden p-8 text-center transition-all duration-300 hover:shadow-[var(--glow-accent),var(--shadow-sm)] sm:px-8 sm:py-10">
           <div className="bloom inset-x-0 -top-1/2 h-[260px]" aria-hidden="true" />
 
           <div className="relative mb-7 flex flex-col items-center gap-1">
             <span className="text-gradient-white text-[clamp(2.4rem,6vw,3.2rem)] font-extrabold tracking-[-0.02em]">
-              {isLive ? pricing.price : 'Coming soon'}
+              {isLive ? pricing.price : 'Coming\u00a0soon'}
             </span>
             <span className="text-[0.85rem] text-muted">{isLive ? 'one-time' : 'launching soon'}</span>
           </div>

@@ -49,7 +49,7 @@ export interface ChatMessage {
 
 // ─── State shape ────────────────────────────────────────────────────────────
 
-const CHAT_STORAGE_KEY = 'soryq_orchestrator_chat';
+const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
 
 function loadChat(): Record<string, ChatMessage[]> {
   return loadJson<Record<string, ChatMessage[]>>(CHAT_STORAGE_KEY, {});

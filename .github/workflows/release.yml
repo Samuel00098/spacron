@@ -12,27 +12,27 @@ on:
         type: string
 
 jobs:
-  # Create the release in soryq-releases before the matrix builds run,
+  # Create the release in spacron-releases before the matrix builds run,
   # because tauri-action requires the release to already exist in the target repo
   # to avoid target_commitish validation errors (since the build commit does not
   # exist in the releases repo).
   prepare:
     runs-on: ubuntu-latest
     steps:
-      - name: Create release in soryq-releases
+      - name: Create release in spacron-releases
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT }}
         run: |
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
 
-          # Check if the release already exists in soryq-releases
-          if gh release view "$TAG" --repo Samuel00098/soryq-releases >/dev/null 2>&1; then
-            echo "Release $TAG already exists in soryq-releases, continuing."
+          # Check if the release already exists in spacron-releases
+          if gh release view "$TAG" --repo Samuel00098/spacron-releases >/dev/null 2>&1; then
+            echo "Release $TAG already exists in spacron-releases, continuing."
           else
-            echo "Creating release $TAG in soryq-releases..."
+            echo "Creating release $TAG in spacron-releases..."
             gh release create "$TAG" \
-              --repo Samuel00098/soryq-releases \
-              --title "Soryq $TAG" \
+              --repo Samuel00098/spacron-releases \
+              --title "Spacron $TAG" \
               --notes "See the changelog for what is new in this release." \
               --target main
           fi
@@ -105,9 +105,9 @@ jobs:
           tauriScript: npm run tauri
           # Publish the release to the separate public releases repo
           owner: Samuel00098
-          repo: soryq-releases
+          repo: spacron-releases
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          releaseName: "Soryq ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          releaseName: "Spacron ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           releaseBody: 'See the changelog for what is new in this release.'
           releaseDraft: false
           prerelease: false

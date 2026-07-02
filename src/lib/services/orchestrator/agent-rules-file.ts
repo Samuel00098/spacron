@@ -52,9 +52,9 @@ export function agentReadsRulesFile(presetOrCommand: string | null | undefined):
 // repo is briefed for any agent regardless of which one is launched first.
 export const AGENT_RULES_FILENAMES = ['CLAUDE.md', 'AGENTS.md'] as const;
 
-// Sentinels around the Soryq-managed region. Anything outside them is the user's
+// Sentinels around the Spacron-managed region. Anything outside them is the user's
 // and is preserved verbatim; the region between them is overwritten on update.
-const BLOCK_BEGIN = '<!-- SORYQ:BEGIN agent-brief — managed by Soryq, do not edit by hand -->';
+const BLOCK_BEGIN = '<!-- SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand -->';
 const BLOCK_END = '<!-- SORYQ:END agent-brief -->';
 
 /**
@@ -65,7 +65,7 @@ const BLOCK_END = '<!-- SORYQ:END agent-brief -->';
  */
 export function buildStandingBriefBody(): string {
   return [
-    '# Soryq agent brief',
+    '# Spacron agent brief',
     '',
     'You are one of several agents (and the user) working in a single shared git working tree — there is no per-agent isolation. Apply these rules to every action:',
     '',
@@ -113,7 +113,7 @@ async function readFileOrNull(path: string): Promise<string | null> {
 }
 
 /**
- * Best-effort: keep a Soryq-created rules file out of the user's git surface by
+ * Best-effort: keep a Spacron-created rules file out of the user's git surface by
  * adding it to `.git/info/exclude` (local-only, never committed). Skipped when
  * the file pre-existed (it may be intentionally tracked) or when there's no
  * plain `.git/info/exclude` (bare/worktree checkouts) — failures are swallowed.

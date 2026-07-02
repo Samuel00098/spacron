@@ -20,23 +20,23 @@ export default function MicrophonePermissionDialog({ onclose }: { onclose?: () =
     if (
       startViewTransition &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
-      !(window as any).__soryq_transitioning
+      !(window as any).__spacron_transitioning
     ) {
-      (window as any).__soryq_transitioning = true;
+      (window as any).__spacron_transitioning = true;
       try {
         const transition = startViewTransition.call(document, () => {
           flushSync(action);
         });
         transition.finished?.finally(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         }).catch(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         });
         setTimeout(() => {
-          (window as any).__soryq_transitioning = false;
+          (window as any).__spacron_transitioning = false;
         }, 1000);
       } catch (e) {
-        (window as any).__soryq_transitioning = false;
+        (window as any).__spacron_transitioning = false;
         action();
       }
     } else {
@@ -88,7 +88,7 @@ export default function MicrophonePermissionDialog({ onclose }: { onclose?: () =
         </div>
 
         <div className="body">
-          <p className="app-name">Soryq</p>
+          <p className="app-name">Spacron</p>
           <h2 className="title">{info.title}</h2>
           <p className="description">{info.description}</p>
         </div>

@@ -18,7 +18,7 @@ const STALE_MEMORY_MS = 7 * 24 * 60 * 60 * 1000;
 export const orchestratorMemory = writable<Record<string, OrchestratorMemoryEntry[]>>({});
 
 function memoryPath(rootPath: string): string {
-  return `${rootPath}/.soryq/orchestrator-memory.json`;
+  return `${rootPath}/.spacron/orchestrator-memory.json`;
 }
 
 function compactText(raw: string, maxChars: number): string {
@@ -131,7 +131,7 @@ export async function loadProjectMemory(projectId: string, rootPath: string): Pr
 export async function flushProjectMemory(projectId: string, rootPath: string): Promise<void> {
   const entries = get(orchestratorMemory)[projectId] ?? [];
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.soryq` }); } catch { /* exists */ }
+    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
     await invoke('fs_write_file', { path: memoryPath(rootPath), content: JSON.stringify(entries, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator memory:', err);

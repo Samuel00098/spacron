@@ -17,14 +17,14 @@ interface WorkspaceState {
 function loadPersisted<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
   try {
-    const raw = localStorage.getItem(`soryq_ws_${key}`);
+    const raw = localStorage.getItem(`spacron_ws_${key}`);
     return raw !== null ? (JSON.parse(raw) as T) : fallback;
   } catch { return fallback; }
 }
 
 function persist(key: string, value: unknown) {
   if (typeof window === 'undefined') return;
-  try { localStorage.setItem(`soryq_ws_${key}`, JSON.stringify(value)); } catch {}
+  try { localStorage.setItem(`spacron_ws_${key}`, JSON.stringify(value)); } catch {}
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({

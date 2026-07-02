@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Soryq — Terminal-first developer workspace</title>
+  <title>Spacron — Terminal-first developer workspace</title>
   <meta name="description" content="A lightweight, terminal-first developer workspace combining PTY terminal sessions, CodeMirror editor, live proxy preview, and git integration in a single keyboard-driven window. Built with Tauri and React.">
   <link rel="icon" type="image/png" href="../static/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,18 +16,14 @@
   <header class="navbar">
     <div class="nav-container">
       <div class="logo">
-        <svg width="24" height="24" viewBox="0 0 36 36" fill="none">
-          <rect width="36" height="36" rx="8" fill="#2f343b"/>
-          <polyline points="10,22 14,18 10,14" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <rect x="17" y="17" width="10" height="2.5" rx="1.25" fill="#f3f3f6"/>
-        </svg>
-        <span>Soryq</span>
+        <img src="../static/icon.png" width="24" height="24" alt="" class="logo-mark" />
+        <span>Spacron</span>
       </div>
       <nav class="links">
         <a href="#features">Features</a>
         <a href="#demo">Interactive Demo</a>
         <a href="#comparison">Compare</a>
-        <a href="https://github.com/Samuel00098/soryq" class="github-link" target="_blank" rel="noopener">
+        <a href="https://github.com/Samuel00098/spacron" class="github-link" target="_blank" rel="noopener">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
           GitHub
         </a>
@@ -41,14 +37,14 @@
     <div class="container hero-content">
       <div class="badge">TAURI 2 + REACT 19 SHIPPED</div>
       <h1 class="hero-title">The lightweight, terminal-first developer workspace.</h1>
-      <p class="hero-desc">Soryq merges a native PTY terminal, CodeMirror editor, live preview proxy, and git status into a keyboard-centric window. Sub-second startup. Zero background cloud trackers.</p>
+      <p class="hero-desc">Spacron merges a native PTY terminal, CodeMirror editor, live preview proxy, and git status into a keyboard-centric window. Sub-second startup. Zero background cloud trackers.</p>
       
       <div class="download-group">
-        <a href="https://github.com/Samuel00098/soryq/releases/latest" class="btn primary" id="download-btn">
-          Download Soryq
+        <a href="https://github.com/Samuel00098/spacron/releases/latest" class="btn primary" id="download-btn">
+          Download Spacron
         </a>
         <div class="install-cmd-wrap">
-          <code id="install-cmd">winget install Samuel00098.Soryq</code>
+          <code id="install-cmd">winget install Samuel00098.Spacron</code>
           <button class="copy-btn" onclick="copyInstallCommand()" title="Copy command">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
@@ -62,8 +58,8 @@
   <section class="demo-section" id="demo">
     <div class="container">
       <div class="section-header">
-        <h2>Experience Soryq in your browser</h2>
-        <p>Click the panel tabs below to see how Soryq orchestrates your terminal, code editor, and proxy previews side-by-side.</p>
+        <h2>Experience Spacron in your browser</h2>
+        <p>Click the panel tabs below to see how Spacron orchestrates your terminal, code editor, and proxy previews side-by-side.</p>
       </div>
 
       <!-- App Mockup Shell -->
@@ -75,7 +71,7 @@
           </div>
           <div class="mock-title-search">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <span>soryq_project (main)</span>
+            <span>spacron_project (main)</span>
           </div>
         </div>
 
@@ -108,11 +104,11 @@
                 <span>bash - terminal-1</span>
               </div>
               <div class="terminal-body">
-                <div class="terminal-line"><span class="prompt">sam@soryq:~/dev$</span> npm run dev</div>
+                <div class="terminal-line"><span class="prompt">sam@spacron:~/dev$</span> npm run dev</div>
                 <div class="terminal-line text-muted">v1.0.0 launching dev server...</div>
                 <div class="terminal-line text-success">➜  Local:   http://localhost:5173</div>
-                <div class="terminal-line text-info">➜  Soryq proxy initialized on port 1420</div>
-                <div class="terminal-line"><span class="prompt">sam@soryq:~/dev$</span> <span class="caret">_</span></div>
+                <div class="terminal-line text-info">➜  Spacron proxy initialized on port 1420</div>
+                <div class="terminal-line"><span class="prompt">sam@spacron:~/dev$</span> <span class="caret">_</span></div>
               </div>
             </div>
 
@@ -127,7 +123,7 @@
                 <div class="code-line"><span class="ln">3</span>  <span class="kw">const</span> [count, setCount] = useState(<span class="num">0</span>);</div>
                 <div class="code-line"><span class="ln">4</span>  <span class="kw">return</span> (</div>
                 <div class="code-line"><span class="ln">5</span>    <span class="kw">&lt;main</span> <span class="attr">className</span>=<span class="str">"container"</span><span class="kw">&gt;</span></div>
-                <div class="code-line"><span class="ln">6</span>      <span class="kw">&lt;h1&gt;</span>Hello Soryq!<span class="kw">&lt;/h1&gt;</span></div>
+                <div class="code-line"><span class="ln">6</span>      <span class="kw">&lt;h1&gt;</span>Hello Spacron!<span class="kw">&lt;/h1&gt;</span></div>
                 <div class="code-line"><span class="ln">7</span>      <span class="kw">&lt;button</span> <span class="attr">onClick</span>=<span class="str">{() =&gt; setCount(c =&gt; c + 1)}</span><span class="kw">&gt;</span>Clicks: {count}<span class="kw">&lt;/button&gt;</span></div>
                 <div class="code-line"><span class="ln">8</span>    <span class="kw">&lt;/main&gt;</span></div>
                 <div class="code-line"><span class="ln">9</span>  );</div>
@@ -142,7 +138,7 @@
                 <span>http://localhost:1420 (Proxied)</span>
               </div>
               <div class="preview-iframe-mock">
-                <h1>Hello Soryq!</h1>
+                <h1>Hello Spacron!</h1>
                 <button class="preview-count-btn" id="demo-count-btn">Clicks: 0</button>
                 <div class="preview-dom-overlay">
                   <span>button#demo-count-btn</span>
@@ -179,7 +175,7 @@
     <div class="container">
       <div class="section-header">
         <h2>Built for productivity</h2>
-        <p>No extensions to install, no cloud syncing accounts to manage, no lag. Soryq ships with premium defaults.</p>
+        <p>No extensions to install, no cloud syncing accounts to manage, no lag. Spacron ships with premium defaults.</p>
       </div>
 
       <div class="features-grid">
@@ -222,7 +218,7 @@
   <section class="comparison-section" id="comparison">
     <div class="container">
       <div class="section-header">
-        <h2>How Soryq stacks up</h2>
+        <h2>How Spacron stacks up</h2>
         <p>Speed of the native desktop shell meets the power of unified layouts.</p>
       </div>
 
@@ -230,7 +226,7 @@
         <thead>
           <tr>
             <th>Feature</th>
-            <th>Soryq</th>
+            <th>Spacron</th>
             <th>VS Code</th>
             <th>Warp</th>
           </tr>
@@ -275,11 +271,11 @@
   <footer class="footer">
     <div class="container footer-content">
       <div class="footer-left">
-        <p>© 2026 Soryq. All rights reserved.</p>
+        <p>© 2026 Spacron. All rights reserved.</p>
       </div>
       <div class="footer-right">
-        <a href="https://github.com/Samuel00098/soryq" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/Samuel00098/soryq/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+        <a href="https://github.com/Samuel00098/spacron" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/Samuel00098/spacron/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
       </div>
     </div>
   </footer>

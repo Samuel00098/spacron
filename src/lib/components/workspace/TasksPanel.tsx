@@ -124,7 +124,7 @@ export default function TasksPanel() {
     await sessions[status].start();
   }
 
-  // Load tasks from .soryq/tasks.json when project changes
+  // Load tasks from .spacron/tasks.json when project changes
   useEffect(() => {
     if (project) void loadProjectTasks(project);
   }, [project]);

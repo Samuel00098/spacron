@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 const updated = 'June 14, 2026';
-// NOTE: Reflects how Soryq works today (local-first, bring-your-own-key, no
+// NOTE: Reflects how Spacron works today (local-first, bring-your-own-key, no
 // server-side routing of your data). Revisit if you add accounts, analytics, or
 // a backend, and have counsel review before launch.
 

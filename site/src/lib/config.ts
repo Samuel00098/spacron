@@ -10,10 +10,10 @@ export const productionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
   : 'https://site-flame-phi.vercel.app';
 
 export const site = {
-  name: 'Soryq',
+  name: 'Spacron',
   tagline: 'A lightweight, terminal-first developer workspace for keyboard-centric professionals.',
   description:
-    'Soryq unifies a real PTY terminal grid, a CodeMirror editor, a live web-preview proxy with DOM inspector, and Git — in one fast, native, keyboard-driven window. No Electron. Sub-second startup.',
+    'Spacron unifies a real PTY terminal grid, a CodeMirror editor, a live web-preview proxy with DOM inspector, and Git — in one fast, native, keyboard-driven window. No Electron. Sub-second startup.',
   version: '0.4.4',
   // Canonical site URL, resolved at build time from whatever production domain
   // is bound to the Vercel project (see productionUrl above). og:url / canonical
@@ -22,20 +22,20 @@ export const site = {
   url: productionUrl,
 
   // Where launch/waitlist emails should go. CHANGE THIS to your real address.
-  contactEmail: 'hello@soryq.app',
+  contactEmail: 'hello@spacron.app',
 };
 
 // ── Downloads ──────────────────────────────────────────────────────────────
 // Downloads are CLOSED for now: every card renders a "Coming soon" state
 // instead of a live installer link.
 //   • TO RE-OPEN: set `downloadsAvailable = true` — the hrefs below already point
-//     at the real public installers (soryq-releases), so nothing else needs to
+//     at the real public installers (spacron-releases), so nothing else needs to
 //     change to go live.
 //   • TO MOVE to site-hosted files later: drop installers into site/public/downloads/
 //     and swap each `href` to the commented `/downloads/...` path below.
 export const downloadsAvailable = false;
 
-const RELEASE_BASE = 'https://github.com/Samuel00098/soryq-releases/releases/download/v0.4.4';
+const RELEASE_BASE = 'https://github.com/Samuel00098/spacron-releases/releases/download/v0.4.4';
 
 export const downloads = [
   {
@@ -43,24 +43,24 @@ export const downloads = [
     icon: 'windows',
     note: '10 / 11 · 64-bit',
     file: 'Windows installer (.exe)',
-    href: `${RELEASE_BASE}/Soryq_0.4.4_x64-setup.exe`,
-    // site-hosted (future): '/downloads/Soryq_x64-setup.exe'
+    href: `${RELEASE_BASE}/Spacron_0.4.4_x64-setup.exe`,
+    // site-hosted (future): '/downloads/Spacron_x64-setup.exe'
   },
   {
     os: 'macOS',
     icon: 'apple',
     note: 'Apple Silicon · 64-bit',
     file: 'Disk image (.dmg)',
-    href: `${RELEASE_BASE}/Soryq_0.4.4_aarch64.dmg`,
-    // site-hosted (future): '/downloads/Soryq_aarch64.dmg'
+    href: `${RELEASE_BASE}/Spacron_0.4.4_aarch64.dmg`,
+    // site-hosted (future): '/downloads/Spacron_aarch64.dmg'
   },
   {
     os: 'Linux',
     icon: 'linux',
     note: 'x86_64',
     file: 'AppImage (.AppImage)',
-    href: `${RELEASE_BASE}/Soryq_0.4.4_amd64.AppImage`,
-    // site-hosted (future): '/downloads/Soryq_x86_64.AppImage'
+    href: `${RELEASE_BASE}/Spacron_0.4.4_amd64.AppImage`,
+    // site-hosted (future): '/downloads/Spacron_x86_64.AppImage'
   },
 ];
 
@@ -189,7 +189,7 @@ export const features = [
 ];
 
 export const comparison = {
-  cols: ['Soryq', 'VS Code', 'Warp'],
+  cols: ['Spacron', 'VS Code', 'Warp'],
   rows: [
     { label: 'Startup speed', values: ['Sub-second (native)', '~2–5 seconds', 'Fast'], win: 0 },
     { label: 'Workspace shell', values: ['Tauri 2 (Rust)', 'Electron (Node)', 'Native (Rust)'], win: 0 },

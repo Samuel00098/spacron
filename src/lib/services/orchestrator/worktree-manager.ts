@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
  * Each orchestrator agent runs in its own git worktree on a dedicated branch
  * (forked from the project's current HEAD), so several agents can edit the same
  * repository at once without colliding. Worktrees live in a sibling
- * `.soryq-worktrees/<repo>` directory managed by the Rust backend, keeping the
+ * `.spacron-worktrees/<repo>` directory managed by the Rust backend, keeping the
  * user's main working tree untouched. This module owns deriving branch names and
  * driving the backend create / remove / status commands.
  */
@@ -14,7 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 export interface WorktreeInfo {
   /** Absolute path to the agent's isolated checkout. */
   path: string;
-  /** The task branch created for the agent (e.g. `soryq/backend-a1b2c3`). */
+  /** The task branch created for the agent (e.g. `spacron/backend-a1b2c3`). */
   branch: string;
   /** Branch the worktree was forked from. */
   baseBranch: string;
@@ -41,13 +41,13 @@ function slugify(label: string): string {
 }
 
 /**
- * Derive a stable, human-readable branch name for a task: `soryq/<slug>-<short>`.
+ * Derive a stable, human-readable branch name for a task: `spacron/<slug>-<short>`.
  * The trailing short id keeps it unique even when two agents share a label.
  */
 export function deriveTaskBranch(taskId: string, label?: string | null): string {
   const short = taskId.replace(/[^a-z0-9]/gi, '').slice(-6) || Math.random().toString(36).slice(2, 8);
   const slug = label && label.trim() ? slugify(label) : 'agent';
-  return `soryq/${slug}-${short}`;
+  return `spacron/${slug}-${short}`;
 }
 
 /**

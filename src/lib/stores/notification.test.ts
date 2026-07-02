@@ -107,7 +107,7 @@ describe('Notification & Toast Stores', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(mockInvoke).toHaveBeenCalledWith('notification_show', {
-      title: 'Soryq - Done',
+      title: 'Spacron - Done',
       body: 'Task finished!',
     });
   });

@@ -125,7 +125,7 @@ export function getVoiceReplyConfigError(options?: SpeakOptions): string | null 
     return null;
   }
   if (!providerSupportsReplyTts(provider)) {
-    return `${providerDef.label} does not support spoken replies in Soryq yet. Choose OpenRouter, Groq, OpenAI, Google, or a local provider with an OpenAI-compatible speech endpoint.`;
+    return `${providerDef.label} does not support spoken replies in Spacron yet. Choose OpenRouter, Groq, OpenAI, Google, or a local provider with an OpenAI-compatible speech endpoint.`;
   }
   if (local ? !baseUrl : !hasApiKey) {
     const kind = local ? 'server URL' : 'API key';

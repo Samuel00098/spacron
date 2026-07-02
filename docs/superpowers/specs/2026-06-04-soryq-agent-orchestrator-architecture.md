@@ -1,10 +1,10 @@
-# Soryq Agent Orchestrator Architecture
+# Spacron Agent Orchestrator Architecture
 
 ## Goal
-Turn Soryq into a local control plane that can accept a goal, route it to one terminal agent or a swarm, monitor execution, isolate filesystem changes with git worktrees, and surface approvals only at explicit gates.
+Turn Spacron into a local control plane that can accept a goal, route it to one terminal agent or a swarm, monitor execution, isolate filesystem changes with git worktrees, and surface approvals only at explicit gates.
 
 ## Product shape
-Soryq should support three execution modes:
+Spacron should support three execution modes:
 
 1. **Direct terminal task** — one agent, one terminal, one task.
 2. **Worktree-backed task** — one agent gets its own git worktree and runs isolated edits.
@@ -20,7 +20,7 @@ The default for code-changing work should be **single-agent + worktree**. That g
 - **Rollback-safe**: every meaningful edit path should be backed by git diff + snapshot history.
 - **Low friction for single-agent work**: the smallest useful unit is one terminal agent with a bounded scope.
 
-## Existing Soryq surfaces to reuse
+## Existing Spacron surfaces to reuse
 - `src/lib/stores/terminal.ts`: per-project terminal sessions, panes, agent presets, prompt routing.
 - `src/lib/stores/workspace.ts`: per-project persistence and project switching.
 - `src/lib/stores/runs.ts`: preset agent commands and quick-run launchers.
@@ -302,7 +302,7 @@ Approvals should be batchable so the user is not interrupted for every small ste
 - Stalled sessions should be marked blocked, not silently failed.
 - If the agent output diverges from the task plan, the orchestrator should surface it as a mismatch instead of pretending success.
 
-## Integration with current Soryq code
+## Integration with current Spacron code
 
 ### Terminal store
 Extend the current terminal session info with orchestration metadata:
@@ -327,8 +327,8 @@ Use it as the verification and approval surface.
 ### Preview panel
 Use it as the live UI verification step for web tasks.
 
-## Uniqueness for Soryq
-This is where Soryq should differ from BridgeSpace-like tools:
+## Uniqueness for Spacron
+This is where Spacron should differ from BridgeSpace-like tools:
 - **one terminal, one task** as the default interaction model
 - **worktree-backed isolation** as the default for edits
 - **preview-driven verification** for frontend work
@@ -377,4 +377,4 @@ This is where Soryq should differ from BridgeSpace-like tools:
 - Letting agents modify the main workspace without isolation by default.
 
 ## Summary
-Soryq’s orchestrator should behave like a local command center: assign one agent to one task, isolate edits with worktrees, verify work through real project artifacts, and keep the user in control at every meaningful gate.
+Spacron’s orchestrator should behave like a local command center: assign one agent to one task, isolate edits with worktrees, verify work through real project artifacts, and keep the user in control at every meaningful gate.

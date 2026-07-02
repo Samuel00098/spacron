@@ -12,8 +12,8 @@ const steps = [
   {
     id: 'welcome',
     title: "A Developer's Workspace, Reimagined",
-    kicker: 'Soryq Workspace',
-    desc: 'Soryq is a native, keyboard-driven environment that consolidates your code editor, terminal grids, Git interface, and AI agents into a single high-performance window on your machine.',
+    kicker: 'Spacron Workspace',
+    desc: 'Spacron is a native, keyboard-driven environment that consolidates your code editor, terminal grids, Git interface, and AI agents into a single high-performance window on your machine.',
   },
   {
     id: 'canvas',
@@ -31,7 +31,7 @@ const steps = [
     id: 'editor',
     title: 'Integrated Code Editor',
     kicker: 'Lightweight & Powerful',
-    desc: 'A full-featured code editor built directly into Soryq, powered by CodeMirror 6 with full language server protocol (LSP) diagnostics and autocompletion.',
+    desc: 'A full-featured code editor built directly into Spacron, powered by CodeMirror 6 with full language server protocol (LSP) diagnostics and autocompletion.',
   },
   {
     id: 'git',
@@ -49,7 +49,7 @@ const steps = [
     id: 'quickaccess',
     title: 'Instant Command Control',
     kicker: 'Speed & Shortcuts',
-    desc: 'Soryq is built to be used entirely from the keyboard. Search files, run commands, trigger AI tasks, and navigate layouts without lifting your hands.',
+    desc: 'Spacron is built to be used entirely from the keyboard. Search files, run commands, trigger AI tasks, and navigate layouts without lifting your hands.',
   },
 ];
 
@@ -226,7 +226,7 @@ function WelcomeIllus() {
         <circle cx="86" cy="26" r="3.5" fill="#ff5f56"/>
         <circle cx="96" cy="26" r="3.5" fill="#ffbd2e"/>
         <circle cx="106" cy="26" r="3.5" fill="#27c93f"/>
-        <text x="240" y="30" fontFamily="system-ui, sans-serif" fontSize="8.5" fill="var(--text-muted)" textAnchor="middle" fontWeight="600" letterSpacing="0.8">Soryq — Workspace</text>
+        <text x="240" y="30" fontFamily="system-ui, sans-serif" fontSize="8.5" fill="var(--text-muted)" textAnchor="middle" fontWeight="600" letterSpacing="0.8">Spacron — Workspace</text>
 
         {/* Sidebar Activity bar */}
         <rect x="70" y="39" width="22" height="145" fill="var(--bg-tertiary)" rx="1"/>
@@ -242,13 +242,13 @@ function WelcomeIllus() {
         
         {/* Editor Code Mockup */}
         <text x="105" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--syntax-keyword, #89ddff)">import</text>
-        <text x="133" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--text-primary)">{'{ Soryq }'}</text>
+        <text x="133" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--text-primary)">{'{ Spacron }'}</text>
         <text x="175" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--syntax-keyword, #89ddff)">from</text>
-        <text x="196" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--syntax-string, #c3e88d)">'soryq'</text>
+        <text x="196" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--syntax-string, #c3e88d)">'spacron'</text>
         
         <text x="105" y="70" fontFamily="monospace" fontSize="6.5" fill="var(--syntax-keyword, #89ddff)">const</text>
         <text x="130" y="70" fontFamily="monospace" fontSize="6.5" fill="var(--accent)">app</text>
-        <text x="146" y="70" fontFamily="monospace" fontSize="6.5" fill="var(--text-secondary)">= new Soryq();</text>
+        <text x="146" y="70" fontFamily="monospace" fontSize="6.5" fill="var(--text-secondary)">= new Spacron();</text>
 
         <text x="105" y="86" fontFamily="monospace" fontSize="6.5" fill="var(--text-muted)" opacity="0.5">// Initialize local developer environment</text>
         <text x="105" y="98" fontFamily="monospace" fontSize="6.5" fill="var(--accent)">app</text>
@@ -263,7 +263,7 @@ function WelcomeIllus() {
         {/* Terminal Pane (Right) */}
         <rect x="260" y="39" width="149" height="145" fill="var(--terminal-bg,#0a0a0c)"/>
         
-        <text x="272" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--accent)" opacity="0.8">$ soryq dev</text>
+        <text x="272" y="58" fontFamily="monospace" fontSize="6.5" fill="var(--accent)" opacity="0.8">$ spacron dev</text>
         <text x="272" y="70" fontFamily="monospace" fontSize="6" fill="var(--success)" opacity="0.9">✔ Native PTY grid established</text>
         <text x="272" y="82" fontFamily="monospace" fontSize="6" fill="var(--text-secondary)">Watching local directory...</text>
         
@@ -387,7 +387,7 @@ function TerminalIllus() {
       <circle cx="42" cy="26" r="3.5" fill="#ff5f56"/>
       <circle cx="52" cy="26" r="3.5" fill="#ffbd2e"/>
       <circle cx="62" cy="26" r="3.5" fill="#27c93f"/>
-      <text x="240" y="29" fontFamily="monospace" fontSize="8" fill="var(--text-muted)" textAnchor="middle" fontWeight="bold">bash (grid: 2 rooms) — Soryq PTY</text>
+      <text x="240" y="29" fontFamily="monospace" fontSize="8" fill="var(--text-muted)" textAnchor="middle" fontWeight="bold">bash (grid: 2 rooms) — Spacron PTY</text>
 
       {/* Vertical Splitting line */}
       <line x1="240" y1="38" x2="240" y2="185" stroke="rgba(255,255,255,0.08)" strokeWidth="1.2"/>
@@ -398,14 +398,14 @@ function TerminalIllus() {
       <rect x="30" y="38" width="60" height="16" fill="var(--terminal-bg,#0a0a0c)" stroke="rgba(255,255,255,0.05)" strokeWidth="0.5"/>
       <text x="60" y="49" fontFamily="monospace" fontSize="6.5" fill="var(--accent)" textAnchor="middle" fontWeight="bold">dev server</text>
       
-      <text x="37"  y="70" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/soryq-app</text>
+      <text x="37"  y="70" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/spacron-app</text>
       <text x="37"  y="81" fontFamily="monospace" fontSize="7" fill="var(--text-secondary)">$ npm run dev</text>
       <text x="37"  y="95" fontFamily="monospace" fontSize="6.5" fill="var(--success)">  ➜  Vite: http://localhost:5173</text>
       <text x="37"  y="105" fontFamily="monospace" fontSize="6.5" fill="var(--text-muted)">  ➜  press h + enter to show help</text>
       
       <line x1="25" y1="116" x2="240" y2="116" stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>
       
-      <text x="37"  y="132" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/soryq-app</text>
+      <text x="37"  y="132" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/spacron-app</text>
       <text x="37"  y="143" fontFamily="monospace" fontSize="7" fill="var(--text-secondary)">$ git branch</text>
       <text x="37"  y="155" fontFamily="monospace" fontSize="7" fill="var(--success)">* <tspan fill="var(--text-primary)" fontWeight="bold">main</tspan> [origin/main]</text>
       <text x="37"  y="167" fontFamily="monospace" fontSize="7" fill="var(--accent)">$ <tspan className="ob-caret">▋</tspan></text>
@@ -416,9 +416,9 @@ function TerminalIllus() {
       <rect x="245" y="38" width="60" height="16" fill="var(--terminal-bg,#0a0a0c)" stroke="rgba(255,255,255,0.05)" strokeWidth="0.5"/>
       <text x="275" y="49" fontFamily="monospace" fontSize="6.5" fill="var(--text-primary)" textAnchor="middle">cargo run</text>
       
-      <text x="252" y="70" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/soryq-core</text>
+      <text x="252" y="70" fontFamily="monospace" fontSize="7" fill="var(--accent)">~/projects/spacron-core</text>
       <text x="252" y="81" fontFamily="monospace" fontSize="7" fill="var(--text-secondary)">$ cargo build --release</text>
-      <text x="252" y="93" fontFamily="monospace" fontSize="6.5" fill="var(--text-muted)">   Compiling soryq-backend v1.0.0</text>
+      <text x="252" y="93" fontFamily="monospace" fontSize="6.5" fill="var(--text-muted)">   Compiling spacron-backend v1.0.0</text>
       
       {/* Compiling Progress bar */}
       <rect x="252" y="102" width="180" height="6" rx="3" fill="rgba(255,255,255,0.05)"/>
@@ -857,7 +857,7 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
         <header className="ob-header">
           <div className="ob-logo-row">
             {!iconError ? (
-              <img src={iconSrc} alt="Soryq" className="ob-logo-img" onError={() => setIconError(true)}/>
+              <img src={iconSrc} alt="Spacron" className="ob-logo-img" onError={() => setIconError(true)}/>
             ) : (
               <svg width="26" height="26" viewBox="0 0 36 36" fill="none">
                 <rect width="36" height="36" rx="8" fill="var(--accent-light)"/>
@@ -1015,7 +1015,7 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
               <button className="ob-btn-prev" onClick={prev}>← Back</button>
             )}
             <button className="ob-btn-next" onClick={next}>
-              {step === steps.length - 1 ? 'Launch Soryq →' : 'Next →'}
+              {step === steps.length - 1 ? 'Launch Spacron →' : 'Next →'}
             </button>
           </div>
         </footer>

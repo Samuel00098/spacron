@@ -59,7 +59,7 @@ export default function DbExplorerPanel() {
   // Load active connection for current project
   useEffect(() => {
     if (project) {
-      const stored = localStorage.getItem(`soryq_db_path_${project.id}`);
+      const stored = localStorage.getItem(`spacron_db_path_${project.id}`);
       if (stored) {
         setDbPath(stored);
         void loadTables(stored);
@@ -82,7 +82,7 @@ export default function DbExplorerPanel() {
       if (selected && typeof selected === 'string') {
         setDbPath(selected);
         if (project) {
-          localStorage.setItem(`soryq_db_path_${project.id}`, selected);
+          localStorage.setItem(`spacron_db_path_${project.id}`, selected);
         }
         await loadTables(selected);
       }
@@ -146,7 +146,7 @@ export default function DbExplorerPanel() {
     setResult(null);
     setErrorMsg('');
     if (project) {
-      localStorage.removeItem(`soryq_db_path_${project.id}`);
+      localStorage.removeItem(`spacron_db_path_${project.id}`);
     }
   }
 

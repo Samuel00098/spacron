@@ -80,9 +80,12 @@ export function getAppContextSnapshot(projectId: string, rootPath = ''): AppStat
     };
   });
 
-  const visiblePanels = PANEL_FLAGS.filter(({ flag }) => !!l[flag]).map(({ label }) => label);
-
   const snap = get(layoutSnapshot);
+  const isDev = snap.ambient === 'development';
+  const visiblePanels = isDev
+    ? (['toolbox', 'http', 'db', 'containers', 'env'].includes(l.activeView) ? [l.activeView] : [])
+    : PANEL_FLAGS.filter(({ flag }) => !!l[flag]).map(({ label }) => label);
+
   const layoutState = {
     ambient: snap.ambient,
     rooms: snap.rooms.map((r) => ({ title: r.title, focused: r.focused, minimized: r.minimized })),

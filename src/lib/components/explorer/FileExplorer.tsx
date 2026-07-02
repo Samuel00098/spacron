@@ -24,6 +24,7 @@ import {
 } from '$lib/stores/explorer';
 import { activeProject, openProject } from '$lib/stores/workspace';
 import { orchestratorTasks } from '$lib/stores/orchestrator';
+import { createTerminalSession } from '$lib/stores/terminal';
 import { useStore } from '$lib/react/useStore';
 import './FileExplorer.css';
 
@@ -85,6 +86,15 @@ function DeleteIcon() {
   );
 }
 
+function TerminalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
+}
+
 export default function FileExplorer() {
   const menu = useStore(contextMenu);
   const project = useStore(activeProject);
@@ -120,6 +130,11 @@ export default function FileExplorer() {
         if (confirm(`Delete ${label}?`)) {
           void deletePaths(list);
         }
+        break;
+      }
+      case 'open-terminal': {
+        const cwd = isDir ? path : path.split(/[\\/]/).slice(0, -1).join('/');
+        void createTerminalSession(cwd);
         break;
       }
     }
@@ -296,6 +311,10 @@ export default function FileExplorer() {
           <button className="context-item" onClick={() => handleContextAction('rename')}>
             <RenameIcon />
             Rename
+          </button>
+          <button className="context-item" onClick={() => handleContextAction('open-terminal')}>
+            <TerminalIcon />
+            Open in Terminal
           </button>
           <button className="context-item danger" onClick={() => handleContextAction('delete')}>
             <DeleteIcon />

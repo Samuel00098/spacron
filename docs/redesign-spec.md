@@ -1,7 +1,8 @@
-# Soryq Redesign — Design Spec (Phase 1, design-first)
+# Spacron Redesign — Design Spec (Phase 1, design-first)
 
 **Direction chosen:** **"The Flow"** — a living stream of work as the default frame; the editor/terminal/preview are *summoned* (expand) and *kept* (pin), not permanent furniture. Warm, calm, editorial aesthetic. BYO-key/no-meter/offline forward.
-**Status:** design only — no live-app changes. Build happens after the Svelte→React migration settles.
+**Updated (June 2026):** Svelte→React migration complete. AppShell, room system, and layout presets (Focus/Split/Preview/Canvas) are live in React. Phase 2 (Shell) is partially built — what remains is the visual system (ambient bloom, neon tokens, glass utilities in global.css) and promoting the orchestrator to the default hero view (Phase 3).
+**Status:** design direction confirmed. Build going live incrementally behind the existing layout.
 **See it (in order — each answers the previous one's question):**
 1. [`redesign-mockup-flow.html`](./redesign-mockup-flow.html) ⭐ **the chosen concept** — clickable: expand cards → full editor/terminal/preview, pin cards to keep them.
 2. [`redesign-mockup-canvas.html`](./redesign-mockup-canvas.html) — the warm/calm aesthetic the Flow uses (agents as named characters).
@@ -31,7 +32,7 @@ the three things BridgeSpace and the rest don't have.
 | **2. Easy to use** | One obvious focal point (the orchestrator) you *talk* to. A 6-icon left rail with hover labels. Layout presets (Focus / Split / Canvas / Preview) instead of manual window juggling. |
 | **3. Very understandable** | Every agent has a **role + colored LED + progress bar**. The status bar always says what's true (native, your key, offline voice, no meter). Nothing is unlabeled. |
 
-**The non-negotiable:** the **orchestrator is the hero of the screen.** Every competitor hides AI in a sidebar. Soryq makes *talking to direct your fleet* the first thing you see — that's the whole pitch, rendered.
+**The non-negotiable:** the **orchestrator is the hero of the screen.** Every competitor hides AI in a sidebar. Spacron makes *talking to direct your fleet* the first thing you see — that's the whole pitch, rendered.
 
 ---
 

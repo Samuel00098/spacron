@@ -25,13 +25,13 @@ const MAX_PROJECT_ENTRIES = 40;
 const MAX_PROMPT_LINES = 12;
 const MAX_ENTRY_CHARS = 240;
 const MAX_NEW_PER_TURN = 6;
-const GLOBAL_KEY = 'soryq_orchestrator_profile';
+const GLOBAL_KEY = 'spacron_orchestrator_profile';
 
 export const globalOrchestratorProfile = writable<ProfileEntry[]>([]);
 export const orchestratorProfile = writable<Record<string, ProfileEntry[]>>({});
 
 function profilePath(rootPath: string): string {
-  return `${rootPath}/.soryq/orchestrator-profile.json`;
+  return `${rootPath}/.spacron/orchestrator-profile.json`;
 }
 
 function compact(raw: string, max = MAX_ENTRY_CHARS): string {
@@ -100,7 +100,7 @@ export async function loadProjectProfile(projectId: string, rootPath: string): P
 async function flushProjectProfile(projectId: string, rootPath: string): Promise<void> {
   const entries = get(orchestratorProfile)[projectId] ?? [];
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.soryq` }); } catch { /* exists */ }
+    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
     await invoke('fs_write_file', { path: profilePath(rootPath), content: JSON.stringify(entries, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator profile:', err);

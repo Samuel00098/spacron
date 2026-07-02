@@ -109,9 +109,9 @@
 }
 
 .welcome .logo-img {
-  width: 72px;
-  height: 72px;
-  border-radius: 9px;
+  width: 96px;
+  height: 96px;
+  border-radius: 15px;
 }
 
 .welcome .logo-fallback {
@@ -725,8 +725,9 @@
   }
 
   .welcome .logo-img {
-    width: 40px;
-    height: 40px;
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
   }
 
   .welcome .app-name {

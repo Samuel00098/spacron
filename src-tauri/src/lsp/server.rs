@@ -57,7 +57,7 @@ impl LspServer {
         // Reader thread: parse the LSP framing and forward each message. Stops
         // when the child closes stdout or the receiver (WebSocket) is dropped.
         thread::Builder::new()
-            .name("soryq-lsp-reader".into())
+            .name("spacron-lsp-reader".into())
             .spawn(move || {
                 let mut reader = BufReader::new(stdout);
                 loop {
@@ -77,7 +77,7 @@ impl LspServer {
         // always read it even though we only log it.
         if let Some(mut stderr) = stderr {
             thread::Builder::new()
-                .name("soryq-lsp-stderr".into())
+                .name("spacron-lsp-stderr".into())
                 .spawn(move || {
                     let mut buf = [0u8; 8192];
                     loop {

@@ -296,7 +296,7 @@ describe('orchestrator terminal leasing', () => {
     const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
     expect(writeCall).toBeDefined();
     const [, writeArgs] = writeCall as [string, { path: string; content: string }];
-    expect(writeArgs.path).toBe('/repo/.soryq/orchestrator.json');
+    expect(writeArgs.path).toBe('/repo/.spacron/orchestrator.json');
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-1',
       projectId: 'project-1',

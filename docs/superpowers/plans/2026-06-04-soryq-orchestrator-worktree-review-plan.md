@@ -1,8 +1,8 @@
-# Soryq Orchestrator Worktree + Review Implementation Plan
+# Spacron Orchestrator Worktree + Review Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade Soryq’s orchestrator from terminal-exit-means-done dispatching to worktree-backed code-changing tasks with explicit `in-review`, `blocked`, and approval-driven completion.
+**Goal:** Upgrade Spacron’s orchestrator from terminal-exit-means-done dispatching to worktree-backed code-changing tasks with explicit `in-review`, `blocked`, and approval-driven completion.
 
 **Architecture:** Keep `src/lib/stores/orchestrator.ts` as the UI-facing shell, but move lifecycle, terminal lease, worktree, and review semantics into focused service modules. Add safe Tauri git worktree commands, persist worktree/review metadata in task records, and treat terminal exit as an event that the lifecycle classifies instead of unconditional success.
 
@@ -100,7 +100,7 @@ describe('task lifecycle transitions', () => {
         worktree: {
           id: 'wt-1',
           path: '/tmp/wt-1',
-          branchName: 'soryq/ot_1',
+          branchName: 'spacron/ot_1',
           baseBranch: 'main',
           baseCommit: 'abc1234',
         },
@@ -320,8 +320,8 @@ describe('worktree-manager', () => {
   it('creates a deterministic task worktree and returns metadata', async () => {
     invoke.mockResolvedValue({
       id: 'ot_123',
-      path: '/repo/.soryq/worktrees/ot_123',
-      branch_name: 'soryq/ot_123-fix-review-flow',
+      path: '/repo/.spacron/worktrees/ot_123',
+      branch_name: 'spacron/ot_123-fix-review-flow',
       base_branch: 'main',
       base_commit: 'abc1234',
       created_at: 1710000000000,
@@ -343,11 +343,11 @@ describe('worktree-manager', () => {
 
   it('removes a task worktree by id/path', async () => {
     invoke.mockResolvedValue('removed');
-    await removeTaskWorktree({ projectId: 'project-1', taskId: 'ot_123', path: '/repo/.soryq/worktrees/ot_123' });
+    await removeTaskWorktree({ projectId: 'project-1', taskId: 'ot_123', path: '/repo/.spacron/worktrees/ot_123' });
     expect(invoke).toHaveBeenCalledWith('workspace_git_worktree_remove', {
       projectId: 'project-1',
       taskId: 'ot_123',
-      path: '/repo/.soryq/worktrees/ot_123',
+      path: '/repo/.spacron/worktrees/ot_123',
       force: false,
     });
   });
@@ -391,7 +391,7 @@ pub fn workspace_git_worktree_create(
     let base_commit = git_capture(&root_path, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Failed to determine HEAD commit".to_string())?;
     let branch_name = sanitize_worktree_branch_name(&task_id, &title);
-    let worktree_root = root_path.join(".soryq").join("worktrees");
+    let worktree_root = root_path.join(".spacron").join("worktrees");
     std::fs::create_dir_all(&worktree_root).map_err(|e| format!("Failed to create worktree dir: {}", e))?;
     let worktree_path = worktree_root.join(&task_id);
 
@@ -431,7 +431,7 @@ pub fn workspace_git_worktree_remove(
 ) -> Result<String, String> {
     let root_path = get_project_path(&project_id, &state)?;
     let worktree_path = clean_path_buf(PathBuf::from(path));
-    if !worktree_path.starts_with(root_path.join(".soryq").join("worktrees")) {
+    if !worktree_path.starts_with(root_path.join(".spacron").join("worktrees")) {
         return Err("Access denied: invalid worktree path".to_string());
     }
 
@@ -463,7 +463,7 @@ fn sanitize_worktree_branch_name(task_id: &str, title: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
         .collect();
     let compact = slug.split('-').filter(|s| !s.is_empty()).take(6).collect::<Vec<_>>().join("-");
-    format!("soryq/{task_id}-{compact}")
+    format!("spacron/{task_id}-{compact}")
 }
 ```
 
@@ -604,8 +604,8 @@ describe('launchOrchestratorTask', () => {
     const task = createOrchestratorTask('project-1', 'Fix orchestrator lifecycle');
     createTaskWorktree.mockResolvedValue({
       id: task.id,
-      path: '/repo/.soryq/worktrees/' + task.id,
-      branchName: 'soryq/' + task.id,
+      path: '/repo/.spacron/worktrees/' + task.id,
+      branchName: 'spacron/' + task.id,
       baseBranch: 'main',
       baseCommit: 'abc1234',
       createdAt: Date.now(),
@@ -615,7 +615,7 @@ describe('launchOrchestratorTask', () => {
     await launchOrchestratorTask(task.id, 'claude', '/repo', true);
 
     expect(createTaskWorktree.mock.invocationCallOrder[0]).toBeLessThan(spawnAgentPreset.mock.invocationCallOrder[0]);
-    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/.soryq/worktrees/' + task.id);
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/.spacron/worktrees/' + task.id);
     expect(get(orchestratorTasks)[0].status).toBe('in-progress');
   });
 });
@@ -883,8 +883,8 @@ it('keeps persisted in-review tasks intact on reload', async () => {
       executionMode: 'worktree',
       worktree: {
         id: 'ot_1',
-        path: '/repo/.soryq/worktrees/ot_1',
-        branchName: 'soryq/ot_1',
+        path: '/repo/.spacron/worktrees/ot_1',
+        branchName: 'spacron/ot_1',
         baseBranch: 'main',
         baseCommit: 'abc1234',
         createdAt: Date.now(),
@@ -952,8 +952,8 @@ it('requests changes without discarding the worktree context', () => {
       executionMode: 'worktree',
       worktree: {
         id: task.id,
-        path: '/repo/.soryq/worktrees/' + task.id,
-        branchName: 'soryq/' + task.id,
+        path: '/repo/.spacron/worktrees/' + task.id,
+        branchName: 'spacron/' + task.id,
         baseBranch: 'main',
         baseCommit: 'abc1234',
         createdAt: Date.now(),

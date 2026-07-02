@@ -126,6 +126,7 @@ export type AiProviderId =
   | 'openai'
   | 'google'
   | 'groq'
+  | 'xai'
   | 'ollama'
   | 'lmstudio'
   | 'local';
@@ -234,11 +235,29 @@ export const aiProviders: AiProviderDef[] = [
     keyLabel: 'Groq API key',
     keyPlaceholder: 'gsk_...',
     keyUrl: 'https://console.groq.com/keys',
-    defaultModel: 'llama-3.1-8b-instant',
+    defaultModel: 'llama-3.3-70b-versatile',
     ttsSupport: 'native',
     models: [
-      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', description: 'Extremely fast and cheap.' },
       { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', description: 'Higher quality, still fast.' },
+      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', description: 'Extremely fast and cheap.' },
+    ],
+  },
+  {
+    id: 'xai',
+    label: 'xAI (Grok)',
+    keyLabel: 'xAI API key',
+    keyPlaceholder: 'xai-...',
+    keyUrl: 'https://console.x.ai/team/default/api-keys',
+    defaultModel: 'grok-4.3',
+    ttsSupport: 'native',
+    models: [
+      { id: 'grok-4.3', label: 'Grok 4.3', description: 'Flagship — most intelligent, fastest, 1M context.' },
+      { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: 'Deep reasoning, 1M context.' },
+      { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning', description: 'Fast responses, 1M context.' },
+      { id: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi-Agent', description: 'Multi-agent orchestration, 1M context.' },
+      { id: 'grok-build-0.1', label: 'Grok Build 0.1', description: 'Fast agentic coding model, 256k context.' },
+      { id: 'grok-2-1212', label: 'Grok 2', description: 'Previous-generation text model.' },
+      { id: 'grok-2-vision', label: 'Grok 2 Vision', description: 'Vision-capable Grok model.' },
     ],
   },
   {
@@ -392,11 +411,11 @@ const microsoftMaiVoiceOptions: TtsVoiceOption[] = [
 ];
 
 const grokVoiceOptions: TtsVoiceOption[] = [
-  { id: 'eve', label: 'Eve', description: 'xAI voice' },
-  { id: 'ara', label: 'Ara', description: 'xAI voice' },
-  { id: 'rex', label: 'Rex', description: 'xAI voice' },
-  { id: 'sal', label: 'Sal', description: 'xAI voice' },
-  { id: 'leo', label: 'Leo', description: 'xAI voice' },
+  { id: 'eve', label: 'Eve', description: 'Energetic, upbeat — great default' },
+  { id: 'ara', label: 'Ara', description: 'Warm, friendly — conversational' },
+  { id: 'rex', label: 'Rex', description: 'Confident, clear — professional' },
+  { id: 'sal', label: 'Sal', description: 'Smooth, balanced — versatile' },
+  { id: 'leo', label: 'Leo', description: 'Authoritative, strong — instructional' },
 ];
 
 const zonosVoiceOptions: TtsVoiceOption[] = [
@@ -568,6 +587,8 @@ export function getTtsVoiceOptionsForModel(provider: AiProviderId, modelId: stri
       return openAiTtsVoiceOptions;
     case 'google':
       return googleTtsVoiceOptions;
+    case 'xai':
+      return grokVoiceOptions;
     case 'local':
       return kokoroVoiceOptions;
     default:
@@ -591,6 +612,10 @@ export function getTtsModelOptions(provider: AiProviderId): TtsModelOption[] {
       return [
         { id: 'gemini-2.5-flash-preview-tts', label: 'Gemini 2.5 Flash Preview TTS', description: 'Google Gemini speech model.', voices: googleTtsVoiceOptions },
       ];
+    case 'xai':
+      return [
+        { id: 'grok-voice-tts-1.0', label: 'Grok Voice TTS 1.0', description: 'xAI voice synthesis.', voices: grokVoiceOptions },
+      ];
     case 'local':
       return [
         { id: 'kokoro-tts-v1.0', label: 'Kokoro TTS (v1.0)', description: 'Offline speech synthesis.', voices: kokoroVoiceOptions },
@@ -610,6 +635,8 @@ export function getDefaultTtsModel(provider: AiProviderId): string {
       return 'gpt-4o-mini-tts';
     case 'google':
       return 'gemini-2.5-flash-preview-tts';
+    case 'xai':
+      return 'grok-voice-tts-1.0';
     case 'local':
       return 'kokoro-tts-v1.0';
     default:
@@ -627,6 +654,8 @@ export function getDefaultTtsVoice(provider: AiProviderId): string {
       return 'alloy';
     case 'google':
       return 'Kore';
+    case 'xai':
+      return 'eve';
     case 'local':
       return 'af_bella';
     default:
@@ -635,7 +664,7 @@ export function getDefaultTtsVoice(provider: AiProviderId): string {
 }
 
 export function providerSupportsReplyTts(provider: AiProviderId): boolean {
-  return provider === 'openrouter' || provider === 'groq' || provider === 'openai' || provider === 'google' || isLocalProvider(provider);
+  return provider === 'openrouter' || provider === 'groq' || provider === 'openai' || provider === 'google' || provider === 'xai' || isLocalProvider(provider);
 }
 
 export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', false);
@@ -643,18 +672,16 @@ export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voic
 export const voiceInputModelByProvider = persistentWritable<Record<string, string>>('voiceInputModelByProvider', {});
 export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider', 'groq');
 export const voiceAiModelByProvider = persistentWritable<Record<string, string>>('voiceAiModelByProvider', {});
-export const voiceConversationAiProvider = persistentWritable<AiProviderId>('voiceConversationAiProvider', 'openrouter');
 export const voiceConversationAiModelByProvider = persistentWritable<Record<string, string>>('voiceConversationAiModelByProvider', {});
 export const voiceConversationTtsModelByProvider = persistentWritable<Record<string, string>>('voiceConversationTtsModelByProvider', {});
 export const voiceConversationTtsVoiceByProvider = persistentWritable<Record<string, string>>('voiceConversationTtsVoiceByProvider', {});
 /**
- * The provider that synthesizes spoken replies (TTS). Decoupled from the
- * conversation *brain* provider (`voiceConversationAiProvider`) so you can run a
- * cloud brain while keeping local (Kokoro) speech — or any other mix. The TTS
- * model/voice maps above are keyed by provider, so each provider remembers its
- * own speech model + voice regardless of which brain is active.
+ * The provider that synthesizes spoken replies (TTS) and powers the brain
+ * during voice conversations — one provider for both, keeping it simple.
+ * The TTS model/voice maps above are keyed by provider, so each provider
+ * remembers its own speech model + voice.
  */
-export const voiceReplyProvider = persistentWritable<AiProviderId>('voiceReplyProvider', 'openrouter');
+export const voiceReplyProvider = persistentWritable<AiProviderId>('voiceReplyProvider', 'groq');
 export const ttsVoice = persistentWritable<string>('ttsVoice', 'austin');
 
 /**
@@ -700,7 +727,7 @@ export function setVoiceAiModel(provider: AiProviderId, modelId: string) {
 }
 
 export const currentVoiceConversationAiModel = derived(
-  [voiceConversationAiProvider, voiceConversationAiModelByProvider],
+  [voiceReplyProvider, voiceConversationAiModelByProvider],
   ([$provider, $map]) => {
     const def = getProviderDef($provider);
     const remembered = $map[$provider];
@@ -793,20 +820,6 @@ if (typeof localStorage !== 'undefined') {
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
 
-  if (!localStorage.getItem('forge_setting_voiceConversationAiProvider')) {
-    const legacyProvider = localStorage.getItem('forge_setting_aiProvider');
-    if (legacyProvider) {
-      try {
-        const provider = JSON.parse(legacyProvider);
-        if (typeof provider === 'string' && provider) {
-          voiceConversationAiProvider.set(provider as AiProviderId);
-        }
-      } catch {
-        // Ignore malformed legacy value.
-      }
-    }
-  }
-
   if (!localStorage.getItem('forge_setting_voiceConversationAiModelByProvider')) {
     const legacyModelMap = localStorage.getItem('forge_setting_aiModelByProvider');
     if (legacyModelMap) {
@@ -821,11 +834,9 @@ if (typeof localStorage !== 'undefined') {
     }
   }
 
-  // Reply TTS used to be tied to the conversation brain provider. Seed the new
-  // standalone reply-provider from it so existing users' spoken voice is unchanged
-  // after the split; they can now point the brain elsewhere without losing it.
+  // Seed voice reply provider from the legacy brain provider if not yet set.
   if (!localStorage.getItem('forge_setting_voiceReplyProvider')) {
-    const existing = localStorage.getItem('forge_setting_voiceConversationAiProvider');
+    const existing = localStorage.getItem('forge_setting_aiProvider');
     if (existing) {
       try {
         const provider = JSON.parse(existing);
@@ -894,53 +905,6 @@ export const swipeNavigationEnabled = persistentWritable<boolean>('swipeNavigati
 
 // Code Formatting
 export const formatOnSave = persistentWritable('formatOnSave', true);
-
-// Voice Personalities
-export interface VoicePersonalityOption {
-  id: string;
-  label: string;
-  description: string;
-  systemPrompt: string;
-}
-
-export const voicePersonalities: VoicePersonalityOption[] = [
-  {
-    id: 'helpful',
-    label: 'Helpful Assistant',
-    description: 'Professional, efficient, and direct. Focuses on helper productivity.',
-    systemPrompt: 'You are a helpful, professional, and efficient AI coding assistant. Respond in a natural, polite, and direct human tone. Keep responses clear and focused on the task at hand without unnecessary preamble.'
-  },
-  {
-    id: 'friendly',
-    label: 'Friendly Guide',
-    description: 'Warm, encouraging, conversational, and supportive companion.',
-    systemPrompt: 'You are a warm, friendly, and approachable developer companion. Speak in an encouraging, conversational, and natural human tone. Be supportive, ask how the user\'s day is going if appropriate, and maintain a pleasant, cozy atmosphere.'
-  },
-  {
-    id: 'hype',
-    label: 'Hype Coach',
-    description: 'High-energy, enthusiastic motivator to pump up your confidence.',
-    systemPrompt: 'You are an enthusiastic, high-energy coding coach and motivator. Respond in an optimistic, encouraging, and upbeat natural tone. Cheer the user on, keep motivation high, and help them feel excited about building and solving bugs!'
-  },
-  {
-    id: 'zen',
-    label: 'Zen Developer',
-    description: 'Calm, reassuring, relaxed, and laid-back developer buddy.',
-    systemPrompt: 'You are a calm, reassuring, and laid-back developer buddy. Respond in a relaxed, easy-going, and natural human tone (using terms like "hey friend", "no worries", "we got this", "easy does it"). Keep the atmosphere stress-free and supportive.'
-  },
-  {
-    id: 'companion',
-    label: 'Sarcastic Companion',
-    description: 'Witty, dry, politely sarcastic companion (reminiscent of GLaDOS).',
-    systemPrompt: 'You are a highly intelligent, witty, and politely sarcastic companion. Speak with dry humor and playful irony, in a natural, deadpan human tone. You can make lighthearted, clever remarks about coding bugs, software fragility, or compiler errors, but always remain helpful, co-operative, and perform the requested actions correctly.'
-  }
-];
-
-export const voicePersonality = persistentWritable<string>('voicePersonality', 'helpful');
-
-export function getVoicePersonalityDef(id: string): VoicePersonalityOption {
-  return voicePersonalities.find((p) => p.id === id) ?? voicePersonalities[0];
-}
 
 // Keyboard Shortcuts
 export interface KeyboardShortcut {
@@ -1163,7 +1127,6 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceInputModelByProvider': voiceInputModelByProvider.set(value as Record<string, string>); break;
     case 'voiceAiProvider': voiceAiProvider.set(value as AiProviderId); break;
     case 'voiceAiModelByProvider': voiceAiModelByProvider.set(value as Record<string, string>); break;
-    case 'voiceConversationAiProvider': voiceConversationAiProvider.set(value as AiProviderId); break;
     case 'voiceConversationAiModelByProvider': voiceConversationAiModelByProvider.set(value as Record<string, string>); break;
     case 'voiceConversationTtsModelByProvider': voiceConversationTtsModelByProvider.set(value as Record<string, string>); break;
     case 'voiceConversationTtsVoiceByProvider': voiceConversationTtsVoiceByProvider.set(value as Record<string, string>); break;
@@ -1206,11 +1169,10 @@ export function resetSettingsToDefault() {
   voiceInputModelByProvider.set({});
   voiceAiProvider.set('groq');
   voiceAiModelByProvider.set({});
-  voiceConversationAiProvider.set('openrouter');
   voiceConversationAiModelByProvider.set({});
   voiceConversationTtsModelByProvider.set({});
   voiceConversationTtsVoiceByProvider.set({});
-  voiceReplyProvider.set('openrouter');
+  voiceReplyProvider.set('groq');
   ttsVoice.set('austin');
   announceAgentCompletions.set(true);
   uiZoom.set(100);
@@ -1229,6 +1191,6 @@ export function resetSettingsToDefault() {
   terminalScrollback.set(5000);
   terminalFontSize.set(13);
   terminalRenderer.set('webgl');
-  voicePersonality.set('helpful');
+
 }
 

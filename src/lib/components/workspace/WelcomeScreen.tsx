@@ -127,7 +127,7 @@ export default function WelcomeScreen() {
           <div className="brand-title-row">
             <div className="logo-wrap">
               {!iconError ? (
-                <img src={iconSrc} alt="Soryq" className="logo-img" onError={() => setIconError(true)} />
+                <img src={iconSrc} alt="Spacron" className="logo-img" onError={() => setIconError(true)} />
               ) : (
                 <svg width="36" height="36" viewBox="0 0 36 36" fill="none" className="logo-fallback">
                   <rect width="36" height="36" rx="8" fill="#2f343b" />

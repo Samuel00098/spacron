@@ -34,6 +34,8 @@ import { reconnoiter } from '$lib/services/orchestrator/recon';
 import {
   aiProvider,
   currentAiModel,
+  currentVoiceConversationAiModel,
+  voiceReplyProvider,
   isLocalProvider,
   getProviderBaseUrl,
   announceAgentCompletions,
@@ -116,7 +118,7 @@ export function getProjectOrchestratorTasks(projectId: string) {
 const projectPaths = new Map<string, string>();
 
 function storePath(rootPath: string): string {
-  return `${rootPath}/.soryq/orchestrator.json`;
+  return `${rootPath}/.spacron/orchestrator.json`;
 }
 
 type PersistedTask = Omit<Partial<OrchestratorTask>, 'status'> & {
@@ -318,7 +320,7 @@ async function flush(projectId: string): Promise<void> {
   // they're in-memory only, never written to disk.
   const projectTasks = get(orchestratorTasks).filter((t) => t.projectId === projectId && !t.adopted);
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.soryq` }); } catch { /* exists */ }
+    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
     await invoke('fs_write_file', { path: storePath(rootPath), content: JSON.stringify(projectTasks, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator tasks:', err);
@@ -406,16 +408,19 @@ function isAiAvailable(): boolean {
 }
 
 /**
- * The LLM that powers the orchestrator brain. Always the main AI provider/model
- * (the one configured under AI / Models) — voice mode and typed chat share the
- * same engine. Voice mode only swaps the I/O around it: local STT in, local TTS
- * out (see voiceInputProvider / voiceReplyProvider), brain unchanged.
+ * The LLM that powers the orchestrator brain. By default uses the main AI
+ * provider/model (configured under AI / Models). During a voice conversation
+ * it uses the voice reply provider as the brain so both brain and speech
+ * share the same provider — except when the reply provider is `'local'`
+ * (offline Kokoro TTS), which has no LLM, so we fall back to the main AI
+ * provider.
  */
-function getConversationLlmConfig(): RouteLlmConfig {
-  const provider = get(aiProvider);
+function getConversationLlmConfig(voiceConversation?: boolean): RouteLlmConfig {
+  const useReplyProvider = voiceConversation && get(voiceReplyProvider) !== 'local';
+  const provider = useReplyProvider ? get(voiceReplyProvider) : get(aiProvider);
   const local = isLocalProvider(provider);
   const baseUrl = local ? getProviderBaseUrl(provider) : '';
-  const model = get(currentAiModel);
+  const model = useReplyProvider ? get(currentVoiceConversationAiModel) : get(currentAiModel);
   return { provider, model, hasApiKey: isProviderApiKeyConfiguredLocal(provider), baseUrl };
 }
 
@@ -1110,7 +1115,7 @@ export interface ChatMessage {
   completion?: CompletionSummary | null;
 }
 
-const CHAT_STORAGE_KEY = 'soryq_orchestrator_chat';
+const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
 const MAX_CHAT_PER_PROJECT = 80;
 
 function loadChat(): Record<string, ChatMessage[]> {
@@ -1516,7 +1521,7 @@ export async function sendChatMessage(
     .slice(-6);
   const taskMemory = buildProjectTaskMemory(projectId);
   const taskPanel = getProjectTaskPanelLines(projectId);
-  const llmConfig = getConversationLlmConfig();
+  const llmConfig = getConversationLlmConfig(opts?.voiceConversation);
 
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() });
   const assistantId = msgId();

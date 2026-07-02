@@ -12,7 +12,7 @@ export function Footer() {
   const year = new Date().getFullYear();
 
   return (
-    <footer className="mt-10 border-t border-[var(--glass-border)] bg-[rgba(9,11,15,0.4)] pb-7 pt-12">
+    <footer className="mt-10 border-t border-[var(--glass-border)] bg-[rgba(7,8,11,0.50)] pb-7 pt-12" style={{ backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)' }}>
       <div className="container flex flex-wrap justify-between gap-8 border-b border-[var(--glass-border)] pb-7">
         <div>
           <a className="flex items-center gap-2.5 text-[1.05rem] font-bold" href="/">
@@ -23,9 +23,9 @@ export function Footer() {
           <p className="mt-2.5 max-w-[38ch] text-[0.9rem] text-muted">{site.tagline}</p>
         </div>
 
-        <nav className="flex flex-wrap items-start gap-[22px] text-[0.92rem] text-soft" aria-label="Footer">
+        <nav className="flex flex-wrap items-start gap-[22px] text-[0.92rem] text-soft transition-colors" aria-label="Footer">
           {footLinks.map((l) => (
-            <a key={l.href} href={l.href} className="transition-colors hover:text-ink">
+            <a key={l.href} href={l.href} className="transition-colors duration-200 hover:text-ink">
               {l.label}
             </a>
           ))}
@@ -34,13 +34,13 @@ export function Footer() {
 
       <div className="container mt-5 flex flex-wrap items-center justify-between gap-4 text-[0.82rem] text-muted">
         <span>
-          © {year} {site.name}. All rights reserved.
+          &copy; {year} {site.name}. All rights reserved.
         </span>
         <nav className="flex flex-wrap gap-5" aria-label="Legal">
-          <a href="/terms" className="transition-colors hover:text-ink">
+          <a href="/terms" className="transition-colors duration-200 hover:text-ink">
             Terms of Use
           </a>
-          <a href="/privacy" className="transition-colors hover:text-ink">
+          <a href="/privacy" className="transition-colors duration-200 hover:text-ink">
             Privacy Policy
           </a>
         </nav>

@@ -67,21 +67,21 @@ window.addEventListener('DOMContentLoaded', () => {
   if (userAgent.indexOf('win') !== -1) {
     detectEl.textContent = 'Detected OS: Windows (x64) · .msi Installer';
     downloadBtn.textContent = 'Download for Windows';
-    downloadBtn.href = 'https://github.com/Samuel00098/soryq/releases/latest/download/Soryq_x64-setup.exe';
-    installCmd.textContent = 'winget install Samuel00098.Soryq';
+    downloadBtn.href = 'https://github.com/Samuel00098/spacron/releases/latest/download/Spacron_x64-setup.exe';
+    installCmd.textContent = 'winget install Samuel00098.Spacron';
   } else if (userAgent.indexOf('mac') !== -1) {
     detectEl.textContent = 'Detected OS: macOS · .dmg Disk Image';
     downloadBtn.textContent = 'Download for macOS';
-    downloadBtn.href = 'https://github.com/Samuel00098/soryq/releases/latest/download/Soryq_aarch64.dmg';
-    installCmd.textContent = 'brew install Samuel00098/soryq';
+    downloadBtn.href = 'https://github.com/Samuel00098/spacron/releases/latest/download/Spacron_aarch64.dmg';
+    installCmd.textContent = 'brew install Samuel00098/spacron';
   } else if (userAgent.indexOf('linux') !== -1) {
     detectEl.textContent = 'Detected OS: Linux · .AppImage / .deb Package';
     downloadBtn.textContent = 'Download for Linux';
-    downloadBtn.href = 'https://github.com/Samuel00098/soryq/releases/latest';
-    installCmd.textContent = 'snap install soryq';
+    downloadBtn.href = 'https://github.com/Samuel00098/spacron/releases/latest';
+    installCmd.textContent = 'snap install spacron';
   } else {
-    detectEl.textContent = 'Download Soryq from our latest releases';
+    detectEl.textContent = 'Download Spacron from our latest releases';
     downloadBtn.textContent = 'View All Downloads';
-    downloadBtn.href = 'https://github.com/Samuel00098/soryq/releases/latest';
+    downloadBtn.href = 'https://github.com/Samuel00098/spacron/releases/latest';
   }
 });

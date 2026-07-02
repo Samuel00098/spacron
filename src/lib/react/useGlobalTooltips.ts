@@ -5,10 +5,10 @@ export function useGlobalTooltips() {
     if (typeof document === 'undefined') return;
 
     // Create the tooltip element
-    let tooltipEl = document.getElementById('soryq-global-tooltip');
+    let tooltipEl = document.getElementById('spacron-global-tooltip');
     if (!tooltipEl) {
       tooltipEl = document.createElement('div');
-      tooltipEl.id = 'soryq-global-tooltip';
+      tooltipEl.id = 'spacron-global-tooltip';
       tooltipEl.className = 'global-tooltip';
       document.body.appendChild(tooltipEl);
     }

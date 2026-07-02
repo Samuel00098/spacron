@@ -1,8 +1,7 @@
 import { features } from '@/lib/config';
 
-// Bento spans — first tile is the large featured one; index 3 is a full-width
-// banner (the AI / bring-your-own-key tile).
 const spans = ['big', '', '', 'full', '', '', ''];
+const delays = [0, 0.06, 0.12, 0.06, 0.18, 0.24, 0.30];
 
 export function Features() {
   return (
@@ -21,8 +20,11 @@ export function Features() {
           {features.map((f, i) => (
             <article
               key={f.title}
-              className={`tile glass reveal ${spans[i] ?? ''}`}
-              style={{ ['--c' as string]: f.accent }}
+              className={`tile glass reveal-lift ${spans[i] ?? ''}`}
+              style={{
+                ['--c' as string]: f.accent,
+                transitionDelay: `${delays[i]}s`,
+              }}
             >
               <span className="glyph" aria-hidden="true" />
               <h3>{f.title}</h3>

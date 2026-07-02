@@ -164,7 +164,7 @@ pub fn lsp_install_server(
     {
         let out = on_output.clone();
         thread::Builder::new()
-            .name("soryq-lsp-install".into())
+            .name("spacron-lsp-install".into())
             .spawn(move || {
                 let reader: Box<dyn std::io::Read + Send> = match stream {
                     Stream::Out(s) => Box::new(s),
@@ -182,7 +182,7 @@ pub fn lsp_install_server(
 
     // Wait for completion off-thread and report the exit code.
     thread::Builder::new()
-        .name("soryq-lsp-install-wait".into())
+        .name("spacron-lsp-install-wait".into())
         .spawn(move || {
             let code = child
                 .wait()

@@ -15,7 +15,7 @@ export interface RunEntry {
   output: string;
 }
 
-const STORAGE_KEY = 'soryq_run_history';
+const STORAGE_KEY = 'spacron_run_history';
 const MAX_ENTRIES = 200;
 
 // Redact common secret patterns from command strings before persistence.

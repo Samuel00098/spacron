@@ -1,141 +1,281 @@
-# Soryq Architecture Document
+# Spacron Architecture Document
 
 ## Application Overview
 
-**Soryq** — a lightweight developer workspace inspired by Terax, built with Tauri 2 + Rust + Svelte 5 + TypeScript. No AI agents. Features split panels, multi-project workspaces, git integration with a side-by-side/inline code reviewer, custom command palette, built-in terminal, code editor, file explorer, and live web preview.
+**Spacron** — a native, local-first, keyboard-driven developer workspace where you talk to one orchestrator that drives a fleet of coding agents inside a real IDE (terminal grid + CodeMirror editor + web preview proxy + git + DB tools). Built with Tauri 2 (Rust) + React 19 + TypeScript.
+
+**Core identity:** "Your machine, your keys, works offline" — the one claim competitors structurally cannot make.
 
 ---
 
-## 1. Project Structure
+## 1. Tech Stack
+
+| Layer | Technology | Role |
+|-------|-----------|------|
+| **Desktop shell** | Tauri 2 | System webview, native menus, file I/O, process spawning |
+| **Rust backend** | Rust 2021 | PTY sessions, git operations, preview proxy, theme loading, file watching, worktree management |
+| **Frontend** | React 19 + TypeScript 5.6 | UI, state management, component rendering |
+| **Editor** | CodeMirror 6 | Syntax highlighting (15+ languages), Vim mode, LSP integration |
+| **Terminal** | xterm.js | PTY terminal rendering with WebGL/Canvas renderers |
+| **State (legacy)** | Svelte-like stores (`storeCompat.ts`) | Reactive writable/derived/get (vanilla TS, no Svelte runtime) |
+| **State (modern)** | Zustand 5 | Simpler state slices migrated from legacy stores |
+| **Build** | Vite 8 + `@vitejs/plugin-react` | Dev server, bundling, HMR |
+| **Tauri commands** | `@tauri-apps/api` | IPC bridge to Rust |
+
+---
+
+## 2. Project Structure
 
 ```
-soryq/
+spacron/
 ├── src-tauri/                          # Rust backend (Tauri 2)
 │   ├── Cargo.toml
-│   ├── tauri.conf.json                 # Tauri configuration
+│   ├── tauri.conf.json
 │   ├── build.rs
 │   ├── capabilities/
-│   │   ├── default.json                # Default capability set
-│   │   └── file-system.json            # File system permissions
+│   │   └── default.json                # Tauri capabilities
 │   ├── src/
-│   │   ├── main.rs                     # Entry point, app setup
-│   │   ├── lib.rs                      # Tauri invoke setup & app initialization
+│   │   ├── main.rs                     # Entry point
+│   │   ├── lib.rs                      # Tauri invoke setup & init
+│   │   ├── state.rs                    # AppState (managed via tauri::State)
+│   │   ├── error.rs                    # Unified error types
 │   │   ├── commands/                   # Tauri command handlers
 │   │   │   ├── mod.rs
 │   │   │   ├── terminal.rs             # PTY session management
 │   │   │   ├── file_system.rs          # File/directory operations
-│   │   │   ├── workspace.rs            # Multi-project workspace & Git operations
-│   │   │   ├── preview.rs              # Web preview server management
-│   │   │   └── theme.rs                # Theme configuration
-│   │   ├── pty/                        # PTY backend abstraction
+│   │   │   ├── workspace.rs            # Git operations, worktree isolation, search
+│   │   │   ├── preview.rs              # Web preview proxy management
+│   │   │   └── theme.rs                # Theme loading & switching
+│   │   ├── pty/                        # PTY backend
 │   │   │   ├── mod.rs
 │   │   │   ├── session.rs              # PTY session lifecycle
-│   │   │   ├── manager.rs              # Session registry & routing
+│   │   │   ├── manager.rs              # Session registry
 │   │   │   └── shell.rs                # Shell detection & config
 │   │   ├── workspace/                  # Workspace domain logic
 │   │   │   ├── mod.rs
-│   │   │   ├── project.rs              # Project model & state
+│   │   │   ├── project.rs              # Project model
 │   │   │   ├── manager.rs              # Multi-project orchestration
 │   │   │   └── settings.rs             # Per-project settings
 │   │   ├── preview/                    # Web preview subsystem
 │   │   │   ├── mod.rs
-│   │   │   ├── server.rs               # Local dev server proxy
+│   │   │   ├── server.rs               # Axum HTTP/WS proxy
 │   │   │   └── browser.rs              # Embedded preview state
 │   │   ├── theme/                      # Theme system
 │   │   │   ├── mod.rs
-│   │   │   ├── models.rs               # Theme data structures
-│   │   │   ├── loader.rs               # Theme file parsing (JSON/TOML)
-│   │   │   └── registry.rs             # Theme registry & switching
-│   │   ├── state.rs                    # Tauri managed state (AppState)
-│   │   └── error.rs                    # Unified error types
-│   ├── themes/                         # Bundled themes
-│   │   ├── default-dark.json
-│   │   ├── default-light.json
-│   │   └── terax-dark.json
-│   └── icons/
-│       ├── icon.png
-│       └── icon.ico
-│
-├── src/                                # Svelte + TypeScript frontend
-│   ├── App.svelte                      # Main application entry component
-│   ├── app.d.ts                        # TypeScript declarations
-│   ├── main.ts                         # Svelte initialization & global style imports
+│   │   │   ├── models.rs
+│   │   │   ├── loader.rs
+│   │   │   └── registry.rs
+│   │   ├── lsp/                        # LSP client (Rust side)
+│   │   │   ├── mod.rs
+│   │   │   └── ...
+│   │   └── preview/                    # Shared preview state
+│   │       ├── mod.rs
+│   │       └── ...
+│   ├── icons/
+│   └── themes/
+├── src/                                # React + TypeScript frontend
+│   ├── main.tsx                        # React entry point
+│   ├── main.ts                         # Generic init
+│   ├── App.tsx                         # Root component
+│   ├── pilot.tsx                       # Isolated component harness for migration checks
+│   ├── styles/
+│   │   ├── global.css                  # CSS custom properties, glass system, themes
+│   │   └── themes/                     # Theme style files
 │   ├── lib/
 │   │   ├── components/                 # UI components
-│   │   │   ├── layout/
-│   │   │   │   ├── AppShell.svelte     # Main app shell (sidebar, split panels)
-│   │   │   │   ├── TitleBar.svelte     # Custom title bar
-│   │   │   │   ├── StatusBar.svelte    # Bottom status bar
-│   │   │   │   └── ActivityBar.svelte  # Left icon activity bar
-│   │   │   ├── terminal/
-│   │   │   │   ├── TerminalPanel.svelte
-│   │   │   │   ├── TerminalTab.svelte
-│   │   │   │   ├── TerminalTabs.svelte
-│   │   │   │   └── TerminalInput.svelte
-│   │   │   ├── editor/
-│   │   │   │   ├── EditorPanel.svelte
-│   │   │   │   ├── EditorTab.svelte
-│   │   │   │   ├── EditorTabs.svelte
-│   │   │   │   ├── CodeEditor.svelte       # CodeMirror 6 wrapper
-│   │   │   │   ├── Minimap.svelte
-│   │   │   │   └── Breadcrumbs.svelte
-│   │   │   ├── explorer/
-│   │   │   │   ├── FileExplorer.svelte
-│   │   │   │   ├── FileTree.svelte
-│   │   │   │   ├── FileNode.svelte
-│   │   │   │   ├── FileIcon.svelte
-│   │   │   │   ├── SourceControl.svelte    # Git changes, log graph, & commit manager
-│   │   │   │   └── EmptyWorkspace.svelte
-│   │   │   ├── preview/
-│   │   │   │   ├── PreviewPanel.svelte
-│   │   │   │   ├── PreviewToolbar.svelte
-│   │   │   ├── review/
-│   │   │   │   └── ReviewPanel.svelte      # Code Review interface (inline diff viewer)
-│   │   │   ├── panels/
-│   │   │   │   ├── SplitPane.svelte        # Resizable split container
-│   │   │   │   ├── SplitHandle.svelte      # Drag handle
-│   │   │   │   ├── PanelGroup.svelte       # Group of panels
-│   │   │   │   └── PanelTab.svelte         # Panel type selector
-│   │   │   ├── workspace/
-│   │   │   │   ├── WorkspaceSwitcher.svelte
-│   │   │   │   ├── ProjectSettings.svelte
-│   │   │   │   └── WelcomeScreen.svelte
-│   │   │   ├── theme/
-│   │   │       ├── Tooltip.svelte
-│   │   │       ├── Button.svelte
-│   │   │       └── Resizer.svelte
-│   │   ├── stores/                     # Svelte stores (using Svelte 5 runes / custom states)
-│   │   │   ├── workspace.ts            # Active projects, workspace state
-│   │   │   ├── terminal.ts             # PTY sessions state
+│   │   │   ├── layout/                 # AppShell, StatusBar, TitleBar, ActivityBar
+│   │   │   ├── terminal/               # TerminalPane, TerminalPanel, FloatingPromptBar
+│   │   │   ├── editor/                 # CodeEditor, EditorPanel, EditorTabs
+│   │   │   ├── explorer/               # FileExplorer, FileTree, SourceControl, SearchPanel
+│   │   │   ├── preview/                # PreviewPanel, MarkdownPreview
+│   │   │   ├── review/                 # ReviewPanel (diff viewer)
+│   │   │   ├── orchestrator/           # AgentActivity, VoiceConversation, AgentWorktreeBadge
+│   │   │   ├── shared/                 # SettingsModal, CommandPalette, Dropdown, Toasts
+│   │   │   ├── workspace/              # WorkspaceSwitcher, TasksPanel, WelcomeScreen
+│   │   │   ├── db/                     # DbExplorerPanel
+│   │   │   ├── http/                   # HttpClientPanel
+│   │   │   ├── toolbox/                # ToolboxPanel, EmbeddedPanel
+│   │   │   ├── youtube/                # YouTubePanel, FloatingYouTube
+│   │   │   ├── containers/             # ContainersPanel
+│   │   │   ├── theme/                  # ThemeCustomizer
+│   │   │   └── conductor/              # Conductor components
+│   │   ├── stores/                     # State management
+│   │   │   ├── storeCompat.ts           # Svelte-compatible writable/derived/get (vanilla TS)
+│   │   │   ├── orchestrator.ts         # Main orchestrator (76KB, being decomposed)
+│   │   │   ├── terminal.ts             # PTY session state (90KB)
+│   │   │   ├── workspace.ts            # Active projects state
+│   │   │   ├── settings.ts             # App settings
 │   │   │   ├── editor.ts               # Open files, active file, content cache
-│   │   │   ├── explorer.ts             # Selected and expanded tree paths
-│   │   │   └── keybindings.ts
+│   │   │   ├── preview.ts              # Web preview proxy state
+│   │   │   ├── theme.ts                # UI colors, syntax styles
+│   │   │   ├── layout.ts               # Panel visibility, sidebar state
+│   │   │   ├── explorer.ts             # File tree expanded state
+│   │   │   ├── notification.ts          # Toast alerts
+│   │   │   ├── *test.ts                # Per-store tests
+│   │   │   └── zustand/                # Zustand store alternatives (migration target)
+│   │   │       ├── orchestrator.ts     # Thin Zustand wrapper
+│   │   │       ├── settings.ts
+│   │   │       ├── layout.ts
+│   │   │       └── ... (15+ stores)
+│   │   ├── services/                   # Business logic, not UI state
+│   │   │   ├── orchestrator/           # Orchestrator service modules
+│   │   │   │   ├── task-lifecycle.ts   # Task types, state machine, transitions
+│   │   │   │   ├── terminal-lease.ts   # Terminal session leasing
+│   │   │   │   ├── worktree-manager.ts # Git worktree isolation per task
+│   │   │   │   ├── review-gate.ts      # Human review gate for agent output
+│   │   │   │   ├── activity-log.ts     # Structured per-task event timeline
+│   │   │   │   ├── agent-adapter.ts    # Agent I/O channel abstraction
+│   │   │   │   ├── agent-turn-watch.ts # Detect agent turn completion
+│   │   │   │   ├── agent-signals.ts    # Agent lifecycle signals
+│   │   │   │   ├── agent-names.ts      # Agent naming/labeling
+│   │   │   │   ├── agent-charter.ts    # Agent standing brief/instructions
+│   │   │   │   ├── agent-rules-file.ts # Agent rules file management
+│   │   │   │   ├── app-context.ts      # App context snapshot for agents
+│   │   │   │   ├── evolve.ts           # Task evolution/rephrasing
+│   │   │   │   ├── memory.ts           # Agent/orchestrator memory
+│   │   │   │   ├── recon.ts            # Project reconnaissance before dispatch
+│   │   │   │   ├── app-settings.ts     # Settings for orchestrator behavior
+│   │   │   │   └── *test.ts            # Per-service tests
+│   │   │   ├── orchestrator-brain.ts   # LLM brain routing user messages → actions
+│   │   │   ├── voice-input.ts          # Voice capture & STT pipeline
+│   │   │   ├── parakeet-local.ts       # Local STT (WASM, Parakeet)
+│   │   │   ├── kokoro-local.ts         # Local TTS (WASM, Kokoro)
+│   │   │   ├── tts.ts                  # TTS abstraction
+│   │   │   ├── ai-keychain.ts          # AI provider key management
+│   │   │   ├── agent-access.ts         # Agent availability detection
+│   │   │   ├── voice-refinement.ts     # Voice recognition refinement
+│   │   │   ├── pty-bridge.ts           # PTY IPC helpers
+│   │   │   ├── github.ts               # GitHub integration helpers
+│   │   │   ├── changelog.ts            # Changelog generation
+│   │   │   ├── app-flags.ts            # Feature flags
+│   │   │   ├── lsp/                    # LSP client (frontend side)
+│   │   │   └── completion/             # Ghost text / autocomplete
 │   │   ├── types/                      # TypeScript type definitions
-│   │   │   ├── workspace.ts
-│   │   │   └── layout.ts
-│   │   └── utils/                      # Shared utilities
-│   │       ├── path.ts
+│   │   ├── utils/                      # Shared utilities (path, storage, etc.)
+│   │   └── actions/                    # App action dispatchers
+├── docs/                               # Design specs, plans, research
+│   ├── redesign-spec.md                # "The Flow" visual redesign spec
+│   ├── redesign-mockup-*.html          # Interactive HTML mockups
+│   ├── market-research-2026.md         # Competitive analysis
+│   ├── BUILDING.md                     # Build instructions
+│   └── superpowers/                    # Feature specs and plans
+├── site/                               # Marketing site (Next.js)
 ├── package.json
-├── vite.config.ts                      # SPA build & alias configuration
+├── vite.config.js                      # Vite config (React plugin only)
 ├── tsconfig.json
 └── README.md
-|-------|---------|
-| `tauri-plugin-shell` | Shell command execution |
-| `tauri-plugin-fs` | File system access |
-| `tauri-plugin-dialog` | File/folder dialogs |
-| `portable-pty` | Cross-platform PTY backend |
-| `serde` / `serde_json` | Serialization |
-| `tokio` | Async runtime |
-| `uuid` | Session/project IDs |
-| `notify` | File system watching |
-| `dirs` | Platform-specific config/cache dirs |
-| `anyhow` | Error handling |
-| `thiserror` | Custom error types |
-| `dashmap` | Concurrent HashMap for session registry |
-| `axum` | Local HTTP proxy for web preview |
-| `toml` | Theme/settings file parsing |
+```
 
-### 2.2 AppState Structure
+---
+
+## 3. State Management (Dual System)
+
+### 3.1 `storeCompat.ts` (Legacy — Svelte-compatible, vanilla TS)
+
+The app was originally built with Svelte 5 stores. After the Svelte→React migration, the store API was reimplemented as pure TypeScript in `src/lib/stores/storeCompat.ts`:
+
+- **`writable<T>(initial)`** — Creates a reactive container with `.set(val)` / `.update(fn)` / `.subscribe(cb)`.
+- **`get<T>(store)`** — Synchronous one-shot read.
+- **`derived<S, T>(stores, fn)`** — Computes a value from one or more source stores.
+
+These are **not Svelte runes** — they are plain consumer-producer reactive stores. Components subscribe via `useEffect` + unsubscribe callback, or through custom React hooks.
+
+All major stores (`orchestrator.ts`, `terminal.ts`, `workspace.ts`) still use this system.
+
+### 3.2 Zustand Stores (Modern — migration target)
+
+Zustand stores live in `src/lib/stores/zustand/` and follow the standard Zustand `create()` pattern. These are simpler, have no subscription boilerplate, and are gradually replacing legacy stores where appropriate:
+
+- `orchestrator.ts` — Thin wrapper over orchestrator state (chat messages, agent UI state)
+- `settings.ts` — App settings (17KB — settings was migrated early)
+- `layout.ts` — Layout configuration
+- `editor.ts` — Editor state
+- `gitStatus.ts`, `explorer.ts`, `theme.ts`, `notification.ts`, `snapshot.ts`, etc.
+
+**Status:** Both systems coexist. New components should prefer Zustand. Legacy store migration is incremental.
+
+---
+
+## 4. Key Services Architecture
+
+### 4.1 Orchestrator System (`src/lib/services/orchestrator/`)
+
+The orchestrator is the central agent-dispatch system. It manages task state, terminal leases, agent communication, worktree isolation, and the review gate.
+
+**Data flow:**
+```
+User message → orchestrator-brain.ts (LLM routing)
+  → task-lifecycle.ts (create task, transition state)
+  → terminal-lease.ts (lease a PTY terminal, spawn agent)
+  → worktree-manager.ts (create isolated git worktree)
+  → agent-adapter.ts (deliver goal to agent's terminal)
+  → agent-turn-watch.ts (detect turn completion)
+  → review-gate.ts (human reviews agent output)
+  → completeLeasedTask / transition task
+```
+
+**Task lifecycle states:**
+```
+todo → in-progress → in-review → complete
+                ↘ blocked
+                ↘ failed
+                ↘ cancelled
+```
+
+**Key service modules:**
+
+| Module | Responsibility |
+|--------|---------------|
+| `task-lifecycle.ts` | Task type definitions, state machine transitions, task CRUD |
+| `terminal-lease.ts` | Spawning agent terminals, recording leases, sending goals |
+| `worktree-manager.ts` | Git worktree create/remove/status for per-task isolation |
+| `review-gate.ts` | Human-in-the-loop review before agent changes are finalized |
+| `activity-log.ts` | Structured timeline of agent actions per task |
+| `agent-adapter.ts` | Abstracted I/O channel per agent session |
+| `agent-turn-watch.ts` | Detecting when an agent finishes a turn (output signal analysis) |
+| `evolve.ts` | Task rephrasing and refinement logic |
+| `memory.ts` | Cross-session agent memory |
+| `recon.ts` | Project structure reconnaissance before dispatching an agent |
+| `app-context.ts` | Snapshot of current app state (open files, terminals, preview URL) |
+| `agent-charter.ts` | Standing brief/instructions delivered to each agent on launch |
+| `agent-rules-file.ts` | Management of agent-specific rules files |
+| `agent-names.ts` | Agent naming/labeling utilities |
+| `agent-signals.ts` | Signal definitions for agent lifecycle events |
+
+### 4.2 Orchestrator Brain (`orchestrator-brain.ts`)
+
+The LLM-powered routing layer. Takes a user's natural language message and decides:
+- Which agent (or agents) to dispatch the work to
+- How to phrase the task prompt
+- Whether any app-control action needs to run first (open file, switch view, etc.)
+- How to summarize completed work for the user
+
+Uses the AI provider configured in the app (BYO-key or local models via Parakeet/Kokoro).
+
+### 4.3 Voice Pipeline
+
+| Module | Role |
+|--------|------|
+| `voice-input.ts` | Microphone capture, VAD (voice activity detection), orchestration |
+| `parakeet-local.ts` | Local speech-to-text via Parakeet WASM (offline-capable) |
+| `kokoro-local.ts` | Local text-to-speech via Kokoro WASM (offline-capable) |
+| `tts.ts` | TTS abstraction layer (local or cloud fallback) |
+| `voice-refinement.ts` | STT result refinement and correction |
+
+**Design principle:** Voice works fully offline. Kokoro TTS and Parakeet STT run as WASM in the webview. No cloud dependency.
+
+### 4.4 AI Provider System (`ai-keychain.ts`, `agent-access.ts`)
+
+Manages API keys for AI providers (OpenRouter, Anthropic, Google, OpenAI, etc.) and detects agent availability. Supports:
+- BYO-key (user provides their own API key)
+- Local models (Parakeet/Kokoro WASM for offline voice)
+- Hybrid: cloud LLM + local voice
+
+---
+
+## 5. Rust Backend Architecture
+
+### 5.1 AppState Structure
 
 ```
 AppState (managed via tauri::State)
@@ -156,95 +296,95 @@ AppState (managed via tauri::State)
 └── settings: RwLock<AppSettings>
 ```
 
-### 2.3 PTY Architecture
+### 5.2 Command Modules
 
-Actor model with async channels. Each terminal tab gets a `PtySession` with its own tokio task for non-blocking I/O. Output streamed via Tauri events.
+| Module | Key Commands |
+|--------|-------------|
+| `terminal.rs` | PTY create/resize/write/kill, session lifecycle |
+| `workspace.rs` | Git operations (status, diff, commit, push, fetch, log, branches), worktree isolation, file search, daily notes |
+| `file_system.rs` | Read/write/list/tree, binary detection |
+| `preview.rs` | Preview proxy start/stop, port detection |
+| `theme.rs` | Theme list, activate, get/save |
 
-### 2.4 File System Operations
+### 5.3 Agent Worktree Isolation
 
-- Use `tauri-plugin-fs` for basic operations.
-- Custom commands for workspace-aware operations (e.g. listing, file metadata).
-- `notify` crate for file watching → emits events to the frontend.
-- Binary file detection via magic bytes.
+Each orchestrator agent can work in its own isolated git worktree (defined in `workspace.rs` and driven from `worktree-manager.ts`):
 
-### 2.5 Web Preview System
+- `workspace_git_create_worktree` — Fork from HEAD into a dedicated branch
+- `workspace_git_remove_worktree` — Clean up the worktree (and optionally delete the branch)
+- `workspace_git_worktree_status` — Live changed-files / branch status
 
-- Rust runs a lightweight HTTP proxy (axum) on a random available port.
-- Proxy forwards requests to the user's dev server (configurable port).
-- Frontend loads preview in a `<webview>` or `<iframe>`.
-- Proxy handles CORS, WebSocket proxying (for HMR), and path rewriting.
+Worktrees live in `.spacron-worktrees/<repo>` (outside the main working tree) so agents never pollute each other's state.
 
-### 2.6 Theme System
+### 5.4 PTY Architecture
 
-Theme files stored as JSON with colors and syntax tokens. Commands: `theme_list`, `theme_activate`, `theme_get_active`, `theme_save`.
-
-### 2.7 Git Integration Commands
-
-Forge interacts directly with the host system's installed Git executable through Tauri's command dispatch.
-- `workspace_git_status`: Runs `git status --porcelain` and checks `git diff HEAD --numstat` to structure a project's modified, added, deleted, and untracked files list alongside aggregate commit metrics.
-- `workspace_git_diff`: Obtains raw unified git diffs for a file or the whole workspace. Untracked files are automatically resolved by reading the file and formatting it as a complete addition block for the reviewer.
-- `workspace_git_commit`: Stages all workspace changes and performs a commit.
-- `workspace_git_push` / `workspace_git_fetch`: Syncs state with remote origins.
-- `workspace_git_discard_file` / `workspace_git_discard_all`: Undoes modifications safely via checkout/clean.
-- `workspace_git_log`: Fetches Git history logs for rendering the workspace commit log graph.
+Actor model with async channels. Each terminal tab gets a `PtySession` with its own tokio task for non-blocking I/O. Output is streamed to the frontend via Tauri events. Cross-platform using `portable-pty` with ConPTY fallback on Windows.
 
 ---
 
-## 3. Svelte Frontend Architecture
+## 6. Design System
 
-### 3.1 Store Structure
+### 6.1 CSS Custom Properties (`src/styles/global.css`)
 
-All stores use Svelte 5 runes (`$state`, `$derived`) or Svelte's reactive stores for modular cross-component communication.
+- **Base:** `--bg-0:#07080b` → `--bg-2:#12141b` (deep slate)
+- **Glass:** `rgba(255,255,255,.04–.065)` surfaces, `22px` blur, `140%` saturate, white rim, deep shadow
+- **Ambient bloom:** Blurred radial-gradient fields behind glass surfaces
+- **Accent palette (semantic):**
+  - `--teal #22d3c7` — orchestrator / builder / primary action
+  - `--sky #60a5fa` — reviewer / info
+  - `--amber #f5b045` — scout / attention
+  - `--green #34d399` — terminal / success / live
+  - `--pink #f472b6` — keywords / accent pop
+- **Typography:** Inter for UI, JetBrains Mono for code/terminal
+- **Roundness:** 4px corners for most UI, 8px for elevated surfaces
 
-- **workspaceStore**: active projects map, currently active project ID, and recent workspaces.
-- **terminalStore**: maps PTY terminal sessions, the active session, and active shells.
-- **editorStore**: open file tabs list, active file, dirty flag registry, scroll coordinates, and document content cache.
-- **explorerStore**: file tree visual state, expanded folders, and context menu actions.
-- **previewStore**: web preview proxy settings, dev server target port, and history navigation.
-- **themeStore**: active UI colors, custom syntax styles, and CSS custom property injector.
-- **layoutStore**: visibility of side panels (`editorVisible`, `previewVisible`, `reviewVisible`), sidebar status, and selected tabs.
-- **settingsStore**: editor custom settings (e.g. font-family, word wrap) and user keybindings.
-- **commandPaletteStore**: registers default workspace actions and holds state for search and visibility of the Command Palette modal.
-- **notificationStore**: manages self-dismissing custom toast alerts (success, info, warning, error).
+### 6.2 Theme System
 
-### 3.2 Multi-Project State Isolation
-
-- Each project has its own namespace and layout state stored in local/memory repositories.
-- Switching projects updates active views, editor tabs, and terminal sessions, hiding background tasks while keeping them running.
-- Layout preferences (split proportions, pane counts) are remembered per-project.
-
-### 3.3 Key Technical Decisions
-
-- **Tauri 2**: Fast performance, system-default webview (WebView2 on Windows, WebKit on macOS/Linux), and secure Rust backend wrappers.
-- **Svelte 5**: Modern fine-grained reactivity using runes, leading to a much smaller javascript footprint and faster UI updates than traditional frameworks.
-- **CodeMirror 6**: Modular editor setup. Custom extensions like `scrollPastEnd()` (from `@codemirror/view`) allow VS Code-style scrolling below the file contents.
-- **Overscroll & Boundary Protection**: Enforced app-wide scroll boundary limits (`overscroll-behavior: none` applied to `.cm-scroller`, `.sc-scrollable`, `.review-body`, and scrollable panels) to prevent WebView overscroll bounce, elastic rubber-banding, and focus leakage.
-- **Layout Shift Prevention**: Strict scrollable containers use `scrollbar-gutter: stable` to ensure side panels, trees, and diff structures do not shift horizontally when a scrollbar appears or disappears.
-- **Sticky Section Layout**: Sidebars and lists (e.g. in `SourceControl.svelte`) leverage contextual sticky headers (`position: sticky; top: 0`) that scroll inline inside panels, preserving category context similar to premium IDEs.
-- **Unified Diff Review Panel**: Rather than using external heavy dependencies, Forge implements a custom diff renderer inside `ReviewPanel.svelte` that parses unified git diff outputs on the fly, rendering changes with inline additions, deletions, line-number comparisons, and file-by-file collapsibility.
+Themes stored as JSON with color tokens and syntax highlighting rules. Managed via Rust commands (`theme_list`, `theme_activate`, `theme_get_active`, `theme_save`). Users can create custom themes through the ThemeCustomizer panel.
 
 ---
 
-## 4. Phased Implementation Plan
+## 7. Redesign Direction: "The Flow"
 
-- **Phase 1: Foundation** `[Completed]` - Tauri 2 scaffolding, frameless Custom TitleBar, and styling tokens.
-- **Phase 2: File Explorer** `[Completed]` - Watchers, folder tree navigation, and FS operations.
-- **Phase 3: Terminal** `[Completed]` - PTY manager, tab multiplexing, and xterm.js integration.
-- **Phase 4: Code Editor** `[Completed]` - CodeMirror 6, syntax highlighting, and Tab management.
-- **Phase 5: Split Panels** `[Completed]` - SplitPane resizers and nested views layout.
-- **Phase 6: Workspaces** `[Completed]` - WelcomeScreen, Workspace Switcher, and state persistence.
-- **Phase 7: Web Preview** `[Completed]` - Axum dev proxy, dev port auto-detection, and HMR proxying.
-- **Phase 8: Git Integration & Code Review** `[Completed]` - Git commands, SourceControl panel, history log graphs, and ReviewPanel inline diff viewer.
-- **Phase 9: Command Palette & UI Polish** `[Completed]` - Search modal, Toast alerts, overscroll locking, and layout improvements.
+The app is moving toward **"The Flow"** — a living stream of work replacing the fixed-panel IDE layout (spec'd in `docs/redesign-spec.md`):
+
+- **Default frame = the stream** — Interactive cards (diffs, terminal runs, previews, query results)
+- **Orchestrator as the hero** — Talk/type to direct your agent fleet
+- **Named agent characters** — Personality layer for agents (Ada, Wren, Sol, etc.)
+- **Cards expand → full IDE** — Editor/terminal/preview summoned on demand
+- **Pin cards** — Keep important work in an ambient pinned column
+- **Layout presets** — Focus / Split / Canvas / Preview replace manual window management
+- **Ambient neon bloom** — The signature visual differentiator
+
+**Build phases (post-design-sign-off):**
+1. Shell: AppShell + title bar + rail + layout presets with new tokens
+2. Orchestrator hero: Promote orchestrator/voice/pet to centerpiece
+3. Panels: Port existing panels into card-stream layout
+4. Polish: Pet states, motion (View Transitions API), first-run states
+
+The redesign is driven by the market wedge: **voice-driven + multi-agent + native + BYO-key/local-first + personality** — the combination no competitor fully occupies.
 
 ---
 
-## 5. Risk Assessment & Mitigations
+## 8. Build & Verification
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| PTY Compatibility | High | Used `portable-pty` with ConPTY fallback for robust Windows shell support. |
-| Scrolling Freeze in Webviews | Medium | Replaced hardware-accelerated composite tricks (`transform: translateZ(0)`) with clean WebView overscroll limits (`overscroll-behavior: none`). |
-| Layout Shifts on Toggle | Low | Integrated `scrollbar-gutter: stable` globally to eliminate horizontal panel jitter. |
-| Git Untracked File review | Medium | Custom Rust command wraps untracked files as standard insertions, allowing side-by-side reviews before commits. |
-| Workspace State Clashes | Medium | Implemented project-isolated namespaces within Svelte stores. |
+- **Dev:** `npm run dev` — Vite dev server on port 1420
+- **Type check:** `npm run check` — `tsc --noEmit`
+- **Test:** `npm test` — Vitest runner
+- **Tauri:** `npm run tauri dev` / `npm run tauri build`
+- **Scripts:** Cross-platform build, version sync, changelog generation
+
+---
+
+## 9. Key Architectural Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Tauri 2 over Electron** | 40-80MB vs 400-800MB, native performance, no Node.js runtime |
+| **React 19 over Svelte 5** | Ecosystem maturity, type-safe TSX, wider hiring pool (migrated v0.4.4) |
+| **Dual store system (storeCompat + Zustand)** | Gradual migration from Svelte-flavored stores to Zustand; both coexist |
+| **Service modules over monolithic store** | Decomposed orchestrator into 20+ focused services with individual tests |
+| **Local-first voice (WASM)** | Kokoro TTS + Parakeet STT run as WASM — fully offline, no cloud dependency |
+| **Git worktree isolation per agent** | Multiple agents edit same repo without conflict (Rust backend + TS service) |
+| **BYO-key architecture** | Users bring their own API keys or run local models; no meter, no subscription |
+| **`storeCompat.ts` custom implementation** | Avoids shipping Svelte runtime just for reactive stores; ~100 LOC vanilla TS |

@@ -17,13 +17,17 @@ export function Download() {
           <h2 className="section-title">Get {site.name} for your platform.</h2>
           <p className="section-sub">
             Native installers for Windows, macOS, and Linux.
-            {!downloadsAvailable && ' Builds are being prepared — they’ll be available here shortly.'}
+            {!downloadsAvailable && ' Builds are being prepared — they\'ll be available here shortly.'}
           </p>
         </div>
 
         <div className="mx-auto grid max-w-[440px] grid-cols-1 gap-5 md:max-w-none md:grid-cols-3">
-          {downloads.map((d) => (
-            <article key={d.os} className="card glass reveal flex flex-col gap-[18px] p-6">
+          {downloads.map((d, i) => (
+            <article
+              key={d.os}
+              className="card glass reveal-lift flex flex-col gap-[18px] p-6 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[var(--glow-accent),var(--shadow-sm)]"
+              style={{ transitionDelay: `${i * 0.08}s` }}
+            >
               <div className="flex items-center gap-3.5 text-ink">
                 <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <path d={icons[d.icon]} />

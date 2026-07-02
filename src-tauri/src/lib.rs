@@ -14,9 +14,19 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let base_config_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let config_dir = base_config_dir.join("soryq");
+    let config_dir = base_config_dir.join("spacron");
 
-    std::fs::create_dir_all(&config_dir).expect("failed to create soryq config directory");
+    // One-time migration from the previous app name ("Soryq"). All app data —
+    // workspaces, themes, backgrounds, app flags, and downloaded models — lives
+    // under <config>/spacron; the former name stored it under <config>/soryq. On
+    // the first launch after the rename, relocate the old data so it carries over.
+    // Best-effort and non-destructive to any data the renamed build already wrote.
+    // NOTE: API keys, the GitHub token, and per-project env-vault secrets live in
+    // the OS keychain under the old service name and are NOT moved here; those must
+    // be re-entered after switching to Spacron.
+    migrate_legacy_config_dir(&base_config_dir.join("soryq"), &config_dir);
+
+    std::fs::create_dir_all(&config_dir).expect("failed to create spacron config directory");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -196,4 +206,59 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running forge application");
+}
+
+/// Relocate the previous ("Soryq") config directory to the current one on first
+/// launch after the rename. Best-effort: it never panics, and it refuses to run
+/// if the destination already holds data, so it can never clobber the renamed
+/// build's own files.
+fn migrate_legacy_config_dir(old_dir: &std::path::Path, new_dir: &std::path::Path) {
+    if !old_dir.is_dir() {
+        return;
+    }
+
+    // Don't touch anything if the new location already has data — only migrate
+    // into an absent or empty directory.
+    let new_has_data = std::fs::read_dir(new_dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if new_has_data {
+        return;
+    }
+
+    // Remove an empty placeholder dir so a fast atomic rename can take its place
+    // (on Windows `rename` fails if the destination exists).
+    if new_dir.exists() {
+        let _ = std::fs::remove_dir(new_dir);
+    }
+
+    // Prefer an atomic move (instant even for large downloaded models); fall back
+    // to a recursive copy if the two paths live on different volumes.
+    match std::fs::rename(old_dir, new_dir) {
+        Ok(()) => eprintln!("[spacron] migrated data from {old_dir:?} to {new_dir:?}"),
+        Err(_) => match copy_dir_recursive(old_dir, new_dir) {
+            Ok(()) => eprintln!("[spacron] copied data from {old_dir:?} to {new_dir:?}"),
+            Err(err) => eprintln!("[spacron] legacy data migration failed: {err}"),
+        },
+    }
+}
+
+/// Recursively copy `src` into `dst`, creating directories as needed. Symlinks are
+/// skipped (app data contains none) to avoid following links outside the tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_symlink() {
+            continue;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }

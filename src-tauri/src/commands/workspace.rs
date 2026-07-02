@@ -917,7 +917,7 @@ pub fn workspace_git_discard_all(
 // ── Agent worktree isolation ────────────────────────────────────────────────
 // Each orchestrator agent works in its own git worktree on a dedicated branch,
 // so multiple agents can edit the same repository concurrently without stepping
-// on each other. Worktrees live in a sibling `.soryq-worktrees/<repo>` directory
+// on each other. Worktrees live in a sibling `.spacron-worktrees/<repo>` directory
 // (outside the main tree) so they never appear in the project's own git status.
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -992,7 +992,7 @@ pub fn workspace_git_create_worktree(
         .ok_or_else(|| "Repository has no parent directory.".to_string())?;
     let safe_branch = branch.replace('/', "-");
     let worktree_path =
-        crate::commands::clean_path_buf(parent.join(".soryq-worktrees").join(&repo_name).join(&safe_branch));
+        crate::commands::clean_path_buf(parent.join(".spacron-worktrees").join(&repo_name).join(&safe_branch));
     let path_str = worktree_path.to_string_lossy().to_string();
 
     // Reuse an existing worktree at this path (idempotent on retry/relaunch).
@@ -1047,7 +1047,7 @@ pub fn workspace_git_create_worktree(
 }
 
 /// Remove an agent worktree (and optionally delete its branch). Refuses to touch
-/// anything outside the managed `.soryq-worktrees` area as a safety guard.
+/// anything outside the managed `.spacron-worktrees` area as a safety guard.
 #[tauri::command]
 pub fn workspace_git_remove_worktree(
     project_id: String,
@@ -1064,7 +1064,7 @@ pub fn workspace_git_remove_worktree(
     let root_path = &project.root_path;
 
     let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
-    if !cleaned.to_string_lossy().contains(".soryq-worktrees") {
+    if !cleaned.to_string_lossy().contains(".spacron-worktrees") {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
 
@@ -1706,8 +1706,8 @@ pub fn workspace_get_recent_daily_notes(
     let mut summaries = Vec::new();
 
     for project in recents {
-        let daily_dir = project.root_path.join(".soryq").join("daily");
-        let daily_notes_dir = project.root_path.join(".soryq").join("daily-notes");
+        let daily_dir = project.root_path.join(".spacron").join("daily");
+        let daily_notes_dir = project.root_path.join(".spacron").join("daily-notes");
 
         let dir_to_read = if daily_dir.is_dir() {
             Some(daily_dir)

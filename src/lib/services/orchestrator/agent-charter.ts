@@ -2,7 +2,7 @@
  * Agent charter — the standing operating brief delivered to every agent the
  * moment it is spawned.
  *
- * Soryq dispatches multiple agents into ONE shared git working tree (the older
+ * Spacron dispatches multiple agents into ONE shared git working tree (the older
  * per-task git-worktree isolation was removed because it caused more problems
  * than it solved). With no filesystem isolation, the only thing keeping agents
  * from colliding — clobbering each other's edits, reverting the user's work, or

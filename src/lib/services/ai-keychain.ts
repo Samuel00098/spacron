@@ -39,12 +39,12 @@ async function migrateLocalStorageToKeychain(): Promise<void> {
   const LEGACY_OPENROUTER_KEY = 'forge_openrouter_api_key';
   const legacyOrKey = localStorage.getItem(LEGACY_OPENROUTER_KEY);
   if (legacyOrKey && legacyOrKey.trim()) {
-    localStorage.setItem('soryq_openrouter_api_key', legacyOrKey.trim());
+    localStorage.setItem('spacron_openrouter_api_key', legacyOrKey.trim());
     localStorage.removeItem(LEGACY_OPENROUTER_KEY);
   }
 
   for (const provider of KNOWN_PROVIDERS) {
-    const lsKey = `soryq_${provider}_api_key`;
+    const lsKey = `spacron_${provider}_api_key`;
     const value = localStorage.getItem(lsKey);
     if (!value || !value.trim()) continue;
     try {

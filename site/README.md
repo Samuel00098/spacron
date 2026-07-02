@@ -1,6 +1,6 @@
-# Soryq — marketing site
+# Spacron — marketing site
 
-The public landing page for Soryq. Built with [Next.js](https://nextjs.org) (App
+The public landing page for Spacron. Built with [Next.js](https://nextjs.org) (App
 Router) and [Tailwind CSS v4](https://tailwindcss.com), and exported as a static
 site (`output: 'export'`) so it loads fast and ranks well. Lives in this `site/`
 folder, fully separate from the desktop app's build.
@@ -40,7 +40,7 @@ npx serve out    # preview the production build locally (any static server works
 - **`src/components/*.tsx`** — page sections (Nav, Hero, Stats, Features, Demo,
   Screenshots, Comparison, Pricing, Download, CTA, Footer) plus `SiteEffects`
   (the constellation canvas, scroll-progress rail, and reveal-on-scroll).
-- **`public/logo.svg`** — the Soryq mark (also used as favicon + social preview).
+- **`public/logo.svg`** — the Spacron mark (also used as favicon + social preview).
 
 ### Distribution (downloads)
 

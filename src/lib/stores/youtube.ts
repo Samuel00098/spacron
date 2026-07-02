@@ -48,7 +48,7 @@ export type YouTubeState = {
   albumTracks?: YouTubeResult[];
 };
 
-const STORAGE_KEY = 'soryq_youtube';
+const STORAGE_KEY = 'spacron_youtube';
 
 type Persisted = Pick<YouTubeState, 'apiKey' | 'mode' | 'musicFilter' | 'query' | 'current' | 'position'>;
 

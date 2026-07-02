@@ -58,12 +58,12 @@ export default defineConfig({
     // TTS is needed later, isolate a dedicated WASM host context instead of the
     // whole app document.
     // Ignore directories the app itself writes into at runtime. Without this,
-    // spawning an orchestrator agent — which writes .soryq/orchestrator.json and
-    // creates .soryq/worktrees/* (full repo copies) — trips Vite's file watcher
+    // spawning an orchestrator agent — which writes .spacron/orchestrator.json and
+    // creates .spacron/worktrees/* (full repo copies) — trips Vite's file watcher
     // and triggers a full page reload of the app while you're dogfooding inside
-    // the Soryq repo. .worktrees is the legacy location.
+    // the Spacron repo. .worktrees is the legacy location.
     watch: {
-      ignored: ['**/src-tauri/**', '**/.soryq/**', '**/.worktrees/**'],
+      ignored: ['**/src-tauri/**', '**/.spacron/**', '**/.worktrees/**'],
     },
   },
 });

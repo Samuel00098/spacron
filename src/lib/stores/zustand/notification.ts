@@ -85,10 +85,10 @@ async function showDesktopNotification(message: string, type: Toast['type']) {
     if (!permissionGranted) return;
 
     const titles: Record<Toast['type'], string> = {
-      error: 'Soryq - Error',
-      warning: 'Soryq - Warning',
-      success: 'Soryq - Done',
-      info: 'Soryq',
+      error: 'Spacron - Error',
+      warning: 'Spacron - Warning',
+      success: 'Spacron - Done',
+      info: 'Spacron',
     };
 
     try {

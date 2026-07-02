@@ -221,7 +221,7 @@ interface PersistedProjectState {
 }
 
 function projectStorageKey(projectId: string) {
-  return `soryq_project_${projectId}`;
+  return `spacron_project_${projectId}`;
 }
 
 function saveProjectStateToStorage(projectId: string) {
@@ -327,7 +327,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   const terminalLayout = typeof r.terminalLayout === 'string' ? r.terminalLayout : undefined;
 
   const ambient: AmbientLayout | undefined =
-    r.ambient === 'focus' || r.ambient === 'development' || r.ambient === 'gallery' || r.ambient === 'preview'
+    r.ambient === 'focus' || r.ambient === 'development' || r.ambient === 'gallery' || r.ambient === 'preview' || r.ambient === 'vibe'
       ? r.ambient
       : (r.ambient === 'split' ? 'development' : undefined);
 
@@ -694,8 +694,9 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           }
         } else {
           if (generation !== restoreProjectStateGeneration) return;
-          // Fresh project — keep the workspace pristine. No auto-terminal,
-          // no editor. The user sees a clean blank canvas.
+          // Fresh project — auto-create a terminal shell so the user doesn't
+          // land on an empty "Open Shell" button.
+          createTerminalSession();
         }
       }
     }
@@ -1103,7 +1104,7 @@ export async function clearAllApplicationState() {
 
   if (typeof window !== 'undefined') {
     const keysToRemove = Object.keys(localStorage).filter(
-      (k) => k.startsWith('soryq_') || k.startsWith('forge_')
+      (k) => k.startsWith('spacron_') || k.startsWith('forge_')
     );
     keysToRemove.forEach((k) => localStorage.removeItem(k));
   }

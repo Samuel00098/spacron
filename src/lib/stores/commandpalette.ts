@@ -7,23 +7,23 @@ function withTransition(fn: () => void) {
   if (
     startViewTransition &&
     !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
-    !(window as any).__soryq_transitioning
+    !(window as any).__spacron_transitioning
   ) {
-    (window as any).__soryq_transitioning = true;
+    (window as any).__spacron_transitioning = true;
     try {
       const transition = startViewTransition.call(document, () => {
         flushSync(fn);
       });
       transition.finished?.finally(() => {
-        (window as any).__soryq_transitioning = false;
+        (window as any).__spacron_transitioning = false;
       }).catch(() => {
-        (window as any).__soryq_transitioning = false;
+        (window as any).__spacron_transitioning = false;
       });
       setTimeout(() => {
-        (window as any).__soryq_transitioning = false;
+        (window as any).__spacron_transitioning = false;
       }, 1000);
     } catch (e) {
-      (window as any).__soryq_transitioning = false;
+      (window as any).__spacron_transitioning = false;
       fn();
     }
   } else {

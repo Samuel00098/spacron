@@ -419,7 +419,7 @@ export default function FloatingPromptBar() {
       // Normalise to forward slashes so the path the agent CLI receives is clean
       // and unambiguous — mixed back/forward slashes can trip up TUI path parsing.
       const root = projectPath.replace(/\\/g, '/').replace(/\/+$/, '');
-      const savePath = `${root}/.soryq/attachments/${img.name}`;
+      const savePath = `${root}/.spacron/attachments/${img.name}`;
       const data = Array.from(dataUrlToBytes(img.dataUrl));
       await invoke('fs_write_binary', { path: savePath, data });
       return savePath;
@@ -462,12 +462,12 @@ export default function FloatingPromptBar() {
   // Write any attached/pasted images to disk and return their on-disk paths,
   // so both the agent-chat path and the terminal path can fold attachments into
   // the message text identically. `ok` is false only when saving was needed but
-  // no project is open to hold .soryq/attachments — the caller should abort then.
+  // no project is open to hold .spacron/attachments — the caller should abort then.
   const materializeAttachments = useCallback(async (): Promise<{ paths: string[]; ok: boolean }> => {
     if (pastedImages.length === 0) return { paths: [], ok: true };
     const toSave = [...pastedImages];
     // Only images without an on-disk path need to be written, which requires a
-    // project to hold the .soryq/attachments folder. Picked-from-disk images
+    // project to hold the .spacron/attachments folder. Picked-from-disk images
     // already have a path and can be sent even with no project open.
     const needsSave = toSave.some((img) => !img.diskPath);
     const projectPath = get(activeProject)?.root_path;
@@ -522,8 +522,8 @@ export default function FloatingPromptBar() {
         voiceModeActiveRef.current &&
         isAgentModeRef.current &&
         !voiceStoppingRef.current &&
-        !isTtsSpeakingRef.current &&
         !isListeningRef.current &&
+        !isTtsSpeakingRef.current &&
         !isRefiningRef.current &&
         !agentSendingRef.current
       ) {
@@ -648,6 +648,7 @@ export default function FloatingPromptBar() {
     lastSpokenMessageKeyRef.current = speechKey;
     setIsTtsSpeaking(true);
     void speakResponse(speechTextForAssistantMessage(lastMsg));
+    queueMicrotask(() => resumeVoiceLoopRef.current());
   }, [voiceModeActive, isAgentMode, isTtsSpeaking, projectChatMessages, speakResponse]);
 
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
@@ -788,6 +789,12 @@ export default function FloatingPromptBar() {
         voiceDraftBaseRef.current = inputValueRef.current;
         setVoiceDraftText('');
         showToast('Listening for terminal prompt...', 'info');
+      },
+      onSpeechStart: () => {
+        if (isTtsSpeakingRef.current) {
+          stopSpeaking();
+          setIsTtsSpeaking(false);
+        }
       },
       onResult: (transcript) => {
         setVoiceDraftText(transcript);
@@ -1023,7 +1030,7 @@ export default function FloatingPromptBar() {
   const handleInternalDrop = useCallback((event: React.DragEvent) => {
     const droppedPath =
       draggedExplorerPath ||
-      event.dataTransfer?.getData('application/x-soryq-path')?.trim() ||
+      event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
       event.dataTransfer?.getData('text/plain')?.trim() ||
       null;
 
@@ -1233,7 +1240,7 @@ export default function FloatingPromptBar() {
     }
     const droppedPath =
       draggedExplorerPath ||
-      event.dataTransfer?.getData('application/x-soryq-path')?.trim() ||
+      event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
       event.dataTransfer?.getData('text/plain')?.trim() ||
       null;
 
@@ -1259,9 +1266,9 @@ export default function FloatingPromptBar() {
     document.addEventListener('keydown', handleGlobalVoiceShortcut);
     document.addEventListener('dragover', handleDocumentDragOver);
     document.addEventListener('drop', handleDocumentDrop);
-    window.addEventListener('soryq-explorer-drag-start', dragStartHandler);
-    window.addEventListener('soryq-explorer-drag-move', dragMoveHandler);
-    window.addEventListener('soryq-explorer-drag-end', dragEndHandler);
+    window.addEventListener('spacron-explorer-drag-start', dragStartHandler);
+    window.addEventListener('spacron-explorer-drag-move', dragMoveHandler);
+    window.addEventListener('spacron-explorer-drag-end', dragEndHandler);
 
     // Tauri v2 intercepts OS file drops before HTML5 events reach the webview.
     // Use getCurrentWindow().onDragDropEvent() — the correct Tauri v2 API.
@@ -1320,9 +1327,9 @@ export default function FloatingPromptBar() {
       document.removeEventListener('keydown', handleGlobalVoiceShortcut);
       document.removeEventListener('dragover', handleDocumentDragOver);
       document.removeEventListener('drop', handleDocumentDrop);
-      window.removeEventListener('soryq-explorer-drag-start', dragStartHandler);
-      window.removeEventListener('soryq-explorer-drag-move', dragMoveHandler);
-      window.removeEventListener('soryq-explorer-drag-end', dragEndHandler);
+      window.removeEventListener('spacron-explorer-drag-start', dragStartHandler);
+      window.removeEventListener('spacron-explorer-drag-move', dragMoveHandler);
+      window.removeEventListener('spacron-explorer-drag-end', dragEndHandler);
       unlistenDragDrop?.();
     };
   }, [
@@ -1518,12 +1525,9 @@ export default function FloatingPromptBar() {
                             </p>
                           );
                         }
-                        // 2. Transition: user done, agent thinking — show nothing
-                        //    (the orb already conveys this state)
-                        if (isRefining || agentSending) {
-                          return null;
-                        }
-                        // 3. Latest assistant reply
+                        // 2. Transition: user done, agent thinking — show
+                        //    the last assistant message (matching what TTS may be
+                        //    speaking) so the bar never goes blank.
                         const lastMsg = projectChatMessages.at(-1);
                         if (lastMsg?.role === 'assistant') {
                           if (lastMsg.pending) {
@@ -1540,11 +1544,12 @@ export default function FloatingPromptBar() {
                               </p>
                             );
                           }
+                          const displayText = stripMarkdown(speechTextForAssistantMessage(lastMsg).split('\n\n🔍')[0]);
                           return (
-                            <p className="transcript-now assistant">{lastMsg.text}</p>
+                            <p className="transcript-now assistant">{displayText}</p>
                           );
                         }
-                        // 4. Voice mode on but no message yet
+                        // 3. Voice mode on but no message yet
                         return (
                           <span className="orc-typing"><span /><span /><span /></span>
                         );

@@ -2,13 +2,13 @@ import { writable } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import { loadBoolean } from '$lib/utils/storage';
 
-const FLOATING_NOTE_OPEN_KEY = 'soryq_floating_note_open';
+const FLOATING_NOTE_OPEN_KEY = 'spacron_floating_note_open';
 
 // In-memory cache — keeps NotesPanel and FloatingNotepad in sync
 export const notes = writable<Record<string, string>>({});
 
 export function getScratchPath(rootPath: string): string {
-  return `${rootPath}/.soryq/scratch.md`;
+  return `${rootPath}/.spacron/scratch.md`;
 }
 
 export async function loadScratchNote(project: { id: string; root_path: string }): Promise<string> {
@@ -27,7 +27,7 @@ export async function saveScratchNote(
   project: { id: string; root_path: string },
   content: string
 ): Promise<void> {
-  const dir = `${project.root_path}/.soryq`;
+  const dir = `${project.root_path}/.spacron`;
   const path = getScratchPath(project.root_path);
   try {
     try { await invoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Soryq — The Flow (Phase 1 concept mockup · clickable)</title>
+<title>Spacron — The Flow (Phase 1 concept mockup · clickable)</title>
 <style>
   /* ─────────────────────────────────────────────────────────────────────────
      SORYQ · THE FLOW — the core concept, made clickable (design-first).
@@ -177,7 +177,7 @@
 
     <div class="top">
       <div class="lights"><i></i><i></i><i></i></div>
-      <div class="brand"><span class="mark"></span> Soryq</div>
+      <div class="brand"><span class="mark"></span> Spacron</div>
       <div class="meta"><span>🔑 <b>your key</b></span><span>🎙 offline voice</span><span><b>own it once</b></span></div>
     </div>
 
@@ -244,9 +244,9 @@
             <div class="ch"><div class="who"><span class="av">A</span> Ada <span class="tag">· ran a command</span></div>
               <div class="st work"><span class="g">✻</span> live</div></div>
             <div class="cb"><div class="termmini">
-<span class="p">soryq</span> ❯ npm run dev<br>
+<span class="p">spacron</span> ❯ npm run dev<br>
 <span class="ok">✓</span> ready in 412ms — http://localhost:5173<br>
-<span class="p">soryq</span> ❯ <span style="opacity:.5">▋</span>
+<span class="p">spacron</span> ❯ <span style="opacity:.5">▋</span>
             </div></div>
             <div class="acts">
               <div class="act" data-expand="terminal">⤢ Open full terminal</div>
@@ -307,7 +307,7 @@
   const pinwrap=document.getElementById('pinwrap'), pinEmpty=document.getElementById('pinEmpty'),
         pinCount=document.getElementById('pinCount'); const pins={};
   const pinBodies={
-    term:'<div class="termmini" style="border-radius:0"><span class="p">soryq</span> ❯ dev<br><span class="ok">✓</span> :5173 live</div>',
+    term:'<div class="termmini" style="border-radius:0"><span class="p">spacron</span> ❯ dev<br><span class="ok">✓</span> :5173 live</div>',
     prev:'<div class="prevmini" style="height:84px;border-radius:0"><h3 class="serif" style="font-size:15px">Welcome back</h3></div>',
     diff:'<div class="diff" style="font-size:11px;padding:10px 12px"><span class="add">+ return {token, ok:true}</span></div>'
   };
@@ -338,16 +338,16 @@
 &nbsp;&nbsp;<span class="k">const</span> token = <span class="k">await</span> <span class="f">verify</span>(creds)<br>
 &nbsp;&nbsp;<span class="k">return</span> { token, ok: <span class="k">true</span> }<br>
 }</div></div>
-        <div class="edterm"><span class="p">soryq</span> ❯ npm test<br><span class="ok">✓</span> 12 passed</div>
+        <div class="edterm"><span class="p">spacron</span> ❯ npm test<br><span class="ok">✓</span> 12 passed</div>
       </div></div>`},
     terminal:{title:'⎚ Terminal — dev server',html:`<div class="bigterm">
-<span class="p">soryq</span> ❯ npm run dev<br><span class="ok">✓</span> ready in 412ms — http://localhost:5173<br>
-<span class="p">soryq</span> ❯ git status<br>On branch main — 3 files staged<br>
-<span class="p">soryq</span> ❯ <span style="opacity:.5">▋</span><br><br>
+<span class="p">spacron</span> ❯ npm run dev<br><span class="ok">✓</span> ready in 412ms — http://localhost:5173<br>
+<span class="p">spacron</span> ❯ git status<br>On branch main — 3 files staged<br>
+<span class="p">spacron</span> ❯ <span style="opacity:.5">▋</span><br><br>
 <span style="color:var(--faint)">// the full terminal, same as you'd expect — summoned from a card, not nailed to the bottom of the screen.</span>
 </div>`},
     preview:{title:'◳ Preview — /login',html:`<div class="bigprev"><div class="url"><span class="dot"></span> localhost:5173 / login &nbsp;·&nbsp; DOM inspector ready</div>
-      <div class="frame"><h2 class="serif">Welcome back</h2><p>Your app, proxied through Soryq. Click any element to inspect it and send it to the orchestrator.</p><div class="cta">Sign in</div></div></div>`}
+      <div class="frame"><h2 class="serif">Welcome back</h2><p>Your app, proxied through Spacron. Click any element to inspect it and send it to the orchestrator.</p><div class="cta">Sign in</div></div></div>`}
   };
   document.querySelectorAll('[data-expand]').forEach(b=>{
     b.addEventListener('click',()=>{const s=sheets[b.dataset.expand];if(!s)return;

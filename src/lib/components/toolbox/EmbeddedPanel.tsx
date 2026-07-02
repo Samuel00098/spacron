@@ -31,7 +31,7 @@ export default function EmbeddedPanel() {
 
   const [piUser, setPiUser] = useState('pi');
   const [piHost, setPiHost] = useState('raspberrypi.local');
-  const [piPath, setPiPath] = useState('~/soryq-project');
+  const [piPath, setPiPath] = useState('~/spacron-project');
 
   const modeTitle =
     mode === 'arduino' ? 'Arduino CLI' : mode === 'platformio' ? 'PlatformIO' : 'Raspberry Pi';
@@ -83,14 +83,14 @@ export default function EmbeddedPanel() {
   const piCommands = useMemo<CommandAction[]>(
     () => [
       { label: 'SSH', command: `ssh ${piTarget}`, tone: 'primary' },
-      { label: 'Copy project', command: `scp -r . ${piTarget}:${piPath.trim() || '~/soryq-project'}` },
+      { label: 'Copy project', command: `scp -r . ${piTarget}:${piPath.trim() || '~/spacron-project'}` },
       {
         label: 'Sync project',
-        command: `rsync -av --exclude node_modules --exclude .git ./ ${piTarget}:${piPath.trim() || '~/soryq-project'}/`,
+        command: `rsync -av --exclude node_modules --exclude .git ./ ${piTarget}:${piPath.trim() || '~/spacron-project'}/`,
       },
       {
         label: 'Run remote shell',
-        command: `ssh ${piTarget} "cd ${piPath.trim() || '~/soryq-project'} && bash"`,
+        command: `ssh ${piTarget} "cd ${piPath.trim() || '~/spacron-project'} && bash"`,
       },
     ],
     [piTarget, piPath],
@@ -201,7 +201,7 @@ export default function EmbeddedPanel() {
             </label>
             <label className="wide">
               <span>Remote path</span>
-              <input value={piPath} onChange={(e) => setPiPath(e.target.value)} placeholder="~/soryq-project" />
+              <input value={piPath} onChange={(e) => setPiPath(e.target.value)} placeholder="~/spacron-project" />
             </label>
           </div>
         )}

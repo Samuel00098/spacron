@@ -1,16 +1,14 @@
-/* Styles for ProjectSwitcher.tsx — extracted verbatim from the original
-   component's \3c style> block; class names unchanged. */
-
 .project-switcher {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0;
+  gap: 3px;
+  padding: 2px 6px;
   overflow-x: auto;
   scrollbar-width: none;
   flex-shrink: 0;
-  min-height: 26px;
-  height: 26px;
+  min-height: 30px;
+  background: var(--titlebar-bg, #121216);
+  border-bottom: 1px solid var(--titlebar-border, rgba(255, 255, 255, 0.04));
 }
 
 .project-switcher::-webkit-scrollbar { display: none; }
@@ -18,29 +16,40 @@
 .project-switcher .project-tab {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
-  border-radius: 5px;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 7px;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
-  max-width: 110px;
-  transition: background 0.15s, color 0.15s;
+  max-width: 130px;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
   flex-shrink: 0;
-  height: 20px;
+  height: 24px;
+  border: 1px solid transparent;
 }
 
-.project-switcher .project-tab:hover { color: var(--text-secondary); background: var(--bg-hover); }
-.project-switcher .project-tab.active { color: var(--text-primary); background: var(--bg-active); }
+.project-switcher .project-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.project-switcher .project-tab.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
 
 .project-switcher .project-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  opacity: 0.8;
+  opacity: 0.85;
+  box-shadow: 0 0 4px currentColor;
 }
 
 .project-switcher .project-tab-name {
@@ -48,36 +57,40 @@
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
+  font-weight: 520;
+  letter-spacing: 0.01em;
 }
 
 .project-switcher .project-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
   color: var(--text-muted);
   opacity: 0;
   flex-shrink: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
+
 .project-switcher .project-tab:hover .project-close,
-.project-switcher .project-tab.active .project-close { opacity: 1; }
-.project-switcher .project-close:hover { background: rgba(248,113,113,0.15); color: var(--error); }
+.project-switcher .project-tab.active .project-close { opacity: 0.7; }
+.project-switcher .project-close:hover { background: rgba(248,113,113,0.12); color: var(--error); opacity: 1 !important; }
 
 .project-switcher .project-add-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
   flex-shrink: 0;
   color: var(--text-muted);
-  transition: color 0.15s, background 0.15s;
+  border: 1px solid transparent;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.project-switcher .project-add-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.project-switcher .project-add-btn:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.06); }
 
 .project-switcher .project-switcher-empty { padding: 0; }
 
@@ -85,15 +98,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 6px;
-  border-radius: 5px;
+  padding: 3px 10px;
+  border-radius: 7px;
   font-size: 11px;
   color: var(--text-muted);
-  transition: color 0.15s, background 0.15s;
-  width: auto;
-  height: 20px;
+  border: 1px solid transparent;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  height: 26px;
 }
-.project-switcher .project-add-full:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.project-switcher .project-add-full:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.06); }
 
 /* ── Context menu ── */
 .project-switcher .ctx-menu {

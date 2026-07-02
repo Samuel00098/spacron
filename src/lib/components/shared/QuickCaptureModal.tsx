@@ -31,8 +31,8 @@ export default function QuickCaptureModal({ onclose }: { onclose: () => void }) 
       return;
     }
 
-    const dir = `${project.root_path}/.soryq`;
-    const inboxPath = `${project.root_path}/.soryq/inbox.md`;
+    const dir = `${project.root_path}/.spacron`;
+    const inboxPath = `${project.root_path}/.spacron/inbox.md`;
     const now = new Date().toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -108,7 +108,7 @@ export default function QuickCaptureModal({ onclose }: { onclose: () => void }) 
 
         <div className="qc-footer">
           <span className="qc-hint">Enter to save · Esc to dismiss</span>
-          <span className="qc-dest">.soryq/inbox.md</span>
+          <span className="qc-dest">.spacron/inbox.md</span>
         </div>
       </div>
     </div>

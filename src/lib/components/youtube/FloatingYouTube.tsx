@@ -26,7 +26,7 @@ type WindowState = {
  *  edges of the window the drag moves. */
 type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
-const STORAGE_KEY = 'soryq_youtube_window';
+const STORAGE_KEY = 'spacron_youtube_window';
 const MIN_W = 320;
 const MIN_H = 220;
 const MIN_OPACITY = 0.3;
@@ -128,8 +128,8 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
         return s;
       });
     };
-    window.addEventListener('soryq-youtube-restore', handleRestore);
-    return () => window.removeEventListener('soryq-youtube-restore', handleRestore);
+    window.addEventListener('spacron-youtube-restore', handleRestore);
+    return () => window.removeEventListener('spacron-youtube-restore', handleRestore);
   }, []);
 
   const startResize = useCallback(

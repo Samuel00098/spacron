@@ -8,6 +8,7 @@ export type AiProviderId =
   | 'openai'
   | 'google'
   | 'groq'
+  | 'xai'
   | 'ollama'
   | 'lmstudio';
 export type VoiceInputProviderId = 'webspeech' | 'google' | 'openrouter' | 'ollama' | 'lmstudio';
@@ -97,20 +98,9 @@ function migrateLegacySettings() {
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
 
-  if (persistentValue('voiceConversationAiProvider', '') === '') {
-    const legacyProvider = localStorage.getItem('forge_setting_aiProvider');
-    if (legacyProvider) {
-      try {
-        const p = JSON.parse(legacyProvider);
-        if (typeof p === 'string' && p) persistValue('voiceConversationAiProvider', p);
-      } catch {}
-    }
-  }
-
-  // Seed the standalone reply-TTS provider from the (now legacy) coupled voice
-  // provider so existing users keep the same spoken voice after the split.
+  // Seed the reply provider from the main AI provider if not yet set.
   if (persistentValue('voiceReplyProvider', '') === '') {
-    const existing = localStorage.getItem('forge_setting_voiceConversationAiProvider');
+    const existing = localStorage.getItem('forge_setting_aiProvider');
     if (existing) {
       try {
         const p = JSON.parse(existing);
@@ -186,7 +176,6 @@ function createSettingsState() {
     voiceInputModelByProvider: persistentValue<Record<string, string>>('voiceInputModelByProvider', {}),
     voiceAiProvider: persistentValue<AiProviderId>('voiceAiProvider', 'groq'),
     voiceAiModelByProvider: persistentValue<Record<string, string>>('voiceAiModelByProvider', {}),
-    voiceConversationAiProvider: persistentValue<AiProviderId>('voiceConversationAiProvider', 'openrouter'),
     voiceConversationAiModelByProvider: persistentValue<Record<string, string>>('voiceConversationAiModelByProvider', {}),
     voiceConversationTtsModelByProvider: persistentValue<Record<string, string>>('voiceConversationTtsModelByProvider', {}),
     voiceConversationTtsVoiceByProvider: persistentValue<Record<string, string>>('voiceConversationTtsVoiceByProvider', {}),
@@ -209,7 +198,6 @@ function createSettingsState() {
     terminalFontSize: persistentValue('terminalFontSize', 13),
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'webgl'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
-    voicePersonality: persistentValue('voicePersonality', 'helpful'),
   };
 }
 
@@ -249,11 +237,10 @@ const defaults: SettingsValues = {
   voiceInputModelByProvider: {},
   voiceAiProvider: 'groq',
   voiceAiModelByProvider: {},
-  voiceConversationAiProvider: 'openrouter',
   voiceConversationAiModelByProvider: {},
   voiceConversationTtsModelByProvider: {},
   voiceConversationTtsVoiceByProvider: {},
-  voiceReplyProvider: 'openrouter',
+  voiceReplyProvider: 'groq',
   ttsVoice: 'austin',
   announceAgentCompletions: true,
   uiZoom: 100,
@@ -307,7 +294,6 @@ const defaults: SettingsValues = {
   terminalFontSize: 13,
   terminalRenderer: 'webgl',
   showSnapshotsTab: false,
-  voicePersonality: 'helpful',
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({
@@ -344,7 +330,6 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       voiceInputModelByProvider: 'voiceInputModelByProvider',
       voiceAiProvider: 'voiceAiProvider',
       voiceAiModelByProvider: 'voiceAiModelByProvider',
-      voiceConversationAiProvider: 'voiceConversationAiProvider',
       voiceConversationAiModelByProvider: 'voiceConversationAiModelByProvider',
       voiceConversationTtsModelByProvider: 'voiceConversationTtsModelByProvider',
       voiceConversationTtsVoiceByProvider: 'voiceConversationTtsVoiceByProvider',
@@ -363,7 +348,6 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
       showSnapshotsTab: 'showSnapshotsTab',
-      voicePersonality: 'voicePersonality',
     };
     const stateKey = setters[key];
     if (stateKey) {

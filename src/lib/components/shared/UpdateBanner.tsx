@@ -33,7 +33,7 @@ export default function UpdateBanner() {
             <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
           </svg>
           <span className="update-msg">
-            Soryq <strong>{update.version}</strong> is available
+            Spacron <strong>{update.version}</strong> is available
           </span>
           <span className="update-trust">signed release</span>
           {update.body && (

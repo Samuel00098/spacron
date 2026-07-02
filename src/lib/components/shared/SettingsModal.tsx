@@ -17,6 +17,7 @@ import {
   closeBehavior,
   currentAiModel,
   currentVoiceAiModel,
+  currentVoiceConversationAiModel,
   currentVoiceConversationTtsModel,
   currentVoiceConversationTtsVoice,
   currentVoiceInputModel,
@@ -38,6 +39,7 @@ import {
   setAiModel,
   setProviderBaseUrl,
   setVoiceAiModel,
+  setVoiceConversationAiModel,
   setVoiceConversationTtsModel,
   setVoiceConversationTtsVoice,
   setVoiceInputModel,
@@ -56,9 +58,6 @@ import {
   voiceReplyProvider,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
-  voicePersonality,
-  voicePersonalities,
-  getVoicePersonalityDef,
   voiceRefinementEnabled,
   announceAgentCompletions,
   wordWrap,
@@ -67,6 +66,7 @@ import {
   type KeyboardShortcut,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
+import { clearAllApplicationState } from '$lib/stores/workspace';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
 import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { requestNotificationPermission, showToast } from '$lib/stores/notification';
@@ -591,6 +591,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [customCommand, setCustomCommand] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState(false);
+  const [groqKeyExists, setGroqKeyExists] = useState(false);
   const [providerLiveModels, setProviderLiveModels] = useState<Record<string, AiModelOption[]>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [localUrlInput, setLocalUrlInput] = useState('');
@@ -667,10 +668,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const voiceRefinement = useStore(voiceRefinementEnabled);
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
+  const voiceBrainModel = useStore(currentVoiceConversationAiModel);
   const replyProvider = useStore(voiceReplyProvider);
   const ttsModel = useStore(currentVoiceConversationTtsModel);
   const ttsVoice = useStore(currentVoiceConversationTtsVoice);
-  const currentPersonality = useStore(voicePersonality);
   const announceCompletions = useStore(announceAgentCompletions);
   const baseUrls = useStore(aiBaseUrlByProvider);
 
@@ -695,6 +696,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
     return merged;
   }, [voiceInput, providerSttModels]);
+
+  const voiceBrainModels = useMemo(() => {
+    return providerLiveModels[replyProvider] ?? getProviderDef(replyProvider).models;
+  }, [replyProvider, providerLiveModels]);
 
   const refinementModels = useMemo(() => {
     return providerLiveModels[refinementProvider] ?? getProviderDef(refinementProvider).models;
@@ -866,6 +871,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [completionProvider, loadCompletionLiveModels]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let active = true;
+    providerApiKeyExists('groq')
+      .then((exists) => { if (active) setGroqKeyExists(exists); })
+      .catch(() => { if (active) setGroqKeyExists(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (activeTab !== 'voice') return;
     const loadChatModels = async (prov: string) => {
       const pid = prov as AiProviderId;
@@ -911,6 +925,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     };
     if (refinementProvider) void loadChatModels(refinementProvider);
     if (replyProvider) {
+      void loadChatModels(replyProvider);
       void loadTtsModels(replyProvider);
     }
     if (voiceInput && voiceInput !== 'webspeech') {
@@ -1002,7 +1017,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
     setPreviewingVoiceId(voiceId);
     try {
-      await speak('Hello, this is a quick preview of my voice in Soryq.', {
+      await speak('Hello, this is a quick preview of my voice in Spacron.', {
         provider: replyProvider,
         model: ttsModel,
         voice: voiceId,
@@ -1023,7 +1038,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     try {
       await checkForUpdate();
       const latest = get(pendingUpdate);
-      setUpdateMessage(latest ? `Update available: v${latest.version}` : 'Soryq is up to date.');
+      setUpdateMessage(latest ? `Update available: v${latest.version}` : 'Spacron is up to date.');
     } catch {
       setUpdateMessage('Could not check for updates.');
     }
@@ -1186,24 +1201,28 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   async function resetAllSettings() {
     let confirmed = false;
+    const message =
+      'This will erase all workspaces, projects, settings, AI keys, and preferences and restart the onboarding. This cannot be undone.';
     if (isTauriRuntime()) {
       try {
         const { ask } = await import('@tauri-apps/plugin-dialog');
-        confirmed = await ask('Reset all settings to defaults?', {
-          title: 'Reset Settings',
+        confirmed = await ask(message, {
+          title: 'Factory Reset',
           kind: 'warning',
         });
       } catch (err) {
         console.error('Failed to show Tauri ask dialog:', err);
-        confirmed = window.confirm('Reset all settings to defaults?');
+        confirmed = window.confirm(message);
       }
     } else {
-      confirmed = window.confirm('Reset all settings to defaults?');
+      confirmed = window.confirm(message);
     }
 
     if (!confirmed) return;
 
-    resetSettingsToDefault();
+    // Clear everything: workspaces, localStorage keys, settings, and the
+    // durable onboarding flag so the tour restarts on next load.
+    await clearAllApplicationState();
     removedPresetAgents.set([]);
 
     if (typeof localStorage !== 'undefined') {
@@ -1216,7 +1235,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       console.error('Failed to reload themes after reset:', e);
     }
 
-    showToast('Settings reset to defaults', 'success');
+    onclose();
+    showToast('Application reset to factory defaults', 'success');
   }
 
   return (
@@ -1304,7 +1324,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Window">
                   <div className="option-cards" style={{ padding: '14px', gap: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
                     {([
-                      { id: 'quit' as const,     label: 'Quit Soryq',    desc: 'Close the app and stop live terminals.' },
+                      { id: 'quit' as const,     label: 'Quit Spacron',    desc: 'Close the app and stop live terminals.' },
                       { id: 'minimize' as const, label: 'Keep running',  desc: 'Minimize and keep terminals and agents alive.' },
                     ]).map((opt) => (
                       <button
@@ -1540,7 +1560,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Local Speech-to-Text (STT)">
                   <div className="local-models-info">
-                    Download Speech-to-Text models to enable 100% private, offline voice typing in Soryq.
+                    Download Speech-to-Text models to enable 100% private, offline voice typing in Spacron.
                   </div>
                   <div className="local-models-list">
                     {localModelsLoading && localModels.length === 0 ? (
@@ -1691,16 +1711,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Voice replies">
                   <SettingRow
-                    title="Brain"
-                    detail="Voice conversations are powered by your main AI model (set under AI / Models) — the same engine as typed chat."
+                    title="Provider"
+                    detail="One provider for both the brain (generating reply content) and speech synthesis (TTS). Keeps it simple."
                   >
-                    <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Main AI model</span>
+                    <SelectField value={replyProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceReplyProvider.set} ariaLabel="Voice replies provider" />
                   </SettingRow>
-                  <SettingRow
-                    title="Speech provider"
-                    detail="Who synthesizes the spoken reply. Independent of the brain — choose Local for offline (Kokoro) speech."
-                  >
-                    <SelectField value={replyProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceReplyProvider.set} ariaLabel="Speech provider" />
+                  <SettingRow title="Brain model">
+                    <ModelSelect value={voiceBrainModel} models={voiceBrainModels} onChange={(value) => setVoiceConversationAiModel(replyProvider, value)} label="Voice brain model" />
                   </SettingRow>
                   {ttsModels.length > 0 && (
                     <SettingRow title="Speech model">
@@ -1737,19 +1754,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </div>
                     </SettingRow>
                   )}
-                  <SettingRow title="Personality">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', alignItems: 'stretch' }}>
-                      <SelectField
-                        value={currentPersonality}
-                        options={voicePersonalities.map((p) => ({ id: p.id, label: p.label }))}
-                        onChange={voicePersonality.set}
-                        ariaLabel="Voice personality"
-                      />
-                      <p style={{ margin: 0, fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-                        {getVoicePersonalityDef(currentPersonality).description}
-                      </p>
-                    </div>
-                  </SettingRow>
+                  {replyProvider === 'groq' && !groqKeyExists && (
+                    <SettingRow title="Groq API key" detail="Groq requires an API key for speech synthesis.">
+                      <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
+                        <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No Groq API key configured</span>
+                        <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
+                          Add API key
+                        </button>
+                      </div>
+                    </SettingRow>
+                  )}
                   <SettingRow
                     title="Announce agent results"
                     detail="Speak a status line aloud when an agent finishes, blocks, or fails — even when voice mode is closed."
@@ -2072,7 +2086,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'about' && (
               <>
-                <Section title="Soryq">
+                <Section title="Spacron">
                   <div className="settings-about-grid">
                     <span>Version</span>
                     <strong>{packageJson.version}</strong>
@@ -2097,10 +2111,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Maintenance">
                   <div className="settings-danger-row">
                     <div>
-                      <span>Reset preferences</span>
-                      <small>Restore defaults for editor, models, voice, terminal, shortcuts, and appearance.</small>
+                      <span>Factory reset</span>
+                      <small>Erase all workspaces, settings, and AI keys and restart the onboarding from scratch.</small>
                     </div>
-                    <button className="settings-danger" onClick={resetAllSettings}>Reset</button>
+                    <button className="settings-danger" onClick={resetAllSettings}>Factory Reset</button>
                   </div>
                 </Section>
               </>

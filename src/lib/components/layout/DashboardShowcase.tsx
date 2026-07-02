@@ -128,7 +128,7 @@ export default function DashboardShowcase() {
       case 'theme':
         return 'Themes loaded: "Zinc Dark" (Default), "Solid Dark", "Amber Light". Primary colors mapped to CSS variables.';
       case 'db':
-        return 'SQLite local state active. Sync paths: C:/Users/samue/OneDrive/Documents/Projects/Real Projects/soryq/.soryq/state.db';
+        return 'SQLite local state active. Sync paths: C:/Users/samue/OneDrive/Documents/Projects/Real Projects/spacron/.spacron/state.db';
       default:
         return '';
     }
@@ -139,7 +139,7 @@ export default function DashboardShowcase() {
       {/* TitleBar header */}
       <header className="showcase-header">
         <div className="header-left">
-          <span className="brand-badge">Soryq</span>
+          <span className="brand-badge">Spacron</span>
           <span className="header-title">Developer Workspace Demo</span>
         </div>
 

@@ -14,7 +14,7 @@ export interface QuickRun {
   isAgent?: boolean;
 }
 
-const STORAGE_KEY = 'soryq_runs';
+const STORAGE_KEY = 'spacron_runs';
 
 function load(): QuickRun[] {
   return loadJson(STORAGE_KEY, [] as QuickRun[]);
