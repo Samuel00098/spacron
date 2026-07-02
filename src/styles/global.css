@@ -354,12 +354,13 @@ body::after {
 
 #app {
   /* Global UI scaling (see src/lib/utils/uiScale.ts). `--ui-scale` grows/shrinks
-     the whole interface with the window. We inverse-size to `100% / scale` and
-     then `zoom` back up by `scale`, so the app always fills the window exactly
-     regardless of scale (no overflow), while `zoom` re-rasterizes for crisp text
-     and reflows layout. `zoom` is a Chromium/WebView2 property. */
-  height: calc(100% / var(--ui-scale, 1));
-  width: calc(100% / var(--ui-scale, 1));
+     the whole interface with the window. Under standardized CSS zoom (Chromium
+     128+/current WebView2) percentage sizes on a zoomed element resolve in its
+     zoomed coordinate space, so plain 100% + zoom fills the window exactly at
+     any scale — do NOT inverse-divide by the scale here (that double-compensates
+     and leaves the app at 1/scale of the window). */
+  height: 100%;
+  width: 100%;
   zoom: var(--ui-scale, 1);
   /* Zoom-corrected viewport units. Raw vw/vh are NOT compensated by an
      ancestor's `zoom`, so inside #app they render `--ui-scale`× too big and
