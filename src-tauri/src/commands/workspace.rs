@@ -105,7 +105,9 @@ pub(crate) fn check_git_available() -> Result<String, String> {
         }
         Ok(_) => Err("git --version exited with non-zero status".to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err("Git is not installed or not on the system PATH. Install Git for Windows (https://git-scm.com) and ensure it's in your PATH.".to_string())
+            // Give the user install guidance for whichever OS they're on, not a
+            // Windows-only hint. See commands::deps for the source of truth.
+            Err(super::deps::GIT.missing_message())
         }
         Err(e) => Err(format!("Failed to run git --version: {e}")),
     }
@@ -185,6 +187,10 @@ pub fn workspace_git_commit(
     if !root_path.join(".git").exists() {
         return Err("This project is not a Git repository.".to_string());
     }
+
+    // Surface a clear, cross-platform "install Git" message instead of a cryptic
+    // "program not found" if the git binary is missing on this machine.
+    check_git_available()?;
 
     if message.trim().is_empty() {
         return Err("Commit message cannot be empty.".to_string());
@@ -285,6 +291,10 @@ pub fn workspace_git_push(project_id: String, state: State<AppState>) -> Result<
         return Err("This project is not a Git repository.".to_string());
     }
 
+    // Surface a clear, cross-platform "install Git" message instead of a cryptic
+    // "program not found" if the git binary is missing on this machine.
+    check_git_available()?;
+
     // 1. Determine current branch
     let branch = git_base()
         .args(["branch", "--show-current"])
@@ -344,6 +354,10 @@ pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result
     if !root_path.join(".git").exists() {
         return Err("This project is not a Git repository.".to_string());
     }
+
+    // Surface a clear, cross-platform "install Git" message instead of a cryptic
+    // "program not found" if the git binary is missing on this machine.
+    check_git_available()?;
 
     let output = git_base()
         .args(["fetch", "origin"])

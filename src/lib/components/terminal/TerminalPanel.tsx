@@ -694,6 +694,26 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
     });
   }, [allSessions, shellSessions]);
 
+  // Auto-open a shell so the terminal room lands on a live terminal instead of the
+  // empty "Open Shell" placeholder. Only fires when pane 0 has nothing to show and
+  // there's no existing shell session to attach — persisted sessions mean a remount
+  // (e.g. switching ambient layouts) never spawns duplicates. Runs once per mount;
+  // the short delay lets the auto-attach effect above claim pane 0 from an existing
+  // session first.
+  const autoOpenedShellRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedShellRef.current) return;
+    const id = window.setTimeout(() => {
+      if (autoOpenedShellRef.current) return;
+      if (assignmentsRef.current[0] != null) { autoOpenedShellRef.current = true; return; }
+      const hasUnassignedShell = shellSessions.some((s) => !assignmentsRef.current.includes(s.id));
+      if (hasUnassignedShell) return; // the attach effect will fill pane 0
+      autoOpenedShellRef.current = true;
+      void createTerminalSession(getStartingCwd(), 0);
+    }, 80);
+    return () => window.clearTimeout(id);
+  }, [shellSessions]);
+
   useEffect(() => {
     registerMosaicGrow(addTiledPane);
     registerMosaicClose((paneIndex) => {

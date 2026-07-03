@@ -198,6 +198,10 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
       style={{
         width: minimized ? `${MIN_W}px` : `${state.width}px`,
         height: minimized ? '38px' : `${state.height}px`,
+        // Fade the whole panel — header included — so the slider makes the
+        // entire player see-through to the app behind it, not just the video.
+        // Kept solid while minimized so the collapsed bar stays easy to find.
+        opacity: minimized ? 1 : state.opacity,
       }}
       role="dialog"
       aria-label="YouTube pop-up player"
@@ -262,11 +266,10 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
         </div>
       </header>
 
-      {/* Opacity is applied to the body only — so the slider visibly fades the
-          video player itself (revealing the app behind it) while the title bar
-          and its controls stay fully opaque and usable. The body stays mounted
+      {/* The transparency fade lives on the whole panel (see the section style
+          above) so the header fades along with the video. The body stays mounted
           even when minimized (just collapsed via CSS) so audio keeps playing. */}
-      <div className="fy-body" style={{ opacity: state.opacity }}>
+      <div className="fy-body">
         <YouTubePanel />
         {/* While dragging/resizing, this transparent shield sits over the iframe
             so the gesture's pointermove events aren't captured by the embedded

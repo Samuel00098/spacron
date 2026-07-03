@@ -43,11 +43,18 @@ import { openSettings } from '$lib/stores/layout';
 import { requestRoomControl } from '$lib/stores/layoutControl';
 import { addRunEntry } from '$lib/stores/runHistory';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
+import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
 import { useStore } from '$lib/react/useStore';
 import '$lib/components/orchestrator/VoiceConversationOverlay.css';
 import './FloatingPromptBar.css';
 
 const NUM_BARS = 22;
+
+// WebKitGTK (Linux) gives our textarea no usable native right-click menu and
+// blocks clipboard writes, so the prompt box needs its own copy/paste there.
+// Windows/macOS keep their native menu untouched.
+const isLinuxHost = typeof navigator !== 'undefined' &&
+  navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
 
 const STATUS: Record<string, string> = {
   idle: 'Ready',
@@ -113,6 +120,22 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
+}
+
+// Encode raw clipboard RGBA into a PNG data URL via a canvas. Used for the Linux
+// clipboard-image paste path, where the native plugin hands us raw pixels rather
+// than an encoded image.
+function rgbaToPngDataUrl(bytes: Uint8Array, width: number, height: number): string | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const imageData = ctx.createImageData(width, height);
+  imageData.data.set(bytes.subarray(0, imageData.data.length));
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
 }
 
 function stripMarkdown(text: string): string {
@@ -437,10 +460,33 @@ export default function FloatingPromptBar() {
     });
   }, []);
 
+  // Pull an image off the native clipboard (Linux/WebKitGTK fallback) and add it
+  // as a preview chip. Returns true when an image was found and attached.
+  const addNativeClipboardImage = useCallback(async (): Promise<boolean> => {
+    const img = await readImageFromClipboard();
+    if (!img) return false;
+    const dataUrl = rgbaToPngDataUrl(img.bytes, img.width, img.height);
+    if (!dataUrl) return false;
+    const blob = new Blob([dataUrlToBytes(dataUrl)], { type: 'image/png' });
+    const objectUrl = URL.createObjectURL(blob);
+    const name = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+    setPastedImages((prev) => [...prev, { objectUrl, dataUrl, name }]);
+    return true;
+  }, []);
+
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageItems = items.filter((item) => item.type.startsWith('image/'));
-    if (!imageItems.length) return;
+    if (!imageItems.length) {
+      // WebKitGTK never exposes clipboard images through the paste event, so fall
+      // back to reading them natively. Only do this when the clipboard carried no
+      // text/files to paste — otherwise let the default text paste run untouched.
+      const hasOther = items.some((item) => item.kind !== 'image');
+      if (!hasOther && isTauriRuntime()) {
+        void addNativeClipboardImage();
+      }
+      return;
+    }
     e.preventDefault();
     for (const item of imageItems) {
       const blob = item.getAsFile();
@@ -457,7 +503,7 @@ export default function FloatingPromptBar() {
       });
       setPastedImages((prev) => [...prev, { objectUrl, dataUrl, name }]);
     }
-  }, []);
+  }, [addNativeClipboardImage]);
 
   // Write any attached/pasted images to disk and return their on-disk paths,
   // so both the agent-chat path and the terminal path can fold attachments into
@@ -740,6 +786,35 @@ export default function FloatingPromptBar() {
   }, [inputValue]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Copy / cut for the prompt box. navigator.clipboard writes are permission-
+    // blocked on WebKitGTK (Linux), so a plain Ctrl+C in this textarea never
+    // reached the system clipboard there — route the selection through the native
+    // clipboard plugin instead. Only intercept when text is actually selected, so
+    // Ctrl+C with no selection keeps its default behaviour. (Paste keeps working
+    // through the onPaste handler / native paste, which WebKitGTK does allow.)
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && isTauriRuntime()) {
+      const key = event.key.toLowerCase();
+      const el = inputElRef.current;
+      if ((key === 'c' || key === 'x') && el) {
+        const start = el.selectionStart ?? 0;
+        const end = el.selectionEnd ?? 0;
+        if (start !== end) {
+          event.preventDefault();
+          void copyTextToClipboard(el.value.slice(start, end));
+          if (key === 'x') {
+            const next = el.value.slice(0, start) + el.value.slice(end);
+            setInputValue(next);
+            requestAnimationFrame(() => {
+              adjustInputHeight();
+              el.focus();
+              el.setSelectionRange(start, start);
+            });
+          }
+          return;
+        }
+      }
+    }
+
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void submitPrompt();
@@ -770,7 +845,35 @@ export default function FloatingPromptBar() {
       setHistoryOpen(false);
       resetHistoryCursor();
     }
-  }, [submitPrompt, inputValue, stepHistory, resetHistoryCursor]);
+  }, [submitPrompt, inputValue, stepHistory, resetHistoryCursor, adjustInputHeight]);
+
+  // Right-click copy/paste for the prompt box on Linux (touchpad-friendly, and the
+  // only reliable copy path there). Selection → copy; no selection → paste at the
+  // cursor. Mirrors the terminal's context-menu behaviour. Left untouched on
+  // Windows/macOS so their native menu keeps working.
+  const handleInputContextMenu = useCallback(async (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (!isLinuxHost || !isTauriRuntime()) return;
+    event.preventDefault();
+    const el = inputElRef.current;
+    if (!el) return;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (start !== end) {
+      await copyTextToClipboard(el.value.slice(start, end));
+      showToast('Copied to clipboard', 'info', undefined, true);
+      return;
+    }
+    const text = await readTextFromClipboard();
+    if (!text) return;
+    const next = el.value.slice(0, start) + text + el.value.slice(end);
+    setInputValue(next);
+    requestAnimationFrame(() => {
+      adjustInputHeight();
+      el.focus();
+      const pos = start + text.length;
+      el.setSelectionRange(pos, pos);
+    });
+  }, [adjustInputHeight]);
 
   const handleInput = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
@@ -1270,58 +1373,6 @@ export default function FloatingPromptBar() {
     window.addEventListener('spacron-explorer-drag-move', dragMoveHandler);
     window.addEventListener('spacron-explorer-drag-end', dragEndHandler);
 
-    // Tauri v2 intercepts OS file drops before HTML5 events reach the webview.
-    // Use getCurrentWindow().onDragDropEvent() — the correct Tauri v2 API.
-    let unlistenDragDrop: (() => void) | undefined;
-
-    if (isTauriRuntime()) {
-      getCurrentWindow().onDragDropEvent((event) => {
-        if (draggedExplorerPath) {
-          return;
-        }
-
-        const type = event.payload.type;
-
-        if (type === 'enter') {
-          setIsGlobalFileDrag(true);
-          return;
-        }
-
-        if (type === 'leave') {
-          setIsGlobalFileDrag(false);
-          setIsDragOver(false);
-          return;
-        }
-
-        if (type === 'over') {
-          const barEl = barElRef.current;
-          if (!barEl) return;
-          const pos = (event.payload as any).position as { x: number; y: number };
-          const rect = barEl.getBoundingClientRect();
-          setIsDragOver(pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom);
-          return;
-        }
-
-        if (type === 'drop') {
-          setIsGlobalFileDrag(false);
-          const payload = event.payload as any;
-          const paths: string[] = payload.paths ?? [];
-
-          const barEl = barElRef.current;
-          if (!barEl || !paths.length) { setIsDragOver(false); return; }
-
-          const pos = payload.position as { x: number; y: number };
-          const rect = barEl.getBoundingClientRect();
-          const isOverBar = pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom;
-
-          setIsDragOver(false);
-          if (!isOverBar) return;
-
-          attachPathsToInput(paths);
-        }
-      }).then((u) => { unlistenDragDrop = u; });
-    }
-
     return () => {
       document.removeEventListener('mousedown', handleDocumentPointerDown);
       document.removeEventListener('keydown', handleGlobalVoiceShortcut);
@@ -1330,7 +1381,6 @@ export default function FloatingPromptBar() {
       window.removeEventListener('spacron-explorer-drag-start', dragStartHandler);
       window.removeEventListener('spacron-explorer-drag-move', dragMoveHandler);
       window.removeEventListener('spacron-explorer-drag-end', dragEndHandler);
-      unlistenDragDrop?.();
     };
   }, [
     handleDocumentPointerDown,
@@ -1341,6 +1391,77 @@ export default function FloatingPromptBar() {
     draggedExplorerPath,
     attachPathsToInput,
   ]);
+
+  // OS file drops (Tauri v2 intercepts them before HTML5 events reach the webview).
+  // Registered exactly ONCE for the component's lifetime — the previous version
+  // lived in the effect above, which re-runs whenever voice/hover/drag state
+  // changes its callback identities. Because Tauri's unlisten resolves
+  // asynchronously (`.then`), a re-run frequently registered a fresh listener
+  // before the prior one's unlisten was ready, so listeners piled up and a single
+  // OS drop fired all of them — the "file path shows four times" bug. Mutable
+  // state is read through refs so this listener never needs to re-subscribe.
+  const draggedExplorerPathRef = useRef(draggedExplorerPath);
+  useEffect(() => { draggedExplorerPathRef.current = draggedExplorerPath; }, [draggedExplorerPath]);
+  const attachPathsToInputRef = useRef(attachPathsToInput);
+  useEffect(() => { attachPathsToInputRef.current = attachPathsToInput; }, [attachPathsToInput]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    getCurrentWindow().onDragDropEvent((event) => {
+      // Internal explorer drags are handled by their own pointer-based path.
+      if (draggedExplorerPathRef.current) return;
+
+      const type = event.payload.type;
+
+      if (type === 'enter') {
+        setIsGlobalFileDrag(true);
+        return;
+      }
+      if (type === 'leave') {
+        setIsGlobalFileDrag(false);
+        setIsDragOver(false);
+        return;
+      }
+      if (type === 'over') {
+        const barEl = barElRef.current;
+        if (!barEl) return;
+        const pos = (event.payload as any).position as { x: number; y: number };
+        const rect = barEl.getBoundingClientRect();
+        setIsDragOver(pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom);
+        return;
+      }
+      if (type === 'drop') {
+        setIsGlobalFileDrag(false);
+        const payload = event.payload as any;
+        const paths: string[] = payload.paths ?? [];
+
+        const barEl = barElRef.current;
+        if (!barEl || !paths.length) { setIsDragOver(false); return; }
+
+        const pos = payload.position as { x: number; y: number };
+        const rect = barEl.getBoundingClientRect();
+        const isOverBar = pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom;
+
+        setIsDragOver(false);
+        if (!isOverBar) return;
+
+        attachPathsToInputRef.current(paths);
+      }
+    }).then((u) => {
+      // If the component unmounted before this resolved, unlisten immediately so
+      // the listener never leaks past the component's life.
+      if (cancelled) u();
+      else unlisten = u;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const showDropOverlay = draggedExplorerPath ? isDragOver : (isGlobalFileDrag || isDragOver);
 
@@ -1634,6 +1755,7 @@ export default function FloatingPromptBar() {
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
+                onContextMenu={handleInputContextMenu}
                 onMouseDown={() => { setTargetPickerOpen(false); setHistoryOpen(false); }}
               />
             </div>

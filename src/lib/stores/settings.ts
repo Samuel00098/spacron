@@ -834,19 +834,13 @@ if (typeof localStorage !== 'undefined') {
     }
   }
 
-  // Seed voice reply provider from the legacy brain provider if not yet set.
-  if (!localStorage.getItem('forge_setting_voiceReplyProvider')) {
-    const existing = localStorage.getItem('forge_setting_aiProvider');
-    if (existing) {
-      try {
-        const provider = JSON.parse(existing);
-        if (typeof provider === 'string' && provider) {
-          voiceReplyProvider.set(provider as AiProviderId);
-        }
-      } catch {
-        // Ignore malformed legacy value.
-      }
-    }
+  // Voice replies are synthesized with Groq's Orpheus TTS by default. Older builds
+  // seeded this from the general "brain" provider, which could silently point voice
+  // replies at a provider that can't speak at all. Force the Groq default once (a
+  // guard flag means a later manual change in Settings still sticks).
+  if (!localStorage.getItem('forge_migration_voiceReplyGroqDefault_v1')) {
+    voiceReplyProvider.set('groq');
+    localStorage.setItem('forge_migration_voiceReplyGroqDefault_v1', '1');
   }
 
   const legacyTtsVoice = localStorage.getItem('forge_setting_ttsVoice');

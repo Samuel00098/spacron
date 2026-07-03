@@ -194,8 +194,6 @@ export default function TerminalPane({
   const lastAgentAttentionAtRef = useRef(0);
 
   const [currentShellCwd, setCurrentShellCwd] = useState<string | null>(null);
-  const [rolePickerOpen, setRolePickerOpen] = useState(false);
-  const [customRoleInput, setCustomRoleInput] = useState('');
 
   const [windowsBuild, setWindowsBuild] = useState<number | null>(cachedWindowsBuild);
 
@@ -245,36 +243,6 @@ export default function TerminalPane({
     // Let the close / maximize buttons handle their own clicks.
     if ((e.target as HTMLElement).closest('button')) return;
     onPaneDragStart(paneIndex, e);
-  }
-
-  function openRolePicker(e: React.MouseEvent) {
-    e.stopPropagation();
-    setCustomRoleInput(
-      sessionInfo?.role && !ROLE_PRESETS.some((r) => r.label === sessionInfo.role) ? sessionInfo.role : '',
-    );
-    setRolePickerOpen((open) => !open);
-  }
-
-  function selectRole(role: string | null) {
-    setSessionRole(sessionId, role);
-    setRolePickerOpen(false);
-  }
-
-  function applyCustomRole() {
-    const trimmed = customRoleInput.trim();
-    setSessionRole(sessionId, trimmed || null);
-    setRolePickerOpen(false);
-  }
-
-  function handleRolePickerKey(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') {
-      setRolePickerOpen(false);
-      e.stopPropagation();
-    }
-    if (e.key === 'Enter') {
-      applyCustomRole();
-      e.stopPropagation();
-    }
   }
 
   function detectBuildProcess(text: string) {
@@ -551,6 +519,32 @@ export default function TerminalPane({
     openUrlInPreview(uri).catch(console.error);
   }
 
+  // Touchpad-friendly copy/paste (Linux especially, where keyboard shortcuts and
+  // corner right-clicks are awkward on a trackpad):
+  //   • Copy-on-select — releasing a left-drag selection copies it to the clipboard,
+  //     the way native Linux terminals behave. No selection (a plain click) is a
+  //     no-op, so it never clobbers the clipboard on stray clicks.
+  //   • Middle-click paste — the standard Linux paste gesture (three-finger tap).
+  // Right-click still opens the copy/paste context menu.
+  function handleTerminalCopyOnSelect(event: MouseEvent) {
+    if (event.button !== 0) return;
+    if (hoveredTerminalLinkRef.current) return; // a link click, not a selection
+    const term = termRef.current;
+    if (!term || !term.hasSelection()) return;
+    const selection = term.getSelection();
+    if (selection) void copyTextToClipboard(selection);
+  }
+
+  function handleTerminalMiddleClickPaste(event: MouseEvent) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    const term = termRef.current;
+    if (!term) return;
+    void readTextFromClipboard().then((text) => {
+      if (text) term.paste(text);
+    });
+  }
+
   function parseOsc7Path(value: string) {
     const rawValue = value.trim();
     if (!rawValue.startsWith('file://')) return;
@@ -747,6 +741,63 @@ export default function TerminalPane({
     });
     termRef.current = term;
 
+    // Keyboard copy/paste. On WebKitGTK (Linux) xterm's rows never fall through to
+    // the browser's native clipboard shortcuts, so it has to be wired explicitly
+    // and routed through the native clipboard plugin (navigator.clipboard is
+    // permission-blocked on WebKitGTK).
+    //
+    // Deliberately NOT Ctrl+Shift+C / Ctrl+Shift+V: those are already global app
+    // shortcuts (Go to Containers / Go to Preview), so the terminal would fire them
+    // too. Instead use bindings that collide with nothing on any platform:
+    //   • Copy  — Ctrl/Cmd+C, but ONLY when text is selected (a bare Ctrl+C with no
+    //             selection still sends SIGINT); also Ctrl+Insert.
+    //   • Paste — Ctrl/Cmd+V; also Shift+Insert.
+    // Handled keys call preventDefault + stopPropagation so they can never reach the
+    // app-level shortcut handler. Returning false stops xterm from processing them.
+    const copySelection = () => {
+      const selection = term.getSelection();
+      if (!selection) return false;
+      void copyTextToClipboard(selection);
+      return true;
+    };
+    const pasteClipboard = () => {
+      void readTextFromClipboard().then((text) => {
+        if (text) term.paste(text);
+      });
+    };
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+
+      // Classic terminal copy/paste (Ctrl+Insert / Shift+Insert) — no modifier
+      // clash with the app's Ctrl+Shift+* navigation shortcuts.
+      if (event.key === 'Insert' && event.ctrlKey && !event.shiftKey && !event.altKey) {
+        if (copySelection()) { event.preventDefault(); event.stopPropagation(); return false; }
+        return true;
+      }
+      if (event.key === 'Insert' && event.shiftKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        pasteClipboard();
+        return false;
+      }
+
+      const primary = event.ctrlKey || event.metaKey;
+      if (!primary || event.shiftKey || event.altKey) return true;
+      const key = event.key.toLowerCase();
+      if (key === 'c') {
+        // Only intercept when there's a selection; otherwise let Ctrl+C be SIGINT.
+        if (copySelection()) { event.preventDefault(); event.stopPropagation(); return false; }
+        return true;
+      }
+      if (key === 'v') {
+        event.preventDefault();
+        event.stopPropagation();
+        pasteClipboard();
+        return false;
+      }
+      return true;
+    });
+
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
@@ -787,6 +838,8 @@ export default function TerminalPane({
       applyTerminalRenderer();
       container.addEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.addEventListener('mouseup', handleTerminalLinkMouseUp, true);
+      container.addEventListener('mouseup', handleTerminalCopyOnSelect);
+      container.addEventListener('mousedown', handleTerminalMiddleClickPaste);
 
       const existingBuffer = getSessionOutputBuffer(sessionId);
       // A non-empty buffer means this pane is reattaching to a session that was
@@ -927,6 +980,8 @@ export default function TerminalPane({
       resizeObserver?.disconnect();
       container.removeEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.removeEventListener('mouseup', handleTerminalLinkMouseUp, true);
+      container.removeEventListener('mouseup', handleTerminalCopyOnSelect);
+      container.removeEventListener('mousedown', handleTerminalMiddleClickPaste);
       unregisterDataCallback(sessionId);
       unregisterExitCallback(sessionId);
       // Dispose the WebGL addon before the terminal so its GPU context is
@@ -1092,9 +1147,6 @@ export default function TerminalPane({
       <div
         className={`pane-titlebar${onPaneDragStart ? ' draggable' : ''}`}
         onMouseDown={handleTitlebarMouseDown}
-        onClick={() => {
-          if (rolePickerOpen) setRolePickerOpen(false);
-        }}
       >
         {/* Close button on the left */}
         <button
@@ -1110,7 +1162,7 @@ export default function TerminalPane({
           </svg>
         </button>
 
-        <span className="pane-title" onClick={openRolePicker} title={paneTitleText || 'Click to set role'}>
+        <span className="pane-title" title={paneTitleText}>
           {agentName && <span className="pane-agent-badge">{agentName}</span>}
           <span className="pane-title-copy">
             <span className="pane-title-main">
@@ -1123,73 +1175,7 @@ export default function TerminalPane({
           </span>
         </span>
 
-        {/* Running indicator dot */}
-        <span className={`pane-status-dot${!isDead ? ' running' : ''}`}></span>
-
-        {/* Maximize / Restore button */}
-        {onMaximize && (
-          <button
-            className="pane-maximize-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMaximize();
-            }}
-            title={isMaximized ? 'Restore pane' : 'Maximize pane'}
-          >
-            {isMaximized ? (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="4 14 10 14 10 20" />
-                <polyline points="20 10 14 10 14 4" />
-                <line x1="10" y1="14" x2="3" y2="21" />
-                <line x1="21" y1="3" x2="14" y2="10" />
-              </svg>
-            ) : (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 3 21 3 21 9" />
-                <polyline points="9 21 3 21 3 15" />
-                <line x1="21" y1="3" x2="14" y2="10" />
-                <line x1="3" y1="21" x2="10" y2="14" />
-              </svg>
-            )}
-          </button>
-        )}
       </div>
-
-      {/* Role picker popover */}
-      {rolePickerOpen && (
-        <div className="role-picker" onClick={(e) => e.stopPropagation()}>
-          <div className="role-chips">
-            {ROLE_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                className={`role-chip${sessionInfo?.role === preset.label ? ' active' : ''}`}
-                onClick={() => selectRole(preset.label)}
-              >
-                <span className="role-dot" style={{ background: preset.color }}></span>
-                {preset.label}
-              </button>
-            ))}
-            {sessionInfo?.role && (
-              <button className="role-chip role-chip-clear" onClick={() => selectRole(null)}>
-                Clear
-              </button>
-            )}
-          </div>
-          <div className="role-custom-row">
-            <input
-              className="role-custom-input"
-              type="text"
-              placeholder="Custom label…"
-              value={customRoleInput}
-              onChange={(e) => setCustomRoleInput(e.target.value)}
-              onKeyDown={handleRolePickerKey}
-            />
-            <button className="role-custom-apply" onClick={applyCustomRole}>
-              Set
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Command history blocks above the live terminal */}
 

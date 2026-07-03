@@ -1,11 +1,13 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { useCommandPaletteStore } from './zustand/commandpalette';
 import { flushSync } from 'react-dom';
+import { viewTransitionsReliable } from '$lib/utils/tauri';
 
 function withTransition(fn: () => void) {
   const startViewTransition = (document as any).startViewTransition;
   if (
     startViewTransition &&
+    viewTransitionsReliable() &&
     !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
     !(window as any).__spacron_transitioning
   ) {

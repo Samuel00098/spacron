@@ -1,4 +1,6 @@
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 #[derive(serde::Deserialize)]
 pub struct NotificationPayload {
@@ -6,6 +8,7 @@ pub struct NotificationPayload {
     body: String,
 }
 
+#[cfg(target_os = "windows")]
 fn focus_main_window(app: AppHandle) {
     let app_for_thread = app.clone();
     let _ = app.run_on_main_thread(move || {

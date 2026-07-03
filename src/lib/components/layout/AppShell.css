@@ -1981,3 +1981,18 @@
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* WebKitGTK (Linux) regularly leaves elements that carry an entrance animation,
+   a `view-transition-name`, or a GPU layer hint (`will-change`) present but never
+   painted — which is why the dock and floating prompt bar went invisible on first
+   paint and on layout switches. Neutralise those fragile hints for the bottom
+   overlays so they are always drawn at their resting visible state. Scoped to
+   WebKitGTK via the `is-webkitgtk` root class, so Windows/macOS keep the polish. */
+html.is-webkitgtk .app-shell .room-dock,
+html.is-webkitgtk .app-shell .composer-strip {
+  animation: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+  view-transition-name: none !important;
+  will-change: auto !important;
+}

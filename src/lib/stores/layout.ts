@@ -1,4 +1,5 @@
 import { flushSync } from 'react-dom';
+import { viewTransitionsReliable } from '$lib/utils/tauri';
 import { writable, type Writable } from '$lib/stores/storeCompat';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
 import { useLayoutStore } from './zustand/layout';
@@ -12,6 +13,7 @@ function withTransition(fn: () => void) {
   const startViewTransition = (document as any).startViewTransition;
   if (
     startViewTransition &&
+    viewTransitionsReliable() &&
     !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
     !(window as any).__spacron_transitioning
   ) {

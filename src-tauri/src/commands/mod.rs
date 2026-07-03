@@ -1,6 +1,7 @@
 pub mod app_flags;
 pub mod background;
 pub mod db;
+pub mod deps;
 pub mod env_vars;
 pub mod file_system;
 pub mod github;

@@ -1,6 +1,6 @@
 [package]
 name = "spacron"
-version = "0.4.9"
+version = "0.5.0"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"

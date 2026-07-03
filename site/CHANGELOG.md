@@ -3,6 +3,47 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.5.0] - 2026-07-03
+
+A Linux reliability release. It fixes the WebKitGTK rendering bugs that made the dock and floating prompt bar go invisible, left a "ghost" of a closed room behind, and spammed internal WebKit errors — and makes copy, paste, and drag-and-drop work properly across the terminal and prompt bar on Linux. It also adds clear, per-platform guidance for missing system dependencies, and a full-panel transparency fade for the floating YouTube player. Windows and macOS are unaffected by the Linux-specific fixes.
+
+### Added
+
+- **Per-platform dependency guidance** — a central catalog now surfaces a clear, OS-specific "here's exactly what to install" message when a required system dependency is missing (Git, the Android SDK tools, Xcode, …), replacing cryptic or Windows-only errors.
+
+- **Drag-and-drop into the prompt bar** — drag a file from the OS file manager or the in-app explorer onto the floating prompt bar to attach its path (and it no longer duplicates the path several times).
+
+- **Clipboard image paste on Linux** — pasting an image such as a screenshot into the prompt bar now works on WebKitGTK, which never exposed clipboard images through the web paste event.
+
+### Changed
+
+- **Terminal opens straight to a live shell** — the terminal room now auto-starts a shell instead of landing on the empty "Open Shell" placeholder.
+
+- **Groq is the default voice-reply provider** — voice replies default to Groq's Orpheus TTS instead of inheriting whatever general "brain" provider was configured, which could be one that can't speak.
+
+- **Conflict-free terminal copy/paste** — copy/paste moved off Ctrl+Shift+C / Ctrl+Shift+V (which collided with Go to Containers / Go to Preview). Copy with Ctrl/Cmd+C when text is selected (a bare Ctrl+C still interrupts), paste with Ctrl/Cmd+V, plus Ctrl+Insert / Shift+Insert. Selecting text also copies it automatically, and middle-click pastes.
+
+- **Floating YouTube transparency** — the opacity slider now fades the entire player panel, header included, rather than just the video body.
+
+- **Leaner terminal pane header** — the per-pane role picker and the status-dot / maximize control were removed.
+
+### Fixed
+
+- **Dock and floating prompt bar going invisible on Linux** — WebKitGTK's DMABUF GPU renderer is disabled on Linux, and the overlays' fragile entrance animations and GPU-layer hints are neutralised there, so both paint reliably from the first frame and after layout changes.
+
+- **Ghost residue after closing a room/panel on Linux** — closing a room now forces a repaint of the rooms grid so stale compositor pixels are cleared.
+
+- **"WebKit encountered an internal error" spam on Linux** — resolved by disabling the broken DMABUF renderer.
+
+- **Vanishing overlays on layout/agent switches** — the CSS View Transitions used on those switches are buggy on WebKitGTK and could leave elements hidden; they now fall back to an instant update on Linux while Windows/macOS keep the animation.
+
+- **Copy/paste on Linux** — terminal and prompt-bar copy/paste route through the native clipboard, since WebKitGTK blocks the web clipboard API; the prompt box also gains a right-click copy/paste menu on Linux.
+
+- **Cross-platform "install Git" guidance** — a missing Git binary now shows OS-appropriate install instructions instead of a Windows-only hint.
+
+- **Compiler warning** — removed a dead-code / unused-import warning in the notification command on non-Windows builds.
+
+
 ## [v0.4.9] - 2026-07-02
 
 A large workspace-shell release: a new Project Launcher, a dedicated Development page with a morphing dock, several new layout modes (Jarvis HUD Cockpit, vibe-coding canvas, redesigned focus), a Playbooks-driven terminal, and a top-to-bottom liquid-glass polish pass.

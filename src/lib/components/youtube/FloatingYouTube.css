@@ -33,7 +33,9 @@
     height 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    /* Ease the whole-panel fade driven by the transparency slider. */
+    opacity 140ms ease;
 }
 
 .floating-youtube.fy-interacting {
@@ -139,13 +141,11 @@
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  /* Opacity is set inline from the transparency slider; ease the change. */
-  transition: opacity 140ms ease;
 }
 
 /* The embedded panel fills the floating body. It keeps its own frosted
    background (from YouTubePanel.css) so the player is solid at full opacity; the
-   body's opacity slider is what fades the whole player to reveal the app. */
+   transparency slider fades the whole panel (header + body) to reveal the app. */
 .floating-youtube .fy-body .youtube-panel {
   flex: 1 1 auto;
   min-width: 0;

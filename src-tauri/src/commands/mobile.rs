@@ -107,7 +107,16 @@ fn emulator_program() -> String {
 /// Turn a failed `Command::output()` (missing binary, etc.) into a friendly msg.
 fn missing_tool(tool: &str, err: std::io::Error) -> String {
     if err.kind() == std::io::ErrorKind::NotFound {
-        format!("`{tool}` was not found on your PATH. Install it and restart Spacron.")
+        // `adb` and `emulator` both ship with the Android SDK, and `xcrun` comes
+        // with Xcode (macOS only), so point the user at how to get the right
+        // toolchain for their OS rather than a bare "install it".
+        if matches!(tool, "adb" | "emulator") {
+            format!("`{tool}` was not found. {}", super::deps::ANDROID_SDK.missing_message())
+        } else if tool == "xcrun" {
+            format!("`{tool}` was not found. {}", super::deps::XCODE.missing_message())
+        } else {
+            format!("`{tool}` was not found on your PATH. Install it and restart Spacron.")
+        }
     } else {
         format!("Failed to run `{tool}`: {err}")
     }

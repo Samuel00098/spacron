@@ -13,6 +13,18 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK (Linux) ships a DMABUF-based GPU renderer that is broken on a wide
+    // range of drivers (many Intel/AMD/NVIDIA + virtualized GPUs). When it fails it
+    // spams "WebKit encountered an internal error … WebLoaderStrategy" and, worse,
+    // leaves composited layers unpainted — the dock and floating bar rendering as
+    // present-but-invisible. Forcing the non-DMABUF path makes rendering reliable.
+    // Set before the webview process spawns, and only when the user hasn't already
+    // chosen a value, so it can still be overridden from the environment.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let base_config_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let config_dir = base_config_dir.join("spacron");
 

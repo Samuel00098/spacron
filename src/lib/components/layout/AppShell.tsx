@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { isWebkitGtk, viewTransitionsReliable } from '$lib/utils/tauri';
 import TitleBar from './TitleBar.tsx';
 import UpdateBanner from '$lib/components/shared/UpdateBanner.tsx';
 import { useAction } from '$lib/react/useAction';
@@ -294,6 +295,7 @@ export default function AppShell() {
 
     if (
       startViewTransition &&
+      viewTransitionsReliable() &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
       !(window as any).__spacron_transitioning
     ) {
@@ -415,6 +417,45 @@ export default function AppShell() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [workspaceId]);
+
+  // Visibility guarantee for the dock (.room-dock) and floating prompt bar
+  // (.composer-strip) on WebKitGTK (Linux). Even at opacity:1 these are regularly
+  // left *present but unpainted* after a first paint or a layout switch — either an
+  // entrance animation stuck at its 0% frame, or an uncomposited GPU layer. The CSS
+  // override handles the animation/opacity case; here we additionally force a hard
+  // repaint (a display flush) to re-composite a stale layer, which a plain opacity
+  // fix can't do. Runs on mount and on every ambient-layout change (opening an agent
+  // that promotes the Development layout was a reported trigger). No-op off Linux.
+  useEffect(() => {
+    if (!workspaceId || !isWebkitGtk()) return;
+    const el = overlaysRef.current;
+    if (!el) return;
+
+    const forceVisible = () => {
+      el.querySelectorAll<HTMLElement>('.room-dock, .composer-strip').forEach((node) => {
+        node.style.animation = 'none';
+        node.style.opacity = '1';
+        node.style.transform = 'none';
+        node.style.visibility = 'visible';
+        node.style.willChange = 'auto';
+        // Hard repaint: toggling display flushes WebKitGTK's stale compositor layer
+        // so an element that reports visible but never painted actually shows.
+        const prevDisplay = node.style.display;
+        node.style.display = 'none';
+        void node.offsetHeight;
+        node.style.display = prevDisplay;
+      });
+    };
+
+    const raf = requestAnimationFrame(forceVisible);
+    const t1 = window.setTimeout(forceVisible, 250);
+    const t2 = window.setTimeout(forceVisible, 700);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [workspaceId, ambientLayout]);
   const allTerminalSessions = useStore(terminalSessions);
   const terminalPaneAssignments = useStore(paneAssignments);
   const history = useStore(commandHistory);
@@ -501,6 +542,34 @@ export default function AppShell() {
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
   const splitRoom = activeRoom ? ((secondaryRoom && sideRooms.includes(secondaryRoom)) ? secondaryRoom : (sideRooms[0] ?? null)) : null;
   const stackedRooms = sideRooms;
+
+  // WebKitGTK (Linux) leaves stale compositor pixels — a "ghost" of the closed
+  // room — behind when a room/panel closes and the grid re-tiles to fill the gap.
+  // When a room is actually removed, force a genuine repaint of the rooms container
+  // so those stale pixels are overwritten. A sub-1 opacity for a single frame forces
+  // WebKitGTK to re-composite the subtree; it's visually imperceptible (≈1, no
+  // movement) and leaves layout size unchanged, so the terminal panes never refit.
+  // Linux-only; Windows/macOS repaint correctly on their own.
+  const prevVisibleRoomsRef = useRef<RoomId[]>([]);
+  useEffect(() => {
+    const prev = prevVisibleRoomsRef.current;
+    prevVisibleRoomsRef.current = visibleRooms;
+    if (!isWebkitGtk()) return;
+    const roomClosed = prev.some((room) => !visibleRooms.includes(room));
+    if (!roomClosed) return;
+    const el = roomsTableRef.current;
+    if (!el) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      el.style.opacity = '0.999';
+      raf2 = requestAnimationFrame(() => { el.style.opacity = ''; });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      el.style.opacity = '';
+    };
+  }, [visibleRooms]);
 
   // Apply layout commands from the orchestrator (or any other controller). The
   // nonce guard makes a repeated identical command (e.g. "focus terminal" twice)
