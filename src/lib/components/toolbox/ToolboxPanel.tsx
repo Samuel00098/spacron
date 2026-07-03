@@ -3,6 +3,7 @@ import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.t
 import EmbeddedPanel from './EmbeddedPanel.tsx';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './ToolboxPanel.css';
 
 type UtilityTab = 'jwt' | 'json' | 'regex' | 'epoch' | 'coder' | 'embedded';
@@ -30,8 +31,7 @@ function getRelativeTimeString(time: number): string {
 }
 
 function copyToClipboard(text: string) {
-  navigator.clipboard
-    .writeText(text)
+  copyTextToClipboard(text)
     .then(() => alert('Copied to clipboard!'))
     .catch((err) => alert(`Failed to copy: ${err}`));
 }

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { useAction } from '$lib/react/useAction';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
+import { copyPngToClipboard, copyTextToClipboard } from '$lib/utils/clipboard';
 import {
   targetPort,
   proxyPort,
@@ -1033,7 +1034,7 @@ export default function PreviewPanel() {
       const blob = new Blob([new Uint8Array(pngBytes)], { type: 'image/png' });
 
       try {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        await copyPngToClipboard(pngBytes);
         showToast('Screenshot copied to clipboard', 'success');
       } catch {
         const label = viewportMode === 'mobile' ? 'mobile' : viewportMode === 'tablet' ? 'tablet' : 'preview';
@@ -1567,7 +1568,7 @@ export default function PreviewPanel() {
           <button
             className="inspect-copy-btn"
             onClick={async () => {
-              await navigator.clipboard.writeText(selectedElementInfo?.selector || '');
+              await copyTextToClipboard(selectedElementInfo?.selector || '');
               showToast('Selector copied to clipboard', 'success');
             }}
           >

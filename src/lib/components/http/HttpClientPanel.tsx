@@ -6,6 +6,7 @@ import {
 } from '$lib/stores/http';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import './HttpClientPanel.css';
@@ -253,7 +254,7 @@ export default function HttpClientPanel() {
                         <input type="checkbox" checked={prettyJson} onChange={(e) => setPrettyJson(e.target.checked)} /> Pretty
                       </label>
                     )}
-                    <button className="copy-res-btn" onClick={() => navigator.clipboard.writeText(response!.body)} title="Copy response">
+                    <button className="copy-res-btn" onClick={() => void copyTextToClipboard(response!.body)} title="Copy response">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                     </button>
                   </div>

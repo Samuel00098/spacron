@@ -46,6 +46,21 @@ chmod +x Spacron_x86_64.AppImage
 ./Spacron_x86_64.AppImage
 ```
 
+Spacron renders through the system WebKitGTK, which plays video/audio via
+GStreamer. For the YouTube panel (and other media playback) install the codec
+packages if your distro doesn't ship them:
+
+```bash
+# Ubuntu / Debian
+sudo apt install gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+
+# Fedora
+sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-libav
+
+# Arch
+sudo pacman -S gst-plugins-good gst-plugins-bad gst-libav
+```
+
 Spacron ships **signed auto-updates**, so it keeps itself current after install.
 
 ---

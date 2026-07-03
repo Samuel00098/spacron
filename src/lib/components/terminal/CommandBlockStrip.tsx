@@ -3,6 +3,7 @@ import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { sendChatMessage } from '$lib/stores/orchestrator';
 import { showToast } from '$lib/stores/notification';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './CommandBlockStrip.css';
 
 interface CommandBlock {
@@ -63,7 +64,7 @@ export default function CommandBlockStrip({ sessionId }: { sessionId: number }) 
 
   const handlePipe = (block: CommandBlock) => {
     const textToPipe = stripAnsi(block.output || '');
-    navigator.clipboard.writeText(textToPipe).then(() => {
+    copyTextToClipboard(textToPipe).then(() => {
       promptBarInput.set(textToPipe);
       showToast('Output copied to clipboard and loaded into prompt composer', 'success');
     }).catch((err) => {

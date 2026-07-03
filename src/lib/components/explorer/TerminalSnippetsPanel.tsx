@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { activeSessionId, devActiveSessionId, sendPromptToSession } from '$lib/stores/terminal';
 import {
   addSnippet,
@@ -166,7 +167,7 @@ export default function TerminalSnippetsPanel() {
   }
 
   function copyToClipboard(text: string) {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyTextToClipboard(text).then(() => {
       showToast('Command copied to clipboard', 'info');
     });
   }

@@ -28,6 +28,34 @@ function musicArt(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
 
+/** Map a YouTube IFrame API error code to a message for the status line —
+ *  without this the player failed silently. Code 5 means the HTML5 player
+ *  itself couldn't play; on Linux that is almost always WebKitGTK missing the
+ *  system GStreamer codecs, so point at the packages to install. */
+function describePlayerError(code: number): string {
+  switch (code) {
+    case 2:
+      return 'This video link looks invalid.';
+    case 100:
+      return 'Video not found — it may be private or removed.';
+    case 101:
+    case 150:
+      return 'This video does not allow embedded playback. Try another result.';
+    default: {
+      const onLinuxDesktop =
+        navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
+      if (onLinuxDesktop) {
+        return (
+          'Playback failed. On Linux, video playback needs the GStreamer codecs — ' +
+          'e.g. on Ubuntu/Debian run: sudo apt install gstreamer1.0-plugins-good ' +
+          'gstreamer1.0-plugins-bad gstreamer1.0-libav — then restart Spacron.'
+        );
+      }
+      return `Playback failed (error ${code}).`;
+    }
+  }
+}
+
 export default function YouTubePanel() {
   const state = useStore(youtubeState);
   const [showSettings, setShowSettings] = useState(false);
@@ -121,6 +149,11 @@ export default function YouTubePanel() {
             start: currentPlaylistId ? undefined : startAt,
             listType: currentPlaylistId ? 'playlist' : undefined,
             list: currentPlaylistId || undefined,
+          },
+          events: {
+            onError: (e) => {
+              youtubeState.update((s) => ({ ...s, status: describePlayerError(e.data) }));
+            },
           },
         });
 

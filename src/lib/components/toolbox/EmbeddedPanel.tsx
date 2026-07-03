@@ -8,6 +8,7 @@ import { showTerminal } from '$lib/stores/layout';
 import { requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import { useStore } from '$lib/react/useStore';
 import { useAction } from '$lib/react/useAction';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './EmbeddedPanel.css';
 
 type EmbeddedMode = 'arduino' | 'platformio' | 'pi';
@@ -108,7 +109,7 @@ export default function EmbeddedPanel() {
     if (!value) return;
 
     try {
-      await navigator.clipboard.writeText(value);
+      await copyTextToClipboard(value);
       showToast('Command copied', 'info');
     } catch (err) {
       showToast(`Copy failed: ${err}`, 'error');

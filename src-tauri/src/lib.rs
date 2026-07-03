@@ -34,9 +34,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             #[cfg_attr(
-                not(any(target_os = "macos", target_os = "windows")),
+                not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
                 allow(unused_variables)
             )]
             let Some(window) = app.get_webview_window("main") else {
@@ -53,6 +54,42 @@ pub fn run() {
                 None,
                 None,
             );
+
+            #[cfg(target_os = "linux")]
+            {
+                // WebKitGTK ships with media capture disabled and silently
+                // refuses any permission request nobody answers, so on Linux
+                // getUserMedia failed even after the user accepted the app's
+                // own microphone dialog. Turn the media features on and grant
+                // WebKit's capture-related requests — the frontend already
+                // gates the microphone behind its own consent dialog before
+                // the request ever reaches WebKit. MSE/EME are enabled for
+                // embedded players (e.g. the YouTube panel), which stream
+                // through MediaSource. macOS and Windows configure all of
+                // this through their own webview runtimes.
+                let _ = window.with_webview(|webview| {
+                    use webkit2gtk::glib::prelude::*;
+                    use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+
+                    let webview = webview.inner();
+                    if let Some(settings) = WebViewExt::settings(&webview) {
+                        settings.set_enable_media_stream(true);
+                        settings.set_enable_webrtc(true);
+                        settings.set_enable_mediasource(true);
+                        settings.set_enable_encrypted_media(true);
+                    }
+                    webview.connect_permission_request(|_, request| {
+                        if request.is::<webkit2gtk::UserMediaPermissionRequest>()
+                            || request.is::<webkit2gtk::DeviceInfoPermissionRequest>()
+                        {
+                            request.allow();
+                            return true;
+                        }
+                        // Anything else keeps WebKit's default handling.
+                        false
+                    });
+                });
+            }
 
             #[cfg(target_os = "windows")]
             {
