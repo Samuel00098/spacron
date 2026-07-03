@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
+import { copyTextToClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -526,7 +527,7 @@ export default function TerminalPane({
     e.stopPropagation();
     const activePath = currentShellCwd || project?.root_path;
     if (activePath) {
-      navigator.clipboard.writeText(activePath).then(() => {
+      copyTextToClipboard(activePath).then(() => {
         showToast(`Copied: ${activePath}`, 'success');
       });
     }
@@ -644,13 +645,13 @@ export default function TerminalPane({
     const term = termRef.current;
     if (term?.hasSelection()) {
       try {
-        await navigator.clipboard.writeText(term.getSelection());
+        await copyTextToClipboard(term.getSelection());
         term.clearSelection();
         showToast('Copied to clipboard', 'info');
       } catch {}
     } else {
       try {
-        const text = await navigator.clipboard.readText();
+        const text = await readTextFromClipboard();
         if (text) writeToSession(sessionId, text);
       } catch {}
     }

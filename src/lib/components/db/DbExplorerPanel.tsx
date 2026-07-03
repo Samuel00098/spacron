@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './DbExplorerPanel.css';
 
 interface QueryResult {
@@ -159,8 +160,7 @@ export default function DbExplorerPanel() {
       });
       return obj;
     });
-    navigator.clipboard
-      .writeText(JSON.stringify(formatted, null, 2))
+    copyTextToClipboard(JSON.stringify(formatted, null, 2))
       .then(() => alert('Copied results as JSON to clipboard!'))
       .catch((err) => alert(`Failed to copy: ${err}`));
   }

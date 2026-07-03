@@ -32,7 +32,12 @@ interface YTNamespace {
       videoId?: string;
       host?: string;
       playerVars?: YTPlayerVars;
-      events?: { onReady?: (e: { target: YTPlayer }) => void };
+      events?: {
+        onReady?: (e: { target: YTPlayer }) => void;
+        /** Fires with a numeric code when the embed can't play: 2 bad request,
+         *  5 HTML5 player failure, 100 missing video, 101/150 embed disallowed. */
+        onError?: (e: { data: number }) => void;
+      };
     },
   ) => YTPlayer;
 }
