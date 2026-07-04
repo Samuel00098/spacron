@@ -6,6 +6,7 @@ import { appearance, backgroundImageEnabled, backgroundImageBlur, interfaceTrans
 import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, hasBackgroundImage } from './background';
 import { presetThemes, currentPresetTheme } from './presetThemes';
 import { useThemeStore } from './zustand/theme';
+import { analyseImage, deriveForegroundPalette } from '$lib/utils/imageAnalysis';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useThemeStore.getState() as any)[key];
@@ -178,7 +179,13 @@ export function switchPresetTheme(themeId: string, showNotification = true) {
 }
 
 export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const cleanHex = hex.trim().replace(/^#/, '');
+  const clean = hex.trim();
+  // Parse rgba(r, g, b, a) string
+  const rgbaMatch = clean.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (rgbaMatch) {
+    return { r: parseInt(rgbaMatch[1], 10), g: parseInt(rgbaMatch[2], 10), b: parseInt(rgbaMatch[3], 10) };
+  }
+  const cleanHex = clean.replace(/^#/, '');
   if (cleanHex.length === 3) {
     const r = parseInt(cleanHex[0] + cleanHex[0], 16);
     const g = parseInt(cleanHex[1] + cleanHex[1], 16);
@@ -191,6 +198,51 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } | nul
     return { r, g, b };
   }
   return null;
+}
+
+/**
+ * Apply a foreground text/icon palette to CSS custom properties.
+ *
+ * Called twice per theme switch:
+ *  1. Synchronously with analysis=null so the theme is never unreadable.
+ *  2. Asynchronously once the Canvas image sampler has real luminance data.
+ *
+ * @param analysis - Result from analyseImage(), or null to fall back to type.
+ * @param themeType - The theme's declared type ('dark' | 'light').
+ */
+function applyForegroundPalette(
+  analysis: import('$lib/utils/imageAnalysis').ImageAnalysisResult | null,
+  themeType: 'dark' | 'light'
+): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+
+  const palette = deriveForegroundPalette(analysis, themeType);
+
+  root.style.setProperty('--text-primary',       palette.primary);
+  root.style.setProperty('--text-secondary',     palette.secondary);
+  root.style.setProperty('--text-muted',         palette.muted);
+  root.style.setProperty('--text-placeholder',   palette.placeholder);
+
+  // RGB variants so components can do rgba(var(--text-primary-rgb), 0.5)
+  for (const [name, hex] of Object.entries(palette)) {
+    const rgb = hexToRgb(hex);
+    if (rgb) {
+      root.style.setProperty(`--text-${name}-rgb`, `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+    }
+  }
+
+  // Titlebar and statusbar follow the same derived palette
+  root.style.setProperty('--titlebar-text', palette.primary);
+  const titlebarRgb = hexToRgb(palette.primary);
+  if (titlebarRgb) {
+    root.style.setProperty('--titlebar-text-rgb', `${titlebarRgb.r}, ${titlebarRgb.g}, ${titlebarRgb.b}`);
+  }
+  root.style.setProperty('--statusbar-text', palette.secondary);
+  const statusbarRgb = hexToRgb(palette.secondary);
+  if (statusbarRgb) {
+    root.style.setProperty('--statusbar-text-rgb', `${statusbarRgb.r}, ${statusbarRgb.g}, ${statusbarRgb.b}`);
+  }
 }
 
 let themeTransitionTimeout: any = null;
@@ -244,13 +296,13 @@ export function applyThemeToCSS(theme: Theme | null) {
   if (theme.backgroundImage) {
     root.style.setProperty('--user-bg-image', `url("${theme.backgroundImage}")`);
     root.classList.add('has-bg-image');
-    const opacity = theme.backgroundOpacity !== undefined ? theme.backgroundOpacity : 100;
+    const opacity = theme.backgroundOpacity !== undefined ? theme.backgroundOpacity : 75;
     const blur = theme.backgroundBlur !== undefined ? theme.backgroundBlur : 0;
     root.style.setProperty('--user-bg-opacity', (opacity / 100).toFixed(3));
     root.style.setProperty('--user-bg-blur', `${blur}px`);
 
-    // Automatically ensure some transparency is enabled so the background is visible.
-    // If global interface transparency is set to 0, force a default of 50% frost.
+    // Force 50% frost transparency when a theme has a built-in background image
+    // so the background wallpaper is clearly visible through the glass UI.
     const trans = get(interfaceTransparency);
     if (trans === 0) {
       applyInterfaceFrost(50);
@@ -270,6 +322,25 @@ export function applyThemeToCSS(theme: Theme | null) {
       applyBackgroundAppearance(get(backgroundImageBlur));
       applyInterfaceFrost(get(interfaceTransparency));
     }
+  }
+
+  // ── Auto-compute foreground text colors for readability ──────
+  // Phase 1: Apply an immediate palette based on theme.type so UI is never
+  // left in an unreadable state while the async image analysis runs.
+  applyForegroundPalette(null, theme.type);
+
+  // Phase 2: If the theme has a background image, sample it with Canvas to
+  // get the real luminance and refine the palette asynchronously.  This
+  // means dark-on-paper themes that happen to use a very bright wallpaper
+  // will still get dark foreground text, and vice-versa.
+  if (theme.backgroundImage) {
+    // Capture the theme id so we don't apply stale results after a switch
+    const themeIdAtStart = theme.id;
+    analyseImage(theme.backgroundImage).then((analysis) => {
+      // Abort if the user has already switched to a different theme
+      if (get(activeTheme)?.id !== themeIdAtStart) return;
+      applyForegroundPalette(analysis, theme.type);
+    });
   }
 
   if (isInitialLoad) {
