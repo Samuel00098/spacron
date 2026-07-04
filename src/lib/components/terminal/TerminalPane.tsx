@@ -308,6 +308,8 @@ export default function TerminalPane({
   // titlebar instead; the content area reads as a solid inset, like a native
   // terminal. Kept as a helper so every renderer switch reasserts it.
   function terminalBackground() {
+    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
+    if (!isSolid) return 'rgba(0, 0, 0, 0)';
     const theme = get(activeTheme);
     const colors = theme?.colors || {};
     const isLight = theme?.type === 'light';
@@ -317,7 +319,8 @@ export default function TerminalPane({
   function applyRendererBackground() {
     const term = termRef.current;
     if (!term) return;
-    term.options.allowTransparency = false;
+    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
+    term.options.allowTransparency = !isSolid;
     term.options.theme = {
       ...term.options.theme,
       background: terminalBackground(),
@@ -701,13 +704,15 @@ export default function TerminalPane({
     // composite a transparent glyph layer over the pane's backdrop-filter blur,
     // and WebGL thins text on transparency. The glass look lives on the pane
     // frame/titlebar; the content reads as a solid inset (see applyRendererBackground).
-    const initialBackground =
-      initialColors['editor-bg'] || initialColors['bg-primary'] || (isLight ? '#ffffff' : '#1a1a1f');
+    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
+    const initialBackground = isSolid
+      ? (initialColors['editor-bg'] || initialColors['bg-primary'] || (isLight ? '#ffffff' : '#1a1a1f'))
+      : 'rgba(0, 0, 0, 0)';
 
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: get(terminalCursorStyle),
-      allowTransparency: false,
+      allowTransparency: !isSolid,
       scrollback: get(terminalScrollback),
       fontSize: get(terminalFontSize),
       fontFamily: get(resolvedFontFamily),
@@ -1059,9 +1064,12 @@ export default function TerminalPane({
       const colors = activeThemeValue.colors;
       const syntax = activeThemeValue.syntax;
       const isLight = activeThemeValue.type === 'light';
-      term.options.allowTransparency = false;
+      const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
+      term.options.allowTransparency = !isSolid;
       term.options.theme = {
-        background: colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'),
+        background: isSolid
+          ? (colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'))
+          : 'rgba(0, 0, 0, 0)',
         foreground: colors['text-primary'] || (isLight ? '#1f2328' : '#e6edf3'),
         cursor: colors['accent'] || (isLight ? '#0f766e' : '#7c6af7'),
         cursorAccent: colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'),

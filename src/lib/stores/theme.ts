@@ -2,7 +2,7 @@ import { writable, get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import type { Theme, ThemeInfo } from '$lib/types/theme';
 import { showToast } from './notification';
-import { appearance, backgroundImageEnabled, backgroundImageOpacity, backgroundImageBlur, interfaceTransparency } from './settings';
+import { appearance, backgroundImageEnabled, backgroundImageBlur, interfaceTransparency } from './settings';
 import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, hasBackgroundImage } from './background';
 import { presetThemes, currentPresetTheme } from './presetThemes';
 import { useThemeStore } from './zustand/theme';
@@ -267,7 +267,7 @@ export function applyThemeToCSS(theme: Theme | null) {
       applyInterfaceFrost(get(interfaceTransparency));
     } else {
       applyBackgroundImage();
-      applyBackgroundAppearance(get(backgroundImageOpacity), get(backgroundImageBlur));
+      applyBackgroundAppearance(get(backgroundImageBlur));
       applyInterfaceFrost(get(interfaceTransparency));
     }
   }
