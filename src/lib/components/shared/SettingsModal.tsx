@@ -1419,17 +1419,41 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                             className={`theme-card ${currentActiveTheme?.id === theme.id ? 'active' : ''}`}
                             onClick={() => switchPresetTheme(theme.id)}
                           >
-                            <div className="theme-preview">
-                              {['keyword', 'string', 'function', 'type', 'constant'].map((syntaxKey, i) => {
-                                const defaultColors = ['#ff7b72', '#a5d6ff', '#d2a8ff', '#7ee787', '#79c0ff'];
-                                return (
-                                  <span
-                                    key={syntaxKey}
-                                    className="preview-bar"
-                                    style={{ background: theme.syntax[syntaxKey] || defaultColors[i] }}
-                                  />
-                                );
-                              })}
+                            <div
+                              className="theme-preview"
+                              style={{
+                                backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
+                                backgroundColor: theme.colors['bg-primary'] || 'var(--bg-secondary)',
+                              }}
+                            >
+                              <div
+                                className="theme-preview-glass"
+                                style={{
+                                  background: `color-mix(in srgb, ${theme.colors['bg-primary'] || 'var(--bg-secondary)'} 75%, transparent)`,
+                                  borderColor: theme.colors['border'] || 'var(--border)',
+                                }}
+                              >
+                                <div className="theme-preview-header">
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['error'] || '#ff5f56' }} />
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['warning'] || '#ffbd2e' }} />
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['success'] || '#27c93f' }} />
+                                </div>
+                                <div className="theme-preview-code">
+                                  <div className="theme-preview-line">
+                                    <span className="theme-preview-token" style={{ width: '20%', background: theme.syntax['keyword'] || 'var(--accent)' }} />
+                                    <span className="theme-preview-token" style={{ width: '35%', background: theme.syntax['variable'] || 'var(--text-primary)' }} />
+                                    <span className="theme-preview-token" style={{ width: '15%', background: theme.syntax['operator'] || 'var(--accent)' }} />
+                                    <span className="theme-preview-token" style={{ width: '10%', background: theme.syntax['number'] || 'var(--accent)' }} />
+                                  </div>
+                                  <div className="theme-preview-line" style={{ paddingLeft: '8px' }}>
+                                    <span className="theme-preview-token" style={{ width: '25%', background: theme.syntax['function'] || 'var(--accent)' }} />
+                                    <span className="theme-preview-token" style={{ width: '50%', background: theme.syntax['string'] || 'var(--success)' }} />
+                                  </div>
+                                  <div className="theme-preview-line">
+                                    <span className="theme-preview-token" style={{ width: '70%', background: theme.syntax['comment'] || 'var(--text-muted)' }} />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                             <div className="theme-meta">
                               <span className="theme-name">{theme.name}</span>
