@@ -1,4 +1,28 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..900,0..100,0..1&display=swap');
+/* Self-hosted fonts (served from static/ → /fonts/). The app CSP is
+   `style-src 'self'` / `font-src 'self'`, which blocks Google Fonts entirely.
+   Inter is Warp's UI face; JetBrains Mono is used for code + terminal. */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-700.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 800; font-display: swap; src: url('/fonts/inter-800.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/jetbrains-mono-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/jetbrains-mono-500.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/jetbrains-mono-700.woff2') format('woff2'); }
+
+/* App-wide font tokens. Every panel/UI surface uses --font-sans (Inter);
+   code + terminal opt into --font-mono. Reference these instead of hardcoding a
+   stack so the whole app stays consistent. */
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', Consolas, monospace;
+}
+
+/* Belt-and-suspenders: pin the app root to the UI face so every panel inherits
+   Inter even where a component forgot to. Code/terminal re-assert mono below. */
+#app {
+  font-family: var(--font-sans);
+}
 
 :root.solid-theme {
   --frost-base: 1.000 !important;
@@ -33,21 +57,22 @@
 }
 
 :root:not(.solid-theme).light-theme {
-  --text-secondary:  #404050 !important;
-  --text-muted:      #606075 !important;
-  /* Light-mode panels: use warm white semi-transparent backgrounds so panels
-     look glassy over the wallpaper, not solid white blocks. */
-  --bg-primary:    rgba(248, 248, 252, 0.18) !important;
-  --bg-secondary:  rgba(240, 240, 246, 0.22) !important;
-  --bg-tertiary:   rgba(232, 232, 240, 0.28) !important;
-  --editor-bg:     rgba(248, 248, 252, 0.18) !important;
-  --panel-bg:      rgba(248, 248, 252, 0.18) !important;
-  --sidebar-bg:    rgba(240, 240, 246, 0.22) !important;
-  --terminal-bg:   rgba(240, 240, 246, 0.22) !important;
-  --titlebar-bg:   rgba(240, 240, 246, 0.22) !important;
-  --tab-active-bg: rgba(248, 248, 252, 0.18) !important;
-  --tab-inactive-bg: rgba(240, 240, 246, 0.12) !important;
-  --input-bg:      rgba(255, 255, 255, 0.35) !important;
+  --text-primary:    #000000 !important;
+  --text-secondary:  #0a0a14 !important;
+  --text-muted:      #1e1e2e !important;
+  /* Light-mode panels: near-transparent so the background wallpaper shows
+     through clearly. These are warm-white tints at very low opacity. */
+  --bg-primary:    rgba(248, 248, 252, 0.08) !important;
+  --bg-secondary:  rgba(240, 240, 246, 0.10) !important;
+  --bg-tertiary:   rgba(232, 232, 240, 0.14) !important;
+  --editor-bg:     rgba(248, 248, 252, 0.08) !important;
+  --panel-bg:      rgba(248, 248, 252, 0.08) !important;
+  --sidebar-bg:    rgba(240, 240, 246, 0.10) !important;
+  --terminal-bg:   rgba(240, 240, 246, 0.10) !important;
+  --titlebar-bg:   rgba(240, 240, 246, 0.10) !important;
+  --tab-active-bg: rgba(248, 248, 252, 0.08) !important;
+  --tab-inactive-bg: rgba(240, 240, 246, 0.06) !important;
+  --input-bg:      rgba(255, 255, 255, 0.20) !important;
 }
 
 :root:not(.solid-theme):not(.light-theme) body {
@@ -55,7 +80,7 @@
 }
 
 :root:not(.solid-theme).light-theme body {
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6), 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
 /* Make title bar icons and words much brighter in transparency mode */
@@ -81,9 +106,9 @@
 }
 
 :root:not(.solid-theme).light-theme .titlebar {
-  --titlebar-text: #05050a !important;
-  --text-secondary: #181822 !important;
-  --text-muted: #3a3a48 !important;
+  --titlebar-text: #000000 !important;
+  --text-secondary: #0a0a14 !important;
+  --text-muted: #1a1a2e !important;
 }
 
 :root:not(.solid-theme).light-theme .titlebar .nav-btn,
@@ -93,7 +118,7 @@
 :root:not(.solid-theme).light-theme .titlebar .search-icon,
 :root:not(.solid-theme).light-theme .titlebar .ws-caret {
   opacity: 1 !important;
-  color: #05050a !important;
+  color: #000000 !important;
 }
 
 :root:not(.solid-theme).light-theme .titlebar .nav-btn:disabled {
@@ -160,12 +185,11 @@
 :root:not(.solid-theme).light-theme .svt-btn svg,
 :root:not(.solid-theme).light-theme .file-node svg,
 :root:not(.solid-theme).light-theme .header-btn svg {
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.3));
 }
 
 
 :root:not(.solid-theme) .cm-editor *,
-:root:not(.solid-theme) .xterm-rows *,
 :root:not(.solid-theme) pre *,
 :root:not(.solid-theme) code * {
   text-shadow: none !important;
@@ -306,11 +330,6 @@ html {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background-color: transparent;
-}
-
-html.has-bg-media,
-html.has-bg-image {
   background-color: var(--bg-primary);
 }
 
@@ -340,9 +359,50 @@ body::before {
   backface-visibility: hidden;
 }
 
-/* Background image is ALWAYS fully solid — no opacity dimming */
+/* Background image is always highly solid but pulled back just 10% to give
+   the glass-frost overlay room to breathe on very busy/bright images. */
 html.has-bg-image body::before {
-  opacity: 1;
+  opacity: 0.90;
+}
+
+/* ── Mid-layer scrim ───────────────────────────────────────────────────────
+   Sits between the wallpaper (z-index -2) and the frosted-glass UI (z-index
+   -1). Darkens or lightens the image just enough that every icon, text label
+   and glass panel stays readable on any wallpaper — dark or light theme. */
+html.has-bg-image body::after,
+html.has-bg-media body::after {
+  /* Boost frost opacity so glass panels have more tint — this is the
+     primary readability lever for glass elements like the sidebar,
+     titlebar, editor and activity bar. */
+  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.52) !important;
+}
+
+/* Dark-theme scrim: a dark semi-transparent wash */
+html.has-bg-image:not(.light-theme) body::before,
+html.has-bg-media:not(.light-theme) body::before {
+  /* Keep image visible via opacity; the scrim below adds the dark wash */
+}
+
+/* A dedicated scrim layer between image and glass UI */
+html.has-bg-image:not(.light-theme) #app::before,
+html.has-bg-media:not(.light-theme) #app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+/* Light-theme scrim: a white wash */
+html.has-bg-image.light-theme #app::before,
+html.has-bg-media.light-theme #app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(255, 255, 255, 0.30);
+  pointer-events: none;
 }
 
 body {
@@ -350,8 +410,11 @@ body {
   height: 100vh;
   overflow: hidden;
   overscroll-behavior: none;
-  font-family: 'Fraunces', Georgia, 'Times New Roman', serif;
-  font-size: 15px;
+  font-family: var(--font-sans);
+  font-size: 17px;
+  /* Medium base weight: hairline 400 text is hard to read over the translucent
+     wallpaper. Elements that set their own (heavier) weight are unaffected. */
+  font-weight: 500;
   color: var(--text-primary);
   background-color: transparent;
   position: relative;
@@ -384,7 +447,7 @@ body::after {
    the wallpaper remains clearly visible. */
 html.has-bg-image.light-theme body::after,
 html.has-bg-media.light-theme body::after {
-  background-color: rgba(255, 255, 255, 0.14) !important;
+  background-color: rgba(255, 255, 255, 0.07) !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -404,42 +467,56 @@ html.has-bg-image:not(.light-theme) {
 
 html.has-bg-media:not(.light-theme) body,
 html.has-bg-image:not(.light-theme) body {
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  /* Stronger shadow so white text pops off ANY background colour */
+  text-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.75),
+    0 2px 8px rgba(0, 0, 0, 0.50);
 }
 
 /* Crisp, strong icon shadows in dark mode with background */
 html.has-bg-media:not(.light-theme) svg,
 html.has-bg-image:not(.light-theme) svg {
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+  /* Inherit white color so icons aren't invisible over bright areas */
+  color: var(--text-primary);
+  filter:
+    drop-shadow(0 1px 4px rgba(0, 0, 0, 0.80))
+    drop-shadow(0 0 8px rgba(0, 0, 0, 0.50));
 }
 
-/* Light mode with background active */
+/* Light mode with background active — pure black text for maximum
+   contrast against the see-through panels and wallpaper. */
 html.has-bg-media.light-theme,
 html.has-bg-image.light-theme {
-  --text-primary:    #050508 !important;
-  --text-secondary:  #18181f !important;
-  --text-muted:      #38384a !important;
-  --titlebar-text:   #050508 !important;
+  --text-primary:    #000000 !important;
+  --text-secondary:  #0a0a14 !important;
+  --text-muted:      #1a1a2e !important;
+  --titlebar-text:   #000000 !important;
 }
 
 html.has-bg-media.light-theme body,
 html.has-bg-image.light-theme body {
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+  /* White halo so dark text reads over both light and dark image areas */
+  text-shadow:
+    0 1px 4px rgba(255, 255, 255, 0.90),
+    0 0 10px rgba(255, 255, 255, 0.60),
+    0 2px 2px rgba(255, 255, 255, 0.40);
 }
 
 /* Crisp icon shadows in light mode with background */
 html.has-bg-media.light-theme svg,
 html.has-bg-image.light-theme svg {
-  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.5));
+  color: var(--text-primary);
+  filter:
+    drop-shadow(0 1px 3px rgba(255, 255, 255, 0.90))
+    drop-shadow(0 0 8px rgba(255, 255, 255, 0.70))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.20));
 }
 
-/* Keep code/terminal text shadow-free for readability */
+/* Keep code text shadow-free for readability */
 html.has-bg-media .cm-editor *,
-html.has-bg-media .xterm-rows *,
 html.has-bg-media pre *,
 html.has-bg-media code *,
 html.has-bg-image .cm-editor *,
-html.has-bg-image .xterm-rows *,
 html.has-bg-image pre *,
 html.has-bg-image code * {
   text-shadow: none !important;
@@ -646,8 +723,8 @@ input:focus {
 /* Light theme overrides */
 :root.light-theme .bento-card {
   background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.15) 30%, transparent 60%),
-    rgba(var(--bg-primary-rgb, 255, 255, 255), var(--frost-chrome, 0.62));
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-color: rgba(0, 0, 0, 0.10);
@@ -800,7 +877,7 @@ textarea,
 .provider-card-subtitle,
 .provider-card-title,
 .voice-input-provider-status {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+  font-family: var(--font-sans) !important;
 }
 
 .cm-editor,
@@ -811,7 +888,7 @@ pre,
 code,
 kbd,
 samp {
-  font-family: var(--editor-font-family, monospace) !important;
+  font-family: var(--editor-font-family, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace) !important;
 }
 
 /* ── Apple-Inspired Liquid Glass Spring Micro-Animations & Sliders ── */
