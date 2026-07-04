@@ -1440,19 +1440,32 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                               onClick={() => switchPresetTheme(theme.id)}
                             >
                               <div
-                                className={`theme-preview${!isDarkTheme ? ' light-card-veil' : ''}`}
+                                className="theme-preview"
                                 style={{
                                   backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
                                   backgroundColor: bgPrimary,
                                 }}
                               >
+                                {/* Scrim overlay to dim the image so the glass panel text is always readable */}
+                                <div style={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  background: isDarkTheme
+                                    ? 'rgba(0, 0, 0, 0.45)'
+                                    : 'rgba(255, 255, 255, 0.42)',
+                                  zIndex: 0,
+                                }} />
                                 <div
                                   className="theme-preview-glass"
                                   style={{
-                                    background: `rgba(${parseInt(bgPrimary.replace(/^#/, '').substring(0, 2), 16) || (isDarkTheme ? 17 : 250)}, ${parseInt(bgPrimary.replace(/^#/, '').substring(2, 4), 16) || (isDarkTheme ? 17 : 250)}, ${parseInt(bgPrimary.replace(/^#/, '').substring(4, 6), 16) || (isDarkTheme ? 17 : 250)}, ${glassTintAlpha})`,
+                                    position: 'relative',
+                                    zIndex: 1,
+                                    background: isDarkTheme
+                                      ? `rgba(0, 0, 0, 0.55)`
+                                      : `rgba(255, 255, 255, 0.65)`,
                                     borderColor: borderColor,
-                                    backdropFilter: 'blur(6px) saturate(150%)',
-                                    WebkitBackdropFilter: 'blur(6px) saturate(150%)',
+                                    backdropFilter: 'blur(8px) saturate(160%)',
+                                    WebkitBackdropFilter: 'blur(8px) saturate(160%)',
                                   }}
                                 >
                                   <div className="theme-preview-header">
