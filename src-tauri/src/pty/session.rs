@@ -62,6 +62,8 @@ pub fn spawn(
     let exit_code = Arc::new(Mutex::new(None));
     let exit_subscribers = Arc::new(Mutex::new(vec![on_exit]));
 
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
     let reader_output_buffer = output_buffer.clone();
     let reader_data_subscribers = data_subscribers.clone();
     thread::Builder::new()
@@ -73,21 +75,74 @@ pub fn spawn(
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let chunk = buf[..n].to_vec();
-                        if let Ok(mut replay) = reader_output_buffer.lock() {
-                            replay.extend_from_slice(&chunk);
-                            let excess = replay.len().saturating_sub(MAX_REPLAY_BUFFER_BYTES);
-                            if excess > 0 {
-                                replay.drain(..excess);
-                            }
-                        }
-                        if let Ok(mut subscribers) = reader_data_subscribers.lock() {
-                            subscribers.retain(|channel| {
-                                channel.send(Response::new(chunk.clone())).is_ok()
-                            });
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            break;
                         }
                     }
                     Err(_) => break,
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    thread::Builder::new()
+        .name("forge-pty-throttler".into())
+        .spawn(move || {
+            let mut local_buffer = Vec::new();
+            let mut last_flush = std::time::Instant::now();
+            let timeout = std::time::Duration::from_millis(15);
+
+            let flush = |buffer: &[u8]| {
+                if buffer.is_empty() {
+                    return;
+                }
+                if let Ok(mut replay) = reader_output_buffer.lock() {
+                    replay.extend_from_slice(buffer);
+                    let excess = replay.len().saturating_sub(MAX_REPLAY_BUFFER_BYTES);
+                    if excess > 0 {
+                        replay.drain(..excess);
+                    }
+                }
+                if let Ok(mut subscribers) = reader_data_subscribers.lock() {
+                    subscribers.retain(|channel| {
+                        channel.send(Response::new(buffer.to_vec())).is_ok()
+                    });
+                }
+            };
+
+            loop {
+                if local_buffer.is_empty() {
+                    match rx.recv() {
+                        Ok(chunk) => {
+                            local_buffer.extend(chunk);
+                            last_flush = std::time::Instant::now();
+                        }
+                        Err(_) => break, // Channel closed
+                    }
+                } else {
+                    match rx.recv_timeout(timeout) {
+                        Ok(chunk) => {
+                            local_buffer.extend(chunk);
+                            if local_buffer.len() >= 8192 {
+                                flush(&local_buffer);
+                                local_buffer.clear();
+                                last_flush = std::time::Instant::now();
+                            } else if last_flush.elapsed() >= timeout {
+                                flush(&local_buffer);
+                                local_buffer.clear();
+                                last_flush = std::time::Instant::now();
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            flush(&local_buffer);
+                            local_buffer.clear();
+                            last_flush = std::time::Instant::now();
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            flush(&local_buffer);
+                            break;
+                        }
+                    }
                 }
             }
         })

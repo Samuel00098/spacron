@@ -896,3 +896,44 @@ input[type='range']::-webkit-slider-thumb:active {
   transition: transform 0.28s cubic-bezier(0.34, 1.3, 0.64, 1), background-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) !important;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   FLOW SYSTEM REDESIGN VARIABLES AND BACKDROP BLOOM
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --flow-bg: #14120e;
+  --flow-panel: #1b1813;
+  --flow-raised: #231f18;
+  --flow-ink: #100e0a;
+  --flow-cream: #ece3d2;
+  --flow-dim: #a89d88;
+  --flow-faint: #716958;
+  --flow-line: rgba(236, 227, 210, 0.08);
+  --flow-line-soft: rgba(236, 227, 210, 0.045);
+  --flow-sage: #8fb2a4;
+  --flow-sage-soft: rgba(143, 178, 164, 0.12);
+  --flow-clay: #cda06b;
+  
+  /* Accent states based on Agent Roles */
+  --flow-accent-teal: #22d3c7;   /* Orchestrator / Builder */
+  --flow-accent-sky: #60a5fa;    /* Reviewer */
+  --flow-accent-amber: #f5b045;  /* Scout / Attention */
+  --flow-accent-green: #34d399;  /* Terminal / Success */
+  --flow-accent-pink: #f472b6;   /* Keyword pop */
+}
+
+/* Background ambient bloom for the Flow theme */
+body.flow-theme-active::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: var(--flow-bg);
+  background-image:
+    radial-gradient(100% 100% at 20% 20%, rgba(143, 178, 164, 0.12) 0%, transparent 60%),
+    radial-gradient(120% 120% at 80% 80%, rgba(205, 160, 107, 0.08) 0%, transparent 60%),
+    radial-gradient(80% 80% at 50% 110%, rgba(34, 211, 199, 0.06) 0%, transparent 50%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.01) 0%, transparent 50%, rgba(255, 255, 255, 0.005) 100%);
+  pointer-events: none;
+}
+
+
