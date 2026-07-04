@@ -315,6 +315,9 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             syntax: HashMap::new(),
+            background_image: None,
+            background_opacity: None,
+            background_blur: None,
         }
     }
 

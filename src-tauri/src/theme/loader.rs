@@ -89,6 +89,9 @@ pub fn load_bundled_themes() -> Vec<Theme> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect(),
+        background_image: None,
+        background_opacity: None,
+        background_blur: None,
     };
 
     let light_theme = Theme {
@@ -158,6 +161,9 @@ pub fn load_bundled_themes() -> Vec<Theme> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect(),
+        background_image: None,
+        background_opacity: None,
+        background_blur: None,
     };
 
     themes.push(dark_theme);

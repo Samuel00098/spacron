@@ -2,7 +2,8 @@ import { writable, get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import type { Theme, ThemeInfo } from '$lib/types/theme';
 import { showToast } from './notification';
-import { appearance } from './settings';
+import { appearance, backgroundImageEnabled, backgroundImageOpacity, backgroundImageBlur, interfaceTransparency } from './settings';
+import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, hasBackgroundImage } from './background';
 import { presetThemes, currentPresetTheme } from './presetThemes';
 import { useThemeStore } from './zustand/theme';
 
@@ -236,6 +237,38 @@ export function applyThemeToCSS(theme: Theme | null) {
     if (rgb) {
       root.style.setProperty('--accent-light', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.15)`);
       root.style.setProperty('--accent-glow', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`);
+    }
+  }
+
+  // Apply theme-specific background image if defined
+  if (theme.backgroundImage) {
+    root.style.setProperty('--user-bg-image', `url("${theme.backgroundImage}")`);
+    root.classList.add('has-bg-image');
+    const opacity = theme.backgroundOpacity !== undefined ? theme.backgroundOpacity : 100;
+    const blur = theme.backgroundBlur !== undefined ? theme.backgroundBlur : 0;
+    root.style.setProperty('--user-bg-opacity', (opacity / 100).toFixed(3));
+    root.style.setProperty('--user-bg-blur', `${blur}px`);
+
+    // Automatically ensure some transparency is enabled so the background is visible.
+    // If global interface transparency is set to 0, force a default of 50% frost.
+    const trans = get(interfaceTransparency);
+    if (trans === 0) {
+      applyInterfaceFrost(50);
+    } else {
+      applyInterfaceFrost(trans);
+    }
+  } else {
+    // Revert to global settings-controlled background image if settings active
+    const settingsActive = get(backgroundImageEnabled) && hasBackgroundImage();
+    if (!settingsActive) {
+      root.style.removeProperty('--user-bg-image');
+      root.classList.remove('has-bg-image');
+      // Restore frost transparency according to global settings
+      applyInterfaceFrost(get(interfaceTransparency));
+    } else {
+      applyBackgroundImage();
+      applyBackgroundAppearance(get(backgroundImageOpacity), get(backgroundImageBlur));
+      applyInterfaceFrost(get(interfaceTransparency));
     }
   }
 

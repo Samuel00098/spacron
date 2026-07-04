@@ -26,18 +26,10 @@
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
-  background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
-  box-shadow: 
-    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
-    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
-    0 32px 80px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
   animation: settingsScaleUp 0.3s cubic-bezier(0.34, 1.3, 0.64, 1);
   view-transition-name: spacron-settings-modal;
 }
@@ -1124,12 +1116,10 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
   /* Use the same glass recipe as the modal so it matches the active theme */
-  background: color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.92) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  background: var(--bg-secondary);
   box-shadow:
     var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.7)),
-    inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07));
+    inset 0 1px 0 var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1236,9 +1226,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.92) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 20px));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 20px));
+  background: var(--bg-secondary);
   color: var(--text-muted);
   margin-bottom: 5px;
 }

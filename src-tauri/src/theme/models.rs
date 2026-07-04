@@ -9,6 +9,12 @@ pub struct Theme {
     pub theme_type: ThemeType,
     pub colors: HashMap<String, String>,
     pub syntax: HashMap<String, String>,
+    #[serde(default)]
+    pub background_image: Option<String>,
+    #[serde(default)]
+    pub background_opacity: Option<f32>,
+    #[serde(default)]
+    pub background_blur: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
