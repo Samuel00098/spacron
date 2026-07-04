@@ -1440,7 +1440,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                               onClick={() => switchPresetTheme(theme.id)}
                             >
                               <div
-                                className="theme-preview"
+                                className={`theme-preview${!isDarkTheme ? ' light-card-veil' : ''}`}
                                 style={{
                                   backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
                                   backgroundColor: bgPrimary,
