@@ -359,10 +359,10 @@ body::before {
   backface-visibility: hidden;
 }
 
-/* Background image is always highly solid but pulled back just 10% to give
-   the glass-frost overlay room to breathe on very busy/bright images. */
+/* Background image pulled back to give the scrim layers more room to work.
+   Lowering this makes busy/bright wallpapers less dominant over the UI. */
 html.has-bg-image body::before {
-  opacity: 0.90;
+  opacity: 0.82;
 }
 
 /* ── Mid-layer scrim ───────────────────────────────────────────────────────
@@ -371,10 +371,9 @@ html.has-bg-image body::before {
    and glass panel stays readable on any wallpaper — dark or light theme. */
 html.has-bg-image body::after,
 html.has-bg-media body::after {
-  /* Boost frost opacity so glass panels have more tint — this is the
-     primary readability lever for glass elements like the sidebar,
-     titlebar, editor and activity bar. */
-  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.52) !important;
+  /* Boost frost opacity so glass panels are more solid and readable —
+     sidebar, titlebar, editor, activity bar all benefit from this. */
+  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.62) !important;
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -390,7 +389,15 @@ html.has-bg-media:not(.light-theme) #app::before {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: rgba(0, 0, 0, 0.28);
+  /* Layered dark gradient: darker at bottom edges, slightly lighter center
+     so the image mood still comes through while text is always readable. */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.35) 0%,
+      rgba(0, 0, 0, 0.45) 40%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
   pointer-events: none;
 }
 
@@ -401,9 +408,17 @@ html.has-bg-media.light-theme #app::before {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: rgba(255, 255, 255, 0.30);
+  /* Layered white gradient: brighter at top, fades softly down */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.50) 0%,
+      rgba(255, 255, 255, 0.42) 50%,
+      rgba(255, 255, 255, 0.55) 100%
+    );
   pointer-events: none;
 }
+
 
 body {
   width: 100vw;
