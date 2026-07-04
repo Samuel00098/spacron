@@ -1,6 +1,6 @@
 import { get, writable } from '$lib/stores/storeCompat';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { backgroundImageEnabled, interfaceTransparency, backgroundImageOpacity, backgroundImageBlur } from './settings';
+import { backgroundImageEnabled, interfaceTransparency, backgroundImageBlur } from './settings';
 import { showToast } from './notification';
 import { useBackgroundStore, type BackgroundMedia, type BackgroundMediaKind } from './zustand/background';
 
@@ -55,7 +55,7 @@ function setCurrent(filePath: string | null, cacheToken = `${Date.now()}`) {
 
 export async function initBackground(): Promise<void> {
   applyInterfaceFrost(get(interfaceTransparency));
-  applyBackgroundAppearance(get(backgroundImageOpacity), get(backgroundImageBlur));
+  applyBackgroundAppearance(get(backgroundImageBlur));
   try {
     const storedBackground = await invoke<string | null>('background_image_get');
     setCurrent(storedBackground);
@@ -191,7 +191,7 @@ export function applyInterfaceFrost(transparency: number): void {
 let appearanceTimeout: any = null;
 let lastAppearanceRun = 0;
 
-export function applyBackgroundAppearance(opacityPct: number, blurPx: number): void {
+export function applyBackgroundAppearance(blurPx: number): void {
   if (typeof document === 'undefined') return;
 
   const now = Date.now();
@@ -199,9 +199,9 @@ export function applyBackgroundAppearance(opacityPct: number, blurPx: number): v
 
   const run = () => {
     const root = document.documentElement;
-    const o = Math.min(100, Math.max(0, opacityPct)) / 100;
     const b = Math.min(60, Math.max(0, blurPx));
-    root.style.setProperty('--user-bg-opacity', o.toFixed(3));
+    // Background image is always fully solid — opacity is fixed at 1 in CSS.
+    // Only the blur is controllable.
     root.style.setProperty('--user-bg-blur', `${b}px`);
     lastAppearanceRun = Date.now();
     appearanceTimeout = null;

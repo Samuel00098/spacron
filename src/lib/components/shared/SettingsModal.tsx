@@ -644,9 +644,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentZoom = useStore(uiZoom);
   const currentFormatOnSave = useStore(formatOnSave);
   const currentAppearance = useStore(appearance);
-  const currentTransparency = useStore(interfaceTransparency);
   const bgEnabled = useStore(backgroundImageEnabled);
-  const bgOpacity = useStore(backgroundImageOpacity);
   const bgBlur = useStore(backgroundImageBlur);
   const provider = useStore(aiProvider);
   const model = useStore(currentAiModel);
@@ -1374,9 +1372,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button className="num-btn-reset" onClick={() => uiZoom.set(100)}>Reset</button>
                     </div>
                   </SettingRow>
-                  <SettingRow title="Transparency" detail={`${currentTransparency}%`}>
-                    <input type="range" min="0" max="100" step="5" value={currentTransparency} onChange={(event) => interfaceTransparency.set(Number(event.target.value))} />
-                  </SettingRow>
                 </Section>
 
                 {showingCustomThemeEditor ? (
@@ -1469,7 +1464,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 )}
 
                 <Section title="Background">
-                  <SettingRow title="Custom background" detail="Show an image or live wallpaper behind the interface.">
+                  <SettingRow title="Custom background" detail="Show an image or live wallpaper behind the interface. The image is always fully solid.">
                     <div className="bg-actions">
                       <button className="bg-btn" onClick={chooseBackgroundImage}>
                         {bgPresent ? 'Change…' : 'Choose…'}
@@ -1481,9 +1476,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow title="Media background">
                     <Toggle label="Toggle background media" checked={bgEnabled} onChange={backgroundImageEnabled.set} />
-                  </SettingRow>
-                  <SettingRow title="Opacity" detail={`${bgOpacity}%`}>
-                    <input type="range" min="0" max="100" step="5" value={bgOpacity} onChange={(event) => backgroundImageOpacity.set(Number(event.target.value))} disabled={!bgEnabled} />
                   </SettingRow>
                   <SettingRow title="Blur" detail={`${bgBlur}px`}>
                     <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgEnabled} />

@@ -1,7 +1,7 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import FlowAppShell from '$lib/components/layout/FlowAppShell.tsx';
+import AppShell from '$lib/components/layout/AppShell.tsx';
 import BackgroundMedia from '$lib/components/shared/BackgroundMedia.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
@@ -40,7 +40,6 @@ import {
   reconcileOnboardingFlag,
   backgroundImageEnabled,
   interfaceTransparency,
-  backgroundImageOpacity,
   backgroundImageBlur,
   closeBehavior,
 } from '$lib/stores/settings';
@@ -107,9 +106,8 @@ export default function App() {
         bgAppearanceRuns += 1;
         return;
       }
-      applyBackgroundAppearance(get(backgroundImageOpacity), get(backgroundImageBlur));
+      applyBackgroundAppearance(get(backgroundImageBlur));
     };
-    const unsubBgOpacity = backgroundImageOpacity.subscribe(applyAppearanceLive);
     const unsubBgBlur = backgroundImageBlur.subscribe(applyAppearanceLive);
 
     let unlistenClose: (() => void) | undefined;
@@ -172,7 +170,6 @@ export default function App() {
       unsubscribeShortcuts();
       unsubFrost();
       unsubBgEnabled();
-      unsubBgOpacity();
       unsubBgBlur();
     };
   }, []);
@@ -180,7 +177,7 @@ export default function App() {
   return (
     <>
       <BackgroundMedia />
-      <FlowAppShell />
+      <AppShell />
 
       <CommandPalette />
       <FloatingSearch />
