@@ -79,7 +79,7 @@ export const presetThemes: Theme[] = [
       'tag': '#eb0c0c',
       'attribute': '#09a041',
     },
-    '/backgrounds/light-office.jpg',
+    '/backgrounds/light-office.webp',
     75,
     0
   ),
@@ -146,7 +146,7 @@ export const presetThemes: Theme[] = [
       'tag': '#e80c3c',
       'attribute': '#09a944',
     },
-    '/backgrounds/light-architecture.jpg',
+    '/backgrounds/light-architecture.webp',
     75,
     0
   ),
@@ -213,7 +213,7 @@ export const presetThemes: Theme[] = [
       'tag': '#eb0c0c',
       'attribute': '#62a108',
     },
-    '/backgrounds/light-desk.jpg',
+    '/backgrounds/light-desk.webp',
     75,
     0
   ),
@@ -280,7 +280,7 @@ export const presetThemes: Theme[] = [
       'tag': '#eb0c0c',
       'attribute': '#098aaa',
     },
-    '/backgrounds/light-beach.jpg',
+    '/backgrounds/light-beach.webp',
     75,
     0
   ),
@@ -347,7 +347,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f7607a',
       'attribute': '#0df2a6',
     },
-    '/backgrounds/dark-street.jpg',
+    '/backgrounds/dark-street.webp',
     75,
     0
   ),
@@ -414,7 +414,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f76e6e',
       'attribute': '#40ebac',
     },
-    '/backgrounds/dark-workspace.jpg',
+    '/backgrounds/dark-workspace.webp',
     75,
     0
   ),
@@ -481,7 +481,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f76060',
       'attribute': '#40ebac',
     },
-    '/backgrounds/dark-obsidian.jpg',
+    '/backgrounds/dark-obsidian.webp',
     75,
     0
   ),
@@ -548,7 +548,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f76e6e',
       'attribute': '#40ebac',
     },
-    '/backgrounds/dark-forest.jpg',
+    '/backgrounds/dark-forest.webp',
     75,
     0
   ),
@@ -615,7 +615,7 @@ export const presetThemes: Theme[] = [
       'tag': '#b83d3d',
       'attribute': '#5b7a58',
     },
-    '/backgrounds/light-scandi.jpg',
+    '/backgrounds/light-scandi.webp',
     75,
     0
   ),
@@ -682,7 +682,7 @@ export const presetThemes: Theme[] = [
       'tag': '#c23b3b',
       'attribute': '#2b664c',
     },
-    '/backgrounds/light-library.jpg',
+    '/backgrounds/light-library.webp',
     75,
     0
   ),
@@ -749,7 +749,7 @@ export const presetThemes: Theme[] = [
       'tag': '#dc2626',
       'attribute': '#15803d',
     },
-    '/backgrounds/light-greenhouse.jpg',
+    '/backgrounds/light-greenhouse.webp',
     75,
     0
   ),
@@ -816,7 +816,7 @@ export const presetThemes: Theme[] = [
       'tag': '#b52626',
       'attribute': '#5b733b',
     },
-    '/backgrounds/light-desert.jpg',
+    '/backgrounds/light-desert.webp',
     75,
     0
   ),
@@ -883,7 +883,7 @@ export const presetThemes: Theme[] = [
       'tag': '#c72828',
       'attribute': '#1c732b',
     },
-    '/backgrounds/light-meadows.jpg',
+    '/backgrounds/light-meadows.webp',
     75,
     0
   ),
@@ -950,7 +950,7 @@ export const presetThemes: Theme[] = [
       'tag': '#a34c4d',
       'attribute': '#5b6c50',
     },
-    '/backgrounds/light-zen-garden.jpg',
+    '/backgrounds/light-zen-garden.webp',
     75,
     0
   ),
@@ -1017,7 +1017,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f43f5e',
       'attribute': '#10b981',
     },
-    '/backgrounds/dark-server-room.jpg',
+    '/backgrounds/dark-server-room.webp',
     75,
     0
   ),
@@ -1084,7 +1084,7 @@ export const presetThemes: Theme[] = [
       'tag': '#e74c3c',
       'attribute': '#a2c185',
     },
-    '/backgrounds/dark-fireplace.jpg',
+    '/backgrounds/dark-fireplace.webp',
     75,
     0
   ),
@@ -1151,7 +1151,7 @@ export const presetThemes: Theme[] = [
       'tag': '#fb7185',
       'attribute': '#10b981',
     },
-    '/backgrounds/dark-ocean.jpg',
+    '/backgrounds/dark-ocean.webp',
     75,
     0
   ),
@@ -1218,7 +1218,7 @@ export const presetThemes: Theme[] = [
       'tag': '#ec4899',
       'attribute': '#8b5cf6',
     },
-    '/backgrounds/dark-nebula.jpg',
+    '/backgrounds/dark-nebula.webp',
     75,
     0
   ),
@@ -1285,7 +1285,7 @@ export const presetThemes: Theme[] = [
       'tag': '#cf5252',
       'attribute': '#569e6b',
     },
-    '/backgrounds/dark-rainy-window.jpg',
+    '/backgrounds/dark-rainy-window.webp',
     75,
     0
   ),
@@ -1352,7 +1352,7 @@ export const presetThemes: Theme[] = [
       'tag': '#cf5348',
       'attribute': '#839e6a',
     },
-    '/backgrounds/dark-industrial-loft.jpg',
+    '/backgrounds/dark-industrial-loft.webp',
     75,
     0
   ),
@@ -1419,7 +1419,7 @@ export const presetThemes: Theme[] = [
       'tag': '#c43333',
       'attribute': '#4b7a42',
     },
-    '/backgrounds/light-cafe.jpg',
+    '/backgrounds/light-cafe.webp',
     75,
     0
   ),
@@ -1486,7 +1486,7 @@ export const presetThemes: Theme[] = [
       'tag': '#c22d2d',
       'attribute': '#4c8c5c',
     },
-    '/backgrounds/light-sakura.jpg',
+    '/backgrounds/light-sakura.webp',
     75,
     0
   ),
@@ -1553,7 +1553,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f23d13',
       'attribute': '#8db37d',
     },
-    '/backgrounds/dark-volcanic-cave.jpg',
+    '/backgrounds/dark-volcanic-cave.webp',
     75,
     0
   ),
@@ -1620,7 +1620,7 @@ export const presetThemes: Theme[] = [
       'tag': '#fb7185',
       'attribute': '#0df2a6',
     },
-    '/backgrounds/dark-cyber-rooftop.jpg',
+    '/backgrounds/dark-cyber-rooftop.webp',
     75,
     0
   ),
