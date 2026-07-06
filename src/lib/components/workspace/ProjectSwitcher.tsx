@@ -51,7 +51,9 @@ export default function ProjectSwitcher() {
   function handleContextMenu(e: React.MouseEvent, project: Project) {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ project, x: e.clientX, y: e.clientY });
+    const zoomPercentStr = window.getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom-percent');
+    const zoomFactor = zoomPercentStr ? (parseFloat(zoomPercentStr) / 100) : 1;
+    setContextMenu({ project, x: e.clientX / zoomFactor, y: e.clientY / zoomFactor });
   }
 
   function handleMove(targetWorkspaceId: string) {

@@ -1,7 +1,7 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import type { FileEntry, FileNode, ContextMenuState } from '$lib/types/explorer';
-import { showHidden } from './settings';
+import { showHidden, uiZoom } from './settings';
 import { activeProject } from './workspace';
 import { showToast } from './notification';
 import { useExplorerStore } from './zustand/explorer';
@@ -138,7 +138,10 @@ export async function confirmRename() {
 export function showContextMenu(e: MouseEvent, path: string, isDir: boolean) {
   e.preventDefault();
   e.stopPropagation();
-  contextMenu.set({ visible: true, x: e.clientX, y: e.clientY, path, isDir });
+  const zoomFactor = (get(uiZoom) || 100) / 100;
+  const x = e.clientX / zoomFactor;
+  const y = e.clientY / zoomFactor;
+  contextMenu.set({ visible: true, x, y, path, isDir });
 }
 
 export function hideContextMenu() {
