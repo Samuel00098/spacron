@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { get } from '$lib/stores/storeCompat';
 import {
@@ -32,6 +33,22 @@ function musicArt(videoId: string): string {
  *  without this the player failed silently. Code 5 means the HTML5 player
  *  itself couldn't play; on Linux that is almost always WebKitGTK missing the
  *  system GStreamer codecs, so point at the packages to install. */
+let gstreamerCodecsChecked = false;
+let gstreamerCodecsOk = true;
+
+// Probe once at module load so describePlayerError can give accurate
+// guidance on Linux instead of always blaming missing codecs.
+checkGstreamerCodecs();
+
+async function checkGstreamerCodecs() {
+  try {
+    gstreamerCodecsOk = await invoke<boolean>('check_gstreamer_codecs');
+  } catch {
+    gstreamerCodecsOk = false;
+  }
+  gstreamerCodecsChecked = true;
+}
+
 function describePlayerError(code: number): string {
   switch (code) {
     case 2:
@@ -44,7 +61,7 @@ function describePlayerError(code: number): string {
     default: {
       const onLinuxDesktop =
         navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
-      if (onLinuxDesktop) {
+      if (onLinuxDesktop && gstreamerCodecsChecked && !gstreamerCodecsOk) {
         return (
           'Playback failed. On Linux, video playback needs the GStreamer codecs — ' +
           'e.g. on Ubuntu/Debian run: sudo apt install gstreamer1.0-plugins-good ' +

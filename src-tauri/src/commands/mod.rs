@@ -1,19 +1,24 @@
 pub mod app_flags;
+pub mod audio;
 pub mod background;
 pub mod db;
 pub mod deps;
 pub mod env_vars;
 pub mod file_system;
+pub mod fs_watch;
 pub mod github;
 pub mod http;
 pub mod lsp;
 pub mod mobile;
 pub mod notification;
+pub mod parakeet;
 pub mod preview;
 pub mod search;
 pub mod secrets;
 pub mod terminal;
 pub mod theme;
+#[cfg(feature = "whisper-stt")]
+pub mod whisper;
 pub mod workspace;
 pub mod models;
 

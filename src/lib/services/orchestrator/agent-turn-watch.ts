@@ -53,9 +53,9 @@ export async function watchLeasedAgentTurn(
   // the task severed from its session, the agent's real answer (printed a beat
   // later) is never read back. Discrete bell/attention signals still finish a
   // turn immediately; this only governs agents that never signal.
-  const idleMs = opts.idleMs ?? 25000;
+  const idleMs = opts.idleMs ?? 90000;
   const tailChars = opts.tailChars ?? 2000;
-  const minWorkChars = opts.minWorkChars ?? 200;
+  const minWorkChars = opts.minWorkChars ?? 500;
 
   let lastLen = getSessionOutputBuffer(sessionId).length;
   let lastBell = countBell(getSessionOutputBuffer(sessionId));

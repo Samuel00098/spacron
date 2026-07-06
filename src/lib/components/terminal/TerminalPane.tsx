@@ -54,17 +54,17 @@ import { useStore } from '$lib/react/useStore';
 import './TerminalPane.css';
 
 const ROLE_PRESETS = [
-  { label: 'Server', color: '#4ade80' },
-  { label: 'Tests', color: '#60a5fa' },
-  { label: 'Build', color: '#fb923c' },
-  { label: 'Agent', color: '#a78bfa' },
-  { label: 'Git', color: '#fbbf24' },
+  { label: 'Server', color: 'var(--role-server)' },
+  { label: 'Tests', color: 'var(--role-tests)' },
+  { label: 'Build', color: 'var(--role-build)' },
+  { label: 'Agent', color: 'var(--role-agent)' },
+  { label: 'Git', color: 'var(--role-git)' },
 ] as const;
 
 function getRoleColor(role: string | null | undefined): string {
   if (!role) return 'transparent';
   const preset = ROLE_PRESETS.find((r) => r.label === role);
-  return preset ? preset.color : '#9ca3af';
+  return preset ? preset.color : 'var(--text-muted)';
 }
 
 // Minimum terminal dimensions — prevents degenerate atlas state when pane is dragged tiny.
@@ -300,27 +300,35 @@ export default function TerminalPane({
     } catch {}
   }
 
-  // The terminal text layer always paints on an OPAQUE surface. WebView2 on
-  // Windows can't reliably composite a transparent glyph/canvas layer over the
-  // pane's backdrop-filter blur (content paints then vanishes — the "blank
-  // terminal" bug), and WebGL additionally thins text on a transparent bg
-  // (xterm.js #4212/#2252). The frosted-glass look lives on the pane frame and
-  // titlebar instead; the content area reads as a solid inset, like a native
-  // terminal. Kept as a helper so every renderer switch reasserts it.
+  // Always render the terminal fully transparent (alpha 0) so the wallpaper shows
+  // through in both light and dark modes — the frosted-glass aesthetic lives on
+  // the pane frame; the content area is see-through.
+  //
+  // BUT the *RGB* of that transparent colour still matters: xterm reports it in
+  // response to a TUI's OSC 11 "what is your background?" query, which is how
+  // termenv-based apps (opencode, Claude Code, etc.) auto-detect light vs dark.
+  // A transparent-*black* bg made every TUI pick dark mode even in light theme.
+  // Carry a light RGB in light mode / dark RGB in dark mode so TUIs theme-match,
+  // while alpha 0 keeps the surface fully transparent.
   function terminalBackground() {
-    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
-    if (!isSolid) return 'rgba(0, 0, 0, 0)';
-    const theme = get(activeTheme);
-    const colors = theme?.colors || {};
-    const isLight = theme?.type === 'light';
-    return colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116');
+    const isLight = get(activeTheme)?.type === 'light';
+    // The xterm surface is ALWAYS fully transparent (alpha 0) — the plain shell and
+    // full-screen TUIs alike — so the wallpaper shows through exactly like the code
+    // editor does. TUIs that paint their own full-screen background (opencode and
+    // similar Bubbletea/ncurses CLIs) still look solid because they draw their own
+    // surface over the glass; everything else stays see-through.
+    //
+    // The RGB still matters: xterm reports it in reply to a TUI's OSC 11 "what is
+    // your background?" query, which is how termenv-based apps auto-detect light vs
+    // dark. Carry a light RGB in light mode / dark RGB in dark mode (alpha 0) so any
+    // agent CLI — including ones the user wires up later — theme-matches at launch.
+    return isLight ? 'rgba(250, 250, 252, 0)' : 'rgba(17, 17, 22, 0)';
   }
 
   function applyRendererBackground() {
     const term = termRef.current;
     if (!term) return;
-    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
-    term.options.allowTransparency = !isSolid;
+    term.options.allowTransparency = true;
     term.options.theme = {
       ...term.options.theme,
       background: terminalBackground(),
@@ -422,12 +430,12 @@ export default function TerminalPane({
       (term as any).clearTextureAtlas?.();
       term.refresh(0, term.rows - 1);
 
-      // Second pass after one settled frame — canvas addon needs an extra cycle after dimension
-      // change before its internal draw state is correct. Crucially we re-measure
-      // and re-fit here: the first fit can run before the pane's flex layout has
-      // settled (especially for the 2nd/3rd agent pane), latching a too-small
-      // row count that leaves an empty band below the content. If the settled
-      // size differs, fit again so xterm fills the pane.
+      // Second pass after layout settles — the first fit can run before the
+      // pane's flex/grid layout has stabilised (especially in vibe mode where
+      // the CSS grid transition is 320ms), latching a too-small row count
+      // that leaves the viewport height wrong and scrolling broken. Wait long
+      // enough that any CSS transition or layout reparenting has finished,
+      // then re-fit if the settled dimensions differ.
       setTimeout(() => {
         const t = termRef.current;
         const fa = fitAddonRef.current;
@@ -443,7 +451,7 @@ export default function TerminalPane({
         }
         (t as any).clearTextureAtlas?.();
         t.refresh(0, t.rows - 1);
-      }, 60);
+      }, 350);
     } catch {}
   }
 
@@ -700,26 +708,21 @@ export default function TerminalPane({
     const initialColors = get(activeTheme)?.colors || {};
     const initialSyntax = get(activeTheme)?.syntax || {};
     const isLight = get(activeTheme)?.type === 'light';
-    // The text layer always paints on an opaque surface — WebView2 can't reliably
-    // composite a transparent glyph layer over the pane's backdrop-filter blur,
-    // and WebGL thins text on transparency. The glass look lives on the pane
-    // frame/titlebar; the content reads as a solid inset (see applyRendererBackground).
-    const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
-    const initialBackground = isSolid
-      ? (initialColors['editor-bg'] || initialColors['bg-primary'] || (isLight ? '#ffffff' : '#1a1a1f'))
-      : 'rgba(0, 0, 0, 0)';
 
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: get(terminalCursorStyle),
-      allowTransparency: !isSolid,
+      allowTransparency: true,
       scrollback: get(terminalScrollback),
       fontSize: get(terminalFontSize),
       fontFamily: get(resolvedFontFamily),
+      fontWeight: 400,
+      fontWeightBold: 700,
       windowsPty,
       theme: {
-        background: initialBackground,
-        foreground: initialColors['text-primary'] || (isLight ? '#1f2328' : '#e6edf3'),
+        // Transparent surface, but light/dark RGB so TUIs can OSC-11 theme-detect.
+        background: isLight ? 'rgba(250, 250, 252, 0)' : 'rgba(17, 17, 22, 0)',
+        foreground: initialColors['text-primary'] || (isLight ? '#000000' : '#e6edf3'),
         cursor: initialColors['accent'] || (isLight ? '#0f766e' : '#7c6af7'),
         cursorAccent: initialColors['editor-bg'] || initialColors['bg-primary'] || (isLight ? '#ffffff' : '#1a1a1f'),
         selectionBackground: initialColors['selection-bg'] || (isLight ? 'rgba(15,118,110,0.2)' : 'rgba(124,106,247,0.3)'),
@@ -733,15 +736,15 @@ export default function TerminalPane({
         // In light mode ANSI white/brightWhite must stay dark, or shell output
         // drawn in those colors (e.g. command tokens) is invisible on the light
         // background. Map them to readable dark tones instead of near-white.
-        white: isLight ? '#586069' : (initialColors['text-primary'] || '#e6edf3'),
-        brightBlack: initialColors['text-muted'] || (isLight ? '#656d76' : '#6e7681'),
+        white: isLight ? '#24292f' : (initialColors['text-primary'] || '#e6edf3'),
+        brightBlack: initialColors['text-muted'] || (isLight ? '#24292f' : '#6e7681'),
         brightRed: initialSyntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
         brightGreen: initialColors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
         brightYellow: initialColors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
         brightBlue: initialColors['accent-hover'] || (isLight ? '#218bff' : '#9585ff'),
         brightMagenta: initialSyntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
         brightCyan: initialSyntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        brightWhite: isLight ? '#24292f' : (initialColors['text-primary'] || '#ffffff'),
+        brightWhite: isLight ? '#000000' : (initialColors['text-primary'] || '#ffffff'),
       },
     });
     termRef.current = term;
@@ -841,6 +844,11 @@ export default function TerminalPane({
 
       term.open(container);
       applyTerminalRenderer();
+      // Re-apply the surface and nudge a repaint whenever the shell enters/leaves a
+      // full-screen TUI (alternate screen buffer). The background stays transparent
+      // glass in every buffer now — TUIs paint their own opaque surface on top — but
+      // re-touching it on the transition keeps the renderer repainting cleanly.
+      term.buffer.onBufferChange(() => applyRendererBackground());
       container.addEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.addEventListener('mouseup', handleTerminalLinkMouseUp, true);
       container.addEventListener('mouseup', handleTerminalCopyOnSelect);
@@ -948,6 +956,14 @@ export default function TerminalPane({
       fitRafRef.current = requestAnimationFrame(() => {
         fitRafRef.current = null;
         doFit();
+        // A layout switch (Focus ↔ Fleet) hides then re-shows this pane. While it
+        // was hidden the WebGL/canvas glyph atlas can be evicted or left stale, and
+        // doFit()'s refresh re-renders straight from that bad atlas — leaving the
+        // off-screen scrollback rows garbled once you scroll back up. Flush the
+        // atlas and repaint (twice, letting layout settle) so a round-trip through
+        // Fleet comes back clean instead of corrupted.
+        forceRedraw();
+        setTimeout(forceRedraw, 80);
       });
     }
     document.addEventListener('pane-resize-end', onResizeEnd);
@@ -1041,12 +1057,25 @@ export default function TerminalPane({
   useEffect(() => {
     const term = termRef.current;
     if (term) {
+      const fontChanged = term.options.fontFamily !== fontFamily || term.options.fontSize !== fontSize;
       term.options.fontFamily = fontFamily;
       term.options.fontSize = fontSize;
       term.options.cursorStyle = cursorStyle;
       term.options.scrollback = scrollback;
       term.options.windowsPty = windowsPty;
-      scheduleFit();
+      if (fontChanged && webglAddonRef.current) {
+        // WebGL addon caches glyphs in a GPU texture atlas keyed by the font.
+        // Just setting term.options.fontFamily doesn't reliably flush this
+        // cache — the old glyph bitmaps stay on the GPU and the terminal keeps
+        // displaying them.  Recreating the addon is the only guaranteed way to
+        // rebuild the atlas with the new font.
+        webglAddonRef.current.dispose();
+        webglAddonRef.current = null;
+        applyTerminalRenderer();
+      } else {
+        forceRedraw();
+        scheduleFit();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fontFamily, fontSize, cursorStyle, scrollback, windowsPty]);
@@ -1064,13 +1093,12 @@ export default function TerminalPane({
       const colors = activeThemeValue.colors;
       const syntax = activeThemeValue.syntax;
       const isLight = activeThemeValue.type === 'light';
-      const isSolid = typeof document !== 'undefined' && document.documentElement.classList.contains('solid-theme');
-      term.options.allowTransparency = !isSolid;
+      term.options.allowTransparency = true;
       term.options.theme = {
-        background: isSolid
-          ? (colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'))
-          : 'rgba(0, 0, 0, 0)',
-        foreground: colors['text-primary'] || (isLight ? '#1f2328' : '#e6edf3'),
+        // Buffer-aware: opaque theme surface for a full-screen TUI, transparent
+        // glass for the plain shell (see terminalBackground).
+        background: terminalBackground(),
+        foreground: colors['text-primary'] || (isLight ? '#000000' : '#e6edf3'),
         cursor: colors['accent'] || (isLight ? '#0f766e' : '#7c6af7'),
         cursorAccent: colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'),
         selectionBackground: colors['selection-bg'] || (isLight ? 'rgba(15,118,110,0.2)' : 'rgba(124,106,247,0.3)'),
@@ -1081,15 +1109,15 @@ export default function TerminalPane({
         blue: colors['accent'] || (isLight ? '#0969da' : '#7c6af7'),
         magenta: syntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
         cyan: syntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        white: isLight ? '#586069' : (colors['text-primary'] || '#e6edf3'),
-        brightBlack: isLight ? '#656d76' : (colors['text-muted'] || '#6e7681'),
+        white: isLight ? '#24292f' : (colors['text-primary'] || '#e6edf3'),
+        brightBlack: isLight ? '#24292f' : (colors['text-muted'] || '#6e7681'),
         brightRed: syntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
         brightGreen: colors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
         brightYellow: colors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
         brightBlue: colors['accent-hover'] || (isLight ? '#218bff' : '#9585ff'),
         brightMagenta: syntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
         brightCyan: syntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        brightWhite: isLight ? '#24292f' : (colors['text-primary'] || '#ffffff'),
+        brightWhite: isLight ? '#000000' : (colors['text-primary'] || '#ffffff'),
       };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -70,26 +70,63 @@
   pointer-events: auto;
 }
 
-/* Utility drawers — edge slide-overs that overlay the rooms (not pushing them),
-   each with a tab-strip header + close button. The LEFT drawer hosts the
-   workspace navigation (Files / Search / Source Control / …); the RIGHT drawer
-   hosts the summoned tools (Toolbox / HTTP / DB / Containers / Env). Both share
-   the .utility-drawer chrome and differ only in which edge they dock to. */
-.app-shell .utility-drawer {
-  position: absolute;
-  top: 0;
-  /* Stop above the floating bottom dock/composer cluster instead of running the
-     full height behind it (same clearance the rooms use). */
-  bottom: var(--overlay-clear, 128px);
-  z-index: 28;
+/* Side utility panels — left hosts workspace nav (Files/Search/Git/...), right
+   hosts the summoned tools (Toolbox/HTTP/DB/Containers/Env). Both are flex
+   items inside .rooms-content-horizontal and push the rooms-table when open. */
+.app-shell .left-utility-panel,
+.app-shell .right-utility-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  flex: 0 0 auto;
+  /* Constrain the panel height to the space above the dock so the panel ends
+     naturally at the dock boundary. Content taller than this scrolls inside
+     the drawer body. */
+  max-height: calc(100% - var(--overlay-clear, 128px));
 }
 
-.app-shell .right-utility-drawer {
-  right: 0;
-  /* Liquid glass: frosted translucency */
+/* Make the drawer body a scroll container so content taller than the panel
+   (which is capped at the dock boundary) scrolls inside instead of being
+   clipped. A flex column lets a single fill-height child (e.g. FileExplorer)
+   handle its own scroll, while shorter panels overflow the body and scroll it. */
+.app-shell .left-utility-panel .drawer-body,
+.app-shell .right-utility-panel .drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app-shell .left-utility-panel .drawer-body > *,
+.app-shell .right-utility-panel .drawer-body > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-shell .left-utility-panel.resizing,
+.app-shell .right-utility-panel.resizing {
+  user-select: none;
+}
+
+/* Left panel — frosted glass, right border */
+.app-shell .left-utility-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  border-right: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18);
+}
+
+/* Right panel — frosted glass, left border */
+.app-shell .right-utility-panel {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 40%),
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
@@ -97,82 +134,34 @@
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-left: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow:
-    -14px 0 44px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
-    inset -1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 40%, transparent);
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18);
 }
 
-:root.solid-theme .app-shell .right-utility-drawer {
+:root.solid-theme .app-shell .left-utility-panel,
+:root.solid-theme .app-shell .right-utility-panel {
   background: var(--bg-secondary) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-:root.light-theme .app-shell .right-utility-drawer {
-  background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.1) 30%, transparent 60%),
-    rgba(var(--bg-primary-rgb, 255, 255, 255), var(--frost-chrome, 0.62));
+:root.light-theme .app-shell .left-utility-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  border-right-color: rgba(0, 0, 0, 0.1);
+}
+
+:root.light-theme .app-shell .right-utility-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-left-color: rgba(0, 0, 0, 0.1);
-  box-shadow: 
-    -14px 0 44px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.65),
-    inset -1px 0 0 rgba(0, 0, 0, 0.08);
-}
-
-.app-shell .left-utility-drawer {
-  position: fixed !important;
-  top: calc(10 * var(--app-vh, 1vh)) !important;
-  left: 50% !important;
-  transform: translateX(-50%) scale(1) !important;
-  width: 960px !important;
-  height: 640px !important;
-  bottom: auto !important;
-  max-width: calc(92 * var(--app-vw, 1vw));
-  max-height: calc(78 * var(--app-vh, 1vh));
-  border-radius: 18px !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent) !important;
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
-  box-shadow: 
-    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
-    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
-    0 32px 64px -16px rgba(0, 0, 0, 0.7) !important;
-  z-index: 999 !important;
-  animation: sidebarModalScaleUp 0.3s cubic-bezier(0.34, 1.3, 0.64, 1);
-}
-
-.sidebar-popup-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 998;
-  animation: sidebarBackdropFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes sidebarBackdropFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes sidebarModalScaleUp {
-  from {
-    transform: translateX(-50%) scale(0.94);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(-50%) scale(1);
-    opacity: 1;
-  }
-}
-
-.app-shell .utility-drawer.resizing {
-  user-select: none;
 }
 
 .app-shell .right-drawer-resize-handle {
@@ -196,6 +185,8 @@
   z-index: 3;
 }
 
+.app-shell .left-utility-panel .drawer-header,
+.app-shell .right-utility-panel .drawer-header,
 .app-shell .utility-drawer .drawer-header {
   display: flex;
   align-items: center;
@@ -206,49 +197,61 @@
   flex: 0 0 auto;
 }
 
+.app-shell .left-utility-panel .drawer-tabs,
+.app-shell .right-utility-panel .drawer-tabs,
 .app-shell .utility-drawer .drawer-tabs {
   display: flex;
   gap: 4px;
 }
 
+.app-shell .left-utility-panel .drawer-tab-btn,
+.app-shell .right-utility-panel .drawer-tab-btn,
 .app-shell .utility-drawer .drawer-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.app-shell .left-utility-panel .drawer-tab-btn:hover,
+.app-shell .right-utility-panel .drawer-tab-btn:hover,
+.app-shell .utility-drawer .drawer-tab-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.app-shell .left-utility-panel .drawer-tab-btn.active,
+.app-shell .right-utility-panel .drawer-tab-btn.active,
+.app-shell .utility-drawer .drawer-tab-btn.active {
+  background: color-mix(in srgb, var(--accent, #7c6af7) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell .left-utility-panel .drawer-close-btn,
+.app-shell .right-utility-panel .drawer-close-btn,
+.app-shell .utility-drawer .drawer-close-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
-.app-shell .utility-drawer .drawer-tab-btn:hover {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.app-shell .utility-drawer .drawer-tab-btn.active {
-  background: color-mix(in srgb, var(--accent, #7c6af7) 22%, transparent);
-  color: var(--text-primary);
-}
-
-.app-shell .utility-drawer .drawer-close-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
+.app-shell .left-utility-panel .drawer-close-btn:hover,
+.app-shell .right-utility-panel .drawer-close-btn:hover,
 .app-shell .utility-drawer .drawer-close-btn:hover {
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -264,6 +267,17 @@
 .app-shell .utility-drawer .drawer-body > * {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Horizontal flex container that holds left panel + rooms-table + right panel.
+   Only the rooms-table is always present; the panels render conditionally and
+   push the table to make room when open. */
+.app-shell .rooms-content-horizontal {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  gap: 0;
 }
 
 .app-shell .rooms-table {
@@ -306,7 +320,13 @@
   border-radius: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   border: 1px solid var(--border);
-  overflow: hidden;
+  overflow: clip;
+  /* https://issues.chromium.org/40863759 — backdrop-filter in a child
+     panel escapes border-radius + overflow:clip on NVIDIA dGPUs without
+     this containment + compositing triplet. */
+  isolation: isolate;
+  transform: translateZ(0);
+  contain: paint;
 }
 
 .app-shell .rooms-table.ambient-focus .room-stack {
@@ -423,7 +443,10 @@
   border-radius: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   border: 1px solid var(--border);
-  overflow: hidden;
+  overflow: clip;
+  isolation: isolate;
+  transform: translateZ(0);
+  contain: paint;
 }
 
 /* Preview mode: the live app preview takes the stage with the terminal alongside.
@@ -451,7 +474,10 @@
   border-radius: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   border: 1px solid var(--border);
-  overflow: hidden;
+  overflow: clip;
+  isolation: isolate;
+  transform: translateZ(0);
+  contain: paint;
 }
 
 .app-shell .rooms-table.ambient-gallery {
@@ -519,6 +545,68 @@
   margin: auto;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* Fleet (vibe): kill entrance animation so every panel appears at once.
+   Crucially, KEEP `will-change: transform, opacity` stable across layouts
+   — toggling to `auto` demotes the GPU compositing layer and orphans the
+   xterm canvas backing store, breaking scroll height / viewport. */
+.app-shell .rooms-table.ambient-vibe .room-panel {
+  animation: none;
+  transform: none;
+}
+
+/* Stage that layers every persistent terminal/agent pane on top of each other,
+   all kept at full size (so their xterm stays fitted) with only the active one
+   visible. Switching agents flips `.stage-hidden` — no unmount, no reload. */
+.app-shell .focused-room.stage-layers {
+  position: relative;
+  display: block;
+}
+.app-shell .stage-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+/* visibility (not display:none) keeps the hidden pane laid out at full size, so
+   its terminal never reflows to zero and is instantly correct when reshown. */
+.app-shell .stage-pane.stage-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Fleet (vibe) reuses the very same persistent stage — the same mounted xterm
+   panes — but re-flows them from a stack into a grid. Because it's the identical
+   React container, switching Focus↔Fleet never unmounts a terminal; the panes
+   just resize, which their ResizeObserver handles cleanly. */
+.app-shell .focused-room.stage-layers.vibe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 12px;
+  align-content: start;
+  overflow-y: auto;
+  padding: 4px;
+  position: relative;
+}
+.app-shell .stage-layers.vibe-grid > .stage-pane {
+  position: static;
+  inset: auto;
+  min-height: 200px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* The personal/dev terminals stay mounted & full-size (visibility, not display),
+   but pulled out of grid flow so they leave no empty cell — keeping them laid out
+   means Focus is instantly correct, and never zero-reflowed, on return. */
+.app-shell .stage-layers.vibe-grid > .stage-pane.stage-hidden {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  border-radius: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .app-shell .focused-room {
@@ -597,6 +685,27 @@
     filter 0.22s ease;
 }
 
+/* Chrome/WebKit compositing bug (crbug.com/40863759):
+   `backdrop-filter` + `will-change` on .room-panel creates a GPU layer
+   that escapes border-radius on NVIDIA dGPUs when a wallpaper is active
+   (backdrop-filter takes the full compositing path vs solid-color fast
+   path). Inherit the parent's radius, force isolation + overflow:clip so
+   the panel clips itself, and kill the persistent will-change so the GPU
+   layer demotes after the entrance animation. */
+.app-shell .focused-room .room-panel {
+  border-radius: inherit;
+  overflow: clip;
+  isolation: isolate;
+  /* The entrance animation has finished by the time the panel reaches a
+     focused state — the persistent will-change on .room-panel below keeps
+     the GPU compositing layer alive indefinitely. Combined with
+     backdrop-filter this layer can bleed past the parent border-radius on
+     some GPU/driver combos when a wallpaper is active (backdrop-filter
+     takes the full compositing path instead of a solid-color fast path).
+     Removing it here lets the GPU layer demote after the entrance fade. */
+  will-change: auto;
+}
+
 :root.solid-theme .app-shell .room-panel {
   background: var(--bg-primary) !important;
   backdrop-filter: none !important;
@@ -606,8 +715,8 @@
 
 :root.light-theme .app-shell .room-panel {
   background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.15) 30%, transparent 60%),
-    rgba(var(--bg-primary-rgb, 255, 255, 255), var(--frost-chrome, 0.62));
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-color: rgba(0, 0, 0, 0.1);
@@ -701,7 +810,7 @@
 .app-shell .room-kind,
 .app-shell .room-card-kind {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 750;
   line-height: 1;
   text-transform: uppercase;
@@ -713,7 +822,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   line-height: 1.3;
 }
@@ -727,9 +836,9 @@
 
 .app-shell .room-action {
   appearance: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -818,8 +927,8 @@
 }
 
 .app-shell .room-card-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .app-shell .room-card-preview {
@@ -1032,8 +1141,8 @@
 }
 
 .app-shell .split-switch-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
 .app-shell .split-switch-copy {
@@ -1143,7 +1252,7 @@
     linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), transparent),
     color-mix(in srgb, var(--bg-primary) 44%, transparent);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1173,8 +1282,8 @@
 }
 
 .app-shell .minimized-room-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
 .app-shell .minimized-room-label {
@@ -1355,8 +1464,8 @@
 
 :root.light-theme .app-shell .ambient-switcher {
   background: 
-    linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.15) 30%, transparent 60%),
-    rgba(var(--bg-primary-rgb, 255, 255, 255), var(--frost-chrome, 0.62));
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-color: rgba(0, 0, 0, 0.1);
@@ -1380,18 +1489,15 @@
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
   position: relative;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
 }
 
 .app-shell .ambient-switch-btn svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
   transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), color 0.16s ease;
 }
@@ -1450,14 +1556,14 @@
 
 .app-shell .svt-btn {
   appearance: none;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px;
-  border-radius: 8px;
+  padding: 7px;
+  border-radius: 9px;
   border: 1px solid transparent;
   color: var(--text-muted);
   background: transparent;
@@ -1590,16 +1696,14 @@
 .app-shell ::view-transition-new(spacron-env-modal),
 .app-shell ::view-transition-new(spacron-command-palette),
 .app-shell ::view-transition-new(spacron-quick-capture-card),
-.app-shell ::view-transition-new(spacron-workspace-modal),
-.app-shell ::view-transition-new(spacron-mic-dialog) {
+.app-shell ::view-transition-new(spacron-workspace-modal) {
   animation: modal-pop-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 .app-shell ::view-transition-old(spacron-settings-modal),
 .app-shell ::view-transition-old(spacron-env-modal),
 .app-shell ::view-transition-old(spacron-command-palette),
 .app-shell ::view-transition-old(spacron-quick-capture-card),
-.app-shell ::view-transition-old(spacron-workspace-modal),
-.app-shell ::view-transition-old(spacron-mic-dialog) {
+.app-shell ::view-transition-old(spacron-workspace-modal) {
   animation: modal-pop-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
@@ -1700,10 +1804,10 @@
 }
 
 .app-shell .composer-strip .floating-prompt-bar {
-  border-radius: 20px;
+  border-radius: 22px;
   width: 100%;
-  min-height: 48px;
-  padding: 6px 8px 6px 9px;
+  min-height: 54px;
+  padding: 8px 10px 8px 12px;
   animation: shell-composer-in 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -1716,23 +1820,23 @@
 }
 
 .app-shell .composer-strip .send-btn {
-  min-width: 52px;
-  height: 32px;
-  padding-inline: 13px;
+  min-width: 56px;
+  height: 36px;
+  padding-inline: 15px;
 }
 
 .app-shell .composer-strip .spawn-toggle,
 .app-shell .composer-strip .attach-toggle,
 .app-shell .composer-strip .voice-toggle,
 .app-shell .composer-strip .agent-toggle {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
 }
 
 .app-shell .composer-strip .prompt-input {
-  min-height: 22px;
-  height: 22px;
-  max-height: 84px;
+  min-height: 26px;
+  height: 26px;
+  max-height: 90px;
 }
 
 .app-shell .composer-strip .prompt-copy {
@@ -1845,7 +1949,12 @@
     height: auto;
   }
 
-  .app-shell .room-stack {
+.app-shell .room-dock,
+.app-shell .composer-strip {
+  will-change: transform;
+}
+
+.app-shell .room-stack {
     min-height: 78px;
     max-height: 116px;
     flex-direction: row;
@@ -1883,24 +1992,24 @@
   }
 
   .app-shell .composer-strip .floating-prompt-bar {
-    gap: 6px;
-    min-height: 46px;
-    padding: 6px;
-    border-radius: 18px;
+    gap: 8px;
+    min-height: 50px;
+    padding: 7px 8px;
+    border-radius: 20px;
   }
 
   .app-shell .composer-strip .spawn-toggle,
   .app-shell .composer-strip .attach-toggle,
   .app-shell .composer-strip .voice-toggle,
   .app-shell .composer-strip .agent-toggle {
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
   }
 
   .app-shell .composer-strip .send-btn {
-    min-width: 48px;
-    height: 30px;
-    padding-inline: 11px;
+    min-width: 52px;
+    height: 34px;
+    padding-inline: 13px;
   }
 
   .app-shell .composer-strip .prompt-hint {

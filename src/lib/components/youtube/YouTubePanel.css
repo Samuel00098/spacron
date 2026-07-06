@@ -57,7 +57,7 @@
 
 .youtube-panel .yt-mode-btn.active {
   background: var(--accent);
-  color: var(--bg-primary);
+  color: var(--button-text, #ffffff);
 }
 
 .youtube-panel .yt-search {
@@ -99,7 +99,7 @@
   padding: 5px 12px;
   margin: 3px 0;
   background: var(--accent);
-  color: var(--bg-primary);
+  color: var(--button-text, #ffffff);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -419,7 +419,7 @@
 .youtube-panel .yt-filter-pill.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg-primary);
+  color: var(--button-text, #ffffff);
 }
 
 /* --- Search grid cards & dropdown rows ---------------------------------- */

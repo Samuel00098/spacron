@@ -10,6 +10,7 @@ export function isTauriRuntime(): boolean {
 // the animated transitions on Windows (WebView2) and macOS (WKWebView).
 export function isWebkitGtk(): boolean {
   return typeof navigator !== 'undefined' &&
+    typeof navigator.userAgent === 'string' &&
     navigator.userAgent.includes('Linux') &&
     !navigator.userAgent.includes('Android');
 }

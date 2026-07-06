@@ -22,7 +22,7 @@
 .qc-backdrop .qc-card {
   width: 480px;
   max-width: calc(100 * var(--app-vw, 1vw) - 40px);
-  background: var(--bg-secondary) !important;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   border: 1px solid var(--border);

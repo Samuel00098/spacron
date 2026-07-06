@@ -14,11 +14,11 @@ import './AgentCommandCenter.css';
 
 // ── agent colors ────────────────────────────────────────────────────────────
 const AGENT_COLORS: Record<string, string> = {
-  claude: '#d97757', codex: '#10a37f', agy: '#a78bfa', antigravity: '#a78bfa',
-  opencode: '#60a5fa', pi: '#f472b6', omp: '#fbbf24', 'oh-my-pi': '#fbbf24',
-  agent: '#22d3ee', cursor: '#22d3ee',
+  claude: 'var(--accent)', codex: 'var(--success)', agy: 'var(--role-agent)', antigravity: 'var(--role-agent)',
+  opencode: 'var(--role-tests)', pi: 'var(--role-build)', omp: 'var(--role-git)', 'oh-my-pi': 'var(--role-git)',
+  agent: 'var(--role-tests)', cursor: 'var(--role-tests)', hermes: 'var(--role-agent)',
 };
-const agentColor = (cmd: string | null | undefined) => (cmd && AGENT_COLORS[cmd]) || '#9ca3af';
+const agentColor = (cmd: string | null | undefined) => (cmd && AGENT_COLORS[cmd]) || 'var(--text-muted)';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function formatSecs(s: number | null | undefined): string {

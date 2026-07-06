@@ -24,6 +24,7 @@ export interface LayoutState {
   youtubeVisible: boolean;
   auxPanelWidth: number;
   auxEditorHeight: number; // percentage split between editor and preview panes
-  rightDrawerWidth: number; // width of the right utility drawer (Toolbox/HTTP/DB/Containers)
+  leftPanelWidth: number; // width of the left utility panel (Files/Search/Git/Snapshots/Snippets/Review)
+  rightDrawerWidth: number; // width of the right utility panel (Toolbox/HTTP/DB/Containers/Env)
 }
 

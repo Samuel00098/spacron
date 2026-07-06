@@ -38,16 +38,41 @@ axum = { version = "0.8.9", features = ["ws"] }
 reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli"] }
 tokio-tungstenite = "0.29.0"
 futures-util = "0.3.32"
+sha2 = "0.10"
 url = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 ignore = "0.4"
 regex = "1"
-# whisper-rs = "0.14"
+# Native ONNX Runtime for offline Parakeet STT (runs in the app process instead
+# of the WebKit renderer's WASM heap, which OOM-kills the web process on Linux).
+ort = "2.0.0-rc.12"
+# Native whisper.cpp bindings for offline Whisper STT. Uses the GGML models the
+# app already downloads; mmaps them so RAM stays low. Optional + gated behind the
+# default-on `whisper-stt` feature: it compiles whisper.cpp from source and so
+# needs `cmake` at build time. Build with `--no-default-features` to drop Whisper
+# (and the cmake requirement) if needed.
+whisper-rs = { version = "0.16", optional = true }
 
+
+[features]
+# Whisper local STT is on by default but can be disabled to build without the
+# cmake/whisper.cpp toolchain: `cargo build --no-default-features`.
+default = ["whisper-stt"]
+whisper-stt = ["dep:whisper-rs"]
 
 [dev-dependencies]
 tempfile = "3"
+
+# Release binary size/perf. `strip` drops debug symbols (large win, no runtime
+# cost); `lto` + single codegen unit shrink and often speed up the binary. Panic
+# unwinding is kept (not "abort") so a panicking Tauri command returns an error
+# instead of taking the whole app down. ML inference speed is unaffected — it
+# lives in whisper.cpp / ONNX Runtime, not this crate.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

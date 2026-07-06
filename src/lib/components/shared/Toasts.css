@@ -23,9 +23,9 @@
   align-items: center;
   padding: 12px 16px;
   border-radius: 8px;
-  background: var(--bg-secondary);
+  background: rgba(var(--bg-secondary-rgb), 1);
   border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
+  backdrop-filter: none;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border);
   color: var(--text-primary);
   pointer-events: auto;
@@ -147,4 +147,14 @@
 .toast-container .toast-close:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Light mode: make warning/error toast icons black so they rely on the
+   foreground vibrancy (text-shadows) instead of semantic colors that may
+   not be legible against the wallpaper. */
+:root.light-theme .toast-container .toast.warning .toast-icon,
+:root.light-theme .toast-container .toast.error .toast-icon,
+:root.light-theme .toast-container .toast.success .toast-icon {
+  color: var(--text-primary);
+  background: transparent;
 }

@@ -121,6 +121,25 @@ fn resolve_base_url(provider: &str, base_url: &Option<String>) -> Result<Option<
     if !base_url_is_safe(&url) {
         return Err("Invalid server URL".to_string());
     }
+    // Even for "local" providers, refuse link-local / cloud-metadata hosts. A
+    // tampered or imported base_url (e.g. http://169.254.169.254/…) would
+    // otherwise turn an AI request — which carries `Authorization: Bearer
+    // {api_key}` when a key is set — into an SSRF that exfiltrates the token.
+    // Reuses the same literal guard the http.rs client applies. localhost /
+    // 127.0.0.1 are deliberately NOT blocked, so real local servers still work.
+    if let Ok(parsed) = url::Url::parse(&url) {
+        if let Some(host) = parsed.host_str() {
+            // Literal check catches `169.254.169.254` etc.; the DNS-aware check
+            // additionally catches a hostname — or a non-standard IP encoding like
+            // the decimal `2852039166` (= 169.254.169.254) that fails `IpAddr`
+            // parsing — that the OS resolver still maps to a blocked address.
+            if crate::commands::http::host_is_blocked(host)
+                || crate::commands::http::resolved_host_is_blocked(host)
+            {
+                return Err("Server URL host is not allowed".to_string());
+            }
+        }
+    }
     Ok(Some(url))
 }
 
@@ -1680,6 +1699,22 @@ mod tests {
         assert!(resolve_base_url("ollama", &None).is_err());
         assert!(resolve_base_url("ollama", &Some("  ".to_string())).is_err());
         assert!(resolve_base_url("lmstudio", &Some("notaurl".to_string())).is_err());
+        // SSRF: link-local / cloud-metadata hosts are refused even for local
+        // providers, so a tampered base_url can't exfiltrate the bearer token.
+        assert!(
+            resolve_base_url("ollama", &Some("http://169.254.169.254/latest".to_string()))
+                .is_err()
+        );
+        assert!(
+            resolve_base_url("lmstudio", &Some("http://metadata.google.internal/".to_string()))
+                .is_err()
+        );
+        // A non-standard IP encoding (decimal 2852039166 == 169.254.169.254) that
+        // fails `IpAddr` parsing but which the OS resolver still maps to the
+        // metadata address must also be refused (DNS-aware check).
+        assert!(
+            resolve_base_url("ollama", &Some("http://2852039166/latest".to_string())).is_err()
+        );
     }
 
     #[test]

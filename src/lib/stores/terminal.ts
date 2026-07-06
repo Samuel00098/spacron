@@ -52,6 +52,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   'oh-my-pi': 'Oh My Pi',
   agent: 'Cursor',
   cursor: 'Cursor',
+  hermes: 'Hermes Agent',
 };
 
 export type GridLayout = 'single' | '2h' | '2v' | '3h' | '3v' | '4' | '9';
@@ -329,7 +330,8 @@ const AGENT_COMMAND_EXECUTABLES: Array<{ preset: string; names: string[] }> = [
   { preset: 'pi', names: ['pi'] },
   { preset: 'antigravity', names: ['agy', 'antigravity'] },
   { preset: 'aider', names: ['aider'] },
-  { preset: 'cursor', names: ['cursor-agent', 'cursor', 'agent'] },
+  { preset: 'cursor',      names: ['cursor-agent', 'cursor', 'agent'] },
+  { preset: 'hermes',      names: ['hermes'] },
 ];
 
 // Tokens that wrap the real command and should be skipped when locating the
@@ -1752,6 +1754,8 @@ export async function killAllSessions() {
   suppressAgentDetection.clear();
   autoBriefInFlight.clear();
   devSessionIds.clear();
+  commandBlocks.set(new Map());
+  _pendingBlockText.clear();
 }
 
 export async function killSession(id: number) {
@@ -1801,6 +1805,8 @@ export async function killSession(id: number) {
   sessionInputBuffers.delete(id);
   agentLaunchStartLengths.delete(id);
   terminalSessionProjects.delete(id);
+  commandBlocks.update((map) => { const c = new Map(map); c.delete(id); return c; });
+  _pendingBlockText.delete(id);
 
   // Close the mosaic cell so surrounding terminals reclaim the freed space.
   // No-op when: called from closePane (cell already removed before killSession),

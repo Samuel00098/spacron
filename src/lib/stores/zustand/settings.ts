@@ -43,11 +43,12 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
     { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', keys: 'Ctrl+K' },
+    { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
     { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
     { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
-    { id: 'goToOrchestrator', label: 'Go to Orchestrator', keys: 'Ctrl+Shift+O' },
+    // goToOrchestrator removed
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
@@ -67,13 +68,14 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
     { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
     { id: 'quickCapture', label: 'Quick Capture', keys: 'Ctrl+Shift+Space' },
-    { id: 'openDailyNote', label: 'Open Daily Note', keys: 'Ctrl+Shift+D' },
-    { id: 'toggleSketch', label: 'Toggle Sketch Canvas', keys: 'Ctrl+Shift+N' },
+    { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
+    // openDailyNote removed
+    // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
     { id: 'canvasZoomIn', label: 'Canvas Zoom In', keys: 'Alt+=' },
     { id: 'canvasZoomOut', label: 'Canvas Zoom Out', keys: 'Alt+-' },
     { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
-    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+L' },
+    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
   ];
   if (!Array.isArray(initial)) return defaultShortcuts;
   const merged = [...initial];
@@ -136,14 +138,15 @@ function migrateLegacySettings() {
     persistValue('voiceConversationTtsModelByProvider', { ...ttsModelMap, google: 'gemini-2.5-flash-preview-tts' });
   }
 
-  // The terminal renderer default was 'dom', which on Windows WebView2 leaves the
-  // terminal blank (a transparent glyph layer can't composite over the pane's
-  // backdrop-filter blur). WebGL on an opaque surface renders reliably. Move
-  // existing users off the legacy 'dom' default once; a later deliberate choice
-  // of 'dom' sets the sentinel too, so it won't be overridden again.
+  // WebGL (the former default) has unreliable font-glyph atlas invalidation,
+  // especially on WebKitGTK/Linux — characters render with stale or wrong fonts
+  // after any font-family change, and GPU context loss leaves a blank canvas.
+  // Canvas is simpler and more reliable on all platforms. New users get canvas;
+  // existing users are migrated once from whatever they had before the flag.
   if (!localStorage.getItem('forge_terminalRendererMigrated')) {
-    if (localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('dom')) {
-      persistValue('terminalRenderer', 'webgl');
+    if (localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('dom') ||
+        localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('webgl')) {
+      persistValue('terminalRenderer', 'canvas');
     }
     localStorage.setItem('forge_terminalRendererMigrated', '1');
   }
@@ -195,8 +198,8 @@ function createSettingsState() {
     terminalShell: persistentValue('terminalShell', ''),
     terminalCursorStyle: persistentValue<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar'),
     terminalScrollback: persistentValue('terminalScrollback', 5000),
-    terminalFontSize: persistentValue('terminalFontSize', 13),
-    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'webgl'),
+    terminalFontSize: persistentValue('terminalFontSize', 14),
+    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
   };
 }
@@ -250,11 +253,12 @@ const defaults: SettingsValues = {
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
     { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', keys: 'Ctrl+K' },
+    { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
     { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
     { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
-    { id: 'goToOrchestrator', label: 'Go to Orchestrator', keys: 'Ctrl+Shift+O' },
+    // goToOrchestrator removed
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
@@ -274,13 +278,14 @@ const defaults: SettingsValues = {
     { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
     { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
     { id: 'quickCapture', label: 'Quick Capture', keys: 'Ctrl+Shift+Space' },
-    { id: 'openDailyNote', label: 'Open Daily Note', keys: 'Ctrl+Shift+D' },
-    { id: 'toggleSketch', label: 'Toggle Sketch Canvas', keys: 'Ctrl+Shift+N' },
+    { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
+    // openDailyNote removed
+    // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
     { id: 'canvasZoomIn', label: 'Canvas Zoom In', keys: 'Alt+=' },
     { id: 'canvasZoomOut', label: 'Canvas Zoom Out', keys: 'Alt+-' },
     { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
-    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+L' },
+    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
   ],
   appearance: 'system',
   interfaceTransparency: 0,
@@ -291,8 +296,8 @@ const defaults: SettingsValues = {
   terminalShell: '',
   terminalCursorStyle: 'bar',
   terminalScrollback: 5000,
-  terminalFontSize: 13,
-  terminalRenderer: 'webgl',
+  terminalFontSize: 14,
+  terminalRenderer: 'canvas',
   showSnapshotsTab: false,
 };
 

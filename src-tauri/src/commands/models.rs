@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::fs;
-use std::sync::{OnceLock, Mutex};
-use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{OnceLock, Mutex, Arc};
+use std::collections::{HashMap, HashSet};
 use serde::{Serialize, Deserialize};
 use tauri::{AppHandle, Emitter};
 use futures_util::StreamExt;
@@ -16,6 +17,10 @@ pub struct ModelInfo {
     pub url: String,
     pub filename: String,
     pub downloaded: bool,
+    /// Actual total bytes on disk once downloaded (sum of all files for
+    /// multi-file models). `None` when the model isn't fully downloaded.
+    #[serde(default)]
+    pub downloaded_size_bytes: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -34,9 +39,15 @@ pub struct DownloadErrorPayload {
 }
 
 static ACTIVE_DOWNLOADS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// Track active download `AbortHandle`s so the frontend can cancel mid-download.
+static ACTIVE_CANCEL_TOKENS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
 fn active_downloads() -> &'static Mutex<HashSet<String>> {
     ACTIVE_DOWNLOADS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn active_cancel_tokens() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    ACTIVE_CANCEL_TOKENS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn get_models_dir() -> PathBuf {
@@ -73,6 +84,36 @@ const PARAKEET_FILES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Expected SHA-256 of every model file we download, keyed by its on-disk file
+/// name. Pinned from the upstream HuggingFace repos (an LFS file's `oid` *is* its
+/// SHA-256; the non-LFS `vocab.txt` was hashed directly). Every completed
+/// download is verified against this before being moved into place, so a
+/// compromised, hijacked, or MITM'd upstream can't deliver a poisoned model that
+/// the native ONNX / whisper runtimes would then parse and execute. To add a
+/// model, pin its digest here too — files without an entry are downloaded but
+/// not integrity-checked.
+const MODEL_SHA256: &[(&str, &str)] = &[
+    // Whisper — ggerganov/whisper.cpp
+    ("ggml-tiny.en.bin", "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"),
+    ("ggml-base.en.bin", "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"),
+    ("ggml-small.en.bin", "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"),
+    ("ggml-large-v3-turbo-q5_0.bin", "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
+    ("ggml-large-v3-turbo.bin", "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"),
+    // Parakeet — istupakov/parakeet-tdt-0.6b-v3-onnx
+    ("parakeet-encoder.int8.onnx", "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09"),
+    ("parakeet-decoder.int8.onnx", "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70"),
+    ("parakeet-vocab.txt", "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
+    ("parakeet-preprocessor.onnx", "a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f"),
+];
+
+/// The expected SHA-256 for a given on-disk model file name, if one is pinned.
+fn expected_sha256(filename: &str) -> Option<&'static str> {
+    MODEL_SHA256
+        .iter()
+        .find(|(name, _)| *name == filename)
+        .map(|(_, hash)| *hash)
+}
+
 fn file_present(path: &Path) -> bool {
     path.exists() && path.metadata().map(|m| m.len() > 0).unwrap_or(false)
 }
@@ -90,6 +131,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin".to_string(),
             filename: "ggml-tiny.en.bin".to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
         ModelInfo {
             id: "whisper-base-en".to_string(),
@@ -100,6 +142,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin".to_string(),
             filename: "ggml-base.en.bin".to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
         ModelInfo {
             id: "whisper-small-en".to_string(),
@@ -110,6 +153,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
             filename: "ggml-small.en.bin".to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
         ModelInfo {
             id: "whisper-large-v3-turbo-q5".to_string(),
@@ -120,6 +164,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
             filename: "ggml-large-v3-turbo-q5_0.bin".to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
         ModelInfo {
             id: "whisper-large-v3-turbo".to_string(),
@@ -130,43 +175,44 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             filename: "ggml-large-v3-turbo.bin".to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
         ModelInfo {
             id: "parakeet-tdt-v3".to_string(),
             name: "NVIDIA Parakeet TDT v3 (Multilingual)".to_string(),
             category: "stt".to_string(),
             size: "640 MB".to_string(),
-            description: "Latest NVIDIA Parakeet — top-tier accuracy, very fast, ~25 languages. Runs in-app via WASM (ONNX). Needs ample RAM.".to_string(),
+            description: "Latest NVIDIA Parakeet — top-tier accuracy, very fast, ~25 languages. Runs locally via native ONNX. Needs ample RAM.".to_string(),
             url: PARAKEET_FILES[0].0.to_string(),
             filename: PARAKEET_FILES[0].1.to_string(),
             downloaded: false,
+            downloaded_size_bytes: None,
         },
-        ModelInfo {
-            id: "kokoro-tts-v1.0".to_string(),
-            name: "Kokoro TTS (v1.0)".to_string(),
-            category: "tts".to_string(),
-            size: "310 MB".to_string(),
-            description: "Latest state-of-the-art offline text-to-speech. Extremely human-like, 28+ voices (ONNX format).".to_string(),
-            url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx".to_string(),
-            filename: "kokoro-v1.0.onnx".to_string(),
-            downloaded: false,
-        }
     ];
 
     for model in &mut list {
-        let exists = file_present(&models_dir.join(&model.filename));
-
-        if model.id == "kokoro-tts-v1.0" {
-            // Kokoro needs its voices file as well to be considered fully downloaded.
-            model.downloaded = exists && file_present(&models_dir.join("voices-v1.0.bin"));
-        } else if model.id == "parakeet-tdt-v3" {
-            // Parakeet is only usable once every one of its ONNX files is present.
-            model.downloaded = PARAKEET_FILES
+        // Collect the on-disk files that make up this model so we can report the
+        // real total size (some models ship as several files).
+        let files: Vec<PathBuf> = if model.id == "parakeet-tdt-v3" {
+            PARAKEET_FILES
                 .iter()
-                .all(|(_, filename, _)| file_present(&models_dir.join(filename)));
+                .map(|(_, filename, _)| models_dir.join(filename))
+                .collect()
         } else {
-            model.downloaded = exists;
-        }
+            vec![models_dir.join(&model.filename)]
+        };
+
+        model.downloaded = files.iter().all(|p| file_present(p));
+        model.downloaded_size_bytes = if model.downloaded {
+            Some(
+                files
+                    .iter()
+                    .filter_map(|p| fs::metadata(p).ok().map(|m| m.len()))
+                    .sum(),
+            )
+        } else {
+            None
+        };
     }
 
     Ok(list)
@@ -208,10 +254,6 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             "ggml-large-v3-turbo.bin".to_string()
         ),
-        "kokoro-tts-v1.0" => (
-            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx".to_string(),
-            "kokoro-v1.0.onnx".to_string()
-        ),
         "parakeet-tdt-v3" => (PARAKEET_FILES[0].0.to_string(), PARAKEET_FILES[0].1.to_string()),
         _ => {
             active_downloads().lock().unwrap().remove(&model_id);
@@ -219,26 +261,52 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
         }
     };
 
+    // 2b. Create a cancel token so the frontend can abort mid-download
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    {
+        if let Ok(mut tokens) = active_cancel_tokens().lock() {
+            // Clean up stale tokens for completed/failed downloads
+            tokens.retain(|id, _| active_downloads().lock().map(|a| a.contains(id)).unwrap_or(false));
+            tokens.insert(model_id.clone(), cancel_token.clone());
+        }
+    }
+
     let app_handle_clone = app_handle.clone();
     let model_id_clone = model_id.clone();
+
+    // Snapshot which of this model's FINAL files already exist on disk. On
+    // cancel we only remove files THIS session created — deleting a pre-existing
+    // complete copy would wipe a working install when a re-download is aborted.
+    let preexisting_finals: std::collections::HashSet<std::path::PathBuf> = {
+        let mut paths = vec![models_dir.join(&filename)];
+        if model_id == "parakeet-tdt-v3" {
+            for (_, fname, _) in PARAKEET_FILES.iter() {
+                paths.push(models_dir.join(fname));
+            }
+        }
+        paths.into_iter().filter(|p| p.exists()).collect()
+    };
 
     // 3. Run download loop in a background thread
     tokio::spawn(async move {
         let result = async {
-            // Download the main file
-            download_file_inner(&app_handle_clone, &model_id_clone, &url, &models_dir.join(&filename), "main").await?;
+            // Check cancellation before starting
+            if cancel_token.load(Ordering::Relaxed) {
+                return Err("Download cancelled".to_string());
+            }
 
-            // If Kokoro, sequentially download its voice style-vector pack.
-            if model_id_clone == "kokoro-tts-v1.0" {
-                let voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin";
-                let voices_path = models_dir.join("voices-v1.0.bin");
-                download_file_inner(&app_handle_clone, &model_id_clone, voices_url, &voices_path, "voices").await?;
+            // Download the main file
+            download_file_inner(&app_handle_clone, &model_id_clone, &cancel_token, &url, &models_dir.join(&filename), "main").await?;
+
+            // Check cancellation before Parakeet's remaining files
+            if cancel_token.load(Ordering::Relaxed) {
+                return Err("Download cancelled".to_string());
             }
 
             // Parakeet's remaining ONNX files (the encoder is the "main" file above).
             if model_id_clone == "parakeet-tdt-v3" {
                 for (url, filename, phase) in PARAKEET_FILES.iter().skip(1) {
-                    download_file_inner(&app_handle_clone, &model_id_clone, url, &models_dir.join(filename), phase).await?;
+                    download_file_inner(&app_handle_clone, &model_id_clone, &cancel_token, url, &models_dir.join(filename), phase).await?;
                 }
             }
 
@@ -249,9 +317,17 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
         if let Ok(mut active) = active_downloads().lock() {
             active.remove(&model_id_clone);
         }
+        // Clean up cancel token
+        if let Ok(mut tokens) = active_cancel_tokens().lock() {
+            tokens.remove(&model_id_clone);
+        }
+
+        // Remove partial files on cancellation
+        let was_cancelled = result.as_ref().is_err_and(|e| e == "Download cancelled");
+        let model_id_for_cleanup = model_id_clone.clone();
 
         // Notify final status
-        match result {
+        match &result {
             Ok(_) => {
                 let _ = app_handle_clone.emit("download-progress", DownloadProgressPayload {
                     model_id: model_id_clone,
@@ -262,10 +338,41 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
                 });
             }
             Err(err) => {
-                let _ = app_handle_clone.emit("download-error", DownloadErrorPayload {
-                    model_id: model_id_clone,
-                    error: err,
-                });
+                if was_cancelled {
+                    let _ = app_handle_clone.emit("download-cancelled", DownloadErrorPayload {
+                        model_id: model_id_clone.clone(),
+                        error: "Download cancelled by user".to_string(),
+                    });
+                } else {
+                    let _ = app_handle_clone.emit("download-error", DownloadErrorPayload {
+                        model_id: model_id_clone,
+                        error: err.clone(),
+                    });
+                }
+            }
+        }
+
+        // Clean up any partial download files after cancellation
+        if was_cancelled {
+            // Always drop the in-flight `.downloading` temp. Only drop a FINAL
+            // file if this session created it (not in `preexisting_finals`), so a
+            // cancelled re-download can never delete a previously installed,
+            // complete copy. Partner files this session freshly renamed to their
+            // final name are still cleaned up (they weren't pre-existing),
+            // avoiding complete-but-orphaned leftovers of a partial download.
+            let main_final = models_dir.join(&filename);
+            let _ = fs::remove_file(main_final.with_extension("downloading"));
+            if !preexisting_finals.contains(&main_final) {
+                let _ = fs::remove_file(&main_final);
+            }
+            if model_id_for_cleanup == "parakeet-tdt-v3" {
+                for (_, filename, _) in PARAKEET_FILES.iter() {
+                    let p = models_dir.join(filename);
+                    let _ = fs::remove_file(p.with_extension("downloading"));
+                    if !preexisting_finals.contains(&p) {
+                        let _ = fs::remove_file(&p);
+                    }
+                }
             }
         }
     });
@@ -276,6 +383,7 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
 async fn download_file_inner(
     app_handle: &AppHandle,
     model_id: &str,
+    cancel_token: &AtomicBool,
     url: &str,
     dest_path: &Path,
     phase: &str,
@@ -292,7 +400,16 @@ async fn download_file_inner(
     }
 
     let total_size = response.content_length();
-    
+
+    // If this file has a pinned digest, hash it incrementally as it streams in
+    // (no second pass over multi-GB files) and verify before we move it into
+    // place. `None` means the file isn't integrity-pinned and is accepted as-is.
+    let expected_hash = dest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(expected_sha256);
+    let mut hasher = expected_hash.map(|_| <sha2::Sha256 as sha2::Digest>::new());
+
     // Download to a temporary file, then rename to prevent partial/corrupt files
     let temp_path = dest_path.with_extension("downloading");
     let mut file = fs::File::create(&temp_path)
@@ -303,9 +420,19 @@ async fn download_file_inner(
     let mut last_progress_emit = std::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
+        // Check cancellation before processing each chunk
+        if cancel_token.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = fs::remove_file(&temp_path);
+            return Err("Download cancelled".to_string());
+        }
+
         let chunk = chunk_result.map_err(|e| format!("Error while downloading stream: {}", e))?;
         std::io::Write::write_all(&mut file, &chunk)
             .map_err(|e| format!("Failed to write chunk to disk: {}", e))?;
+        if let Some(h) = hasher.as_mut() {
+            sha2::Digest::update(h, &chunk);
+        }
         downloaded += chunk.len() as u64;
 
         // Throttle progress updates to avoid flooding the IPC channel
@@ -331,6 +458,24 @@ async fn download_file_inner(
     std::io::Write::flush(&mut file).map_err(|e| format!("Failed to flush file: {}", e))?;
     drop(file);
 
+    // Integrity gate: reject a file whose SHA-256 doesn't match the pinned value
+    // and discard it, so a tampered download never reaches its final path (and is
+    // never loaded by the ONNX / whisper runtimes).
+    if let (Some(expected_hex), Some(h)) = (expected_hash, hasher) {
+        let digest = sha2::Digest::finalize(h);
+        let actual_hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+        if !actual_hex.eq_ignore_ascii_case(expected_hex) {
+            let _ = fs::remove_file(&temp_path);
+            let name = dest_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            return Err(format!(
+                "Integrity check failed for {name}: the downloaded file's SHA-256 did not match the expected value. The file was discarded — please try again."
+            ));
+        }
+    }
+
     if dest_path.exists() {
         fs::remove_file(dest_path).map_err(|e| format!("Failed to replace old file: {}", e))?;
     }
@@ -341,7 +486,24 @@ async fn download_file_inner(
 }
 
 #[tauri::command]
+pub async fn cancel_download(model_id: String) -> Result<(), String> {
+    // Signal cancellation by setting the cancel token
+    if let Ok(tokens) = active_cancel_tokens().lock() {
+        if let Some(token) = tokens.get(&model_id) {
+            token.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+    }
+    Err("No active download found for this model".to_string())
+}
+
+#[tauri::command]
 pub async fn delete_model(model_id: String) -> Result<(), String> {
+    // Drop any cached whisper context so a re-download reloads fresh weights.
+    #[cfg(feature = "whisper-stt")]
+    if model_id.starts_with("whisper") {
+        crate::commands::whisper::reset_whisper();
+    }
     let models_dir = get_models_dir();
     let filename = match model_id.as_str() {
         "whisper-tiny-en" => "ggml-tiny.en.bin",
@@ -349,14 +511,9 @@ pub async fn delete_model(model_id: String) -> Result<(), String> {
         "whisper-small-en" => "ggml-small.en.bin",
         "whisper-large-v3-turbo-q5" => "ggml-large-v3-turbo-q5_0.bin",
         "whisper-large-v3-turbo" => "ggml-large-v3-turbo.bin",
-        "kokoro-tts-v1.0" => {
-            let voices_path = models_dir.join("voices-v1.0.bin");
-            if voices_path.exists() {
-                let _ = fs::remove_file(voices_path);
-            }
-            "kokoro-v1.0.onnx"
-        }
         "parakeet-tdt-v3" => {
+            // Drop cached ONNX sessions so re-download reloads fresh files.
+            crate::commands::parakeet::reset_parakeet();
             for (_, filename, _) in PARAKEET_FILES.iter() {
                 let p = models_dir.join(filename);
                 if p.exists() {
@@ -384,7 +541,6 @@ pub async fn get_model_path(model_id: String) -> Result<String, String> {
         "whisper-small-en" => "ggml-small.en.bin",
         "whisper-large-v3-turbo-q5" => "ggml-large-v3-turbo-q5_0.bin",
         "whisper-large-v3-turbo" => "ggml-large-v3-turbo.bin",
-        "kokoro-tts-v1.0" => "kokoro-v1.0.onnx",
         "parakeet-tdt-v3" => PARAKEET_FILES[0].1,
         _ => return Err("Unknown model ID".to_string()),
     };
@@ -397,51 +553,6 @@ pub async fn get_model_path(model_id: String) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-/// Return the raw bytes of a downloaded model file as a binary IPC response.
-///
-/// Sent as `tauri::ipc::Response` (raw bytes) rather than `Vec<u8>` so the
-/// payload travels as a binary `ArrayBuffer` instead of a JSON number array,
-/// which would balloon a 300 MB ONNX model to multiple gigabytes over IPC.
-/// Used by the renderer-side Kokoro pipeline to feed onnxruntime-web.
-#[tauri::command]
-pub async fn read_tts_model_bytes(model_id: String) -> Result<tauri::ipc::Response, String> {
-    let path = get_model_path(model_id).await?;
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read model file: {}", e))?;
-    Ok(tauri::ipc::Response::new(bytes))
-}
-
-/// Return the raw bytes of the downloaded Kokoro voice style-vector pack.
-#[tauri::command]
-pub async fn read_tts_voices_bytes() -> Result<tauri::ipc::Response, String> {
-    let path = get_models_dir().join("voices-v1.0.bin");
-    if !path.exists() {
-        return Err("Voices file is not downloaded".to_string());
-    }
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read voices file: {}", e))?;
-    Ok(tauri::ipc::Response::new(bytes))
-}
-
-/// Return the raw bytes of a named file inside the models directory.
-///
-/// Used by the renderer (e.g. the Parakeet WASM pipeline) to load multi-file
-/// models. The name is restricted to a plain filename within the models dir to
-/// prevent path traversal.
-#[tauri::command]
-pub async fn read_model_file_bytes(filename: String) -> Result<tauri::ipc::Response, String> {
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains("..")
-    {
-        return Err("Invalid filename".to_string());
-    }
-    let path = get_models_dir().join(&filename);
-    if !path.exists() {
-        return Err(format!("File is not downloaded: {}", filename));
-    }
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
-    Ok(tauri::ipc::Response::new(bytes))
-}
 
 #[allow(dead_code)]
 fn wav_to_f32_pcm(wav_bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -469,31 +580,104 @@ fn wav_to_f32_pcm(wav_bytes: &[u8]) -> Result<Vec<f32>, String> {
 
 #[tauri::command]
 pub async fn local_stt_transcribe(
-    _audio_bytes: Vec<u8>,
-    _model_id: String,
-) -> Result<String, String> {
-    Err("Local Whisper transcription is pending integration. Please select 'NVIDIA Parakeet TDT v3' in Settings for fully offline local voice typing.".to_string())
-}
-
-#[derive(Serialize)]
-pub struct TtsAudioPayload {
-    pub bytes: Vec<u8>,
-    pub mime_type: String,
-}
-
-#[tauri::command]
-pub async fn local_tts_speak(
-    text: String,
+    audio_bytes: Vec<u8>,
     model_id: String,
-    voice: String,
-) -> Result<TtsAudioPayload, String> {
-    let _model_path = get_model_path(model_id.clone()).await?;
-    
-    // Kokoro TTS offline execution requires phonetization (G2P), which depends on espeak-ng.
-    // For now, return a clear descriptive error guiding the user.
-    Err(format!(
-        "Local TTS model '{}' with voice '{}' for text '{}' is ready, but built-in offline Rust execution is pending espeak-ng linking. Please use system speech or run a local TTS server.",
-        model_id, voice, text
-    ))
+) -> Result<String, String> {
+    if model_id.starts_with("parakeet") {
+        let models_dir = get_models_dir();
+        let encoder = models_dir.join(PARAKEET_FILES[0].1);
+        let decoder = models_dir.join(PARAKEET_FILES[1].1);
+        let vocab = models_dir.join(PARAKEET_FILES[2].1);
+        let preprocessor = models_dir.join(PARAKEET_FILES[3].1);
+        for p in [&encoder, &decoder, &vocab, &preprocessor] {
+            if !p.exists() {
+                return Err(format!(
+                    "Parakeet model file missing: {}. Re-download the model in Settings.",
+                    p.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                ));
+            }
+        }
+        // ONNX inference is blocking CPU work; keep it off the async runtime threads.
+        return tokio::task::spawn_blocking(move || {
+            crate::commands::parakeet::transcribe_wav(
+                &audio_bytes,
+                encoder,
+                decoder,
+                preprocessor,
+                vocab,
+            )
+        })
+        .await
+        .map_err(|e| format!("Transcription task failed: {e}"))?;
+    }
+
+    if model_id.starts_with("whisper") {
+        #[cfg(feature = "whisper-stt")]
+        {
+            let model_path = PathBuf::from(get_model_path(model_id).await?);
+            return tokio::task::spawn_blocking(move || {
+                crate::commands::whisper::transcribe_wav(&audio_bytes, model_path)
+            })
+            .await
+            .map_err(|e| format!("Transcription task failed: {e}"))?;
+        }
+        #[cfg(not(feature = "whisper-stt"))]
+        {
+            return Err(
+                "This build was compiled without Whisper support. Select NVIDIA Parakeet TDT v3, or rebuild with the `whisper-stt` feature.".to_string(),
+            );
+        }
+    }
+
+    Err(format!("Unsupported local STT model: {model_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every downloadable model file must carry a pinned SHA-256 so a future
+    /// model addition can't silently ship without integrity verification.
+    #[test]
+    fn every_model_file_has_a_pinned_digest() {
+        // Whisper single-file models (names must match list_downloadable_models
+        // and get_model_path).
+        for name in [
+            "ggml-tiny.en.bin",
+            "ggml-base.en.bin",
+            "ggml-small.en.bin",
+            "ggml-large-v3-turbo-q5_0.bin",
+            "ggml-large-v3-turbo.bin",
+        ] {
+            assert!(
+                expected_sha256(name).is_some(),
+                "missing pinned digest for {name}"
+            );
+        }
+        // Parakeet multi-file set.
+        for (_, filename, _) in PARAKEET_FILES.iter() {
+            assert!(
+                expected_sha256(filename).is_some(),
+                "missing pinned digest for {filename}"
+            );
+        }
+    }
+
+    /// Guard against typos: each pinned digest is a 64-char lowercase hex string.
+    #[test]
+    fn pinned_digests_are_well_formed() {
+        for (name, hash) in MODEL_SHA256.iter() {
+            assert_eq!(hash.len(), 64, "{name} digest is not 64 hex chars");
+            assert!(
+                hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                "{name} digest is not lowercase hex"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_file_is_not_pinned() {
+        assert!(expected_sha256("totally-unknown.bin").is_none());
+    }
 }
 

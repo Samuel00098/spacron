@@ -80,8 +80,8 @@ import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import type { ActiveView, SidebarTab } from '$lib/types/layout';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
-import { openDailyNote } from '$lib/stores/dailyNote';
-import { toggleSketchCanvas } from '$lib/stores/sketch';
+// openDailyNote removed
+// toggleSketch removed
 import './AppShell.css';
 
 type AuxPanelId =
@@ -130,6 +130,13 @@ function isAgentRoomId(id: RoomId): id is AgentRoomId {
 
 function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
+}
+
+// Rooms whose live body (an xterm) must persist across focus switches: the
+// personal terminal, the dev terminal, and every running agent. They're kept
+// mounted in the stage and toggled by visibility rather than unmounted.
+function isPersistentRoomId(id: RoomId): boolean {
+  return id === 'terminal' || id === 'dev-terminal' || isAgentRoomId(id);
 }
 
 const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ReturnType<typeof useLayoutStore.getState>> = {
@@ -370,6 +377,7 @@ export default function AppShell() {
 
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [leftPanelResizing, setLeftPanelResizing] = useState(false);
   const [rightDrawerResizing, setRightDrawerResizing] = useState(false);
   const [auxResizing, setAuxResizing] = useState(false);
   const [auxRowResizing, setAuxRowResizing] = useState(false);
@@ -396,6 +404,7 @@ export default function AppShell() {
   const lastActiveRoomRef = useRef<RoomId | null>(null);
 
   const sidebarResizeRef = useRef({ startX: 0, startWidth: 0 });
+  const leftPanelResizeRef = useRef({ startX: 0, startWidth: 0 });
   const rightDrawerResizeRef = useRef({ startX: 0, startWidth: 0 });
   const auxResizeRef = useRef({ startX: 0, startWidth: 0 });
   const auxRowResizeRef = useRef({ startY: 0, startHeight: 0 });
@@ -434,16 +443,17 @@ export default function AppShell() {
     const forceVisible = () => {
       el.querySelectorAll<HTMLElement>('.room-dock, .composer-strip').forEach((node) => {
         node.style.animation = 'none';
+        node.style.visibility = 'visible';
         node.style.opacity = '1';
         node.style.transform = 'none';
-        node.style.visibility = 'visible';
-        node.style.willChange = 'auto';
-        // Hard repaint: toggling display flushes WebKitGTK's stale compositor layer
-        // so an element that reports visible but never painted actually shows.
-        const prevDisplay = node.style.display;
-        node.style.display = 'none';
+        node.style.willChange = 'transform';
+        // Force a GPU compositor layer flush without toggling display (which
+        // causes visible flicker). Setting opacity to a near-1 value and back
+        // in the same synchronous block forces WebKitGTK to repaint the stale
+        // layer while the user sees no perceptible change.
+        node.style.opacity = '0.999';
         void node.offsetHeight;
-        node.style.display = prevDisplay;
+        node.style.opacity = '1';
       });
     };
 
@@ -645,7 +655,33 @@ export default function AppShell() {
   }, [ambientLayout, layoutState.previewVisible]);
 
   const auxTabsNarrow = auxPanelWidth < 300;
-  const resizing = sidebarResizing || auxResizing || auxRowResizing || rightDrawerResizing;
+  const resizing = sidebarResizing || leftPanelResizing || auxResizing || auxRowResizing || rightDrawerResizing;
+
+  // Auto-refit the terminal on entering / switching a workspace. The terminal can
+  // mount before the layout reaches its final size, which otherwise leaves an
+  // empty band (a stale fit) until the next manual resize. Firing the existing
+  // `pane-resize-end` signal a couple of times after settle fixes startup sizing.
+  useEffect(() => {
+    if (!workspaceId) return;
+    const t1 = window.setTimeout(() => notifyPanesResized(), 120);
+    const t2 = window.setTimeout(() => notifyPanesResized(), 500);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  // Trailing refit after a layout/focus change settles. A room panel grows into
+  // place via the ~0.32s grid transition; the immediate refit from
+  // withRoomTransition fits the terminal to the mid-transition (smaller) size,
+  // which leaves it too narrow with an empty band on the right. Re-fire once the
+  // transition has finished so the terminal fills the final panel width.
+  useEffect(() => {
+    const t = window.setTimeout(() => notifyPanesResized(), 400);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ambientLayout, activeRoom, visibleRooms]);
 
   function auxMaxWidth(width = windowWidth) {
     const sidebar = 48; // Sidebar is a pop-up and doesn't push panels anymore
@@ -744,6 +780,12 @@ export default function AppShell() {
         useLayoutStore.setState({
           sidebarWidth: Math.max(180, Math.min(maxAllowedWidth, sidebarResizeRef.current.startWidth + delta)),
         });
+      } else if (leftPanelResizing) {
+        const delta = (event.clientX - leftPanelResizeRef.current.startX) / scale;
+        const maxAllowedWidth = Math.min(600, windowWidth / scale - 250 - 48);
+        useLayoutStore.setState({
+          leftPanelWidth: Math.max(180, Math.min(maxAllowedWidth, leftPanelResizeRef.current.startWidth + delta)),
+        });
       } else if (rightDrawerResizing) {
         // Drawer is anchored to the right edge, so dragging its left handle
         // leftwards (negative deltaX) widens it.
@@ -771,6 +813,7 @@ export default function AppShell() {
       const wasAuxResize = auxResizing || auxRowResizing;
       const wasRightDrawerResize = rightDrawerResizing;
       setSidebarResizing(false);
+      setLeftPanelResizing(false);
       setRightDrawerResizing(false);
       setAuxResizing(false);
       setAuxRowResizing(false);
@@ -791,7 +834,7 @@ export default function AppShell() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [auxEditorHeight, auxPanelWidth, auxResizing, auxRowResizing, sidebarResizing, rightDrawerResizing, windowWidth, zoom]);
+  }, [auxEditorHeight, auxPanelWidth, auxResizing, auxRowResizing, sidebarResizing, leftPanelResizing, rightDrawerResizing, windowWidth, zoom]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -833,6 +876,9 @@ export default function AppShell() {
         case 'openSettings':
           openSettings();
           break;
+        case 'toggleSidebar':
+          toggleSidebar();
+          break;
         case 'newWorkspace':
           withTransition(() => {
             useWorkspaceStore.getState().__set('newWorkspacePromptOpen', true);
@@ -851,9 +897,7 @@ export default function AppShell() {
           setActiveView('preview');
           setFocusedRoom('preview');
           break;
-        case 'goToOrchestrator':
-          // Orchestrator panel removed — no-op
-          break;
+        // goToOrchestrator removed — Orchestrator panel no longer exists
         case 'goToReview':
           toggleReviewVisible();
           break;
@@ -916,22 +960,14 @@ export default function AppShell() {
         case 'spawnAgent':
           openAgentSpawn();
           break;
-        case 'openDailyNote':
-          if (project) {
-            void openDailyNote(project, true);
-          }
-          break;
-        case 'toggleSketch':
-          toggleSketchCanvas();
-          break;
+        // openDailyNote removed
+        // toggleSketch removed
         case 'launchVoiceMode':
           launchPromptBarVoiceMode();
           break;
         case 'cycleAmbientLayout': {
-          const MODE_ORDER: AmbientLayout[] = ['focus', 'gallery', 'vibe', 'preview', 'development'];
-          const currentIdx = MODE_ORDER.indexOf(ambientLayout);
-          const nextIdx = (currentIdx + 1) % MODE_ORDER.length;
-          switchAmbientLayout(MODE_ORDER[nextIdx]);
+          // One-window shell: the only arrangement toggle left is Fleet (vibe).
+          switchAmbientLayout(ambientLayout === 'vibe' ? 'focus' : 'vibe');
           break;
         }
       }
@@ -944,6 +980,14 @@ export default function AppShell() {
   function startSidebarResize(event: React.MouseEvent) {
     setSidebarResizing(true);
     sidebarResizeRef.current = { startX: event.clientX, startWidth: layoutState.sidebarWidth };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function startLeftPanelResize(event: React.MouseEvent) {
+    event.preventDefault();
+    setLeftPanelResizing(true);
+    leftPanelResizeRef.current = { startX: event.clientX, startWidth: layoutState.leftPanelWidth };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   }
@@ -978,47 +1022,47 @@ export default function AppShell() {
     else selectLeftTool(tool);
   }
 
-  function renderLeftUtilityDrawer() {
+  function renderLeftUtilityPanel() {
     if (!leftDrawerOpen) return null;
     return (
-      <>
+      <aside
+        className="left-utility-panel bento-card"
+        style={{ width: layoutState.leftPanelWidth }}
+        aria-label="Workspace navigation"
+      >
         <div
-          className="sidebar-popup-backdrop"
-          onClick={closeLeftDrawer}
-          role="presentation"
+          className="left-drawer-resize-handle"
+          onMouseDown={startLeftPanelResize}
+          role="separator"
+          aria-orientation="vertical"
         />
-        <aside
-          className="utility-drawer left-utility-drawer bento-card"
-          aria-label="Workspace navigation"
-        >
-          <header className="drawer-header">
-            <div className="drawer-tabs">
-              {leftDrawerTools.map((tool) => (
-                <button
-                  key={tool}
-                  className={`drawer-tab-btn${leftActiveTool === tool ? ' active' : ''}`}
-                  onClick={() => selectLeftTool(tool)}
-                  title={LEFT_TOOL_META[tool].title}
-                  aria-label={LEFT_TOOL_META[tool].title}
-                >
-                  {LEFT_TOOL_META[tool].icon}
-                </button>
-              ))}
-            </div>
-            <button
-              className="drawer-close-btn"
-              onClick={() => closeLeftDrawer()}
-              title="Close panel"
-              aria-label="Close panel"
-            >
-              <XIcon />
-            </button>
-          </header>
-          <div className="drawer-body">
-            <SidebarContent tab={layoutState.sidebarTab} />
+        <header className="drawer-header">
+          <div className="drawer-tabs">
+            {leftDrawerTools.map((tool) => (
+              <button
+                key={tool}
+                className={`drawer-tab-btn${leftActiveTool === tool ? ' active' : ''}`}
+                onClick={() => selectLeftTool(tool)}
+                title={LEFT_TOOL_META[tool].title}
+                aria-label={LEFT_TOOL_META[tool].title}
+              >
+                {LEFT_TOOL_META[tool].icon}
+              </button>
+            ))}
           </div>
-        </aside>
-      </>
+          <button
+            className="drawer-close-btn"
+            onClick={() => closeLeftDrawer()}
+            title="Close panel"
+            aria-label="Close panel"
+          >
+            <XIcon />
+          </button>
+        </header>
+        <div className="drawer-body">
+          <SidebarContent tab={layoutState.sidebarTab} />
+        </div>
+      </aside>
     );
   }
 
@@ -1050,8 +1094,48 @@ export default function AppShell() {
     else selectRightTool(tool);
   }
 
-  function renderRightUtilityDrawer() {
-    return null;
+  function renderRightUtilityPanel() {
+    if (!rightDrawerOpen || !rightActiveTool) return null;
+    return (
+      <aside
+        className="right-utility-panel bento-card"
+        style={{ width: layoutState.rightDrawerWidth }}
+        aria-label="Tools"
+      >
+        <div
+          className="right-drawer-resize-handle"
+          onMouseDown={startRightDrawerResize}
+          role="separator"
+          aria-orientation="vertical"
+        />
+        <header className="drawer-header">
+          <div className="drawer-tabs">
+            {RIGHT_TOOLS_ALL.map((tool) => (
+              <button
+                key={tool}
+                className={`drawer-tab-btn${rightActiveTool === tool ? ' active' : ''}`}
+                onClick={() => selectRightTool(tool)}
+                title={RIGHT_TOOL_META[tool].title}
+                aria-label={RIGHT_TOOL_META[tool].title}
+              >
+                {RIGHT_TOOL_META[tool].icon}
+              </button>
+            ))}
+          </div>
+          <button
+            className="drawer-close-btn"
+            onClick={() => closeRightDrawer()}
+            title="Close panel"
+            aria-label="Close panel"
+          >
+            <XIcon />
+          </button>
+        </header>
+        <div className="drawer-body">
+          <PanelHost id={rightActiveTool} />
+        </div>
+      </aside>
+    );
   }
 
   function startAuxResize(event: React.MouseEvent) {
@@ -1462,10 +1546,10 @@ export default function AppShell() {
         return <Icon><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" /></Icon>;
       case 'containers':
         return <Icon><path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" /><path d="M4 12.5 12 17l8-4.5" /><path d="M4 17.5 12 22l8-4.5" /></Icon>;
-      case 'toolbox':
-        return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
-      default:
-        return null;
+    case 'toolbox':
+      return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
+    default:
+      return null;
     }
   }
 
@@ -1680,17 +1764,21 @@ export default function AppShell() {
     notifyPanesResized();
   }
 
-  function switchAmbientLayout(nextLayout: AmbientLayout) {
+  function switchAmbientLayout(requested: AmbientLayout) {
+    // One-window shell: only `focus` (the single terminal/agent screen) and
+    // `vibe` (the optional Fleet grid) are reachable. Any request for
+    // development/preview/gallery — including incidental ones from tool toggles
+    // that call requestAmbientLayout('development') — collapses to focus, so
+    // opening a tool never re-tiles the layout or unmounts the terminal.
+    const nextLayout: AmbientLayout = requested === 'vibe' ? 'vibe' : 'focus';
     if (nextLayout === ambientLayout) return;
 
     // Save current mode's state before switching
     perLayoutState.current[ambientLayout] = { focused: focusedRoom, minimized: minimizedRooms };
 
-    // Preview mode tests the live web app: make sure the preview browser is open.
-    if (nextLayout === 'preview') {
-      if (!layoutState.previewVisible) {
-        persistLayoutPatch({ previewVisible: true, activeView: 'preview', lastAuxView: 'preview' });
-      }
+    // Fleet (vibe) shows running agents; keep the terminal session open behind it
+    // so returning to the workspace lands you back on a live terminal.
+    if (nextLayout === 'vibe') {
       setTerminalRoomOpen(true);
     }
 
@@ -1798,29 +1886,6 @@ export default function AppShell() {
       );
     }
 
-    if (ambientLayout === 'vibe') {
-      const agentRooms = visibleRooms.filter((room) => isAgentRoomId(room));
-      if (agentRooms.length === 0) {
-        return (
-          <div className="focused-room empty-stage" aria-label="No agents running">
-            <p className="vibe-empty-msg">Open an agent to see it here</p>
-          </div>
-        );
-      }
-      return (
-        <>
-          <div className="vibe-grid">
-            {agentRooms.map((room) => (
-              <div key={room} className="vibe-cell">
-                {renderRoomFrame(room, true)}
-              </div>
-            ))}
-          </div>
-          {renderMinimizedRooms()}
-        </>
-      );
-    }
-
     if (ambientLayout === 'preview') {
       // The live app preview is the stage; other open and non-minimized panels
       // (like the terminal and running agents) stack alongside.
@@ -1870,28 +1935,71 @@ export default function AppShell() {
       );
     }
 
+    // VS Code-style persistence: every open terminal/agent keeps its xterm
+    // mounted at all times. Focus LAYERS them (only the active one visible);
+    // Fleet (vibe) re-flows the SAME live panes into a grid. Both modes render
+    // the identical keyed container + children, so switching Focus↔Fleet only
+    // swaps CSS classes — React never unmounts an xterm, so the PTY view is
+    // never disposed/rebuilt and the WebGL atlas can't corrupt the scrollback on
+    // the round trip. Non-terminal rooms (editor/preview/…) render on top only
+    // in Focus. `isVibe` decides which panes are visible and how they lay out.
+    const isVibe = ambientLayout === 'vibe';
+    const persistentStageRooms = visibleRooms.filter(isPersistentRoomId);
+    const activeIsPersistent = activeRoom ? isPersistentRoomId(activeRoom) : false;
+    const hasAgents = persistentStageRooms.some(isAgentRoomId);
+
+    // Empty states unmount nothing worth keeping (no agents / no active room), so
+    // they can short-circuit — matching the prior Focus/Fleet empty behaviour.
+    if (isVibe && !hasAgents) {
+      return (
+        <>
+          <div className="focused-room empty-stage" aria-label="No agents running">
+            <p className="vibe-empty-msg">Open an agent to see it here</p>
+          </div>
+          {renderMinimizedRooms()}
+        </>
+      );
+    }
+    if (!isVibe && !activeRoom) {
+      return (
+        <>
+          <div className="focused-room empty-stage" aria-label="Empty workspace" />
+          {renderMinimizedRooms()}
+        </>
+      );
+    }
+
     return (
       <>
-        {activeRoom ? (
-          <>
-            <div className="focused-room">
+        <div className={`focused-room stage-layers${isVibe ? ' vibe-grid' : ''}`}>
+          {persistentStageRooms.map((room) => {
+            // Focus: only the active pane is visible. Fleet: every agent pane is
+            // visible in the grid; the personal/dev terminals stay mounted but
+            // hidden so returning to Focus is instant and uncorrupted.
+            const hidden = isVibe ? !isAgentRoomId(room) : room !== activeRoom;
+            return (
+              <div
+                key={room}
+                className={`stage-pane${hidden ? ' stage-hidden' : ''}`}
+              >
+                {renderRoomFrame(room, true)}
+              </div>
+            );
+          })}
+          {!isVibe && !activeIsPersistent && activeRoom && (
+            <div className="stage-pane">
               {renderRoomFrame(activeRoom, true)}
             </div>
-            {stackedRooms.length > 0 && (
-              <aside className="room-stack" aria-label="Open rooms">
-                <div className="room-cards-row">
-                  {stackedRooms.map((room) => renderRoomCard(room))}
-                </div>
-              </aside>
-            )}
-            {renderMinimizedRooms()}
-          </>
-        ) : (
-          <>
-            <div className="focused-room empty-stage" aria-label="Empty workspace" />
-            {renderMinimizedRooms()}
-          </>
+          )}
+        </div>
+        {!isVibe && stackedRooms.length > 0 && (
+          <aside className="room-stack" aria-label="Open rooms">
+            <div className="room-cards-row">
+              {stackedRooms.map((room) => renderRoomCard(room))}
+            </div>
+          </aside>
         )}
+        {renderMinimizedRooms()}
       </>
     );
   }
@@ -1913,85 +2021,50 @@ export default function AppShell() {
             >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}
 
-              <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
-                (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
-                (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
-                  ? ` ${ambientLayout}-solo`
-                  : ''
-              }`} aria-label="Spacron ambient layout">
-                {renderAmbientLayout()}
-              </main>
+              <div className="rooms-content-horizontal">
+                {renderLeftUtilityPanel()}
 
-              {renderLeftUtilityDrawer()}
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
+                  (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
+                  (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
+                    ? ` ${ambientLayout}-solo`
+                    : ''
+                }`} aria-label="Spacron ambient layout">
+                  {renderAmbientLayout()}
+                </main>
 
-              {renderRightUtilityDrawer()}
+                {renderRightUtilityPanel()}
+              </div>
 
               <div ref={overlaysRef} className="workspace-overlays">
               <nav className="room-dock bento-card" aria-label="Room launcher">
-                {ambientLayout === 'development' ? (
-                  <>
-                    <div className="room-dock-group">
-                      <button
-                        className="svt-btn back-btn"
-                        onClick={() => {
-                          useLayoutStore.getState().setActiveView('terminal');
-                          switchAmbientLayout('focus');
-                        }}
-                        title="Back to Workspace"
-                        aria-label="Back to Workspace"
-                      >
-                        <Icon><polyline points="15 18 9 12 15 6" /></Icon>
-                      </button>
-                    </div>
-                    <div className="room-dock-separator" />
-                    <div className="room-dock-group utilities">
-                      {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                      <div className="room-dock-separator-mini" style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.08)', margin: '0 6px' }} />
-                      <ActivityButton
-                        item={{
-                          id: 'dev-terminal',
-                          title: 'Toggle Terminal panel',
-                          active: devTerminalRoomOpen && !minimizedRooms.has('dev-terminal'),
-                          onClick: () => {
-                            if (devTerminalRoomOpen && !minimizedRooms.has('dev-terminal')) {
-                              minimizeRoom('dev-terminal');
-                            } else {
-                              setDevTerminalRoomOpen(true);
-                              restoreRoom('dev-terminal');
-                            }
-                          },
-                          icon: <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>
-                        }}
-                      />
-                      <ActivityButton
-                        item={{
-                          id: 'spawnAgent',
-                          title: 'Spawn Agents',
-                          active: layoutState.agentSpawnOpen,
-                          onClick: () => {
-                            if (layoutState.agentSpawnOpen) closeAgentSpawn();
-                            else openAgentSpawn();
-                          },
-                          icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-                        }}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="room-dock-group nav">
-                      {leftNavDockItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                    </div>
-                    <div className="room-dock-separator" />
-                    <div className="room-dock-group tools">
-                      {roomLauncherItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                    </div>
-                    <div className="room-dock-separator" />
-                    <div className="room-dock-group">
-                      {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                    </div>
-                  </>
-                )}
+                {/* Single unified dock (the 5-mode `development` branch is gone).
+                    Left→right: workspace nav · room launchers · dev tools (open
+                    the docked overlay) · actions + Fleet. */}
+                <div className="room-dock-group nav">
+                  {leftNavDockItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                </div>
+                <div className="room-dock-separator" />
+                <div className="room-dock-group tools">
+                  {roomLauncherItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                </div>
+                <div className="room-dock-separator" />
+                <div className="room-dock-group utilities">
+                  {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                </div>
+                <div className="room-dock-separator" />
+                <div className="room-dock-group">
+                  {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                  <ActivityButton
+                    item={{
+                      id: 'fleet',
+                      title: ambientLayout === 'vibe' ? 'Back to workspace' : 'Fleet — all agents',
+                      active: ambientLayout === 'vibe',
+                      onClick: () => switchAmbientLayout(ambientLayout === 'vibe' ? 'focus' : 'vibe'),
+                      icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
+                    }}
+                  />
+                </div>
               </nav>
               <div className="composer-strip">
                 <FloatingPromptBar />

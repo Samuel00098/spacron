@@ -314,7 +314,6 @@ export const aiProviders: AiProviderDef[] = [
       { id: 'whisper-large-v3-turbo-q5', label: 'Whisper Large v3 Turbo (Quantized)', description: 'Latest multilingual Speech-to-Text, compact.' },
       { id: 'whisper-large-v3-turbo', label: 'Whisper Large v3 Turbo (Full)', description: 'Highest-accuracy multilingual Speech-to-Text.' },
       { id: 'parakeet-tdt-v3', label: 'NVIDIA Parakeet TDT v3', description: 'Fastest, top-accuracy multilingual Speech-to-Text (WASM).' },
-      { id: 'kokoro-tts-v1.0', label: 'Kokoro TTS (v1.0)', description: 'Offline Text-to-Speech.' },
     ],
   },
 ];
@@ -589,8 +588,6 @@ export function getTtsVoiceOptionsForModel(provider: AiProviderId, modelId: stri
       return googleTtsVoiceOptions;
     case 'xai':
       return grokVoiceOptions;
-    case 'local':
-      return kokoroVoiceOptions;
     default:
       return [];
   }
@@ -616,10 +613,6 @@ export function getTtsModelOptions(provider: AiProviderId): TtsModelOption[] {
       return [
         { id: 'grok-voice-tts-1.0', label: 'Grok Voice TTS 1.0', description: 'xAI voice synthesis.', voices: grokVoiceOptions },
       ];
-    case 'local':
-      return [
-        { id: 'kokoro-tts-v1.0', label: 'Kokoro TTS (v1.0)', description: 'Offline speech synthesis.', voices: kokoroVoiceOptions },
-      ];
     default:
       return [];
   }
@@ -637,8 +630,6 @@ export function getDefaultTtsModel(provider: AiProviderId): string {
       return 'gemini-2.5-flash-preview-tts';
     case 'xai':
       return 'grok-voice-tts-1.0';
-    case 'local':
-      return 'kokoro-tts-v1.0';
     default:
       return 'local-tts-model';
   }
@@ -656,15 +647,22 @@ export function getDefaultTtsVoice(provider: AiProviderId): string {
       return 'Kore';
     case 'xai':
       return 'eve';
-    case 'local':
-      return 'af_bella';
     default:
       return 'default';
   }
 }
 
 export function providerSupportsReplyTts(provider: AiProviderId): boolean {
-  return provider === 'openrouter' || provider === 'groq' || provider === 'openai' || provider === 'google' || provider === 'xai' || isLocalProvider(provider);
+  // Bundled 'local' (Kokoro) TTS was removed. Self-hosted OpenAI-compatible
+  // servers (ollama/lmstudio) still support reply TTS via the tts_speak endpoint.
+  return (
+    provider === 'openrouter' ||
+    provider === 'groq' ||
+    provider === 'openai' ||
+    provider === 'google' ||
+    provider === 'xai' ||
+    (isLocalProvider(provider) && provider !== 'local')
+  );
 }
 
 export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', false);
@@ -917,11 +915,13 @@ export interface ShortcutAction {
 export const shortcutActions: ShortcutAction[] = [
   { id: 'commandPalette', label: 'Command Palette', category: 'View' },
   { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
+  { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', category: 'View' },
+  { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
   { id: 'newWorkspace',   label: 'New Workspace',   category: 'Workspace' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     category: 'View' },
   { id: 'goToEditor',     label: 'Go to Editor',       category: 'View' },
   { id: 'goToPreview',    label: 'Go to Preview',      category: 'View' },
-  { id: 'goToOrchestrator', label: 'Go to Orchestrator', category: 'View' },
+  // goToOrchestrator removed — Orchestrator panel no longer exists
   { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
   { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
@@ -942,8 +942,8 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'resetZoom',      label: 'Reset Zoom',      category: 'Window' },
   { id: 'quickCapture',  label: 'Quick Capture',     category: 'Workspace' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     category: 'Workspace' },
-  { id: 'openDailyNote', label: 'Open Daily Note',   category: 'Workspace' },
-  { id: 'toggleSketch',   label: 'Toggle Sketch Canvas', category: 'View' },
+  // openDailyNote removed
+  // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', category: 'Voice' },
   { id: 'canvasZoomIn',   label: 'Canvas Zoom In', category: 'Canvas' },
   { id: 'canvasZoomOut',  label: 'Canvas Zoom Out', category: 'Canvas' },
@@ -954,11 +954,13 @@ export const shortcutActions: ShortcutAction[] = [
 export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
   { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
+  { id: 'toggleProjectHUD', label: 'Toggle Project Launcher HUD', keys: 'Ctrl+K' },
+  { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
   { id: 'newWorkspace',   label: 'New Workspace',   keys: 'Ctrl+N' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },
   { id: 'goToEditor',     label: 'Go to Editor',       keys: 'Ctrl+E' },
   { id: 'goToPreview',    label: 'Go to Preview',      keys: 'Ctrl+Shift+V' },
-  { id: 'goToOrchestrator', label: 'Go to Orchestrator', keys: 'Ctrl+Shift+O' },
+  // goToOrchestrator removed — Orchestrator panel no longer exists
   { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
   { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
@@ -979,13 +981,13 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'resetZoom',      label: 'Reset Zoom',      keys: 'Ctrl+0' },
   { id: 'quickCapture',  label: 'Quick Capture',     keys: 'Ctrl+Shift+Space' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     keys: 'Ctrl+Shift+A' },
-  { id: 'openDailyNote', label: 'Open Daily Note',   keys: 'Ctrl+Shift+D' },
-  { id: 'toggleSketch',   label: 'Toggle Sketch Canvas', keys: 'Ctrl+Shift+N' },
+  // openDailyNote removed
+  // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
   { id: 'canvasZoomIn',   label: 'Canvas Zoom In', keys: 'Alt+=' },
   { id: 'canvasZoomOut',  label: 'Canvas Zoom Out', keys: 'Alt+-' },
   { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
-  { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+L' },
+  { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
 ];
 
 export const userShortcuts = persistentWritable<KeyboardShortcut[]>('userShortcuts', defaultShortcuts);
@@ -1100,8 +1102,8 @@ export async function reconcileOnboardingFlag() {
 export const terminalShell = persistentWritable<string>('terminalShell', ''); // empty = auto-detect
 export const terminalCursorStyle = persistentWritable<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar');
 export const terminalScrollback = persistentWritable('terminalScrollback', 5000);
-export const terminalFontSize = persistentWritable('terminalFontSize', 13);
-export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'webgl');
+export const terminalFontSize = persistentWritable('terminalFontSize', 14);
+export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas');
 
 export function updateSetting(key: string, value: unknown) {
   switch (key) {
@@ -1183,8 +1185,8 @@ export function resetSettingsToDefault() {
   terminalShell.set('');
   terminalCursorStyle.set('bar');
   terminalScrollback.set(5000);
-  terminalFontSize.set(13);
-  terminalRenderer.set('webgl');
+  terminalFontSize.set(14);
+  terminalRenderer.set('canvas');
 
 }
 

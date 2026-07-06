@@ -12,8 +12,14 @@
 }
 .editor-layout .cm-editor {
   height: 100%;
-  background: rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-surface, 0.72));
+  /* Transparent — the AppShell panel behind provides the frosted glass surface */
+  background: transparent;
   position: relative;
+}
+
+/* Override any inline theme background CM6 injects on the scroller */
+.editor-layout .cm-editor .cm-scroller {
+  background: transparent !important;
 }
 
 /* Liquid glass sheen on editor content area */

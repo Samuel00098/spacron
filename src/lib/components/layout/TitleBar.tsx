@@ -9,13 +9,8 @@ import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/sto
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
-import AmbientSwitcher from '$lib/components/layout/AmbientSwitcher.tsx';
 import packageJson from '../../../../package.json';
 import './TitleBar.css';
-
-// On macOS, the native traffic-light buttons handle minimize/maximize/close.
-// We detect the platform to hide our custom controls so they don't double up.
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
 export default function TitleBar() {
   const win = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
@@ -29,7 +24,6 @@ export default function TitleBar() {
   const [iconError, setIconError] = useState(false);
 
   // Reactive store reads — the React equivalent of `$store`.
-  const projectId = useWorkspaceStore((s) => s.activeProjectId);
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const workspace = useWorkspaceStore((s) => (s.activeWorkspaceId ? s.recentWorkspaces.find((w) => w.id === s.activeWorkspaceId) ?? null : null));
@@ -80,13 +74,6 @@ export default function TitleBar() {
     WebkitAppRegion: 'no-drag',
     appRegion: 'no-drag',
   } as CSSProperties;
-
-  const dividerStyle: CSSProperties = {
-    width: '1px',
-    height: '16px',
-    background: 'var(--titlebar-border, rgba(255, 255, 255, 0.08))',
-    margin: '0 4px',
-  };
 
   return (
     <div className="titlebar" data-tauri-drag-region>
@@ -211,13 +198,6 @@ export default function TitleBar() {
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right">
-        {/* Ambient layout switcher (Focus / Split / Canvas / Preview) */}
-        {workspace && (
-          <>
-            <AmbientSwitcher />
-            <div className="tb-divider" style={dividerStyle}></div>
-          </>
-        )}
 
         {workspaceId && (
           <>
@@ -291,8 +271,9 @@ export default function TitleBar() {
           </button>
         )}
 
-        {/* Window controls — rendered unconditionally, matching the original
-            markup (the isMac detection exists but did not gate them). */}
+        {/* Window controls — rendered unconditionally on every OS. The window is
+            frameless (decorations:false), so macOS shows no native traffic
+            lights and these custom controls are always needed. */}
         <div className="titlebar-controls">
           <button className="wc-btn wc-min" onClick={minimize} aria-label="Minimize" title="Minimize">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">

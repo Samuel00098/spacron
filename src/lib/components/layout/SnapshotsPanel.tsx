@@ -21,11 +21,11 @@ const LAYOUT_ICONS: Record<string, string> = {
 };
 
 const ROLE_COLORS: Record<string, string> = {
-  Server: '#4ade80',
-  Tests: '#60a5fa',
-  Build: '#fb923c',
-  Agent: '#a78bfa',
-  Git: '#fbbf24',
+  Server: 'var(--role-server)',
+  Tests: 'var(--role-tests)',
+  Build: 'var(--role-build)',
+  Agent: 'var(--role-agent)',
+  Git: 'var(--role-git)',
 };
 
 function formatDate(timestamp: number): string {
@@ -230,7 +230,7 @@ export default function SnapshotsPanel() {
                     <div className={`pane-chip${pane === null ? ' empty' : ''}`} key={`${snapshot.id}:${index}`}>
                       {pane?.role ? (
                         <>
-                          <span className="pane-role-dot" style={{ background: ROLE_COLORS[pane.role] ?? '#9ca3af' }} />
+                          <span className="pane-role-dot" style={{ background: ROLE_COLORS[pane.role] ?? 'var(--text-muted)' }} />
                           <span className="pane-role-label">{pane.role}</span>
                         </>
                       ) : pane !== null ? (

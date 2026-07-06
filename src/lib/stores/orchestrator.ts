@@ -239,7 +239,7 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
   // terminal state; otherwise (app restart, terminal closed) reset to todo.
   const liveSessions = getTerminalProjectState(project.id).sessions;
   let needsFlush = false;
-  const reconciledTasks: OrchestratorTask[] = [];
+  let reconciledTasks: OrchestratorTask[] = [];
 
   for (const rawTask of rawPersistedTasks) {
     const task = normalizeLoadedTask(rawTask);
@@ -294,6 +294,22 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
     }
 
     reconciledTasks.push(reconciledTask);
+  }
+
+  // Cap completed/failed/blocked/cancelled tasks to prevent unbounded growth.
+  const MAX_ORCHESTRATOR_TASKS = 100;
+  const terminalIds = ['complete', 'failed', 'blocked', 'cancelled'] as const;
+  let capped = 0;
+  const cappedTasks = reconciledTasks.filter((t) => {
+    if ((terminalIds as readonly string[]).includes(t.status)) {
+      capped++;
+      return capped <= MAX_ORCHESTRATOR_TASKS;
+    }
+    return true;
+  });
+  if (cappedTasks.length !== reconciledTasks.length) {
+    reconciledTasks = cappedTasks;
+    needsFlush = true;
   }
 
   // Adopted tasks aren't persisted, so a reload would otherwise wipe agents the
@@ -469,6 +485,9 @@ function announceCompletionAloud(
 ): void {
   if (!get(announceAgentCompletions)) return;
   if (getVoiceReplyConfigError()) return;
+  // In voice mode the auto-speak effect handles completion cards — skip here
+  // to avoid double-speaking and to keep the voice loop's TTS lifecycle intact.
+  if (get(agentVoiceModeActive)) return;
   const line =
     status === 'blocked' ? `${name} needs your input: ${title}.` :
     status === 'failed' ? `${name} failed: ${title}.` :
@@ -1116,7 +1135,15 @@ export interface ChatMessage {
 }
 
 const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
-const MAX_CHAT_PER_PROJECT = 80;
+// Soft cap: reaching this schedules background compaction, which summarizes the
+// oldest chunk (see compactProjectChat) rather than dropping it.
+const MAX_CHAT_PER_PROJECT = 100;
+const CHAT_SUMMARY_CHUNK = 15;
+// Hard safety cap: only ever trims raw messages if compaction can't keep up
+// (e.g. no conversation API key configured). Sits above the soft cap + one
+// compaction chunk so, in the normal case, compaction shrinks the list before
+// anything is dropped un-summarized.
+const CHAT_HARD_CAP = MAX_CHAT_PER_PROJECT + CHAT_SUMMARY_CHUNK + 20;
 
 function loadChat(): Record<string, ChatMessage[]> {
   return loadJson<Record<string, ChatMessage[]>>(CHAT_STORAGE_KEY, {});
@@ -1140,9 +1167,78 @@ export function getProjectChat(projectId: string) {
 
 function appendChat(projectId: string, msg: ChatMessage) {
   chatMessages.update((all) => {
-    const list = [...(all[projectId] ?? []), msg].slice(-MAX_CHAT_PER_PROJECT);
+    // Trim only at the hard safety cap. Normal shrinking is done by
+    // compactProjectChat, which summarizes the oldest chunk instead of dropping
+    // it — scheduled as soon as the soft cap is reached, so it runs (and frees
+    // room) before the hard cap could ever drop a message un-summarized.
+    const list = [...(all[projectId] ?? []), msg].slice(-CHAT_HARD_CAP);
+    if (list.length >= MAX_CHAT_PER_PROJECT) {
+      scheduleChatCompact(projectId);
+    }
     return { ...all, [projectId]: list };
   });
+}
+
+const _compactQueued = new Set<string>();
+
+function scheduleChatCompact(projectId: string) {
+  if (_compactQueued.has(projectId)) return;
+  _compactQueued.add(projectId);
+  setTimeout(() => {
+    _compactQueued.delete(projectId);
+    compactProjectChat(projectId).catch(() => {});
+  }, 3000);
+}
+
+async function compactProjectChat(projectId: string) {
+  const config = getConversationLlmConfig(false);
+  if (!config.hasApiKey) return;
+
+  const msgs = get(chatMessages)[projectId];
+  if (!msgs || msgs.length < MAX_CHAT_PER_PROJECT) return;
+
+  // Find the oldest consecutive user+assistant pairs to compact
+  const toCompact: ChatMessage[] = [];
+  for (const m of msgs) {
+    if (toCompact.length >= CHAT_SUMMARY_CHUNK) break;
+    if (m.role === 'assistant' && !m.text && m.pending) continue;
+    toCompact.push(m);
+  }
+  if (toCompact.length < 2) return;
+
+  const compactText = toCompact
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.slice(0, 600)}`)
+    .join('\n---\n');
+
+  try {
+    const summary = await invoke<string>('ai_complete', {
+      systemPrompt:
+        'Condense the following conversation exchange into 1-2 concise sentences. ' +
+        'Capture what the user asked for and what was accomplished. Be factual and omit pleasantries.',
+      userText: compactText,
+      provider: config.provider,
+      model: config.model,
+      apiKey: '',
+      baseUrl: config.baseUrl || undefined,
+    });
+
+    chatMessages.update((all) => {
+      const list = all[projectId] ?? [];
+      // Verify oldest messages haven't changed since we started
+      const ids = new Set(toCompact.map((m) => m.id));
+      if (!list.slice(0, toCompact.length).every((m) => ids.has(m.id))) return all;
+
+      const summaryMsg: ChatMessage = {
+        id: `summ-${Date.now()}`,
+        role: 'assistant',
+        text: `📋 Earlier conversation: ${summary.trim()}`,
+        ts: toCompact[0].ts,
+      };
+      return { ...all, [projectId]: [summaryMsg, ...list.slice(toCompact.length)] };
+    });
+  } catch {
+    // Summarization failed — the truncated list is fine
+  }
 }
 
 function patchChat(projectId: string, id: string, patch: Partial<ChatMessage>) {

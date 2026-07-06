@@ -38,6 +38,7 @@ const defaultLayout: LayoutState = {
   youtubeVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
+  leftPanelWidth: 310,
   rightDrawerWidth: 380,
 };
 
@@ -106,6 +107,7 @@ interface LayoutActions {
   toggleContainersVisible: () => void;
   toggleToolboxVisible: () => void;
   setRightDrawerTool: (tool: RightDrawerTool | null) => void;
+  setLeftPanelWidth: (width: number) => void;
   setRightDrawerWidth: (width: number) => void;
   toggleYoutubeVisible: () => void;
   toggleOrchestratorVisible: () => void;
@@ -195,10 +197,9 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   openAgentSpawn: () => set({ agentSpawnOpen: true }),
   closeAgentSpawn: () => set({ agentSpawnOpen: false }),
 
-  // Env lives in the main stage in development mode.
   openEnvManager: () => {
     set((l) => {
-      const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+      const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
       persistLayout(next);
       return next;
     });
@@ -206,7 +207,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   },
   closeEnvManager: () => {
     set((l) => {
-      const next = { ...l, activeView: 'terminal' as const, envVisible: false };
+      const next = { ...l, activeView: 'terminal' as const, envVisible: false, envManagerOpen: false };
       persistLayout(next);
       return next;
     });
@@ -282,7 +283,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'env') {
-        const next: LayoutState = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+        const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
         persistLayout(next);
         queueMicrotask(() => requestAmbientLayout('development'));
         return next;
@@ -434,7 +435,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   setRightDrawerTool: (tool: RightDrawerTool | null) => {
     if (tool === null) {
       set((l) => {
-        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false };
         persistLayout(next);
         return next;
       });
@@ -449,13 +450,22 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
           dbVisible: tool === 'db',
           containersVisible: tool === 'containers',
           toolboxVisible: tool === 'toolbox',
-          envVisible: tool === 'env'
+          envVisible: tool === 'env',
+          envManagerOpen: tool === 'env'
         };
         persistLayout(next);
         return next;
       });
       requestAmbientLayout('development');
     }
+  },
+
+  setLeftPanelWidth: (width: number) => {
+    set((l) => {
+      const next: LayoutState = { ...l, leftPanelWidth: Math.max(180, Math.min(600, width)) };
+      persistLayout(next);
+      return next;
+    });
   },
 
   setRightDrawerWidth: (width: number) => {
@@ -466,10 +476,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     });
   },
 
-  // YouTube is a free-floating pop-up window, not an aux room: toggling it just
-  // flips its own visibility and leaves the rest of the layout (active view,
-  // other panels, ambient mode) completely untouched, so it can pop up over any
-  // page and persist across mode switches.
   toggleYoutubeVisible: () => {
     if (getState().youtubeVisible) {
       try {

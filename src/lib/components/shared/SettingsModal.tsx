@@ -66,7 +66,7 @@ import {
   type KeyboardShortcut,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
-import { clearAllApplicationState } from '$lib/stores/workspace';
+import { resetAllApplicationState } from '$lib/stores/workspace';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
 import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { requestNotificationPermission, showToast } from '$lib/stores/notification';
@@ -118,6 +118,15 @@ const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
 
 function classNames(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
+}
+
+/** Human-readable byte size, e.g. 654311424 -> "624 MB". */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / Math.pow(1024, i);
+  return `${value >= 100 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
 }
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
@@ -501,6 +510,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }, []);
 
+  const handleCancelDownload = useCallback(async (modelId: string) => {
+    if (!isTauriRuntime()) return;
+    try {
+      await invoke('cancel_download', { modelId });
+    } catch (err) {
+      showToast(String(err), 'error');
+    }
+  }, []);
+
   const handleDeleteModel = useCallback(async (modelId: string) => {
     let confirmed = false;
     if (isTauriRuntime()) {
@@ -539,6 +557,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     
     let unlistenProgress: (() => void) | undefined;
     let unlistenError: (() => void) | undefined;
+    let unlistenCancelled: (() => void) | undefined;
     
     const setupListeners = async () => {
       unlistenProgress = await listen<any>('download-progress', (event) => {
@@ -568,6 +587,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
         });
         showToast(`Failed to download model: ${error}`, 'error');
       });
+
+      unlistenCancelled = await listen<any>('download-cancelled', (event) => {
+        const { model_id } = event.payload;
+        setDownloadProgress((prev) => {
+          const next = { ...prev };
+          delete next[model_id];
+          return next;
+        });
+        showToast('Download cancelled', 'info');
+      });
     };
     
     void setupListeners();
@@ -575,6 +604,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     return () => {
       if (unlistenProgress) unlistenProgress();
       if (unlistenError) unlistenError();
+      if (unlistenCancelled) unlistenCancelled();
     };
   }, [loadLocalModels]);
 
@@ -1220,7 +1250,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
     // Clear everything: workspaces, localStorage keys, settings, and the
     // durable onboarding flag so the tour restarts on next load.
-    await clearAllApplicationState();
+    await resetAllApplicationState();
     removedPresetAgents.set([]);
 
     if (typeof localStorage !== 'undefined') {
@@ -1618,6 +1648,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <div className="local-models-info">
                     Download Speech-to-Text models to enable 100% private, offline voice typing in Spacron.
                   </div>
+                  <div style={{ fontSize: '12px', background: 'rgba(78, 201, 176, 0.08)', color: 'var(--text-secondary)', padding: '8px 12px', borderRadius: '6px', marginTop: '8px', marginBottom: '12px', lineHeight: '1.5', border: '1px solid rgba(78, 201, 176, 0.15)' }}>
+                    ⚡ Parakeet now runs natively in the app process (ONNX Runtime) instead of WASM in the renderer, eliminating the OOM crash on long speech. Memory usage is capped via 30-second windowed inference — short utterances stay single-pass.
+                  </div>
                   <div className="local-models-list">
                     {localModelsLoading && localModels.length === 0 ? (
                       <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading catalog...</div>
@@ -1627,7 +1660,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         return (
                           <div key={model.id} className="local-model-card">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <strong>{model.name} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'normal' }}>({model.size})</span></strong>
+                              <strong>{model.name} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'normal' }}>({model.downloaded && model.downloaded_size_bytes ? formatBytes(model.downloaded_size_bytes) : model.size})</span></strong>
                               {model.downloaded ? (
                                 <span style={{ background: 'rgba(78, 201, 176, 0.1)', color: 'var(--success)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Ready / Offline</span>
                               ) : progressInfo ? (
@@ -1652,76 +1685,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                               {model.downloaded ? (
                                 <button type="button" className="settings-danger" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} onClick={() => handleDeleteModel(model.id)}>Delete</button>
                               ) : progressInfo ? (
-                                <button type="button" className="settings-secondary" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} disabled>Downloading...</button>
-                              ) : (
-                                <button type="button" className="settings-primary" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} onClick={() => handleDownloadModel(model.id)}>Download</button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </Section>
-
-                <Section title="Local Text-to-Speech (TTS)">
-                  <div className="local-models-info">
-                    Download Text-to-Speech models to hear natural-sounding local speech synthesis completely offline.
-                  </div>
-                  <div className="local-models-list">
-                    {localModelsLoading && localModels.length === 0 ? (
-                      <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading catalog...</div>
-                    ) : (
-                      localModels.filter(m => m.category === 'tts').map(model => {
-                        const progressInfo = downloadProgress[model.id];
-                        return (
-                          <div key={model.id} className="local-model-card">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <strong>{model.name} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'normal' }}>({model.size})</span></strong>
-                              {model.downloaded ? (
-                                <span style={{ background: 'rgba(78, 201, 176, 0.1)', color: 'var(--success)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Ready / Offline</span>
-                              ) : progressInfo ? (
-                                <span style={{ color: 'var(--accent)', fontSize: '11px', fontWeight: 600 }}>Downloading...</span>
-                              ) : (
-                                <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Not installed</span>
-                              )}
-                            </div>
-                            <p>{model.description}</p>
-                            
-                            <div style={{ marginTop: '8px', marginBottom: '8px' }}>
-                              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>List of voices</div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                {getTtsVoiceOptionsForModel('local', model.id).map((v) => (
-                                  <span key={v.id} style={{ fontSize: '10px', background: 'var(--bg-active)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--border)' }}>
-                                    {v.label}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-
-                            {progressInfo && (
-                              <div style={{ width: '100%', marginTop: '4px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                                  <span>Phase: {
-                                    progressInfo.phase === 'main' ? 'Model'
-                                    : progressInfo.phase === 'voices' ? 'Voices (voices-v1.0.bin)'
-                                    : progressInfo.phase === 'decoder' ? 'Decoder'
-                                    : progressInfo.phase === 'tokenizer' ? 'Tokenizer'
-                                    : progressInfo.phase === 'preprocessor' ? 'Preprocessor'
-                                    : 'Initializing'
-                                  }</span>
-                                  <span>{Math.round(progressInfo.progress)}%</span>
-                                </div>
-                                <div style={{ height: '6px', width: '100%', background: 'var(--bg-active)', borderRadius: '3px', overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${progressInfo.progress}%`, background: 'var(--accent)', transition: 'width 0.15s ease' }} />
-                                </div>
-                              </div>
-                            )}
-                            <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                              {model.downloaded ? (
-                                <button type="button" className="settings-danger" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} onClick={() => handleDeleteModel(model.id)}>Delete</button>
-                              ) : progressInfo ? (
-                                <button type="button" className="settings-secondary" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} disabled>Downloading...</button>
+                                <button type="button" className="settings-secondary" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} onClick={() => handleCancelDownload(model.id)}>Cancel</button>
                               ) : (
                                 <button type="button" className="settings-primary" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', width: 'auto' }} onClick={() => handleDownloadModel(model.id)}>Download</button>
                               )}

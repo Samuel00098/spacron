@@ -1094,7 +1094,18 @@ export async function openProject() {
   }
 }
 
-export async function clearAllApplicationState() {
+export async function clearRecentWorkspaces() {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('workspace_clear_recent');
+  } catch (err) {
+    console.error('Failed to clear recent projects on backend:', err);
+  }
+  recentWorkspaces.set([]);
+  activeWorkspaceId.set(null);
+}
+
+export async function resetAllApplicationState() {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('workspace_clear_recent');

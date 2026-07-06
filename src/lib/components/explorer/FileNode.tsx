@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { memo, useRef } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import FileIcon from './FileIcon.tsx';
 import type { FileNode as FileNodeType } from '$lib/types/explorer';
@@ -31,7 +31,39 @@ interface PendingDrag {
   active: boolean;
 }
 
-export default function FileNode({ node }: { node: FileNodeType }) {
+// Deep value-compare of a node's rendered subtree. A silent auto-refresh
+// rebuilds the whole tree with brand-new objects (rebuildNode never reuses
+// prior instances), so comparing only the node's own fields + direct
+// children.length would treat a subtree as "unchanged" whenever a nested
+// descendant changed without altering an ancestor's direct-child count — e.g.
+// a file created/renamed/deleted inside an expanded nested folder. That
+// ancestor's memo would then skip re-render and the change would never appear.
+// Recursing keeps the anti-flash benefit (truly-unchanged subtrees still skip)
+// while catching nested edits.
+function nodeSubtreeEqual(a: FileNodeType, b: FileNodeType): boolean {
+  if (a.entry.path !== b.entry.path) return false;
+  if (a.entry.name !== b.entry.name) return false;
+  if (a.entry.is_dir !== b.entry.is_dir) return false;
+  if (a.depth !== b.depth) return false;
+  if (a.expanded !== b.expanded) return false;
+  if (a.loading !== b.loading) return false;
+  const ac = a.children;
+  const bc = b.children;
+  if (Boolean(ac) !== Boolean(bc)) return false;
+  if (ac && bc) {
+    if (ac.length !== bc.length) return false;
+    for (let i = 0; i < ac.length; i++) {
+      if (!nodeSubtreeEqual(ac[i], bc[i])) return false;
+    }
+  }
+  return true;
+}
+
+function nodePropsEqual(prev: { node: FileNodeType }, next: { node: FileNodeType }): boolean {
+  return nodeSubtreeEqual(prev.node, next.node);
+}
+
+function FileNodeUnmemoized({ node }: { node: FileNodeType }) {
   const selected = useStore(selectedPaths);
   const renaming = useStore(renamingPath);
   const renameValue = useStore(renamingValue);
@@ -242,3 +274,6 @@ export default function FileNode({ node }: { node: FileNodeType }) {
     </div>
   );
 }
+
+const FileNode = memo(FileNodeUnmemoized, nodePropsEqual);
+export default FileNode;

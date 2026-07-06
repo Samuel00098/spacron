@@ -3,6 +3,8 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { backgroundImageEnabled, interfaceTransparency, backgroundImageBlur } from './settings';
 import { showToast } from './notification';
 import { useBackgroundStore, type BackgroundMedia, type BackgroundMediaKind } from './zustand/background';
+import { useThemeStore } from './zustand/theme';
+import { analyseImage } from '$lib/utils/imageAnalysis';
 
 export type { BackgroundMediaKind, BackgroundMedia } from './zustand/background';
 
@@ -124,11 +126,45 @@ export function applyBackgroundImage(): void {
     root.style.setProperty('--user-bg-image', `url("${currentAssetUrl}")`);
     root.classList.add('has-bg-image');
   } else {
-    root.style.removeProperty('--user-bg-image');
-    root.classList.remove('has-bg-image');
+    // No CUSTOM background image. A preset theme can own the background via
+    // theme.backgroundImage (applied by applyThemeToCSS) — don't strip it here, or
+    // the theme's own wallpaper vanishes on reload: initBackground() runs alongside
+    // loadThemes() at boot and this used to unconditionally clear has-bg-image,
+    // wiping the preset background loadThemes() had just set. Only clear when the
+    // active theme has no built-in image of its own either.
+    const themeHasBg = !!(useThemeStore.getState() as { activeTheme?: { backgroundImage?: string } }).activeTheme?.backgroundImage;
+    if (!themeHasBg) {
+      root.style.removeProperty('--user-bg-image');
+      root.classList.remove('has-bg-image');
+    }
   }
 
   root.classList.toggle('has-bg-media', active);
+
+  // ── Adaptive foreground palette for user-added backgrounds ──────
+  if (active) {
+    // Sync: set palette based on theme type immediately (before async analysis)
+    const themeType = (useThemeStore.getState() as { activeTheme?: { type: 'dark' | 'light' } }).activeTheme?.type ?? 'dark';
+    root.classList.toggle('bg-palette-dark', themeType === 'dark');
+    root.classList.toggle('bg-palette-light', themeType !== 'dark');
+
+    // Async: analyse the actual background image and refine palette
+    if (currentMediaKind === 'image' && currentAssetUrl) {
+      const urlAtStart = currentAssetUrl;
+      analyseImage(urlAtStart).then((analysis) => {
+        // Stale check: don't apply if user has since removed/changed the background
+        if (!get(backgroundImageEnabled) || currentAssetUrl !== urlAtStart) return;
+        const effectivelyDark = analysis !== null ? analysis.isDark : themeType === 'dark';
+        root.classList.toggle('bg-palette-dark', effectivelyDark);
+        root.classList.toggle('bg-palette-light', !effectivelyDark);
+      });
+    }
+  } else {
+    // No user background active — remove palette classes
+    root.classList.remove('bg-palette-dark', 'bg-palette-light');
+    // If the active theme has its own background, applyForegroundPalette
+    // in applyThemeToCSS will have set the correct palette class already.
+  }
 }
 
 let frostTimeout: any = null;

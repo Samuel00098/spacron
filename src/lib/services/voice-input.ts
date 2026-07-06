@@ -11,6 +11,7 @@ import {
   voiceInputUsesModelTranscription,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import { isWebkitGtk } from '$lib/utils/tauri';
 
 export type VoiceInputCallbacks = {
   onStart?: () => void;
@@ -25,6 +26,8 @@ export type VoiceInputSession = {
   start: () => Promise<void>;
   stop: () => void;
   isSupported: () => boolean;
+  /** Keep the mic warm between turns for the conversational loop (see impl). */
+  setConversationMode: (enabled: boolean) => void;
 };
 
 export type VoiceRefineOptions = {
@@ -46,15 +49,61 @@ type BrowserSpeechRecognition = {
 };
 
 type AudioContextCtor = new () => AudioContext;
-const GOOGLE_VAD_RMS_THRESHOLD = 0.025;
-// How long of a silence ends an utterance. Kept tight so transcription fires
-// quickly after the user stops talking; still long enough to ride out the
-// natural mid-sentence pauses that would otherwise cut the user off.
-const GOOGLE_VAD_SILENCE_MS = 2500;
+// VAD (voice-activity detection) tuning. A *fixed* RMS gate was the cause of the
+// "stuck on Listening, transcript only appears when I exit" bug: when the room's
+// noise floor sat near the threshold, every buffer looked like speech, so the
+// silence timer never completed and the utterance never auto-finalized (only the
+// manual stop on exit flushed it). We instead track the ambient noise floor and
+// gate relative to it, with hysteresis, plus a hard cap so a wedged VAD can never
+// listen forever.
+const VAD_ABS_FLOOR = 0.002; // never treat anything quieter than this as speech
+const VAD_ONSET_MULT = 1.2; // speech starts when RMS exceeds noiseFloor × this
+const VAD_RELEASE_MULT = 1.1; // still speaking while RMS exceeds noiseFloor × this
+// How long of a silence ends an utterance. Kept snappy for responsive turn-
+// taking; the release-multiplier hysteresis (VAD_RELEASE_MULT) holds through the
+// brief quiet dips inside a sentence, so this only elapses on a real end-of-turn
+// pause rather than cutting a speaker off mid-thought.
+const VAD_SILENCE_MS = 500;
+// Absolute ceiling on a single utterance.
+const VAD_MAX_UTTERANCE_MS = 15_000;
 
 function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
+  // WebKitGTK (Linux) exposes a `webkitSpeechRecognition` object, but its
+  // implementation is non-functional and its `.start()` segfaults the web
+  // process — which takes the whole Tauri app down (the reported "mic closes the
+  // app" crash). A native segfault is NOT catchable by the try/catch around
+  // start(), so the only safe option is to never hand out the ctor here. Returning
+  // null makes the webspeech provider surface a graceful "not supported" message
+  // (and, because this check runs before getUserMedia, it also avoids touching the
+  // mic at all on that path). Linux users should pick a local/cloud STT provider.
+  if (isWebkitGtk()) return null;
   return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+}
+
+/** Is `getUserMedia` available in this runtime? */
+function isGetUserMediaApiAvailable(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  if (!navigator.mediaDevices?.getUserMedia) return false;
+  return true;
+}
+
+/** Probes whether the GStreamer audio bridge is installed on Linux.
+ *
+ * WebKitGTK (Tauri on Linux) enables media capture via GStreamer. If the
+ * required GStreamer audio bridge (`gstreamer1.0-pulseaudio` for PulseAudio,
+ * or `gstreamer1.0-pipewire` for PipeWire) is missing, calling getUserMedia
+ * segfaults the web process — an unrecoverable crash.  This async check
+ * asks the Rust backend whether the bridge .so is present.
+ */
+async function checkAudioSafe(): Promise<boolean> {
+  if (!isGetUserMediaApiAvailable()) return false;
+  if (!isWebkitGtk()) return true;
+  try {
+    return await invoke<boolean>('check_audio_safe');
+  } catch {
+    return false;
+  }
 }
 
 function getAudioContextCtor(): AudioContextCtor | null {
@@ -205,28 +254,35 @@ async function requestMicrophoneStream(): Promise<MediaStream | string> {
     return 'This runtime cannot access the microphone.';
   }
 
-  // Check permission state before prompting so we can show our own dialog
-  // instead of the browser bar when the user hasn't decided yet.
+  if (!(await checkAudioSafe())) {
+    return 'Microphone access requires the GStreamer audio bridge. Run: sudo apt install gstreamer1.0-pulseaudio';
+  }
+
+  // Check permission state before prompting — the browser/OS will show its own
+  // permission prompt via getUserMedia below.
   if (navigator.permissions) {
     try {
       const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
       if (status.state === 'denied') {
         return 'Microphone access denied. Enable microphone permissions and try again.';
       }
-      if (status.state === 'prompt') {
-        const { usePermissionsStore } = await import('$lib/stores/zustand/permissions');
-        const granted = await usePermissionsStore.getState().requestPermission('microphone');
-        if (!granted) {
-          return 'Microphone access was not allowed.';
-        }
-      }
     } catch {
-      // Permissions API unavailable — fall through to getUserMedia which handles it natively
+      // Permissions API unavailable — fall through to getUserMedia
     }
   }
 
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Enable the browser's DSP: echo cancellation stops the assistant's own TTS
+    // playback from being heard back by the mic (which, in hands-free voice mode,
+    // kept the VAD from ever registering silence), and noise suppression lowers
+    // the ambient floor so the silence detector actually fires.
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
   } catch (err: any) {
     if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
       return 'Microphone access denied. Enable microphone permissions and try again.';
@@ -309,13 +365,37 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
   let speechDetected = false;
   let startTime = 0;
-  let highRmsCount = 0;
+  // Rolling estimate of the ambient noise floor (RMS), seeded during the mic
+  // warmup and adapted between utterances so the gate tracks the room.
+  let noiseFloor = 0;
+  // Conversation ("keep-warm") mode: when set, the capture graph (mic stream +
+  // AudioContext + processor) is kept alive between turns and re-armed instantly
+  // instead of torn down and re-acquired (getUserMedia + AudioContext + warmup)
+  // on every turn — the dominant source of inter-turn lag in the voice loop.
+  let keepWarm = false;
+  // Whether the live graph is currently feeding audio into a turn. False while a
+  // turn is transcribing or the graph is parked warm between turns, so the
+  // always-running processor ignores audio until the next re-arm.
+  let listening = false;
+  // Set when stop() arrives mid-transcription: the in-flight finalizer releases
+  // the mic in its `finally` instead of parking the graph warm.
+  let teardownRequested = false;
 
   function clearSilenceTimer() {
     if (silenceTimer) {
       clearTimeout(silenceTimer);
       silenceTimer = null;
     }
+  }
+
+  // Re-arm the VAD for the next turn on an already-live graph: drop the previous
+  // utterance's audio and reset speech state, but KEEP the learned noise floor
+  // (the room hasn't changed) and re-base the warmup window.
+  function softResetVad() {
+    clearSilenceTimer();
+    capturedChunks = [];
+    speechDetected = false;
+    startTime = Date.now();
   }
 
   function clearCaptureState() {
@@ -332,23 +412,40 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     captureStream = null;
     capturedChunks = [];
     speechDetected = false;
-    highRmsCount = 0;
+    noiseFloor = 0;
+    listening = false;
   }
 
   function autoStopAfterSilence() {
     if (stopRequested || transcriptionPending || (!captureStream && !captureContext)) return;
-    stopRequested = true;
+    // Normal end-of-turn (silence or hard cap). Halt capture via `listening`
+    // (NOT `stopRequested`, which is reserved for a real user stop) so
+    // finishGoogleTranscription can tell a turn-end apart from an exit and park
+    // the graph warm instead of releasing the mic.
+    listening = false;
     void finishGoogleTranscription();
+  }
+
+  // Park the live capture graph for the next turn (keep-warm) unless we're
+  // actually stopping — in which case release the mic. Called at the same point
+  // the old code unconditionally tore everything down.
+  function releaseOrParkGraph() {
+    if (keepWarm && !stopRequested && !teardownRequested) {
+      softResetVad();
+    } else {
+      clearCaptureState();
+    }
   }
 
   async function finishGoogleTranscription() {
     if (transcriptionPending) return;
     transcriptionPending = true;
+    listening = false;
     clearSilenceTimer();
     callbacks.onProcessingStart?.('Transcribing with Google…');
 
     if (capturedChunks.length === 0 || !speechDetected) {
-      clearCaptureState();
+      releaseOrParkGraph();
       transcriptionPending = false;
       stopRequested = false;
       callbacks.onResult('');
@@ -356,12 +453,13 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       return;
     }
 
-    // Keep the raw float PCM (Parakeet runs in-renderer on Float32 @ 16 kHz);
-    // Whisper still goes to Rust as WAV bytes.
-    const pcmChunks = capturedChunks;
-    const pcmRate = captureSampleRate;
+    // All local STT (Parakeet and Whisper) runs natively in Rust via
+    // `local_stt_transcribe`, receiving WAV bytes. Parakeet used to run
+    // in-renderer via onnxruntime-web (WASM), but that grew a CPU memory arena
+    // that never shrank and OOM-killed the WebKitGTK web process on long
+    // utterances — so it now runs in the app process alongside Whisper.
     const bytes = pcmToWavBytes(capturedChunks, captureSampleRate);
-    clearCaptureState();
+    releaseOrParkGraph();
 
     try {
       const provider = get(voiceInputProvider);
@@ -369,16 +467,10 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       if (provider === 'local') {
         callbacks.onProcessingStart?.('Transcribing locally…');
         const model = get(currentVoiceInputModel) || getDefaultVoiceInputModel(provider);
-        if (model.startsWith('parakeet')) {
-          // Lazy-load so onnxruntime-web / parakeet.js stay out of the main bundle.
-          const { transcribeParakeet } = await import('$lib/services/parakeet-local');
-          transcript = await transcribeParakeet(pcmChunks, pcmRate, model);
-        } else {
-          transcript = await invoke<string>('local_stt_transcribe', {
-            audioBytes: Array.from(bytes),
-            modelId: model,
-          });
-        }
+        transcript = await invoke<string>('local_stt_transcribe', {
+          audioBytes: Array.from(bytes),
+          modelId: model,
+        });
       } else {
         const providerId = (provider === 'webspeech' ? 'google' : provider) as AiProviderId;
         const providerDef = getProviderDef(providerId);
@@ -407,6 +499,12 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       callbacks.onError?.(message || 'Transcription failed.');
     } finally {
       transcriptionPending = false;
+      // A stop() that arrived while this transcription was in flight parked the
+      // graph warm (it couldn't tear down mid-finalize) — release the mic now.
+      if (teardownRequested) {
+        teardownRequested = false;
+        clearCaptureState();
+      }
       stopRequested = false;
       callbacks.onEnd?.();
     }
@@ -416,17 +514,34 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     isSupported() {
       const provider = get(voiceInputProvider);
       if (voiceInputUsesModelTranscription(provider)) {
-        return !!getAudioContextCtor() && typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+        return !!getAudioContextCtor() && isGetUserMediaApiAvailable();
       }
       return !!getSpeechRecognitionCtor();
     },
 
     async start() {
       if (starting || recognition) return;
-      if (captureStream || transcriptionPending) return;
       const provider = get(voiceInputProvider);
 
       if (voiceInputUsesModelTranscription(provider)) {
+        if (transcriptionPending) return; // a turn is still finalizing
+
+        // Warm re-arm: the capture graph from the previous turn is still alive
+        // (keep-warm conversation mode), so just reset the VAD and resume —
+        // skipping getUserMedia, AudioContext creation, and the mic warmup that
+        // otherwise run on every single turn.
+        if (captureContext && captureContext.state !== 'closed' && captureProcessor && captureStream) {
+          stopRequested = false;
+          teardownRequested = false;
+          // A parked context can auto-suspend (OS audio interruption); resume it
+          // so the processor keeps firing on this turn.
+          if (captureContext.state === 'suspended') void captureContext.resume().catch(() => undefined);
+          softResetVad();
+          listening = true;
+          callbacks.onStart?.();
+          return;
+        }
+
         const AudioContextClass = getAudioContextCtor();
         if (!AudioContextClass) {
           callbacks.onError?.('Voice input is not supported in this runtime.');
@@ -457,44 +572,66 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           speechDetected = false;
           clearSilenceTimer();
           startTime = Date.now();
-          highRmsCount = 0;
+          noiseFloor = VAD_ABS_FLOOR;
+          listening = true;
 
           captureProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
-            if (stopRequested) return;
+            // The processor runs continuously in keep-warm mode; only feed audio
+            // into the VAD while a turn is actively listening (not between turns
+            // or during transcription).
+            if (stopRequested || !listening) return;
             const input = event.inputBuffer.getChannelData(0);
             capturedChunks.push(new Float32Array(input));
-
-            // Ignore VAD check during the first 400ms to allow microphone initialization noise/clicks to settle.
-            // We skip this check in unit tests where input buffers are mock-shortened (length < 128).
-            if (input.length >= 128 && Date.now() - startTime < 400) {
-              return;
-            }
 
             let sumSquares = 0;
             for (let i = 0; i < input.length; i += 1) {
               sumSquares += input[i] * input[i];
             }
             const rms = Math.sqrt(sumSquares / Math.max(input.length, 1));
-            if (rms >= GOOGLE_VAD_RMS_THRESHOLD) {
-              highRmsCount++;
-              if (input.length < 128 || highRmsCount >= 2) {
-                if (!speechDetected) {
-                  speechDetected = true;
-                  callbacks.onSpeechStart?.();
-                }
+
+            // Skip the first 150ms (mic startup artifacts) but still adapt the
+            // noise floor so we start with a sensible estimate.
+            if (Date.now() - startTime < 150) {
+              noiseFloor = noiseFloor * 0.9 + rms * 0.1;
+              return;
+            }
+
+            // Hard cap: never listen indefinitely.
+            if (Date.now() - startTime >= VAD_MAX_UTTERANCE_MS) {
+              clearSilenceTimer();
+              autoStopAfterSilence();
+              return;
+            }
+
+            // Simple gate: speech if RMS exceeds threshold, silence if below.
+            // Onset has a higher bar than release (hysteresis) to avoid chatter.
+            const threshold = speechDetected
+              ? Math.max(VAD_ABS_FLOOR, noiseFloor * VAD_RELEASE_MULT)
+              : Math.max(VAD_ABS_FLOOR * VAD_ONSET_MULT, noiseFloor * VAD_ONSET_MULT);
+
+            if (rms >= threshold) {
+              if (!speechDetected) {
+                speechDetected = true;
+                callbacks.onSpeechStart?.();
               }
               clearSilenceTimer();
               return;
             }
-            highRmsCount = 0;
-            if (!speechDetected || silenceTimer) return;
-            silenceTimer = setTimeout(() => {
-              silenceTimer = null;
-              autoStopAfterSilence();
-            }, GOOGLE_VAD_SILENCE_MS);
+
+            // No speech — blend noise floor toward the ambient level.
+            noiseFloor = noiseFloor * 0.95 + rms * 0.05;
+
+            if (speechDetected && !silenceTimer) {
+              silenceTimer = setTimeout(() => {
+                silenceTimer = null;
+                autoStopAfterSilence();
+              }, VAD_SILENCE_MS);
+            }
           };
 
           captureSource.connect(captureProcessor);
+          // Connect to destination so the ScriptProcessorNode fires callbacks
+          // (required by many browser implementations).
           captureProcessor.connect(captureContext.destination);
           starting = false;
           callbacks.onStart?.();
@@ -508,7 +645,11 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
 
       const SpeechRecognition = getSpeechRecognitionCtor();
       if (!SpeechRecognition) {
-        callbacks.onError?.('Voice input is not supported in this runtime.');
+        callbacks.onError?.(
+          isWebkitGtk()
+            ? 'Web Speech voice input isn’t available on Linux. Pick a local or cloud voice provider in Settings → Voice.'
+            : 'Voice input is not supported in this runtime.',
+        );
         return;
       }
 
@@ -573,12 +714,27 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
 
     stop() {
       stopRequested = true;
+      listening = false;
+      keepWarm = false; // leaving the loop — release the mic, don't park it warm
+      if (transcriptionPending) {
+        // A turn is transcribing and can't be torn down mid-finalize; its
+        // `finally` releases the mic once it settles.
+        teardownRequested = true;
+        return;
+      }
       if (captureStream || captureContext) {
         void finishGoogleTranscription();
         return;
       }
       recognition?.stop();
       recognition = null;
+    },
+
+    // Enable "keep-warm" behavior for the conversational voice loop: the capture
+    // graph stays alive between turns so each turn re-arms instantly instead of
+    // re-acquiring the mic. Disable (and call stop()) when leaving voice mode.
+    setConversationMode(enabled: boolean) {
+      keepWarm = enabled;
     },
   };
 }

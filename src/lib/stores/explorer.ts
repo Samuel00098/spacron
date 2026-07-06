@@ -318,8 +318,8 @@ showHidden.subscribe(() => {
   }
 });
 
-export async function loadRootDirectory(path: string) {
-  await refreshProjectTree(path);
+export async function loadRootDirectory(path: string, skipLoading?: boolean) {
+  await refreshProjectTree(path, skipLoading);
 }
 
 function updateTreeNode(nodes: FileNode[], targetPath: string, mutate: (node: FileNode) => FileNode): FileNode[] | null {
@@ -368,16 +368,24 @@ function updateProjectTreeNode(path: string, mutate: (node: FileNode) => FileNod
   });
 }
 
-export async function refreshProjectTree(path: string) {
+export async function refreshProjectTree(path: string, skipLoading?: boolean) {
   const activeRoot = get(activeProject)?.root_path;
-  if (path === activeRoot) {
+  // On a background/silent refresh (the auto-refresh poll) we must NOT flip any
+  // loading flag: `rootLoading` swaps the whole tree for a "Loading files…"
+  // placeholder, so toggling it every few seconds made the explorer flash and
+  // reset scroll. Only show loading UI on an explicit/initial load. Unchanged
+  // rows keep their identity through the rebuild (FileNode is memoized), so a
+  // silent refresh updates only what actually changed — no flash.
+  if (path === activeRoot && !skipLoading) {
     isLoading.set(true);
   }
-  loadingProjectRoots.update((set) => {
-    const next = new Set(set);
-    next.add(path);
-    return next;
-  });
+  if (!skipLoading) {
+    loadingProjectRoots.update((set) => {
+      const next = new Set(set);
+      next.add(path);
+      return next;
+    });
+  }
   try {
     const entries = await loadDirectory(path);
     const nodes = await Promise.all(
@@ -392,13 +400,15 @@ export async function refreshProjectTree(path: string) {
       rootNodes.set(nodes);
     }
   } finally {
-    loadingProjectRoots.update((set) => {
-      const next = new Set(set);
-      next.delete(path);
-      return next;
-    });
-    if (path === activeRoot) {
-      isLoading.set(false);
+    if (!skipLoading) {
+      loadingProjectRoots.update((set) => {
+        const next = new Set(set);
+        next.delete(path);
+        return next;
+      });
+      if (path === activeRoot) {
+        isLoading.set(false);
+      }
     }
   }
 }

@@ -54,6 +54,12 @@ function rgbToHue(r: number, g: number, b: number): number {
 
 /** Cache so we don't re-analyse the same URL on every re-render */
 const cache = new Map<string, ImageAnalysisResult>();
+const CACHE_MAX = 20;
+function trimCache() {
+  if (cache.size <= CACHE_MAX) return;
+  const toDelete = [...cache.keys()].slice(0, cache.size - CACHE_MAX);
+  for (const k of toDelete) cache.delete(k);
+}
 
 /**
  * Analyse an image URL and return colour metrics.
@@ -103,6 +109,7 @@ export async function analyseImage(url: string): Promise<ImageAnalysisResult | n
 
         const result: ImageAnalysisResult = { luminance, isDark, dominantHue, avgR, avgG, avgB };
         cache.set(url, result);
+        trimCache();
         resolve(result);
       } catch {
         // Canvas taint or other error — fall back gracefully

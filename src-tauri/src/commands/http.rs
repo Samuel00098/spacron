@@ -29,8 +29,10 @@ fn ip_is_blocked(ip: IpAddr) -> bool {
 
 /// Fast, no-DNS reject: blocks the well-known metadata hostnames and any host
 /// that is itself a blocked IP literal. Cheap enough to run on every redirect
-/// hop without a network round-trip.
-fn host_is_blocked(host: &str) -> bool {
+/// hop without a network round-trip. Shared with the AI local-provider path
+/// (`secrets::resolve_base_url`) so a tampered `base_url` can't point an
+/// authenticated request at the cloud-metadata endpoint.
+pub(crate) fn host_is_blocked(host: &str) -> bool {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
 
     const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.goog"];
@@ -49,7 +51,7 @@ fn host_is_blocked(host: &str) -> bool {
 /// in theory get a different answer), but this stops the straightforward
 /// "hostname → 169.254.169.254" bypass. Resolution failures return false so
 /// reqwest surfaces the real connection error.
-fn resolved_host_is_blocked(host: &str) -> bool {
+pub(crate) fn resolved_host_is_blocked(host: &str) -> bool {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
     match (host, 80u16).to_socket_addrs() {
         Ok(addrs) => addrs.into_iter().any(|sa| ip_is_blocked(sa.ip())),

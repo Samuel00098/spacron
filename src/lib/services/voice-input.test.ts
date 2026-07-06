@@ -36,6 +36,9 @@ class MockAudioContext {
     audioProcessors.push(processor);
     return processor as any;
   });
+  constructor() {
+    audioContexts.push(this);
+  }
 }
 
 class MockSpeechRecognition {
@@ -57,6 +60,7 @@ class MockSpeechRecognition {
 
 let recognizers: MockSpeechRecognition[] = [];
 let audioProcessors: MockScriptProcessor[] = [];
+let audioContexts: MockAudioContext[] = [];
 const permissionsQuery = vi.fn();
 const getUserMedia = vi.fn<() => Promise<MockStream>>();
 
@@ -104,6 +108,7 @@ function installBrowserStubs() {
 beforeEach(() => {
   recognizers = [];
   audioProcessors = [];
+  audioContexts = [];
   invoke.mockReset();
   isProviderApiKeyConfiguredLocal.mockReset();
   isProviderApiKeyConfiguredLocal.mockImplementation((_provider: string) => false);
@@ -196,6 +201,10 @@ describe('createVoiceInputSession', () => {
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(audioProcessors).toHaveLength(1);
 
+    // Advance past the 150ms mic-warmup window before feeding audio; buffers
+    // that arrive during warmup are intentionally swallowed (they only adapt the
+    // noise floor), so without this the VAD never detects speech.
+    await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
     processor.onaudioprocess?.({
       inputBuffer: { getChannelData: () => new Float32Array([0.25, 0.2, 0.18, 0.22]) },
@@ -236,6 +245,10 @@ describe('createVoiceInputSession', () => {
     await session.start();
     expect(audioProcessors).toHaveLength(1);
 
+    // Advance past the 150ms mic-warmup window before feeding audio; buffers
+    // that arrive during warmup are intentionally swallowed (they only adapt the
+    // noise floor), so without this the VAD never detects speech.
+    await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
     processor.onaudioprocess?.({
       inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
@@ -274,6 +287,10 @@ describe('createVoiceInputSession', () => {
     });
 
     await session.start();
+    // Advance past the 150ms mic-warmup window before feeding audio; buffers
+    // that arrive during warmup are intentionally swallowed (they only adapt the
+    // noise floor), so without this the VAD never detects speech.
+    await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
     processor.onaudioprocess?.({
       inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
@@ -309,6 +326,10 @@ describe('createVoiceInputSession', () => {
     await session.start();
     expect(audioProcessors).toHaveLength(1);
 
+    // Advance past the 150ms mic-warmup window before feeding audio; buffers
+    // that arrive during warmup are intentionally swallowed (they only adapt the
+    // noise floor), so without this the VAD never detects speech.
+    await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
     processor.onaudioprocess?.({
       inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
@@ -329,6 +350,61 @@ describe('createVoiceInputSession', () => {
       mimeType: 'audio/wav',
     }));
     expect(onResult).toHaveBeenCalledWith('local transcript');
+
+    vi.useRealTimers();
+  });
+
+  it('keeps the mic warm across turns in conversation mode and releases it on stop', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    // A single stable track spy so we can assert the mic is (not) released.
+    const trackStop = vi.fn();
+    getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: trackStop }] });
+
+    const onEnd = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onProcessingStart: vi.fn(), onEnd });
+    session.setConversationMode(true);
+
+    const speakOneTurn = async () => {
+      await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
+      const processor = audioProcessors[0];
+      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) } });
+      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) } });
+      await vi.advanceTimersByTimeAsync(2600); // trigger the silence timer
+      await Promise.resolve();
+    };
+
+    // --- Turn 1: cold start acquires the mic + AudioContext ---
+    await session.start();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(audioContexts).toHaveLength(1);
+    const ctx = audioContexts[0];
+
+    await speakOneTurn();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    // Mic parked WARM: context not closed, tracks not stopped.
+    expect(ctx.close).not.toHaveBeenCalled();
+    expect(ctx.state).toBe('running');
+    expect(trackStop).not.toHaveBeenCalled();
+
+    // --- Turn 2: warm re-arm reuses the graph — no new getUserMedia / context ---
+    await session.start();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(audioContexts).toHaveLength(1);
+    expect(audioProcessors).toHaveLength(1);
+
+    await speakOneTurn();
+    expect(onEnd).toHaveBeenCalledTimes(2);
+
+    // --- stop() finally releases the mic ---
+    session.stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctx.close).toHaveBeenCalled();
+    expect(trackStop).toHaveBeenCalled();
 
     vi.useRealTimers();
   });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { newWorkspacePromptOpen, createNewWorkspace } from '$lib/stores/workspace';
+import { viewTransitionsReliable } from '$lib/utils/tauri';
 import './WorkspaceNameModal.css';
 
 export default function WorkspaceNameModal() {
@@ -16,6 +17,7 @@ export default function WorkspaceNameModal() {
     const startViewTransition = (document as any).startViewTransition;
     if (
       startViewTransition &&
+      viewTransitionsReliable() &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
       !(window as any).__spacron_transitioning
     ) {

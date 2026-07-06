@@ -151,7 +151,7 @@
 
 .welcome .subtitle-divider {
   opacity: 0.3;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .welcome .app-tagline {
@@ -182,7 +182,7 @@
   gap: 12px;
   padding: 0 16px;
   border-radius: 12px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   text-align: left;
   transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -246,7 +246,7 @@
 
 .welcome .action-btn kbd {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 12px;
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -318,7 +318,7 @@
 .welcome .section-label {
   display: inline-block;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -330,7 +330,7 @@
   background: rgba(174, 182, 194, 0.1);
   border: 1px solid rgba(174, 182, 194, 0.15);
   border-radius: 20px;
-  font-size: 9.5px;
+  font-size: 12px;
   color: var(--accent);
   font-weight: 600;
 }
@@ -379,7 +379,7 @@
   border: 1px solid transparent;
   border-radius: 8px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   user-select: none;
 }
@@ -394,7 +394,7 @@
 
 .welcome .recent-name {
   color: var(--text-primary);
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -403,7 +403,7 @@
 
 .welcome .recent-path {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -425,7 +425,7 @@
 
 .welcome .recent-time {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 12px;
   margin-right: 4px;
   opacity: 0.7;
 }
@@ -460,7 +460,7 @@
   padding: 3px 8px;
   border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -486,7 +486,7 @@
   border-radius: 6px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   outline: none;
   padding: 0 8px;
@@ -523,7 +523,7 @@
   background: rgba(255, 255, 255, 0.015);
   border: 1px solid rgba(255, 255, 255, 0.03);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-primary);
   transition: all 0.2s ease;
 }
@@ -540,7 +540,7 @@
 }
 
 .welcome .shortcut-pill kbd {
-  font-size: 9px;
+  font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -574,7 +574,7 @@
   border: 1px dashed rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   text-align: center;
   background: rgba(255, 255, 255, 0.005);
   display: flex;
@@ -735,7 +735,7 @@
   }
 
   .welcome .brand-subtitle-row {
-    font-size: 12px;
+    font-size: 13px;
     flex-wrap: wrap;
     gap: 4px 8px;
   }

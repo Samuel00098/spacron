@@ -29,8 +29,8 @@ export interface SpeakOptions {
 }
 
 type TtsAudioPayload = {
-  // Cloud providers return a JSON number[] over IPC; the local Kokoro engine
-  // returns a Uint8Array directly. `new Uint8Array(...)` accepts both.
+  // Cloud/self-hosted providers return a JSON number[] over IPC.
+  // `new Uint8Array(...)` accepts both number[] and Uint8Array.
   bytes: number[] | Uint8Array;
   mime_type: string;
 };
@@ -121,9 +121,6 @@ function resolveTtsConfig(options?: SpeakOptions) {
 
 export function getVoiceReplyConfigError(options?: SpeakOptions): string | null {
   const { provider, providerDef, local, hasApiKey, baseUrl } = resolveTtsConfig(options);
-  if (provider === 'local') {
-    return null;
-  }
   if (!providerSupportsReplyTts(provider)) {
     return `${providerDef.label} does not support spoken replies in Spacron yet. Choose OpenRouter, Groq, OpenAI, Google, or a local provider with an OpenAI-compatible speech endpoint.`;
   }
@@ -200,17 +197,12 @@ function playBytes(payload: TtsAudioPayload, token: number): Promise<void> {
 }
 
 /**
- * Pre-load the local speech engine in the background so the first spoken reply
- * isn't stalled by a cold WASM/ONNX start. No-op for cloud providers (their
- * latency is the network round-trip, which can't be warmed up) and silently
- * skips if local speech isn't usable yet. Call when entering voice mode.
+ * Previously pre-loaded the bundled local speech engine. That engine (Kokoro)
+ * has been removed, so this is now a no-op kept for call-site compatibility.
+ * Cloud/self-hosted TTS latency is the network round-trip, which can't be warmed.
  */
-export function warmupLocalTts(options?: SpeakOptions): void {
-  const { provider, model } = resolveTtsConfig(options);
-  if (provider !== 'local') return;
-  void import('$lib/services/kokoro-local')
-    .then((m) => m.warmupKokoro(model))
-    .catch(() => {});
+export function warmupLocalTts(_options?: SpeakOptions): void {
+  /* no local speech engine to warm up */
 }
 
 export async function speak(text: string, options?: SpeakOptions): Promise<void> {
@@ -229,13 +221,9 @@ export async function speak(text: string, options?: SpeakOptions): Promise<void>
   const token = ++speakToken;
 
   const generate = (chunk: string): Promise<TtsAudioPayload> => {
-    if (provider === 'local') {
-      // Lazy-load the Kokoro engine so onnxruntime-web / phonemizer stay out of
-      // the main bundle and only load the first time local speech is used.
-      return import('$lib/services/kokoro-local').then((m) =>
-        m.synthesizeKokoro(chunk, model, voice),
-      );
-    }
+    // Bundled local (Kokoro) TTS was removed; 'local' no longer reaches here
+    // because getVoiceReplyConfigError rejects it first. Cloud + self-hosted
+    // OpenAI-compatible servers (ollama/lmstudio) go through tts_speak.
     return invoke<TtsAudioPayload>('tts_speak', {
       text: chunk,
       provider,

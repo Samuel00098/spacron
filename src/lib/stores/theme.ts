@@ -210,7 +210,7 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } | nul
  * @param analysis - Result from analyseImage(), or null to fall back to type.
  * @param themeType - The theme's declared type ('dark' | 'light').
  */
-function applyForegroundPalette(
+export function applyForegroundPalette(
   analysis: import('$lib/utils/imageAnalysis').ImageAnalysisResult | null,
   themeType: 'dark' | 'light'
 ): void {
@@ -243,9 +243,38 @@ function applyForegroundPalette(
   if (statusbarRgb) {
     root.style.setProperty('--statusbar-text-rgb', `${statusbarRgb.r}, ${statusbarRgb.g}, ${statusbarRgb.b}`);
   }
+
+  // Toggle palette class so CSS can target the effective luminance
+  const effectivelyDark = analysis !== null ? analysis.isDark : themeType === 'dark';
+  root.classList.toggle('bg-palette-dark', effectivelyDark);
+  root.classList.toggle('bg-palette-light', !effectivelyDark);
 }
 
 let themeTransitionTimeout: any = null;
+
+// WebKitGTK's tiled compositor sometimes fails to invalidate composited tiles
+// when only CSS custom properties change (a theme switch). The stale tiles show
+// up as a "square of the previous theme" in the title-bar corners (around the
+// app icon and the window-control buttons). Promoting the app subtree to a fresh
+// GPU layer and dropping it a frame later forces a full re-rasterization, which
+// clears the residue. Targets `.app-shell` (not `:root`) so the fixed wallpaper
+// layers — `body::before`/`::after`, which live outside `.app-shell` — are never
+// transformed, and modals (portaled to `body`) are unaffected. translateZ(0) is
+// visually a no-op.
+let repaintRaf: number | null = null;
+function forceWebkitRepaint() {
+  if (typeof document === 'undefined' || typeof requestAnimationFrame === 'undefined') return;
+  const el = document.querySelector<HTMLElement>('.app-shell') ?? document.body;
+  if (!el) return;
+  if (repaintRaf !== null) cancelAnimationFrame(repaintRaf);
+  el.style.transform = 'translateZ(0)';
+  repaintRaf = requestAnimationFrame(() => {
+    repaintRaf = requestAnimationFrame(() => {
+      el.style.transform = '';
+      repaintRaf = null;
+    });
+  });
+}
 
 export function applyThemeToCSS(theme: Theme | null) {
   if (!theme || typeof document === 'undefined') return;
@@ -346,6 +375,9 @@ export function applyThemeToCSS(theme: Theme | null) {
   if (isInitialLoad) {
     root.classList.add('theme-initialized');
   } else {
+    // Clear the stale composited corner tiles WebKitGTK leaves behind on a
+    // theme switch (see forceWebkitRepaint). Only on real switches, not first paint.
+    forceWebkitRepaint();
     themeTransitionTimeout = setTimeout(() => {
       root.classList.remove('theme-transitioning');
       themeTransitionTimeout = null;

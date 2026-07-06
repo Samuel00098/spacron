@@ -1141,7 +1141,7 @@
   padding: 0 12px;
   border: 1px solid var(--input-border, var(--border));
   border-radius: var(--radius-md, 8px);
-  background: var(--input-bg, var(--bg-primary));
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   color: var(--text-primary);
   font: inherit;
   font-size: 12.5px;
@@ -1157,7 +1157,7 @@
 
 .sselect.open .sselect-trigger {
   border-color: var(--accent);
-  background: var(--bg-primary);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
@@ -1188,8 +1188,8 @@
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
-  /* Use the same glass recipe as the modal so it matches the active theme */
-  background: var(--bg-secondary);
+  /* Solid background to maintain readability regardless of transparency mode */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   box-shadow:
     var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.7)),
     inset 0 1px 0 var(--border);
@@ -1211,13 +1211,6 @@
   scrollbar-color: var(--scrollbar-thumb) transparent;
   mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
-}
-
-/* Solid theme: opaque panel, no blur */
-:root.solid-theme .sselect-panel {
-  background: var(--bg-secondary);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 @keyframes sselectOpen {
@@ -1299,7 +1292,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg-secondary);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   color: var(--text-muted);
   margin-bottom: 5px;
 }

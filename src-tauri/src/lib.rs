@@ -79,7 +79,7 @@ pub fn run() {
                 // embedded players (e.g. the YouTube panel), which stream
                 // through MediaSource. macOS and Windows configure all of
                 // this through their own webview runtimes.
-                let _ = window.with_webview(|webview| {
+                if let Err(e) = window.with_webview(|webview| {
                     use webkit2gtk::glib::prelude::*;
                     use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
 
@@ -89,6 +89,9 @@ pub fn run() {
                         settings.set_enable_webrtc(true);
                         settings.set_enable_mediasource(true);
                         settings.set_enable_encrypted_media(true);
+                        eprintln!("[spacron] WebKit media/webrtc/mse/eme settings applied");
+                    } else {
+                        eprintln!("[spacron] WARN: could not access WebKit settings to enable MSE/EME/WebRTC");
                     }
                     webview.connect_permission_request(|_, request| {
                         if request.is::<webkit2gtk::UserMediaPermissionRequest>()
@@ -100,7 +103,9 @@ pub fn run() {
                         // Anything else keeps WebKit's default handling.
                         false
                     });
-                });
+                }) {
+                    eprintln!("[spacron] WARN: failed to configure WebKit media settings: {e}");
+                }
             }
 
             #[cfg(target_os = "windows")]
@@ -144,6 +149,8 @@ pub fn run() {
             commands::theme::theme_save,
             commands::app_flags::app_flag_get,
             commands::app_flags::app_flag_set,
+            commands::audio::check_audio_safe,
+            commands::audio::check_gstreamer_codecs,
             commands::background::background_image_set,
             commands::background::background_image_get,
             commands::background::background_image_clear,
@@ -159,13 +166,12 @@ pub fn run() {
             commands::secrets::tts_speak,
             commands::models::list_downloadable_models,
             commands::models::download_model,
+            commands::models::cancel_download,
             commands::models::delete_model,
             commands::models::get_model_path,
             commands::models::local_stt_transcribe,
-            commands::models::local_tts_speak,
-            commands::models::read_tts_model_bytes,
-            commands::models::read_tts_voices_bytes,
-            commands::models::read_model_file_bytes,
+            commands::fs_watch::start_fs_watch,
+            commands::fs_watch::stop_fs_watch,
             commands::http::http_send_request,
             commands::notification::notification_show,
             commands::workspace::workspace_open_project,

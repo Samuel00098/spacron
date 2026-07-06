@@ -47,7 +47,7 @@
 }
 
 .titlebar .titlebar-name {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--titlebar-text);
   letter-spacing: 0.3px;
@@ -70,9 +70,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
   color: var(--titlebar-text);
   opacity: 0.8;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
@@ -114,7 +114,7 @@
 
 
 .titlebar .titlebar-no-project {
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text-muted);
   letter-spacing: 0.5px;
@@ -344,9 +344,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
   color: var(--titlebar-text);
   opacity: 0.8;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
@@ -407,9 +407,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
   color: var(--titlebar-text);
   opacity: 0.8;
   transition: background 0.15s, color 0.15s, opacity 0.15s, transform 0.1s;
@@ -497,8 +497,8 @@
   .titlebar .nav-btn,
   .titlebar .icon-btn,
   .titlebar .github-push-btn {
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
   }
   .titlebar .titlebar-nav {
     padding: 0 3px;
@@ -525,8 +525,8 @@
   .titlebar .icon-btn,
   .titlebar .nav-btn,
   .titlebar .github-push-btn {
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
   }
   .titlebar .titlebar-right {
     gap: 0;

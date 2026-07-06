@@ -9,7 +9,6 @@ import Toasts from '$lib/components/shared/Toasts.tsx';
 import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
-import MicrophonePermissionDialog from '$lib/components/shared/MicrophonePermissionDialog.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import { useStore } from '$lib/react/useStore';
@@ -27,7 +26,6 @@ import {
   saveProjectState,
   activeProjectId,
 } from '$lib/stores/workspace';
-import { usePermissionsStore } from '$lib/stores/zustand/permissions';
 import { loadThemes } from '$lib/stores/theme';
 import { initDefaultCommands } from '$lib/stores/commandpalette';
 import { requestNotificationPermission } from '$lib/stores/notification';
@@ -76,7 +74,6 @@ export default function App() {
   const isQuickCaptureOpen = useStore(quickCaptureOpen);
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
-  const permissionRequest = usePermissionsStore((s) => s.pendingPermissionRequest);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
 
   useEffect(() => {
@@ -198,7 +195,6 @@ export default function App() {
         </Suspense>
       )}
 
-      {permissionRequest && <MicrophonePermissionDialog />}
     </>
   );
 }

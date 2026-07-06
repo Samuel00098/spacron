@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { get } from '$lib/stores/storeCompat';
 import EmptyWorkspace from './EmptyWorkspace.tsx';
 import FileIcon from './FileIcon.tsx';
@@ -23,7 +25,6 @@ import {
   startRename,
 } from '$lib/stores/explorer';
 import { activeProject, openProject } from '$lib/stores/workspace';
-import { orchestratorTasks } from '$lib/stores/orchestrator';
 import { createTerminalSession } from '$lib/stores/terminal';
 import { useStore } from '$lib/react/useStore';
 import './FileExplorer.css';
@@ -103,7 +104,6 @@ export default function FileExplorer() {
   const createPath = useStore(creatingPath);
   const createType = useStore(creatingType);
   const createValue = useStore(creatingValue);
-  const tasks = useStore(orchestratorTasks);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   function handleContextAction(action: string) {
@@ -158,15 +158,35 @@ export default function FileExplorer() {
     }
   }, [project, rootNodesByPath]);
 
+  // Instant updates: watch the active project root and refresh the moment
+  // anything changes on disk (an agent editing a file, a new file, a rename…).
+  // The refresh is silent (skipLoading) so it never flashes; unchanged rows keep
+  // their identity via FileNode's memo, so only what actually changed re-renders.
   useEffect(() => {
     if (!project) return;
-    const hasRunningTask = tasks.some(t => t.status === 'in-progress');
-    const delay = hasRunningTask ? 1500 : 5000;
+    const root = project.root_path;
+    void invoke('start_fs_watch', { path: root }).catch(() => {});
+    const unlisten = listen<string>('fs-change', (event) => {
+      if (event.payload === root) {
+        void loadRootDirectory(root, true);
+      }
+    });
+    return () => {
+      void invoke('stop_fs_watch', { path: root }).catch(() => {});
+      void unlisten.then((fn) => fn());
+    };
+  }, [project]);
+
+  // Slow backstop poll in case the OS watch misses events or can't be
+  // established (e.g. inotify watch limit on a very large tree). Silent, so it
+  // never flashes; the watcher above is what makes updates feel instant.
+  useEffect(() => {
+    if (!project) return;
     const interval = setInterval(() => {
-      void loadRootDirectory(project.root_path);
-    }, delay);
+      void loadRootDirectory(project.root_path, true);
+    }, 15000);
     return () => clearInterval(interval);
-  }, [project, tasks]);
+  }, [project]);
 
   useEffect(() => {
     function handleKeydown(event: KeyboardEvent) {

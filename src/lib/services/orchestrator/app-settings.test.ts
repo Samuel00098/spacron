@@ -18,8 +18,8 @@ describe('app-settings (agent settings control)', () => {
 
   it('lists preset theme names the agent can switch to', () => {
     const names = listThemeNames();
-    expect(names).toContain('Solace Workspace');
-    expect(names).toContain('Cyber Tokyo');
+    expect(names).toContain('Solace Sky Workspace');
+    expect(names).toContain('Tokyo Neon Street');
   });
 
   it('snapshots current settings values', () => {
@@ -27,7 +27,7 @@ describe('app-settings (agent settings control)', () => {
     const snap = getAgentSettingsSnapshot();
     expect(snap.values.fontSize).toBe(18);
     expect(snap.values.wordWrap).toBe(false);
-    expect(snap.availableThemes).toContain('Solace Workspace');
+    expect(snap.availableThemes).toContain('Solace Sky Workspace');
   });
 
   it('coerces truthy words to booleans', async () => {
@@ -62,9 +62,9 @@ describe('app-settings (agent settings control)', () => {
   });
 
   it('switches to a preset theme by name', async () => {
-    const res = await applyAgentSetting('theme', 'Cyber Tokyo');
+    const res = await applyAgentSetting('theme', 'Tokyo Neon Street');
     expect(res.ok).toBe(true);
-    expect(get(activeTheme)?.name).toBe('Cyber Tokyo');
+    expect(get(activeTheme)?.name).toBe('Tokyo Neon Street');
   });
 
   it('rejects an unknown theme and an unknown setting', async () => {

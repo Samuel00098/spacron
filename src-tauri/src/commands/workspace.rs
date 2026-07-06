@@ -1112,16 +1112,38 @@ pub fn workspace_git_remove_worktree(
 /// Live status for an agent worktree: number of changed files (staged, unstaged,
 /// and untracked) plus the current branch. Used to surface review-readiness.
 #[tauri::command]
-pub fn workspace_git_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+pub fn workspace_git_worktree_status(
+    worktree_path: String,
+    state: State<AppState>,
+) -> Result<WorktreeStatus, String> {
+    // Confine to the managed worktree area of an open project. Worktrees are
+    // created at <project_parent>/.spacron-worktrees/<repo>/<branch> (see
+    // workspace_git_create_worktree), so a legitimate status query always sits
+    // under some open project's area. Without this the command would run git in
+    // any attacker-named path and leak whether it is a repo and its branch.
     let path = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
-    if !path.join(".git").exists() {
+    let canonical = std::fs::canonicalize(&path)
+        .map(crate::commands::clean_path_buf)
+        .map_err(|_| "Not a git worktree.".to_string())?;
+    let in_managed_area = state.workspace_manager.list_projects().iter().any(|p| {
+        p.root_path
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent.join(".spacron-worktrees")).ok())
+            .map(crate::commands::clean_path_buf)
+            .map(|area| canonical.starts_with(&area))
+            .unwrap_or(false)
+    });
+    if !in_managed_area {
+        return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
+    }
+    if !canonical.join(".git").exists() {
         return Err("Not a git worktree.".to_string());
     }
 
-    let porcelain = git_capture(&path, &["status", "--porcelain"]).unwrap_or_default();
+    let porcelain = git_capture(&canonical, &["status", "--porcelain"]).unwrap_or_default();
     let changed_files = porcelain.lines().filter(|l| !l.trim().is_empty()).count() as u32;
-    let branch =
-        git_capture(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".to_string());
+    let branch = git_capture(&canonical, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| "HEAD".to_string());
 
     Ok(WorktreeStatus {
         changed_files,

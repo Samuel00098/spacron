@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import packageJson from '../../../../package.json';
 import {
-  clearAllApplicationState,
+  clearRecentWorkspaces,
   newWorkspacePromptOpen,
   openProject,
   openWorkspace,
@@ -173,7 +173,7 @@ export default function WelcomeScreen() {
               <span className="section-label">Recent Collections</span>
               {search && <span className="search-pill">Filtered: "{search}"</span>}
             </div>
-            {workspaces.length > 0 && <button className="text-btn danger" onClick={clearAllApplicationState}>Clear all</button>}
+            {workspaces.length > 0 && <button className="text-btn danger" onClick={clearRecentWorkspaces}>Clear all</button>}
           </div>
 
           {filteredWorkspaces.length > 0 ? (
