@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -27,7 +27,7 @@ import {
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
-import { isTauriRuntime } from '$lib/utils/tauri';
+import { isTauriRuntime, isWebkitGtk } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -44,11 +44,12 @@ import { requestRoomControl } from '$lib/stores/layoutControl';
 import { addRunEntry } from '$lib/stores/runHistory';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
+import MentionDropdown from './MentionDropdown.tsx';
+import type { FileEntry } from '$lib/types/explorer';
 import { useStore } from '$lib/react/useStore';
+import { useLayoutStore } from '$lib/stores/zustand/layout';
 import '$lib/components/orchestrator/VoiceConversationOverlay.css';
 import './FloatingPromptBar.css';
-
-const NUM_BARS = 22;
 
 // WebKitGTK (Linux) gives our textarea no usable native right-click menu and
 // blocks clipboard writes, so the prompt box needs its own copy/paste there.
@@ -56,24 +57,23 @@ const NUM_BARS = 22;
 const isLinuxHost = typeof navigator !== 'undefined' &&
   navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
 
-const STATUS: Record<string, string> = {
-  idle: 'Ready',
-  listening: 'Listening…',
-  speaking: 'Speaking…',
-  thinking: 'Thinking…',
-};
+// Spoken commands that pause / resume the conversational voice loop. Listed in
+// NORMALIZED form (lowercase, no punctuation) — matchVoiceCommand() normalizes
+// the transcript the same way and matches on whole-word boundaries, so "ready"
+// wakes on "ready" but not "already", and punctuation / apostrophes / trailing
+// words don't defeat a match. Extra variants cover common STT mishearings.
+const SLEEP_KEYWORDS = ['go to sleep', 'goto sleep', 'stop listening', 'take a break', 'pause listening', 'sleep now', 'go to bed'];
+const WAKE_KEYWORDS = ['wake up', 'wake', 'come back', 'resume listening', 'resume', 'listen up', 'ready', 'im back', 'i m back'];
 
-function barStyle(i: number): CSSProperties {
-  const dur = 280 + ((i * 137) % 420);
-  const dly = (i * 83) % 360;
-  const c = (NUM_BARS - 1) / 2;
-  const d = Math.abs(i - c) / c;
-  const max = (0.22 + (1 - d * d) * 0.78).toFixed(2);
-  return {
-    ['--dur']: `${dur}ms`,
-    ['--dly']: `${dly}ms`,
-    ['--max']: max,
-  } as CSSProperties;
+/** Lowercase, strip punctuation, and collapse whitespace for command matching. */
+function normalizeSpeech(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True if any normalized `phrase` appears as a whole word/phrase in `transcript`. */
+function matchVoiceCommand(transcript: string, phrases: string[]): boolean {
+  const padded = ` ${normalizeSpeech(transcript)} `;
+  return phrases.some((p) => padded.includes(` ${p} `));
 }
 
 // Per-project state cache
@@ -204,14 +204,14 @@ export default function FloatingPromptBar() {
 
   const [inputValue, setInputValue, inputValueRef] = useSyncedState('');
   const inputElRef = useRef<HTMLTextAreaElement | null>(null);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [, setHistoryIndex] = useState(-1);
   const draftBeforeHistoryRef = useRef('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
   const [voiceLocked, setVoiceLocked] = useSyncedState(false);
-  const [voiceHeld, setVoiceHeld] = useSyncedState(false);
-  const [voiceStopping, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
+  const [, setVoiceHeld] = useSyncedState(false);
+  const [, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
   const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(null);
@@ -227,15 +227,17 @@ export default function FloatingPromptBar() {
   const voiceDraftBaseRef = useRef('');
   const [voiceDraftText, setVoiceDraftText, voiceDraftTextRef] = useSyncedState('');
   const [isAgentMode, setIsAgentMode] = useState(true);
-  const voiceHeldRef = useRef(false);
   const [agentSending, setAgentSending, agentSendingRef] = useSyncedState(false);
   const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] = useSyncedState(false);
   const [isTtsSpeaking, setIsTtsSpeaking, isTtsSpeakingRef] = useSyncedState(false);
+  const [voiceSleeping, setVoiceSleeping, voiceSleepingRef] = useSyncedState(false);
   const lastSpokenMessageKeyRef = useRef<string | null>(null);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
+  const [pastedFiles, setPastedFiles] = useState<Array<{ name: string; path: string }>>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const transcriptElRef = useRef<HTMLDivElement | null>(null);
-  const transcriptStuckToBottomRef = useRef(true);
 
   const hasPromptText = inputValue.trim().length > 0;
   const isActive = true;
@@ -253,26 +255,6 @@ export default function FloatingPromptBar() {
   );
 
   const isVoiceActive = isAgentMode && voiceModeActive;
-
-  const lastAssistantRaw = useMemo(() => {
-    const msg = [...projectChatMessages].reverse().find((m) => m.role === 'assistant' && !m.pending);
-    return msg ? speechTextForAssistantMessage(msg) : '';
-  }, [projectChatMessages]);
-
-  const lastAssistantDisplay = useMemo(() => {
-    if (lastAssistantRaw.length === 0) return '';
-    return lastAssistantRaw
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/`[^`]+`/g, '')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/#+\s+/g, '')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/^[-*+]\s+/gm, '')
-      .replace(/\n+/g, ' ')
-      .trim()
-      .slice(0, 160);
-  }, [lastAssistantRaw]);
 
 
 
@@ -298,9 +280,10 @@ export default function FloatingPromptBar() {
   // non-agent active pane, and falls back to that shell when no agent is running.
   const autoTarget = preferredAgentTerminal ?? activeTerminal;
   const manualTarget = useMemo(
-    () => ($manualPromptTargetId !== null
-      ? ($sessions.find((s) => s.id === $manualPromptTargetId && s.isRunning) ?? null)
-      : null),
+    () => {
+      if ($manualPromptTargetId === null) return null;
+      return ($sessions.find((s) => s.id === $manualPromptTargetId && s.isRunning) ?? null);
+    },
     [$manualPromptTargetId, $sessions]
   );
   const promptTarget = manualTarget ?? autoTarget;
@@ -437,12 +420,24 @@ export default function FloatingPromptBar() {
 
 
 
-  const saveImageToDisk = useCallback(async (img: PastedImage, projectPath: string): Promise<string | null> => {
+  const saveImageToDisk = useCallback(async (img: PastedImage): Promise<string | null> => {
+    // Write under the project's `.spacron/` dir (already the app's project-local
+    // scratch area and in the orchestrator's skip-dirs), NOT the OS temp dir: the
+    // fs_write_binary command enforces require_in_project, so a temp path outside
+    // the project root is rejected and the attachment silently fails on every OS.
+    const root = $activeProject?.root_path;
+    if (!root) return null;
     try {
-      // Normalise to forward slashes so the path the agent CLI receives is clean
-      // and unambiguous — mixed back/forward slashes can trip up TUI path parsing.
-      const root = projectPath.replace(/\\/g, '/').replace(/\/+$/, '');
-      const savePath = `${root}/.spacron/attachments/${img.name}`;
+      const base = root.replace(/\\/g, '/').replace(/\/+$/, '');
+      const dir = `${base}/.spacron/paste`;
+      // Sanitize to a bare filename so a name can't traverse out of the dir.
+      const safeName = (img.name.split(/[/\\]/).pop() || 'image.png').replace(/^\.+/, '');
+      try {
+        await invoke('fs_create_dir', { path: dir });
+      } catch {
+        /* already exists */
+      }
+      const savePath = `${dir}/${safeName}`;
       const data = Array.from(dataUrlToBytes(img.dataUrl));
       await invoke('fs_write_binary', { path: savePath, data });
       return savePath;
@@ -450,7 +445,7 @@ export default function FloatingPromptBar() {
       console.error('Failed to save pasted image to disk:', error);
       return null;
     }
-  }, []);
+  }, [$activeProject]);
 
   const removeImage = useCallback((index: number) => {
     setPastedImages((prev) => {
@@ -458,6 +453,19 @@ export default function FloatingPromptBar() {
       if (img) URL.revokeObjectURL(img.objectUrl);
       return prev.filter((_, i) => i !== index);
     });
+  }, []);
+
+  const addFileChip = useCallback((filePath: string) => {
+    const name = filePath.split(/[/\\]/).pop() || filePath;
+    const path = filePath.replace(/\\/g, '/');
+    // Dedup by path: chips are keyed by file.path, so attaching the same file
+    // twice (e.g. drag then @-mention) would produce duplicate React keys and
+    // make removeFile(index) target the wrong chip.
+    setPastedFiles((prev) => (prev.some((f) => f.path === path) ? prev : [...prev, { name, path }]));
+  }, []);
+
+  const removeFile = useCallback((index: number) => {
+    setPastedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   // Pull an image off the native clipboard (Linux/WebKitGTK fallback) and add it
@@ -507,30 +515,25 @@ export default function FloatingPromptBar() {
 
   // Write any attached/pasted images to disk and return their on-disk paths,
   // so both the agent-chat path and the terminal path can fold attachments into
-  // the message text identically. `ok` is false only when saving was needed but
-  // no project is open to hold .spacron/attachments — the caller should abort then.
+  // the message text identically. Clipboard-pasted images are saved to the OS
+  // temp directory (so they never bloat the project); file-picked images already
+  // have a diskPath and are referenced in-place. Non-image files are collected
+  // from pastedFiles chips and appended as raw paths.
   const materializeAttachments = useCallback(async (): Promise<{ paths: string[]; ok: boolean }> => {
-    if (pastedImages.length === 0) return { paths: [], ok: true };
+    const filePaths = pastedFiles.map((f) => f.path);
+    setPastedFiles([]);
+    if (pastedImages.length === 0) return { paths: filePaths, ok: true };
     const toSave = [...pastedImages];
-    // Only images without an on-disk path need to be written, which requires a
-    // project to hold the .spacron/attachments folder. Picked-from-disk images
-    // already have a path and can be sent even with no project open.
-    const needsSave = toSave.some((img) => !img.diskPath);
-    const projectPath = get(activeProject)?.root_path;
-    if (needsSave && !projectPath) {
-      showToast('Open a project before attaching images', 'warning');
-      return { paths: [], ok: false };
-    }
     setPastedImages([]);
-    const paths = await Promise.all(
+    const imagePaths = await Promise.all(
       toSave.map((img) =>
         img.diskPath
           ? Promise.resolve(img.diskPath.replace(/\\/g, '/'))
-          : saveImageToDisk(img, projectPath as string)
+          : saveImageToDisk(img)
       )
     );
-    const validPaths = paths.filter(Boolean) as string[];
-    const failedCount = toSave.length - validPaths.length;
+    const validImagePaths = imagePaths.filter(Boolean) as string[];
+    const failedCount = toSave.length - validImagePaths.length;
     if (failedCount > 0) {
       showToast(
         failedCount === toSave.length
@@ -540,8 +543,8 @@ export default function FloatingPromptBar() {
       );
     }
     toSave.forEach((img) => URL.revokeObjectURL(img.objectUrl));
-    return { paths: validPaths, ok: true };
-  }, [pastedImages, saveImageToDisk]);
+    return { paths: [...validImagePaths, ...filePaths], ok: true };
+  }, [pastedImages, pastedFiles, saveImageToDisk]);
 
   // Quote only paths with spaces — matches attachPathsToInput and is friendlier
   // to agent TUIs than always-single-quoting (which leaves literal quotes the
@@ -560,6 +563,10 @@ export default function FloatingPromptBar() {
   // redundant call from two racing finalizers a harmless no-op.
   const resumeVoiceLoopRef = useRef<() => void>(() => {});
 
+  // Late-bound handle to stopAgentVoice so the once-created voiceInput callbacks
+  // (onError) can tear voice mode down without depending on definition order.
+  const stopAgentVoiceRef = useRef<() => void>(() => {});
+
   const submitAgentMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
 
   useEffect(() => {
@@ -569,10 +576,16 @@ export default function FloatingPromptBar() {
         isAgentModeRef.current &&
         !voiceStoppingRef.current &&
         !isListeningRef.current &&
-        !isTtsSpeakingRef.current &&
         !isRefiningRef.current &&
-        !agentSendingRef.current
+        !agentSendingRef.current &&
+        // Don't reopen the mic while TTS is speaking: on platforms where the
+        // WebRTC echoCancellation constraint is a no-op (notably WebKitGTK on
+        // Linux) the live mic hears the reply audio and onSpeechStart cuts the
+        // assistant off mid-sentence. speakResponse()'s finally re-invokes this
+        // the instant TTS ends (see the auto-speak effect's comment).
+        !isTtsSpeakingRef.current
       ) {
+        // When sleeping, still keep the mic on so the wake word can be heard
         void voiceInput.start();
       }
     };
@@ -601,17 +614,37 @@ export default function FloatingPromptBar() {
     setVoiceModeActive(false);
     agentVoiceModeActive.set(false);
     setIsTtsSpeaking(false);
+    setVoiceSleeping(false);
     lastSpokenMessageKeyRef.current = null;
     stopSpeaking();
     setVoiceLocked(false);
     setVoiceHeld(false);
     setVoiceStopping(true);
+    voiceInput.setConversationMode(false);
     voiceInput.stop();
     focusInput();
   }, [focusInput]);
 
+  useEffect(() => {
+    stopAgentVoiceRef.current = stopAgentVoice;
+  }, [stopAgentVoice]);
+
   const toggleAgentVoiceMode = useCallback(() => {
     if (voiceModeActive) { stopAgentVoice(); return; }
+    // Validate voice *input* first: entering with an unsupported input provider
+    // (e.g. the default Web Speech provider on Linux/WebKitGTK, whose recognizer
+    // doesn't exist) would open the overlay on the idle orb with a mic that never
+    // engages — the "headphone icon that never picks anything up" wedge.
+    if (!voiceInput.isSupported()) {
+      showToast(
+        isWebkitGtk()
+          ? "Web Speech voice input isn't available on Linux. Pick a local or cloud voice provider in Settings → Voice."
+          : 'Voice input is not supported in this runtime. Pick a voice provider in Settings → Voice.',
+        'warning',
+      );
+      openSettings();
+      return;
+    }
     const replyVoiceError = getVoiceReplyConfigError();
     if (replyVoiceError) {
       showToast(replyVoiceError, 'warning');
@@ -627,6 +660,9 @@ export default function FloatingPromptBar() {
     // Warm the local speech engine now so the first reply isn't stalled on a
     // cold WASM/ONNX start (no-op for cloud providers).
     warmupLocalTts();
+    // Keep the mic warm between turns so each turn re-arms instantly instead of
+    // re-acquiring the mic (getUserMedia + AudioContext + warmup) every time.
+    voiceInput.setConversationMode(true);
     void voiceInput.start();
   }, [voiceModeActive, stopAgentVoice, projectChatMessages]);
 
@@ -685,10 +721,6 @@ export default function FloatingPromptBar() {
     if (!voiceModeActive || !isAgentMode || isTtsSpeaking) return;
     const lastMsg = projectChatMessages.at(-1);
     if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.pending) return;
-    // Agent-completion recaps are announced (as a short status line) by the
-    // orchestrator's completion path so they work even when this overlay is
-    // closed; skip them here so a completion is never spoken twice.
-    if (lastMsg.completion) return;
     const speechKey = speechKeyForAssistantMessage(lastMsg);
     if (speechKey === lastSpokenMessageKeyRef.current) return;
     lastSpokenMessageKeyRef.current = speechKey;
@@ -701,6 +733,16 @@ export default function FloatingPromptBar() {
   useEffect(() => {
     void waitingTaskCount; // subscribe but don't open panel — orchestrator panel removed
   }, [isAgentMode, voiceModeActive, waitingTaskCount]);
+
+  // Clean up pasted-image object URLs on unmount to prevent blob: URL leaks.
+  useEffect(() => {
+    return () => {
+      setPastedImages((prev) => {
+        for (const img of prev) URL.revokeObjectURL(img.objectUrl);
+        return [];
+      });
+    };
+  }, []);
 
   // Auto-scroll transcript to bottom whenever the displayed content changes
   useEffect(() => {
@@ -786,6 +828,15 @@ export default function FloatingPromptBar() {
   }, [inputValue]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // When the @-mention dropdown is open, intercept keyboard events and let
+    // the MentionDropdown's window-level listener handle them.
+    if (mentionQuery !== null) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape') {
+        event.preventDefault();
+        return;
+      }
+    }
+
     // Copy / cut for the prompt box. navigator.clipboard writes are permission-
     // blocked on WebKitGTK (Linux), so a plain Ctrl+C in this textarea never
     // reached the system clipboard there — route the selection through the native
@@ -875,6 +926,23 @@ export default function FloatingPromptBar() {
     });
   }, [adjustInputHeight]);
 
+  const handleMentionSelect = useCallback((entry: FileEntry) => {
+    const el = inputElRef.current;
+    const value = inputValueRef.current;
+    const cursorPos = el?.selectionStart ?? value.length;
+    const atIndex = value.lastIndexOf('@', cursorPos - 1);
+    if (atIndex !== -1) {
+      setInputValue(value.slice(0, atIndex) + value.slice(cursorPos));
+    }
+    addFileChip(entry.path);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      adjustInputHeight();
+      inputElRef.current?.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adjustInputHeight]);
+
   const handleInput = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
     setInputValue(value);
@@ -882,7 +950,23 @@ export default function FloatingPromptBar() {
     adjustInputHeight();
     setHistoryIndex((prev) => (prev !== -1 ? -1 : prev));
     if (value.trim()) setIsExpanded(true);
-  }, [adjustInputHeight]);
+
+    // Check for @-mention trigger
+    const el = event.target;
+    const cursorPos = el.selectionStart;
+    if ($activeProject) {
+      const textBefore = value.slice(0, cursorPos);
+      const atIndex = textBefore.lastIndexOf('@');
+      if (atIndex !== -1 && (atIndex === 0 || value[atIndex - 1] === ' ' || value[atIndex - 1] === '\n')) {
+        const afterAt = value.slice(atIndex + 1, cursorPos);
+        if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
+          setMentionQuery(afterAt);
+          return;
+        }
+      }
+    }
+    setMentionQuery(null);
+  }, [adjustInputHeight, $activeProject]);
 
   const voiceInputRef = useRef(
     createVoiceInputSession({
@@ -894,10 +978,8 @@ export default function FloatingPromptBar() {
         showToast('Listening for terminal prompt...', 'info');
       },
       onSpeechStart: () => {
-        if (isTtsSpeakingRef.current) {
-          stopSpeaking();
-          setIsTtsSpeaking(false);
-        }
+        stopSpeaking();
+        setIsTtsSpeaking(false);
       },
       onResult: (transcript) => {
         setVoiceDraftText(transcript);
@@ -930,6 +1012,37 @@ export default function FloatingPromptBar() {
                   resumeVoiceLoopRef.current();
                 });
                 return currentHeld;
+              }
+
+              // Check for sleep/wake keywords in voice mode
+              if (shouldResumeAgentVoice) {
+                if (voiceSleepingRef.current) {
+                  if (matchVoiceCommand(transcript, WAKE_KEYWORDS)) {
+                    setVoiceSleeping(false);
+                    setIsRefining(false);
+                    setVoiceStopping(false);
+                    voiceDraftBaseRef.current = '';
+                    setVoiceDraftText('');
+                    queueMicrotask(() => resumeVoiceLoopRef.current());
+                    return currentHeld;
+                  }
+                  // Still sleeping — ignore everything else
+                  setIsRefining(false);
+                  setVoiceStopping(false);
+                  voiceDraftBaseRef.current = '';
+                  setVoiceDraftText('');
+                  queueMicrotask(() => resumeVoiceLoopRef.current());
+                  return currentHeld;
+                }
+                if (matchVoiceCommand(transcript, SLEEP_KEYWORDS)) {
+                  setVoiceSleeping(true);
+                  setIsRefining(false);
+                  setVoiceStopping(false);
+                  voiceDraftBaseRef.current = '';
+                  setVoiceDraftText('');
+                  queueMicrotask(() => resumeVoiceLoopRef.current());
+                  return currentHeld;
+                }
               }
 
               setIsRefining(true);
@@ -991,6 +1104,12 @@ export default function FloatingPromptBar() {
         voiceDraftBaseRef.current = '';
         setVoiceDraftText('');
         showToast(message, 'error');
+        // In the hands-free agent voice loop a start/transcription error would
+        // otherwise leave the overlay wedged on the idle orb with a dead mic.
+        // Tear voice mode down so the error toast is the clear signal.
+        if (isAgentModeRef.current && voiceModeActiveRef.current) {
+          stopAgentVoiceRef.current();
+        }
       },
     })
   );
@@ -1055,46 +1174,6 @@ export default function FloatingPromptBar() {
     });
   }, [resetHistoryCursor, adjustInputHeight]);
 
-  const attachFiles = useCallback(async () => {
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({
-        multiple: true,
-        directory: false,
-        title: 'Attach files to prompt',
-      });
-
-      if (!selected || (Array.isArray(selected) && selected.length === 0)) return;
-
-      const items = (Array.isArray(selected) ? selected : [selected]).map(String);
-      // Images become preview chips (sent as the exact file path, so the agent
-      // reads the right image); everything else is inserted as a plain path.
-      const textPaths: string[] = [];
-      for (const path of items) {
-        if (isImagePath(path)) {
-          const previewed = await addDiskImageChip(path);
-          if (!previewed) textPaths.push(path);
-        } else {
-          textPaths.push(path);
-        }
-      }
-
-      if (textPaths.length > 0) {
-        // Routed through the shared helper so quoting matches paste/drag-drop
-        // (double-quote only when the path has spaces) — the previous always
-        // single-quote behaviour left literal quotes the agent CLI couldn't open.
-        attachPathsToInput(textPaths);
-      } else {
-        setHistoryOpen(false);
-        resetHistoryCursor();
-        requestAnimationFrame(() => inputElRef.current?.focus());
-      }
-    } catch (error) {
-      console.error('Failed to attach files to prompt:', error);
-      showToast('Failed to attach files', 'error');
-    }
-  }, [addDiskImageChip, attachPathsToInput, resetHistoryCursor]);
-
   const isPointInsideBar = useCallback((clientX: number, clientY: number) => {
     const barEl = barElRef.current;
     if (!barEl || typeof document === 'undefined') return false;
@@ -1147,10 +1226,14 @@ export default function FloatingPromptBar() {
     queueMicrotask(() => { internalDropHandledRef.current = false; });
     updateExplorerDragPoint(event.clientX, event.clientY);
     setIsDragOver(false);
-    attachPathsToInput([droppedPath]);
+    if (isImagePath(droppedPath)) {
+      void addDiskImageChip(droppedPath);
+    } else {
+      addFileChip(droppedPath);
+    }
     setDraggedExplorerPath(null);
     setLastExplorerDragPoint(null);
-  }, [draggedExplorerPath, updateExplorerDragPoint, attachPathsToInput]);
+  }, [draggedExplorerPath, updateExplorerDragPoint, addDiskImageChip, addFileChip, isImagePath]);
 
   const lastFocusRequestRef = useRef(0);
   useEffect(() => {
@@ -1402,8 +1485,18 @@ export default function FloatingPromptBar() {
   // state is read through refs so this listener never needs to re-subscribe.
   const draggedExplorerPathRef = useRef(draggedExplorerPath);
   useEffect(() => { draggedExplorerPathRef.current = draggedExplorerPath; }, [draggedExplorerPath]);
-  const attachPathsToInputRef = useRef(attachPathsToInput);
-  useEffect(() => { attachPathsToInputRef.current = attachPathsToInput; }, [attachPathsToInput]);
+  const addChipsForPathsRef = useRef<(paths: string[]) => void>(() => {});
+  useEffect(() => {
+    addChipsForPathsRef.current = (paths: string[]) => {
+      for (const p of paths) {
+        if (isImagePath(p)) {
+          void addDiskImageChip(p);
+        } else {
+          addFileChip(p);
+        }
+      }
+    };
+  }, [addDiskImageChip, addFileChip, isImagePath]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -1448,7 +1541,7 @@ export default function FloatingPromptBar() {
         setIsDragOver(false);
         if (!isOverBar) return;
 
-        attachPathsToInputRef.current(paths);
+        addChipsForPathsRef.current(paths);
       }
     }).then((u) => {
       // If the component unmounted before this resolved, unlisten immediately so
@@ -1498,7 +1591,7 @@ export default function FloatingPromptBar() {
           )}
 
           <div
-            className={`floating-prompt-bar${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isAgentMode ? ' agent-mode' : ''}${isVoiceActive ? ' voice-active' : ''}`}
+            className={`floating-prompt-bar${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isAgentMode ? ' agent-mode' : ''}${isVoiceActive ? ' voice-active' : ''}${promptTarget?.agentPreset ? ` target-${promptTarget.agentPreset}` : ''}`}
             id="floating-prompt-bar"
             ref={barElRef}
             onDragEnter={handleInternalDragEnter}
@@ -1524,16 +1617,22 @@ export default function FloatingPromptBar() {
               <div className="voice-mode-inner">
                 {/* Compact orb — left side only, no text here */}
                 <div className={`orb-wrap ${
-                  isListening
-                    ? 'listening'
-                    : isTtsSpeaking
-                      ? 'speaking'
-                      : isRefining || agentSending
-                        ? 'thinking'
-                        : 'idle'
+                  voiceSleeping
+                    ? 'sleeping'
+                    : isListening
+                      ? 'listening'
+                      : isTtsSpeaking
+                        ? 'speaking'
+                        : isRefining || agentSending
+                          ? 'thinking'
+                          : 'idle'
                 }`}>
                   <div className="orb">
-                    {isListening ? (
+                    {voiceSleeping ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                      </svg>
+                    ) : isListening ? (
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                         <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
@@ -1638,7 +1737,18 @@ export default function FloatingPromptBar() {
                             </div>
                           );
                         }
-                        // 1. User is speaking — show live draft or a placeholder if no transcript yet
+                        // 1. Voice is sleeping — show moon icon and hint
+                        if (voiceSleeping) {
+                          return (
+                            <div className="transcript-now sleeping">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                              </svg>
+                              <span>Sleeping — say &ldquo;wake up&rdquo; to resume</span>
+                            </div>
+                          );
+                        }
+                        // 2. User is speaking — show live draft or a placeholder if no transcript yet
                         if (isListening) {
                           return (
                             <p className="transcript-now user draft">
@@ -1646,9 +1756,19 @@ export default function FloatingPromptBar() {
                             </p>
                           );
                         }
-                        // 2. Transition: user done, agent thinking — show
-                        //    the last assistant message (matching what TTS may be
-                        //    speaking) so the bar never goes blank.
+                        // 2. Transition: user done, agent thinking/processing — show the
+                        //    user's last spoken words with a thinking indicator instead of
+                        //    the previous assistant reply, so the bar never goes blank or
+                        //    shows stale text from an earlier turn.
+                        if ((isRefining || agentSending) && voiceDraftText) {
+                          return (
+                            <p className="transcript-now user draft">
+                              {voiceDraftText}
+                              <span className="orc-typing"><span /><span /><span /></span>
+                            </p>
+                          );
+                        }
+                        // 3. Assistant message exists — show it
                         const lastMsg = projectChatMessages.at(-1);
                         if (lastMsg?.role === 'assistant') {
                           if (lastMsg.pending) {
@@ -1702,14 +1822,14 @@ export default function FloatingPromptBar() {
                       className={`target-item${promptTarget?.id === s.id ? ' active' : ''}`}
                       onClick={() => selectTarget(s.id)}
                     >
-                      {s.role && (
+                      {s.role ? (
                         <span
                           className="target-dot"
                           style={{
-                            background: s.role === 'Server' ? '#4ade80' : s.role === 'Tests' ? '#60a5fa' : s.role === 'Build' ? '#fb923c' : s.role === 'Agent' ? '#a78bfa' : s.role === 'Git' ? '#fbbf24' : '#9ca3af',
+                            background: s.role === 'Server' ? 'var(--role-server)' : s.role === 'Tests' ? 'var(--role-tests)' : s.role === 'Build' ? 'var(--role-build)' : s.role === 'Agent' ? 'var(--role-agent)' : s.role === 'Git' ? 'var(--role-git)' : 'var(--text-muted)',
                           }}
                         />
-                      )}
+                      ) : null}
                       <span className="target-label">{getSessionPromptTargetLabel(s, $sessions)}</span>
                       {s.id === promptTarget?.id && !isPinned && (
                         <span className="target-auto-badge">auto</span>
@@ -1740,7 +1860,36 @@ export default function FloatingPromptBar() {
                 </div>
               )}
 
+              {pastedFiles.length > 0 && (
+                <div className="file-chips">
+                  {pastedFiles.map((file, i) => (
+                    <div className="file-chip" key={file.path}>
+                      <svg className="file-chip-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      <span className="file-chip-name" title={file.path}>{file.name}</span>
+                      <button className="chip-remove" onClick={() => removeFile(i)} title="Remove file" aria-label="Remove file">
+                        <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Input: hidden in agent mode (voice-only), shown in terminal mode */}
+              {mentionQuery !== null && $activeProject && (
+                <MentionDropdown
+                  projectRoot={$activeProject.root_path}
+                  query={mentionQuery}
+                  selectedIndex={mentionSelectedIndex}
+                  onSelect={handleMentionSelect}
+                  onSetSelectedIndex={setMentionSelectedIndex}
+                  onClose={() => setMentionQuery(null)}
+                />
+              )}
               <textarea
                 ref={inputElRef}
                 value={inputValue}
@@ -1765,7 +1914,7 @@ export default function FloatingPromptBar() {
               <button
                 className="send-btn"
                 onClick={submitPrompt}
-                disabled={!canSend || (!inputValue.trim() && pastedImages.length === 0)}
+                disabled={!canSend || (!inputValue.trim() && pastedImages.length === 0 && pastedFiles.length === 0)}
                 title={preferredAgentTerminal ? 'Send prompt to AI agent terminal' : 'Send prompt to active terminal'}
               >
                 Send
