@@ -11,8 +11,8 @@ interface Props {
 
 const KIND_COLOR: Record<ActivityKind, string> = {
   dispatch: 'var(--accent)',
-  goal: '#60a5fa',
-  'follow-up': '#60a5fa',
+  goal: 'var(--info, #60a5fa)',
+  'follow-up': 'var(--info, #60a5fa)',
   review: 'var(--accent)',
   finished: 'var(--success, #4ade80)',
   approved: 'var(--success, #4ade80)',

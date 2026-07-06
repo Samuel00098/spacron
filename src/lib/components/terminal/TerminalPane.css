@@ -1,13 +1,11 @@
 .terminal-pane {
   display: flex;
   flex-direction: column;
-  /* Frosted glass surface — the xterm background is transparent and reads
-     over this translucent layer + the ambient backdrop behind the window. */
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%),
-    rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-surface, 0.72));
-  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  /* See-through, exactly like the code editor: the xterm surface is transparent
+     and the `.room-panel` behind provides the single frosted-glass layer. We do
+     NOT paint our own `--frost-surface` fill or a second backdrop-filter here —
+     that double-frosted the pane into a near-opaque sheet. Just a faint sheen. */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
   overflow: hidden;
   position: relative;
   border: 1px solid var(--border);
@@ -231,11 +229,21 @@
   overflow: hidden;
   min-height: 0;
   padding: 6px 6px 8px 6px;
-  background:
-    radial-gradient(140% 120% at 0% 0%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 48%),
-    transparent;
-  transition: opacity 0.15s, filter 0.15s;
+  background: transparent;
+  transition: opacity 0.15s, filter 0.15s, background 0.15s;
   position: relative;
+}
+
+/* Readability scrim: a subtle theme-bg backing painted behind the terminal text
+   (which xterm draws at alpha 0). Full-screen TUIs like Claude Code paint no
+   surface of their own, so without this their text sits straight on the
+   see-through glass over a busy wallpaper and washes out. The scrim gives every
+   pane consistent contrast while the frost still lets the wallpaper glow through.
+   Tunable per-theme via --terminal-scrim (0 = fully transparent, 1 = opaque);
+   only applies to the frosted (non-solid) themes since solid themes are already
+   opaque. */
+:root:not(.solid-theme) .terminal-pane .xterm-container {
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim, 0.35));
 }
 
 /* Liquid glass sheen overlay — specular diagonal reflection + vignette */
@@ -475,6 +483,14 @@
   border-color: rgba(245, 176, 69, 0.3);
 }
 
+.terminal-pane.agent-pane.agent-cursor {
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
+}
+
+.terminal-pane.agent-pane.agent-hermes {
+  border-color: color-mix(in srgb, var(--role-agent) 30%, transparent);
+}
+
 /* Active agent panes get intense glows */
 .terminal-pane.agent-pane.active.agent-agy,
 .terminal-pane.agent-pane.active.agent-antigravity {
@@ -490,6 +506,16 @@
 .terminal-pane.agent-pane.active.agent-aider {
   border-color: #f5b045 !important;
   box-shadow: 0 0 10px rgba(245, 176, 69, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.terminal-pane.agent-pane.active.agent-cursor {
+  border-color: var(--info) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--info) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.terminal-pane.agent-pane.active.agent-hermes {
+  border-color: var(--role-agent) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--role-agent) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 /* Pulse animation when the agent is executing */

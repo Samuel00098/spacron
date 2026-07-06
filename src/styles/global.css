@@ -75,6 +75,20 @@
   --input-bg:      rgba(255, 255, 255, 0.20) !important;
 }
 
+/* Role & Semantic colors — darker/higher-contrast variants for readability on light backgrounds */
+:root.light-theme,
+html.bg-palette-light {
+  --error:           #eb0c0c !important;
+  --warning:         #cb720b !important;
+  --success:         #09a944 !important;
+  --info:            #1359f3 !important;
+  --role-server:     #09a944 !important;
+  --role-tests:      #1359f3 !important;
+  --role-build:      #c2640a !important;
+  --role-agent:      #6d28d9 !important;
+  --role-git:        #cb720b !important;
+}
+
 :root:not(.solid-theme):not(.light-theme) body {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
@@ -354,9 +368,13 @@ body::before {
   transition: opacity 280ms cubic-bezier(0.4, 0, 0.2, 1),
               filter  280ms cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
-  will-change: transform, opacity;
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
+  /* Intentionally NOT promoted to its own GPU layer (no `will-change: transform`
+     / `translate3d` / `backface-visibility`). On WebKitGTK a separately
+     composited negative-z fixed layer flickers ABOVE the `backdrop-filter`
+     panels (the title-bar glass tabs) whenever they repaint on hover/press —
+     the "background jumps to the front" glitch. Painting in normal document
+     order keeps the wallpaper reliably behind the UI. The scrim (`body::after`)
+     is likewise un-promoted and never exhibited the bug. */
 }
 
 /* Background image pulled back to give the scrim layers more room to work.
@@ -471,13 +489,26 @@ html.has-bg-media.light-theme body::after {
    against the wallpaper in BOTH dark and light modes.
    ═══════════════════════════════════════════════════════════════ */
 
-/* Dark mode with background active */
-html.has-bg-media:not(.light-theme),
-html.has-bg-image:not(.light-theme) {
-  --text-primary:    #ffffff !important;
-  --text-secondary:  #e8e8f0 !important;
-  --text-muted:      #b0b0c8 !important;
-  --titlebar-text:   #ffffff !important;
+/* Adaptive foreground palette — set by applyForegroundPalette()
+   based on measured background luminance (dark → bright text,
+   light → dark text). Falls back to theme type when analysis
+   hasn't run yet. */
+html.has-bg-media.bg-palette-dark,
+html.has-bg-image.bg-palette-dark {
+  --text-primary:    #f0f0f4 !important;
+  --text-secondary:  #a8a8b8 !important;
+  --text-muted:      #686878 !important;
+  --text-placeholder: #484858 !important;
+  --titlebar-text:   #f0f0f4 !important;
+}
+
+html.has-bg-media.bg-palette-light,
+html.has-bg-image.bg-palette-light {
+  --text-primary:    #1a1a22 !important;
+  --text-secondary:  #4a4a58 !important;
+  --text-muted:      #8a8a9a !important;
+  --text-placeholder: #b0b0ba !important;
+  --titlebar-text:   #1a1a22 !important;
 }
 
 html.has-bg-media:not(.light-theme) body,
@@ -485,53 +516,47 @@ html.has-bg-image:not(.light-theme) body {
   /* Multi-layer halo: tight black outline + wide soft bloom */
   text-shadow:
     0 0   2px rgba(0, 0, 0, 1.00),   /* pixel-tight outline */
-    0 1px 3px rgba(0, 0, 0, 0.95),   /* close shadow */
-    0 2px 8px rgba(0, 0, 0, 0.80),   /* mid bloom */
-    0 4px 16px rgba(0, 0, 0, 0.55),  /* wide atmospheric glow */
-    0 8px 24px rgba(0, 0, 0, 0.30);  /* far diffuse */
+    0 1px 3px rgba(0, 0, 0, 0.75),   /* close shadow */
+    0 2px 8px rgba(0, 0, 0, 0.45),   /* mid bloom */
+    0 4px 16px rgba(0, 0, 0, 0.22),  /* wide atmospheric glow */
+    0 8px 24px rgba(0, 0, 0, 0.08);  /* far diffuse */
 }
 
-/* Crisp, strong icon shadows in dark mode with background */
+/* Subtler icon shadows in dark mode with background */
 html.has-bg-media:not(.light-theme) svg,
 html.has-bg-image:not(.light-theme) svg {
   color: var(--text-primary);
   filter:
     drop-shadow(0 0   1px rgba(0, 0, 0, 1.00))
-    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.95))
-    drop-shadow(0 2px 8px rgba(0, 0, 0, 0.70))
-    drop-shadow(0 4px 16px rgba(0, 0, 0, 0.45));
+    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75))
+    drop-shadow(0 2px 8px rgba(0, 0, 0, 0.40))
+    drop-shadow(0 4px 16px rgba(0, 0, 0, 0.18));
 }
 
-/* Light mode with background active — pure black text for maximum
-   contrast against the see-through panels and wallpaper. */
-html.has-bg-media.light-theme,
-html.has-bg-image.light-theme {
-  --text-primary:    #000000 !important;
-  --text-secondary:  #0a0a14 !important;
-  --text-muted:      #1a1a2e !important;
-  --titlebar-text:   #000000 !important;
-}
+/* (Light mode palette handled by .bg-palette-light above —
+   the old html.has-bg-media.light-theme path is superseded by
+   the class-based system.) */
 
 html.has-bg-media.light-theme body,
 html.has-bg-image.light-theme body {
   /* Triple-layer white halo: tight bright ring + medium aura + wide diffuse bloom */
   text-shadow:
     0 0   2px rgba(255, 255, 255, 1.00),  /* pixel-tight white outline */
-    0 1px 4px rgba(255, 255, 255, 0.95),  /* close glow */
-    0 2px 10px rgba(255, 255, 255, 0.80), /* mid halo */
-    0 4px 20px rgba(255, 255, 255, 0.55), /* wide luminous bloom */
-    0 8px 32px rgba(255, 255, 255, 0.30); /* far atmospheric diffuse */
+    0 1px 4px rgba(255, 255, 255, 0.75),  /* close glow */
+    0 2px 10px rgba(255, 255, 255, 0.45), /* mid halo */
+    0 4px 20px rgba(255, 255, 255, 0.22), /* wide luminous bloom */
+    0 8px 32px rgba(255, 255, 255, 0.08); /* far atmospheric diffuse */
 }
 
-/* Crisp icon shadows in light mode with background */
+/* Subtler icon shadows in light mode with background */
 html.has-bg-media.light-theme svg,
 html.has-bg-image.light-theme svg {
   color: var(--text-primary);
   filter:
     drop-shadow(0 0   1px rgba(255, 255, 255, 1.00))
-    drop-shadow(0 1px 3px rgba(255, 255, 255, 0.95))
-    drop-shadow(0 2px 10px rgba(255, 255, 255, 0.80))
-    drop-shadow(0 4px 18px rgba(255, 255, 255, 0.55))
+    drop-shadow(0 1px 3px rgba(255, 255, 255, 0.75))
+    drop-shadow(0 2px 10px rgba(255, 255, 255, 0.45))
+    drop-shadow(0 4px 18px rgba(255, 255, 255, 0.22))
     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));  /* subtle dark underline for depth */
 }
 
