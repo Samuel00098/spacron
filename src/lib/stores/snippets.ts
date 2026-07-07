@@ -1,5 +1,5 @@
 import { writable, get, derived } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 
 export interface ShellSnippet {
   id: string;
@@ -48,7 +48,7 @@ export async function loadProjectSnippets(project: { id: string; root_path: stri
   const path = getSnippetsPath(project.root_path);
   let loaded: ShellSnippet[] = [];
   try {
-    const raw = await invoke<string>('fs_read_file', { path });
+    const raw = await backendInvoke<string>('fs_read_file', { path });
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       loaded = parsed.map(s => ({ ...s, projectId: project.id }));
@@ -74,8 +74,8 @@ async function flushProjectSnippets(projectId: string): Promise<void> {
     id, name, command, description
   }));
   try {
-    try { await invoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
-    await invoke('fs_write_file', { path, content: JSON.stringify(cleanSnippets, null, 2) });
+    try { await backendInvoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
+    await backendInvoke('fs_write_file', { path, content: JSON.stringify(cleanSnippets, null, 2) });
   } catch (err) {
     console.error('Failed to save project snippets:', err);
   }

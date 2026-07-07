@@ -2,8 +2,13 @@ mod commands;
 mod error;
 mod lsp;
 mod preview;
-mod pty;
-mod state;
+pub mod pty;
+// Headless remote-workspace server: reuses the PTY core over a WebSocket so the
+// desktop app can attach to a workspace running on a remote box. See
+// `docs/remote-workspace.md`. Compiled into the lib; only run by the
+// `spacron-server` binary, never by the desktop `run()` path.
+pub mod remote;
+pub mod state;
 mod theme;
 mod workspace;
 

@@ -1,4 +1,7 @@
 import { invoke, Channel } from '@tauri-apps/api/core';
+import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
+import { openPtyRemote, attachPtyRemote, getAvailableShellsRemote } from './pty-bridge-remote';
 
 export type PtyHandlers = {
   onData: (bytes: Uint8Array) => void;
@@ -23,7 +26,35 @@ export type ShellInfo = {
   args: string[];
 };
 
-export async function getAvailableShells(): Promise<ShellInfo[]> {
+// ── Transport facade ────────────────────────────────────────────────────────
+// When a remote workspace is active, route to the WebSocket bridge; otherwise
+// use the local Tauri backend (the `*Local` functions below). Callers import
+// these three and are unaware of which transport is in use.
+
+export function getAvailableShells(): Promise<ShellInfo[]> {
+  return get(remoteTarget) ? getAvailableShellsRemote() : getAvailableShellsLocal();
+}
+
+export function openPty(
+  cols: number,
+  rows: number,
+  handlers: PtyHandlers,
+  cwd?: string,
+  shellProgram?: string,
+  env?: Record<string, string>,
+): Promise<PtySession> {
+  return get(remoteTarget)
+    ? openPtyRemote(cols, rows, handlers, cwd, shellProgram, env)
+    : openPtyLocal(cols, rows, handlers, cwd, shellProgram, env);
+}
+
+export function attachPty(id: number, handlers: PtyHandlers): Promise<PtySession> {
+  return get(remoteTarget) ? attachPtyRemote(id, handlers) : attachPtyLocal(id, handlers);
+}
+
+// ── Local (Tauri IPC) transport ─────────────────────────────────────────────
+
+async function getAvailableShellsLocal(): Promise<ShellInfo[]> {
   try {
     return await invoke<ShellInfo[]>('terminal_list_shells');
   } catch {
@@ -31,7 +62,7 @@ export async function getAvailableShells(): Promise<ShellInfo[]> {
   }
 }
 
-export async function openPty(
+async function openPtyLocal(
   cols: number,
   rows: number,
   handlers: PtyHandlers,
@@ -103,7 +134,7 @@ export async function openPty(
   };
 }
 
-export async function attachPty(
+async function attachPtyLocal(
   id: number,
   handlers: PtyHandlers,
 ): Promise<PtySession> {

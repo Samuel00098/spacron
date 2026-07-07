@@ -83,7 +83,15 @@ pub fn terminal_create(
         _ => shell::detect_shell(),
     };
     let clean_cwd = resolve_terminal_cwd(cwd, &state)?;
-    let pty_session = session::spawn(cols, rows, shell, clean_cwd, on_data, on_exit, env)?;
+    let pty_session = session::spawn(
+        cols,
+        rows,
+        shell,
+        clean_cwd,
+        Box::new(on_data),
+        Box::new(on_exit),
+        env,
+    )?;
     let id = state.pty_manager.insert(pty_session);
     Ok(id)
 }
@@ -104,7 +112,7 @@ pub fn terminal_attach(
         .pty_manager
         .get(id)
         .ok_or_else(|| format!("Session not found: {id}"))?;
-    let replay = session.attach(on_data, on_exit)?;
+    let replay = session.attach(Box::new(on_data), Box::new(on_exit))?;
     Ok(Response::new(replay))
 }
 

@@ -1,5 +1,5 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import type { ActivityEvent } from '$lib/services/orchestrator/activity-log';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 
@@ -107,7 +107,7 @@ export function mergeMemoryEntry(
 export async function loadProjectMemory(projectId: string, rootPath: string): Promise<void> {
   let entries: OrchestratorMemoryEntry[] = [];
   try {
-    const raw = await invoke<string>('fs_read_file', { path: memoryPath(rootPath) });
+    const raw = await backendInvoke<string>('fs_read_file', { path: memoryPath(rootPath) });
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       entries = parsed
@@ -131,8 +131,8 @@ export async function loadProjectMemory(projectId: string, rootPath: string): Pr
 export async function flushProjectMemory(projectId: string, rootPath: string): Promise<void> {
   const entries = get(orchestratorMemory)[projectId] ?? [];
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await invoke('fs_write_file', { path: memoryPath(rootPath), content: JSON.stringify(entries, null, 2) });
+    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
+    await backendInvoke('fs_write_file', { path: memoryPath(rootPath), content: JSON.stringify(entries, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator memory:', err);
   }

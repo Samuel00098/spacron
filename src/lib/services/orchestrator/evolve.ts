@@ -1,5 +1,5 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { loadJson } from '$lib/utils/storage';
 import type { OrchestratorAction } from '$lib/services/orchestrator-brain';
 
@@ -88,7 +88,7 @@ function flushGlobalProfile(): void {
 export async function loadProjectProfile(projectId: string, rootPath: string): Promise<void> {
   let entries: ProfileEntry[] = [];
   try {
-    const raw = await invoke<string>('fs_read_file', { path: profilePath(rootPath) });
+    const raw = await backendInvoke<string>('fs_read_file', { path: profilePath(rootPath) });
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) entries = parsed.filter(isProfileEntry).slice(0, MAX_PROJECT_ENTRIES);
   } catch {
@@ -100,8 +100,8 @@ export async function loadProjectProfile(projectId: string, rootPath: string): P
 async function flushProjectProfile(projectId: string, rootPath: string): Promise<void> {
   const entries = get(orchestratorProfile)[projectId] ?? [];
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await invoke('fs_write_file', { path: profilePath(rootPath), content: JSON.stringify(entries, null, 2) });
+    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
+    await backendInvoke('fs_write_file', { path: profilePath(rootPath), content: JSON.stringify(entries, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator profile:', err);
   }

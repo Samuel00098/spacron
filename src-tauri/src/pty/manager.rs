@@ -31,6 +31,21 @@ impl PtyManager {
         id
     }
 
+    /// Allocate a session id without inserting anything. Used by the remote
+    /// server, whose output sinks need the id up front (to tag WebSocket frames)
+    /// before the session is spawned and inserted via [`Self::insert_with_id`].
+    pub fn reserve_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Insert a session under an id previously handed out by [`Self::reserve_id`].
+    pub fn insert_with_id(&self, id: u32, session: PtySession) {
+        self.sessions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, session);
+    }
+
     pub fn get(&self, id: u32) -> Option<PtySession> {
         self.sessions
             .read()

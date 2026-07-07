@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 
 /**
  * Per-agent git worktree isolation.
@@ -62,7 +62,7 @@ export async function createTaskWorktree(args: {
 }): Promise<WorktreeInfo | null> {
   const branch = deriveTaskBranch(args.taskId, args.label);
   try {
-    const raw = await invoke<{
+    const raw = await backendInvoke<{
       path: string;
       branch: string;
       base_branch: string;
@@ -100,7 +100,7 @@ export async function removeTaskWorktree(
   deleteBranch = false
 ): Promise<void> {
   try {
-    await invoke('workspace_git_remove_worktree', {
+    await backendInvoke('workspace_git_remove_worktree', {
       projectId,
       worktreePath: worktree.path,
       deleteBranch,
@@ -114,7 +114,7 @@ export async function removeTaskWorktree(
 /** Live changed-files / branch status for a worktree, or null if unavailable. */
 export async function getWorktreeStatus(worktree: WorktreeInfo): Promise<WorktreeStatus | null> {
   try {
-    const raw = await invoke<{ changed_files: number; branch: string }>('workspace_git_worktree_status', {
+    const raw = await backendInvoke<{ changed_files: number; branch: string }>('workspace_git_worktree_status', {
       worktreePath: worktree.path,
     });
     return { changedFiles: raw.changed_files, branch: raw.branch };

@@ -9,6 +9,8 @@ import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, t
 import { layoutSnapshot, requestAmbientLayout, type AmbientLayout } from './layoutControl';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
+import { backendInvoke } from '$lib/services/backend';
+import type { RemoteConnection } from './remoteWorkspace';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useWorkspaceStore.getState() as any)[key];
@@ -224,8 +226,16 @@ function projectStorageKey(projectId: string) {
   return `spacron_project_${projectId}`;
 }
 
+/** Remote-workspace projects use a `remote:<id>` project id. Their state lives
+ *  on the server and they're never auto-reopened locally, so we keep them out of
+ *  localStorage to avoid orphaned per-project entries. */
+function isRemoteProjectId(projectId: string): boolean {
+  return projectId.startsWith('remote:');
+}
+
 function saveProjectStateToStorage(projectId: string) {
   if (typeof window === 'undefined') return;
+  if (isRemoteProjectId(projectId)) return;
   const terminalState = getTerminalProjectState(projectId);
   const terminalPanes: PersistedTerminalPane[] = terminalState.sessions
     .filter((session) => session.isRunning && session.agentPreset)
@@ -1079,6 +1089,97 @@ export function switchToProject(projectId: string) {
 
 export async function openProjectByPath(path: string) {
   await addFolderToWorkspace(path);
+}
+
+// ── Remote workspace root (Step 4 of docs/remote-workspace.md) ─────────────
+// Connecting to a remote opens a project pointed at the server's `--workspace`
+// root so the file tree + editor follow it. These files/terminals read/write
+// through the `backendInvoke` seam, which routes to the server while a remote is
+// active — so a `remote:<id>` project needs no local Tauri project registration.
+// We keep this deliberately separate from the local `restoreProjectState` path
+// (which does local-only Tauri work: port detection, preview proxy, persisted
+// pane reattach) rather than thread remote-awareness through it.
+
+/** The local project that was active before connecting, so disconnect can
+ *  return to it. */
+let previousLocalProjectId: string | null = null;
+
+/**
+ * Open the remote server's workspace root as the active project. Called after
+ * the socket connects (so `workspace_info` routes over it).
+ */
+export async function openRemoteRoot(conn: RemoteConnection): Promise<void> {
+  const info = await backendInvoke<{ root: string; name: string }>('workspace_info');
+
+  // Remember and save the outgoing local project so disconnect can restore it.
+  const current = get(activeProjectId);
+  if (current && !current.startsWith('remote:')) {
+    previousLocalProjectId = current;
+    saveProjectState(current);
+  }
+  // A queued autosave from the outgoing project would otherwise fire mid-switch
+  // and write transitional state under the wrong id.
+  cancelPendingProjectAutosave();
+
+  const id = `remote:${conn.id}`;
+  const project: Project = {
+    id,
+    name: info.name || conn.name,
+    root_path: info.root,
+    state: { open_files: [], active_file: null, last_modified: Date.now().toString() },
+  };
+
+  projects.update((p) => { p.set(id, project); return p; });
+  openProjectIds.update((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  activeProjectId.set(id);
+
+  // Minimal restore, in the same order as restoreProjectState: clear the outgoing
+  // project's stores first, then point the terminal at the remote root and open a
+  // shell (which runs remotely via pty-bridge). The file tree loads itself —
+  // FileExplorer reacts to the active project's root.
+  clearAllStores();
+  setActiveTerminalProject(id);
+  setTerminalProjectRoot(id, info.root);
+  createTerminalSession();
+  terminalRoomOpen.set(true);
+  layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
+}
+
+/**
+ * Return to Local: drop the remote project(s) and restore the local project that
+ * was active before connecting. The caller (`disconnectRemote`) has already set
+ * `activeRemoteId` to null, so the restore below reads local files again.
+ */
+export function leaveRemoteRoot(): void {
+  cancelPendingProjectAutosave();
+
+  const remoteIds = get(openProjectIds).filter((id) => id.startsWith('remote:'));
+  if (remoteIds.length === 0) return;
+
+  projects.update((p) => { for (const id of remoteIds) p.delete(id); return p; });
+  openProjectIds.update((ids) => ids.filter((id) => !id.startsWith('remote:')));
+
+  const openIds = get(openProjectIds);
+  const target =
+    previousLocalProjectId && get(projects).has(previousLocalProjectId)
+      ? previousLocalProjectId
+      : openIds[openIds.length - 1] ?? null;
+  previousLocalProjectId = null;
+
+  if (target) {
+    const proj = get(projects).get(target);
+    activeProjectId.set(target);
+    setActiveTerminalProject(target);
+    if (proj) {
+      restoreProjectState(target, proj.root_path).catch((e) =>
+        console.error('restoreProjectState failed:', e),
+      );
+    }
+  } else {
+    activeProjectId.set(null);
+    setActiveTerminalProject(null);
+    clearAllStores();
+  }
 }
 
 export async function openProject() {

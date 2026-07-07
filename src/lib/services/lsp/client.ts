@@ -23,6 +23,8 @@ import {
 import type { Extension } from '@codemirror/state';
 import { showToast, dismissToast, toasts } from '$lib/stores/notification';
 import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
+import { backendInvoke } from '../backend';
 
 /** Spacron language ids (from `detectLanguage`) that we offer LSP for. */
 const SUPPORTED = new Set(['typescript', 'javascript', 'rust', 'python', 'go']);
@@ -116,9 +118,37 @@ function pathToFileUri(p: string): string {
 async function checkServer(language: string): Promise<ServerStatus> {
   const cached = statusCache.get(language);
   if (cached) return cached;
-  const status = await invoke<ServerStatus>('lsp_check_server', { language });
+  // Route through the backend seam: with a remote workspace active this probes
+  // the *remote* PATH (where the code and language servers actually live).
+  const status = await backendInvoke<ServerStatus>('lsp_check_server', { language });
   statusCache.set(language, status);
   return status;
+}
+
+/**
+ * Build the WebSocket URL CodeMirror's transport connects to, plus the workspace
+ * `rootUri`. Local: `lsp_start` spawns a localhost bridge and returns its port +
+ * a one-time token. Remote: `lsp_start` (over the shared backend socket) mints the
+ * same kind of one-time token, but the server has no separate port — the `/lsp`
+ * route lives on the remote target's own host, so we derive the URL from it.
+ */
+async function resolveLspConnection(
+  root: string,
+  serverLang: string,
+): Promise<{ uri: string; rootUri: string }> {
+  const target = get(remoteTarget);
+  const conn = await backendInvoke<LspConnection>('lsp_start', { root, language: serverLang });
+
+  if (target) {
+    const u = new URL(target.url);
+    u.pathname = '/lsp';
+    u.search = `?token=${encodeURIComponent(conn.token)}`;
+    return { uri: u.toString(), rootUri: conn.root_uri };
+  }
+  return {
+    uri: `ws://127.0.0.1:${conn.port}/lsp?token=${conn.token}`,
+    rootUri: conn.root_uri,
+  };
 }
 
 async function getOrCreateClient(
@@ -132,20 +162,16 @@ async function getOrCreateClient(
     return existing;
   }
 
-  const conn = await invoke<LspConnection>('lsp_start', {
-    root,
-    language: serverLang,
-  });
-  const uri = `ws://127.0.0.1:${conn.port}/lsp?token=${conn.token}`;
+  const { uri, rootUri } = await resolveLspConnection(root, serverLang);
   const transport = new WebSocketTransport(uri);
   const rootName = root.split(/[\\/]/).filter(Boolean).pop() || 'workspace';
 
   const client = new LanguageServerClient({
     transport,
-    rootUri: conn.root_uri,
-    workspaceFolders: [{ uri: conn.root_uri, name: rootName }],
+    rootUri,
+    workspaceFolders: [{ uri: rootUri, name: rootName }],
     // The client carries base options; the per-document plugin overrides these.
-    documentUri: conn.root_uri,
+    documentUri: rootUri,
     languageId: serverLang,
     autoClose: false,
     onClose: () => {
@@ -156,7 +182,7 @@ async function getOrCreateClient(
     onError: (err) => console.error(`LSP (${serverLang}) error:`, err),
   });
 
-  const entry: ClientEntry = { client, transport, rootUri: conn.root_uri, refs: 1 };
+  const entry: ClientEntry = { client, transport, rootUri, refs: 1 };
   clients.set(key, entry);
   return entry;
 }
@@ -261,6 +287,19 @@ export async function installServer(language: string): Promise<void> {
   const status = await checkServer(language);
   if (status.available) {
     showToast(`${status.command} is already installed.`, 'info');
+    return;
+  }
+
+  // The installer streams over Tauri channels and runs on *this* machine — but a
+  // remote workspace's servers must live on the remote box. Rather than install
+  // to the wrong host, point the user at their remote terminal (Step 1 gave them
+  // one). Auto-install over the transport is a later step.
+  if (get(remoteTarget)) {
+    showToast(
+      `Install ${status.command} on your remote workspace: run “${status.install_hint}” in a terminal.`,
+      'info',
+      10000,
+    );
     return;
   }
 

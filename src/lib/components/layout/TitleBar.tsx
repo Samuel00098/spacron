@@ -9,6 +9,7 @@ import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/sto
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
+import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import packageJson from '../../../../package.json';
 import './TitleBar.css';
 
@@ -270,6 +271,10 @@ export default function TitleBar() {
             </svg>
           </button>
         )}
+
+        {/* Remote workspace status — always visible so the user can connect
+            to a remote dev server before opening a workspace. */}
+        <RemoteStatus dropdownUp={false} />
 
         {/* Window controls — rendered unconditionally on every OS. The window is
             frameless (decorations:false), so macOS shows no native traffic

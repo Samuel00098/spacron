@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { openFile } from '$lib/stores/editor';
 
 function getTodayString(): string {
@@ -41,17 +41,17 @@ export async function openDailyNote(
   const filePath = getDailyNotePath(project.root_path, today);
 
   // Ensure directory exists
-  try { await invoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
+  try { await backendInvoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
 
   // Create file only if it doesn't exist yet
   let fileExists = false;
   try {
-    await invoke('fs_get_file_info', { path: filePath });
+    await backendInvoke('fs_get_file_info', { path: filePath });
     fileExists = true;
   } catch { /* not found */ }
 
   if (!fileExists) {
-    await invoke('fs_write_file', { path: filePath, content: getDailyTemplate(today) });
+    await backendInvoke('fs_write_file', { path: filePath, content: getDailyTemplate(today) });
   }
 
   if (typeof localStorage !== 'undefined') {

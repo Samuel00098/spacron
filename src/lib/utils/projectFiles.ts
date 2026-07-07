@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke as invoke } from '$lib/services/backend';
 import { isTauriRuntime } from './tauri';
 import type { FileEntry } from '$lib/types/explorer';
 

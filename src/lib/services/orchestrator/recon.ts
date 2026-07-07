@@ -8,7 +8,7 @@
  * the agent needs, so it doesn't waste context window on discovery.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ async function planRecon(
   // Read the top-level directory listing to give the LLM context.
   let projectTree = '';
   try {
-    const entries = await invoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: rootPath });
+    const entries = await backendInvoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: rootPath });
     const limited = entries.filter((e) => !e.name.startsWith('.') && !e.name.startsWith('node_modules')).slice(0, 40);
     projectTree = limited.map((e) => `  ${e.type === 'dir' ? '[dir]' : '[file]'} ${e.name}`).join('\n');
   } catch {
@@ -164,7 +164,7 @@ async function executeRecon(plan: ReconPlan, rootPath: string, projectId?: strin
   const filePromises = plan.readFiles.slice(0, MAX_RECON_FILES).map(
     async (relPath): Promise<ReconFinding | null> => {
       try {
-        const content = await invoke<string>('fs_read_file', { path: pathJoin(rootPath, relPath) });
+        const content = await backendInvoke<string>('fs_read_file', { path: pathJoin(rootPath, relPath) });
         const truncated = content.length > MAX_FILE_READ_CHARS
           ? content.slice(0, MAX_FILE_READ_CHARS) + '\n… (truncated)'
           : content;
@@ -176,7 +176,7 @@ async function executeRecon(plan: ReconPlan, rootPath: string, projectId?: strin
   );
 
   const gitLogP: Promise<ReconFinding | null> = (plan.gitLogCount > 0 && !!projectId)
-    ? invoke<Array<{ graph: string; hash?: string; author?: string; date?: string; refs?: string; subject?: string }>>('workspace_git_log', { projectId })
+    ? backendInvoke<Array<{ graph: string; hash?: string; author?: string; date?: string; refs?: string; subject?: string }>>('workspace_git_log', { projectId })
         .then((log) => {
           if (!log?.length) return null;
           const recent = log.slice(0, plan.gitLogCount);
@@ -189,7 +189,7 @@ async function executeRecon(plan: ReconPlan, rootPath: string, projectId?: strin
     : Promise.resolve(null);
 
   const gitStatusP: Promise<ReconFinding | null> = (plan.checkGitStatus && !!projectId)
-    ? invoke<{ branch: string; modified: string[]; added: string[]; deleted: string[]; untracked: string[]; file_stats: Record<string, [number, number]>; total_additions: number; total_deletions: number }>('workspace_git_status', { projectId })
+    ? backendInvoke<{ branch: string; modified: string[]; added: string[]; deleted: string[]; untracked: string[]; file_stats: Record<string, [number, number]>; total_additions: number; total_deletions: number }>('workspace_git_status', { projectId })
         .then((status) => {
           const parts = [`Branch: ${status.branch}`];
           if (status.modified.length) parts.push(`Modified: ${status.modified.join(', ')}`);
@@ -204,7 +204,7 @@ async function executeRecon(plan: ReconPlan, rootPath: string, projectId?: strin
     : Promise.resolve(null);
 
   const gitDiffP: Promise<ReconFinding | null> = (plan.checkGitStatus && !!projectId)
-    ? invoke<string>('workspace_git_diff', { projectId, filePath: null as string | null })
+    ? backendInvoke<string>('workspace_git_diff', { projectId, filePath: null as string | null })
         .then((diff) => {
           if (!diff?.trim() || diff.length <= 10) return null;
           const truncated = diff.length > 4000 ? diff.slice(0, 4000) + '\n… (diff truncated)' : diff;
@@ -326,7 +326,7 @@ async function buildProjectTree(
   async function walk(dir: string, depth: number) {
     if (depth > maxDepth || entries.length >= maxEntries) return;
     try {
-      const items = await invoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: dir });
+      const items = await backendInvoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: dir });
       for (const item of items) {
         if (entries.length >= maxEntries) return;
         if (item.name.startsWith('.')) continue;

@@ -3,7 +3,21 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtyS
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::ipc::{Channel, Response};
+
+/// Transport-agnostic sink for a PTY session's live output. Each attached
+/// frontend (Tauri IPC channel, remote WebSocket, …) provides one. Returning
+/// `false` marks the sink dead so the reader loop drops it. Keeping this trait
+/// free of Tauri types is what lets `spacron-server` reuse the PTY core headless.
+pub trait DataSink: Send + Sync {
+    /// Deliver a chunk of terminal output. Returns `false` if the sink is gone.
+    fn send_data(&self, bytes: &[u8]) -> bool;
+}
+
+/// Transport-agnostic sink for a PTY session's exit code. See [`DataSink`].
+pub trait ExitSink: Send + Sync {
+    /// Deliver the child's exit code. Returns `false` if the sink is gone.
+    fn send_exit(&self, code: i32) -> bool;
+}
 
 #[derive(Clone)]
 pub struct PtySession {
@@ -11,9 +25,9 @@ pub struct PtySession {
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     output_buffer: Arc<Mutex<Vec<u8>>>,
-    data_subscribers: Arc<Mutex<Vec<Channel<Response>>>>,
+    data_subscribers: Arc<Mutex<Vec<Box<dyn DataSink>>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
-    exit_subscribers: Arc<Mutex<Vec<Channel<i32>>>>,
+    exit_subscribers: Arc<Mutex<Vec<Box<dyn ExitSink>>>>,
 }
 
 const MAX_REPLAY_BUFFER_BYTES: usize = 1024 * 1024;
@@ -23,8 +37,8 @@ pub fn spawn(
     rows: u16,
     shell: ShellConfig,
     cwd: String,
-    on_data: Channel<Response>,
-    on_exit: Channel<i32>,
+    on_data: Box<dyn DataSink>,
+    on_exit: Box<dyn ExitSink>,
     env: Option<std::collections::HashMap<String, String>>,
 ) -> Result<PtySession, String> {
     let pty_system = NativePtySystem::default();
@@ -104,9 +118,7 @@ pub fn spawn(
                     }
                 }
                 if let Ok(mut subscribers) = reader_data_subscribers.lock() {
-                    subscribers.retain(|channel| {
-                        channel.send(Response::new(buffer.to_vec())).is_ok()
-                    });
+                    subscribers.retain(|sink| sink.send_data(buffer));
                 }
             };
 
@@ -161,7 +173,7 @@ pub fn spawn(
                 *stored_code = Some(code);
             }
             if let Ok(mut subscribers) = waiter_exit_subscribers.lock() {
-                subscribers.retain(|channel| channel.send(code).is_ok());
+                subscribers.retain(|sink| sink.send_exit(code));
             }
         })
         .map_err(|e| e.to_string())?;
@@ -200,8 +212,8 @@ impl PtySession {
     /// running child would render them as literal `]10;rgb:…` input.
     pub fn attach(
         &self,
-        on_data: Channel<Response>,
-        on_exit: Channel<i32>,
+        on_data: Box<dyn DataSink>,
+        on_exit: Box<dyn ExitSink>,
     ) -> Result<Vec<u8>, String> {
         let replay = {
             let mut subscribers = self.data_subscribers.lock().map_err(|e| e.to_string())?;
@@ -216,7 +228,7 @@ impl PtySession {
 
         let maybe_exit_code = *self.exit_code.lock().map_err(|e| e.to_string())?;
         if let Some(code) = maybe_exit_code {
-            let _ = on_exit.send(code);
+            let _ = on_exit.send_exit(code);
             return Ok(replay);
         }
 
@@ -251,5 +263,20 @@ impl PtySession {
                 pixel_height: 0,
             })
             .map_err(|e| e.to_string())
+    }
+}
+
+// Tauri IPC adapters: the local (in-app) transport delivers PTY output through a
+// `Channel`. These let `commands::terminal` keep passing channels straight into
+// the transport-agnostic PTY core — it just boxes them as sinks.
+impl DataSink for tauri::ipc::Channel<tauri::ipc::Response> {
+    fn send_data(&self, bytes: &[u8]) -> bool {
+        self.send(tauri::ipc::Response::new(bytes.to_vec())).is_ok()
+    }
+}
+
+impl ExitSink for tauri::ipc::Channel<i32> {
+    fn send_exit(&self, code: i32) -> bool {
+        self.send(code).is_ok()
     }
 }

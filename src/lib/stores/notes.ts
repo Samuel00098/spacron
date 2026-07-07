@@ -1,5 +1,5 @@
 import { writable } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { loadBoolean } from '$lib/utils/storage';
 
 const FLOATING_NOTE_OPEN_KEY = 'spacron_floating_note_open';
@@ -15,7 +15,7 @@ export async function loadScratchNote(project: { id: string; root_path: string }
   const path = getScratchPath(project.root_path);
   let content = '';
   try {
-    content = await invoke<string>('fs_read_file', { path });
+    content = await backendInvoke<string>('fs_read_file', { path });
   } catch {
     // file doesn't exist yet — empty scratch is fine
   }
@@ -30,8 +30,8 @@ export async function saveScratchNote(
   const dir = `${project.root_path}/.spacron`;
   const path = getScratchPath(project.root_path);
   try {
-    try { await invoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
-    await invoke('fs_write_file', { path, content });
+    try { await backendInvoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
+    await backendInvoke('fs_write_file', { path, content });
   } catch (err) {
     console.error('Failed to save scratch note:', err);
     throw err;

@@ -6,6 +6,7 @@ import { setSidebarTab } from '$lib/stores/layout';
 import { branchInfo } from '$lib/stores/gitBranch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { useStore } from '$lib/react/useStore';
+import RemoteStatus from './RemoteStatus';
 import './StatusBar.css';
 
 const viewColors: Record<string, string> = {
@@ -69,6 +70,8 @@ export default function StatusBar() {
       </div>
 
       <div className="sb-right">
+        <RemoteStatus />
+        <span className="sb-sep">.</span>
         {activeFileInfo && (
           <>
             {activeFileIsText && (

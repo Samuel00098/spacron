@@ -1,5 +1,8 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+// Route file ops through the backend seam so they follow a remote workspace when
+// one is active (docs/remote-workspace.md). Local mode is a pass-through to Tauri
+// invoke — every call in this file is a workspace file op.
+import { backendInvoke as invoke } from '$lib/services/backend';
 import type { FileEntry, FileNode, ContextMenuState } from '$lib/types/explorer';
 import { showHidden, uiZoom } from './settings';
 import { activeProject } from './workspace';

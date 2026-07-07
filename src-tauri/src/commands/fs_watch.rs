@@ -26,15 +26,16 @@ fn watchers() -> &'static Mutex<HashMap<String, RecommendedWatcher>> {
 // to a few emits per second rather than hundreds.
 const DEBOUNCE_MS: u64 = 250;
 
-#[tauri::command]
-pub fn start_fs_watch(app: AppHandle, path: String) -> Result<(), String> {
-    let mut map = watchers()
-        .lock()
-        .map_err(|_| "watch registry lock poisoned".to_string())?;
-    if map.contains_key(&path) {
-        return Ok(()); // already watching this root
-    }
-
+/// Start a recursive, debounced watch on `path`, invoking `on_change` once per
+/// settled burst. Returns the live `RecommendedWatcher` — keep it alive to keep
+/// watching; drop it to stop the OS watch and end the paired debounce thread.
+///
+/// Transport-agnostic: the Tauri command emits a `fs-change` event from
+/// `on_change`; the remote server pushes an `fsChange` frame instead.
+pub fn spawn_watch<F>(path: &str, on_change: F) -> Result<RecommendedWatcher, String>
+where
+    F: Fn() + Send + 'static,
+{
     let (tx, rx) = channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::recommended_watcher(move |res| {
         // Forward every raw event; the debounce thread decides when to emit.
@@ -42,10 +43,9 @@ pub fn start_fs_watch(app: AppHandle, path: String) -> Result<(), String> {
     })
     .map_err(|e| format!("failed to create filesystem watcher: {e}"))?;
     watcher
-        .watch(Path::new(&path), RecursiveMode::Recursive)
+        .watch(Path::new(path), RecursiveMode::Recursive)
         .map_err(|e| format!("failed to watch {path}: {e}"))?;
 
-    let emit_path = path.clone();
     std::thread::spawn(move || loop {
         // Block until the first event of a burst arrives.
         if rx.recv().is_err() {
@@ -62,8 +62,25 @@ pub fn start_fs_watch(app: AppHandle, path: String) -> Result<(), String> {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
-        let _ = app.emit("fs-change", &emit_path);
+        on_change();
     });
+
+    Ok(watcher)
+}
+
+#[tauri::command]
+pub fn start_fs_watch(app: AppHandle, path: String) -> Result<(), String> {
+    let mut map = watchers()
+        .lock()
+        .map_err(|_| "watch registry lock poisoned".to_string())?;
+    if map.contains_key(&path) {
+        return Ok(()); // already watching this root
+    }
+
+    let emit_path = path.clone();
+    let watcher = spawn_watch(&path, move || {
+        let _ = app.emit("fs-change", &emit_path);
+    })?;
 
     map.insert(path, watcher);
     Ok(())

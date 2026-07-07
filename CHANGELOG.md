@@ -3,6 +3,33 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.0] - 2026-07-07
+
+Remote workspaces. Your workspace — files, terminals, LSP, git, and agents — can now live on a box you own (a VPS, cloud VM, or home server), with the Spacron app acting as a thin client that attaches to it. Open Spacron, connect to a remote, and your terminal, editor, and language servers are all operating on the remote machine; close the laptop and reconnect from anywhere and the workspace is still there, mid-state. The desktop app is unchanged when no remote is connected.
+
+### Added
+
+- **Remote workspaces** — connect to a machine you own and run your whole workspace there. The file tree, editor, terminals, language servers, and agents all operate on the remote box, so language servers run next to the code (real types, no project sync) and long-running work doesn't need your laptop awake. It's the interactive remote model (like VS Code Server / Cursor Remote-SSH), not an ephemeral cloud agent.
+
+- **Headless `spacron-server`** — a standalone binary you run on the remote box (`spacron-server --workspace <dir> --port 9000 --token <token>`). It reuses the desktop app's terminal, file, watch, and LSP cores and serves them over a single WebSocket, confined to the workspace directory you point it at.
+
+- **Connection manager in the status/title bar** — a chip shows the active workspace and live connection status (connecting / connected / reconnecting / error). Its popover lets you add, edit, and switch between "Local" and saved remotes in one click. Saved remotes persist; the app always boots Local and you connect explicitly.
+
+- **Auto-reconnect** — a dropped link (laptop sleep, network blip) reconnects automatically with exponential backoff, re-attaching your still-live terminal sessions and re-arming file watches. Terminal sessions and their scrollback survive the disconnect on the server, so output simply resumes.
+
+- **Optional durability auto-commit** — pass `--auto-commit-ms <interval>` to `spacron-server` to periodically stage and commit uncommitted changes as a safety net against losing work if the remote VM dies. Disabled by default.
+
+### Changed
+
+- **Fully see-through panels on Windows and macOS** — the rooms (editor, terminal, preview, …), both utility sidebars, the activity bar, and the terminal scrim now drop their frosted tint entirely so the wallpaper shows straight through. Content that paints its own surface (a preview, a video) is unaffected, and the solid overlays (settings, model switcher, search, quick capture) stay solid. Linux (WebKitGTK) keeps its original frosted look.
+
+- **Backend calls route through a transport seam** — workspace operations (file read/write, search, git, LSP) now go through a single `BackendClient` seam instead of calling the Tauri backend directly. When no remote is active this is a transparent pass-through with identical local behavior; when a remote is connected the same calls travel over the WebSocket to `spacron-server`.
+
+### Security
+
+- **Pre-shared token over a WebSocket subprotocol** — the client authenticates with a token presented as a `token.<TOKEN>` subprotocol (kept out of the URL, so it can't leak into logs or history) and validated in constant time. LSP connections use single-use, short-TTL ephemeral tokens so the pre-shared secret never lands in a URL. The transport is plaintext `ws://` and is meant to run behind Tailscale/VPN (which encrypts the link); the server prints a startup warning and must never be exposed on a public network. TLS (`wss://`) is a planned hardening step.
+
+
 ## [v0.5.0] - 2026-07-03
 
 A Linux reliability release. It fixes the WebKitGTK rendering bugs that made the dock and floating prompt bar go invisible, left a "ghost" of a closed room behind, and spammed internal WebKit errors — and makes copy, paste, and drag-and-drop work properly across the terminal and prompt bar on Linux. It also adds clear, per-platform guidance for missing system dependencies, and a full-panel transparency fade for the floating YouTube player. Windows and macOS are unaffected by the Linux-specific fixes.

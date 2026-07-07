@@ -1,6 +1,7 @@
 import { writable, get, derived } from '$lib/stores/storeCompat';
 import { useOrchestratorStore } from './zustand/orchestrator';
 import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { showToast } from '$lib/stores/notification';
 import { getPresetRuns } from '$lib/stores/runs';
 import {
@@ -225,7 +226,7 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
   await loadProjectProfile(project.id, project.root_path);
   let rawPersistedTasks: Array<Partial<PersistedTask> | null | undefined> = [];
   try {
-    const raw = await invoke<string>('fs_read_file', { path: storePath(project.root_path) });
+    const raw = await backendInvoke<string>('fs_read_file', { path: storePath(project.root_path) });
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       rawPersistedTasks = parsed as Array<Partial<PersistedTask> | null | undefined>;
@@ -336,8 +337,8 @@ async function flush(projectId: string): Promise<void> {
   // they're in-memory only, never written to disk.
   const projectTasks = get(orchestratorTasks).filter((t) => t.projectId === projectId && !t.adopted);
   try {
-    try { await invoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await invoke('fs_write_file', { path: storePath(rootPath), content: JSON.stringify(projectTasks, null, 2) });
+    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
+    await backendInvoke('fs_write_file', { path: storePath(rootPath), content: JSON.stringify(projectTasks, null, 2) });
   } catch (err) {
     console.error('Failed to save orchestrator tasks:', err);
     showToast('Task state could not be saved — changes may be lost on restart', 'error', 8000);

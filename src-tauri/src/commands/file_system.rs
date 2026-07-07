@@ -6,8 +6,26 @@ use tauri::State;
 /// Resolve a (possibly new) path to its best canonical form and verify it
 /// falls inside one of the currently open project roots.
 pub fn require_in_project(path: &Path, state: &AppState) -> Result<(), String> {
-    let projects = state.workspace_manager.list_projects();
-    if projects.is_empty() {
+    require_in_roots(path, &project_roots(state))
+}
+
+/// Snapshot of the open project roots — the confinement set for the local
+/// (in-app) transport. The remote server passes its single `--workspace` root
+/// instead; both flow through [`require_in_roots`].
+pub fn project_roots(state: &AppState) -> Vec<PathBuf> {
+    state
+        .workspace_manager
+        .list_projects()
+        .into_iter()
+        .map(|p| p.root_path)
+        .collect()
+}
+
+/// Transport-agnostic confinement check: verify `path` falls inside one of
+/// `roots`. Shared by the Tauri commands (roots = open projects) and the remote
+/// server (roots = the served workspace).
+pub fn require_in_roots(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    if roots.is_empty() {
         return Err("No project is open — open a project folder first".to_string());
     }
     // Get the best canonical path we can for a possibly-new file.
@@ -26,7 +44,7 @@ pub fn require_in_project(path: &Path, state: &AppState) -> Result<(), String> {
         path.to_path_buf()
     };
     let canonical = crate::commands::clean_path_buf(canonical);
-    if !projects.iter().any(|p| canonical.starts_with(&p.root_path)) {
+    if !roots.iter().any(|r| canonical.starts_with(r)) {
         return Err("Access denied: path is outside any open project".to_string());
     }
     Ok(())
@@ -105,8 +123,13 @@ pub struct FileEntry {
 
 #[tauri::command]
 pub fn fs_read_dir(path: String, state: State<AppState>) -> Result<Vec<FileEntry>, String> {
+    read_dir(&path, &project_roots(&state))
+}
+
+pub fn read_dir(path: &str, roots: &[PathBuf]) -> Result<Vec<FileEntry>, String> {
+    let path = path.to_string();
     let dir = require_path(&path)?;
-    require_in_project(&dir, &state)?;
+    require_in_roots(&dir, roots)?;
     if !dir.is_dir() {
         return Err("Not a directory".to_string());
     }
@@ -148,55 +171,75 @@ pub fn fs_read_dir(path: String, state: State<AppState>) -> Result<Vec<FileEntry
 
 #[tauri::command]
 pub fn fs_create_file(path: String, state: State<AppState>) -> Result<(), String> {
-    let file_path = resolve_path(&path)?;
-    require_in_project(&file_path, &state)?;
+    create_file(&path, &project_roots(&state))
+}
+
+pub fn create_file(path: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let file_path = resolve_path(path)?;
+    require_in_roots(&file_path, roots)?;
     if let Some(parent) = file_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, &path))?;
+        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, path))?;
     }
-    std::fs::File::create(&file_path).map_err(|e| sanitize_io_error(e, &path))?;
+    std::fs::File::create(&file_path).map_err(|e| sanitize_io_error(e, path))?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn fs_create_dir(path: String, state: State<AppState>) -> Result<(), String> {
-    let p = resolve_path(&path)?;
-    require_in_project(&p, &state)?;
-    std::fs::create_dir_all(&p).map_err(|e| sanitize_io_error(e, &path))
+    create_dir(&path, &project_roots(&state))
+}
+
+pub fn create_dir(path: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let p = resolve_path(path)?;
+    require_in_roots(&p, roots)?;
+    std::fs::create_dir_all(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
 #[tauri::command]
 pub fn fs_rename(from: String, to: String, state: State<AppState>) -> Result<(), String> {
-    let from_path = require_path(&from)?;
-    let to_path = resolve_path(&to)?;
-    require_in_project(&from_path, &state)?;
-    require_in_project(&to_path, &state)?;
+    rename(&from, &to, &project_roots(&state))
+}
+
+pub fn rename(from: &str, to: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let from_path = require_path(from)?;
+    let to_path = resolve_path(to)?;
+    require_in_roots(&from_path, roots)?;
+    require_in_roots(&to_path, roots)?;
     std::fs::rename(&from_path, &to_path).map_err(|e| format!("Failed to rename: {}", e.kind()))
 }
 
 #[tauri::command]
 pub fn fs_delete(path: String, state: State<AppState>) -> Result<(), String> {
-    let p = require_path(&path)?;
-    require_in_project(&p, &state)?;
+    delete(&path, &project_roots(&state))
+}
+
+pub fn delete(path: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let p = require_path(path)?;
+    require_in_roots(&p, roots)?;
     if p.is_dir() {
-        std::fs::remove_dir_all(&p).map_err(|e| sanitize_io_error(e, &path))
+        std::fs::remove_dir_all(&p).map_err(|e| sanitize_io_error(e, path))
     } else {
-        std::fs::remove_file(&p).map_err(|e| sanitize_io_error(e, &path))
+        std::fs::remove_file(&p).map_err(|e| sanitize_io_error(e, path))
     }
 }
 
 #[tauri::command]
 pub fn fs_copy(from: String, to: String, state: State<AppState>) -> Result<(), String> {
-    let from_path = require_path(&from)?;
-    let to_path = resolve_path(&to)?;
-    require_in_project(&from_path, &state)?;
-    require_in_project(&to_path, &state)?;
+    copy(&from, &to, &project_roots(&state))
+}
+
+pub fn copy(from: &str, to: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let from_path = require_path(from)?;
+    let to_path = resolve_path(to)?;
+    require_in_roots(&from_path, roots)?;
+    require_in_roots(&to_path, roots)?;
     if from_path.is_dir() {
         copy_dir_recursive(&from_path, &to_path).map_err(|e| format!("Copy failed: {}", e.kind()))
     } else {
         if let Some(parent) = to_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, &to))?;
+            std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, to))?;
         }
-        std::fs::copy(&from_path, &to_path).map_err(|e| sanitize_io_error(e, &from))?;
+        std::fs::copy(&from_path, &to_path).map_err(|e| sanitize_io_error(e, from))?;
         Ok(())
     }
 }
@@ -334,55 +377,75 @@ mod tests {
 
 #[tauri::command]
 pub fn fs_read_file(path: String, state: State<AppState>) -> Result<String, String> {
-    let p = require_path(&path)?;
-    require_in_project(&p, &state)?;
+    read_file(&path, &project_roots(&state))
+}
+
+pub fn read_file(path: &str, roots: &[PathBuf]) -> Result<String, String> {
+    let p = require_path(path)?;
+    require_in_roots(&p, roots)?;
     if p.metadata().map(|m| m.len()).unwrap_or(0) > 50 * 1024 * 1024 {
         return Err("File too large to read".to_string());
     }
-    std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(e, &path))
+    std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
 #[tauri::command]
 pub fn fs_read_binary(path: String, state: State<AppState>) -> Result<Vec<u8>, String> {
-    let p = require_path(&path)?;
-    require_in_project(&p, &state)?;
+    read_binary(&path, &project_roots(&state))
+}
+
+pub fn read_binary(path: &str, roots: &[PathBuf]) -> Result<Vec<u8>, String> {
+    let p = require_path(path)?;
+    require_in_roots(&p, roots)?;
     if p.metadata().map(|m| m.len()).unwrap_or(0) > 50 * 1024 * 1024 {
         return Err("File too large to read".to_string());
     }
-    std::fs::read(&p).map_err(|e| sanitize_io_error(e, &path))
+    std::fs::read(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
 #[tauri::command]
 pub fn fs_write_file(path: String, content: String, state: State<AppState>) -> Result<(), String> {
+    write_file(&path, &content, &project_roots(&state))
+}
+
+pub fn write_file(path: &str, content: &str, roots: &[PathBuf]) -> Result<(), String> {
     if content.len() > 100 * 1024 * 1024 {
         return Err("Content too large to write (limit 100 MB)".to_string());
     }
-    let file_path = resolve_path(&path)?;
-    require_in_project(&file_path, &state)?;
+    let file_path = resolve_path(path)?;
+    require_in_roots(&file_path, roots)?;
     if let Some(parent) = file_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, &path))?;
+        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, path))?;
     }
-    std::fs::write(&file_path, &content).map_err(|e| sanitize_io_error(e, &path))
+    std::fs::write(&file_path, content).map_err(|e| sanitize_io_error(e, path))
 }
 
 #[tauri::command]
 pub fn fs_write_binary(path: String, data: Vec<u8>, state: State<AppState>) -> Result<(), String> {
+    write_binary(&path, &data, &project_roots(&state))
+}
+
+pub fn write_binary(path: &str, data: &[u8], roots: &[PathBuf]) -> Result<(), String> {
     if data.len() > 100 * 1024 * 1024 {
         return Err("Data too large to write (limit 100 MB)".to_string());
     }
-    let file_path = resolve_path(&path)?;
-    require_in_project(&file_path, &state)?;
+    let file_path = resolve_path(path)?;
+    require_in_roots(&file_path, roots)?;
     if let Some(parent) = file_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, &path))?;
+        std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, path))?;
     }
-    std::fs::write(&file_path, &data).map_err(|e| sanitize_io_error(e, &path))
+    std::fs::write(&file_path, data).map_err(|e| sanitize_io_error(e, path))
 }
 
 #[tauri::command]
 pub fn fs_get_file_info(path: String, state: State<AppState>) -> Result<FileEntry, String> {
-    let p = require_path(&path)?;
-    require_in_project(&p, &state)?;
-    let metadata = std::fs::metadata(&p).map_err(|e| sanitize_io_error(e, &path))?;
+    get_file_info(&path, &project_roots(&state))
+}
+
+pub fn get_file_info(path: &str, roots: &[PathBuf]) -> Result<FileEntry, String> {
+    let p = require_path(path)?;
+    require_in_roots(&p, roots)?;
+    let metadata = std::fs::metadata(&p).map_err(|e| sanitize_io_error(e, path))?;
     let modified = metadata
         .modified()
         .ok()

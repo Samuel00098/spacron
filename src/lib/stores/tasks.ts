@@ -1,5 +1,5 @@
 import { writable, get, derived } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 
 export type TaskStatus = 'todo' | 'doing' | 'done';
 
@@ -26,7 +26,7 @@ export async function loadProjectTasks(project: { id: string; root_path: string 
   const path = getTasksPath(project.root_path);
   let loaded: Task[] = [];
   try {
-    const raw = await invoke<string>('fs_read_file', { path });
+    const raw = await backendInvoke<string>('fs_read_file', { path });
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) loaded = parsed;
   } catch {
@@ -45,8 +45,8 @@ async function flushProjectTasks(projectId: string): Promise<void> {
   const path = getTasksPath(rootPath);
   const projectTasks = get(tasks).filter(t => t.projectId === projectId);
   try {
-    try { await invoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
-    await invoke('fs_write_file', { path, content: JSON.stringify(projectTasks, null, 2) });
+    try { await backendInvoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
+    await backendInvoke('fs_write_file', { path, content: JSON.stringify(projectTasks, null, 2) });
   } catch (err) {
     console.error('Failed to save tasks:', err);
   }

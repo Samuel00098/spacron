@@ -18,7 +18,7 @@
  * sentinels, appending it if absent and leaving everything else untouched.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { getCustomAgents } from '$lib/stores/customAgents';
 
 // Agents that read a standing rules file at startup, keyed by every form the
@@ -106,7 +106,7 @@ export function upsertManagedBlock(existing: string, block: string): string {
 
 async function readFileOrNull(path: string): Promise<string | null> {
   try {
-    return await invoke<string>('fs_read_file', { path });
+    return await backendInvoke<string>('fs_read_file', { path });
   } catch {
     return null;
   }
@@ -126,7 +126,7 @@ async function excludeFromGit(rootPath: string, filename: string): Promise<void>
     const lines = current.split(/\r?\n/);
     if (lines.includes(`/${filename}`) || lines.includes(filename)) return;
     const next = current.replace(/\s*$/, '') + `\n/${filename}\n`;
-    await invoke('fs_write_file', { path: excludePath, content: next });
+    await backendInvoke('fs_write_file', { path: excludePath, content: next });
   } catch {
     /* best-effort: a missing exclude file or write failure must not block launch */
   }
@@ -152,7 +152,7 @@ export async function ensureAgentRulesFiles(rootPath: string): Promise<boolean> 
       const existing = await readFileOrNull(path);
       const next = upsertManagedBlock(existing ?? '', block);
       if (next !== (existing ?? '')) {
-        await invoke('fs_write_file', { path, content: next });
+        await backendInvoke('fs_write_file', { path, content: next });
         if (existing === null) {
           // We created this file — shield it from the user's git surface.
           await excludeFromGit(root, filename);
