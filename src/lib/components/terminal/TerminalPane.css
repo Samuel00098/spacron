@@ -235,15 +235,20 @@
 }
 
 /* Readability scrim: a subtle theme-bg backing painted behind the terminal text
-   (which xterm draws at alpha 0). Full-screen TUIs like Claude Code paint no
-   surface of their own, so without this their text sits straight on the
-   see-through glass over a busy wallpaper and washes out. The scrim gives every
-   pane consistent contrast while the frost still lets the wallpaper glow through.
-   Tunable per-theme via --terminal-scrim (0 = fully transparent, 1 = opaque);
-   only applies to the frosted (non-solid) themes since solid themes are already
-   opaque. */
+   (which xterm draws at alpha 0). Gives every pane consistent contrast while the
+   frost still lets the wallpaper glow through. Tunable per-theme via
+   --terminal-scrim (0 = fully transparent, 1 = opaque); only applies to the
+   frosted (non-solid) themes. Windows/macOS strip it below for a fully
+   see-through terminal; Linux keeps this scrim. */
 :root:not(.solid-theme) .terminal-pane .xterm-container {
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim, 0.35));
+}
+
+/* Windows / macOS: remove the scrim entirely so the terminal is completely
+   see-through onto the wallpaper. Linux (WebKitGTK) keeps the 0.35 scrim above,
+   so its original look is untouched. */
+:root:not(.solid-theme):not(.is-webkitgtk) .terminal-pane .xterm-container {
+  background: transparent !important;
 }
 
 /* Liquid glass sheen overlay — specular diagonal reflection + vignette */

@@ -727,6 +727,26 @@
     0 12px 30px rgba(0, 0, 0, 0.08);
 }
 
+/* ── Fully see-through panels (Windows / macOS only) ──────────────────────
+   Every room (editor, terminal, preview, review, http, db, containers, toolbox,
+   tasks, youtube, env, workspace) and both utility sidebars (incl. the file
+   explorer) drop their frosted tint entirely so the wallpaper shows straight
+   through — "completely see-through". Any content that paints its own background
+   (a preview, a video) still shows its own colour; only the frame's glass tint
+   is removed. The four solid overlays — settings, model switcher, search bar,
+   quick capture — are separate components and are untouched, so they stay solid.
+
+   Scoped to :not(.is-webkitgtk) so LINUX IS UNCHANGED — WebKitGTK already renders
+   the frosted panels see-through the way we want, so it keeps the original look.
+   This only reshapes the Chromium (Windows WebView2) and macOS WKWebView paths. */
+:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .room-panel,
+:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .left-utility-panel,
+:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .right-utility-panel {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .app-shell .room-panel.featured {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   box-shadow:

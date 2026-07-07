@@ -15,6 +15,16 @@
   padding: 6px 0;
 }
 
+/* Fully see-through (Windows / macOS only): drop the frosted tint so the
+   wallpaper shows through the activity bar. Icons stay legible via the adaptive
+   foreground palette + halos. Scoped to :not(.is-webkitgtk) so LINUX KEEPS its
+   original frosted activity bar. */
+:root:not(.solid-theme):not(.is-webkitgtk) .activitybar {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .activitybar .ab-top, .activitybar .ab-bottom {
   display: flex;
   flex-direction: column;
