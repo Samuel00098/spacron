@@ -47,7 +47,20 @@ ignore = "0.4"
 regex = "1"
 # Native ONNX Runtime for offline Parakeet STT (runs in the app process instead
 # of the WebKit renderer's WASM heap, which OOM-kills the web process on Linux).
-ort = "2.0.0-rc.12"
+#
+# `load-dynamic` makes ort dlopen the ONNX Runtime shared library at runtime
+# instead of static-linking it. The prebuilt static libs pyke ships for ORT 1.24
+# (this rc) reference Abseil symbols that ort-sys fails to put on the final link
+# line for the Linux GCC/ld toolchain, breaking the build with
+# `undefined reference to absl::...::NominalCPUFrequency`. Dynamic loading sidesteps
+# static linking entirely on every platform. `download-binaries` + `copy-dylibs`
+# (default features) still fetch the dylib and copy it next to the built binary,
+# and `preload-dylibs` (pulled in by `load-dynamic`) loads it from next to the
+# binary at startup. NOTE: this fixes the build/link on all platforms and the
+# `--no-bundle` CI job. Tauri release *bundles* must additionally ship this dylib
+# next to the packaged binary (or point `ORT_DYLIB_PATH`/`ort::init().with_dylib_path`
+# at it) for the installed app to load ONNX Runtime at runtime — still TODO.
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 # Native whisper.cpp bindings for offline Whisper STT. Uses the GGML models the
 # app already downloads; mmaps them so RAM stays low. Optional + gated behind the
 # default-on `whisper-stt` feature: it compiles whisper.cpp from source and so
