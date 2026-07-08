@@ -408,6 +408,40 @@ describe('createVoiceInputSession', () => {
 
     vi.useRealTimers();
   });
+
+  it('raises the speech-onset gate while assistant playback is active (barge-in)', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('interrupting words');
+
+    const onSpeechStart = vi.fn();
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult, onSpeechStart, onProcessingStart: vi.fn() });
+    session.setPlaybackActive(true);
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
+
+    const processor = audioProcessors[0];
+    // Echo residue: RMS 0.004 clears the normal onset gate (~0.0024) but must
+    // NOT clear the raised playback gate (0.008) — the assistant's own reply
+    // leaking through echo cancellation must not cut it off.
+    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(4).fill(0.004) } });
+    expect(onSpeechStart).not.toHaveBeenCalled();
+
+    // A real interruption is much louder and clears the playback gate.
+    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) } });
+    expect(onSpeechStart).toHaveBeenCalledTimes(1);
+
+    // The barged-in utterance still transcribes as a normal turn.
+    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) } });
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    expect(onResult).toHaveBeenCalledWith('interrupting words');
+
+    vi.useRealTimers();
+  });
 });
 
 describe('downsamplePcmChunks', () => {

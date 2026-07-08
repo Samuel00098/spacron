@@ -28,7 +28,13 @@ import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
 import { isRealtimeVoiceSupported, startRealtimeVoiceSession, type RealtimeVoiceSession } from '$lib/services/realtime-voice';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
-import { openaiRealtimeModel, openaiRealtimeVoice, voiceConversationEngine } from '$lib/stores/settings';
+import {
+  openaiRealtimeModel,
+  openaiRealtimeVoice,
+  voiceConversationEngine,
+  voiceInputProvider,
+  voiceInputUsesModelTranscription,
+} from '$lib/stores/settings';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { isTauriRuntime, isWebkitGtk } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
@@ -590,6 +596,18 @@ export default function FloatingPromptBar() {
   const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const realtimeActiveRef = useRef(false);
 
+  // Barge-in (interrupt the assistant mid-sentence, like the GPT Realtime
+  // engine): keep the mic live while the reply TTS plays, so onSpeechStart can
+  // cut playback and the utterance becomes the next turn. Only where it's safe:
+  // - not on WebKitGTK, whose echoCancellation is a no-op — the mic would hear
+  //   the reply audio and the assistant would cut itself off;
+  // - only for raw-audio input providers. Web Speech runs its own recognizer,
+  //   which would transcribe the assistant's reply as user input.
+  // The raised VAD playback gate (voiceInput.setPlaybackActive) filters out the
+  // echo residue that survives cancellation.
+  const bargeInSupported = () =>
+    !isWebkitGtk() && voiceInputUsesModelTranscription(get(voiceInputProvider));
+
   useEffect(() => {
     resumeVoiceLoopRef.current = () => {
       if (
@@ -600,12 +618,10 @@ export default function FloatingPromptBar() {
         !isListeningRef.current &&
         !isRefiningRef.current &&
         !agentSendingRef.current &&
-        // Don't reopen the mic while TTS is speaking: on platforms where the
-        // WebRTC echoCancellation constraint is a no-op (notably WebKitGTK on
-        // Linux) the live mic hears the reply audio and onSpeechStart cuts the
-        // assistant off mid-sentence. speakResponse()'s finally re-invokes this
-        // the instant TTS ends (see the auto-speak effect's comment).
-        !isTtsSpeakingRef.current
+        // With barge-in support the mic listens straight through TTS playback.
+        // Otherwise don't reopen it while TTS is speaking; speakResponse()'s
+        // finally re-invokes this the instant TTS ends.
+        (!isTtsSpeakingRef.current || bargeInSupported())
       ) {
         // When sleeping, still keep the mic on so the wake word can be heard
         void voiceInput.start();
@@ -623,10 +639,14 @@ export default function FloatingPromptBar() {
       return;
     }
     try {
+      // Raise the VAD's speech-onset gate for the duration of playback so the
+      // live barge-in mic isn't tripped by the reply's own echo.
+      voiceInput.setPlaybackActive(true);
       await speak(clean);
     } catch (error) {
       if (voiceModeActive) showToast(describeTtsError(error), 'error');
     } finally {
+      voiceInput.setPlaybackActive(false);
       setIsTtsSpeaking(false);
       resumeVoiceLoopRef.current();
     }

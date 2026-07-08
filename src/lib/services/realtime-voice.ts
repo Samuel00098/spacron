@@ -37,7 +37,28 @@ export type RealtimeVoiceCallbacks = {
 
 export type RealtimeVoiceSession = {
   stop: () => void;
+  /**
+   * Speak a background update (e.g. "Codex finished: Add dark mode") through
+   * the live call in the model's own voice. Queued until the model is idle so
+   * it never talks over the user or an in-flight response.
+   */
+  announce: (text: string) => void;
 };
+
+// The one live session's announcer (there is never more than one call at a
+// time). Lets far-away modules — the orchestrator's completion watcher — speak
+// through the call without holding a session handle.
+let activeAnnouncer: ((text: string) => void) | null = null;
+
+/**
+ * Speak `text` through the live GPT Realtime session, if one exists.
+ * Returns false when no session is active (caller falls back to pipeline TTS).
+ */
+export function announceViaRealtimeVoice(text: string): boolean {
+  if (!activeAnnouncer) return false;
+  activeAnnouncer(text);
+  return true;
+}
 
 export function isRealtimeVoiceSupported(): boolean {
   return (
@@ -92,6 +113,15 @@ export async function startRealtimeVoiceSession(options: {
   let state: RealtimeVoiceState = 'connecting';
   // Assistant transcript accumulated across deltas for the current utterance.
   let assistantBuf = '';
+  // Turn bookkeeping for announcements: an injected response.create while a
+  // response is active (or the user is mid-utterance) errors out / talks over,
+  // so background updates queue until the call is idle.
+  let responseActive = false;
+  let userSpeaking = false;
+  const announcementQueue: string[] = [];
+  // The announcement whose response.create is in flight, so an
+  // "already has active response" race can silently re-queue it.
+  let announcementInFlight: string | null = null;
 
   const setState = (next: RealtimeVoiceState) => {
     if (ended || next === state) return;
@@ -102,6 +132,7 @@ export async function startRealtimeVoiceSession(options: {
   const teardown = (notify: boolean) => {
     if (ended) return;
     ended = true;
+    if (activeAnnouncer === announce) activeAnnouncer = null;
     try {
       dc?.close();
     } catch {
@@ -133,6 +164,37 @@ export async function startRealtimeVoiceSession(options: {
     }
   };
 
+  const flushAnnouncements = () => {
+    if (ended || !dc || dc.readyState !== 'open') return;
+    if (responseActive || userSpeaking || announcementQueue.length === 0) return;
+    const text = announcementQueue.shift()!;
+    announcementInFlight = text;
+    send({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [
+          {
+            type: 'input_text',
+            text: `Background update from Spacron (not spoken by the user): ${text}\nRelay this to the user now in one short spoken sentence.`,
+          },
+        ],
+      },
+    });
+    send({ type: 'response.create' });
+    // Optimistic: response.created confirms, and the error handler re-queues if
+    // a user turn beat us to it.
+    responseActive = true;
+  };
+
+  const announce = (text: string) => {
+    const trimmed = text.trim();
+    if (ended || !trimmed) return;
+    announcementQueue.push(trimmed);
+    flushAnnouncements();
+  };
+
   const handleFunctionCall = async (name: string, callId: string, argsJson: string) => {
     let output: string;
     if (name === ORCHESTRATOR_TOOL.name && callbacks.onOrchestratorCommand) {
@@ -162,15 +224,18 @@ export async function startRealtimeVoiceSession(options: {
       // The user started talking (also fires on barge-in: the server cuts the
       // assistant's audio and listens).
       case 'input_audio_buffer.speech_started':
+        userSpeaking = true;
         setState('listening');
         break;
       case 'input_audio_buffer.speech_stopped':
+        userSpeaking = false;
         setState('thinking');
         break;
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript?.trim()) callbacks.onUserTranscript?.(event.transcript.trim());
         break;
       case 'response.created':
+        responseActive = true;
         setState('thinking');
         break;
       case 'response.output_audio_transcript.delta':
@@ -199,6 +264,8 @@ export async function startRealtimeVoiceSession(options: {
         }
         break;
       case 'response.done':
+        responseActive = false;
+        announcementInFlight = null;
         // Text-only responses (e.g. a pure tool round) produce no audio buffer
         // events; don't leave the orb stuck on "thinking".
         if (state === 'thinking') setState('listening');
@@ -207,10 +274,21 @@ export async function startRealtimeVoiceSession(options: {
             event.response?.status_details?.error?.message || 'The voice model failed to respond.',
           );
         }
+        flushAnnouncements();
         break;
-      case 'error':
-        callbacks.onError?.(event.error?.message || 'Realtime voice error.');
+      case 'error': {
+        // A queued announcement can race a user turn's auto-response; put it
+        // back and retry at the next idle point instead of surfacing an error.
+        const message = event.error?.message || 'Realtime voice error.';
+        if (announcementInFlight && /active response/i.test(message)) {
+          announcementQueue.unshift(announcementInFlight);
+          announcementInFlight = null;
+          responseActive = true; // the server said one is running
+          break;
+        }
+        callbacks.onError?.(message);
         break;
+      }
       default:
         break;
     }
@@ -244,7 +322,10 @@ export async function startRealtimeVoiceSession(options: {
         /* non-JSON frame — ignore */
       }
     };
-    dc.onopen = () => setState('listening');
+    dc.onopen = () => {
+      setState('listening');
+      flushAnnouncements();
+    };
 
     pc.onconnectionstatechange = () => {
       const s = pc?.connectionState;
@@ -271,9 +352,12 @@ export async function startRealtimeVoiceSession(options: {
     throw error instanceof Error ? error : new Error(String(error));
   }
 
+  activeAnnouncer = announce;
+
   return {
     stop() {
       teardown(true);
     },
+    announce,
   };
 }

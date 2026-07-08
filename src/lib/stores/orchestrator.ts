@@ -43,6 +43,7 @@ import {
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import { speak, getVoiceReplyConfigError } from '$lib/services/tts';
+import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
 import {
   createTaskRecord,
   transitionTask,
@@ -485,14 +486,20 @@ function announceCompletionAloud(
   title: string
 ): void {
   if (!get(announceAgentCompletions)) return;
-  if (getVoiceReplyConfigError()) return;
-  // In voice mode the auto-speak effect handles completion cards — skip here
-  // to avoid double-speaking and to keep the voice loop's TTS lifecycle intact.
-  if (get(agentVoiceModeActive)) return;
   const line =
     status === 'blocked' ? `${name} needs your input: ${title}.` :
     status === 'failed' ? `${name} failed: ${title}.` :
     `${name} finished: ${title}.`;
+  if (get(agentVoiceModeActive)) {
+    // Voice conversation open. With the GPT Realtime engine, inject the update
+    // into the live call so the model announces it in its own voice. With the
+    // pipeline engine (announceViaRealtimeVoice returns false), the auto-speak
+    // effect reads the completion card instead — skip here to avoid
+    // double-speaking and to keep the voice loop's TTS lifecycle intact.
+    announceViaRealtimeVoice(line);
+    return;
+  }
+  if (getVoiceReplyConfigError()) return;
   void speak(line).catch(() => {});
 }
 
