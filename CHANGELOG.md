@@ -3,6 +3,19 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.1] - 2026-07-08
+
+A preview reliability release. Local previews of apps that redirect on load — a `/` → `/login` bounce, an `http`→`https` upgrade, or a hosted auth handshake (Clerk, Auth0, NextAuth, Supabase) — now stay inside the preview instead of failing with "content is blocked" or hanging. Only the in-app preview proxy is affected; nothing else changes.
+
+### Fixed
+
+- **Local previews survive redirects to other origins** — a dev app that redirects on load now keeps rendering in the preview. The proxy rewrites the redirect so the browser follows it *through* the proxy (where framing headers are stripped) instead of escaping to the raw origin, whose `X-Frame-Options` / CSP would otherwise block the iframe with "content is blocked".
+
+- **Cookie-based auth handshakes no longer time out** — a hosted auth provider's redirect chain (e.g. Clerk's dev-instance `handshake`) previously looped between the provider and the app until it failed with "operation timed out", because the proxy followed the redirects itself and dropped the `Set-Cookie` headers each hop depends on. The proxy now hands every redirect back to the preview so cookies land in the browser and the handshake completes.
+
+- **Local custom domains stop being wrongly blocked** — a hostname that resolves to your own machine (a hosts-file alias like `myapp.test`, or `lvh.me`-style wildcard DNS) is no longer rejected with "Access to private/internal resources is not allowed". The DNS-rebinding guard now blocks only genuinely private ranges (LAN, link-local, ULA, cloud metadata), matching the rest of the proxy. Blocked-target errors now name the URL that was blocked.
+
+
 ## [v0.6.0] - 2026-07-07
 
 Remote workspaces. Your workspace — files, terminals, LSP, git, and agents — can now live on a box you own (a VPS, cloud VM, or home server), with the Spacron app acting as a thin client that attaches to it. Open Spacron, connect to a remote, and your terminal, editor, and language servers are all operating on the remote machine; close the laptop and reconnect from anywhere and the workspace is still there, mid-state. The desktop app is unchanged when no remote is connected.

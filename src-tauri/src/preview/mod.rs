@@ -629,19 +629,18 @@ fn preview_http_client_builder() -> reqwest::ClientBuilder {
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(false)
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let url = attempt.url();
-            let url_str = url.as_str();
-            if !is_loopback_target(url_str) && is_private_target(url_str) {
-                return attempt.error("redirect to private IP blocked");
-            }
-            if let Some(port) = url.port() {
-                if is_restricted_port(port) {
-                    return attempt.error("redirect to restricted port blocked");
-                }
-            }
-            attempt.follow()
-        }))
+        // Never follow redirects server-side; hand every 3xx back to the preview
+        // WebView (with Location rewritten to stay on the proxy) so the *browser*
+        // drives the redirect chain. This matters for cookie-based auth
+        // handshakes (Clerk, Auth0, …): each hop carries Set-Cookie headers that
+        // only take effect if they land in the browser — reqwest has no cookie
+        // jar, so following here silently drops them, and a dev-instance
+        // handshake then loops between the provider and the app until the 30s
+        // client timeout fires ("operation timed out"). Not following also
+        // removes the risk of the client chasing a redirect into a private
+        // range: the rewritten Location re-enters the proxy, where the
+        // private-target and restricted-port gates run on every hop.
+        .redirect(reqwest::redirect::Policy::none())
 }
 
 /// Format a reqwest error including its underlying source chain. reqwest's own
@@ -766,31 +765,67 @@ fn is_private_target(url: &str) -> bool {
     false
 }
 
-async fn has_private_resolved_ip(host: &str, port: u16) -> bool {
+/// True when `host` resolves to an address in a blocked private range. Loopback
+/// resolutions are deliberately NOT blocked: a hostname that maps to the user's
+/// own machine (a hosts-file alias like `myapp.test`, or `lvh.me`-style wildcard
+/// DNS) is just another loopback alias, and loopback targets are allowed through
+/// the proxy by policy — blocking them here while allowing literal `localhost`
+/// made local custom-domain setups fail with "private/internal resources".
+/// What this check closes is the DNS-rebinding path where an innocuous-looking
+/// public hostname resolves to a LAN, link-local, ULA, unspecified, or
+/// cloud-metadata address. Resolution failures return false so the client
+/// surfaces the real connection error instead of a misleading block.
+async fn has_blocked_resolved_ip(host: &str, port: u16) -> bool {
     use std::net::IpAddr;
     let addr_str = format!("{}:{}", host, port);
     match tokio::net::lookup_host(addr_str).await {
-        Ok(addrs) => addrs.into_iter().any(|sa| {
-            match sa.ip() {
-                IpAddr::V4(v4) => {
-                    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_multicast()
-                }
-                IpAddr::V6(v6) => {
-                    let segs = v6.segments();
-                    v6.is_loopback() || v6.is_multicast() || v6.is_unspecified()
+        Ok(addrs) => addrs.into_iter().any(|sa| match sa.ip() {
+            IpAddr::V4(v4) => {
+                !v4.is_loopback()
+                    && (v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_multicast()
+                        || v4.is_unspecified())
+            }
+            IpAddr::V6(v6) => {
+                let segs = v6.segments();
+                !v6.is_loopback()
+                    && (v6.is_multicast()
+                        || v6.is_unspecified()
                         || (segs[0] & 0xfe00) == 0xfc00  // ULA fc00::/7
-                        || (segs[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
-                }
+                        || (segs[0] & 0xffc0) == 0xfe80) // link-local fe80::/10
             }
         }),
         Err(_) => false,
     }
 }
 
-fn is_loopback_target(url: &str) -> bool {
+/// True when the URL's host is a loopback alias — `localhost`, an IPv4 loopback
+/// address (127.0.0.0/8), or IPv6 `::1`. The preview proxy blocks *private*
+/// targets as an SSRF guard, but loopback is the user's own machine and is
+/// precisely what local-dev previewing targets: a dev app that redirects to
+/// another local service (a second dev server, a local auth/API service) must be
+/// reachable *through the proxy* so its framing headers get stripped. Genuinely
+/// private LAN ranges (RFC1918, link-local, ULA, cloud metadata) stay blocked by
+/// `is_private_target`, and `is_restricted_port` still blocks dangerous loopback
+/// services (databases, Docker, Kubernetes, …), so relaxing loopback here does
+/// not open the proxy to the wider network. `proxy_request_allowed` rejects
+/// cross-origin fetch/XHR from pages in the user's normal browser; plain GET
+/// navigations and img/script loads carry no Origin header, so their residual
+/// reach is a blind GET to a non-restricted loopback port — and only if the
+/// attacker first guesses the proxy's randomized ephemeral port.
+fn is_loopback_host_target(url: &str) -> bool {
     if let Ok(parsed) = url::Url::parse(url) {
         if let Some(host) = parsed.host_str() {
-            return host == "127.0.0.1" || host == "localhost";
+            if host.eq_ignore_ascii_case("localhost") {
+                return true;
+            }
+            // `host_str` wraps IPv6 literals in brackets (`[::1]`), which don't
+            // parse as an `IpAddr` — strip them first.
+            let bare = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(addr) = bare.parse::<std::net::IpAddr>() {
+                return addr.is_loopback();
+            }
         }
     }
     false
@@ -957,10 +992,16 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
                     return (StatusCode::BAD_REQUEST, "Only HTTP(S) URLs are allowed")
                         .into_response();
                 }
-                if is_private_target(&url) {
+                // Loopback is the user's own machine (the local-dev redirect
+                // rewriter routes app-to-app redirects here), so allow it; only
+                // block genuinely private LAN/metadata ranges as SSRF targets.
+                if is_private_target(&url) && !is_loopback_host_target(&url) {
                     return (
                         StatusCode::FORBIDDEN,
-                        "Access to private/internal resources is not allowed",
+                        format!(
+                            "Access to private/internal resources is not allowed (blocked target: {})",
+                            url
+                        ),
                     )
                         .into_response();
                 }
@@ -1053,6 +1094,18 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
         .await;
     }
 
+    // The Host the browser used to reach this proxy (127.0.0.1:{proxy_port}).
+    // Captured before `parts` is moved into proxy_local_dev_request so a
+    // same-dev-server redirect can be collapsed back onto *this* proxy origin.
+    let proxy_origin = {
+        let host = parts
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("127.0.0.1");
+        format!("http://{}", host)
+    };
+
     // Retrieve request body
     let bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
         Ok(b) => b,
@@ -1068,7 +1121,17 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
     )
     .await
     {
-        Ok(res) => build_preview_response(res, false).await,
+        Ok(res) => {
+            build_preview_response(
+                res,
+                false,
+                Some(RedirectRewrite::LocalDev {
+                    proxy_origin,
+                    dev_port: target_port,
+                }),
+            )
+            .await
+        }
         Err(message) => {
             (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", message)).into_response()
         }
@@ -1186,22 +1249,33 @@ async fn proxy_external_url(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid target URL").into_response(),
     };
 
-    if is_private_target(target_url) {
+    // Loopback (the user's own machine) is allowed — the local-dev redirect
+    // rewriter deliberately routes app-to-app redirects through here. Only
+    // genuinely private LAN/metadata ranges are blocked as SSRF targets.
+    if is_private_target(target_url) && !is_loopback_host_target(target_url) {
         return (
             StatusCode::FORBIDDEN,
-            "Access to private/internal resources is not allowed",
+            format!(
+                "Access to private/internal resources is not allowed (blocked target: {})",
+                target_url
+            ),
         )
             .into_response();
     }
-    // DNS rebinding protection: resolve hostname and check resolved IPs
+    // DNS rebinding protection: resolve hostname and check resolved IPs. Skipped
+    // for loopback hosts (e.g. `localhost`), which resolve to 127.0.0.1 by design
+    // and are intentionally reachable per the check above.
     if let Some(host) = target.host_str() {
-        if host.parse::<std::net::IpAddr>().is_err() {
+        if host.parse::<std::net::IpAddr>().is_err() && !is_loopback_host_target(target_url) {
             // Only do DNS check for domain names — IPs were already checked above
             let port = target.port_or_known_default().unwrap_or(80);
-            if has_private_resolved_ip(host, port).await {
+            if has_blocked_resolved_ip(host, port).await {
                 return (
                     StatusCode::FORBIDDEN,
-                    "Access to private/internal resources is not allowed",
+                    format!(
+                        "Access to private/internal resources is not allowed ({} resolves to a private address)",
+                        host
+                    ),
                 )
                     .into_response();
             }
@@ -1216,6 +1290,17 @@ async fn proxy_external_url(
                 .into_response();
         }
     }
+
+    // The Host the browser used to reach this proxy, kept so redirect Locations
+    // from the external origin can be rewritten back onto this proxy origin.
+    let proxy_origin = {
+        let host = parts
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("127.0.0.1");
+        format!("http://{}", host)
+    };
 
     let method = parts.method.clone();
     let mut reqwest_req = reqwest::Request::new(method, target.clone());
@@ -1257,7 +1342,8 @@ async fn proxy_external_url(
 
     match client.execute(reqwest_req).await {
         Ok(res) => {
-            // Update active_external_origins with the final redirected URL
+            // Record the origin this response actually came from (the client does
+            // not follow redirects, so this is the requested target's origin).
             let final_url = res.url();
             let scheme = final_url.scheme();
             let host = final_url.host_str().unwrap_or("");
@@ -1277,7 +1363,15 @@ async fn proxy_external_url(
                 origins.insert(project_id, Some(origin));
             }
 
-            build_preview_response(res, true).await
+            build_preview_response(
+                res,
+                true,
+                Some(RedirectRewrite::External {
+                    proxy_origin,
+                    target: target.clone(),
+                }),
+            )
+            .await
         }
         Err(err) => (
             StatusCode::BAD_GATEWAY,
@@ -1318,9 +1412,180 @@ fn should_strip_preview_header(key_lower: &str) -> bool {
     )
 }
 
+/// Context for rewriting a redirect `Location` so the browser follows it
+/// *through the proxy* instead of escaping to the raw origin (where framing
+/// guards would block the preview iframe). Neither proxy client follows
+/// redirects itself — every 3xx is handed back to the WebView so Set-Cookie
+/// headers on each hop land in the browser — so every `Location` must be kept
+/// on the proxy origin.
+enum RedirectRewrite {
+    /// Redirect emitted by the local dev server.
+    LocalDev {
+        /// The proxy origin the browser is talking to, e.g. `http://127.0.0.1:54321`.
+        proxy_origin: String,
+        /// The dev server's own port, used to recognise self-redirects.
+        dev_port: u16,
+    },
+    /// Redirect emitted by an external origin fetched via the `/proxy/...` path
+    /// (a hosted auth provider, or general external browsing).
+    External {
+        /// The proxy origin the browser is talking to.
+        proxy_origin: String,
+        /// The external URL this response came from; relative `Location`s
+        /// resolve against it.
+        target: url::Url,
+    },
+}
+
+/// Rewrite a redirect `Location` from the local dev server so the browser
+/// follows it *through the proxy* instead of navigating straight to the raw dev
+/// origin. Without this, a dev server that redirects on load (e.g. `/` → `/login`
+/// with an absolute URL, an `http`→`https` bounce, or a hosted auth provider)
+/// sends the iframe off the proxy to an origin whose `X-Frame-Options` /
+/// `frame-ancestors` then reach the WebView — which blocks the frame with
+/// "content is blocked". `localhost:{devport}` isn't in the app's `frame-src`
+/// allowlist either, so even a same-host escape fails.
+///
+/// Returns `Some(new_location)` when the header should be replaced, `None` to
+/// leave it as-is (relative Locations already resolve against the proxy origin,
+/// and non-http(s) schemes like `mailto:` must not be touched).
+fn rewrite_local_redirect_location(
+    location: &str,
+    dev_port: u16,
+    proxy_origin: &str,
+) -> Option<String> {
+    let trimmed = location.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // A relative Location (no scheme/host) already resolves against the proxy
+    // origin, so it's already safe — leave it untouched. `Url::parse` only
+    // succeeds on absolute URLs here, so a parse failure means "relative".
+    let parsed = url::Url::parse(trimmed).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    let host = parsed.host_str().unwrap_or("");
+    let is_dev_host = matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0");
+    let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+    let port = parsed.port().unwrap_or(default_port);
+
+    let path_and_rest = |p: &str| {
+        let mut out = p.to_string();
+        if let Some(q) = parsed.query() {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = parsed.fragment() {
+            out.push('#');
+            out.push_str(f);
+        }
+        out
+    };
+
+    // Same dev server (any loopback alias on the dev port, either scheme):
+    // collapse to a proxy-relative path so the follow-up stays on the proxy
+    // origin where embedding guards are stripped.
+    if is_dev_host && port == dev_port {
+        return Some(path_and_rest(parsed.path()));
+    }
+
+    // A redirect to a genuinely different origin (hosted auth provider, an
+    // upgrade to a different host, …). Route it through the proxy's external
+    // `/proxy/{scheme}/{host}{path}` form so its embedding-block headers get
+    // stripped too, instead of letting the iframe escape to the raw origin. This
+    // keeps the top-level auth page rendering and cookies flowing; deep
+    // *same-host root-relative* subresources on that page are best-effort (the
+    // usual limitation of a path-rewriting proxy), but that's strictly better
+    // than a hard "content is blocked".
+    let authority = match parsed.port() {
+        Some(p) => format!("{}:{}", host, p),
+        None => host.to_string(),
+    };
+    Some(format!(
+        "{}/proxy/{}/{}{}",
+        proxy_origin,
+        parsed.scheme(),
+        authority,
+        path_and_rest(parsed.path())
+    ))
+}
+
+/// Rewrite a redirect `Location` emitted by an *external* origin (fetched via
+/// the `/proxy/...` path) so the browser keeps following it through the proxy.
+/// The external client does not follow redirects — a hosted auth handshake's
+/// Set-Cookie headers must land in the browser — so each hop's `Location` comes
+/// back through here.
+///
+/// Unlike the local-dev variant, relative `Location`s can NOT be left alone: a
+/// root-relative `/login` must resolve against the *external* origin
+/// (`/proxy/{scheme}/{host}/login`), but served as-is it would resolve against
+/// the proxy origin and lose the `/proxy/...` prefix. So every shape (absolute,
+/// protocol-relative `//host/x`, root-relative, path-relative) is first resolved
+/// against the target URL — exactly as a browser sitting on the real origin
+/// would — and then mapped onto the proxy.
+///
+/// Returns `None` to leave the header untouched (non-http(s) schemes, or an
+/// unparseable value).
+fn rewrite_external_redirect_location(
+    location: &str,
+    target: &url::Url,
+    proxy_origin: &str,
+) -> Option<String> {
+    let trimmed = location.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let resolved = url::Url::options()
+        .base_url(Some(target))
+        .parse(trimmed)
+        .ok()?;
+    if resolved.scheme() != "http" && resolved.scheme() != "https" {
+        return None;
+    }
+
+    let mut suffix = resolved.path().to_string();
+    if let Some(q) = resolved.query() {
+        suffix.push('?');
+        suffix.push_str(q);
+    }
+    if let Some(f) = resolved.fragment() {
+        suffix.push('#');
+        suffix.push_str(f);
+    }
+
+    // A redirect straight back to the proxy's own origin — an auth provider
+    // returning to the redirect_url it was handed, which the Host rewrite in
+    // proxy_local_dev_request made point at the proxy (e.g. Clerk's
+    // `Location: http://127.0.0.1:{proxy_port}/?__clerk_handshake=…`). Collapse
+    // it to a root-relative path: the browser lands back on the proxy root (the
+    // local dev server) carrying the handshake query with it.
+    if let Ok(proxy_url) = url::Url::parse(proxy_origin) {
+        if is_loopback_host_target(resolved.as_str())
+            && resolved.port_or_known_default() == proxy_url.port_or_known_default()
+        {
+            return Some(suffix);
+        }
+    }
+
+    let host = resolved.host_str().unwrap_or("");
+    let authority = match resolved.port() {
+        Some(p) => format!("{}:{}", host, p),
+        None => host.to_string(),
+    };
+    Some(format!(
+        "{}/proxy/{}/{}{}",
+        proxy_origin,
+        resolved.scheme(),
+        authority,
+        suffix
+    ))
+}
+
 async fn build_preview_response(
     res: reqwest::Response,
     strip_embed_headers: bool,
+    redirect_rewrite: Option<RedirectRewrite>,
 ) -> Response<Body> {
     let is_html = res
         .headers()
@@ -1331,10 +1596,30 @@ async fn build_preview_response(
 
     let status = res.status();
     let headers = res.headers().clone();
-    // The final URL after any redirects the client followed. For external pages
-    // this is the URL the address bar should show; we hand it to the page via a
-    // meta tag so the injected reporter can post it back to the app shell.
+    // The URL this response was fetched from (neither client follows redirects,
+    // so it matches the requested target). For external pages this is the URL
+    // the address bar should show; we hand it to the page via a meta tag so the
+    // injected reporter can post it back to the app shell.
     let final_url = res.url().to_string();
+
+    // For a redirect, compute the rewritten Location up front so both
+    // header-copy paths (HTML and streamed) apply it identically.
+    let rewritten_location = redirect_rewrite.as_ref().and_then(|ctx| {
+        if !status.is_redirection() {
+            return None;
+        }
+        let loc = headers.get(reqwest::header::LOCATION)?.to_str().ok()?;
+        match ctx {
+            RedirectRewrite::LocalDev {
+                proxy_origin,
+                dev_port,
+            } => rewrite_local_redirect_location(loc, *dev_port, proxy_origin),
+            RedirectRewrite::External {
+                proxy_origin,
+                target,
+            } => rewrite_external_redirect_location(loc, target, proxy_origin),
+        }
+    });
 
     if is_html {
         let body_bytes = match res.bytes().await {
@@ -1376,6 +1661,12 @@ async fn build_preview_response(
             if should_strip_preview_header(&key_lower) {
                 continue;
             }
+            if key_lower == "location" {
+                if let Some(ref loc) = rewritten_location {
+                    builder = builder.header(key, loc.as_str());
+                    continue;
+                }
+            }
             builder = builder.header(key, value);
         }
 
@@ -1393,6 +1684,12 @@ async fn build_preview_response(
         let key_lower = key.as_str().to_lowercase();
         if should_strip_preview_header(&key_lower) {
             continue;
+        }
+        if key_lower == "location" {
+            if let Some(ref loc) = rewritten_location {
+                builder = builder.header(key, loc.as_str());
+                continue;
+            }
         }
         builder = builder.header(key, value);
     }
@@ -1705,15 +2002,193 @@ mod tests {
     }
 
     #[test]
-    fn loopback_targets_are_classified_correctly() {
-        // is_loopback_target gates the external client's redirect guard (loopback
-        // redirects are allowed through; redirects to other private IPs are
-        // blocked). A hosted auth domain must read as non-loopback.
-        assert!(super::is_loopback_target("http://localhost:3000/dashboard"));
-        assert!(super::is_loopback_target("http://127.0.0.1:3000/"));
-        assert!(!super::is_loopback_target(
-            "https://romantic-cat-12.clerk.accounts.dev/v1/client/handshake"
-        ));
+    fn loopback_hosts_are_allowed_through_the_proxy_gate() {
+        use super::{is_loopback_host_target, is_private_target};
+        // Loopback aliases must read as loopback so the SSRF gate lets them
+        // through (the local-dev redirect rewriter routes app-to-app redirects
+        // to these).
+        assert!(is_loopback_host_target("http://localhost:4000/api"));
+        assert!(is_loopback_host_target("http://127.0.0.1:8080/"));
+        assert!(is_loopback_host_target("http://127.0.0.2:3000/")); // 127.0.0.0/8
+        assert!(is_loopback_host_target("http://[::1]:5000/"));
+        // Genuinely private LAN / metadata ranges are NOT loopback, so they stay
+        // blocked (is_private_target still fires and the gate keeps rejecting).
+        assert!(!is_loopback_host_target("http://192.168.1.10/"));
+        assert!(is_private_target("http://192.168.1.10/"));
+        assert!(!is_loopback_host_target("http://10.0.0.5/"));
+        assert!(!is_loopback_host_target("http://169.254.169.254/")); // cloud metadata
+        assert!(is_private_target("http://169.254.169.254/"));
+        // 0.0.0.0 is unspecified, not loopback — remains blocked.
+        assert!(!is_loopback_host_target("http://0.0.0.0:3000/"));
+        // Public hosts are neither.
+        assert!(!is_loopback_host_target("https://example.com/"));
+    }
+
+    #[test]
+    fn resolved_ip_gate_blocks_private_but_allows_loopback() {
+        use super::has_blocked_resolved_ip;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // IP literals resolve to themselves — deterministic, no real DNS needed.
+        // LAN / metadata / unspecified stay blocked.
+        assert!(rt.block_on(has_blocked_resolved_ip("192.168.1.10", 80)));
+        assert!(rt.block_on(has_blocked_resolved_ip("10.0.0.5", 80)));
+        assert!(rt.block_on(has_blocked_resolved_ip("169.254.169.254", 80)));
+        assert!(rt.block_on(has_blocked_resolved_ip("0.0.0.0", 80)));
+        // Loopback is the user's own machine — a hostname resolving here (e.g. a
+        // hosts-file alias like myapp.test) must NOT be blocked.
+        assert!(!rt.block_on(has_blocked_resolved_ip("127.0.0.1", 80)));
+        assert!(!rt.block_on(has_blocked_resolved_ip("127.0.0.2", 80)));
+        assert!(!rt.block_on(has_blocked_resolved_ip("::1", 80)));
+        // Public addresses pass.
+        assert!(!rt.block_on(has_blocked_resolved_ip("93.184.216.34", 80)));
+        // Resolution failure defers to the client's real connection error.
+        assert!(!rt.block_on(has_blocked_resolved_ip(
+            "this-name-should-not-resolve.invalid",
+            80
+        )));
+    }
+
+    #[test]
+    fn local_redirect_to_same_dev_server_becomes_relative() {
+        use super::rewrite_local_redirect_location;
+        let proxy = "http://127.0.0.1:54321";
+        // Absolute redirect back to the dev server's own origin (any loopback
+        // alias) collapses to a proxy-relative path so it stays on the proxy.
+        assert_eq!(
+            rewrite_local_redirect_location("http://localhost:3000/login", 3000, proxy),
+            Some("/login".to_string())
+        );
+        assert_eq!(
+            rewrite_local_redirect_location("http://127.0.0.1:3000/login?next=/", 3000, proxy),
+            Some("/login?next=/".to_string())
+        );
+        // An https upgrade on the same host:port is still the dev server.
+        assert_eq!(
+            rewrite_local_redirect_location("https://localhost:3000/dashboard#top", 3000, proxy),
+            Some("/dashboard#top".to_string())
+        );
+    }
+
+    #[test]
+    fn relative_and_non_http_locations_are_left_alone() {
+        use super::rewrite_local_redirect_location;
+        let proxy = "http://127.0.0.1:54321";
+        // Relative Locations already resolve against the proxy origin.
+        assert_eq!(rewrite_local_redirect_location("/login", 3000, proxy), None);
+        assert_eq!(
+            rewrite_local_redirect_location("./next?a=b", 3000, proxy),
+            None
+        );
+        // Non-http(s) schemes must never be rewritten.
+        assert_eq!(
+            rewrite_local_redirect_location("mailto:hi@example.com", 3000, proxy),
+            None
+        );
+        assert_eq!(rewrite_local_redirect_location("   ", 3000, proxy), None);
+    }
+
+    #[test]
+    fn cross_origin_redirect_is_routed_through_proxy_path() {
+        use super::rewrite_local_redirect_location;
+        let proxy = "http://127.0.0.1:54321";
+        // A hosted auth provider — keep it on the proxy so its framing guards get
+        // stripped instead of blocking the iframe.
+        assert_eq!(
+            rewrite_local_redirect_location(
+                "https://romantic-cat-12.clerk.accounts.dev/v1/client/handshake?redirect=/",
+                3000,
+                proxy
+            ),
+            Some(
+                "http://127.0.0.1:54321/proxy/https/romantic-cat-12.clerk.accounts.dev/v1/client/handshake?redirect=/"
+                    .to_string()
+            )
+        );
+        // A different local service (not the dev port) is treated as external too.
+        assert_eq!(
+            rewrite_local_redirect_location("http://localhost:4000/api", 3000, proxy),
+            Some("http://127.0.0.1:54321/proxy/http/localhost:4000/api".to_string())
+        );
+    }
+
+    #[test]
+    fn external_redirect_back_to_proxy_origin_collapses_to_relative() {
+        use super::rewrite_external_redirect_location;
+        // The exact Clerk dev-instance handshake shape: the provider 307s back
+        // to the redirect_url it was handed, which the Host rewrite made the
+        // proxy's own origin. The browser must land back on the proxy root (the
+        // dev server) still carrying the handshake token.
+        let target = url::Url::parse(
+            "https://main-lizard-73.clerk.accounts.dev/v1/client/handshake?redirect_url=http%3A%2F%2F127.0.0.1%3A57532%2F",
+        )
+        .unwrap();
+        assert_eq!(
+            rewrite_external_redirect_location(
+                "http://127.0.0.1:57532/?__clerk_handshake=abc",
+                &target,
+                "http://127.0.0.1:57532"
+            ),
+            Some("/?__clerk_handshake=abc".to_string())
+        );
+        // Any loopback alias on the proxy port is still the proxy itself.
+        assert_eq!(
+            rewrite_external_redirect_location(
+                "http://localhost:57532/done",
+                &target,
+                "http://127.0.0.1:57532"
+            ),
+            Some("/done".to_string())
+        );
+    }
+
+    #[test]
+    fn external_redirects_stay_on_the_proxy() {
+        use super::rewrite_external_redirect_location;
+        let target = url::Url::parse("https://example.com/start/here").unwrap();
+        let proxy = "http://127.0.0.1:54321";
+        // Absolute redirect to another external origin (an OAuth hop).
+        assert_eq!(
+            rewrite_external_redirect_location(
+                "https://accounts.google.com/o/oauth2/auth?client_id=1",
+                &target,
+                proxy
+            ),
+            Some(
+                "http://127.0.0.1:54321/proxy/https/accounts.google.com/o/oauth2/auth?client_id=1"
+                    .to_string()
+            )
+        );
+        // Root-relative resolves against the *external* origin, not the proxy —
+        // served untouched it would lose the /proxy/{scheme}/{host} prefix.
+        assert_eq!(
+            rewrite_external_redirect_location("/login", &target, proxy),
+            Some("http://127.0.0.1:54321/proxy/https/example.com/login".to_string())
+        );
+        // Path-relative resolves against the target's directory.
+        assert_eq!(
+            rewrite_external_redirect_location("next?a=b", &target, proxy),
+            Some("http://127.0.0.1:54321/proxy/https/example.com/start/next?a=b".to_string())
+        );
+        // Protocol-relative inherits the target's scheme.
+        assert_eq!(
+            rewrite_external_redirect_location("//cdn.example.net/x", &target, proxy),
+            Some("http://127.0.0.1:54321/proxy/https/cdn.example.net/x".to_string())
+        );
+        // A loopback service on a NON-proxy port is routed through the proxy's
+        // external form (the /proxy gate re-checks it on the next hop).
+        assert_eq!(
+            rewrite_external_redirect_location("http://localhost:3000/app", &target, proxy),
+            Some("http://127.0.0.1:54321/proxy/http/localhost:3000/app".to_string())
+        );
+        // Non-http(s) schemes are never rewritten.
+        assert_eq!(
+            rewrite_external_redirect_location("mailto:hi@example.com", &target, proxy),
+            None
+        );
+        assert_eq!(rewrite_external_redirect_location("  ", &target, proxy), None);
     }
 
     #[test]
