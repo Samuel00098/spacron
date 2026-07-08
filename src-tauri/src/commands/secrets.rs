@@ -1565,6 +1565,113 @@ pub async fn tts_speak(
     }
 }
 
+/// Allowed voices for the OpenAI Realtime speech-to-speech API.
+const OPENAI_REALTIME_VOICES: &[&str] = &[
+    "marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse",
+];
+
+/// Establish an OpenAI Realtime (speech-to-speech) WebRTC call.
+///
+/// The renderer creates an `RTCPeerConnection`, generates an SDP offer, and
+/// hands it here; we POST it to OpenAI's `/v1/realtime/calls` endpoint with the
+/// stored API key and return the SDP answer. Doing the exchange in Rust keeps
+/// the API key (and even short-lived tokens) out of the renderer entirely, and
+/// sidesteps the webview CSP, which doesn't allow `connect-src` to OpenAI. The
+/// subsequent audio + event traffic flows peer-to-peer over WebRTC, which the
+/// CSP does not govern.
+#[tauri::command]
+pub async fn openai_realtime_connect(
+    offer_sdp: String,
+    model: String,
+    voice: String,
+    instructions: String,
+    tools: Option<serde_json::Value>,
+) -> Result<String, String> {
+    let api_key = resolve_api_key("openai", "")?;
+
+    let model = model.trim().to_string();
+    if !model_id_is_safe(&model) || !model.contains("realtime") {
+        return Err("Invalid realtime model id".to_string());
+    }
+    let voice = voice.trim().to_lowercase();
+    if !OPENAI_REALTIME_VOICES.contains(&voice.as_str()) {
+        return Err("Invalid voice id".to_string());
+    }
+    let offer_sdp = offer_sdp.trim().to_string();
+    // An SDP offer always starts with a version line; anything else is garbage.
+    if !offer_sdp.starts_with("v=") || offer_sdp.len() > 65_536 {
+        return Err("Invalid SDP offer".to_string());
+    }
+    let tools = match tools {
+        Some(serde_json::Value::Array(items)) => serde_json::Value::Array(items),
+        Some(serde_json::Value::Null) | None => serde_json::Value::Array(Vec::new()),
+        Some(_) => return Err("Invalid realtime tools".to_string()),
+    };
+
+    let session = json!({
+        "type": "realtime",
+        "model": model,
+        "instructions": instructions,
+        "audio": {
+            "input": {
+                // Turn transcripts back into text so the app can log the
+                // conversation into the project chat.
+                "transcription": { "model": "gpt-4o-mini-transcribe" },
+                "turn_detection": { "type": "semantic_vad" }
+            },
+            "output": { "voice": voice }
+        },
+        "tools": tools,
+        "tool_choice": "auto"
+    });
+
+    // reqwest's `multipart` feature isn't enabled; hand-roll the form body the
+    // same way the audio-transcription path does.
+    let boundary = "spacron-openai-realtime-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\n{offer_sdp}\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{}\r\n",
+            session
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let client = shared_http_client(Duration::from_secs(30))?;
+    let response = client
+        .post("https://api.openai.com/v1/realtime/calls")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .map_err(|err| safe_request_error("Failed to contact OpenAI Realtime", err))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let preview = redact_secrets(&body.chars().take(300).collect::<String>());
+        return Err(format!("OpenAI Realtime call failed ({status}): {preview}"));
+    }
+
+    let answer_sdp = response
+        .text()
+        .await
+        .map_err(|err| format!("Failed to read Realtime SDP answer: {err}"))?;
+    if !answer_sdp.trim_start().starts_with("v=") {
+        return Err("OpenAI Realtime returned an invalid SDP answer.".to_string());
+    }
+    Ok(answer_sdp)
+}
+
 #[tauri::command]
 pub async fn check_local_provider_online(
     provider: String,

@@ -683,6 +683,39 @@ export const voiceReplyProvider = persistentWritable<AiProviderId>('voiceReplyPr
 export const ttsVoice = persistentWritable<string>('ttsVoice', 'austin');
 
 /**
+ * Which engine powers the hands-free voice conversation:
+ * - 'pipeline': the classic STT → orchestrator brain → TTS loop, works with
+ *   any configured provider combination.
+ * - 'openai-realtime': one live speech-to-speech WebRTC call to OpenAI's
+ *   Realtime API — much lower latency and natural barge-in, but requires an
+ *   OpenAI API key and is billed on audio tokens.
+ */
+export type VoiceConversationEngine = 'pipeline' | 'openai-realtime';
+export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'pipeline');
+export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
+export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
+
+export const openaiRealtimeModelOptions: TtsModelOption[] = [
+  { id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 Mini', description: 'Fast and ~3× cheaper (~$10/$20 per 1M audio tokens). Good default for conversation.' },
+  { id: 'gpt-realtime-2.1', label: 'GPT Realtime 2.1', description: 'Flagship speech-to-speech model (~$32/$64 per 1M audio tokens).' },
+  { id: 'gpt-realtime-mini', label: 'GPT Realtime Mini (previous gen)', description: 'Previous-generation mini realtime model.' },
+  { id: 'gpt-realtime', label: 'GPT Realtime (previous gen)', description: 'Previous-generation realtime model.' },
+];
+
+export const openaiRealtimeVoiceOptions: TtsVoiceOption[] = [
+  { id: 'marin', label: 'Marin', description: 'Natural conversational voice (recommended)' },
+  { id: 'cedar', label: 'Cedar', description: 'Natural conversational voice (recommended)' },
+  { id: 'alloy', label: 'Alloy', description: 'Neutral voice' },
+  { id: 'ash', label: 'Ash', description: 'Male voice' },
+  { id: 'ballad', label: 'Ballad', description: 'Male voice' },
+  { id: 'coral', label: 'Coral', description: 'Female voice' },
+  { id: 'echo', label: 'Echo', description: 'Male voice' },
+  { id: 'sage', label: 'Sage', description: 'Female voice' },
+  { id: 'shimmer', label: 'Shimmer', description: 'Female voice' },
+  { id: 'verse', label: 'Verse', description: 'Male voice' },
+];
+
+/**
  * When on, the orchestrator speaks a short status line aloud each time an agent
  * finishes/blocks/fails ("Codex finished: Add dark mode"), independent of whether
  * the voice conversation overlay is open. The detailed recap stays on-demand.
@@ -1127,6 +1160,9 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceConversationTtsModelByProvider': voiceConversationTtsModelByProvider.set(value as Record<string, string>); break;
     case 'voiceConversationTtsVoiceByProvider': voiceConversationTtsVoiceByProvider.set(value as Record<string, string>); break;
     case 'voiceReplyProvider': voiceReplyProvider.set(value as AiProviderId); break;
+    case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
+    case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
+    case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
     case 'aiProvider': aiProvider.set(value as AiProviderId); break;
     case 'aiModelByProvider': aiModelByProvider.set(value as Record<string, string>); break;
     case 'aiBaseUrlByProvider': aiBaseUrlByProvider.set(value as Record<string, string>); break;
@@ -1169,6 +1205,9 @@ export function resetSettingsToDefault() {
   voiceConversationTtsModelByProvider.set({});
   voiceConversationTtsVoiceByProvider.set({});
   voiceReplyProvider.set('groq');
+  voiceConversationEngine.set('pipeline');
+  openaiRealtimeModel.set('gpt-realtime-2.1-mini');
+  openaiRealtimeVoice.set('marin');
   ttsVoice.set('austin');
   announceAgentCompletions.set(true);
   uiZoom.set(100);

@@ -55,15 +55,21 @@ import {
   userShortcuts,
   vimMode,
   voiceAiProvider,
+  voiceConversationEngine,
   voiceReplyProvider,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceRefinementEnabled,
   announceAgentCompletions,
+  openaiRealtimeModel,
+  openaiRealtimeModelOptions,
+  openaiRealtimeVoice,
+  openaiRealtimeVoiceOptions,
   wordWrap,
   type AiModelOption,
   type AiProviderId,
   type KeyboardShortcut,
+  type VoiceConversationEngine,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
 import { resetAllApplicationState } from '$lib/stores/workspace';
@@ -622,6 +628,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState(false);
   const [groqKeyExists, setGroqKeyExists] = useState(false);
+  const [openaiKeyExists, setOpenaiKeyExists] = useState(false);
   const [providerLiveModels, setProviderLiveModels] = useState<Record<string, AiModelOption[]>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [localUrlInput, setLocalUrlInput] = useState('');
@@ -697,6 +704,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
   const voiceBrainModel = useStore(currentVoiceConversationAiModel);
+  const conversationEngine = useStore(voiceConversationEngine);
+  const realtimeModel = useStore(openaiRealtimeModel);
+  const realtimeVoice = useStore(openaiRealtimeVoice);
   const replyProvider = useStore(voiceReplyProvider);
   const ttsModel = useStore(currentVoiceConversationTtsModel);
   const ttsVoice = useStore(currentVoiceConversationTtsVoice);
@@ -904,6 +914,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     providerApiKeyExists('groq')
       .then((exists) => { if (active) setGroqKeyExists(exists); })
       .catch(() => { if (active) setGroqKeyExists(false); });
+    providerApiKeyExists('openai')
+      .then((exists) => { if (active) setOpenaiKeyExists(exists); })
+      .catch(() => { if (active) setOpenaiKeyExists(false); });
     return () => { active = false; };
   }, []);
 
@@ -1727,6 +1740,55 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow title="Model">
                     <ModelSelect value={refinementModel} models={refinementModels} onChange={(value) => setVoiceAiModel(refinementProvider, value)} label="Voice refinement model" />
                   </SettingRow>
+                </Section>
+
+                <Section title="Conversation engine">
+                  <SettingRow
+                    title="Engine"
+                    detail={conversationEngine === 'openai-realtime'
+                      ? 'One live speech-to-speech call to OpenAI — replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'
+                      : 'Transcribe → think → speak, one step at a time. Works with any provider combination below.'}
+                  >
+                    <SelectField
+                      value={conversationEngine}
+                      options={[
+                        { id: 'pipeline', label: 'Standard (STT + brain + TTS)' },
+                        { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
+                      ]}
+                      onChange={(value) => voiceConversationEngine.set(value as VoiceConversationEngine)}
+                      ariaLabel="Voice conversation engine"
+                    />
+                  </SettingRow>
+                  {conversationEngine === 'openai-realtime' && (
+                    <>
+                      <SettingRow title="Realtime model">
+                        <ModelSelect
+                          value={realtimeModel}
+                          models={openaiRealtimeModelOptions}
+                          onChange={openaiRealtimeModel.set}
+                          label="Realtime model"
+                        />
+                      </SettingRow>
+                      <SettingRow title="Voice">
+                        <StyledSelect
+                          value={realtimeVoice}
+                          options={openaiRealtimeVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
+                          onChange={openaiRealtimeVoice.set}
+                          ariaLabel="Realtime voice"
+                        />
+                      </SettingRow>
+                      {!openaiKeyExists && (
+                        <SettingRow title="OpenAI API key" detail="GPT Realtime needs an OpenAI API key.">
+                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>
+                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
+                              Add API key
+                            </button>
+                          </div>
+                        </SettingRow>
+                      )}
+                    </>
+                  )}
                 </Section>
 
                 <Section title="Voice replies">

@@ -241,7 +241,7 @@ async function verifyMicrophoneAccess(): Promise<string | null> {
   return null;
 }
 
-async function requestMicrophoneStream(): Promise<MediaStream | string> {
+export async function requestMicrophoneStream(): Promise<MediaStream | string> {
   if (typeof window === 'undefined') {
     return 'Voice input is only available in the browser.';
   }
@@ -295,6 +295,38 @@ async function requestMicrophoneStream(): Promise<MediaStream | string> {
     }
     return 'Could not access the microphone.';
   }
+}
+
+// Every STT consumer works on 16 kHz mono: local Whisper/Parakeet resample to
+// 16 kHz in Rust, and the cloud endpoints accept it natively. Capture runs at
+// the device rate (typically 44.1/48 kHz), so downsampling before the WAV
+// encode cuts the Tauri IPC payload (serialized as a JSON number array) and any
+// network upload to a third of the size — a directly audible chunk of the
+// "stop talking → transcript appears" latency — and saves the backend resample.
+const STT_SAMPLE_RATE = 16_000;
+
+export function downsamplePcmChunks(chunks: Float32Array[], fromRate: number, toRate: number): Float32Array {
+  const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const input = new Float32Array(totalSamples);
+  let offset = 0;
+  for (const chunk of chunks) {
+    input.set(chunk, offset);
+    offset += chunk.length;
+  }
+  if (fromRate <= toRate || totalSamples === 0) return input;
+
+  const ratio = fromRate / toRate;
+  const output = new Float32Array(Math.floor(totalSamples / ratio));
+  for (let i = 0; i < output.length; i += 1) {
+    // Average the source window per output sample — a cheap box filter that
+    // keeps aliasing out of the speech band without a full FIR pass.
+    const start = Math.floor(i * ratio);
+    const end = Math.min(Math.floor((i + 1) * ratio), totalSamples);
+    let sum = 0;
+    for (let j = start; j < end; j += 1) sum += input[j];
+    output[i] = end > start ? sum / (end - start) : input[start] ?? 0;
+  }
+  return output;
 }
 
 function pcmToWavBytes(chunks: Float32Array[], sampleRate: number) {
@@ -458,7 +490,8 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     // in-renderer via onnxruntime-web (WASM), but that grew a CPU memory arena
     // that never shrank and OOM-killed the WebKitGTK web process on long
     // utterances — so it now runs in the app process alongside Whisper.
-    const bytes = pcmToWavBytes(capturedChunks, captureSampleRate);
+    const pcm = downsamplePcmChunks(capturedChunks, captureSampleRate, STT_SAMPLE_RATE);
+    const bytes = pcmToWavBytes([pcm], Math.min(captureSampleRate, STT_SAMPLE_RATE));
     releaseOrParkGraph();
 
     try {

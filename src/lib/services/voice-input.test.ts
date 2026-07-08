@@ -6,7 +6,7 @@ const isProviderApiKeyConfiguredLocal = vi.hoisted(() => vi.fn((_provider: strin
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('$lib/services/ai-keychain', () => ({ isProviderApiKeyConfiguredLocal }));
 
-import { createVoiceInputSession } from './voice-input';
+import { createVoiceInputSession, downsamplePcmChunks } from './voice-input';
 import { aiBaseUrlByProvider, voiceInputModelByProvider, voiceInputProvider } from '$lib/stores/settings';
 
 type MockTrack = { stop: ReturnType<typeof vi.fn> };
@@ -407,5 +407,32 @@ describe('createVoiceInputSession', () => {
     expect(trackStop).toHaveBeenCalled();
 
     vi.useRealTimers();
+  });
+});
+
+describe('downsamplePcmChunks', () => {
+  it('concatenates chunks untouched when already at or below the target rate', () => {
+    const out = downsamplePcmChunks([new Float32Array([0.1, 0.2]), new Float32Array([0.3])], 16_000, 16_000);
+    expect(Array.from(out)).toEqual([expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.3)]);
+  });
+
+  it('reduces 48 kHz capture to a third of the samples', () => {
+    const input = new Float32Array(48_000).fill(0.5); // 1 second at 48 kHz
+    const out = downsamplePcmChunks([input], 48_000, 16_000);
+    expect(out.length).toBe(16_000);
+    // A constant signal must survive the box filter unchanged.
+    expect(out[0]).toBeCloseTo(0.5);
+    expect(out[out.length - 1]).toBeCloseTo(0.5);
+  });
+
+  it('handles non-integer ratios like 44.1 kHz', () => {
+    const input = new Float32Array(44_100).fill(0.25);
+    const out = downsamplePcmChunks([input], 44_100, 16_000);
+    expect(out.length).toBe(16_000);
+    expect(out[12_345]).toBeCloseTo(0.25);
+  });
+
+  it('returns an empty buffer for empty input', () => {
+    expect(downsamplePcmChunks([], 48_000, 16_000).length).toBe(0);
   });
 });

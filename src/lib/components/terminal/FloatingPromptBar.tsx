@@ -26,6 +26,9 @@ import {
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
+import { isRealtimeVoiceSupported, startRealtimeVoiceSession, type RealtimeVoiceSession } from '$lib/services/realtime-voice';
+import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import { openaiRealtimeModel, openaiRealtimeVoice, voiceConversationEngine } from '$lib/stores/settings';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { isTauriRuntime, isWebkitGtk } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
@@ -36,6 +39,7 @@ import {
   chatMessages,
   agentForcedAgent,
   agentVoiceModeActive,
+  appendVoiceExchangeMessage,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
 import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking, warmupLocalTts } from '$lib/services/tts';
@@ -75,6 +79,17 @@ function matchVoiceCommand(transcript: string, phrases: string[]): boolean {
   const padded = ` ${normalizeSpeech(transcript)} `;
   return phrases.some((p) => padded.includes(` ${p} `));
 }
+
+// System instructions for the GPT Realtime speech-to-speech engine. The model
+// converses on its own and delegates real work to the orchestrator via the
+// spacron_orchestrator tool (see realtime-voice.ts).
+const REALTIME_VOICE_INSTRUCTIONS = [
+  "You are Spacron's voice assistant. The user is a developer talking to you hands-free inside Spacron, a desktop app that orchestrates AI coding agents (Claude Code, Codex, Gemini and others) working in terminals on the user's projects.",
+  'Personality: a sharp, friendly pair-programming partner. Sound natural and conversational — contractions, brief reactions, no corporate filler.',
+  'Keep spoken replies short: one to three sentences unless the user asks for detail. Never read code, file paths, or long output aloud verbatim — summarize what it means instead.',
+  'Whenever the user wants project work done or asked about — spawning or closing agents, giving an agent a task, checking progress or output, navigating the app — call the spacron_orchestrator tool with a clear standalone request, then relay its answer conversationally. For casual conversation, just talk; do not call the tool.',
+  'If a tool result is long, give the gist and offer to go deeper.',
+].join('\n');
 
 // Per-project state cache
 const barProjectCache = new Map<string, { inputValue: string; manualTargetId: number | null }>();
@@ -569,9 +584,16 @@ export default function FloatingPromptBar() {
 
   const submitAgentMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
 
+  // Live GPT Realtime session (speech-to-speech engine). When it's active the
+  // classic pipeline (voiceInput loop + auto-speak TTS) must stay dormant: the
+  // realtime call owns the mic and speaks for itself.
+  const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
+  const realtimeActiveRef = useRef(false);
+
   useEffect(() => {
     resumeVoiceLoopRef.current = () => {
       if (
+        !realtimeActiveRef.current &&
         voiceModeActiveRef.current &&
         isAgentModeRef.current &&
         !voiceStoppingRef.current &&
@@ -619,6 +641,19 @@ export default function FloatingPromptBar() {
     stopSpeaking();
     setVoiceLocked(false);
     setVoiceHeld(false);
+    // Null the session ref BEFORE stopping so the session's onEnded callback
+    // (which fires from stop()) sees it gone and doesn't re-enter this teardown.
+    const realtimeSession = realtimeSessionRef.current;
+    realtimeSessionRef.current = null;
+    realtimeActiveRef.current = false;
+    if (realtimeSession) {
+      realtimeSession.stop();
+      setIsListening(false);
+      setIsRefining(false);
+      setVoiceStopping(false);
+      focusInput();
+      return;
+    }
     setVoiceStopping(true);
     voiceInput.setConversationMode(false);
     voiceInput.stop();
@@ -629,8 +664,107 @@ export default function FloatingPromptBar() {
     stopAgentVoiceRef.current = stopAgentVoice;
   }, [stopAgentVoice]);
 
+  // Bridge from the GPT Realtime model to the orchestrator brain: the model
+  // calls its spacron_orchestrator tool, we run the request through the same
+  // sendChatMessage path the pipeline uses, and hand back the brain's reply for
+  // the model to speak. Chat logging comes for free from sendChatMessage.
+  const runRealtimeOrchestratorCommand = useCallback(async (request: string): Promise<string> => {
+    const project = get(activeProject);
+    if (!project) return 'No project is open right now.';
+    setAgentSending(true);
+    try {
+      await sendChatMessage(project.id, project.root_path, request, {
+        forcedAgent: get(agentForcedAgent),
+        voiceConversation: true,
+      });
+    } finally {
+      setAgentSending(false);
+    }
+    const messages = get(chatMessages)[project.id] ?? [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role === 'assistant' && !message.pending && message.text?.trim()) {
+        return message.text.trim();
+      }
+      if (message.role === 'user') break;
+    }
+    return 'The orchestrator accepted the request.';
+  }, [setAgentSending]);
+
+  const startRealtimeVoiceMode = useCallback(() => {
+    if (!isRealtimeVoiceSupported()) {
+      showToast('GPT Realtime voice needs WebRTC, which this runtime does not support. Pick the standard engine in Settings → Voice.', 'warning');
+      openSettings();
+      return;
+    }
+    if (!isProviderApiKeyConfiguredLocal('openai')) {
+      showToast('GPT Realtime needs an OpenAI API key. Add it in Settings, or switch the conversation engine.', 'warning');
+      openSettings();
+      return;
+    }
+    setVoiceModeActive(true);
+    agentVoiceModeActive.set(true);
+    realtimeActiveRef.current = true;
+    setIsRefining(true); // "thinking" orb while the call connects
+
+    void (async () => {
+      try {
+        const session = await startRealtimeVoiceSession({
+          model: get(openaiRealtimeModel),
+          voice: get(openaiRealtimeVoice),
+          instructions: REALTIME_VOICE_INSTRUCTIONS,
+          callbacks: {
+            onStateChange: (state) => {
+              setIsRefining(state === 'connecting' || state === 'thinking');
+              setIsListening(state === 'listening');
+              setIsTtsSpeaking(state === 'speaking');
+            },
+            onUserTranscript: (text) => {
+              const project = get(activeProject);
+              if (project) appendVoiceExchangeMessage(project.id, 'user', text);
+            },
+            onAssistantTranscript: (text, final) => {
+              if (!final) return;
+              const project = get(activeProject);
+              if (project) appendVoiceExchangeMessage(project.id, 'assistant', text);
+            },
+            onOrchestratorCommand: runRealtimeOrchestratorCommand,
+            onError: (message) => showToast(message, 'error'),
+            onEnded: () => {
+              // Fires for a spontaneous transport failure as well as stop().
+              // A user-initiated stop already nulled the ref, so this only acts
+              // when the connection died on its own.
+              if (realtimeSessionRef.current) {
+                realtimeSessionRef.current = null;
+                realtimeActiveRef.current = false;
+                if (voiceModeActiveRef.current) stopAgentVoiceRef.current();
+              }
+            },
+          },
+        });
+        if (!realtimeActiveRef.current) {
+          // The user exited voice mode while the call was still connecting.
+          session.stop();
+          return;
+        }
+        realtimeSessionRef.current = session;
+      } catch (error) {
+        realtimeActiveRef.current = false;
+        setIsRefining(false);
+        showToast(error instanceof Error ? error.message : 'Could not start GPT Realtime voice.', 'error');
+        stopAgentVoiceRef.current();
+      }
+    })();
+  }, [runRealtimeOrchestratorCommand, setIsListening, setIsRefining, setIsTtsSpeaking, setVoiceModeActive]);
+
   const toggleAgentVoiceMode = useCallback(() => {
     if (voiceModeActive) { stopAgentVoice(); return; }
+    // The GPT Realtime engine replaces the whole STT → brain → TTS loop with
+    // one speech-to-speech call; none of the pipeline validation below applies.
+    if (get(voiceConversationEngine) === 'openai-realtime') {
+      startRealtimeVoiceMode();
+      return;
+    }
     // Validate voice *input* first: entering with an unsupported input provider
     // (e.g. the default Web Speech provider on Linux/WebKitGTK, whose recognizer
     // doesn't exist) would open the overlay on the idle orb with a mic that never
@@ -664,7 +798,7 @@ export default function FloatingPromptBar() {
     // re-acquiring the mic (getUserMedia + AudioContext + warmup) every time.
     voiceInput.setConversationMode(true);
     void voiceInput.start();
-  }, [voiceModeActive, stopAgentVoice, projectChatMessages]);
+  }, [voiceModeActive, stopAgentVoice, projectChatMessages, startRealtimeVoiceMode]);
 
   const launchAgentVoiceMode = useCallback(() => {
     openPromptBar();
@@ -719,6 +853,9 @@ export default function FloatingPromptBar() {
   // (see submitAgentMessage's finally) or when TTS ends (see speakResponse).
   useEffect(() => {
     if (!voiceModeActive || !isAgentMode || isTtsSpeaking) return;
+    // The GPT Realtime engine speaks for itself; assistant messages it logs to
+    // the chat must not ALSO be synthesized by the pipeline TTS.
+    if (realtimeActiveRef.current) return;
     const lastMsg = projectChatMessages.at(-1);
     if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.pending) return;
     const speechKey = speechKeyForAssistantMessage(lastMsg);

@@ -1166,6 +1166,20 @@ export function getProjectChat(projectId: string) {
   return derived(chatMessages, ($all) => $all[projectId] ?? []);
 }
 
+/**
+ * Log one side of a realtime voice exchange into the project chat WITHOUT
+ * running the orchestrator brain. The GPT Realtime engine converses on its own
+ * (speech-to-speech); this keeps the on-screen transcript and chat history in
+ * sync with what was actually said. Returns the message id.
+ */
+export function appendVoiceExchangeMessage(projectId: string, role: 'user' | 'assistant', text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed || !projectId) return null;
+  const id = msgId();
+  appendChat(projectId, { id, role, text: trimmed, ts: Date.now() });
+  return id;
+}
+
 function appendChat(projectId: string, msg: ChatMessage) {
   chatMessages.update((all) => {
     // Trim only at the hard safety cap. Normal shrinking is done by
