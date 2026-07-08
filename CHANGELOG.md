@@ -3,6 +3,15 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.2] - 2026-07-08
+
+A new Split view layout. Alongside Focus (the single terminal/agent screen) and Fleet (the grid), you can now open Split — two rooms side by side — from the dock or by cycling layouts with the shortcut.
+
+### Added
+
+- **Split view layout** — a two-panel, side-by-side arrangement of rooms. Open it from the new Split toggle in the dock, and the layout-cycle shortcut now steps Focus → Split → Fleet. Split is only ever entered by an explicit action, so opening a tool never re-tiles into it and the terminal is never unmounted underneath you.
+
+
 ## [v0.6.1] - 2026-07-08
 
 A preview reliability release. Local previews of apps that redirect on load — a `/` → `/login` bounce, an `http`→`https` upgrade, or a hosted auth handshake (Clerk, Auth0, NextAuth, Supabase) — now stay inside the preview instead of failing with "content is blocked" or hanging. Only the in-app preview proxy is affected; nothing else changes.

@@ -490,28 +490,6 @@
   padding-bottom: var(--overlay-clear);
 }
 
-.app-shell .split-view {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.app-shell .split-primary:only-child {
-  grid-column: 1 / -1;
-}
-
-.app-shell .split-primary,
-.app-shell .split-secondary {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  border-radius: 12px;
-  overflow: hidden;
-}
-
 .app-shell .rooms-table.ambient-vibe {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -601,6 +579,36 @@
    but pulled out of grid flow so they leave no empty cell — keeping them laid out
    means Focus is instantly correct, and never zero-reflowed, on return. */
 .app-shell .stage-layers.vibe-grid > .stage-pane.stage-hidden {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  border-radius: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Split view reuses the very same persistent stage — the identical mounted xterm
+   panes — but re-flows the primary + secondary rooms into two side-by-side
+   columns (one column when only a single room is on stage). Because it's the same
+   React container as Focus/Fleet, switching in and out of Split never unmounts a
+   terminal; the panes only resize, which their ResizeObserver handles cleanly. */
+.app-shell .focused-room.stage-layers.split-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--split-cols, 2), minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  position: relative;
+}
+.app-shell .stage-layers.split-grid > .stage-pane {
+  position: static;
+  inset: auto;
+  min-height: 0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* Off-stage terminals stay mounted & full-size but pulled out of grid flow so
+   they leave no empty column and never zero-reflow (matches the Fleet pattern). */
+.app-shell .stage-layers.split-grid > .stage-pane.stage-hidden {
   position: absolute;
   inset: 0;
   min-height: 0;

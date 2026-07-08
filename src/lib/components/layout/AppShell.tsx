@@ -966,8 +966,10 @@ export default function AppShell() {
           launchPromptBarVoiceMode();
           break;
         case 'cycleAmbientLayout': {
-          // One-window shell: the only arrangement toggle left is Fleet (vibe).
-          switchAmbientLayout(ambientLayout === 'vibe' ? 'focus' : 'vibe');
+          // Cycle through the three reachable arrangements: Focus → Split → Fleet.
+          const cycle: AmbientLayout[] = ['focus', 'gallery', 'vibe'];
+          const idx = cycle.indexOf(ambientLayout);
+          switchAmbientLayout(cycle[(idx + 1) % cycle.length] ?? 'focus');
           break;
         }
       }
@@ -1765,12 +1767,16 @@ export default function AppShell() {
   }
 
   function switchAmbientLayout(requested: AmbientLayout) {
-    // One-window shell: only `focus` (the single terminal/agent screen) and
-    // `vibe` (the optional Fleet grid) are reachable. Any request for
-    // development/preview/gallery — including incidental ones from tool toggles
-    // that call requestAmbientLayout('development') — collapses to focus, so
-    // opening a tool never re-tiles the layout or unmounts the terminal.
-    const nextLayout: AmbientLayout = requested === 'vibe' ? 'vibe' : 'focus';
+    // One-window shell: only `focus` (the single terminal/agent screen), `vibe`
+    // (the optional Fleet grid) and `gallery` (the Split view — two rooms side by
+    // side) are reachable. Any request for development/preview — including
+    // incidental ones from tool toggles that call
+    // requestAmbientLayout('development') — collapses to focus, so opening a tool
+    // never re-tiles the layout or unmounts the terminal. `gallery` is only ever
+    // requested by an explicit user action (the Split toggle / cycle shortcut),
+    // never incidentally, so entering the Split view always stays intentional.
+    const nextLayout: AmbientLayout =
+      requested === 'vibe' ? 'vibe' : requested === 'gallery' ? 'gallery' : 'focus';
     if (nextLayout === ambientLayout) return;
 
     // Save current mode's state before switching
@@ -1863,29 +1869,6 @@ export default function AppShell() {
   }
 
   function renderAmbientLayout() {
-    if (ambientLayout === 'gallery') {
-      return (
-        <>
-          {activeRoom ? (
-            <div className="split-view">
-              <div className="split-primary">
-                {renderRoomFrame(activeRoom, true)}
-              </div>
-              {splitRoom && (
-                <div className="split-secondary">
-                  {renderRoomFrame(splitRoom, true)}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="focused-room empty-stage" aria-label="Empty workspace" />
-          )}
-          {visibleRooms.length > 0 && renderSplitSwitcher()}
-          {renderMinimizedRooms()}
-        </>
-      );
-    }
-
     if (ambientLayout === 'preview') {
       // The live app preview is the stage; other open and non-minimized panels
       // (like the terminal and running agents) stack alongside.
@@ -1937,16 +1920,34 @@ export default function AppShell() {
 
     // VS Code-style persistence: every open terminal/agent keeps its xterm
     // mounted at all times. Focus LAYERS them (only the active one visible);
-    // Fleet (vibe) re-flows the SAME live panes into a grid. Both modes render
-    // the identical keyed container + children, so switching Focus↔Fleet only
-    // swaps CSS classes — React never unmounts an xterm, so the PTY view is
-    // never disposed/rebuilt and the WebGL atlas can't corrupt the scrollback on
-    // the round trip. Non-terminal rooms (editor/preview/…) render on top only
-    // in Focus. `isVibe` decides which panes are visible and how they lay out.
+    // Split (gallery) re-flows the SAME live panes into two side-by-side columns;
+    // Fleet (vibe) re-flows them into a grid. All three modes render the identical
+    // keyed `.stage-layers` container + `.stage-pane` children, so switching
+    // between them only swaps CSS classes and each pane's `order` — React never
+    // unmounts an xterm, so the PTY view is never disposed/rebuilt (no lost
+    // scrollback, no corrupted WebGL atlas) and the panes just resize into place
+    // (their ResizeObserver refits the terminal). Non-terminal rooms
+    // (editor/preview/…) are mounted as their own keyed pane; `isVibe`/`isSplit`
+    // decide which panes are visible and how they lay out.
     const isVibe = ambientLayout === 'vibe';
+    const isSplit = ambientLayout === 'gallery';
     const persistentStageRooms = visibleRooms.filter(isPersistentRoomId);
-    const activeIsPersistent = activeRoom ? isPersistentRoomId(activeRoom) : false;
     const hasAgents = persistentStageRooms.some(isAgentRoomId);
+
+    // Which rooms occupy the stage right now:
+    //   focus → the active room only
+    //   split → primary (active) + secondary (split), side by side
+    //   vibe  → every running agent
+    const stageRooms: RoomId[] = isVibe
+      ? persistentStageRooms.filter(isAgentRoomId)
+      : isSplit
+        ? ([activeRoom, splitRoom].filter((room): room is RoomId => room !== null))
+        : activeRoom
+          ? [activeRoom]
+          : [];
+    const stageRoomSet = new Set(stageRooms);
+    // Non-terminal rooms that must be mounted as their own pane (editor/preview/…).
+    const nonPersistentStageRooms = stageRooms.filter((room) => !isPersistentRoomId(room));
 
     // Empty states unmount nothing worth keeping (no agents / no active room), so
     // they can short-circuit — matching the prior Focus/Fleet empty behaviour.
@@ -1969,36 +1970,49 @@ export default function AppShell() {
       );
     }
 
+    const stageModifier = isVibe ? ' vibe-grid' : isSplit ? ' split-grid' : '';
+    // In Split, force the primary room to the left column and the secondary to the
+    // right, regardless of DOM order (a terminal is mapped before an editor even
+    // when the editor is the primary/left pane).
+    const paneOrder = (room: RoomId): React.CSSProperties | undefined =>
+      isSplit ? { order: room === activeRoom ? 0 : 1 } : undefined;
+
     return (
       <>
-        <div className={`focused-room stage-layers${isVibe ? ' vibe-grid' : ''}`}>
+        <div
+          className={`focused-room stage-layers${stageModifier}`}
+          style={isSplit ? ({ '--split-cols': stageRooms.length } as React.CSSProperties) : undefined}
+        >
           {persistentStageRooms.map((room) => {
-            // Focus: only the active pane is visible. Fleet: every agent pane is
-            // visible in the grid; the personal/dev terminals stay mounted but
-            // hidden so returning to Focus is instant and uncorrupted.
-            const hidden = isVibe ? !isAgentRoomId(room) : room !== activeRoom;
+            // Focus: only the active pane is visible. Split: the primary+secondary
+            // panes. Fleet: every agent pane. Off-stage terminals stay mounted but
+            // hidden (visibility, not unmount) so returning is instant and clean.
+            const hidden = !stageRoomSet.has(room);
             return (
               <div
                 key={room}
                 className={`stage-pane${hidden ? ' stage-hidden' : ''}`}
+                style={hidden ? undefined : paneOrder(room)}
               >
                 {renderRoomFrame(room, true)}
               </div>
             );
           })}
-          {!isVibe && !activeIsPersistent && activeRoom && (
-            <div className="stage-pane">
-              {renderRoomFrame(activeRoom, true)}
+          {nonPersistentStageRooms.map((room) => (
+            <div key={room} className="stage-pane" style={paneOrder(room)}>
+              {renderRoomFrame(room, true)}
             </div>
-          )}
+          ))}
         </div>
-        {!isVibe && stackedRooms.length > 0 && (
-          <aside className="room-stack" aria-label="Open rooms">
-            <div className="room-cards-row">
-              {stackedRooms.map((room) => renderRoomCard(room))}
-            </div>
-          </aside>
-        )}
+        {isSplit
+          ? visibleRooms.length > 0 && renderSplitSwitcher()
+          : !isVibe && stackedRooms.length > 0 && (
+              <aside className="room-stack" aria-label="Open rooms">
+                <div className="room-cards-row">
+                  {stackedRooms.map((room) => renderRoomCard(room))}
+                </div>
+              </aside>
+            )}
         {renderMinimizedRooms()}
       </>
     );
@@ -2055,6 +2069,15 @@ export default function AppShell() {
                 <div className="room-dock-separator" />
                 <div className="room-dock-group">
                   {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                  <ActivityButton
+                    item={{
+                      id: 'split',
+                      title: ambientLayout === 'gallery' ? 'Exit split view' : 'Split view — two panels side by side',
+                      active: ambientLayout === 'gallery',
+                      onClick: () => switchAmbientLayout(ambientLayout === 'gallery' ? 'focus' : 'gallery'),
+                      icon: <Icon><rect x="3" y="4" width="7.5" height="16" rx="1.3" /><rect x="13.5" y="4" width="7.5" height="16" rx="1.3" /></Icon>,
+                    }}
+                  />
                   <ActivityButton
                     item={{
                       id: 'fleet',
