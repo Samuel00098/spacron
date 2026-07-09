@@ -34,6 +34,8 @@ import {
   voiceConversationEngine,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
+  xaiRealtimeModel,
+  xaiRealtimeVoice,
 } from '$lib/stores/settings';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { isTauriRuntime, isWebkitGtk } from '$lib/utils/tauri';
@@ -711,14 +713,16 @@ export default function FloatingPromptBar() {
     return 'The orchestrator accepted the request.';
   }, [setAgentSending]);
 
-  const startRealtimeVoiceMode = useCallback(() => {
-    if (!isRealtimeVoiceSupported()) {
-      showToast('GPT Realtime voice needs WebRTC, which this runtime does not support. Pick the standard engine in Settings → Voice.', 'warning');
+  const startRealtimeVoiceMode = useCallback((engine: 'openai-realtime' | 'xai-realtime') => {
+    const provider = engine === 'xai-realtime' ? ('xai' as const) : ('openai' as const);
+    const label = provider === 'xai' ? 'Grok Realtime' : 'GPT Realtime';
+    if (!isRealtimeVoiceSupported(provider)) {
+      showToast(`${label} voice isn't supported in this runtime. Pick the standard engine in Settings → Voice.`, 'warning');
       openSettings();
       return;
     }
-    if (!isProviderApiKeyConfiguredLocal('openai')) {
-      showToast('GPT Realtime needs an OpenAI API key. Add it in Settings, or switch the conversation engine.', 'warning');
+    if (!isProviderApiKeyConfiguredLocal(provider)) {
+      showToast(`${label} needs an ${provider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`, 'warning');
       openSettings();
       return;
     }
@@ -730,8 +734,9 @@ export default function FloatingPromptBar() {
     void (async () => {
       try {
         const session = await startRealtimeVoiceSession({
-          model: get(openaiRealtimeModel),
-          voice: get(openaiRealtimeVoice),
+          provider,
+          model: get(provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel),
+          voice: get(provider === 'xai' ? xaiRealtimeVoice : openaiRealtimeVoice),
           instructions: REALTIME_VOICE_INSTRUCTIONS,
           callbacks: {
             onStateChange: (state) => {
@@ -771,7 +776,7 @@ export default function FloatingPromptBar() {
       } catch (error) {
         realtimeActiveRef.current = false;
         setIsRefining(false);
-        showToast(error instanceof Error ? error.message : 'Could not start GPT Realtime voice.', 'error');
+        showToast(error instanceof Error ? error.message : `Could not start ${label} voice.`, 'error');
         stopAgentVoiceRef.current();
       }
     })();
@@ -779,10 +784,12 @@ export default function FloatingPromptBar() {
 
   const toggleAgentVoiceMode = useCallback(() => {
     if (voiceModeActive) { stopAgentVoice(); return; }
-    // The GPT Realtime engine replaces the whole STT → brain → TTS loop with
-    // one speech-to-speech call; none of the pipeline validation below applies.
-    if (get(voiceConversationEngine) === 'openai-realtime') {
-      startRealtimeVoiceMode();
+    // The realtime engines (GPT Realtime / Grok Realtime) replace the whole
+    // STT → brain → TTS loop with one speech-to-speech call; none of the
+    // pipeline validation below applies.
+    const engine = get(voiceConversationEngine);
+    if (engine === 'openai-realtime' || engine === 'xai-realtime') {
+      startRealtimeVoiceMode(engine);
       return;
     }
     // Validate voice *input* first: entering with an unsupported input provider

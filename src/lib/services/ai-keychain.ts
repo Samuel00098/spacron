@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isLocalProvider, getProviderBaseUrl, type AiProviderId } from '$lib/stores/settings';
 
 const KNOWN_PROVIDERS: AiProviderId[] = [
-  'openrouter', 'anthropic', 'openai', 'google', 'groq', 'ollama', 'lmstudio',
+  'openrouter', 'anthropic', 'openai', 'google', 'groq', 'xai', 'ollama', 'lmstudio',
 ];
 
 // In-memory key-existence cache backed by the OS keychain.

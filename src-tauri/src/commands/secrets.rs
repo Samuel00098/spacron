@@ -65,6 +65,7 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "openai",
     "google",
     "groq",
+    "xai",
     "ollama",
     "lmstudio",
 ];
@@ -1672,6 +1673,55 @@ pub async fn openai_realtime_connect(
     Ok(answer_sdp)
 }
 
+/// Mint a short-lived client secret for xAI's Grok Realtime voice API.
+///
+/// Unlike OpenAI's realtime (WebRTC, SDP exchanged in Rust), xAI's is a plain
+/// WebSocket the renderer opens itself, authenticating with this ephemeral
+/// token as a `xai-client-secret.<token>` subprotocol. Minting it here keeps
+/// the long-lived xAI API key out of the renderer; the token the renderer does
+/// see expires in minutes and only grants a realtime session.
+#[tauri::command]
+pub async fn xai_realtime_client_secret() -> Result<String, String> {
+    let api_key = resolve_api_key("xai", "")?;
+    let client = shared_http_client(Duration::from_secs(30))?;
+    let response = client
+        .post("https://api.x.ai/v1/realtime/client_secrets")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .json(&json!({ "expires_after": { "seconds": 600 } }))
+        .send()
+        .await
+        .map_err(|err| safe_request_error("Failed to contact xAI Realtime", err))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let preview = redact_secrets(&body.chars().take(300).collect::<String>());
+        return Err(format!("xAI Realtime token request failed ({status}): {preview}"));
+    }
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|err| format!("xAI Realtime returned an invalid response: {err}"))?;
+    // Be liberal about the field name — providers have shipped both flat and
+    // nested shapes for this endpoint.
+    let token = payload
+        .get("value")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.get("token").and_then(|v| v.as_str()))
+        .or_else(|| {
+            payload
+                .get("client_secret")
+                .and_then(|cs| cs.get("value"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("");
+    if token.is_empty() {
+        return Err("xAI Realtime returned no client secret.".to_string());
+    }
+    Ok(token.to_string())
+}
+
 #[tauri::command]
 pub async fn check_local_provider_online(
     provider: String,
@@ -1751,6 +1801,7 @@ mod tests {
         assert!(is_known_provider("openai"));
         assert!(is_known_provider("google"));
         assert!(is_known_provider("groq"));
+        assert!(is_known_provider("xai"));
         assert!(is_known_provider("ollama"));
         assert!(is_known_provider("lmstudio"));
     }

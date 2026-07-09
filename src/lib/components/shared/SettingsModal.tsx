@@ -65,6 +65,10 @@ import {
   openaiRealtimeModelOptions,
   openaiRealtimeVoice,
   openaiRealtimeVoiceOptions,
+  xaiRealtimeModel,
+  xaiRealtimeModelOptions,
+  xaiRealtimeVoice,
+  xaiRealtimeVoiceOptions,
   wordWrap,
   type AiModelOption,
   type AiProviderId,
@@ -629,6 +633,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [keyExists, setKeyExists] = useState(false);
   const [groqKeyExists, setGroqKeyExists] = useState(false);
   const [openaiKeyExists, setOpenaiKeyExists] = useState(false);
+  const [xaiKeyExists, setXaiKeyExists] = useState(false);
   const [providerLiveModels, setProviderLiveModels] = useState<Record<string, AiModelOption[]>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [localUrlInput, setLocalUrlInput] = useState('');
@@ -707,6 +712,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const conversationEngine = useStore(voiceConversationEngine);
   const realtimeModel = useStore(openaiRealtimeModel);
   const realtimeVoice = useStore(openaiRealtimeVoice);
+  const grokRealtimeModel = useStore(xaiRealtimeModel);
+  const grokRealtimeVoice = useStore(xaiRealtimeVoice);
   const replyProvider = useStore(voiceReplyProvider);
   const ttsModel = useStore(currentVoiceConversationTtsModel);
   const ttsVoice = useStore(currentVoiceConversationTtsVoice);
@@ -917,6 +924,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     providerApiKeyExists('openai')
       .then((exists) => { if (active) setOpenaiKeyExists(exists); })
       .catch(() => { if (active) setOpenaiKeyExists(false); });
+    providerApiKeyExists('xai')
+      .then((exists) => { if (active) setXaiKeyExists(exists); })
+      .catch(() => { if (active) setXaiKeyExists(false); });
     return () => { active = false; };
   }, []);
 
@@ -1747,13 +1757,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Engine"
                     detail={conversationEngine === 'openai-realtime'
                       ? 'One live speech-to-speech call to OpenAI — replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'
-                      : 'Transcribe → think → speak, one step at a time. Works with any provider combination below.'}
+                      : conversationEngine === 'xai-realtime'
+                        ? 'One live speech-to-speech call to xAI Grok — same sub-second replies and barge-in as GPT Realtime, billed flat at ~$0.05 per minute.'
+                        : 'Transcribe → think → speak, one step at a time. Works with any provider combination below.'}
                   >
                     <SelectField
                       value={conversationEngine}
                       options={[
                         { id: 'pipeline', label: 'Standard (STT + brain + TTS)' },
                         { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
+                        { id: 'xai-realtime', label: 'Grok Realtime (xAI)' },
                       ]}
                       onChange={(value) => voiceConversationEngine.set(value as VoiceConversationEngine)}
                       ariaLabel="Voice conversation engine"
@@ -1781,6 +1794,36 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         <SettingRow title="OpenAI API key" detail="GPT Realtime needs an OpenAI API key.">
                           <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
                             <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>
+                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
+                              Add API key
+                            </button>
+                          </div>
+                        </SettingRow>
+                      )}
+                    </>
+                  )}
+                  {conversationEngine === 'xai-realtime' && (
+                    <>
+                      <SettingRow title="Realtime model">
+                        <ModelSelect
+                          value={grokRealtimeModel}
+                          models={xaiRealtimeModelOptions}
+                          onChange={xaiRealtimeModel.set}
+                          label="Realtime model"
+                        />
+                      </SettingRow>
+                      <SettingRow title="Voice">
+                        <StyledSelect
+                          value={grokRealtimeVoice}
+                          options={xaiRealtimeVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
+                          onChange={xaiRealtimeVoice.set}
+                          ariaLabel="Realtime voice"
+                        />
+                      </SettingRow>
+                      {!xaiKeyExists && (
+                        <SettingRow title="xAI API key" detail="Grok Realtime needs an xAI API key.">
+                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No xAI API key configured</span>
                             <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
                               Add API key
                             </button>

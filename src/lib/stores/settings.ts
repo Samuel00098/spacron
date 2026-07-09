@@ -689,8 +689,11 @@ export const ttsVoice = persistentWritable<string>('ttsVoice', 'austin');
  * - 'openai-realtime': one live speech-to-speech WebRTC call to OpenAI's
  *   Realtime API — much lower latency and natural barge-in, but requires an
  *   OpenAI API key and is billed on audio tokens.
+ * - 'xai-realtime': the same experience over xAI's Grok Voice Agent API
+ *   (OpenAI Realtime-compatible, WebSocket). Requires an xAI API key; billed
+ *   flat per minute (~$0.05/min).
  */
-export type VoiceConversationEngine = 'pipeline' | 'openai-realtime';
+export type VoiceConversationEngine = 'pipeline' | 'openai-realtime' | 'xai-realtime';
 export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'pipeline');
 export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
 export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
@@ -713,6 +716,22 @@ export const openaiRealtimeVoiceOptions: TtsVoiceOption[] = [
   { id: 'sage', label: 'Sage', description: 'Female voice' },
   { id: 'shimmer', label: 'Shimmer', description: 'Female voice' },
   { id: 'verse', label: 'Verse', description: 'Male voice' },
+];
+
+export const xaiRealtimeModel = persistentWritable<string>('xaiRealtimeModel', 'grok-voice-latest');
+export const xaiRealtimeVoice = persistentWritable<string>('xaiRealtimeVoice', 'eve');
+
+export const xaiRealtimeModelOptions: TtsModelOption[] = [
+  { id: 'grok-voice-latest', label: 'Grok Voice (latest)', description: 'Always points at the newest Grok realtime voice model. Flat ~$0.05/min.' },
+  { id: 'grok-voice-think-fast-1.0', label: 'Grok Voice Think Fast 1.0', description: 'Pinned flagship Grok realtime voice model.' },
+];
+
+export const xaiRealtimeVoiceOptions: TtsVoiceOption[] = [
+  { id: 'eve', label: 'Eve', description: 'Default Grok voice' },
+  { id: 'ara', label: 'Ara', description: 'Female voice' },
+  { id: 'rex', label: 'Rex', description: 'Male voice' },
+  { id: 'sal', label: 'Sal', description: 'Male voice' },
+  { id: 'leo', label: 'Leo', description: 'Male voice' },
 ];
 
 /**
@@ -1163,6 +1182,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
     case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
+    case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
+    case 'xaiRealtimeVoice': xaiRealtimeVoice.set(value as string); break;
     case 'aiProvider': aiProvider.set(value as AiProviderId); break;
     case 'aiModelByProvider': aiModelByProvider.set(value as Record<string, string>); break;
     case 'aiBaseUrlByProvider': aiBaseUrlByProvider.set(value as Record<string, string>); break;
@@ -1208,6 +1229,8 @@ export function resetSettingsToDefault() {
   voiceConversationEngine.set('pipeline');
   openaiRealtimeModel.set('gpt-realtime-2.1-mini');
   openaiRealtimeVoice.set('marin');
+  xaiRealtimeModel.set('grok-voice-latest');
+  xaiRealtimeVoice.set('eve');
   ttsVoice.set('austin');
   announceAgentCompletions.set(true);
   uiZoom.set(100);

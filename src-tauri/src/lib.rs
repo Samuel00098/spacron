@@ -170,6 +170,7 @@ pub fn run() {
             commands::secrets::check_local_provider_online,
             commands::secrets::tts_speak,
             commands::secrets::openai_realtime_connect,
+            commands::secrets::xai_realtime_client_secret,
             commands::models::list_downloadable_models,
             commands::models::download_model,
             commands::models::cancel_download,
