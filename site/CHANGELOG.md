@@ -3,6 +3,25 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.4] - 2026-07-09
+
+An orchestration release: the voice/orchestrator brain can now plan a large task and fan the sub-tasks out to your already-running agents, the prompt bar shows live agent task cards, voice replies can speak through xAI, and the conversational brain confirms before it acts.
+
+### Added
+
+- **xAI TTS voice** — voice replies can now be spoken by xAI's text-to-speech (`https://api.x.ai/v1/tts`), alongside the existing OpenAI, Groq, and local providers. The request is made from Rust so the xAI key never reaches the renderer, and the returned audio is decoded and played back like any other TTS provider.
+
+- **Agent task cards** — the floating prompt bar now shows CNVS-style cards for your agents, with running / blocked / recently-finished states and animated indicators, so you can see at a glance what each agent is doing and which ones just finished.
+
+- **Plan-and-delegate workflow** — for a large multi-part task, the orchestrator brain can now work in two phases: first it spawns an agent to write a numbered implementation plan, then on a later turn it reads the completed plan back out of that agent's terminal output and dispatches the sub-tasks — one per available running agent, several at once — sending to agents that are already open (and spawning only when none are running). To support this, a completed planning agent's output is now passed to the brain in full (up to 80 lines) instead of the usual 10-line tail.
+
+### Changed
+
+- **Confirmation gate in voice mode** — the conversational brain now acknowledges what you asked and asks for confirmation before it spawns, sends, or closes anything; the action is only taken after you explicitly agree ("yes", "go ahead", "do it"). Saying no just continues the conversation.
+
+- **Cleaner spoken status** — when reporting what an agent did, the voice brain now paraphrases (which files changed, what ran, whether tests passed, what state it ended in) instead of ever reading raw terminal output aloud.
+
+
 ## [v0.6.3] - 2026-07-09
 
 A voice release: two new realtime speech-to-speech engines alongside the existing pipeline (VAD → STT → brain → TTS), plus barge-in, completion announcements, and a steadier pipeline mode.
