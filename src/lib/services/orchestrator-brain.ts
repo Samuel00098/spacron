@@ -265,8 +265,10 @@ function buildUserText(message: string, ctx?: RouteContext): string {
       if (r.freshness) parts.push(`  Freshness: ${compactText(r.freshness, 160)}`);
       if (r.reason) parts.push(`  Reason: ${compactText(r.reason, 180)}`);
       if (r.recentOutput?.trim()) {
-        const lines = r.recentOutput.trim().split('\n').slice(-10).map((l) => `  | ${l}`).join('\n');
-        parts.push(`  Terminal output (recent tail):\n${lines}`);
+        const isPlan = r.status === 'complete' && r.recentOutput.length > 200;
+        const tailCount = isPlan ? 80 : 10;
+        const lines = r.recentOutput.trim().split('\n').slice(-tailCount).join('\n');
+        parts.push(`  Terminal output (${isPlan ? 'full plan' : 'recent tail'}):\n${lines}`);
       }
     }
   }
@@ -635,7 +637,7 @@ function buildSystemPrompt(
     '',
     'Each action is ONE of:',
     '- {"kind": "spawn", "agent": "<command id>", "prompt": "<full standalone prompt>" | null, "name": null}',
-    '    Launch a NEW agent. Omit/null "prompt" to just open it idle and ready. Leave "name" null — the app auto-assigns a friendly human name (e.g. "Iris"). Only set "name" to echo a specific name the USER explicitly chose; never invent generic labels like "claude-1" or "agent 2".',
+    '    Launch a NEW agent. Omit/null "prompt" to just open it idle and ready. Leave "name" null — the app auto-assigns a name (e.g. "Trinity"). Only set "name" to echo a specific name the USER explicitly chose; never invent generic labels like "claude-1" or "agent 2".',
     '- {"kind": "send", "target": "<running agent name>", "prompt": "<full standalone prompt>"}',
     '    Give a new task to an agent that is ALREADY running. Use this instead of spawning when the user refers to an existing agent.',
     '- {"kind": "name", "target": "<running agent name or unnamed reference>", "name": "<new name>"}',
@@ -682,6 +684,19 @@ function buildSystemPrompt(
     ...(conversational ? [] : ['- Keep reply to one or two sentences.']),
     '- CRITICAL: "open/spawn/launch X agent" without a real task (e.g. "open Claude", "spawn Codex", "launch an agent") means spawn with null prompt. Do NOT use the user\'s message as the agent\'s prompt — the user just wants the agent opened and ready, not given a meaningless task.',
     '- Only include a real task prompt when the user describes actual work to do ("fix this bug", "build a login page", "refactor the router").',
+    '',
+    'PLAN-AND-DELEGATE WORKFLOW — For complex multi-part tasks, use this two-phase pattern to create a plan and then dispatch sub-tasks to already-running agents:',
+    '',
+    'Phase 1 — Plan: When the user describes a large task ("build X", "create a full Y", "implement Z with multiple parts"), spawn an agent to create a plan. Use a prompt like: "Create a detailed implementation plan for [the task]. Break it into clear numbered sub-tasks that can be worked on independently. Output ONLY the numbered plan, one sub-task per line." Do not try to execute the work yourself — just get the plan.',
+    '',
+    'Phase 2 — Delegate: In a later turn, the planning agent\'s terminal output appears under "Recent agent/task status and terminal output" (with status "complete" and the plan visible). When you see a completed plan AND running agents (under "Currently running agents") AND the user wants to proceed, READ THE PLAN from the terminal output and dispatch sub-tasks:',
+    '  - For each sub-task in the plan, pick an available running agent (by name).',
+    '  - Use a SEND action to push the sub-task: {"kind": "send", "target": "<agent name>", "prompt": "<fully self-contained sub-task>"}.',
+    '  - You can issue MULTIPLE send actions in one turn to dispatch different sub-tasks to different agents simultaneously.',
+    '  - If there are more sub-tasks than running agents, send one per agent and the rest will be dispatched in a follow-up turn when agents free up.',
+    '  - If no agents are running, use SPAWN instead of SEND.',
+    '',
+    'Example: User says "Build a login system, plan first then delegate to my open agents." Turn 1: spawn claude to plan. Turn 2 (plan is ready, two agents "Neo" and "Trinity" are running): send sub-task 1 ("Set up the login form UI") to Neo, send sub-task 2 ("Create the auth API endpoint") to Trinity.',
     ...(conversational
       ? [
           '',
@@ -692,9 +707,10 @@ function buildSystemPrompt(
           '- Always include a natural spoken acknowledgement in "reply", even when you are also returning actions. The reply should say what you are about to do or what you just did.',
           '- Use an EMPTY actions array for questions, brainstorming, observations, status checks, or anything that sounds like thinking out loud.',
           '- DO spawn/send/close or use APP-CONTROL actions when the user clearly asks you to do something — e.g. "fix X", "build Y", "run the tests", "open the preview", "switch to Dracula", "open an agent and add X", "spawn claude to fix Y", "have an agent do Z".',
-          '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
-          '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
-          '- Terminal output for running agents is shown above. Reference it in your replies: say what the agents just outputted, mention their last action, or summarize progress. Do NOT recite the raw output verbatim — paraphrase naturally.',
+           '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
+           '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
+           '- CONFIRMATION GATE — Before you return a spawn, send, or close action, FIRST acknowledge what the user asked and ASK for confirmation conversationally. For example: "I\'ll launch Claude to refactor the auth module, want me to go ahead?" Only include the action AFTER the user explicitly confirms with "yes", "go ahead", "do it", "sure", or similar affirmative. If the user says "no" or clarifies, do NOT include the action — just continue the conversation.',
+           '- TERMINAL OUTPUT SUMMARIZATION — When reporting what an agent did, NEVER read raw terminal output aloud. Paraphrase naturally: say which files changed, what commands were run, whether tests passed, and what state the agent ended in. Use the "Recent agent/task status and terminal output" section above as your source.',
         ]
       : []),
   ].join('\n');

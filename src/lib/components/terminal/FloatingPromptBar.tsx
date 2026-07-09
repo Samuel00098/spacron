@@ -23,6 +23,7 @@ import {
   getSessionLabel,
   getSessionPromptTargetLabel,
   isAgentSession,
+  getAgentDisplayName,
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
@@ -279,7 +280,18 @@ export default function FloatingPromptBar() {
 
   const isVoiceActive = isAgentMode && voiceModeActive;
 
-
+  // Agent task cards for CNVS-like running/waiting/done state visualization
+  const agentCards = useMemo(() => {
+    const projectId = $activeProject?.id ?? '';
+    const tasks = $orchestratorTasks.filter((t) => t.projectId === projectId);
+    const running = tasks.filter((t) => t.status === 'in-progress');
+    const blocked = tasks.filter((t) => t.status === 'blocked');
+    const recentDone = tasks
+      .filter((t) => (t.status === 'complete' || t.status === 'failed') && t.completedAt)
+      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
+      .slice(0, 1);
+    return [...running, ...blocked, ...recentDone];
+  }, [$orchestratorTasks, $activeProject]);
 
   const activeTerminal = useMemo(
     () => $sessions.find((session) => session.id === $activeSessionId) ?? null,
@@ -2089,6 +2101,44 @@ export default function FloatingPromptBar() {
                 onMouseDown={() => { setTargetPickerOpen(false); setHistoryOpen(false); }}
               />
             </div>
+
+            {/* Agent cards: running/blocked/recently-finished task states (CNVS-like) */}
+            {isAgentMode && agentCards.length > 0 && !voiceModeActive && (
+              <div className="agent-cards">
+                {agentCards.map((task) => {
+                  const cardStatus =
+                    task.status === 'in-progress' ? 'working' :
+                    task.status === 'blocked' ? 'waiting' : 'done';
+                  const agentName = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
+                  const detail =
+                    task.status === 'blocked' ? (task.blockedReason ?? 'Needs your input') :
+                    task.status === 'complete' ? 'Done' :
+                    task.status === 'failed' ? 'Failed' : '';
+                  return (
+                    <div key={task.id} className={`agent-card ${cardStatus}`} title={task.title}>
+                      <span className="agent-card-icon">
+                        {cardStatus === 'working' && <span className="working-dot" />}
+                        {cardStatus === 'waiting' && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
+                        )}
+                        {cardStatus === 'done' && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </span>
+                      <span className="agent-card-name">{agentName}</span>
+                      <span className="agent-card-title">{task.title}</span>
+                      {detail && <span className="agent-card-detail">{detail}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Send button is hidden in agent mode — voice is the primary input there */}
             {!isAgentMode && (

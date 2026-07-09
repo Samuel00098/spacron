@@ -42,6 +42,7 @@ const OPENAI_TTS_URL: &str = "https://api.openai.com/v1/audio/speech";
 const OPENAI_STT_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_TTS_URL: &str = "https://api.groq.com/openai/v1/audio/speech";
+const XAI_TTS_URL: &str = "https://api.x.ai/v1/tts";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const GOOGLE_AUDIO_TRANSCRIPTION_PROMPT: &str = "Transcribe this speech into clean, accurate text. Keep the speaker's exact technical terms, code words, file paths, flags, package names, and URLs. Use natural punctuation and paragraph breaks when they are obvious from the audio. Return only the transcript.";
@@ -1568,6 +1569,58 @@ pub async fn tts_speak(
             Ok(TtsAudioPayload {
                 bytes: pcm_s16le_to_wav_bytes(&pcm, 1, 24_000, 16),
                 mime_type: "audio/wav".to_string(),
+            })
+        }
+        "xai" => {
+            let response = client
+                .post(XAI_TTS_URL)
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .json(&json!({
+                    "text": text,
+                    "voice_id": voice,
+                    "language": "en",
+                    "output_format": {
+                        "codec": "wav",
+                        "sample_rate": 24000,
+                    },
+                }))
+                .send()
+                .await
+                .map_err(|err| safe_request_error("Failed to contact xAI TTS", err))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
+                return Err(format!("xAI TTS failed ({status}): {preview}"));
+            }
+
+            let payload: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|err| format!("xAI TTS returned an invalid response: {err}"))?;
+
+            let audio_b64 = payload
+                .get("audio")
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
+
+            let content_type = payload
+                .get("content_type")
+                .and_then(|c| c.as_str())
+                .unwrap_or("audio/wav");
+
+            if audio_b64.is_empty() {
+                return Err("xAI TTS returned no audio.".to_string());
+            }
+
+            let bytes = STANDARD
+                .decode(audio_b64)
+                .map_err(|err| format!("Failed to decode xAI TTS audio: {err}"))?;
+
+            Ok(TtsAudioPayload {
+                bytes,
+                mime_type: content_type.to_string(),
             })
         }
         p if is_local_provider(p) => {

@@ -221,7 +221,7 @@ export default function TerminalPane({
   }, [currentShellCwd, project?.root_path]);
 
   const sessionLabel = sessionInfo ? getSessionLabel(sessionInfo, allSessions) : promptPath;
-  // Badge shows the orchestrator-assigned assistant name (e.g. "Iris"), falling
+  // Badge shows the orchestrator-assigned assistant name (e.g. "Trinity"), falling
   // back to the agent CLI's product name. The main title is driven by the CLI's
   // OSC title (what it reports it's doing) — the two no longer share a field, so
   // both stay visible at once.

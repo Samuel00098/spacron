@@ -28,17 +28,17 @@ describe('isGenericAgentName', () => {
     expect(isGenericAgentName('bot-3')).toBe(true);
   });
 
-  it('keeps real human names the user would choose', () => {
-    expect(isGenericAgentName('Iris', 'claude')).toBe(false);
+  it('keeps real agent names the user would choose', () => {
+    expect(isGenericAgentName('Trinity', 'claude')).toBe(false);
     expect(isGenericAgentName('Frontend', 'claude')).toBe(false);
-    expect(isGenericAgentName('Nova 2', 'claude')).toBe(false);
+    expect(isGenericAgentName('Neo 2', 'claude')).toBe(false);
     expect(isGenericAgentName('claude-reviewer', 'claude')).toBe(false);
   });
 });
 
 describe('pickAssistantName', () => {
   it('returns a name not already taken (case-insensitive)', () => {
-    const taken = ['ada', 'IRIS', 'leo'];
+    const taken = ['neo', 'TRINITY', 'morpheus'];
     const picked = pickAssistantName(taken);
     expect(taken.map((n) => n.toLowerCase())).not.toContain(picked.toLowerCase());
   });

@@ -11,7 +11,7 @@ export type AiProviderId =
   | 'xai'
   | 'ollama'
   | 'lmstudio';
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openrouter' | 'ollama' | 'lmstudio';
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'ollama' | 'lmstudio' | 'local';
 export interface KeyboardShortcut {
   id: string;
   label: string;
@@ -175,7 +175,7 @@ function createSettingsState() {
     aiCompletionProvider: persistentValue<AiProviderId>('aiCompletionProvider', 'groq'),
     aiCompletionModelByProvider: persistentValue<Record<string, string>>('aiCompletionModelByProvider', {}),
     voiceRefinementEnabled: persistentValue('voiceRefinementEnabled', false),
-    voiceInputProvider: persistentValue<VoiceInputProviderId>('voiceInputProvider', 'webspeech'),
+    voiceInputProvider: persistentValue<VoiceInputProviderId>('voiceInputProvider', 'local'),
     voiceInputModelByProvider: persistentValue<Record<string, string>>('voiceInputModelByProvider', {}),
     voiceAiProvider: persistentValue<AiProviderId>('voiceAiProvider', 'groq'),
     voiceAiModelByProvider: persistentValue<Record<string, string>>('voiceAiModelByProvider', {}),
@@ -236,7 +236,7 @@ const defaults: SettingsValues = {
   aiCompletionProvider: 'groq',
   aiCompletionModelByProvider: {},
   voiceRefinementEnabled: false,
-  voiceInputProvider: 'webspeech',
+  voiceInputProvider: 'local',
   voiceInputModelByProvider: {},
   voiceAiProvider: 'groq',
   voiceAiModelByProvider: {},

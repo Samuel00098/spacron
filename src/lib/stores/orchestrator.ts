@@ -96,6 +96,7 @@ import {
   createTerminalSession,
   sendPromptToSession,
   sessionHasRunningProcess,
+  setSessionExecuting,
 } from '$lib/stores/terminal';
 
 export type {
@@ -483,19 +484,21 @@ async function generateTranscriptSummary(
 function announceCompletionAloud(
   name: string,
   status: CompletionSummary['status'],
-  title: string
+  title: string,
+  summary?: string | null
 ): void {
   if (!get(announceAgentCompletions)) return;
   const line =
     status === 'blocked' ? `${name} needs your input: ${title}.` :
     status === 'failed' ? `${name} failed: ${title}.` :
+    summary ? summary :
     `${name} finished: ${title}.`;
   if (get(agentVoiceModeActive)) {
-    // Voice conversation open. With the GPT Realtime engine, inject the update
+    // Voice conversation open. With a realtime engine, inject the update
     // into the live call so the model announces it in its own voice. With the
     // pipeline engine (announceViaRealtimeVoice returns false), the auto-speak
     // effect reads the completion card instead — skip here to avoid
-    // double-speaking and to keep the voice loop's TTS lifecycle intact.
+    // double-speaking.
     announceViaRealtimeVoice(line);
     return;
   }
@@ -520,12 +523,12 @@ function leasedSessionLive(taskId: string, sessionId: number): boolean {
  * double-complete it. `notify` is suppressed on process exit, where the terminal
  * layer already raises its own "finished" notification.
  */
-function completeLeasedTask(
+async function completeLeasedTask(
   taskId: string,
   sessionId: number,
   outcome: AgentTurnOutcome,
   opts?: { notify?: boolean; exitCode?: number | null }
-): void {
+): Promise<void> {
   const task = get(orchestratorTasks).find((t) => t.id === taskId);
   if (!task || task.status !== 'in-progress' || task.assignedSessionId !== sessionId) return;
 
@@ -545,6 +548,7 @@ function completeLeasedTask(
     }),
   }));
   releaseOrchestratorTerminal(sessionId);
+  setSessionExecuting(sessionId, false);
 
   if (updated) {
     if (updated.status === 'blocked') {
@@ -577,18 +581,31 @@ function completeLeasedTask(
     : updated.status === 'failed' ? updated.failureReason
     : null;
 
-  announceCompletionAloud(name, completionStatus, task.title);
-
   const chatMsgId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const willSummarize = !!(updated.transcript?.trim()) && isAiAvailable();
+  const voiceMode = get(agentVoiceModeActive);
+
+  // In voice mode, block on summary generation so we can speak a meaningful
+  // result aloud instead of a canned line.
+  let voiceSummary: string | null = null;
+  if (willSummarize && voiceMode && updated.transcript) {
+    try {
+      voiceSummary = (await generateTranscriptSummary(updated.transcript, completionStatus)).trim();
+    } catch {
+      // fall through to canned line
+    }
+  }
+
+  announceCompletionAloud(name, completionStatus, task.title, voiceSummary);
+
   const completionData: CompletionSummary = {
     status: completionStatus,
     agentName: name,
     taskTitle: task.title,
     elapsedSec: elapsed,
     reason: completionReason ?? null,
-    summary: null,
-    summaryPending: willSummarize,
+    summary: voiceSummary,
+    summaryPending: willSummarize && !voiceSummary,
   };
 
   appendChat(task.projectId, {
@@ -599,7 +616,7 @@ function completeLeasedTask(
     completion: completionData,
   });
 
-  if (willSummarize) {
+  if (willSummarize && !voiceSummary) {
     const projectId = task.projectId;
     const transcript = updated.transcript!;
     void (async () => {

@@ -1,22 +1,22 @@
-// Friendly human names for orchestrator agents. When the user (or the brain)
-// doesn't name a spawned agent, we give it one of these so it's easy to refer to
-// ("ask Iris to run the tests") and shows a personable badge on its pane.
+// Agent names drawn from The Matrix. When the user (or the brain) doesn't name a
+// spawned agent, we give it one of these so it's easy to refer to
+// ("ask Trinity to run the tests") and shows a distinctive badge on its pane.
 
 const ASSISTANT_NAMES = [
-  'Ada', 'Iris', 'Leo', 'Nova', 'Max', 'Ruby', 'Theo', 'Vera', 'Milo', 'Juno',
-  'Eve', 'Otto', 'Sage', 'Wren', 'Cleo', 'Hugo', 'Luna', 'Ezra', 'Mira', 'Felix',
-  'Nina', 'Rex', 'Opal', 'Cyrus', 'Hazel', 'Jude', 'Lena', 'Arlo', 'Tess', 'Bruno',
+  'Neo', 'Trinity', 'Morpheus', 'Cypher', 'Switch', 'Apoc', 'Mouse', 'Tank', 'Dozer', 'Oracle',
+  'Niobe', 'Ghost', 'Seraph', 'Link', 'Zee', 'Sati', 'Persephone', 'Bane', 'Lock', 'Roland',
+  'Cas', 'Choi', 'Kid', 'Hamann', 'Rama', 'Ballard', 'Keymaker', 'Trainman', 'Spoon', 'Architect',
 ];
 
 // Generic words a model reaches for when it labels an agent instead of leaving it
-// unnamed — we strip these so the friendly human name takes over.
+// unnamed — we strip these so the film name takes over.
 const GENERIC_NAME_WORDS = new Set(['agent', 'assistant', 'bot', 'ai', 'coder', 'worker', 'task']);
 
 /**
  * True when `name` is a throwaway, machine-flavored label rather than a real name
  * the user would choose — e.g. "claude-1", "Claude Code 2", "agent", "bot 3".
  * The orchestrator's brain (especially weaker models) tends to emit these; we
- * treat them as unnamed so every agent still gets a personable human name.
+ * treat them as unnamed so every agent still gets a distinctive film name.
  *
  * `command` is the agent's CLI id (e.g. "claude"); `displayName` its product name
  * (e.g. "Claude Code"). A label is generic when, after dropping a trailing number,
@@ -46,8 +46,8 @@ export function isGenericAgentName(
 }
 
 /**
- * Pick a human assistant name not already in `taken` (case-insensitive). If every
- * name is in use, falls back to a numbered variant ("Iris 2") so it stays unique.
+ * Pick an agent name not already in `taken` (case-insensitive). If every
+ * name is in use, falls back to a numbered variant ("Trinity 2") so it stays unique.
  */
 export function pickAssistantName(taken: Iterable<string> = []): string {
   const used = new Set(Array.from(taken, (n) => n.trim().toLowerCase()).filter(Boolean));

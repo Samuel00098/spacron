@@ -666,7 +666,7 @@ export function providerSupportsReplyTts(provider: AiProviderId): boolean {
 }
 
 export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', false);
-export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voiceInputProvider', 'webspeech');
+export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voiceInputProvider', 'local');
 export const voiceInputModelByProvider = persistentWritable<Record<string, string>>('voiceInputModelByProvider', {});
 export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider', 'groq');
 export const voiceAiModelByProvider = persistentWritable<Record<string, string>>('voiceAiModelByProvider', {});
