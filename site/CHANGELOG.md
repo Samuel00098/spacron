@@ -17,6 +17,8 @@ A voice release: two new realtime speech-to-speech engines alongside the existin
 
 - **Agent completion announcements in Realtime mode** — background agent completions ("Codex finished: ...") are now spoken in the model's own voice during a live Realtime call, queued until the call is idle so they never talk over the user or the model.
 
+- **Live realtime model lists** — the Realtime model picker for GPT Realtime and Grok Realtime now fetches the provider's actual model catalogue (filtered to realtime/voice models) once a key is configured, with a manual "Refresh models" button, instead of only ever showing the curated static list.
+
 ### Changed
 
 - **Faster pipeline capture** — mic audio is downsampled to 16 kHz mono before encoding, cutting the IPC payload and STT upload to about a third of its previous size with no loss (local Whisper/Parakeet resample to 16 kHz anyway).

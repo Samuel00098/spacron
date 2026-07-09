@@ -55,6 +55,7 @@ const COMMIT_SYSTEM_PROMPT: &str = "You are an expert software engineer writing 
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const GROQ_MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
+const XAI_MODELS_URL: &str = "https://api.x.ai/v1/models";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const GOOGLE_MODELS_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
@@ -186,6 +187,7 @@ pub(crate) enum ModelPurpose {
     Chat,
     Stt,
     Tts,
+    Realtime,
 }
 
 fn openai_is_stt_model(id: &str) -> bool {
@@ -196,6 +198,21 @@ fn openai_is_stt_model(id: &str) -> bool {
 fn openai_is_tts_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("tts") || id.contains("speech")
+}
+
+/// OpenAI's realtime (speech-to-speech) models are excluded from the regular
+/// chat list (see `openai_is_chat_model`'s block list) but are exactly what
+/// the Realtime voice engine's model picker needs to show.
+fn openai_is_realtime_model(id: &str) -> bool {
+    id.to_ascii_lowercase().contains("realtime")
+}
+
+/// xAI doesn't expose a dedicated realtime flag on /v1/models, so match the
+/// naming its Grok Realtime voice models actually use (`grok-voice-...`),
+/// same as the curated fallback list in the frontend.
+fn xai_is_realtime_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.contains("realtime") || id.contains("voice")
 }
 
 fn groq_is_stt_model(id: &str) -> bool {
@@ -278,6 +295,7 @@ fn openrouter_model_matches_purpose(item: &serde_json::Value, id: &str, purpose:
                 ) && !text_matches_any(&haystack, &["whisper", "transcribe", "asr"])
         }
         ModelPurpose::Chat => true,
+        ModelPurpose::Realtime => text_matches_any(&haystack, &["realtime"]),
     }
 }
 
@@ -1184,6 +1202,7 @@ pub async fn list_provider_models(
             let url = match provider.as_str() {
                 "openai" => OPENAI_MODELS_URL.to_string(),
                 "groq" => GROQ_MODELS_URL.to_string(),
+                "xai" => XAI_MODELS_URL.to_string(),
                 p if is_local_provider(p) => {
                     local_endpoint(base_url.as_deref().unwrap_or_default(), "models")
                 }
@@ -1232,6 +1251,11 @@ pub async fn list_provider_models(
                                 continue;
                             }
                         }
+                        ModelPurpose::Realtime => {
+                            if !openai_is_realtime_model(&id) {
+                                continue;
+                            }
+                        }
                         ModelPurpose::Chat => {
                             if !openai_is_chat_model(&id) {
                                 continue;
@@ -1249,8 +1273,24 @@ pub async fn list_provider_models(
                                 continue;
                             }
                         }
+                        // Groq has no realtime speech-to-speech API today.
+                        ModelPurpose::Realtime => continue,
                         ModelPurpose::Chat => {
                             if !groq_is_chat_model(&id) {
+                                continue;
+                            }
+                        }
+                    },
+                    "xai" => match purpose {
+                        ModelPurpose::Realtime => {
+                            if !xai_is_realtime_model(&id) {
+                                continue;
+                            }
+                        }
+                        // xAI has no separate STT/TTS models today.
+                        ModelPurpose::Stt | ModelPurpose::Tts => continue,
+                        ModelPurpose::Chat => {
+                            if xai_is_realtime_model(&id) {
                                 continue;
                             }
                         }
@@ -1766,8 +1806,9 @@ mod tests {
     use super::{
         audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
         build_audio_transcription_multipart_body, is_known_provider, is_local_provider,
-        local_endpoint, model_id_is_safe, openrouter_audio_chat_model_is_unsupported,
-        redact_secrets, resolve_base_url,
+        local_endpoint, model_id_is_safe, openai_is_realtime_model,
+        openrouter_audio_chat_model_is_unsupported, redact_secrets, resolve_base_url,
+        xai_is_realtime_model,
     };
     const MAX_TEXT_LEN: usize = 32_000;
 
@@ -1950,6 +1991,22 @@ mod tests {
         assert!(text.contains("filename=\"audio.wav\""));
         assert!(text.contains("Content-Type: audio/wav"));
         assert!(body.ends_with(b"\r\n--test-boundary--\r\n"));
+    }
+
+    #[test]
+    fn openai_realtime_models_are_identified() {
+        assert!(openai_is_realtime_model("gpt-realtime-2.1"));
+        assert!(openai_is_realtime_model("gpt-realtime-2.1-mini"));
+        assert!(!openai_is_realtime_model("gpt-4o-mini"));
+        assert!(!openai_is_realtime_model("whisper-1"));
+    }
+
+    #[test]
+    fn xai_realtime_models_are_identified() {
+        assert!(xai_is_realtime_model("grok-voice-latest"));
+        assert!(xai_is_realtime_model("grok-voice-think-fast-1.0"));
+        assert!(!xai_is_realtime_model("grok-4.3"));
+        assert!(!xai_is_realtime_model("grok-2-vision"));
     }
 
     #[test]

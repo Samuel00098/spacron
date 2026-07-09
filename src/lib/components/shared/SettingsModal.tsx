@@ -652,6 +652,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const [providerSttModels, setProviderSttModels] = useState<Record<string, AiModelOption[]>>({});
   const [providerTtsModels, setProviderTtsModels] = useState<Record<string, AiModelOption[]>>({});
+  const [providerRealtimeModels, setProviderRealtimeModels] = useState<Record<string, AiModelOption[]>>({});
+  const [realtimeModelLoading, setRealtimeModelLoading] = useState(false);
+  const providerRealtimeModelsRef = useRef<Record<string, AiModelOption[]>>({});
+
+  useEffect(() => {
+    providerRealtimeModelsRef.current = providerRealtimeModels;
+  }, [providerRealtimeModels]);
 
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
 
@@ -749,6 +756,23 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const refinementModels = useMemo(() => {
     return providerLiveModels[refinementProvider] ?? getProviderDef(refinementProvider).models;
   }, [refinementProvider, providerLiveModels]);
+
+  // Live realtime model lists, falling back to the curated list when the live
+  // fetch hasn't landed yet (no key, offline, or request still in flight) —
+  // curated descriptions/pricing notes win when a live id matches one we know.
+  const openaiRealtimeModelsMerged = useMemo(() => {
+    const live = providerRealtimeModels['openai'];
+    if (!live || live.length === 0) return openaiRealtimeModelOptions;
+    const curated = new Map(openaiRealtimeModelOptions.map((m) => [m.id, m]));
+    return live.map((m) => curated.get(m.id) ?? m);
+  }, [providerRealtimeModels]);
+
+  const xaiRealtimeModelsMerged = useMemo(() => {
+    const live = providerRealtimeModels['xai'];
+    if (!live || live.length === 0) return xaiRealtimeModelOptions;
+    const curated = new Map(xaiRealtimeModelOptions.map((m) => [m.id, m]));
+    return live.map((m) => curated.get(m.id) ?? m);
+  }, [providerRealtimeModels]);
 
   const liveTtsModels = providerTtsModels[replyProvider];
   const ttsModels = useMemo(() => {
@@ -874,6 +898,34 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }, []);
 
+  const loadRealtimeModels = useCallback(async (prov: 'openai' | 'xai', force = false) => {
+    if (!isTauriRuntime()) return;
+
+    const hasKey = await providerApiKeyExists(prov).catch(() => false);
+    if (!hasKey) return;
+
+    if (!force && providerRealtimeModelsRef.current[prov]) {
+      return;
+    }
+
+    setRealtimeModelLoading(true);
+    try {
+      const remote = await listProviderModels(prov, 'realtime');
+      const merged: AiModelOption[] = remote.map((r) => ({
+        id: r.id,
+        label: r.label ?? r.id,
+        description: r.description ?? '',
+      }));
+      if (merged.length) {
+        setProviderRealtimeModels((prev) => ({ ...prev, [prov]: merged }));
+      }
+    } catch (err) {
+      console.error(`Failed to load realtime models for ${prov}:`, err);
+    } finally {
+      setRealtimeModelLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     setApiKeyInput('');
     if (!isTauriRuntime()) {
@@ -982,7 +1034,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     if (voiceInput && voiceInput !== 'webspeech') {
       void loadSttModels(voiceInput);
     }
-  }, [activeTab, refinementProvider, replyProvider, voiceInput, loadLiveModels]);
+    void loadRealtimeModels('openai');
+    void loadRealtimeModels('xai');
+  }, [activeTab, refinementProvider, replyProvider, voiceInput, loadLiveModels, loadRealtimeModels]);
 
   useEffect(() => {
     setLocalUrlInput(getProviderBaseUrl(provider, baseUrls) || '');
@@ -1777,11 +1831,23 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <SettingRow title="Realtime model">
                         <ModelSelect
                           value={realtimeModel}
-                          models={openaiRealtimeModelOptions}
+                          models={openaiRealtimeModelsMerged}
                           onChange={openaiRealtimeModel.set}
                           label="Realtime model"
                         />
                       </SettingRow>
+                      {openaiKeyExists && (
+                        <div className="settings-action-row">
+                          <button
+                            type="button"
+                            className="settings-secondary"
+                            onClick={() => void loadRealtimeModels('openai', true)}
+                            disabled={realtimeModelLoading}
+                          >
+                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
+                          </button>
+                        </div>
+                      )}
                       <SettingRow title="Voice">
                         <StyledSelect
                           value={realtimeVoice}
@@ -1807,11 +1873,23 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <SettingRow title="Realtime model">
                         <ModelSelect
                           value={grokRealtimeModel}
-                          models={xaiRealtimeModelOptions}
+                          models={xaiRealtimeModelsMerged}
                           onChange={xaiRealtimeModel.set}
                           label="Realtime model"
                         />
                       </SettingRow>
+                      {xaiKeyExists && (
+                        <div className="settings-action-row">
+                          <button
+                            type="button"
+                            className="settings-secondary"
+                            onClick={() => void loadRealtimeModels('xai', true)}
+                            disabled={realtimeModelLoading}
+                          >
+                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
+                          </button>
+                        </div>
+                      )}
                       <SettingRow title="Voice">
                         <StyledSelect
                           value={grokRealtimeVoice}
