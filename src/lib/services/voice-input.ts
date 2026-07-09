@@ -63,8 +63,19 @@ type AudioContextCtor = new () => AudioContext;
 // gate relative to it, with hysteresis, plus a hard cap so a wedged VAD can never
 // listen forever.
 const VAD_ABS_FLOOR = 0.002; // never treat anything quieter than this as speech
-const VAD_ONSET_MULT = 1.2; // speech starts when RMS exceeds noiseFloor × this
+const VAD_ONSET_MULT = 2.0; // speech starts when RMS exceeds noiseFloor × this
 const VAD_RELEASE_MULT = 1.1; // still speaking while RMS exceeds noiseFloor × this
+// Absolute minimum RMS for speech onset. The relative gate alone let very quiet
+// rooms (adapted floor ≈ VAD_ABS_FLOOR) trigger on breathing and mouse clicks;
+// with the browser's AGC even soft speech lands well above this.
+const VAD_ONSET_MIN_RMS = 0.01;
+// Speech vs. background noise: a single loud buffer (~85 ms at 48 kHz) is how
+// keyboard clicks, coughs and door slams got transcribed as turns — and, with
+// barge-in, cut the assistant off mid-reply. Real speech sustains energy, so
+// onset is only confirmed after this many consecutive above-threshold buffers
+// (~250 ms). No audio is lost while confirming: buffers keep accumulating in
+// capturedChunks either way.
+const VAD_ONSET_FRAMES = 3;
 // How long of a silence ends an utterance. Kept snappy for responsive turn-
 // taking; the release-multiplier hysteresis (VAD_RELEASE_MULT) holds through the
 // brief quiet dips inside a sentence, so this only elapses on a real end-of-turn
@@ -77,7 +88,7 @@ const VAD_MAX_UTTERANCE_MS = 15_000;
 // reply into the capture. Require a clearly louder onset before treating audio
 // as user speech during playback — a real interruption easily clears it.
 const VAD_PLAYBACK_ONSET_MULT = 2.5;
-const VAD_PLAYBACK_ABS_FLOOR = 0.008;
+const VAD_PLAYBACK_ABS_FLOOR = 0.025;
 // While playback is active and no speech has been detected, keep only this many
 // trailing buffers (~0.5 s) so a barge-in turn starts with a clean lead-in
 // instead of dragging the whole reply's echo into the transcript.
@@ -412,6 +423,10 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   let captureSampleRate = 16_000;
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
   let speechDetected = false;
+  // Consecutive above-threshold buffers seen while waiting for speech onset;
+  // speechDetected flips only once this reaches VAD_ONSET_FRAMES (see the
+  // constant's comment — this is what separates speech from transient noise).
+  let onsetRun = 0;
   let startTime = 0;
   // Rolling estimate of the ambient noise floor (RMS), seeded during the mic
   // warmup and adapted between utterances so the gate tracks the room.
@@ -445,6 +460,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     clearSilenceTimer();
     capturedChunks = [];
     speechDetected = false;
+    onsetRun = 0;
     startTime = Date.now();
   }
 
@@ -462,6 +478,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     captureStream = null;
     capturedChunks = [];
     speechDetected = false;
+    onsetRun = 0;
     noiseFloor = 0;
     listening = false;
   }
@@ -621,6 +638,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           captureProcessor = captureContext.createScriptProcessor(4096, 1, 1);
           capturedChunks = [];
           speechDetected = false;
+          onsetRun = 0;
           clearSilenceTimer();
           startTime = Date.now();
           noiseFloor = VAD_ABS_FLOOR;
@@ -667,16 +685,25 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
               ? Math.max(VAD_ABS_FLOOR, noiseFloor * VAD_RELEASE_MULT)
               : playbackActive
                 ? Math.max(VAD_PLAYBACK_ABS_FLOOR, noiseFloor * VAD_PLAYBACK_ONSET_MULT)
-                : Math.max(VAD_ABS_FLOOR * VAD_ONSET_MULT, noiseFloor * VAD_ONSET_MULT);
+                : Math.max(VAD_ONSET_MIN_RMS, noiseFloor * VAD_ONSET_MULT);
 
             if (rms >= threshold) {
               if (!speechDetected) {
-                speechDetected = true;
-                callbacks.onSpeechStart?.();
+                // Confirm onset only after several consecutive loud buffers so
+                // a lone transient (keyboard click, cough, door slam) neither
+                // starts a turn nor barges in on the assistant's reply.
+                onsetRun += 1;
+                if (onsetRun >= VAD_ONSET_FRAMES) {
+                  speechDetected = true;
+                  callbacks.onSpeechStart?.();
+                }
               }
               clearSilenceTimer();
               return;
             }
+
+            // Below the gate: any unconfirmed onset was just a transient.
+            onsetRun = 0;
 
             // No speech — blend noise floor toward the ambient level.
             noiseFloor = noiseFloor * 0.95 + rms * 0.05;

@@ -55,7 +55,9 @@ export default function VoiceConversationOverlay({
         ? 'thinking'
         : 'idle';
 
-  const displayText = isListening ? voiceDraftText : lastAssistantDisplay;
+  // While listening with no draft yet (raw-audio STT has no interim results),
+  // keep the last reply visible instead of blanking it.
+  const displayText = isListening ? voiceDraftText || lastAssistantDisplay : lastAssistantDisplay;
 
   return (
     <div className={`overlay${compact ? ' compact' : ''}`} role="dialog" aria-label="Voice conversation">

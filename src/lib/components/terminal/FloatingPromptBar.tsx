@@ -1783,10 +1783,14 @@ export default function FloatingPromptBar() {
                 <div className={`orb-wrap ${
                   voiceSleeping
                     ? 'sleeping'
-                    : isListening
-                      ? 'listening'
-                      : isTtsSpeaking
-                        ? 'speaking'
+                    : isTtsSpeaking
+                      // With barge-in the mic listens straight through playback,
+                      // so both flags are set while the reply plays — show
+                      // "speaking" until it ends (or the user cuts in, which
+                      // clears isTtsSpeaking via onSpeechStart).
+                      ? 'speaking'
+                      : isListening
+                        ? 'listening'
                         : isRefining || agentSending
                           ? 'thinking'
                           : 'idle'
@@ -1796,17 +1800,17 @@ export default function FloatingPromptBar() {
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                       </svg>
-                    ) : isListening ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                        <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                        <line x1="12" x2="12" y1="19" y2="22" />
-                      </svg>
                     ) : isTtsSpeaking ? (
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                         <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
                         <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      </svg>
+                    ) : isListening ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                        <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                        <line x1="12" x2="12" y1="19" y2="22" />
                       </svg>
                     ) : isRefining || agentSending ? (
                       <svg className="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -1912,15 +1916,21 @@ export default function FloatingPromptBar() {
                             </div>
                           );
                         }
-                        // 2. User is speaking — show live draft or a placeholder if no transcript yet
-                        if (isListening) {
+                        // 2. User is speaking and we have a live draft (Web Speech
+                        //    interim results) — show it. With raw-audio STT there is
+                        //    no interim transcript, and with barge-in the mic is open
+                        //    the whole time the reply plays, so an unconditional
+                        //    "Listening…" here would hide every assistant response.
+                        //    Instead fall through and keep the last reply on screen
+                        //    until the user actually says something.
+                        if (isListening && voiceDraftText) {
                           return (
                             <p className="transcript-now user draft">
-                              {voiceDraftText ? `${voiceDraftText}…` : 'Listening…'}
+                              {voiceDraftText}…
                             </p>
                           );
                         }
-                        // 2. Transition: user done, agent thinking/processing — show the
+                        // 3. Transition: user done, agent thinking/processing — show the
                         //    user's last spoken words with a thinking indicator instead of
                         //    the previous assistant reply, so the bar never goes blank or
                         //    shows stale text from an earlier turn.
@@ -1932,7 +1942,9 @@ export default function FloatingPromptBar() {
                             </p>
                           );
                         }
-                        // 3. Assistant message exists — show it
+                        // 4. Assistant message exists — show it (also reached while
+                        //    the mic listens with no draft yet, so the reply stays
+                        //    readable until the user starts the next turn)
                         const lastMsg = projectChatMessages.at(-1);
                         if (lastMsg?.role === 'assistant') {
                           if (lastMsg.pending) {
@@ -1954,7 +1966,12 @@ export default function FloatingPromptBar() {
                             <p className="transcript-now assistant">{displayText}</p>
                           );
                         }
-                        // 3. Voice mode on but no message yet
+                        // 5. Mic is open but nothing has been said yet and there is
+                        //    no reply to keep on screen (first turn of the session).
+                        if (isListening) {
+                          return <p className="transcript-now user draft">Listening…</p>;
+                        }
+                        // 6. Voice mode on but no message yet
                         return (
                           <span className="orc-typing"><span /><span /><span /></span>
                         );

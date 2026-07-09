@@ -105,6 +105,26 @@ function installBrowserStubs() {
   });
 }
 
+// Speech RMS ≈ 0.21 — well above the onset gate. Onset needs several
+// consecutive loud buffers (VAD_ONSET_FRAMES) before it counts as speech, so
+// helpers feed this repeatedly.
+const LOUD_BUFFER = [0.25, 0.2, 0.18, 0.22];
+const ONSET_FRAMES = 3;
+
+function feedSpeech(processor: MockScriptProcessor, frames = ONSET_FRAMES) {
+  for (let i = 0; i < frames; i += 1) {
+    processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(LOUD_BUFFER) },
+    });
+  }
+}
+
+function feedSilence(processor: MockScriptProcessor) {
+  processor.onaudioprocess?.({
+    inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
+  });
+}
+
 beforeEach(() => {
   recognizers = [];
   audioProcessors = [];
@@ -206,12 +226,8 @@ describe('createVoiceInputSession', () => {
     // noise floor), so without this the VAD never detects speech.
     await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0.25, 0.2, 0.18, 0.22]) },
-    });
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
-    });
+    feedSpeech(processor);
+    feedSilence(processor);
 
     await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
@@ -250,12 +266,8 @@ describe('createVoiceInputSession', () => {
     // noise floor), so without this the VAD never detects speech.
     await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
-    });
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
-    });
+    feedSpeech(processor);
+    feedSilence(processor);
 
     await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
@@ -292,12 +304,8 @@ describe('createVoiceInputSession', () => {
     // noise floor), so without this the VAD never detects speech.
     await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
-    });
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
-    });
+    feedSpeech(processor);
+    feedSilence(processor);
 
     await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
@@ -331,12 +339,8 @@ describe('createVoiceInputSession', () => {
     // noise floor), so without this the VAD never detects speech.
     await vi.advanceTimersByTimeAsync(200);
     const processor = audioProcessors[0];
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) },
-    });
-    processor.onaudioprocess?.({
-      inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
-    });
+    feedSpeech(processor);
+    feedSilence(processor);
 
     await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
@@ -371,8 +375,8 @@ describe('createVoiceInputSession', () => {
     const speakOneTurn = async () => {
       await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
       const processor = audioProcessors[0];
-      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) } });
-      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) } });
+      feedSpeech(processor);
+      feedSilence(processor);
       await vi.advanceTimersByTimeAsync(2600); // trigger the silence timer
       await Promise.resolve();
     };
@@ -424,21 +428,82 @@ describe('createVoiceInputSession', () => {
     await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
 
     const processor = audioProcessors[0];
-    // Echo residue: RMS 0.004 clears the normal onset gate (~0.0024) but must
-    // NOT clear the raised playback gate (0.008) — the assistant's own reply
-    // leaking through echo cancellation must not cut it off.
-    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(4).fill(0.004) } });
+    // Echo residue: RMS 0.015 clears the normal onset gate (0.01) but must NOT
+    // clear the raised playback gate (0.025) — the assistant's own reply leaking
+    // through echo cancellation must not cut it off, no matter how sustained.
+    for (let i = 0; i < ONSET_FRAMES + 2; i += 1) {
+      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(4).fill(0.015) } });
+    }
     expect(onSpeechStart).not.toHaveBeenCalled();
 
     // A real interruption is much louder and clears the playback gate.
-    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0.3, 0.24, 0.2, 0.18]) } });
+    feedSpeech(processor);
     expect(onSpeechStart).toHaveBeenCalledTimes(1);
 
     // The barged-in utterance still transcribes as a normal turn.
-    processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) } });
+    feedSilence(processor);
     await vi.advanceTimersByTimeAsync(2600);
     await Promise.resolve();
     expect(onResult).toHaveBeenCalledWith('interrupting words');
+
+    vi.useRealTimers();
+  });
+
+  it('ignores a lone transient (click/cough) instead of treating it as speech', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('real speech after the click');
+
+    const onSpeechStart = vi.fn();
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult, onSpeechStart, onProcessingStart: vi.fn() });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
+
+    const processor = audioProcessors[0];
+    // A keyboard click / door slam: loud, but only ONSET_FRAMES - 1 buffers —
+    // never confirmed as speech, so no turn starts and nothing is transcribed.
+    feedSpeech(processor, ONSET_FRAMES - 1);
+    feedSilence(processor);
+    expect(onSpeechStart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    expect(invoke).not.toHaveBeenCalledWith('ai_transcribe_audio', expect.anything());
+    expect(onResult).not.toHaveBeenCalled();
+
+    // The transient must not have "used up" the gate: real sustained speech
+    // right after is still detected.
+    feedSpeech(processor);
+    expect(onSpeechStart).toHaveBeenCalledTimes(1);
+    feedSilence(processor);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    expect(onResult).toHaveBeenCalledWith('real speech after the click');
+
+    vi.useRealTimers();
+  });
+
+  it('does not start a turn on quiet room noise below the absolute onset floor', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+
+    const onSpeechStart = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onSpeechStart, onProcessingStart: vi.fn() });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200); // past the 150ms warmup
+
+    const processor = audioProcessors[0];
+    // Sustained breathing / fan noise at RMS 0.006: above the old relative gate
+    // (noise floor × mult) in a quiet room, but below VAD_ONSET_MIN_RMS (0.01).
+    for (let i = 0; i < ONSET_FRAMES + 3; i += 1) {
+      processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(4).fill(0.006) } });
+    }
+    expect(onSpeechStart).not.toHaveBeenCalled();
 
     vi.useRealTimers();
   });
