@@ -1128,7 +1128,8 @@
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+  /* Fully opaque so the history list stays readable over the page underneath. */
+  background: rgba(var(--bg-primary-rgb, 24, 24, 30), 1);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
   overflow: hidden;
 }

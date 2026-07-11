@@ -10,6 +10,8 @@ export interface YTPlayer {
   getDuration(): number;
   /** Player state: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued. */
   getPlayerState(): number;
+  /** 0-based index of the currently playing video in the playlist. */
+  getPlaylistIndex(): number;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
   pauseVideo(): void;
@@ -20,6 +22,8 @@ export interface YTPlayerVars {
   autoplay?: 0 | 1;
   rel?: 0 | 1;
   start?: number;
+  /** 0-based index of the first video to play in a playlist. */
+  index?: number;
   listType?: string;
   list?: string;
   modestbranding?: 0 | 1;

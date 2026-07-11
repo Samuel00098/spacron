@@ -46,6 +46,10 @@ export type YouTubeState = {
   /** Playback position (seconds) of the current video, so the player resumes
    *  from where it was after a mode-switch remount reloads the iframe. */
   position: number;
+  /** Whether the user paused playback (vs it being stopped/ended). */
+  paused: boolean;
+  /** Index of the currently playing track within a playlist/album (0-based). */
+  playlistIndex: number;
   /** True while fetching tracks for an album or playlist. */
   albumLoading?: boolean;
   /** Tracks belonging to the currently playing album/playlist. */
@@ -54,10 +58,10 @@ export type YouTubeState = {
 
 const STORAGE_KEY = 'spacron_youtube';
 
-type Persisted = Pick<YouTubeState, 'apiKey' | 'mode' | 'musicFilter' | 'query' | 'current' | 'position'>;
+type Persisted = Pick<YouTubeState, 'apiKey' | 'mode' | 'musicFilter' | 'query' | 'current' | 'position' | 'paused' | 'playlistIndex'>;
 
 function defaultPersisted(): Persisted {
-  return { apiKey: '', mode: 'video', musicFilter: 'songs', query: '', current: null, position: 0 };
+  return { apiKey: '', mode: 'video', musicFilter: 'songs', query: '', current: null, position: 0, paused: false, playlistIndex: 0 };
 }
 
 function loadPersisted(): Persisted {
@@ -77,6 +81,8 @@ function loadPersisted(): Persisted {
       query: typeof parsed.query === 'string' ? parsed.query : base.query,
       current: parsed.current ?? null,
       position: typeof parsed.position === 'number' ? parsed.position : base.position,
+      paused: typeof parsed.paused === 'boolean' ? parsed.paused : base.paused,
+      playlistIndex: typeof parsed.playlistIndex === 'number' ? parsed.playlistIndex : base.playlistIndex,
     };
   } catch {
     return defaultPersisted();
@@ -95,6 +101,8 @@ export const youtubeState = writable<YouTubeState>({
   status: '',
   loading: false,
   position: initial.position,
+  paused: initial.paused,
+  playlistIndex: initial.playlistIndex,
   albumLoading: false,
   albumTracks: [],
 });
@@ -109,6 +117,8 @@ function persist() {
     query: s.query,
     current: s.current,
     position: s.position,
+    paused: s.paused,
+    playlistIndex: s.playlistIndex,
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
@@ -132,6 +142,27 @@ export function setPosition(seconds: number) {
     lastPositionPersist = now;
     persist();
   }
+}
+
+/**
+ * Record whether the user has paused playback. Only persists when the
+ * paused state actually changes so we don't hammer localStorage on every
+ * poll tick when paused is stable.
+ */
+export function setPaused(paused: boolean) {
+  youtubeState.update((s) => {
+    if (s.paused === paused) return s;
+    persist();
+    return { ...s, paused };
+  });
+}
+
+/**
+ * Record which track index (0-based) is playing inside a playlist/album so
+ * we can restore the exact track after a refresh.
+ */
+export function setPlaylistIndex(playlistIndex: number) {
+  youtubeState.update((s) => ({ ...s, playlistIndex }));
 }
 
 export function setApiKey(apiKey: string) {
@@ -171,6 +202,8 @@ export function goHome() {
     query: '',
     status: '',
     position: 0,
+    paused: false,
+    playlistIndex: 0,
   }));
   persist();
 }
@@ -186,6 +219,7 @@ export function playVideo(video: YouTubeResult) {
       // A different video/playlist starts from the beginning; re-selecting the same one
       // (e.g. after a remount) keeps its saved position so playback resumes.
       position: isSame ? s.position : 0,
+      playlistIndex: isSame ? s.playlistIndex : 0,
       status: '',
     };
   });
@@ -640,12 +674,19 @@ function collectMusicRenderers(node: unknown, out: any[]): void {
   for (const value of Object.values(obj)) collectMusicRenderers(value, out);
 }
 
-/** Find the first `watchEndpoint.videoId` anywhere within a node. */
+/** Find the first `watchEndpoint.videoId` anywhere within a node, preferring
+ *  known locations before falling back to a blind deep search. */
 function findWatchVideoId(node: unknown): string | null {
   if (!node || typeof node !== 'object') return null;
   const obj = node as Record<string, any>;
   if (typeof obj?.playlistItemData?.videoId === 'string') return obj.playlistItemData.videoId;
   if (typeof obj?.watchEndpoint?.videoId === 'string') return obj.watchEndpoint.videoId;
+  // musicResponsiveListItemRenderer stores the video ID inside
+  // navigationEndpoint.watchEndpoint — check before the blind deep search
+  // so we don't accidentally find a watchEndpoint in an unrelated subtree.
+  if (typeof obj?.navigationEndpoint?.watchEndpoint?.videoId === 'string') {
+    return obj.navigationEndpoint.watchEndpoint.videoId;
+  }
   for (const value of Object.values(obj)) {
     const found = findWatchVideoId(value);
     if (found) return found;
@@ -653,13 +694,22 @@ function findWatchVideoId(node: unknown): string | null {
   return null;
 }
 
-/** Find the first playlistId anywhere within a node. */
+/** Find the first playlistId anywhere within a node, preferring known
+ *  locations before falling back to a blind deep search. */
 function findPlaylistId(node: unknown): string | null {
   if (!node || typeof node !== 'object') return null;
   const obj = node as Record<string, any>;
   if (typeof obj?.playlistId === 'string' && obj.playlistId) return obj.playlistId;
   if (typeof obj?.watchPlaylistEndpoint?.playlistId === 'string') return obj.watchPlaylistEndpoint.playlistId;
   if (typeof obj?.watchEndpoint?.playlistId === 'string') return obj.watchEndpoint.playlistId;
+  // musicResponsiveListItemRenderer stores the playlist ID inside
+  // navigationEndpoint — check before the blind deep search
+  if (typeof obj?.navigationEndpoint?.watchPlaylistEndpoint?.playlistId === 'string') {
+    return obj.navigationEndpoint.watchPlaylistEndpoint.playlistId;
+  }
+  if (typeof obj?.navigationEndpoint?.watchEndpoint?.playlistId === 'string') {
+    return obj.navigationEndpoint.watchEndpoint.playlistId;
+  }
   for (const value of Object.values(obj)) {
     const found = findPlaylistId(value);
     if (found) return found;

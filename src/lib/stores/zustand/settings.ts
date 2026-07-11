@@ -16,7 +16,7 @@ export interface KeyboardShortcut {
   id: string;
   label: string;
   keys: string;
-  command?: string; // Custom shell command to run in active terminal
+  action?: string; // For custom shortcuts: id of the app action (see shortcutActions) this key triggers
 }
 
 const FONT_FALLBACK = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', 'Noto Mono', Consolas, monospace";

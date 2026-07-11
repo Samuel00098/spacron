@@ -11,12 +11,14 @@ import {
   searchVideos,
   playMusicResult,
   setPosition,
+  setPaused,
+  setPlaylistIndex,
   goHome,
   fetchAlbumTracks,
   clearAlbumTracks,
   type MusicFilter,
 } from '$lib/stores/youtube';
-import { loadYouTubeApi, type YTPlayer } from '$lib/utils/youtubeApi';
+import { loadYouTubeApi, type YTPlayer, type YTPlayerVars } from '$lib/utils/youtubeApi';
 import './YouTubePanel.css';
 
 /** Format a second count as m:ss for the music transport bar. */
@@ -159,6 +161,17 @@ export default function YouTubePanel() {
     const host = playerHostRef.current;
     if (!host) return;
 
+    // Validate video ID format before passing to the IFrame API (error 2 =
+    // "Invalid video id"). The IFrame player expects standard 11-character
+    // YouTube video IDs — anything else will cause an opaque failure.
+    if (currentVideoId && !/^[a-zA-Z0-9_-]{11}$/.test(currentVideoId)) {
+      youtubeState.update((s) => ({
+        ...s,
+        status: 'This video link looks invalid.',
+      }));
+      return;
+    }
+
     let cancelled = false;
     let poll: number | null = null;
     // Captured once, at the moment this video/playlist mounts — the resume point.
@@ -183,23 +196,61 @@ export default function YouTubePanel() {
         const mount = document.createElement('div');
         playerHostRef.current.appendChild(mount);
 
-        playerRef.current = new YT.Player(mount, {
+        // A playlist/album loads via listType+list and must NOT also carry a
+        // videoId — album search results often include the first track's videoId
+        // alongside the playlist id, and passing both makes the IFrame API throw
+        // "Invalid video id". A single track loads via videoId (resuming at
+        // startAt). Build the options for exactly one of the two so they never mix.
+        const playerVars: YTPlayerVars = {
+          autoplay: 0,
+          rel: 0,
+          modestbranding: 1,
+          start: startAt,
+        };
+        const opts: ConstructorParameters<typeof YT.Player>[1] = {
           host: 'https://www.youtube-nocookie.com',
-          videoId: currentVideoId || undefined,
-          playerVars: {
-            autoplay: 0,
-            rel: 0,
-            modestbranding: 1,
-            start: currentPlaylistId ? undefined : startAt,
-            listType: currentPlaylistId ? 'playlist' : undefined,
-            list: currentPlaylistId || undefined,
-          },
+          playerVars,
           events: {
+            onReady: () => {
+              const p = playerRef.current;
+              if (!p || cancelled) return;
+              try {
+                // Seek to the exact saved position (start cue is approximate —
+                // it snaps to the nearest keyframe; a direct seekAfter is more
+                // precise). Then honour the saved paused state: if the user had
+                // paused, leave it paused; otherwise resume playback.
+                if (startAt > 0) p.seekTo(startAt, true);
+                if (!get(youtubeState).paused) {
+                  p.playVideo();
+                }
+              } catch {
+                /* player not fully ready yet */
+              }
+            },
             onError: (e) => {
               youtubeState.update((s) => ({ ...s, status: describePlayerError(e.data) }));
             },
           },
-        });
+        };
+        if (currentPlaylistId) {
+          playerVars.listType = 'playlist';
+          playerVars.list = currentPlaylistId;
+          if (startAt > 0) {
+            playerVars.index = get(youtubeState).playlistIndex;
+          }
+        } else {
+          opts.videoId = currentVideoId || undefined;
+        }
+
+        try {
+          playerRef.current = new YT.Player(mount, opts);
+        } catch {
+          youtubeState.update((s) => ({
+            ...s,
+            status: 'Could not start playback for this track — try another result.',
+          }));
+          return;
+        }
 
         // Sample the position and track info while playing. Also runs the stall
         // watchdog: `lastTime`/`stalledSince` persist across ticks (closure vars)
@@ -218,7 +269,12 @@ export default function YouTubePanel() {
             const d = p.getDuration();
             if (typeof d === 'number' && d > 0) setMusicDuration(d);
             const ps = p.getPlayerState();
-            if (typeof ps === 'number') setMusicPlaying(ps === 1 || ps === 3);
+            if (typeof ps === 'number') {
+              setMusicPlaying(ps === 1 || ps === 3);
+              setPaused(ps === 2);
+            }
+            const idx = p.getPlaylistIndex();
+            if (typeof idx === 'number') setPlaylistIndex(idx);
 
             // Dynamically retrieve info of the active track (crucial for playlists/albums)
             const data = (p as any).getVideoData?.();
@@ -301,40 +357,6 @@ export default function YouTubePanel() {
 
   const isMusic = state.mode === 'music';
 
-  // Music mode defaults to the CUSTOM player: keyless InnerTube search
-  // (songs/albums/playlists) + the IFrame API player + the .yt-music transport
-  // UI. No sign-in, no proxy. The real music.youtube.com site is available
-  // behind an explicit toolbar toggle for browsing/discovery — it refuses to
-  // be iframed directly (X-Frame-Options/CSP), so it loads through the app's
-  // background proxy, which strips those guards.
-  const [musicSiteOpen, setMusicSiteOpen] = useState(false);
-  const [musicSitePort, setMusicSitePort] = useState<number | null>(null);
-
-  // Leaving music mode always closes the embedded site.
-  useEffect(() => {
-    if (!isMusic) setMusicSiteOpen(false);
-  }, [isMusic]);
-
-  useEffect(() => {
-    if (!musicSiteOpen) return;
-    let cancelled = false;
-    void (async () => {
-      const { ensureProxyRunning } = await import('$lib/stores/preview');
-      const port = await ensureProxyRunning();
-      if (!cancelled) setMusicSitePort(port);
-    })();
-    // Opening the site: pause whatever the custom player is playing so its
-    // audio doesn't fight the embedded site's.
-    try {
-      playerRef.current?.pauseVideo();
-    } catch {
-      /* player not ready */
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [musicSiteOpen]);
-
   // Keep the album/playlist tracklist in sync with what's playing: fetch it
   // when a playlist/album loads (keyless InnerTube `next` call), clear it when
   // playback moves to a single track.
@@ -398,10 +420,25 @@ export default function YouTubePanel() {
   const isShort = dimensions.height > 0 && dimensions.height < 450;
   const isMiniHeight = dimensions.height > 0 && dimensions.height < 250;
 
+  // A loaded album/playlist shows its tracklist. Lay the tracks *beside* the
+  // now-playing block whenever the panel is landscape enough to fit both;
+  // otherwise they stack below (and scroll). Driving this off the live aspect
+  // ratio — not a fixed height breakpoint — keeps everything visible no matter
+  // how the window is sized or positioned.
+  const hasTracks =
+    isMusic &&
+    !!state.current &&
+    !state.albumLoading &&
+    !!state.albumTracks &&
+    state.albumTracks.length > 0;
+  const tracksSide =
+    hasTracks && dimensions.width >= 420 && dimensions.width > dimensions.height;
+
   const sizeClasses = [
     isNarrow ? 'yt-width-narrow' : '',
     isShort ? 'yt-height-short' : '',
     isMiniHeight ? 'yt-height-mini' : '',
+    tracksSide ? 'yt-tracks-side' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -467,10 +504,6 @@ export default function YouTubePanel() {
             <span className="yt-mode-text">Music</span>
           </button>
         </div>
-        {/* The search box drives both surfaces (keyless InnerTube search). It
-            is only hidden while the embedded YT Music site is open — the site
-            has its own search. */}
-        {!musicSiteOpen && (
         <form className="yt-search" onSubmit={onSubmit}>
           <svg className="yt-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" />
@@ -503,8 +536,7 @@ export default function YouTubePanel() {
             )}
           </button>
         </form>
-        )}
-        {!musicSiteOpen && state.current && state.results.length > 0 && (
+        {state.current && state.results.length > 0 && (
           <button
             className={`yt-icon-btn${resultsOpen ? ' active' : ''}`}
             title="Search results"
@@ -514,21 +546,6 @@ export default function YouTubePanel() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
               <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
               <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
-            </svg>
-          </button>
-        )}
-        {isMusic && (
-          <button
-            className={`yt-icon-btn${musicSiteOpen ? ' active' : ''}`}
-            title={musicSiteOpen ? 'Back to the player' : 'Open the YouTube Music site'}
-            aria-label={musicSiteOpen ? 'Back to the player' : 'Open the YouTube Music site'}
-            aria-pressed={musicSiteOpen}
-            onClick={() => setMusicSiteOpen((v) => !v)}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M3 12h18" />
-              <path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
             </svg>
           </button>
         )}
@@ -562,9 +579,7 @@ export default function YouTubePanel() {
         </div>
       )}
 
-      {/* Music sub-filters: what kind of result the keyless search returns.
-          Hidden while the embedded site is open (it has its own filters). */}
-      {isMusic && !musicSiteOpen && (
+      {isMusic && (
         <div className="yt-music-filters" role="tablist" aria-label="Music search filter">
           {(['songs', 'albums', 'playlists'] as MusicFilter[]).map((filter) => (
             <button
@@ -582,29 +597,8 @@ export default function YouTubePanel() {
       )}
 
       <div className="yt-body">
-        {/* Opt-in browsing surface: the real YouTube Music site, embedded
-            through the background proxy (which strips its X-Frame-Options/CSP
-            so it can render inside the panel). Unmounted when closed so its
-            audio stops instead of fighting the custom player's. */}
-        {isMusic && musicSiteOpen && (
-          <div className="yt-music-site">
-            {musicSitePort ? (
-              <iframe
-                className="yt-music-site-frame"
-                title="YouTube Music"
-                src={`http://127.0.0.1:${musicSitePort}/proxy/https/music.youtube.com/`}
-                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-              />
-            ) : (
-              <div className="yt-empty">
-                <p>Starting YouTube Music…</p>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Results dropdown over the player — only while a video is playing. */}
-        {!musicSiteOpen && resultsOpen && state.current && state.results.length > 0 && (
+        {resultsOpen && state.current && state.results.length > 0 && (
           <>
             <div className="yt-results-backdrop" onClick={() => setResultsOpen(false)} />
             <div className="yt-results-dropdown">
@@ -654,7 +648,7 @@ export default function YouTubePanel() {
             IFrame API can manage its lifecycle from the effect above. In music
             mode the host is pushed off-screen (it keeps the audio playing) and a
             dedicated music UI is shown instead — see .yt-player-music in the CSS. */}
-        <div className={`yt-player${isMusic ? ' yt-player-music' : ''}`} style={{ display: !hasPlayer || musicSiteOpen ? 'none' : undefined }}>
+        <div className={`yt-player${isMusic ? ' yt-player-music' : ''}`} style={{ display: !hasPlayer ? 'none' : undefined }}>
           {state.current && (
             <button className="yt-back" onClick={() => youtubeState.update((s) => ({ ...s, current: null }))}>
               ← <span className="yt-back-text">Back to results</span>
@@ -663,72 +657,74 @@ export default function YouTubePanel() {
 
           {isMusic && state.current && (
             <div className="yt-music">
-              <div className="yt-music-art">
-                <img src={getActiveArt()} alt="" />
-              </div>
-              <div className="yt-music-details">
-                <div className="yt-music-meta">
-                  <div className="yt-music-title" title={activeTitle}>{activeTitle}</div>
-                  {activeChannel && <div className="yt-music-artist">{activeChannel}</div>}
+              <div className="yt-music-now">
+                <div className="yt-music-art">
+                  <img src={getActiveArt()} alt="" />
                 </div>
-                <div className="yt-music-controls">
-                  <div className="yt-music-btns">
-                    <button
-                      type="button"
-                      className="yt-music-prev"
-                      onClick={playPrev}
-                      disabled={!hasPlaylist}
-                      title="Previous track"
-                      aria-label="Previous track"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="yt-music-play"
-                      onClick={toggleMusicPlay}
-                      aria-label={musicPlaying ? 'Pause' : 'Play'}
-                      title={musicPlaying ? 'Pause' : 'Play'}
-                    >
-                      {musicPlaying ? (
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                          <rect x="6" y="5" width="4" height="14" rx="1" />
-                          <rect x="14" y="5" width="4" height="14" rx="1" />
-                        </svg>
-                      ) : (
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="yt-music-next"
-                      onClick={playNext}
-                      disabled={!hasPlaylist}
-                      title="Next track"
-                      aria-label="Next track"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M6 18l8.5-6L6 6zm9-12h2v12h-2z" />
-                      </svg>
-                    </button>
+                <div className="yt-music-details">
+                  <div className="yt-music-meta">
+                    <div className="yt-music-title" title={activeTitle}>{activeTitle}</div>
+                    {activeChannel && <div className="yt-music-artist">{activeChannel}</div>}
                   </div>
-                  <div className="yt-music-slider">
-                    <span className="yt-music-time">{fmtTime(musicProgress)}</span>
-                    <input
-                      className="yt-music-seek"
-                      type="range"
-                      min={0}
-                      max={musicDuration || 0}
-                      step={1}
-                      value={Math.min(musicProgress, musicDuration || 0)}
-                      onChange={onMusicSeek}
-                      aria-label="Seek"
-                    />
-                    <span className="yt-music-time">{fmtTime(musicDuration)}</span>
+                  <div className="yt-music-controls">
+                    <div className="yt-music-btns">
+                      <button
+                        type="button"
+                        className="yt-music-prev"
+                        onClick={playPrev}
+                        disabled={!hasPlaylist}
+                        title="Previous track"
+                        aria-label="Previous track"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="yt-music-play"
+                        onClick={toggleMusicPlay}
+                        aria-label={musicPlaying ? 'Pause' : 'Play'}
+                        title={musicPlaying ? 'Pause' : 'Play'}
+                      >
+                        {musicPlaying ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="5" width="4" height="14" rx="1" />
+                            <rect x="14" y="5" width="4" height="14" rx="1" />
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="yt-music-next"
+                        onClick={playNext}
+                        disabled={!hasPlaylist}
+                        title="Next track"
+                        aria-label="Next track"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M6 18l8.5-6L6 6zm9-12h2v12h-2z" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="yt-music-slider">
+                      <span className="yt-music-time">{fmtTime(musicProgress)}</span>
+                      <input
+                        className="yt-music-seek"
+                        type="range"
+                        min={0}
+                        max={musicDuration || 0}
+                        step={1}
+                        value={Math.min(musicProgress, musicDuration || 0)}
+                        onChange={onMusicSeek}
+                        aria-label="Seek"
+                      />
+                      <span className="yt-music-time">{fmtTime(musicDuration)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -782,7 +778,7 @@ export default function YouTubePanel() {
           {!isMusic && state.current?.title && <div className="yt-now-playing">{activeTitle}</div>}
         </div>
 
-        {!musicSiteOpen && !state.current && state.results.length > 0 && (
+        {!state.current && state.results.length > 0 && (
           <div className="yt-grid scrollable">
             {state.results.map((r) => (
               <button key={r.playlistId || r.browseId || r.videoId} className="yt-card" onClick={() => void playMusicResult(r)}>
@@ -799,7 +795,7 @@ export default function YouTubePanel() {
           </div>
         )}
 
-        {!musicSiteOpen && !hasPlayer && state.results.length === 0 && (
+        {!hasPlayer && state.results.length === 0 && (
           <div className="yt-empty">
             {isMusic ? (
               <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">

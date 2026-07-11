@@ -33,9 +33,10 @@
 .youtube-panel .yt-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 /* Segmented Video / Music source toggle. */
@@ -191,21 +192,6 @@
   position: relative;
 }
 
-/* Music mode: the embedded music.youtube.com site fills the whole body. */
-.youtube-panel .yt-music-site {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-}
-
-.youtube-panel .yt-music-site-frame {
-  flex: 1 1 auto;
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: rgb(var(--bg-primary-rgb, 24, 24, 30));
-}
-
 .youtube-panel .yt-player {
   display: flex;
   flex-direction: column;
@@ -214,11 +200,13 @@
 }
 
 .youtube-panel .yt-back {
+  position: relative;
+  z-index: 2;
   align-self: flex-start;
   margin: 8px 10px 0;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-secondary);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   color: var(--text-secondary);
   font-size: 12px;
   padding: 4px 10px;
@@ -274,17 +262,31 @@
 .youtube-panel .yt-music {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  padding: 24px 28px;
+  gap: 14px;
+  padding: 18px 22px;
   text-align: center;
 }
 
+/* The "now playing" block — cover art stacked above the title + transport.
+   Grouping art + details lets the tracklist sit beside this block (side-by-side)
+   or below it (stacked) as a single unit, instead of loose columns. */
+.youtube-panel .yt-music-now {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
 .youtube-panel .yt-music-art {
-  width: min(240px, 60%);
+  width: min(200px, 50%);
   aspect-ratio: 1 / 1;
   border-radius: 14px;
   overflow: hidden;
@@ -306,7 +308,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
 }
@@ -335,11 +337,11 @@
 
 .youtube-panel .yt-music-controls {
   width: 100%;
-  max-width: 360px;
+  max-width: min(440px, 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .youtube-panel .yt-music-btns {
@@ -414,6 +416,7 @@
 .youtube-panel .yt-music-seek {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -422,10 +425,20 @@
 .youtube-panel .yt-music-filters {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-secondary) 40%, transparent);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.youtube-panel .yt-music-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.youtube-panel .yt-music-filters {
+  scrollbar-width: none;
 }
 
 .youtube-panel .yt-filter-pill {
@@ -457,8 +470,8 @@
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
   padding: 12px;
   align-content: start;
 }
@@ -576,9 +589,8 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
-  backdrop-filter: blur(22px) saturate(1.1);
-  -webkit-backdrop-filter: blur(22px) saturate(1.1);
+  /* Fully opaque so the search results stay readable over the playing video. */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   box-shadow: 0 18px 50px -20px rgba(0, 0, 0, 0.7);
 }
 
@@ -720,81 +732,226 @@
 }
 
 .youtube-panel.yt-width-narrow .yt-music-art {
-  width: min(150px, 45%);
+  width: min(120px, 40%);
 }
 
 .youtube-panel.yt-width-narrow .yt-music-title {
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .youtube-panel.yt-width-narrow .yt-music-artist {
   font-size: 11px;
 }
 
-/* --- Short Viewports (< 290px height) ------------------------------------ */
+.youtube-panel.yt-width-narrow .yt-music-play {
+  width: 38px;
+  height: 38px;
+}
+
+.youtube-panel.yt-width-narrow .yt-music-prev,
+.youtube-panel.yt-width-narrow .yt-music-next {
+  width: 28px;
+  height: 28px;
+}
+
+.youtube-panel.yt-width-narrow .yt-music-btns {
+  gap: 12px;
+}
+
+.youtube-panel.yt-width-narrow .yt-toolbar {
+  padding: 6px 8px;
+  gap: 4px;
+}
+
+.youtube-panel.yt-width-narrow .yt-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.youtube-panel.yt-width-narrow .yt-search {
+  min-width: 60px;
+}
+
+.youtube-panel.yt-width-narrow .yt-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.youtube-panel.yt-width-narrow .yt-album-tracklist {
+  max-width: 100%;
+}
+
+.youtube-panel.yt-width-narrow .yt-music-slider {
+  gap: 6px;
+}
+
+.youtube-panel.yt-width-narrow .yt-track-row {
+  font-size: 11.5px;
+  padding: 5px 6px;
+}
+
+/* --- Short Viewports (< 450px height) — compact the now-playing block ----- */
 .youtube-panel.yt-height-short .yt-music {
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 16px;
-  padding: 12px 18px;
-  text-align: left;
+  gap: 8px;
+  padding: 10px 16px;
 }
 
 .youtube-panel.yt-height-short .yt-music-art {
   width: 90px;
-  height: 90px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .youtube-panel.yt-height-short .yt-music-details {
-  align-items: flex-start;
-  text-align: left;
   gap: 6px;
-  flex: 1 1 auto;
-}
-
-.youtube-panel.yt-height-short .yt-music-meta {
-  text-align: left;
-  margin: 0;
 }
 
 .youtube-panel.yt-height-short .yt-music-controls {
-  max-width: none;
-  align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
 }
 
 .youtube-panel.yt-height-short .yt-music-play {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
 }
 
 .youtube-panel.yt-height-short .yt-music-prev,
 .youtube-panel.yt-height-short .yt-music-next {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
 }
 
 .youtube-panel.yt-height-short .yt-music-time {
-  min-width: 28px;
+  min-width: 26px;
   font-size: 10px;
+}
+
+.youtube-panel.yt-height-short .yt-music-title {
+  font-size: 13px;
+}
+
+.youtube-panel.yt-height-short .yt-music-artist {
+  font-size: 11px;
+}
+
+.youtube-panel.yt-height-short .yt-music-btns {
+  gap: 12px;
 }
 
 /* --- Short AND Narrow ---------------------------------------------------- */
 .youtube-panel.yt-height-short.yt-width-narrow .yt-music-art {
-  width: 64px;
-  height: 64px;
+  width: 56px;
+  height: 56px;
 }
 
-/* --- Mini Height (< 200px height) ---------------------------------------- */
+.youtube-panel.yt-height-short.yt-width-narrow .yt-music-title {
+  font-size: 12px;
+}
+
+.youtube-panel.yt-height-short.yt-width-narrow .yt-music-artist {
+  font-size: 10.5px;
+}
+
+.youtube-panel.yt-height-short.yt-width-narrow .yt-music-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.youtube-panel.yt-height-short.yt-width-narrow .yt-music-prev svg,
+.youtube-panel.yt-height-short.yt-width-narrow .yt-music-next svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* --- Mini Height (< 250px height) — ultra-compact bar layout -------------- */
 .youtube-panel.yt-height-mini .yt-music-art {
   display: none;
 }
 
 .youtube-panel.yt-height-mini .yt-music {
-  padding: 8px 12px;
+  padding: 6px 12px;
+  gap: 6px;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.youtube-panel.yt-height-mini .yt-music-now {
+  flex-direction: row;
+  gap: 10px;
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.youtube-panel.yt-height-mini .yt-music-details {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+}
+
+.youtube-panel.yt-height-mini .yt-music-meta {
+  text-align: left;
+  min-width: 0;
+}
+
+.youtube-panel.yt-height-mini .yt-music-title {
+  font-size: 12px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-artist {
+  font-size: 10px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-controls {
+  width: auto;
+  max-width: none;
+  flex-direction: row;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-btns {
+  gap: 8px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-play {
+  width: 30px;
+  height: 30px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-prev,
+.youtube-panel.yt-height-mini .yt-music-next {
+  width: 24px;
+  height: 24px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-prev svg,
+.youtube-panel.yt-height-mini .yt-music-next svg {
+  width: 13px;
+  height: 13px;
+}
+
+.youtube-panel.yt-height-mini .yt-music-slider {
+  width: min(160px, 40vw);
+  gap: 4px;
+  flex-shrink: 1;
+}
+
+.youtube-panel.yt-height-mini .yt-music-time {
+  min-width: 22px;
+  font-size: 9px;
+}
+
+.youtube-panel.yt-height-mini .yt-album-tracklist {
+  display: none;
 }
 
 /* --- Album / Playlist Tracklist ----------------------------------------- */
@@ -805,33 +962,73 @@
   text-align: center;
 }
 
+/* Stacked (default): the tracklist sits below the now-playing block and grows
+   to fill whatever height is left, scrolling internally so it never overflows. */
 .youtube-panel .yt-album-tracklist {
   width: 100%;
-  max-width: 360px;
-  margin-top: 12px;
+  max-width: min(480px, 100%);
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 4px;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 10px;
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 180px;
+  gap: 4px;
   overflow-y: auto;
 }
 
-.youtube-panel.yt-height-short .yt-album-tracklist {
-  flex: 1 1 0;
-  min-width: 180px;
-  max-width: none;
-  margin-top: 0;
-  border-top: none;
-  border-left: 1px solid var(--border);
-  padding-top: 0;
-  padding-left: 16px;
-  max-height: 100%;
+/* Side-by-side: the panel is landscape enough to place the tracklist beside the
+   now-playing block. The now block holds the left column; the tracks fill the
+   rest of the width and the full height, scrolling on their own. */
+.youtube-panel.yt-tracks-side .yt-music {
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 16px;
 }
 
-.youtube-panel.yt-height-mini .yt-album-tracklist {
+.youtube-panel.yt-tracks-side .yt-music-now {
+  flex: 0 0 auto;
+  width: min(44%, 220px);
+  align-self: center;
+}
+
+.youtube-panel.yt-tracks-side .yt-album-tracklist {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+  align-self: stretch;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+  border-left: 1px solid var(--border);
+  padding-left: 14px;
+}
+
+.youtube-panel.yt-tracks-side.yt-height-short .yt-music {
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+.youtube-panel.yt-tracks-side.yt-height-short .yt-music-now {
+  width: min(40%, 120px);
+}
+
+.youtube-panel.yt-tracks-side.yt-height-short .yt-album-tracklist {
+  padding-left: 10px;
+}
+
+.youtube-panel.yt-tracks-side.yt-height-short .yt-track-row {
+  padding: 4px 6px;
+  font-size: 11.5px;
+}
+
+/* Too short to stack art + details + tracks vertically: drop the tracklist only
+   when stacked. In side-by-side there's still horizontal room, so keep it. */
+.youtube-panel.yt-height-mini:not(.yt-tracks-side) .yt-album-tracklist {
   display: none;
 }
 

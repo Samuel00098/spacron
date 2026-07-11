@@ -3,6 +3,33 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.7] - 2026-07-11
+
+A release focused on the YouTube Music experience and custom shortcut rework: the embedded music.youtube.com site is gone in favor of a refined keyless player, the side-by-side responsive tracklist, and persistent playback state. Custom shortcuts shift from terminal commands to app actions, dropdowns gain modal-safe boundary detection, and various UI polish rounds out the release.
+
+### Added
+
+- **Side-by-side tracklist in landscape panels** — when the YouTube Music panel is wider than it is tall, the album/playlist tracklist moves beside the now-playing block instead of below it, with responsive breakpoints that react to narrow, short, and mini viewports — every panel size gets a tailored layout.
+- **Custom shortcuts drive app actions** — custom keyboard shortcuts now bind to app actions (toggle a panel, open settings, switch layout) via a Dropdown picker instead of typing a shell command, making custom shortcuts useful for navigation without needing a terminal.
+- **Dropdown boundary detection** — the custom Dropdown component gains a `boundarySelector` prop that keeps the menu inside modal boundaries, preventing clipping in Settings and other overflow-hidden containers.
+- **Playlist index & paused state persistence** — the YouTube player now saves which track was playing in an album/playlist and whether it was paused, restoring the exact playback state across app restarts and mode switches.
+- **Scroll-edge fade on dropdown menus** — the dropdown overlay gets a vertical mask-image gradient so items fade into the panel edge instead of cutting off sharply.
+
+### Changed
+
+- **YouTube Music: removed the embedded site** — the toolbar toggle for the real music.youtube.com site (loaded through the proxy) is removed. The keyless InnerTube player is now the only music surface, which eliminates the audio-fighting and complexity of maintaining both surfaces.
+- **Grok CLI now reads the rules file** — the built-in Grok CLI preset (`grok`) now sets `readsRulesFile: true`, matching the other built-in CLI agents.
+- **Shortcut editor category renamed** — custom shortcuts now appear under "Custom Shortcuts" instead of "Custom Commands", and the add-form section is titled "Add custom navigation shortcut".
+- **Responsive CSS refinements** — narrow-width breakpoints now scale play/prev/next button sizes, toolbar padding, grid layout, and track-row density, ensuring the YouTube panel is usable at every size from a narrow sidebar to a full-width panel.
+
+### Fixed
+
+- **Video ID validation before IFrame load** — invalid or malformed video IDs are caught early instead of producing an opaque "Invalid video id" error from the YouTube IFrame API.
+- **Playlist/album loading with mixed videoId** — album search results that include a first-track `videoId` alongside the `playlistId` no longer cause the IFrame API to throw "Invalid video id", because the two are never passed together.
+- **Paused state restores correctly on remount** — the player now remembers whether playback was paused (not just the position), so switching modes and back doesn't auto-resume a paused track.
+- **Improved InnerTube data extraction** — `findWatchVideoId` and `findPlaylistId` now check `musicResponsiveListItemRenderer`'s `navigationEndpoint` before the blind deep search, so album/playlist tracks parsed from InnerTube `next` responses resolve correctly.
+
+
 ## [v0.6.6] - 2026-07-11
 
 A release featuring agent team roles with a shared mailbox, the Grok CLI as a new built-in agent, opt-in remote auto-reconnect, local HTML preview, TTS pacing controls, a downloadable website, and a proprietary license.

@@ -12,13 +12,13 @@
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.5);
-  border: 1px solid var(--border);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  border: 1px solid var(--input-border, var(--border));
   border-radius: 7px;
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
 }
 .dd-trigger:hover:not(:disabled) {
   border-color: var(--border-focus);
@@ -26,7 +26,8 @@
 }
 .dd-trigger.open {
   border-color: var(--accent);
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.7);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 .dd-trigger:disabled {
   opacity: 0.45;
@@ -83,6 +84,9 @@
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
   animation: dd-pop 0.13s ease;
+  /* Scroll edge fade — matches .room-stack, .sselect-options-list, etc. */
+  mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
 }
 .dd-menu.drop-up {
   transform-origin: bottom;
@@ -94,6 +98,11 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes dd-pop-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dd-item-in {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
@@ -110,6 +119,7 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
+  animation: dd-item-in 0.18s ease both;
   transition: background 0.12s, color 0.12s;
 }
 .dd-item:hover:not(:disabled) {

@@ -72,7 +72,6 @@ import {
   paneAssignments,
   setActiveSession,
   sessions as terminalSessions,
-  writeToSession,
   commandHistory,
 } from '$lib/stores/terminal';
 
@@ -854,32 +853,14 @@ export default function AppShell() {
       const matched = (shortcuts || []).find((shortcut) => shortcut && matchShortcut(event, shortcut.keys));
       if (!matched) return;
 
-      if (matched.id.startsWith('custom_') && matched.command) {
-        event.preventDefault();
-        const runCustomCommand = async () => {
-          const isDev = ambientLayout === 'development';
-          if (isDev) {
-            setDevTerminalRoomOpen(true);
-            setFocusedRoom('dev-terminal');
-          } else {
-            setTerminalRoomOpen(true);
-            setFocusedRoom('terminal');
-          }
-          let sesId = isDev ? devActiveSessionIdRef.current : activeSessionIdRef.current;
-          if (sesId === null) {
-            sesId = await createTerminalSession(undefined, undefined, undefined, { isDev });
-          }
-          if (sesId !== null) {
-            writeToSession(sesId, matched.command + '\r');
-          }
-        };
-        runCustomCommand().catch(console.error);
-        return;
-      }
+      // Built-in shortcuts dispatch by their own id; custom shortcuts point at an
+      // app action via `action`, so we drive the same switch through that id.
+      const actionId = matched.id.startsWith('custom_') ? matched.action : matched.id;
+      if (!actionId) return;
 
       event.preventDefault();
 
-      switch (matched.id) {
+      switch (actionId) {
         case 'toggleProjectHUD':
           toggleProjectHUD();
           break;

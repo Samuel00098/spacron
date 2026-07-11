@@ -36,6 +36,7 @@ import {
   minimap,
   notificationsEnabled,
   resetSettingsToDefault,
+  shortcutActions,
   setAiModel,
   setProviderBaseUrl,
   setVoiceAiModel,
@@ -98,9 +99,20 @@ import { activeTheme, switchPresetTheme, saveTheme, importTheme, themeColorField
 import { presetThemes } from '$lib/stores/presetThemes';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import './SettingsModal.css';
 
 type Tab = 'general' | 'appearance' | 'models' | 'voice' | 'terminal' | 'agents' | 'shortcuts' | 'about';
+
+// App actions a custom shortcut can be bound to. Zoom actions are dispatched
+// separately (window zoom in App.tsx, canvas zoom is view-local), so they're
+// omitted here — every action listed is handled by AppShell's shortcut switch.
+const assignableActions = shortcutActions.filter((a) => !a.id.toLowerCase().includes('zoom'));
+const actionOptions: DropdownOption[] = assignableActions.map((a) => ({
+  value: a.id,
+  label: a.label,
+  sublabel: a.category,
+}));
 
 type SettingsModalProps = {
   onclose: () => void;
@@ -404,7 +416,7 @@ function ShortcutEditor({
     const groups = new Map<string, KeyboardShortcut[]>();
     for (const shortcut of shortcuts) {
       const category = shortcut.id.startsWith('custom_')
-        ? 'Custom Commands'
+        ? 'Custom Shortcuts'
         : shortcut.id.startsWith('canvas')
           ? 'Canvas'
           : shortcut.id.includes('Terminal') || shortcut.id === 'newTerminal'
@@ -455,9 +467,9 @@ function ShortcutEditor({
                   )}
                 </div>
               </label>
-              {shortcut.id.startsWith('custom_') && shortcut.command && (
+              {shortcut.id.startsWith('custom_') && shortcut.action && (
                 <div style={{ paddingLeft: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                  Command: <code>{shortcut.command}</code>
+                  Action: <code>{shortcutActions.find((a) => a.id === shortcut.action)?.label ?? shortcut.action}</code>
                 </div>
               )}
             </div>
@@ -482,7 +494,7 @@ const PRESET_AGENTS: PresetAgent[] = [
   { name: 'Pi AI Agent', command: 'pi', readsRulesFile: false },
   { name: 'Oh My Pi', command: 'omp', readsRulesFile: false },
   { name: 'Cursor', command: 'agent', readsRulesFile: true },
-  { name: 'Grok CLI', command: 'grok', readsRulesFile: false },
+  { name: 'Grok CLI', command: 'grok', readsRulesFile: true },
 ];
 
 export default function SettingsModal({ onclose }: SettingsModalProps) {
@@ -630,7 +642,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const [customLabel, setCustomLabel] = useState('');
   const [customKeys, setCustomKeys] = useState('');
-  const [customCommand, setCustomCommand] = useState('');
+  const [customAction, setCustomAction] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState(false);
   const [groqKeyExists, setGroqKeyExists] = useState(false);
@@ -1156,7 +1168,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }
 
   function handleAddShortcut() {
-    if (!customLabel.trim() || !customKeys.trim() || !customCommand.trim()) {
+    if (!customLabel.trim() || !customKeys.trim() || !customAction) {
       showToast('Please fill out all fields to add a shortcut.', 'warning');
       return;
     }
@@ -1173,13 +1185,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       id: newId,
       label: customLabel.trim(),
       keys: customKeys.trim(),
-      command: customCommand.trim()
+      action: customAction
     };
 
     userShortcuts.set([...shortcuts, newShortcut]);
     setCustomLabel('');
     setCustomKeys('');
-    setCustomCommand('');
+    setCustomAction('');
     showToast('Custom shortcut added successfully.', 'info');
   }
 
@@ -2206,15 +2218,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     onDelete={handleDeleteShortcut} 
                   />
                 </Section>
-                <Section title="Add custom command shortcut">
+                <Section title="Add custom navigation shortcut">
                   <div className="custom-shortcut-form">
                     <div style={{ display: 'flex', gap: '10px' }}>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Label / Name</span>
                         <input 
                           type="text" 
-                          placeholder="e.g. Build Project" 
-                          value={customLabel} 
+                          placeholder="e.g. Jump to Editor"
+                          value={customLabel}
                           onChange={(e) => setCustomLabel(e.target.value)} 
                           style={{
                             background: 'var(--bg-secondary)',
@@ -2248,21 +2260,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Terminal Command</span>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. npm run build" 
-                        value={customCommand} 
-                        onChange={(e) => setCustomCommand(e.target.value)} 
-                        style={{
-                          background: 'var(--bg-secondary)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '6px',
-                          color: 'var(--text-primary)',
-                          padding: '6px 10px',
-                          fontSize: '13px',
-                          outline: 'none'
-                        }}
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Application Action</span>
+                      <Dropdown
+                        options={actionOptions}
+                        value={customAction}
+                        onChange={(val) => setCustomAction(val)}
+                        placeholder="Select an action…"
+                        ariaLabel="Application Action"
                       />
                     </div>
                     

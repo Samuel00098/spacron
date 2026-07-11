@@ -1227,8 +1227,14 @@
   font-size: 12.5px;
   color: var(--text-secondary);
   cursor: pointer;
+  animation: sselect-item-in 0.18s ease both;
   transition: background-color 0.12s ease, color 0.12s ease;
   user-select: none;
+}
+
+@keyframes sselect-item-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .sselect-option:hover {

@@ -53,3 +53,17 @@ src-tauri/cargo_output*.txt
 website/.next/
 website/out/
 website/next-env.d.ts
+
+# Test/output artifacts from YouTube API testing
+albums.json
+browse_album.json
+next_album.json
+search_albums.json
+player.json
+player_live.json
+playlists.json
+consent_live.html
+ytm*.html
+enc_headers.txt
+enc_test_*.bin
+cj.txt

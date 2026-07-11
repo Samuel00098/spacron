@@ -20,6 +20,9 @@ interface DropdownProps {
   placeholder?: string;
   ariaLabel?: string;
   disabled?: boolean;
+  /** CSS selector for a container element to bound the dropdown within.
+   *  When set, the menu will not extend past this element's edges. */
+  boundarySelector?: string;
 }
 
 // Menu max-height (keep in sync with .dd-menu max-height in CSS).
@@ -32,6 +35,7 @@ export default function Dropdown({
   placeholder = 'Select…',
   ariaLabel = 'Select an option',
   disabled = false,
+  boundarySelector,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
@@ -46,12 +50,27 @@ export default function Dropdown({
    * never be clipped by an ancestor's `overflow` (the room panels that host this
    * dropdown clip their content), and the available space decides whether it
    * opens up or down and how tall it can grow before it scrolls.
+   * When `boundarySelector` is provided, the menu stays inside that element's
+   * bounds instead of extending past it (useful inside modals).
    */
   const updatePlacement = useCallback(() => {
     if (!rootEl.current) return;
     const r = rootEl.current.getBoundingClientRect();
-    const below = window.innerHeight - r.bottom;
-    const above = r.top;
+
+    // Determine the bounding rect that constrains the menu.
+    let boundTop = 0;
+    let boundBottom = window.innerHeight;
+    if (boundarySelector) {
+      const boundary = document.querySelector(boundarySelector);
+      if (boundary) {
+        const br = boundary.getBoundingClientRect();
+        boundTop = br.top;
+        boundBottom = br.bottom;
+      }
+    }
+
+    const below = boundBottom - r.bottom;
+    const above = r.top - boundTop;
     const willDropUp = below < Math.min(MENU_MAX, 200) && above > below;
     setDropUp(willDropUp);
 
@@ -63,12 +82,12 @@ export default function Dropdown({
       maxHeight,
     };
     if (willDropUp) {
-      next.bottom = window.innerHeight - r.top + 6;
+      next.bottom = boundBottom - r.top + 6;
     } else {
       next.top = r.bottom + 6;
     }
     setMenuStyle(next);
-  }, []);
+  }, [boundarySelector]);
 
   function toggle() {
     if (disabled) return;
