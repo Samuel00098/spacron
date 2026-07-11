@@ -398,12 +398,13 @@ function collectVideoRenderers(node: unknown, out: any[]): void {
 async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeResult[]> {
   const url = `https://music.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}&prettyPrint=false`;
 
-  // Select the appropriate InnerTube search parameter based on the filter
+  // InnerTube search filter params (protobuf, same values ytmusicapi uses —
+  // the middle chars encode the result type: II=songs, IY=albums).
   let params = 'EgWKAQIIAWoKEAkQBRAKEAMQBA=='; // Songs (default)
   if (filter === 'albums') {
-    params = 'EgWKAQIIAWoKEAkQBRADEAMQBA=='; // Albums
+    params = 'EgWKAQIYAWoMEA4QChADEAQQCRAF'; // Albums
   } else if (filter === 'playlists') {
-    params = 'EgWKAQIIAWoKEAkQBRADEAUQBA=='; // Playlists
+    params = 'Eg-KAQwIABAAGAAgACgBMABqChAEEAMQCRAFEAo%3D'; // Playlists
   }
 
   const payload = {
@@ -420,17 +421,32 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
 
   const seen = new Set<string>();
   const results: YouTubeResult[] = [];
+  const isList = filter === 'albums' || filter === 'playlists';
   for (const item of renderers) {
     const videoId = findWatchVideoId(item);
-    const playlistId = findPlaylistId(item);
 
-    // If searching for albums/playlists, we need a playlistId. Otherwise we need a videoId.
-    const isList = filter === 'albums' || filter === 'playlists';
-    if (isList && !playlistId) continue;
-    if (!isList && !videoId) continue;
+    // Resolve the playable playlist id for list results. Albums prefer their
+    // OLAK5uy_… audio playlist (present directly in album search results);
+    // playlists fall back to the row's VLPL… browse target with the VL prefix
+    // stripped, since some rows only expose the id there.
+    let playlistId: string | undefined;
+    if (isList) {
+      const browseTarget: unknown = (item as any)?.navigationEndpoint?.browseEndpoint?.browseId;
+      const fromBrowse =
+        typeof browseTarget === 'string' && browseTarget.startsWith('VL')
+          ? browseTarget.slice(2)
+          : null;
+      playlistId =
+        filter === 'albums'
+          ? findOlakPlaylistId(item) ?? sanitizePlaylistId(findPlaylistId(item))
+          : sanitizePlaylistId(findPlaylistId(item)) ?? sanitizePlaylistId(fromBrowse);
+    }
+    const browseId = filter === 'albums' ? findAlbumBrowseId(item) ?? undefined : undefined;
 
-    const idKey = isList ? playlistId! : videoId!;
-    if (seen.has(idKey)) continue;
+    // Albums without a resolved playlist id can still play via their browseId
+    // (playMusicResult resolves it); anything else needs a concrete id.
+    const idKey = isList ? playlistId ?? browseId : videoId ?? undefined;
+    if (!idKey || seen.has(idKey)) continue;
     seen.add(idKey);
 
     const cols: any[] = Array.isArray(item?.flexColumns) ? item.flexColumns : [];
@@ -443,20 +459,25 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
         .trim();
     };
     const title = colText(0) || 'Untitled';
-    let channel = (colText(1).split('•')[0] ?? '').trim();
-    
-    // Clean up channel name if it's a playlist starting with "Playlist"
-    if (channel.toLowerCase().startsWith('playlist')) {
-      const parts = colText(1).split('•');
-      channel = (parts[1] || parts[0] || '').trim();
-    }
+    // The subtitle column is "Artist • Album • …" for songs, but list results
+    // lead with their kind ("Album • Artist • Year", "Playlist • Author • …");
+    // skip that leading type word so the card shows the artist/author.
+    const subtitleParts = colText(1)
+      .split('•')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const typeWords = new Set(['album', 'single', 'ep', 'playlist']);
+    const channel =
+      (subtitleParts[0] && typeWords.has(subtitleParts[0].toLowerCase())
+        ? subtitleParts[1]
+        : subtitleParts[0]) ?? '';
 
     results.push({
       // A song plays as its bare video: search attaches an RDAMVM… "radio"
       // playlistId which the IFrame embed player refuses to load.
       videoId: videoId || undefined,
-      playlistId: isList ? sanitizePlaylistId(playlistId) : undefined,
-      browseId: filter === 'albums' ? findAlbumBrowseId(item) ?? undefined : undefined,
+      playlistId: isList ? playlistId : undefined,
+      browseId,
       title,
       channel,
       thumbnail: findThumbnail(item),
