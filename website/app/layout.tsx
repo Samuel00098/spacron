@@ -27,7 +27,6 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <head />
       <body>
         <div className="container">
           <nav className="nav">
