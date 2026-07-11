@@ -15,7 +15,7 @@ cj.txt
 ytm*.html
 pilot.html
 consent_live.html
-*.png
+/*.png
 
 # Data files only used at runtime by the desktop app
 albums.json
