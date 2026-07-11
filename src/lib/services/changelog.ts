@@ -5,7 +5,7 @@ import { isTauriRuntime } from '$lib/utils/tauri';
 // permanent *.vercel.app project URL, which keeps working even if a custom
 // domain is added or changed later — so links baked into shipped builds never
 // break when the domain moves.
-const FALLBACK_SITE_URL = (import.meta.env.VITE_SITE_URL ?? 'https://site-flame-phi.vercel.app').replace(/\/+$/, '');
+const FALLBACK_SITE_URL = (import.meta.env.VITE_SITE_URL ?? 'https://spacron.vercel.app').replace(/\/+$/, '');
 
 let resolvedSiteUrl: string | null = null;
 let detectionPromise: Promise<string> | null = null;
