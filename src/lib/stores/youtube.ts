@@ -9,6 +9,10 @@ import { writable, get } from '$lib/stores/storeCompat';
 export type YouTubeResult = {
   videoId?: string;
   playlistId?: string;
+  /** Album page id (MPREb…) from music search. Albums don't expose their
+   *  playable OLAK5uy_… playlist id in search results — it is resolved from
+   *  this id at play time; see playMusicResult. */
+  browseId?: string;
   title: string;
   channel: string;
   thumbnail: string;
@@ -448,8 +452,11 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
     }
 
     results.push({
+      // A song plays as its bare video: search attaches an RDAMVM… "radio"
+      // playlistId which the IFrame embed player refuses to load.
       videoId: videoId || undefined,
-      playlistId: playlistId || undefined,
+      playlistId: isList ? sanitizePlaylistId(playlistId) : undefined,
+      browseId: filter === 'albums' ? findAlbumBrowseId(item) ?? undefined : undefined,
       title,
       channel,
       thumbnail: findThumbnail(item),
@@ -458,6 +465,143 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
     if (results.length >= 24) break;
   }
   return results;
+}
+
+/** Radio/mix ids (RD…) are session-generated server-side lists the embedded
+ *  IFrame player cannot load — treat them as "no playlist id". */
+function sanitizePlaylistId(playlistId: string | null): string | undefined {
+  if (!playlistId || playlistId.startsWith('RD')) return undefined;
+  return playlistId;
+}
+
+/** Find an album's page browseId (MPREb…) anywhere within a search renderer. */
+function findAlbumBrowseId(node: unknown): string | null {
+  if (!node || typeof node !== 'object') return null;
+  const obj = node as Record<string, any>;
+  if (typeof obj.browseId === 'string' && obj.browseId.startsWith('MPRE')) return obj.browseId;
+  for (const value of Object.values(obj)) {
+    const found = findAlbumBrowseId(value);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Play a search result, resolving albums to their playable playlist first.
+ * Album search results only carry the album *page* id (MPREb…); the id the
+ * player can actually load (OLAK5uy_…) comes from one keyless InnerTube
+ * `browse` call. Everything else plays directly.
+ */
+export async function playMusicResult(result: YouTubeResult): Promise<void> {
+  if (result.type === 'album' && !result.playlistId && result.browseId) {
+    youtubeState.update((s) => ({ ...s, status: '' }));
+    try {
+      const url = `https://music.youtube.com/youtubei/v1/browse?key=${INNERTUBE_KEY}&prettyPrint=false`;
+      const payload = {
+        context: {
+          client: { clientName: 'WEB_REMIX', clientVersion: '1.20240701.01.00', hl: 'en', gl: 'US' },
+        },
+        browseId: result.browseId,
+      };
+      const body = await httpPost(url, JSON.stringify(payload));
+      const audioPlaylistId = findOlakPlaylistId(JSON.parse(body));
+      if (audioPlaylistId) {
+        playVideo({ ...result, playlistId: audioPlaylistId });
+        return;
+      }
+    } catch {
+      /* fall through to the fallback below */
+    }
+    // Couldn't resolve the album — fall back to its first track if search
+    // found one, so the click still produces sound.
+    if (result.videoId) {
+      playVideo({ ...result, type: 'song' });
+    } else {
+      youtubeState.update((s) => ({ ...s, status: 'Could not load this album — try another result.' }));
+    }
+    return;
+  }
+  playVideo(result);
+}
+
+/** Find the album's playable audio-playlist id (OLAK5uy_…) in a browse response. */
+function findOlakPlaylistId(node: unknown): string | null {
+  if (!node || typeof node !== 'object') return null;
+  const obj = node as Record<string, any>;
+  for (const key of ['audioPlaylistId', 'playlistId'] as const) {
+    if (typeof obj[key] === 'string' && obj[key].startsWith('OLAK')) return obj[key];
+  }
+  for (const value of Object.values(obj)) {
+    const found = findOlakPlaylistId(value);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Fetch the track list of an album/playlist via the Music InnerTube `next`
+ * endpoint — the call the site itself makes to build its play queue. Keyless
+ * and sign-in free, like musicSearch. Populates `albumTracks` for the
+ * tracklist panel; any failure just leaves the list empty (the album still
+ * plays through the IFrame player, only the visual tracklist is missing).
+ */
+export async function fetchAlbumTracks(playlistId: string): Promise<void> {
+  youtubeState.update((s) => ({ ...s, albumLoading: true, albumTracks: [] }));
+  try {
+    const url = `https://music.youtube.com/youtubei/v1/next?key=${INNERTUBE_KEY}&prettyPrint=false`;
+    const payload = {
+      context: {
+        client: { clientName: 'WEB_REMIX', clientVersion: '1.20240701.01.00', hl: 'en', gl: 'US' },
+      },
+      playlistId,
+    };
+    const body = await httpPost(url, JSON.stringify(payload));
+    const data = JSON.parse(body);
+    // One `playlistPanelVideoRenderer` per queue entry.
+    const renderers: any[] = [];
+    collectRenderersByKey(data, 'playlistPanelVideoRenderer', renderers);
+
+    const seen = new Set<string>();
+    const tracks: YouTubeResult[] = [];
+    for (const r of renderers) {
+      const videoId: string | undefined =
+        r?.videoId ?? r?.navigationEndpoint?.watchEndpoint?.videoId;
+      if (!videoId || seen.has(videoId)) continue;
+      seen.add(videoId);
+      const title = r?.title?.runs?.[0]?.text ?? r?.title?.simpleText ?? 'Untitled';
+      // longBylineText runs are "Artist • Album • Year" — keep the artist.
+      const byline = Array.isArray(r?.longBylineText?.runs)
+        ? r.longBylineText.runs.map((run: any) => (typeof run?.text === 'string' ? run.text : '')).join('')
+        : '';
+      const channel = (byline.split('•')[0] ?? '').trim();
+      tracks.push({ videoId, title, channel, thumbnail: thumbFor(videoId), type: 'song' });
+    }
+    youtubeState.update((s) => ({ ...s, albumLoading: false, albumTracks: tracks }));
+  } catch {
+    youtubeState.update((s) => ({ ...s, albumLoading: false, albumTracks: [] }));
+  }
+}
+
+/** Clear the album tracklist (when playback moves to a plain video/song). */
+export function clearAlbumTracks() {
+  youtubeState.update((s) =>
+    s.albumTracks && s.albumTracks.length ? { ...s, albumTracks: [], albumLoading: false } : s
+  );
+}
+
+/** Recursively collect every object stored under `key`, resilient to YouTube
+ *  reshuffling the surrounding response structure. */
+function collectRenderersByKey(node: unknown, key: string, out: any[]): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectRenderersByKey(item, key, out);
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  if (obj[key] && typeof obj[key] === 'object') {
+    out.push(obj[key]);
+  }
+  for (const value of Object.values(obj)) collectRenderersByKey(value, key, out);
 }
 
 /** Recursively collect every `musicResponsiveListItemRenderer` (one per track),

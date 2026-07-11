@@ -9,9 +9,12 @@ import {
   setMusicFilter,
   setQuery,
   searchVideos,
-  playVideo,
+  playMusicResult,
   setPosition,
   goHome,
+  fetchAlbumTracks,
+  clearAlbumTracks,
+  type MusicFilter,
 } from '$lib/stores/youtube';
 import { loadYouTubeApi, type YTPlayer } from '$lib/utils/youtubeApi';
 import './YouTubePanel.css';
@@ -73,6 +76,14 @@ function describePlayerError(code: number): string {
   }
 }
 
+// Live-stream / stall recovery tuning. If the player claims to be playing or
+// buffering (or a live stream drops to ENDED) but the current time hasn't moved
+// for this long, we treat the stream as stalled and rebuild the player to
+// reconnect. Bounded so a stream that has genuinely ended doesn't reload forever.
+const STALL_TIMEOUT_MS = 20000;
+const MAX_RECONNECTS = 5;
+const RECONNECTING_STATUS = 'Reconnecting…';
+
 export default function YouTubePanel() {
   const state = useStore(youtubeState);
   const [showSettings, setShowSettings] = useState(false);
@@ -99,6 +110,14 @@ export default function YouTubePanel() {
   // While a video is playing, a fresh search drops its results into a dropdown
   // over the player so you can switch without leaving what you're watching.
   const [resultsOpen, setResultsOpen] = useState(false);
+
+  // Bumping this forces the player-building effect to tear down and rebuild the
+  // iframe — used by the stall watchdog to reconnect a frozen/dropped stream.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  // Reconnect attempts spent on the *current* source, so a genuinely dead stream
+  // can't loop forever. Reset when the source changes or playback recovers.
+  const reconnectsRef = useRef(0);
+  const lastKeyRef = useRef<string | null>(null);
 
   // Measure container dimensions for responsiveness
   useEffect(() => {
@@ -143,7 +162,15 @@ export default function YouTubePanel() {
     let cancelled = false;
     let poll: number | null = null;
     // Captured once, at the moment this video/playlist mounts — the resume point.
+    // (For a live stream YouTube ignores this and rejoins the live edge.)
     const startAt = Math.floor(get(youtubeState).position);
+    // Reset the reconnect budget only when the *source* changes, not on a
+    // watchdog-triggered rebuild (which bumps reloadNonce, keeping playbackKey the
+    // same) — otherwise the retry cap would reset every reload and loop forever.
+    if (lastKeyRef.current !== playbackKey) {
+      lastKeyRef.current = playbackKey;
+      reconnectsRef.current = 0;
+    }
     // Reset the music transport for the freshly-loaded track.
     setMusicProgress(0);
     setMusicDuration(0);
@@ -174,7 +201,11 @@ export default function YouTubePanel() {
           },
         });
 
-        // Sample the position and track info while playing.
+        // Sample the position and track info while playing. Also runs the stall
+        // watchdog: `lastTime`/`stalledSince` persist across ticks (closure vars)
+        // to detect frozen playback and trigger a reconnect.
+        let lastTime = -1;
+        let stalledSince = 0;
         poll = window.setInterval(() => {
           const p = playerRef.current;
           if (!p) return;
@@ -197,6 +228,46 @@ export default function YouTubePanel() {
                 title: data.title || '',
                 channel: data.author || '',
               });
+            }
+
+            // ── Stall / live-drop watchdog ──────────────────────────────────
+            // ps: 1 playing, 2 paused, 3 buffering, 0 ended.
+            const isLive = Boolean(data?.isLive);
+            const advanced = typeof t === 'number' && Math.abs(t - lastTime) >= 0.25;
+            if (advanced) {
+              // Healthy playback — clear any stall state and refund the budget.
+              stalledSince = 0;
+              lastTime = t;
+              reconnectsRef.current = 0;
+              youtubeState.update((s) =>
+                s.status === RECONNECTING_STATUS ? { ...s, status: '' } : s
+              );
+            } else {
+              // Not advancing. Recover from a frozen play/buffer, or a live stream
+              // that dropped to ENDED. A normal (non-live) video reaching its end
+              // is left alone so finished videos don't reload.
+              const frozenWhilePlaying = (ps === 1 || ps === 3) && typeof t === 'number';
+              const liveDropped = isLive && ps === 0;
+              if (frozenWhilePlaying || liveDropped) {
+                if (stalledSince === 0) {
+                  stalledSince = Date.now();
+                } else if (Date.now() - stalledSince > STALL_TIMEOUT_MS) {
+                  stalledSince = 0;
+                  lastTime = -1;
+                  if (reconnectsRef.current < MAX_RECONNECTS) {
+                    reconnectsRef.current += 1;
+                    youtubeState.update((s) => ({ ...s, status: RECONNECTING_STATUS }));
+                    setReloadNonce((n) => n + 1);
+                  } else {
+                    youtubeState.update((s) => ({
+                      ...s,
+                      status: 'Stream stopped — it may have ended. Search again to retry.',
+                    }));
+                  }
+                }
+              } else {
+                stalledSince = 0;
+              }
             }
           } catch {
             /* player not ready yet */
@@ -226,9 +297,54 @@ export default function YouTubePanel() {
       playerHostRef.current?.replaceChildren();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playbackKey]);
+  }, [playbackKey, reloadNonce]);
 
   const isMusic = state.mode === 'music';
+
+  // Music mode defaults to the CUSTOM player: keyless InnerTube search
+  // (songs/albums/playlists) + the IFrame API player + the .yt-music transport
+  // UI. No sign-in, no proxy. The real music.youtube.com site is available
+  // behind an explicit toolbar toggle for browsing/discovery — it refuses to
+  // be iframed directly (X-Frame-Options/CSP), so it loads through the app's
+  // background proxy, which strips those guards.
+  const [musicSiteOpen, setMusicSiteOpen] = useState(false);
+  const [musicSitePort, setMusicSitePort] = useState<number | null>(null);
+
+  // Leaving music mode always closes the embedded site.
+  useEffect(() => {
+    if (!isMusic) setMusicSiteOpen(false);
+  }, [isMusic]);
+
+  useEffect(() => {
+    if (!musicSiteOpen) return;
+    let cancelled = false;
+    void (async () => {
+      const { ensureProxyRunning } = await import('$lib/stores/preview');
+      const port = await ensureProxyRunning();
+      if (!cancelled) setMusicSitePort(port);
+    })();
+    // Opening the site: pause whatever the custom player is playing so its
+    // audio doesn't fight the embedded site's.
+    try {
+      playerRef.current?.pauseVideo();
+    } catch {
+      /* player not ready */
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [musicSiteOpen]);
+
+  // Keep the album/playlist tracklist in sync with what's playing: fetch it
+  // when a playlist/album loads (keyless InnerTube `next` call), clear it when
+  // playback moves to a single track.
+  useEffect(() => {
+    if (currentPlaylistId) {
+      void fetchAlbumTracks(currentPlaylistId);
+    } else {
+      clearAlbumTracks();
+    }
+  }, [currentPlaylistId]);
 
   function toggleMusicPlay() {
     const p = playerRef.current;
@@ -351,6 +467,10 @@ export default function YouTubePanel() {
             <span className="yt-mode-text">Music</span>
           </button>
         </div>
+        {/* The search box drives both surfaces (keyless InnerTube search). It
+            is only hidden while the embedded YT Music site is open — the site
+            has its own search. */}
+        {!musicSiteOpen && (
         <form className="yt-search" onSubmit={onSubmit}>
           <svg className="yt-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" />
@@ -383,7 +503,8 @@ export default function YouTubePanel() {
             )}
           </button>
         </form>
-        {state.current && state.results.length > 0 && (
+        )}
+        {!musicSiteOpen && state.current && state.results.length > 0 && (
           <button
             className={`yt-icon-btn${resultsOpen ? ' active' : ''}`}
             title="Search results"
@@ -393,6 +514,21 @@ export default function YouTubePanel() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
               <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
               <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+          </button>
+        )}
+        {isMusic && (
+          <button
+            className={`yt-icon-btn${musicSiteOpen ? ' active' : ''}`}
+            title={musicSiteOpen ? 'Back to the player' : 'Open the YouTube Music site'}
+            aria-label={musicSiteOpen ? 'Back to the player' : 'Open the YouTube Music site'}
+            aria-pressed={musicSiteOpen}
+            onClick={() => setMusicSiteOpen((v) => !v)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18" />
+              <path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
             </svg>
           </button>
         )}
@@ -426,35 +562,49 @@ export default function YouTubePanel() {
         </div>
       )}
 
+      {/* Music sub-filters: what kind of result the keyless search returns.
+          Hidden while the embedded site is open (it has its own filters). */}
+      {isMusic && !musicSiteOpen && (
+        <div className="yt-music-filters" role="tablist" aria-label="Music search filter">
+          {(['songs', 'albums', 'playlists'] as MusicFilter[]).map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              role="tab"
+              aria-selected={state.musicFilter === filter}
+              className={`yt-filter-pill${state.musicFilter === filter ? ' active' : ''}`}
+              onClick={() => setMusicFilter(filter)}
+            >
+              {filter.charAt(0).toUpperCase() + filter.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="yt-body">
-        {state.mode === 'music' && !state.current && (
-          <div className="yt-music-filters">
-            <button
-              type="button"
-              className={`yt-filter-pill${state.musicFilter === 'songs' ? ' active' : ''}`}
-              onClick={() => setMusicFilter('songs')}
-            >
-              Songs
-            </button>
-            <button
-              type="button"
-              className={`yt-filter-pill${state.musicFilter === 'albums' ? ' active' : ''}`}
-              onClick={() => setMusicFilter('albums')}
-            >
-              Albums
-            </button>
-            <button
-              type="button"
-              className={`yt-filter-pill${state.musicFilter === 'playlists' ? ' active' : ''}`}
-              onClick={() => setMusicFilter('playlists')}
-            >
-              Playlists
-            </button>
+        {/* Opt-in browsing surface: the real YouTube Music site, embedded
+            through the background proxy (which strips its X-Frame-Options/CSP
+            so it can render inside the panel). Unmounted when closed so its
+            audio stops instead of fighting the custom player's. */}
+        {isMusic && musicSiteOpen && (
+          <div className="yt-music-site">
+            {musicSitePort ? (
+              <iframe
+                className="yt-music-site-frame"
+                title="YouTube Music"
+                src={`http://127.0.0.1:${musicSitePort}/proxy/https/music.youtube.com/`}
+                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+              />
+            ) : (
+              <div className="yt-empty">
+                <p>Starting YouTube Music…</p>
+              </div>
+            )}
           </div>
         )}
 
         {/* Results dropdown over the player — only while a video is playing. */}
-        {resultsOpen && state.current && state.results.length > 0 && (
+        {!musicSiteOpen && resultsOpen && state.current && state.results.length > 0 && (
           <>
             <div className="yt-results-backdrop" onClick={() => setResultsOpen(false)} />
             <div className="yt-results-dropdown">
@@ -479,7 +629,7 @@ export default function YouTubePanel() {
                         : ''
                     }`}
                     onClick={() => {
-                      playVideo(r);
+                      void playMusicResult(r);
                       setResultsOpen(false);
                     }}
                   >
@@ -504,7 +654,7 @@ export default function YouTubePanel() {
             IFrame API can manage its lifecycle from the effect above. In music
             mode the host is pushed off-screen (it keeps the audio playing) and a
             dedicated music UI is shown instead — see .yt-player-music in the CSS. */}
-        <div className={`yt-player${isMusic ? ' yt-player-music' : ''}`} style={{ display: hasPlayer ? 'flex' : 'none' }}>
+        <div className={`yt-player${isMusic ? ' yt-player-music' : ''}`} style={{ display: !hasPlayer || musicSiteOpen ? 'none' : undefined }}>
           {state.current && (
             <button className="yt-back" onClick={() => youtubeState.update((s) => ({ ...s, current: null }))}>
               ← <span className="yt-back-text">Back to results</span>
@@ -632,10 +782,10 @@ export default function YouTubePanel() {
           {!isMusic && state.current?.title && <div className="yt-now-playing">{activeTitle}</div>}
         </div>
 
-        {!state.current && state.results.length > 0 && (
+        {!musicSiteOpen && !state.current && state.results.length > 0 && (
           <div className="yt-grid scrollable">
             {state.results.map((r) => (
-              <button key={r.playlistId || r.videoId} className="yt-card" onClick={() => playVideo(r)}>
+              <button key={r.playlistId || r.browseId || r.videoId} className="yt-card" onClick={() => void playMusicResult(r)}>
                 <div className="yt-thumb">
                   {r.thumbnail ? <img src={r.thumbnail} alt="" loading="lazy" /> : <div className="yt-thumb-fallback" />}
                   {r.type && r.type !== 'song' && r.type !== 'video' && (
@@ -649,13 +799,25 @@ export default function YouTubePanel() {
           </div>
         )}
 
-        {!hasPlayer && state.results.length === 0 && (
+        {!musicSiteOpen && !hasPlayer && state.results.length === 0 && (
           <div className="yt-empty">
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <rect x="2" y="5" width="20" height="14" rx="4" />
-              <path d="m10 9 5 3-5 3z" />
-            </svg>
-            <p>Search for something or paste a YouTube link to start watching.</p>
+            {isMusic ? (
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
+                <path d="M9 18V5l12-2v13" />
+                <circle cx="6" cy="18" r="3" />
+                <circle cx="18" cy="16" r="3" />
+              </svg>
+            ) : (
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
+                <rect x="2" y="5" width="20" height="14" rx="4" />
+                <path d="m10 9 5 3-5 3z" />
+              </svg>
+            )}
+            <p>
+              {isMusic
+                ? 'Search for songs, albums, or playlists — or paste a YouTube Music link.'
+                : 'Search for something or paste a YouTube link to start watching.'}
+            </p>
           </div>
         )}
 
