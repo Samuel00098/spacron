@@ -93,6 +93,10 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
     if (fileCache.has(path)) {
       set({ activeFile: path, jumpToLine: null });
       useLayoutStore.getState().setActiveView('editor');
+      if (/\.(html?|htm)$/i.test(path)) {
+        const { previewLocalFile } = await import('$lib/stores/preview');
+        void previewLocalFile(path);
+      }
       return;
     }
     try {
@@ -111,6 +115,10 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
         jumpToLine: null,
       });
       useLayoutStore.getState().setActiveView('editor');
+      if (/\.(html?|htm)$/i.test(path)) {
+        const { previewLocalFile } = await import('$lib/stores/preview');
+        void previewLocalFile(path);
+      }
     } catch (err: any) {
       useNotificationStore.getState().showToast(`Failed to open file: ${err?.message || err}`, 'error');
     }

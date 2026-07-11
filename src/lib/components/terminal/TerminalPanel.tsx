@@ -7,7 +7,6 @@ import {
   assignToPane as assignToPaneOrig,
   createTerminalSession as createTerminalSessionOrig,
   focusPane as focusPaneOrig,
-  getLayoutPaneCount,
   gridLayout,
   isAgentSession,
   killSession,
@@ -15,7 +14,6 @@ import {
   registerMosaicClose as registerMosaicCloseOrig,
   registerMosaicGrow as registerMosaicGrowOrig,
   sessions,
-  setGridLayout as setGridLayoutOrig,
   setTerminalMosaic as setTerminalMosaicOrig,
   terminalMosaic,
   devSessions,
@@ -36,16 +34,6 @@ import './TerminalPanel.css';
 
 type CellInfo = { index: number };
 type ColumnInfo = { cells: CellInfo[] };
-
-const layouts: { id: GridLayout; label: string; icon: string; count: number }[] = [
-  { id: 'single', label: 'Single', icon: '1', count: 1 },
-  { id: '2h', label: 'Split H', icon: '2H', count: 2 },
-  { id: '3h', label: 'Triple H', icon: '3H', count: 3 },
-  { id: '2v', label: 'Split V', icon: '2V', count: 2 },
-  { id: '3v', label: 'Triple V', icon: '3V', count: 3 },
-  { id: '4', label: 'Grid 2x2', icon: '2x2', count: 4 },
-  { id: '9', label: 'Grid 3x3', icon: '3x3', count: 9 },
-];
 
 function layoutToColumns(layout: GridLayout): { columns: ColumnInfo[]; colWidths: number[]; cellHeights: number[][] } {
   if (layout === '2h') return { columns: [{ cells: [{ index: 0 }] }, { cells: [{ index: 1 }] }], colWidths: [50, 50], cellHeights: [[100], [100]] };
@@ -106,10 +94,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
     return focusPaneOrig(paneIdx, devMode);
   }, [devMode]);
 
-  const setGridLayout = useCallback((layout: GridLayout) => {
-    return setGridLayoutOrig(layout, devMode);
-  }, [devMode]);
-
   const setTerminalMosaic = useCallback((mosaic: TerminalMosaic | null) => {
     return setTerminalMosaicOrig(mosaic, devMode);
   }, [devMode]);
@@ -134,7 +118,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   const [columns, setColumns] = useState<ColumnInfo[]>(initialGrid.columns);
   const [colWidths, setColWidths] = useState<number[]>(initialGrid.colWidths);
   const [cellHeights, setCellHeights] = useState<number[][]>(initialGrid.cellHeights);
-  const [layoutPickerOpen, setLayoutPickerOpen] = useState(false);
   const [maximizedPaneIndex, setMaximizedPaneIndex] = useState<number | null>(null);
 
   const columnsRef = useRef(columns);
@@ -178,7 +161,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   fileRef.current = file;
 
   const totalCells = columns.reduce((sum, column) => sum + column.cells.length, 0);
-  const currentLayoutIcon = layouts.find((layout) => layout.id === currentLayout)?.icon ?? '1';
   const shellSessions = useMemo(
     () => allSessions.filter((session) => !isAgentSession(session)),
     [allSessions],
@@ -600,25 +582,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
     else closePane(paneIndex);
   }
 
-  async function ensureSessionsForLayout(layout: GridLayout) {
-    const count = getLayoutPaneCount(layout);
-    const cwd = getStartingCwd();
-    for (let i = 0; i < count; i += 1) {
-      if (assignmentsRef.current[i] == null) {
-        await createTerminalSession(cwd, i);
-      }
-    }
-  }
-
-  async function handleLayoutSelect(layout: GridLayout) {
-    setMaximizedPaneIndex(null);
-    setGridLayout(layout);
-    const next = layoutToColumns(layout);
-    setGrid(next.columns, next.colWidths, next.cellHeights);
-    setLayoutPickerOpen(false);
-    await ensureSessionsForLayout(layout);
-  }
-
   async function handleNewTerminal() {
     setMaximizedPaneIndex(null);
     const empty = assignmentsRef.current.findIndex((sessionId) => sessionId === null);
@@ -753,14 +716,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   }, [assignments]);
 
   useEffect(() => {
-    function handleOutsideClick(event: MouseEvent) {
-      if (!(event.target as Element).closest('.layout-picker')) setLayoutPickerOpen(false);
-    }
-    window.addEventListener('click', handleOutsideClick);
-    return () => window.removeEventListener('click', handleOutsideClick);
-  }, []);
-
-  useEffect(() => {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => {
@@ -846,45 +801,6 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
             </svg>
           </button>
 
-          <div className="toolbar-divider" />
-
-          <div className={`layout-picker${layoutPickerOpen ? ' open' : ''}`}>
-            <button
-              className="toolbar-btn layout-btn"
-              onClick={(event) => {
-                event.stopPropagation();
-                setLayoutPickerOpen((open) => !open);
-              }}
-              title="Terminal layout"
-            >
-              <span className="layout-current-icon">{currentLayoutIcon}</span>
-              <svg className="layout-trigger-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="12" y1="4" x2="12" y2="20" /><line x1="3" y1="10" x2="12" y2="10" />
-              </svg>
-              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <polyline points="2 3 5 7 8 3" />
-              </svg>
-            </button>
-
-            {layoutPickerOpen && (
-              <div className="layout-dropdown" onClick={(event) => event.stopPropagation()}>
-                {layouts.map((layout) => (
-                  <button key={layout.id} className={`layout-option${currentLayout === layout.id ? ' selected' : ''}`} onClick={() => void handleLayoutSelect(layout.id)}>
-                    <span className="lo-icon">{layout.icon}</span>
-                    <div className="lo-info">
-                      <span className="lo-label">{layout.label}</span>
-                      <span className="lo-count">{layout.count} {layout.count === 1 ? 'pane' : 'panes'}</span>
-                    </div>
-                    {currentLayout === layout.id && (
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                        <path d="M2 6l3 3 5-6" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 

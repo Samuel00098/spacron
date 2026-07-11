@@ -22,10 +22,10 @@
     linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%, rgba(255, 255, 255, 0.01) 100%),
     color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 14px;
-  width: 840px;
-  max-width: calc(92 * var(--app-vw, 1vw));
-  max-height: calc(75 * var(--app-vh, 1vh));
+  border-radius: 20px;
+  width: 980px;
+  max-width: calc(94 * var(--app-vw, 1vw));
+  max-height: calc(80 * var(--app-vh, 1vh));
   display: flex;
   flex-direction: column;
   box-shadow:
@@ -83,11 +83,31 @@
 .project-hud-header {
   display: flex;
   align-items: center;
-  padding: 18px 24px;
+  padding: 20px 22px;
   border-bottom: 1px solid var(--border);
-  gap: 14px;
+  gap: 12px;
   position: relative;
   background: rgba(255, 255, 255, 0.01);
+}
+
+/* Search styled as a proper inset field/pill */
+.hud-search-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 44px;
+  padding: 0 15px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  border: 1px solid var(--border);
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.hud-search-field:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .hud-search-icon {
@@ -95,10 +115,14 @@
   flex-shrink: 0;
 }
 
+.hud-search-field:focus-within .hud-search-icon {
+  color: var(--accent);
+}
+
 .hud-search-input {
   background: transparent;
   border: none;
-  font-size: 15px;
+  font-size: 14.5px;
   color: var(--text-primary);
   flex: 1;
   outline: none;
@@ -110,15 +134,35 @@
   opacity: 0.6;
 }
 
-.hud-esc-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--bg-primary) 50%, transparent);
+/* Close (X) button — replaces the old ESC badge */
+.hud-close-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
   border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   color: var(--text-muted);
-  opacity: 0.7;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
+}
+
+.hud-close-btn:hover {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  border-color: color-mix(in srgb, var(--error) 32%, transparent);
+  color: var(--error);
+}
+
+.hud-close-btn:active {
+  transform: scale(0.94);
+}
+
+.hud-close-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 /* Body Content */
@@ -601,10 +645,26 @@
   color: #6a6a7a;
 }
 
-:root.light-theme .hud-esc-badge {
-  background: rgba(0, 0, 0, 0.06);
+:root.light-theme .hud-search-field {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+:root.light-theme .hud-search-field:focus-within {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+:root.light-theme .hud-close-btn {
+  background: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 0, 0, 0.1);
   color: #555566;
+}
+
+:root.light-theme .hud-close-btn:hover {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
 }
 
 :root.light-theme .hud-collection-title {

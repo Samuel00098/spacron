@@ -522,7 +522,17 @@ export async function startRealtimeVoiceSession(options: {
         session: {
           voice,
           instructions,
-          turn_detection: { type: 'server_vad' },
+          // Tune Grok's server VAD (OpenAI Realtime-compatible fields) for more
+          // patient turn-taking: a slightly longer end-of-turn silence so a mid-
+          // thought pause doesn't cut the user off, plus lead-in padding so the
+          // first word of a turn isn't clipped. (OpenAI's GPT Realtime path uses
+          // semantic_vad, configured server-side in openai_realtime_connect.)
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 700,
+          },
           audio: {
             input: { format: { type: 'audio/pcm', rate: XAI_AUDIO_RATE } },
             output: { format: { type: 'audio/pcm', rate: XAI_AUDIO_RATE } },

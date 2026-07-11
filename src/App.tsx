@@ -9,8 +9,11 @@ import Toasts from '$lib/components/shared/Toasts.tsx';
 import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
+import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
+import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
+import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
 import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
@@ -22,6 +25,7 @@ import {
 } from '$lib/stores/layout';
 import {
   newWorkspacePromptOpen,
+  newFolderPromptOpen,
   initializeWorkspaces,
   saveProjectState,
   activeProjectId,
@@ -29,6 +33,7 @@ import {
 import { loadThemes } from '$lib/stores/theme';
 import { initDefaultCommands } from '$lib/stores/commandpalette';
 import { requestNotificationPermission } from '$lib/stores/notification';
+import { maybeAutoReconnectRemote } from '$lib/stores/remoteWorkspace';
 import {
   uiZoom,
   userShortcuts,
@@ -74,6 +79,7 @@ export default function App() {
   const isQuickCaptureOpen = useStore(quickCaptureOpen);
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
+  const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
 
   useEffect(() => {
@@ -88,6 +94,10 @@ export default function App() {
     initDefaultCommands();
     if (isTauriRuntime()) {
       requestNotificationPermission();
+      // Opt-in: if a remote is flagged to reconnect on startup, dial it so a
+      // workspace whose agents are still running on the box comes back on its own.
+      // Fails fast + rolls back to Local if the box is offline, so this can't hang boot.
+      void maybeAutoReconnectRemote();
     }
     initNavigationHistory();
 
@@ -179,6 +189,8 @@ export default function App() {
       <CommandPalette />
       <FloatingSearch />
       <ProjectHUD />
+      <KnowledgeGraphOverlay />
+      <AgentNotifications />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}
@@ -188,6 +200,7 @@ export default function App() {
       {isAgentSpawnOpen && <AgentSpawnModal onclose={closeAgentSpawn} />}
 
       {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
+      {isNewFolderPromptOpen && <NewFolderModal />}
 
       {!hasCompletedOnboarding && (
         <Suspense fallback={null}>

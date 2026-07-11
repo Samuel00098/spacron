@@ -482,6 +482,7 @@ const PRESET_AGENTS: PresetAgent[] = [
   { name: 'Pi AI Agent', command: 'pi', readsRulesFile: false },
   { name: 'Oh My Pi', command: 'omp', readsRulesFile: false },
   { name: 'Cursor', command: 'agent', readsRulesFile: true },
+  { name: 'Grok CLI', command: 'grok', readsRulesFile: false },
 ];
 
 export default function SettingsModal({ onclose }: SettingsModalProps) {

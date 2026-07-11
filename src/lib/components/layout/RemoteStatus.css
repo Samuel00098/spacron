@@ -192,6 +192,8 @@
 }
 .rs-icon-btn:hover { background: var(--bg-active); color: var(--text-primary); }
 .rs-icon-btn.rs-danger:hover { color: var(--error, #e5484d); }
+.rs-icon-btn.rs-on { color: var(--accent); }
+.rs-icon-btn.rs-on svg { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
 
 /* ── Add / edit form ────────────────────────────────────────────────────── */
 

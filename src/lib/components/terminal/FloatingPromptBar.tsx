@@ -23,7 +23,6 @@ import {
   getSessionLabel,
   getSessionPromptTargetLabel,
   isAgentSession,
-  getAgentDisplayName,
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
@@ -255,6 +254,7 @@ export default function FloatingPromptBar() {
   const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] = useSyncedState(false);
   const [isTtsSpeaking, setIsTtsSpeaking, isTtsSpeakingRef] = useSyncedState(false);
   const [voiceSleeping, setVoiceSleeping, voiceSleepingRef] = useSyncedState(false);
+  const [audioRms, setAudioRms] = useState(0);
   const lastSpokenMessageKeyRef = useRef<string | null>(null);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
   const [pastedFiles, setPastedFiles] = useState<Array<{ name: string; path: string }>>([]);
@@ -281,18 +281,6 @@ export default function FloatingPromptBar() {
   const isVoiceActive = isAgentMode && voiceModeActive;
 
   // Agent task cards for CNVS-like running/waiting/done state visualization
-  const agentCards = useMemo(() => {
-    const projectId = $activeProject?.id ?? '';
-    const tasks = $orchestratorTasks.filter((t) => t.projectId === projectId);
-    const running = tasks.filter((t) => t.status === 'in-progress');
-    const blocked = tasks.filter((t) => t.status === 'blocked');
-    const recentDone = tasks
-      .filter((t) => (t.status === 'complete' || t.status === 'failed') && t.completedAt)
-      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
-      .slice(0, 1);
-    return [...running, ...blocked, ...recentDone];
-  }, [$orchestratorTasks, $activeProject]);
-
   const activeTerminal = useMemo(
     () => $sessions.find((session) => session.id === $activeSessionId) ?? null,
     [$sessions, $activeSessionId]
@@ -338,13 +326,22 @@ export default function FloatingPromptBar() {
   const adjustInputHeight = useCallback(() => {
     const inputEl = inputElRef.current;
     if (!inputEl) return;
+    // Grow the box with typed content up to three lines; past that it stops
+    // growing and scrolls internally (overflow-y: auto in the CSS). The cap is
+    // derived from the live computed line-height so it stays correct across the
+    // responsive font-size breakpoints instead of a hard-coded pixel count.
+    const cs = window.getComputedStyle(inputEl);
+    const lineHeight = parseFloat(cs.lineHeight) || 21;
+    const padding = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const oneLine = lineHeight + padding;
+    const maxHeight = lineHeight * 3 + padding;
     if (!inputEl.value) {
-      inputEl.style.height = '24px';
+      inputEl.style.height = `${oneLine}px`;
       return;
     }
     inputEl.style.height = '0px';
-    const nextHeight = Math.min(inputEl.scrollHeight, 100);
-    inputEl.style.height = `${Math.max(nextHeight, 24)}px`;
+    const nextHeight = Math.min(inputEl.scrollHeight, maxHeight);
+    inputEl.style.height = `${Math.max(nextHeight, oneLine)}px`;
   }, []);
 
   const resetHistoryCursor = useCallback(() => {
@@ -855,7 +852,8 @@ export default function FloatingPromptBar() {
       return;
     }
     enterAgentMode();
-  }, [isAgentMode, voiceModeActive, stopAgentVoice, focusInput, enterAgentMode]);
+    toggleAgentVoiceMode();
+  }, [isAgentMode, voiceModeActive, stopAgentVoice, focusInput, enterAgentMode, toggleAgentVoiceMode]);
 
   const submitAgentMessage = useCallback(async (textOverride?: string) => {
     if (!$activeProject || agentSendingRef.current) return;
@@ -920,11 +918,19 @@ export default function FloatingPromptBar() {
     };
   }, []);
 
-  // Auto-scroll transcript to bottom whenever the displayed content changes
+  // The voice transcript grows up to three lines and then scrolls vertically.
+  // While the user is speaking (or the turn is being processed) keep the newest
+  // words in view by pinning to the bottom; for a settled assistant reply reset
+  // to the top so it reads from the beginning.
   useEffect(() => {
     const el = transcriptElRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [projectChatMessages.length, voiceDraftText, isListening, agentSending]);
+    if (!el) return;
+    if (isListening || isRefining || agentSending) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTop = 0;
+    }
+  }, [projectChatMessages.length, voiceDraftText, isListening, isRefining, agentSending]);
 
   const submitPrompt = useCallback(async () => {
     if (isAgentMode) { await submitAgentMessage(); return; }
@@ -964,9 +970,7 @@ export default function FloatingPromptBar() {
       projectId: $activeProject?.id ?? '',
       startedAt: Date.now(),
     });
-    if (!target.agentPreset) {
-      addHistoryEntry(finalText);
-    }
+    addHistoryEntry(finalText);
 
     setInputValue('');
     setIsExpanded(false);
@@ -1146,6 +1150,7 @@ export default function FloatingPromptBar() {
 
   const voiceInputRef = useRef(
     createVoiceInputSession({
+      onAudioLevel: (rms) => setAudioRms(rms),
       onStart: () => {
         setIsListening(true);
         setIsRefining(false);
@@ -1791,64 +1796,98 @@ export default function FloatingPromptBar() {
             )}
             {isVoiceActive && (
               <div className="voice-mode-inner">
-                {/* Compact orb — left side only, no text here */}
-                <div className={`orb-wrap ${
-                  voiceSleeping
-                    ? 'sleeping'
-                    : isTtsSpeaking
-                      // With barge-in the mic listens straight through playback,
-                      // so both flags are set while the reply plays — show
-                      // "speaking" until it ends (or the user cuts in, which
-                      // clears isTtsSpeaking via onSpeechStart).
-                      ? 'speaking'
-                      : isListening
-                        ? 'listening'
-                        : isRefining || agentSending
-                          ? 'thinking'
-                          : 'idle'
-                }`}>
-                  <div className="orb">
-                    {voiceSleeping ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                      </svg>
-                    ) : isTtsSpeaking ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                      </svg>
-                    ) : isListening ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                        <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                        <line x1="12" x2="12" y1="19" y2="22" />
-                      </svg>
-                    ) : isRefining || agentSending ? (
-                      <svg className="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                      </svg>
-                    ) : (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                        <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
-                        <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
-                      </svg>
+                <div className="voice-mode-row">
+                  <div className={`orb-wrap ${
+                    voiceSleeping
+                      ? 'sleeping'
+                      : isTtsSpeaking
+                        ? 'speaking'
+                        : isListening
+                          ? 'listening'
+                          : isRefining || agentSending
+                            ? 'thinking'
+                            : 'idle'
+                  }`}>
+                    {isListening && (
+                      <>
+                        <div className="voice-ring voice-ring-a"></div>
+                        <div className="voice-ring voice-ring-b"></div>
+                      </>
                     )}
+                    <div className="orb">
+                      {voiceSleeping ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                        </svg>
+                      ) : isTtsSpeaking ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        </svg>
+                      ) : isListening ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                          <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                          <line x1="12" x2="12" y1="19" y2="22" />
+                        </svg>
+                      ) : isRefining || agentSending ? (
+                        <svg className="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                          <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
+                          <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                        </svg>
+                      )}
+                    </div>
                   </div>
+
+                  <div className={`voice-eq ${
+                    isListening ? 'listening' :
+                    isTtsSpeaking ? 'speaking' :
+                    isRefining || agentSending ? 'thinking' : 'idle'
+                  }`}>
+                    {Array.from({ length: 16 }).map((_, i) => {
+                      const c = (16 - 1) / 2;
+                      const d = Math.abs(i - c) / c;
+                      return (
+                        <div
+                          key={i}
+                          className="voice-eq-bar"
+                          style={{
+                            '--dur': `${280 + ((i * 137) % 420)}ms`,
+                            '--dly': `${(i * 83) % 360}ms`,
+                            '--max': (0.22 + (1 - d * d) * 0.78).toFixed(2),
+                          } as React.CSSProperties}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {isListening && audioRms > 0.01 && (
+                    <div className="voice-waveform">
+                      <div
+                        className="voice-waveform-fill"
+                        style={{ width: `${Math.min(100, audioRms * 120)}%` }}
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    className="voice-close-btn"
+                    onClick={stopAgentVoice}
+                    aria-label="End voice mode"
+                    title="End voice mode"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
                 </div>
-                {/* Stop button */}
-                <button
-                  className="voice-close-btn"
-                  onClick={stopAgentVoice}
-                  aria-label="End voice mode"
-                  title="End voice mode"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
               </div>
             )}
             {!voiceModeActive && (
@@ -2083,62 +2122,21 @@ export default function FloatingPromptBar() {
                   onClose={() => setMentionQuery(null)}
                 />
               )}
-              <textarea
-                ref={inputElRef}
-                value={inputValue}
-                className={`prompt-input${isAgentMode ? ' agent-mode-hidden' : ''}`}
-                placeholder={
-                  isAgentMode
-                    ? ($activeProject ? 'Ask your agent…' : 'Open a project to use agent mode')
-                    : (canSend ? 'Prompt the active terminal...' : 'Open or focus a terminal to send prompts')
-                }
-                rows={1}
-                disabled={isAgentMode ? !canSend : false}
-                onChange={handleInput}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                onContextMenu={handleInputContextMenu}
-                onMouseDown={() => { setTargetPickerOpen(false); setHistoryOpen(false); }}
-              />
+              {!isAgentMode && (
+                <textarea
+                  ref={inputElRef}
+                  value={inputValue}
+                  className="prompt-input"
+                  placeholder={canSend ? 'Prompt the active terminal...' : 'Open or focus a terminal to send prompts'}
+                  rows={1}
+                  onChange={handleInput}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  onContextMenu={handleInputContextMenu}
+                  onMouseDown={() => { setTargetPickerOpen(false); setHistoryOpen(false); }}
+                />
+              )}
             </div>
-
-            {/* Agent cards: running/blocked/recently-finished task states (CNVS-like) */}
-            {isAgentMode && agentCards.length > 0 && !voiceModeActive && (
-              <div className="agent-cards">
-                {agentCards.map((task) => {
-                  const cardStatus =
-                    task.status === 'in-progress' ? 'working' :
-                    task.status === 'blocked' ? 'waiting' : 'done';
-                  const agentName = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
-                  const detail =
-                    task.status === 'blocked' ? (task.blockedReason ?? 'Needs your input') :
-                    task.status === 'complete' ? 'Done' :
-                    task.status === 'failed' ? 'Failed' : '';
-                  return (
-                    <div key={task.id} className={`agent-card ${cardStatus}`} title={task.title}>
-                      <span className="agent-card-icon">
-                        {cardStatus === 'working' && <span className="working-dot" />}
-                        {cardStatus === 'waiting' && (
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                            <line x1="12" y1="9" x2="12" y2="13" />
-                            <line x1="12" y1="17" x2="12.01" y2="17" />
-                          </svg>
-                        )}
-                        {cardStatus === 'done' && (
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </span>
-                      <span className="agent-card-name">{agentName}</span>
-                      <span className="agent-card-title">{task.title}</span>
-                      {detail && <span className="agent-card-detail">{detail}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
 
             {/* Send button is hidden in agent mode — voice is the primary input there */}
             {!isAgentMode && (

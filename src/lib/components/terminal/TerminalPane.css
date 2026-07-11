@@ -496,6 +496,10 @@
   border-color: color-mix(in srgb, var(--role-agent) 30%, transparent);
 }
 
+.terminal-pane.agent-pane.agent-grok {
+  border-color: color-mix(in srgb, var(--text-primary) 30%, transparent);
+}
+
 /* Active agent panes get intense glows */
 .terminal-pane.agent-pane.active.agent-agy,
 .terminal-pane.agent-pane.active.agent-antigravity {
@@ -521,6 +525,11 @@
 .terminal-pane.agent-pane.active.agent-hermes {
   border-color: var(--role-agent) !important;
   box-shadow: 0 0 10px color-mix(in srgb, var(--role-agent) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.terminal-pane.agent-pane.active.agent-grok {
+  border-color: var(--text-primary) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--text-primary) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 /* Pulse animation when the agent is executing */

@@ -14,7 +14,7 @@ export default function UpdateBanner() {
 
   async function viewChangelog() {
     try {
-      await openChangelogPage();
+      await openChangelogPage(update?.version);
     } catch (err) {
       console.error('Failed to open changelog:', err);
       showToast('Could not open the changelog', 'error');

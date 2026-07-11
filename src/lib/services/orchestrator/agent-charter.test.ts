@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgentCharter, buildAgentTaskMessage } from './agent-charter';
+import { buildAgentCharter, buildAgentTaskMessage, ROLE_BRIEFS } from './agent-charter';
 
 describe('buildAgentCharter', () => {
   it('embeds the task goal inside an untrusted task block', () => {
@@ -93,5 +93,41 @@ describe('buildAgentTaskMessage', () => {
   it('is far shorter than the full charter for the same goal', () => {
     const goal = 'Refactor the auth module';
     expect(buildAgentTaskMessage(goal).length).toBeLessThan(buildAgentCharter(goal).length);
+  });
+
+  it('prepends the role charter when a role is assigned', () => {
+    const message = buildAgentTaskMessage('Wire the login form', { name: 'Iris', role: 'builder' });
+    expect(message).toContain('Iris, your task:');
+    expect(message).toContain(ROLE_BRIEFS.builder);
+    expect(message).toContain('Wire the login form');
+  });
+
+  it('carries the role even without a name', () => {
+    const message = buildAgentTaskMessage('Explore the codebase', { role: 'scout' });
+    expect(message).toContain(ROLE_BRIEFS.scout);
+    expect(message).toContain('Explore the codebase');
+  });
+});
+
+describe('agent roles', () => {
+  it('embeds the assigned role charter in the pasted brief', () => {
+    const charter = buildAgentCharter('Plan the migration', { name: 'Neo', role: 'coordinator' });
+    expect(charter).toContain(ROLE_BRIEFS.coordinator);
+    // Role sits alongside the standing guardrails, not instead of them.
+    expect(charter).toMatch(/SCOPE/);
+    expect(charter).toMatch(/reset --hard/);
+  });
+
+  it('omits any role line when none is assigned', () => {
+    const charter = buildAgentCharter('do the thing', { name: 'Echo' });
+    for (const brief of Object.values(ROLE_BRIEFS)) {
+      expect(charter).not.toContain(brief);
+    }
+  });
+
+  it('gives each role a distinct, single-line charter', () => {
+    const briefs = Object.values(ROLE_BRIEFS);
+    expect(new Set(briefs).size).toBe(briefs.length);
+    for (const brief of briefs) expect(brief).not.toContain('\n');
   });
 });

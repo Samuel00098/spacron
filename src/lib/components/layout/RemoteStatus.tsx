@@ -9,6 +9,7 @@ import {
   addRemoteConnection,
   updateRemoteConnection,
   removeRemoteConnection,
+  setReconnectOnStartup,
   hostLabel,
   type ConnectionStatus,
 } from '$lib/stores/remoteWorkspace';
@@ -143,6 +144,17 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
                   )}
                 </button>
                 <div className="rs-row-actions">
+                  <button
+                    type="button"
+                    className={`rs-icon-btn${conn.reconnectOnStartup ? ' rs-on' : ''}`}
+                    title={conn.reconnectOnStartup ? 'Reconnecting on startup — agents come back on their own' : 'Reconnect on startup'}
+                    aria-pressed={!!conn.reconnectOnStartup}
+                    onClick={() => setReconnectOnStartup(conn.id, !conn.reconnectOnStartup)}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2 4.5 13.5H12l-1 8.5 8.5-11.5H11z" />
+                    </svg>
+                  </button>
                   <button
                     type="button"
                     className="rs-icon-btn"

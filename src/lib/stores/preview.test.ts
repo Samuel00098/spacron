@@ -18,6 +18,7 @@ import {
   activePreviewTabId,
   currentUrl,
   parseLocalPreviewUrl,
+  parseLocalFilePreviewUrl,
   type PreviewTab,
 } from './preview';
 import { get } from '$lib/stores/storeCompat';
@@ -368,6 +369,36 @@ describe('preview navigation', () => {
       const t2 = tabs.find((t) => t.id === 'test-tab-2')!;
       expect(t2.history).toEqual(['/', '/from-tab2']);
       expect(t2.historyIndex).toBe(1);
+    });
+  });
+
+  describe('local file preview URLs', () => {
+    it('parses a /local-file?path= URL into file path and query', () => {
+      const filePath = 'C:\\Users\\sam\\Real Projects\\site\\index.html';
+      const url = `http://127.0.0.1:54321/local-file?path=${encodeURIComponent(filePath)}`;
+      const parsed = parseLocalFilePreviewUrl(url);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.filePath).toBe(filePath);
+      // search preserves the encoded query so the URL can be rebuilt verbatim
+      // against a different (current) proxy port.
+      expect(`http://127.0.0.1:99999/local-file${parsed!.search}`).toContain(
+        encodeURIComponent(filePath)
+      );
+    });
+
+    it('rejects non-local-file URLs', () => {
+      expect(parseLocalFilePreviewUrl('http://127.0.0.1:5173/app')).toBeNull();
+      expect(parseLocalFilePreviewUrl('http://127.0.0.1:54321/local-file')).toBeNull(); // no path param
+      expect(parseLocalFilePreviewUrl('https://example.com/local-file?path=x')).toBeNull(); // not loopback
+      expect(parseLocalFilePreviewUrl('not a url')).toBeNull();
+    });
+
+    it('titles a local file tab with the file name', () => {
+      const filePath = 'C:\\Users\\sam\\projects\\site\\index.html';
+      navigatePreviewTab(
+        `http://127.0.0.1:54321/local-file?path=${encodeURIComponent(filePath)}`
+      );
+      expect(getActiveTab().title).toBe('index.html');
     });
   });
 });

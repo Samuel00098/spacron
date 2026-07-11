@@ -355,9 +355,16 @@ opening a popover to add / edit / remove / pick between Local and saved remotes.
 
 ### Deferred
 
-- **Auto-reconnect on startup.** We persist the saved list but not the active
-  selection, so reopening the app starts Local; the user reconnects in one click.
-  Remembering + auto-dialing the last remote is a later refinement.
+- **Auto-reconnect on startup** ✅ *shipped (opt-in).* Each saved remote carries a
+  `reconnectOnStartup` flag (toggled from the RemoteStatus popover; at most one set).
+  On boot, `maybeAutoReconnectRemote()` dials the flagged remote so a workspace whose
+  agents are still running on the box comes back on its own — "close the laptop, reopen,
+  they're still there." Safe because `connectRemote` fails fast (10 s) and rolls back to
+  Local if the box is offline, so it can never hang boot or leave a half-connected state.
+  It stays **opt-in** (default Local) precisely to honor that original caution.
+  *Remaining refinement:* re-linking orchestrator **task↔session** state after a cold
+  start — the PTY sessions re-attach and the agents keep running, but the task cards that
+  owned them (frontend state lost on close) don't yet re-bind to the re-attached sessions.
 - **Preview stays local.** The preview proxy still targets `localhost`; a remote
   dev server isn't proxied yet.
 - Multiple simultaneous remote roots / mixing local + remote projects in one

@@ -20,6 +20,7 @@ export type VoiceInputCallbacks = {
   onEnd?: () => void;
   onError?: (message: string) => void;
   onProcessingStart?: (message: string) => void;
+  onAudioLevel?: (rms: number) => void;
 };
 
 export type VoiceInputSession = {
@@ -657,6 +658,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
               sumSquares += input[i] * input[i];
             }
             const rms = Math.sqrt(sumSquares / Math.max(input.length, 1));
+            callbacks.onAudioLevel?.(rms);
 
             // Skip the first 150ms (mic startup artifacts) but still adapt the
             // noise floor so we start with a sensible estimate.

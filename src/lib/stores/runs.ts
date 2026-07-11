@@ -31,6 +31,7 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   { name: 'Oh My Pi', command: 'omp', isPreset: true, isAgent: true },
   { name: 'Cursor', command: 'agent', isPreset: true, isAgent: true },
   { name: 'Hermes Agent', command: 'hermes', isPreset: true, isAgent: true },
+  { name: 'Grok CLI', command: 'grok', isPreset: true, isAgent: true },
   { name: 'Dev Server', command: 'npm run dev', isPreset: true },
 ];
 

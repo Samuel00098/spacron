@@ -9,6 +9,7 @@ export type OrchestratorTaskStatus =
 import type { ActivityEvent } from './activity-log';
 export type { ActivityEvent } from './activity-log';
 import type { WorktreeInfo } from './worktree-manager';
+import type { AgentRole } from './agent-charter';
 
 export interface OrchestratorTask {
   id: string;
@@ -19,6 +20,12 @@ export interface OrchestratorTask {
   name?: string | null;
   status: OrchestratorTaskStatus;
   agentPreset?: string | null;
+  /**
+   * Team role assigned by the planner (Coordinator/Builder/Scout/Reviewer). Adds
+   * a compact role charter to the agent's brief so a fleet can divide a goal and
+   * coordinate through the mailbox. Null ⇒ a plain, un-roled agent.
+   */
+  role?: AgentRole | null;
   assignedSessionId?: number | null;
   /**
    * The session the agent last ran in. Unlike `assignedSessionId` (cleared on
@@ -67,7 +74,8 @@ export function createTaskRecord(
   projectId: string,
   goal: string,
   agentPreset?: string | null,
-  name?: string | null
+  name?: string | null,
+  role?: AgentRole | null
 ): OrchestratorTask {
   const now = Date.now();
   const trimmedGoal = goal.trim();
@@ -80,6 +88,7 @@ export function createTaskRecord(
     name: name?.trim() ? name.trim() : null,
     status: 'todo',
     agentPreset: agentPreset ?? null,
+    role: role ?? null,
     assignedSessionId: null,
     blockedReason: null,
     failureReason: null,

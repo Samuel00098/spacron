@@ -43,10 +43,39 @@ export function localDevProxyKey(host: string, port: number) {
   return `${host.trim().toLowerCase()}:${port}`;
 }
 
+/**
+ * Recognize a `/local-file?path=…` preview URL (an HTML file served straight
+ * off disk through the background proxy). Returns the decoded file path and
+ * the raw query string so callers can rebuild the URL against the *current*
+ * proxy port — the port embedded in a persisted tab goes stale across app
+ * restarts because the proxy binds a fresh ephemeral port each launch.
+ */
+export function parseLocalFilePreviewUrl(
+  url: string
+): { filePath: string; search: string } | null {
+  try {
+    const parsed = new URL(url);
+    const isLocalHost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (!isLocalHost || parsed.pathname !== '/local-file') return null;
+    const filePath = parsed.searchParams.get('path');
+    if (!filePath) return null;
+    return { filePath, search: parsed.search };
+  } catch {
+    return null;
+  }
+}
+
 function derivePreviewTabTitle(url: string) {
   const trimmed = url.trim();
   if (!trimmed || trimmed === '/' || trimmed === 'about:blank') {
     return 'New Tab';
+  }
+
+  // Local file previews: show the file name, not "Local:54321/local-file".
+  const localFile = parseLocalFilePreviewUrl(trimmed);
+  if (localFile) {
+    const name = localFile.filePath.split(/[\\/]/).pop();
+    return name || 'Local file';
   }
 
   const localPreview = parseLocalPreviewUrl(trimmed);
@@ -463,5 +492,50 @@ export async function clearProxyTarget() {
     await invoke('preview_clear_proxy_target');
   } catch (err) {
     console.error('Failed to clear proxy target:', err);
+  }
+}
+
+/**
+ * Update the project root path in the proxy so the `/local-file` route can
+ * serve files from the correct directory.  Call this whenever the active
+ * project changes.
+ */
+export async function setPreviewProjectRoot(rootPath: string | null) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('preview_set_project_root', { path: rootPath });
+  } catch (err) {
+    console.error('Failed to set preview project root:', err);
+  }
+}
+
+/**
+ * Navigate the preview panel to a local file served through the proxy's
+ * `/local-file` route.  Ensures the background proxy is running first so the
+ * iframe `src` resolves immediately.
+ *
+ * Returns the full URL the preview was navigated to, or `null` on failure.
+ */
+export async function previewLocalFile(filePath: string): Promise<string | null> {
+  try {
+    const port = await ensureProxyRunning();
+    let url: string | null = null;
+    if (port) {
+      const encoded = encodeURIComponent(filePath);
+      url = `http://127.0.0.1:${port}/local-file?path=${encoded}`;
+      navigatePreviewTab(url);
+    } else {
+      // Proxy unavailable — navigate to a blank page so the panel shows
+      navigatePreviewTab(BLANK_PREVIEW_URL);
+    }
+    // Always reveal the preview panel so it appears on screen, even when
+    // the proxy isn't available (browser mode, Tauri not loaded).
+    const { useLayoutStore } = await import('./zustand/layout');
+    useLayoutStore.getState().revealPreview();
+    return url;
+  } catch (err: any) {
+    console.error('Failed to preview local file:', err);
+    showToast(`Failed to preview file: ${err?.message || err}`, 'error');
+    return null;
   }
 }

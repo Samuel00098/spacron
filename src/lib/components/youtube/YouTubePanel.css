@@ -5,10 +5,24 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a diagonal gloss sheen reflection */
-  background: 
+  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a
+     diagonal gloss sheen reflection — over a fully opaque base so text behind
+     the player never shows through. The pop-up's transparency slider still
+     fades the whole panel when see-through is wanted.
+     NOTE: the opaque base must live in `background-color` — in the shorthand,
+     only the LAST layer may be a bare color, and the color-mix frost layer is
+     a color too, so listing both made the whole declaration invalid and the
+     browser dropped it (leaving the panel fully transparent). The frost tint
+     is wrapped in a gradient so it is a legal image layer. It must also use
+     rgb(var(--bg-primary-rgb)): `var(--bg-primary)` is overridden to
+     rgba(...,0.15) by global.css when transparency mode is active. */
+  background-color: rgb(var(--bg-primary-rgb, 24, 24, 30));
+  background-image:
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
-    color-mix(in srgb, var(--bg-primary) calc(var(--frost-surface, 0.55) * 100%), transparent);
+    linear-gradient(
+      color-mix(in srgb, var(--bg-primary) calc(var(--frost-surface, 0.55) * 100%), transparent),
+      color-mix(in srgb, var(--bg-primary) calc(var(--frost-surface, 0.55) * 100%), transparent)
+    );
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   color: var(--text-primary);
@@ -175,6 +189,21 @@
   display: flex;
   flex-direction: column;
   position: relative;
+}
+
+/* Music mode: the embedded music.youtube.com site fills the whole body. */
+.youtube-panel .yt-music-site {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.youtube-panel .yt-music-site-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: rgb(var(--bg-primary-rgb, 24, 24, 30));
 }
 
 .youtube-panel .yt-player {

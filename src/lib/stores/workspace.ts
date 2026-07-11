@@ -50,7 +50,25 @@ export const activeProject = derived(
     $activeProjectId ? $projects.get($activeProjectId) ?? null : null
 );
 
+// Keep the preview proxy's project root in sync with the active project across
+// EVERY path that changes it — open folder, switch tab, session/workspace
+// restore, close — not just `setActiveProject`. The proxy's `/local-file` route
+// refuses to serve any file until this is set, so a missed update surfaces as a
+// "No project open" error in the preview panel. Centralizing here means new
+// call sites can't forget to notify the proxy. Deduped so unrelated `projects`
+// map updates (metadata refreshes) don't spam the backend.
+let lastPreviewProjectRoot: string | null | undefined;
+activeProject.subscribe(($activeProject) => {
+  const rootPath = $activeProject?.root_path ?? null;
+  if (rootPath === lastPreviewProjectRoot) return;
+  lastPreviewProjectRoot = rootPath;
+  import('./preview').then(({ setPreviewProjectRoot }) => {
+    setPreviewProjectRoot(rootPath);
+  });
+});
+
 export const newWorkspacePromptOpen = syncWritable<boolean>('newWorkspacePromptOpen', false);
+export const newFolderPromptOpen = syncWritable<boolean>('newFolderPromptOpen', false);
 export const isProjectHUDOpen = syncWritable<boolean>('isProjectHUDOpen', false);
 
 export function toggleProjectHUD() {
@@ -775,6 +793,11 @@ export function setActiveProject(project: Project) {
   activeProjectId.set(project.id);
   setActiveTerminalProject(project.id);
 
+  // Tell the preview proxy which project root to serve local files from.
+  import('./preview').then(({ setPreviewProjectRoot }) => {
+    setPreviewProjectRoot(project.root_path);
+  });
+
   // Update active workspace's active path
   const wsId = get(activeWorkspaceId);
   if (wsId) {
@@ -792,6 +815,9 @@ export function clearActiveProject() {
   saveCurrentProjectState();
   activeProjectId.set(null);
   setActiveTerminalProject(null);
+  import('./preview').then(({ setPreviewProjectRoot }) => {
+    setPreviewProjectRoot(null);
+  });
   clearAllStores();
   import('@tauri-apps/api/core').then(({ invoke }) => {
     invoke('workspace_set_active', { projectId: null }).catch((e) => {
@@ -913,7 +939,13 @@ export async function openWorkspace(workspaceId: string) {
   }
 }
 
-export async function addFolderToWorkspace(path: string) {
+/** Register an already-opened project as the active project of the active
+ *  workspace (creating a placeholder workspace if none is active). Shared by
+ *  `addFolderToWorkspace` (open existing) and `createProjectFolder` (start fresh).
+ *  `path` is the value recorded in the workspace's `project_paths` and reused to
+ *  re-open the project later, so it must match what `workspace_open_project`
+ *  accepts for that folder. */
+async function attachProjectToActiveWorkspace(project: Project, path: string) {
   let wsId = get(activeWorkspaceId);
   if (!wsId) {
     createNewWorkspace();
@@ -921,58 +953,72 @@ export async function addFolderToWorkspace(path: string) {
   }
   if (!wsId) return;
 
+  const currentActiveId = get(activeProjectId);
+  if (currentActiveId) {
+    saveProjectState(currentActiveId);
+  }
+
+  projects.update((p) => { p.set(project.id, project); return p; });
+
+  openProjectIds.update((ids) => {
+    if (!ids.includes(project.id)) return [...ids, project.id];
+    return ids;
+  });
+
+  activeProjectId.set(project.id);
+  setActiveTerminalProject(project.id);
+  await restoreProjectState(project.id, project.root_path);
+
+  // Update active workspace
+  recentWorkspaces.update((wsList) => {
+    return wsList.map((w) => {
+      if (w.id === wsId) {
+        const paths = [...w.project_paths];
+        if (!paths.includes(path)) {
+          paths.push(path);
+        }
+
+        // Only auto-name a freshly-created (placeholder) workspace after its
+        // first folder. Once a workspace has a real name, leave it untouched —
+        // adding more projects must not rewrite the user's chosen name.
+        let wsName = w.name;
+        if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name.trim() === '' || w.name === 'Empty Collection' || w.name === 'Empty Workspace') {
+          wsName = getFilename(path);
+        }
+
+        return {
+          ...w,
+          name: wsName,
+          project_paths: paths,
+          active_project_path: path,
+          last_opened: Date.now().toString(),
+        };
+      }
+      return w;
+    });
+  });
+}
+
+export async function addFolderToWorkspace(path: string) {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const project = await invoke<Project>('workspace_open_project', { path });
-
-    const currentActiveId = get(activeProjectId);
-    if (currentActiveId) {
-      saveProjectState(currentActiveId);
-    }
-
-    projects.update((p) => { p.set(project.id, project); return p; });
-    
-    openProjectIds.update((ids) => {
-      if (!ids.includes(project.id)) return [...ids, project.id];
-      return ids;
-    });
-
-    activeProjectId.set(project.id);
-    setActiveTerminalProject(project.id);
-    await restoreProjectState(project.id, project.root_path);
-
-    // Update active workspace
-    recentWorkspaces.update((wsList) => {
-      return wsList.map((w) => {
-        if (w.id === wsId) {
-          const paths = [...w.project_paths];
-          if (!paths.includes(path)) {
-            paths.push(path);
-          }
-          
-          // Only auto-name a freshly-created (placeholder) workspace after its
-          // first folder. Once a workspace has a real name, leave it untouched —
-          // adding more projects must not rewrite the user's chosen name.
-          let wsName = w.name;
-          if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name.trim() === '' || w.name === 'Empty Collection' || w.name === 'Empty Workspace') {
-            wsName = getFilename(path);
-          }
-
-          return {
-            ...w,
-            name: wsName,
-            project_paths: paths,
-            active_project_path: path,
-            last_opened: Date.now().toString(),
-          };
-        }
-        return w;
-      });
-    });
+    await attachProjectToActiveWorkspace(project, path);
   } catch (err) {
     console.error('Failed to add folder to workspace:', err);
     throw err;
   }
+}
+
+/** Create a brand-new empty folder named `name` under `parentDir` on disk and open
+ *  it as the active project — the "start fresh" flow. The backend creates the
+ *  directory and registers it as a project root in one step; we then attach it to
+ *  the active workspace exactly like opening an existing folder. */
+export async function createProjectFolder(parentDir: string, name: string): Promise<Project> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const project = await invoke<Project>('workspace_create_project', { parent: parentDir, name });
+  await attachProjectToActiveWorkspace(project, project.root_path);
+  return project;
 }
 
 export function closeProject(projectId: string) {

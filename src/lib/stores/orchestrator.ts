@@ -72,13 +72,29 @@ import {
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
-import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
+import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import {
   getProjectMemoryLines,
   loadProjectMemory,
   rememberTask,
 } from '$lib/services/orchestrator/memory';
+import {
+  ORCHESTRATOR,
+  USER,
+  activeClaims,
+  getMailboxLines,
+  getProjectMailbox,
+  findClaimConflicts,
+  loadProjectMailbox,
+  postMailboxMessage,
+  dismissMailboxCard,
+  type MailboxCard,
+} from '$lib/services/orchestrator/mailbox';
+import {
+  getKnowledgeLines,
+  loadKnowledgeGraph,
+} from '$lib/services/orchestrator/knowledge';
 import {
   getProfileLines,
   loadProjectProfile,
@@ -172,6 +188,7 @@ function normalizeLoadedTask(raw: Partial<PersistedTask> | null | undefined): Or
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null,
     status,
     agentPreset: raw.agentPreset ?? null,
+    role: raw.role ?? null,
     assignedSessionId: status === 'in-progress' ? raw.assignedSessionId ?? null : null,
     blockedReason: raw.blockedReason ?? null,
     failureReason: raw.failureReason ?? null,
@@ -225,6 +242,8 @@ function releaseTaskLease(task: OrchestratorTask): void {
 export async function loadProjectOrchestratorTasks(project: { id: string; root_path: string }): Promise<void> {
   projectPaths.set(project.id, project.root_path);
   await loadProjectMemory(project.id, project.root_path);
+  await loadProjectMailbox(project.id, project.root_path);
+  await loadKnowledgeGraph(project.id, project.root_path);
   await loadProjectProfile(project.id, project.root_path);
   let rawPersistedTasks: Array<Partial<PersistedTask> | null | undefined> = [];
   try {
@@ -517,6 +536,150 @@ function leasedSessionLive(taskId: string, sessionId: number): boolean {
 }
 
 /**
+ * Post an agent's turn outcome to the shared mailbox so the rest of the team (and
+ * the orchestrator's surfacing) sees what just happened without the user relaying
+ * it. Complete ⇒ `done`; blocked/failed ⇒ `note`. Broadcast to the whole team.
+ */
+/**
+ * The name of a Reviewer on this project's team that can receive a hand-off — a
+ * task tagged with the `reviewer` role that is still alive (not complete/failed/
+ * cancelled), excluding the handing-off task itself. Null when the team has none.
+ */
+function findTeamReviewer(projectId: string, excludeTaskId: string): string | null {
+  const reviewer = get(orchestratorTasks).find(
+    (t) =>
+      t.projectId === projectId &&
+      t.id !== excludeTaskId &&
+      t.role === 'reviewer' &&
+      t.status !== 'complete' &&
+      t.status !== 'failed' &&
+      t.status !== 'cancelled'
+  );
+  if (!reviewer) return null;
+  return reviewer.name
+    ?? (reviewer.agentPreset ? getAgentDisplayName(reviewer.agentPreset) : null)
+    ?? reviewer.agentPreset
+    ?? null;
+}
+
+async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurnOutcome): Promise<void> {
+  const from = task.name
+    ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
+    ?? task.agentPreset
+    ?? 'Agent';
+  const label = task.name ?? task.title ?? task.goal;
+  const rootPath = projectPaths.get(task.projectId);
+  if (task.status === 'complete') {
+    // Capture any files this task claimed BEFORE the `done` below releases the
+    // claim, so the handoff can tell the Reviewer exactly what changed.
+    const claim = activeClaims(getProjectMailbox(task.projectId)).find((c) => c.taskId === task.id);
+    await postMailboxMessage(task.projectId, rootPath, {
+      from,
+      kind: 'done',
+      taskId: task.id,
+      text: `Finished: ${label}`,
+    });
+    // Bi-directional handoff: a Builder that just finished hands its work to a
+    // Reviewer directly — no user relay. The Reviewer gates it and either merges
+    // or bounces it back with a note. Only fires when a reviewer is on the team.
+    if (task.role === 'builder') {
+      const reviewer = findTeamReviewer(task.projectId, task.id);
+      if (reviewer) {
+        await postMailboxMessage(task.projectId, rootPath, {
+          from,
+          to: reviewer,
+          kind: 'handoff',
+          taskId: task.id,
+          files: claim?.files,
+          text: `Ready for review: ${label}`,
+        });
+      }
+    }
+  } else if (task.status === 'blocked') {
+    await postMailboxMessage(task.projectId, projectPaths.get(task.projectId), {
+      from,
+      kind: 'note',
+      taskId: task.id,
+      text: `Blocked on ${label} — ${outcome.kind === 'blocked' ? outcome.reason : 'needs input'}`,
+    });
+  } else if (task.status === 'failed') {
+    await postMailboxMessage(task.projectId, projectPaths.get(task.projectId), {
+      from,
+      kind: 'note',
+      taskId: task.id,
+      text: `Failed on ${label} — ${task.failureReason ?? 'exited with errors'}`,
+    });
+  }
+}
+
+// ─── Mailbox card actions ─────────────────────────────────────────────────────
+// The "needs you" strip (AgentMailboxCards) renders the actionable mailbox cards
+// — report / handoff / ask — that want a human decision. These wire its buttons
+// back to the sending agent: the user's words are recorded in the shared mailbox
+// (so the whole team and the orchestrator's own context see them) and delivered
+// straight into the agent's live REPL when it's still running — no user relay.
+
+async function deliverMailboxReply(
+  projectId: string,
+  card: MailboxCard,
+  text: string,
+  rootPath: string | null | undefined,
+): Promise<boolean> {
+  const body = text.trim();
+  if (!body) return false;
+  // Record the user's decision on the shared board, addressed to the sender.
+  await postMailboxMessage(projectId, rootPath ?? projectPaths.get(projectId), {
+    from: USER,
+    to: card.from,
+    kind: 'note',
+    taskId: card.taskId,
+    text: body,
+  });
+  // Deliver it live to the agent if it's still running; a finished agent just
+  // gets the note on the board.
+  const task = resolveRunningTaskByName(projectId, card.from);
+  let delivered = false;
+  if (task && rootPath) {
+    try {
+      delivered = await sendFollowUpToAgent(task, body, rootPath);
+    } catch (err) {
+      console.error('Failed to deliver mailbox reply:', err);
+    }
+  }
+  dismissMailboxCard(card.id);
+  return delivered;
+}
+
+/** Reply to an actionable card: deliver `text` to the sending agent (if live) and note it to the team. */
+export async function replyToMailboxCard(
+  projectId: string,
+  card: MailboxCard,
+  text: string,
+  rootPath: string | null | undefined,
+): Promise<void> {
+  const delivered = await deliverMailboxReply(projectId, card, text, rootPath);
+  showToast(
+    delivered ? `Sent to ${card.from}` : `Noted — ${card.from} isn't live right now`,
+    delivered ? 'info' : 'warning',
+    3000,
+  );
+}
+
+/** Approve an actionable card: tell the sending agent to proceed and clear the card. */
+export async function approveMailboxCard(
+  projectId: string,
+  card: MailboxCard,
+  rootPath: string | null | undefined,
+): Promise<void> {
+  const delivered = await deliverMailboxReply(projectId, card, 'Approved — please proceed.', rootPath);
+  showToast(
+    delivered ? `Approved · told ${card.from} to proceed` : `Approved — ${card.from} isn't live right now`,
+    delivered ? 'success' : 'info',
+    3000,
+  );
+}
+
+/**
  * Reconcile a leased task once its agent turn ends (detected by the turn watcher
  * or by terminal exit). Idempotent: only acts while the task is still the
  * in-progress owner of `sessionId`, so the watcher and the exit handler can't
@@ -560,6 +723,7 @@ async function completeLeasedTask(
     }
     const rememberedTask = get(orchestratorTasks).find((t) => t.id === updated.id) ?? updated;
     void rememberTask(updated.projectId, projectPaths.get(updated.projectId), rememberedTask);
+    void postAgentTurnToMailbox(updated, outcome);
   }
 
   if (opts?.notify === false || !updated) return;
@@ -640,13 +804,15 @@ export function createOrchestratorTask(
   projectId: string,
   goal: string,
   agentPreset?: string | null,
-  name?: string | null
+  name?: string | null,
+  role?: AgentRole | null
 ): OrchestratorTask {
   const task = createTaskRecord(
     projectId,
     goal,
     agentPreset,
-    name
+    name,
+    role
   );
   const titledTask = {
     ...task,
@@ -727,11 +893,17 @@ function withAgentTaskPanelContext(goal: string, projectId: string): string {
   return `${goal.trim()}\n\n${panelContext}`;
 }
 
-function buildLeasedAgentMessage(goal: string, agentCommand: string | null | undefined, name?: string | null, projectId?: string): string {
+function buildLeasedAgentMessage(
+  goal: string,
+  agentCommand: string | null | undefined,
+  name?: string | null,
+  projectId?: string,
+  role?: AgentRole | null
+): string {
   const contextualGoal = projectId ? withAgentTaskPanelContext(goal, projectId) : goal;
   return agentReadsRulesFile(agentCommand)
-    ? buildAgentTaskMessage(contextualGoal, { name: name ?? null })
-    : buildAgentCharter(contextualGoal, { name: name ?? null });
+    ? buildAgentTaskMessage(contextualGoal, { name: name ?? null, role: role ?? null })
+    : buildAgentCharter(contextualGoal, { name: name ?? null, role: role ?? null });
 }
 
 function sendGoalToLeasedTask(
@@ -748,7 +920,7 @@ function sendGoalToLeasedTask(
       // only the task; the rest get the charter-wrapped goal. The stored goal and
       // the activity log keep the clean task text either way.
       const task = get(orchestratorTasks).find((t) => t.id === id);
-      const message = buildLeasedAgentMessage(goal, agentCommand, task?.name ?? null, task?.projectId);
+      const message = buildLeasedAgentMessage(goal, agentCommand, task?.name ?? null, task?.projectId, task?.role ?? null);
       const sent = await sendOrchestratorGoalWhenReady(sessionId, message, {
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
@@ -911,7 +1083,7 @@ export function resendOrchestratorGoal(id: string): void {
   // rules-file agents, whose brief is already in CLAUDE.md / AGENTS.md).
   resendLeasedOrchestratorGoal(
     task.assignedSessionId,
-    buildLeasedAgentMessage(task.goal, task.agentPreset, task.name ?? null, task.projectId)
+    buildLeasedAgentMessage(task.goal, task.agentPreset, task.name ?? null, task.projectId, task.role ?? null)
   );
   patchTask(id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
   logTaskActivity(id, 'follow-up', `Re-sent goal: ${task.goal}`);
@@ -1614,6 +1786,66 @@ function msgId(): string {
   return `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// ── Confirmation gate (conversational / voice mode) ─────────────────────────
+// In a spoken conversation the assistant must ASK before it launches, messages,
+// or closes an agent — it should never act on the same turn it was asked. We
+// can't rely on the LLM to withhold the action (it routinely returns the
+// "want me to go ahead?" reply AND the spawn in one response), so the hold is
+// enforced here in code: agent-launching actions are stashed per project, the
+// user is asked, and they only run once the user affirms on the NEXT turn.
+interface PendingConfirmation {
+  actions: OrchestratorAction[];
+  /** The assistant's original (declarative) reply, shown once the user confirms. */
+  reply: string;
+  viaLLM: boolean;
+}
+const pendingConfirmations = new Map<string, PendingConfirmation>();
+
+// Affirmations that release a held action. Anchored at the start so a sentence
+// that merely contains "no" or "yes" mid-way isn't misread.
+const AFFIRM_RE =
+  /^\s*(y(es|eah|ep|up|a)?|sure|ok(ay)?|go( ahead| for it| on)?|do it|please do|sounds good|let'?s (do it|go)|absolutely|affirmative|proceed|confirm(ed)?|send it|make it so|fire away)\b/i;
+const DECLINE_RE =
+  /^\s*(no|nope|nah|don'?t|do not|stop|cancel|never ?mind|not (yet|now)|hold off|forget it|leave it|wait)\b/i;
+
+/** True for actions that touch the agent fleet — the ones gated behind a confirm. */
+function isAgentAction(action: OrchestratorAction): boolean {
+  return action.kind === 'spawn' || action.kind === 'send' || action.kind === 'close';
+}
+
+/**
+ * A short, natural confirmation question derived from the actions the assistant
+ * wants to take. Keeps the LLM's own phrasing when it already asked (reply ends
+ * with "?"), otherwise builds a clean standalone question so a declarative reply
+ * ("Handing this to Claude.") never contradicts the fact that we're waiting.
+ */
+function confirmationQuestion(actions: OrchestratorAction[], reply: string): string {
+  const trimmedReply = reply.trim();
+  if (/\?\s*$/.test(trimmedReply)) return trimmedReply;
+
+  const spawns = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'spawn' }> => a.kind === 'spawn');
+  const sends = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'send' }> => a.kind === 'send');
+  const closes = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'close' }> => a.kind === 'close');
+
+  const bits: string[] = [];
+  if (spawns.length === 1) {
+    bits.push(`launch ${getAgentDisplayName(spawns[0].agent) ?? spawns[0].agent}`);
+  } else if (spawns.length > 1) {
+    bits.push(`launch ${spawns.length} agents`);
+  }
+  if (sends.length === 1) bits.push(`send that to ${sends[0].target}`);
+  else if (sends.length > 1) bits.push(`dispatch ${sends.length} tasks`);
+  if (closes.length === 1) {
+    const t = closes[0].target.toLowerCase();
+    bits.push(t === 'all' || t === 'everything' ? 'close all the agents' : `close ${closes[0].target}`);
+  } else if (closes.length > 1) {
+    bits.push('close those agents');
+  }
+
+  const what = bits.join(' and ') || 'go ahead';
+  return `Want me to ${what}?`;
+}
+
 /**
  * Talk to the orchestrator. Appends the user message, asks the brain how to
  * route it (LLM when configured, heuristic otherwise), replies, and — when the
@@ -1656,6 +1888,8 @@ export async function sendChatMessage(
     .slice(-6);
   const taskMemory = buildProjectTaskMemory(projectId);
   const taskPanel = getProjectTaskPanelLines(projectId);
+  const mailboxLines = getMailboxLines(projectId);
+  const knowledgeLines = getKnowledgeLines(projectId);
   const llmConfig = getConversationLlmConfig(opts?.voiceConversation);
 
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() });
@@ -1663,10 +1897,28 @@ export async function sendChatMessage(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true });
 
   let result: RouteResult;
+  // When we asked the user to confirm a spawn/send/close last turn, this turn's
+  // message is their answer — resolve it here instead of re-routing "yes".
+  let resolvingHeld = false;
+  const held = opts?.voiceConversation ? pendingConfirmations.get(projectId) : undefined;
+  if (held) pendingConfirmations.delete(projectId);
+
+  if (held && DECLINE_RE.test(trimmed)) {
+    patchChat(projectId, assistantId, {
+      text: "Okay, I'll hold off. Just say the word whenever you want me to.",
+      pending: false,
+    });
+    return;
+  }
+
   const forced = opts?.forcedAgent && opts.forcedAgent !== 'auto'
     ? agents.find((a) => a.command === opts.forcedAgent)
     : null;
-  if (forced) {
+  if (held && AFFIRM_RE.test(trimmed)) {
+    // Confirmed — run exactly what we held, with the original declarative reply.
+    result = { reply: held.reply, actions: held.actions, viaLLM: held.viaLLM };
+    resolvingHeld = true;
+  } else if (forced) {
     result = {
       reply: `Handing this to ${forced.name}.`,
       actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed }],
@@ -1680,6 +1932,8 @@ export async function sendChatMessage(
         recentUserMessages,
         taskMemory,
         taskPanel,
+        mailbox: mailboxLines,
+        knowledge: knowledgeLines,
         runningAgents: getRunningAgentRefs(projectId),
         reviewingAgents: getReviewableAgentRefs(projectId),
         taskOutputs: getAgentOutputRefs(projectId),
@@ -1695,6 +1949,23 @@ export async function sendChatMessage(
   }
 
   patchChat(projectId, assistantId, { text: result.reply, pending: false });
+
+  // ── Confirmation gate ──────────────────────────────────────────────────────
+  // In conversational mode, never launch/message/close an agent on the same turn
+  // the user asked. Stash the agent-launching actions, ask for a go-ahead, and
+  // wait for the user's next message (resolved at the top of this function).
+  if (opts?.voiceConversation && !resolvingHeld && result.actions.some(isAgentAction)) {
+    pendingConfirmations.set(projectId, {
+      actions: result.actions,
+      reply: result.reply,
+      viaLLM: result.viaLLM,
+    });
+    patchChat(projectId, assistantId, {
+      text: confirmationQuestion(result.actions, result.reply),
+      pending: false,
+    });
+    return;
+  }
 
   // ── Reconnaissance (started now, awaited after spawning) ──────────────────
   // Kick recon off immediately so its LLM calls (plan + craft) overlap with the
@@ -1776,6 +2047,28 @@ export async function sendChatMessage(
     const persistent = !!explicitName || !action.prompt;
     // Every spawned agent gets a friendly human name so it's easy to address.
     const name = explicitName ?? pickAssistantName(usedNames);
+
+    // File ownership: a builder that declared the files it will own is held back
+    // if any overlap a claim that is still live (another builder's in-flight
+    // work). Worktrees stop physical collisions; this stops logical ones — two
+    // agents editing the same file in parallel and conflicting at merge. The
+    // Coordinator can re-dispatch once the holder releases (posts done/release).
+    const wantedFiles = action.files ?? [];
+    if (wantedFiles.length) {
+      const conflicts = findClaimConflicts(getProjectMailbox(projectId), wantedFiles);
+      if (conflicts.length) {
+        const owners = [...new Set(conflicts.map((c) => c.owner))].join(', ');
+        const files = [...new Set(conflicts.map((c) => c.file))].slice(0, 3).join(', ');
+        void postMailboxMessage(projectId, rootPath, {
+          from: ORCHESTRATOR,
+          kind: 'note',
+          text: `Held ${name}: ${files} still claimed by ${owners}. Will dispatch once released.`,
+        });
+        showToast(`Holding ${name} — ${files} is still owned by ${owners}`, 'warning', 6000, true);
+        continue;
+      }
+    }
+
     usedNames.push(name);
     const isPrimary = spawnIndex === 0;
     spawnIndex++;
@@ -1784,8 +2077,20 @@ export async function sendChatMessage(
       projectId,
       action.prompt ?? '',
       action.agent,
-      name
+      name,
+      action.role ?? null
     );
+
+    // Post the claim so later spawns in this same plan see it as live.
+    if (wantedFiles.length) {
+      void postMailboxMessage(projectId, rootPath, {
+        from: name,
+        kind: 'claim',
+        taskId: task.id,
+        files: wantedFiles,
+        text: `Claiming ${wantedFiles.length} file(s) for: ${task.title}`,
+      });
+    }
 
     // Spawn terminal now but hold the goal — recon will enrich it before sending.
     const sessionId = await launchOrchestratorTask(task.id, action.agent, rootPath, {

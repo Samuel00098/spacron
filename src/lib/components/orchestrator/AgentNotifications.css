@@ -1,0 +1,184 @@
+/* ── Agent notification stack ────────────────────────────────────────────────
+   Bottom-right floating cards that replace the removed orchestrator panel:
+   actionable mailbox traffic + task-completion summaries, surfaced as
+   dismissible notifications. Sits just clear of the toast corner (toasts own
+   bottom:32px / z:10000) and above the composer. Self-contained — it copies the
+   card styles from AgentMailboxCards.css / AgentCommandCenter.css so it doesn't
+   depend on those (unmounted) components loading their CSS. */
+.agent-notifs {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  z-index: 9998;
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Each card is interactive; the container itself lets clicks fall through the gaps. */
+.agent-notifs > .agent-notif {
+  pointer-events: auto;
+  animation: agent-notif-in 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+  box-shadow: 0 10px 32px -8px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border);
+}
+
+@keyframes agent-notif-in {
+  from { transform: translateY(12px) scale(0.97); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-notifs > .agent-notif { animation: none; }
+}
+
+/* ══ mailbox card — from AgentMailboxCards.css, scoped here ══════════════════ */
+.agent-notifs .orc-mb-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  border-left: 2px solid var(--accent);
+  /* Opaque enough to read as a floating notification over any workspace content. */
+  background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.agent-notifs .orc-mb-handoff { border-left-color: var(--role-agent, var(--accent)); }
+.agent-notifs .orc-mb-ask { border-left-color: var(--warning, #f59e0b); }
+.agent-notifs .orc-mb-report { border-left-color: var(--info, #38bdf8); }
+
+.agent-notifs .orc-mb-meta {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 10px; color: var(--text-muted);
+}
+.agent-notifs .orc-mb-kind {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary);
+}
+.agent-notifs .orc-mb-glyph { font-size: 11px; }
+.agent-notifs .orc-mb-route { color: var(--text-secondary); }
+.agent-notifs .orc-mb-route strong { color: var(--text-primary); font-weight: 650; }
+.agent-notifs .orc-mb-arrow { color: var(--text-muted); }
+.agent-notifs .orc-mb-age { margin-left: auto; white-space: nowrap; }
+
+.agent-notifs .orc-mb-text {
+  font-size: 12px; line-height: 1.4; color: var(--text-primary); word-break: break-word;
+}
+
+.agent-notifs .orc-mb-files { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-notifs .orc-mb-file {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-notifs .orc-mb-file.more { color: var(--text-muted); background: transparent; }
+
+.agent-notifs .orc-mb-actions,
+.agent-notifs .orc-mb-reply-actions { display: flex; gap: 6px; }
+.agent-notifs .orc-mb-btn {
+  font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 15%, var(--border));
+  background: color-mix(in srgb, var(--bg-tertiary) 60%, transparent);
+  color: var(--text-secondary); cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.agent-notifs .orc-mb-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.agent-notifs .orc-mb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-notifs .orc-mb-btn.primary { color: var(--bg-primary); background: var(--accent); border-color: var(--accent); }
+.agent-notifs .orc-mb-btn.primary:hover { background: var(--accent-hover, var(--accent)); }
+.agent-notifs .orc-mb-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.agent-notifs .orc-mb-btn.ghost { background: transparent; color: var(--text-muted); }
+.agent-notifs .orc-mb-btn.ghost:hover { color: var(--text-secondary); border-color: var(--border); }
+
+.agent-notifs .orc-mb-reply { display: flex; flex-direction: column; gap: 6px; }
+.agent-notifs .orc-mb-reply-input {
+  width: 100%; resize: vertical; font-family: inherit; font-size: 12px; line-height: 1.4;
+  padding: 6px 8px; border-radius: 6px; color: var(--text-primary);
+  background: var(--bg-primary); border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+.agent-notifs .orc-mb-reply-input:focus { outline: none; border-color: var(--accent); }
+.agent-notifs .orc-mb-reply-actions { justify-content: flex-end; }
+
+/* ══ completion card — from AgentCommandCenter.css, scoped here ══════════════ */
+.agent-notifs .orc-completion {
+  --cc: var(--success, #4ade80);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  padding-right: 30px; /* room for the close button */
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--cc) 7%, color-mix(in srgb, var(--bg-secondary) 92%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cc) 22%, var(--border));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.agent-notifs .orc-completion-failed { --cc: var(--error, #f87171); }
+.agent-notifs .orc-completion-blocked { --cc: var(--warning, #fbbf24); }
+
+.agent-notifs .orc-comp-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+.agent-notifs .orc-comp-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.agent-notifs .orc-comp-headline {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 11px; font-weight: 650; color: var(--text-primary);
+}
+.agent-notifs .orc-comp-status { color: var(--cc); }
+.agent-notifs .orc-comp-time { font-size: 10px; color: var(--text-muted); }
+.agent-notifs .orc-comp-task {
+  font-size: 10.5px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.agent-notifs .orc-comp-reason { font-size: 10px; color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+.agent-notifs .orc-comp-summary {
+  margin: 4px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.agent-notifs .orc-comp-loading {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 3px;
+  font-size: 10px; color: var(--text-muted); font-style: italic;
+}
+.agent-notifs .orc-typing-sm { display: inline-flex; gap: 2px; }
+.agent-notifs .orc-typing-sm span {
+  width: 3px; height: 3px; border-radius: 50%; background: var(--text-muted);
+  animation: agent-notif-dot 1.2s ease-in-out infinite;
+}
+.agent-notifs .orc-typing-sm span:nth-child(2) { animation-delay: 0.2s; }
+.agent-notifs .orc-typing-sm span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes agent-notif-dot {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-notifs .orc-typing-sm span { animation: none; }
+}
+
+/* ── shared close button (completion cards) ─────────────────────────────────── */
+.agent-notifs .agent-notif-close {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.agent-notifs .agent-notif-close:hover { background: var(--bg-hover, color-mix(in srgb, var(--text-muted) 15%, transparent)); color: var(--text-primary); }
+.agent-notifs .agent-notif-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

@@ -9,6 +9,7 @@ import {
   getProviderBaseUrl,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import type { AgentRole } from '$lib/services/orchestrator/agent-charter';
 
 export interface AgentChoice {
   command: string;
@@ -24,8 +25,12 @@ export interface AgentChoice {
  * application UI itself so the orchestrator works as a full in-app assistant.
  */
 export type OrchestratorAction =
-  /** Launch a new agent. Omit `prompt` to open it idle/ready; `name` labels it. */
-  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null }
+  /**
+   * Launch a new agent. Omit `prompt` to open it idle/ready; `name` labels it.
+   * `role` assigns a team charter (coordinator/builder/scout/reviewer) when the
+   * spawn is part of a divided plan.
+   */
+  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null }
   /** Push a new prompt to an already-running agent, addressed by its name. */
   | { kind: 'send'; target: string; prompt: string }
   /** Give a running agent a name (or rename it). */
@@ -135,6 +140,10 @@ export interface RouteContext {
   recentUserMessages?: string[];
   taskMemory?: string[];
   taskPanel?: string[];
+  /** Recent agent-to-agent traffic on the shared mailbox (claim/handoff/report/…). */
+  mailbox?: string[];
+  /** Authored, wikilinked knowledge notes the team has written for this project. */
+  knowledge?: string[];
   runningAgents?: RunningAgentRef[];
   reviewingAgents?: RunningAgentRef[];
   taskOutputs?: AgentOutputRef[];
@@ -272,6 +281,11 @@ function buildUserText(message: string, ctx?: RouteContext): string {
       }
     }
   }
+  const knowledge = (ctx?.knowledge ?? []).slice(0, 6);
+  if (knowledge.length) {
+    parts.push('Project knowledge notes (authored by the team):');
+    for (const line of knowledge) parts.push(`- ${compactText(line, 240)}`);
+  }
   const memory = (ctx?.taskMemory ?? []).slice(-8);
   if (memory.length) {
     parts.push('Project memory and recent task activity:');
@@ -281,6 +295,11 @@ function buildUserText(message: string, ctx?: RouteContext): string {
   if (taskPanel.length) {
     parts.push('Task panel board:');
     for (const line of taskPanel) parts.push(`- ${compactText(line, 240)}`);
+  }
+  const mailbox = (ctx?.mailbox ?? []).slice(-8);
+  if (mailbox.length) {
+    parts.push('Team mailbox (agent-to-agent traffic):');
+    for (const line of mailbox) parts.push(`- ${compactText(line, 240)}`);
   }
   const recentUserMessages = (ctx?.recentUserMessages ?? []).slice(-6);
   if (recentUserMessages.length) {
@@ -309,7 +328,7 @@ const QUESTION_MARK_RE = /\?\s*$/;
 // when the user clearly asks to launch an agent or to have one do coding work —
 // everything else is treated as plain conversation, never a dispatch.
 const EXPLICIT_SPAWN_RE =
-  /\b(open|spawn|launch|start|fire up|boot up|kick off|create|use|have|get|tell|ask|put)\b[^.?!]*\b(agent|claude|codex|aider|opencode|antigravity|agy|cursor|pi|oh ?my ?pi|omp|assistant|bot)\b/i;
+  /\b(open|spawn|launch|start|fire up|boot up|kick off|create|use|have|get|tell|ask|put)\b[^.?!]*\b(agent|claude|codex|aider|opencode|antigravity|agy|cursor|pi|oh ?my ?pi|omp|grok|assistant|bot)\b/i;
 
 // Status-check patterns — intercepted before the LLM so we respond instantly.
 const STATUS_CHECK_RE = /^(status|what[‘’]?s (?:the )?status|what[‘’]?s running|list agents|show agents|which agents|what agents are running|show me the agents|what are (?:my |the )?agents doing|how (?:is|are) (?:the |my |that |those )?agents? doing|is (?:it|that|the agent) (?:done|finished|complete)|has (?:it|that|the agent) finished|are (?:they|the agents) (?:done|finished|complete))\b/i;
@@ -373,6 +392,7 @@ const AGENT_ALIASES: Record<string, string[]> = {
   omp: ['omp', 'oh my pi', 'oh-my-pi', 'ohmypi'],
   agent: ['cursor'],
   aider: ['aider'],
+  grok: ['grok'],
 };
 
 function escapeRegExp(s: string): string {
@@ -636,8 +656,10 @@ function buildSystemPrompt(
     '{"reply": "<short friendly message to the user>", "actions": [ <zero or more action objects> ]}',
     '',
     'Each action is ONE of:',
-    '- {"kind": "spawn", "agent": "<command id>", "prompt": "<full standalone prompt>" | null, "name": null}',
+    '- {"kind": "spawn", "agent": "<command id>", "prompt": "<full standalone prompt>" | null, "name": null, "role": null}',
     '    Launch a NEW agent. Omit/null "prompt" to just open it idle and ready. Leave "name" null — the app auto-assigns a name (e.g. "Trinity"). Only set "name" to echo a specific name the USER explicitly chose; never invent generic labels like "claude-1" or "agent 2".',
+    '    "role" (optional): when you divide ONE goal across a TEAM, tag each spawn with its role so it gets the right charter — "coordinator" (plans + sequences the sub-tasks), "builder" (implements one sub-task), "scout" (read-only recon, no edits), "reviewer" (gates each hand-off). Leave null for an ordinary single agent.',
+    '    "files" (optional): for a builder in a divided plan, the repo-relative files that sub-task will own. The app posts a claim so no two builders edit the same file at once — a spawn whose files overlap a live claim is held until released. Only set it when you know the files; otherwise omit.',
     '- {"kind": "send", "target": "<running agent name>", "prompt": "<full standalone prompt>"}',
     '    Give a new task to an agent that is ALREADY running. Use this instead of spawning when the user refers to an existing agent.',
     '- {"kind": "name", "target": "<running agent name or unnamed reference>", "name": "<new name>"}',
@@ -709,7 +731,7 @@ function buildSystemPrompt(
           '- DO spawn/send/close or use APP-CONTROL actions when the user clearly asks you to do something — e.g. "fix X", "build Y", "run the tests", "open the preview", "switch to Dracula", "open an agent and add X", "spawn claude to fix Y", "have an agent do Z".',
            '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
            '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
-           '- CONFIRMATION GATE — Before you return a spawn, send, or close action, FIRST acknowledge what the user asked and ASK for confirmation conversationally. For example: "I\'ll launch Claude to refactor the auth module, want me to go ahead?" Only include the action AFTER the user explicitly confirms with "yes", "go ahead", "do it", "sure", or similar affirmative. If the user says "no" or clarifies, do NOT include the action — just continue the conversation.',
+           '- CONFIRMATION GATE — When the user asks you to spawn, send, or close an agent, INCLUDE the spawn/send/close action as usual AND phrase your "reply" as a short confirmation question that names what you are about to do — e.g. "I\'ll launch Claude to refactor the auth module, want me to go ahead?". The app HOLDS the action and only runs it once the user affirms ("yes", "go ahead", "do it", …) on their next turn, so you never act on the same turn you were asked. Always end such a reply with a question; never claim you have already done it.',
            '- TERMINAL OUTPUT SUMMARIZATION — When reporting what an agent did, NEVER read raw terminal output aloud. Paraphrase naturally: say which files changed, what commands were run, whether tests passed, and what state the agent ended in. Use the "Recent agent/task status and terminal output" section above as your source.',
         ]
       : []),
@@ -732,6 +754,25 @@ function str(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
 
+const VALID_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer'];
+
+/** Snap a model-supplied role string to a known preset, or null. */
+function parseRole(raw: unknown): AgentRole | null {
+  if (typeof raw !== 'string') return null;
+  const key = raw.trim().toLowerCase();
+  return (VALID_ROLES as readonly string[]).includes(key) ? (key as AgentRole) : null;
+}
+
+/** Snap a model-supplied file list to a clean array of paths, or null. */
+function parseFileList(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const files = raw
+    .filter((f): f is string => typeof f === 'string')
+    .map((f) => f.trim())
+    .filter((f) => f.length > 0);
+  return files.length ? files : null;
+}
+
 function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -741,7 +782,9 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     if (!agent) return null;
     const prompt = str(obj.prompt);
     const name = str(obj.name);
-    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null };
+    const role = parseRole(obj.role);
+    const files = parseFileList(obj.files);
+    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files };
   }
   if (kind === 'send') {
     const target = str(obj.target);

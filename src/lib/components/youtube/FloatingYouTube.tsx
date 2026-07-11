@@ -204,7 +204,7 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
         opacity: minimized ? 1 : state.opacity,
       }}
       role="dialog"
-      aria-label="YouTube pop-up player"
+      aria-label="Media Player pop-up"
     >
       <header
         className="fy-titlebar"
@@ -215,7 +215,7 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
             <rect x="2" y="5" width="20" height="14" rx="4" />
             <path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" />
           </svg>
-          YouTube
+          Media Player
         </span>
         <div className="fy-titlebar-controls">
           <label className="fy-control fy-opacity" title="Video transparency">
@@ -255,8 +255,8 @@ export default function FloatingYouTube({ onClose }: { onClose: () => void }) {
           <button
             className="fy-control fy-close"
             onClick={onClose}
-            title="Close YouTube"
-            aria-label="Close YouTube"
+            title="Close Media Player"
+            aria-label="Close Media Player"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
               <line x1="18" y1="6" x2="6" y2="18" />

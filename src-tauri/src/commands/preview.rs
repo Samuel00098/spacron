@@ -27,6 +27,16 @@ pub fn preview_start_local_proxy(
     state.preview_manager.start_local_dev_proxy(host, port)
 }
 
+/// Update the project root path used by the proxy's local-file serving route.
+/// Called by the frontend whenever the active project changes so that
+/// `/local-file?path=...` can validate and serve files from the correct root.
+#[tauri::command]
+pub fn preview_set_project_root(path: Option<String>, state: State<AppState>) -> Result<(), String> {
+    let root = path.map(std::path::PathBuf::from);
+    state.preview_manager.set_project_root(root);
+    Ok(())
+}
+
 fn validate_target_port(port: u16) -> Result<(), String> {
     if port == 0 {
         return Err("Port 0 is not a valid target port".to_string());

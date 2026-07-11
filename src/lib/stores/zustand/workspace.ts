@@ -10,6 +10,7 @@ interface WorkspaceState {
   isLoading: boolean;
   isProjectSwitching: boolean;
   newWorkspacePromptOpen: boolean;
+  newFolderPromptOpen: boolean;
   isProjectHUDOpen: boolean;
   __set: (key: string, value: unknown) => void;
 }
@@ -36,6 +37,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   isLoading: false,
   isProjectSwitching: false,
   newWorkspacePromptOpen: false,
+  newFolderPromptOpen: false,
   isProjectHUDOpen: false,
 
   __set: (key, value) => {

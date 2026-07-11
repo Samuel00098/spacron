@@ -1342,6 +1342,29 @@ const OPENAI_TTS_MODEL: &str = "gpt-4o-mini-tts";
 const GOOGLE_TTS_MODEL: &str = "gemini-2.5-flash-preview-tts";
 const OPENROUTER_TTS_MODEL: &str = "openai/gpt-4o-mini-tts-2025-12-15";
 
+/// Apply pacing/tone controls to an OpenAI-compatible `/audio/speech` request
+/// body, gated by model exactly as OpenAI's API requires: `gpt-4o-mini-tts`
+/// takes free-text `instructions` (and rejects `speed`), while the classic
+/// `tts-1`/`tts-1-hd` models take a numeric `speed` (0.25–4.0). Anything else is
+/// left untouched so unsupported providers/models never receive a bad field.
+fn apply_openai_speech_controls(
+    body: &mut serde_json::Value,
+    model: &str,
+    speed: Option<f64>,
+    instructions: Option<String>,
+) {
+    if model.contains("gpt-4o-mini-tts") {
+        if let Some(instr) = instructions {
+            let instr: String = instr.trim().chars().take(1_000).collect();
+            if !instr.is_empty() {
+                body["instructions"] = json!(instr);
+            }
+        }
+    } else if let Some(sp) = speed {
+        body["speed"] = json!(sp.clamp(0.25, 4.0));
+    }
+}
+
 #[derive(Serialize)]
 pub struct TtsAudioPayload {
     pub bytes: Vec<u8>,
@@ -1387,6 +1410,8 @@ pub async fn tts_speak(
     voice: String,
     api_key: String,
     base_url: Option<String>,
+    speed: Option<f64>,
+    instructions: Option<String>,
 ) -> Result<TtsAudioPayload, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
@@ -1420,12 +1445,18 @@ pub async fn tts_speak(
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header("HTTP-Referer", "https://spacron.app")
                 .header("X-Title", APP_TITLE)
-                .json(&json!({
-                    "model": if model.is_empty() { OPENROUTER_TTS_MODEL } else { &model },
-                    "input": text,
-                    "voice": voice,
-                    "response_format": "mp3",
-                }))
+                .json(&{
+                    let effective_model =
+                        if model.is_empty() { OPENROUTER_TTS_MODEL } else { model.as_str() };
+                    let mut body = json!({
+                        "model": effective_model,
+                        "input": text,
+                        "voice": voice,
+                        "response_format": "mp3",
+                    });
+                    apply_openai_speech_controls(&mut body, effective_model, speed, instructions);
+                    body
+                })
                 .send()
                 .await
                 .map_err(|err| safe_request_error("Failed to contact OpenRouter TTS", err))?;
@@ -1480,12 +1511,18 @@ pub async fn tts_speak(
             let response = client
                 .post(OPENAI_TTS_URL)
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .json(&json!({
-                    "model": if model.is_empty() { OPENAI_TTS_MODEL } else { &model },
-                    "input": text,
-                    "voice": voice,
-                    "response_format": "wav",
-                }))
+                .json(&{
+                    let effective_model =
+                        if model.is_empty() { OPENAI_TTS_MODEL } else { model.as_str() };
+                    let mut body = json!({
+                        "model": effective_model,
+                        "input": text,
+                        "voice": voice,
+                        "response_format": "wav",
+                    });
+                    apply_openai_speech_controls(&mut body, effective_model, speed, instructions);
+                    body
+                })
                 .send()
                 .await
                 .map_err(|err| safe_request_error("Failed to contact OpenAI TTS", err))?;
@@ -1825,6 +1862,28 @@ pub async fn check_local_provider_online(
     }
     if !base_url_is_safe(&base_url) {
         return Ok(false);
+    }
+    // Refuse link-local / cloud-metadata hosts, exactly as `resolve_base_url`
+    // does for the authenticated AI paths. This "is it online?" probe carries no
+    // credentials and only returns a boolean, but without the guard a tampered
+    // base_url turns it into a blind reachability oracle for internal hosts
+    // (e.g. http://169.254.169.254/…). Keep the guard consistent everywhere a
+    // user-supplied base_url reaches the network.
+    if let Ok(parsed) = url::Url::parse(&base_url) {
+        if let Some(host) = parsed.host_str() {
+            let host_owned = host.to_string();
+            if crate::commands::http::host_is_blocked(host) {
+                return Ok(false);
+            }
+            let resolved_blocked = tokio::task::spawn_blocking(move || {
+                crate::commands::http::resolved_host_is_blocked(&host_owned)
+            })
+            .await
+            .unwrap_or(false);
+            if resolved_blocked {
+                return Ok(false);
+            }
+        }
     }
 
     let client = match shared_http_client(Duration::from_millis(500)) {

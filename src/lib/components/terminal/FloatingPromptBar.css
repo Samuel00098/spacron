@@ -806,7 +806,9 @@
 .floating-prompt-shell .prompt-input {
   width: 100%;
   min-height: 28px;
-  max-height: 110px;
+  /* ~3 lines (font-size 14px × line-height 1.5); JS caps the live height to
+     three lines and this is the backstop before it scrolls internally. */
+  max-height: 72px;
   resize: none;
   overflow-y: auto;
   border: 0;
@@ -1099,15 +1101,92 @@
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
   gap: 4px;
   flex-shrink: 0;
-  width: 32px;
+  animation: voice-inner-in 200ms ease both;
 }
 
-/* Orb */
+@keyframes voice-inner-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.floating-prompt-shell .floating-prompt-bar .voice-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.floating-prompt-shell .voice-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 24px;
+  min-width: 32px;
+  max-width: 60px;
+}
+
+.floating-prompt-shell .voice-eq-bar {
+  width: 3px;
+  height: 24px;
+  border-radius: 2px 2px 1px 1px;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.05);
+  will-change: transform;
+}
+
+.floating-prompt-shell .voice-eq.idle .voice-eq-bar {
+  background: var(--text-muted);
+  opacity: 0.3;
+  animation: fbar-idle var(--dur) ease-in-out var(--dly) infinite alternate;
+}
+
+.floating-prompt-shell .voice-eq.listening .voice-eq-bar {
+  background: #f87171;
+  opacity: 1;
+  animation: fbar-live var(--dur) ease-in-out var(--dly) infinite alternate;
+}
+
+.floating-prompt-shell .voice-eq.speaking .voice-eq-bar {
+  background: var(--accent);
+  opacity: 0.85;
+  animation: fbar-mid var(--dur) ease-in-out var(--dly) infinite alternate;
+}
+
+.floating-prompt-shell .voice-eq.thinking .voice-eq-bar {
+  background: var(--text-secondary);
+  opacity: 0.25;
+  animation: fbar-think var(--dur) ease-in-out var(--dly) infinite alternate;
+}
+
+@keyframes fbar-idle  { from{transform:scaleY(.04)} to{transform:scaleY(calc(var(--max)*.25))} }
+@keyframes fbar-live  { from{transform:scaleY(.04)} to{transform:scaleY(var(--max))} }
+@keyframes fbar-mid   { from{transform:scaleY(.1)}  to{transform:scaleY(calc(var(--max)*.8))} }
+@keyframes fbar-think { from{transform:scaleY(.04)} to{transform:scaleY(calc(var(--max)*.35))} }
+
+.floating-prompt-shell .voice-waveform {
+  height: 3px;
+  min-width: 50px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  overflow: hidden;
+  flex-shrink: 1;
+}
+
+.floating-prompt-shell .voice-waveform-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
+  transition: width 80ms ease-out;
+  min-width: 2px;
+}
+
+/* Orb — container for ring + orb */
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap {
+  position: relative;
   width: 28px;
   height: 28px;
   display: flex;
@@ -1116,6 +1195,24 @@
   flex-shrink: 0;
 }
 
+/* Ripple rings — listening only */
+.floating-prompt-shell .voice-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px solid rgba(239,68,68,.5);
+  width: 22px;
+  height: 22px;
+  animation: voice-ring-ripple 2s ease-out infinite;
+  pointer-events: none;
+}
+.floating-prompt-shell .voice-ring-b { animation-delay: .9s; }
+
+@keyframes voice-ring-ripple {
+  0%   { width: 22px;  height: 22px;  opacity: .6; }
+  100% { width: 52px; height: 52px; opacity: 0; }
+}
+
+/* Orb base */
 .floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb {
   width: 22px;
   height: 22px;
@@ -1123,12 +1220,46 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.3s, box-shadow 0.3s;
+  transition: background 0.4s, box-shadow 0.4s, color 0.4s;
+  z-index: 2;
 }
 
+/* Orb states */
+.floating-prompt-shell .orb-wrap.idle .orb {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary) 84%);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+  animation: voice-pulse-idle 3.5s ease-in-out infinite;
+}
+.floating-prompt-shell .orb-wrap.listening .orb {
+  background: color-mix(in srgb, #ef4444 32%, var(--bg-secondary) 68%);
+  box-shadow: 0 0 20px rgba(239,68,68,.5), 0 0 48px rgba(239,68,68,.18);
+  color: #fca5a5;
+  animation: voice-pulse-listen .9s ease-in-out infinite;
+}
+.floating-prompt-shell .orb-wrap.speaking .orb {
+  background: color-mix(in srgb, var(--accent) 42%, var(--bg-secondary) 58%);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 48%, transparent);
+  color: white;
+  animation: voice-pulse-speak 1.6s ease-in-out infinite;
+}
+.floating-prompt-shell .orb-wrap.thinking .orb {
+  background: color-mix(in srgb, var(--text-muted) 12%, var(--bg-secondary) 88%);
+  box-shadow: 0 0 12px rgba(107,114,128,.1);
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+.floating-prompt-shell .orb-wrap.sleeping .orb {
+  background: color-mix(in srgb, var(--text-muted) 8%, var(--bg-secondary) 92%);
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+@keyframes voice-pulse-idle   { 0%,100%{transform:scale(1);opacity:.85} 50%{transform:scale(1.04);opacity:1} }
+@keyframes voice-pulse-listen { 0%,100%{transform:scale(1)}              50%{transform:scale(1.09)}             }
+@keyframes voice-pulse-speak  { 0%,100%{transform:scale(1)}              50%{transform:scale(1.055)}            }
+
 .floating-prompt-shell .voice-transcript {
-  max-height: 80px;
-  overflow-y: auto;
   font-size: 11px;
 }
 
@@ -1189,103 +1320,6 @@
   0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
   50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent), 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); }
 }
-
-/* Agent cards: running/blocked/recently-finished task states (CNVS-like) */
-.floating-prompt-shell .agent-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-self: flex-start;
-  padding: 0 2px;
-  max-width: 100%;
-}
-
-.floating-prompt-shell .agent-card {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 7px 3px 5px;
-  border-radius: 6px;
-  font-size: 10.5px;
-  line-height: 1.3;
-  min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.floating-prompt-shell .agent-card-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  width: 12px;
-  height: 12px;
-}
-
-@keyframes workingPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.85); }
-}
-
-.floating-prompt-shell .working-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: workingPulse 1.2s ease-in-out infinite;
-  box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 50%, transparent);
-}
-
-.floating-prompt-shell .agent-card.working {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-
-.floating-prompt-shell .agent-card.waiting {
-  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
-  color: var(--warning);
-}
-
-.floating-prompt-shell .agent-card.waiting .agent-card-detail {
-  color: var(--warning);
-  opacity: 0.8;
-}
-
-.floating-prompt-shell .agent-card.done {
-  border-color: color-mix(in srgb, var(--success) 20%, var(--border));
-  opacity: 0.7;
-}
-
-.floating-prompt-shell .agent-card-name {
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.floating-prompt-shell .agent-card-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  max-width: 140px;
-}
-
-.floating-prompt-shell .agent-card-detail {
-  flex-shrink: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100px;
-  opacity: 0.7;
-  font-size: 10px;
-}
-
-.floating-prompt-shell .agent-card.done .agent-card-detail {
-  text-transform: uppercase;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-}
-
 /* Agent voice controls row */
 .floating-prompt-shell .agent-voice-controls {
   display: flex;
@@ -1525,19 +1559,20 @@
 
 /* ── Voice Transcript ─────────────────────────────────────────────────────── */
 
-/* Hide the textarea in agent mode — speech replaces typing */
-.prompt-input.agent-mode-hidden {
-  display: none;
-}
-
 .voice-transcript {
   width: 100%;
-  /* Capped height: shows ~2-3 lines, scrolls to the latest */
-  max-height: 52px;
-  min-height: 22px;
+  /* Grow with the transcript / reply up to three lines, then scroll vertically
+     so the bar never grows taller than that. The scrollTop effect in
+     FloatingPromptBar.tsx keeps the newest content in view while listening. */
+  max-height: 54px; /* ~3 lines at font-size 12px × line-height 1.5 */
+  overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: none; /* hide scrollbar — content just flows */
+  scrollbar-width: none; /* hide scrollbar — content just scrolls along */
   padding: 2px 2px 0;
+}
+
+.voice-transcript::-webkit-scrollbar {
+  display: none;
 }
 
 /* Empty state */
@@ -1545,14 +1580,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 4px;
+  padding: 3px 4px;
   color: var(--text-muted);
   font-size: 11.5px;
+  white-space: nowrap;
   opacity: 0.7;
 }
 
 .transcript-empty svg {
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
   opacity: 0.6;
 }
 
@@ -1572,8 +1610,12 @@
   margin: 0;
   padding: 0 2px;
   font-size: 12px;
-  line-height: 1.55;
-  word-break: break-word;
+  line-height: 1.5;
+  /* Wrap across up to three lines; the .voice-transcript container caps the
+     height and scrolls vertically past that. */
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .transcript-now.user {
@@ -1659,6 +1701,25 @@
   box-shadow:
     0 26px 58px -24px rgba(0, 0, 0, 0.78),
     0 12px 28px -18px color-mix(in srgb, var(--role-agent) 35%, transparent),
+    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14);
+}
+
+.floating-prompt-shell .floating-prompt-bar.target-grok {
+  border-color: color-mix(in srgb, var(--text-primary) 35%, var(--border));
+  box-shadow:
+    0 22px 50px -24px rgba(0, 0, 0, 0.72),
+    0 10px 22px -18px color-mix(in srgb, var(--text-primary) 25%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+}
+
+.floating-prompt-shell .floating-prompt-bar.target-grok:hover,
+.floating-prompt-shell .floating-prompt-bar.target-grok:focus-within {
+  border-color: color-mix(in srgb, var(--text-primary) 60%, var(--border));
+  box-shadow:
+    0 26px 58px -24px rgba(0, 0, 0, 0.78),
+    0 12px 28px -18px color-mix(in srgb, var(--text-primary) 35%, transparent),
     inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
     inset 0 -1px 0 rgba(0, 0, 0, 0.14);
 }

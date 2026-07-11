@@ -66,7 +66,8 @@ export function toggleCommandPalette() {
   });
 }
 
-import { newWorkspacePromptOpen, openProject, openProjectByPath } from './workspace';
+import { newWorkspacePromptOpen, newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
+import { knowledgeGraphOpen } from '$lib/services/orchestrator/knowledge';
 import { saveActiveFile, formatActiveFile } from './editor';
 import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager } from './layout';
 import { createTerminalSession } from './terminal';
@@ -97,6 +98,12 @@ export function initDefaultCommands() {
       action: () => openProject(),
     },
     {
+      id: 'workspace.new_folder',
+      name: 'New Folder...',
+      category: 'Workspace',
+      action: () => newFolderPromptOpen.set(true),
+    },
+    {
       id: 'sidebar.toggle',
       name: 'Toggle Sidebar',
       category: 'View',
@@ -116,6 +123,12 @@ export function initDefaultCommands() {
       category: 'Workspace',
       shortcut: 'Ctrl+Shift+E',
       action: () => openEnvManager(),
+    },
+    {
+      id: 'orchestrator.memory_graph',
+      name: 'Memory Graph…',
+      category: 'View',
+      action: () => knowledgeGraphOpen.set(true),
     },
     {
       id: 'view.editor',

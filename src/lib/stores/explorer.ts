@@ -142,8 +142,33 @@ export function showContextMenu(e: MouseEvent, path: string, isDir: boolean) {
   e.preventDefault();
   e.stopPropagation();
   const zoomFactor = (get(uiZoom) || 100) / 100;
-  const x = e.clientX / zoomFactor;
-  const y = e.clientY / zoomFactor;
+
+  const target = e.target as HTMLElement;
+  const row = target.closest('.file-node') as HTMLElement | null;
+
+  let x: number;
+  let y: number;
+
+  if (row) {
+    const rect = row.getBoundingClientRect();
+    x = rect.left / zoomFactor;
+    y = rect.bottom / zoomFactor;
+  } else {
+    x = e.clientX / zoomFactor;
+    y = e.clientY / zoomFactor;
+  }
+
+  // Keep menu within viewport
+  const menuWidth = 180;
+  const menuHeight = 200;
+  const vw = window.innerWidth / zoomFactor;
+  const vh = window.innerHeight / zoomFactor;
+  if (x + menuWidth > vw) x = vw - menuWidth - 8;
+  if (row && y + menuHeight > vh) {
+    const rect = row.getBoundingClientRect();
+    y = rect.top / zoomFactor - menuHeight;
+  }
+
   contextMenu.set({ visible: true, x, y, path, isDir });
 }
 

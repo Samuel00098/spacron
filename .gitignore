@@ -47,3 +47,9 @@ src-tauri/cargo_output*.txt
 # Per-project local data (daily notes, tasks) written by the app at runtime
 .spacron/
 /.worktrees/
+.vercel
+
+# Next.js website build artifacts
+website/.next/
+website/out/
+website/next-env.d.ts

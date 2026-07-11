@@ -12,7 +12,8 @@ import {
   renameWorkspace,
   removeProjectFromCollection,
   deleteCollection,
-  openProject
+  openProject,
+  newFolderPromptOpen
 } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
 import './ProjectHUD.css';
@@ -227,19 +228,32 @@ export default function ProjectHUD() {
         
         {/* Header Search */}
         <header className="project-hud-header">
-          <svg className="hud-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            ref={inputRef}
-            type="text"
-            className="hud-search-input"
-            placeholder="Search projects or collections... (↑↓ to navigate, Enter to open)"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <kbd className="hud-esc-badge">ESC</kbd>
+          <div className="hud-search-field">
+            <svg className="hud-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              ref={inputRef}
+              type="text"
+              className="hud-search-input"
+              placeholder="Search projects or collections… (↑↓ to navigate, Enter to open)"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="hud-close-btn"
+            onClick={() => isProjectHUDOpen.set(false)}
+            title="Close"
+            aria-label="Close"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </header>
 
         {/* Content list */}
@@ -294,6 +308,27 @@ export default function ProjectHUD() {
                     </button>
                     
                     <button
+                      className="hud-action-btn"
+                      onClick={async () => {
+                        // Create the new folder inside this collection: make it the
+                        // active workspace first (the modal creates into the active
+                        // one), then close the HUD and open the New Folder dialog.
+                        if (activeWsId !== ws.id) {
+                          await openWorkspace(ws.id);
+                        }
+                        isProjectHUDOpen.set(false);
+                        newFolderPromptOpen.set(true);
+                      }}
+                      title="New folder in collection"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        <line x1="12" y1="11" x2="12" y2="17" />
+                        <line x1="9" y1="14" x2="15" y2="14" />
+                      </svg>
+                    </button>
+
+                    <button
                       className="hud-action-btn add-btn"
                       onClick={async () => {
                         // Activate workspace first if not active
@@ -302,7 +337,7 @@ export default function ProjectHUD() {
                         }
                         await openProject();
                       }}
-                      title="Add folder to collection"
+                      title="Add existing folder to collection"
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                         <line x1="12" y1="5" x2="12" y2="19" />
@@ -461,7 +496,6 @@ export default function ProjectHUD() {
           <div className="hud-shortcuts-help">
             <span><kbd>↑↓</kbd> Navigate</span>
             <span><kbd>Enter</kbd> Open</span>
-            <span><kbd>ESC</kbd> Close</span>
           </div>
         </footer>
 

@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from '$lib/stores/storeCompat';
+import { isHtmlPath } from '$lib/stores/editor';
 import EmptyWorkspace from './EmptyWorkspace.tsx';
 import FileIcon from './FileIcon.tsx';
 import FileNode from './FileNode.tsx';
@@ -96,6 +98,15 @@ function TerminalIcon() {
   );
 }
 
+function PreviewIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 export default function FileExplorer() {
   const menu = useStore(contextMenu);
   const project = useStore(activeProject);
@@ -135,6 +146,12 @@ export default function FileExplorer() {
       case 'open-terminal': {
         const cwd = isDir ? path : path.split(/[\\/]/).slice(0, -1).join('/');
         void createTerminalSession(cwd);
+        break;
+      }
+      case 'preview-file': {
+        void import('$lib/stores/preview').then(({ previewLocalFile }) => {
+          previewLocalFile(path);
+        });
         break;
       }
     }
@@ -309,7 +326,7 @@ export default function FileExplorer() {
         )}
       </div>
 
-      {menu.visible && (
+      {menu.visible && createPortal(
         <div
           ref={contextMenuRef}
           className="context-menu"
@@ -336,11 +353,18 @@ export default function FileExplorer() {
             <TerminalIcon />
             Open in Terminal
           </button>
+          {!menu.isDir && isHtmlPath(menu.path) && (
+            <button className="context-item" onClick={() => handleContextAction('preview-file')}>
+              <PreviewIcon />
+              Preview in Panel
+            </button>
+          )}
           <button className="context-item danger" onClick={() => handleContextAction('delete')}>
             <DeleteIcon />
             Delete
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

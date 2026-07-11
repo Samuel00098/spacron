@@ -53,6 +53,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   agent: 'Cursor',
   cursor: 'Cursor',
   hermes: 'Hermes Agent',
+  grok: 'Grok CLI',
 };
 
 export type GridLayout = 'single' | '2h' | '2v' | '3h' | '3v' | '4' | '9';
@@ -332,6 +333,7 @@ const AGENT_COMMAND_EXECUTABLES: Array<{ preset: string; names: string[] }> = [
   { preset: 'aider', names: ['aider'] },
   { preset: 'cursor',      names: ['cursor-agent', 'cursor', 'agent'] },
   { preset: 'hermes',      names: ['hermes'] },
+  { preset: 'grok',        names: ['grok'] },
 ];
 
 // Tokens that wrap the real command and should be skipped when locating the

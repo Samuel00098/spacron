@@ -24,6 +24,7 @@ import {
   clearProxyTarget,
   clearPreviewData,
   localDevProxyKey,
+  parseLocalFilePreviewUrl,
   navigatePreviewTab,
   commitInternalNavigation,
   replaceCurrentNavigation,
@@ -443,6 +444,18 @@ export default function PreviewPanel() {
       const norm = normalizeUrl(url);
       if (norm === 'about:blank') {
         return norm;
+      }
+      // Local file preview URLs — serve directly from the background proxy,
+      // bypassing the local dev proxy pipeline (no double-proxying). Rebuild
+      // against the *current* proxy port instead of trusting the one embedded
+      // in the URL: persisted tabs carry the port from a previous app run, and
+      // the proxy binds a fresh ephemeral port each launch. If the proxy isn't
+      // up yet, stay blank — PreviewPanel starts it on mount and this re-runs.
+      const localFile = parseLocalFilePreviewUrl(norm);
+      if (localFile) {
+        return proxyPortValue
+          ? `http://127.0.0.1:${proxyPortValue}/local-file${localFile.search}`
+          : '';
       }
       const localDev = parseLocalDevUrl(norm);
       if (localDev) {

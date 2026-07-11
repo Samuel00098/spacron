@@ -16,10 +16,25 @@
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a diagonal gloss sheen reflection */
-  background: 
+  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a
+     diagonal gloss sheen reflection — layered over a fully opaque base so the
+     workspace behind the pop-up never bleeds through at full opacity. The
+     title-bar transparency slider (element `opacity`) still fades the whole
+     panel to see-through when the user wants it.
+     NOTE: the opaque base must live in `background-color` — in the shorthand,
+     only the LAST layer may be a bare color, and the color-mix frost layer is
+     a color too, so listing both made the whole declaration invalid and the
+     browser dropped it (leaving the pop-up fully transparent). The frost tint
+     is wrapped in a gradient so it is a legal image layer. It must also use
+     rgb(var(--bg-primary-rgb)): `var(--bg-primary)` is overridden to
+     rgba(...,0.15) by global.css when transparency mode is active. */
+  background-color: rgb(var(--bg-primary-rgb, 24, 24, 30));
+  background-image:
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
-    color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+    linear-gradient(
+      color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent),
+      color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent)
+    );
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border: 1px solid rgba(255, 255, 255, 0.12);

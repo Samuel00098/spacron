@@ -3,6 +3,7 @@ import packageJson from '../../../../package.json';
 import {
   clearRecentWorkspaces,
   newWorkspacePromptOpen,
+  newFolderPromptOpen,
   openProject,
   openWorkspace,
   recentWorkspaces,
@@ -153,6 +154,10 @@ export default function WelcomeScreen() {
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg></span>
             <span className="action-label">New Collection</span>
             <kbd>Ctrl+N</kbd>
+          </button>
+          <button className="action-btn secondary" onClick={() => newFolderPromptOpen.set(true)}>
+            <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg></span>
+            <span className="action-label">New Folder</span>
           </button>
           <button className="action-btn secondary" onClick={() => void openProject()}>
             <span className="action-icon"><FolderIcon size={15} /></span>

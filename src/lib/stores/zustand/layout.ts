@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
 import { loadJson } from '$lib/utils/storage';
-import { requestAmbientLayout } from '../layoutControl';
+import { requestAmbientLayout, requestRoomControl } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
@@ -115,6 +115,7 @@ interface LayoutActions {
   setSidebarTab: (tab: SidebarTab) => void;
   toggleSidebarTab: (tab: SidebarTab) => void;
   toggleEditorSplitPreview: () => void;
+  revealPreview: () => void;
   setSidebarWidth: (width: number) => void;
   resetLayoutToDefault: () => void;
   /** Merge a partial layout patch into the store and persist it. Used to
@@ -542,6 +543,26 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       persistLayout(next);
       return next;
     });
+  },
+
+  // Make the preview panel visible without tearing down what the user is
+  // looking at. Used when something navigates the preview programmatically
+  // (e.g. "Preview" on an HTML file) — navigating an invisible panel reads as
+  // "nothing happened". If the editor is showing, open the editor+preview
+  // split so the file stays editable next to its preview; otherwise switch to
+  // the preview view. Already-visible preview is left untouched.
+  revealPreview: () => {
+    set((l) => {
+      if (l.previewVisible) return l;
+      const next: LayoutState = l.editorVisible
+        ? { ...l, editorSplitPreview: true, previewVisible: true, lastAuxView: 'preview' as const, activeView: 'preview' as const }
+        : { ...l, previewVisible: true, lastAuxView: 'preview' as const, activeView: 'preview' as const };
+      persistLayout(next);
+      return next;
+    });
+    // Ask the room system to focus the preview room so it appears in-view
+    // (not just added to the room list in the background).
+    requestRoomControl('focus', 'preview');
   },
 
   setSidebarWidth: (width: number) => {

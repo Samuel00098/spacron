@@ -52,9 +52,16 @@ const IMAGE_EXTENSIONS = new Set([
   'svg', 'avif', 'tif', 'tiff',
 ]);
 
+const HTML_EXTENSIONS = new Set(['html', 'htm']);
+
 export function isImagePath(path: string): boolean {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   return IMAGE_EXTENSIONS.has(ext);
+}
+
+export function isHtmlPath(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return HTML_EXTENSIONS.has(ext);
 }
 
 export function getImageMimeType(path: string): string {

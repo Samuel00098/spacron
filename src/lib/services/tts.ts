@@ -9,6 +9,8 @@ import {
   isLocalProvider,
   providerSupportsReplyTts,
   voiceReplyProvider,
+  voiceReplyTtsSpeed,
+  voiceReplyTtsInstructions,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 
@@ -26,6 +28,10 @@ export interface SpeakOptions {
   provider?: AiProviderId;
   model?: string;
   voice?: string;
+  /** Playback rate for `tts-1`/`tts-1-hd` (0.25–4.0). Ignored by gpt-4o-mini-tts. */
+  speed?: number;
+  /** Free-text pacing/emotion guidance for gpt-4o-mini-tts. Ignored by others. */
+  instructions?: string;
 }
 
 type TtsAudioPayload = {
@@ -105,6 +111,8 @@ function resolveTtsConfig(options?: SpeakOptions) {
   const providerDef = getProviderDef(provider);
   const model = options?.model ?? get(currentVoiceConversationTtsModel);
   const voice = options?.voice ?? get(currentVoiceConversationTtsVoice);
+  const speed = options?.speed ?? get(voiceReplyTtsSpeed);
+  const instructions = options?.instructions ?? get(voiceReplyTtsInstructions);
   const local = isLocalProvider(provider);
   const hasApiKey = isProviderApiKeyConfiguredLocal(provider);
   const baseUrl = local ? getProviderBaseUrl(provider) : '';
@@ -113,6 +121,8 @@ function resolveTtsConfig(options?: SpeakOptions) {
     providerDef,
     model,
     voice,
+    speed,
+    instructions,
     local,
     hasApiKey,
     baseUrl,
@@ -217,18 +227,22 @@ export async function speak(text: string, options?: SpeakOptions): Promise<void>
   const chunks = splitIntoChunks(text);
   if (chunks.length === 0) return;
 
-  const { provider, model, voice, baseUrl } = config;
+  const { provider, model, voice, speed, instructions, baseUrl } = config;
   const token = ++speakToken;
 
   const generate = (chunk: string): Promise<TtsAudioPayload> => {
     // Bundled local (Kokoro) TTS was removed; 'local' no longer reaches here
     // because getVoiceReplyConfigError rejects it first. Cloud + self-hosted
     // OpenAI-compatible servers (ollama/lmstudio) go through tts_speak.
+    // `speed`/`instructions` are gated per-model on the Rust side (only one
+    // applies, and only for OpenAI-compatible speech models).
     return invoke<TtsAudioPayload>('tts_speak', {
       text: chunk,
       provider,
       model,
       voice,
+      speed,
+      instructions: instructions?.trim() || undefined,
       apiKey: '',
       baseUrl: baseUrl || undefined,
     });

@@ -20,6 +20,7 @@ import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
 
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
+import AgentPanelImages from '$lib/components/orchestrator/AgentPanelImages.tsx';
 import ContainersPanel from '$lib/components/containers/ContainersPanelLazy.tsx';
 import DbExplorerPanel from '$lib/components/db/DbExplorerPanelLazy.tsx';
 import HttpClientPanel from '$lib/components/http/HttpClientPanelLazy.tsx';
@@ -120,7 +121,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   db: 'Database',
   containers: 'Containers',
   toolbox: 'Toolbox',
-  youtube: 'YouTube',
+  youtube: 'Media Player',
   env: 'Environment',
 };
 
@@ -622,7 +623,19 @@ export default function AppShell() {
     const room = resolveRoom();
     if (!room) return;
     switch (layoutCommand.op) {
-      case 'focus': focusRoom(room); break;
+      case 'focus':
+        // In gallery (split) mode with other rooms visible, show the
+        // preview in the secondary (right) pane instead of the primary
+        // (left) — "agent on the left, preview on the right".
+        if (room === 'preview' && ambientLayout === 'gallery') {
+          const otherRooms = visibleRooms.filter((r) => r !== 'preview');
+          if (otherRooms.length > 0) {
+            showRoomInSecondary('preview');
+            break;
+          }
+        }
+        focusRoom(room);
+        break;
       case 'minimize': minimizeRoom(room); break;
       case 'restore': restoreRoom(room); break;
       case 'close': closeRoom(room); break;
@@ -1215,6 +1228,7 @@ export default function AppShell() {
   }
 
   function showRoomInPrimary(id: RoomId) {
+    if (id === activeRoom) return;
     withRoomTransition(() => {
       setMinimizedRooms((current) => {
         const next = new Set(current);
@@ -1223,8 +1237,14 @@ export default function AppShell() {
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
       if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
-      if (activeRoom && activeRoom !== id) {
+      if (id === splitRoom) {
+        // Clicked the room already on the right → swap sides: the old left
+        // room moves over to the right.
         setSecondaryRoom(activeRoom);
+      } else {
+        // Clicked a room that isn't displayed → replace the left pane only,
+        // pinning whatever is on the right so it stays put.
+        setSecondaryRoom(splitRoom);
       }
       setFocusedRoom(id);
     });
@@ -1381,7 +1401,7 @@ export default function AppShell() {
     },
     {
       id: 'youtube',
-      title: 'YouTube',
+      title: 'Media Player',
       active: layoutState.youtubeVisible,
       // Pops up the free-floating window rather than opening a tiled room.
       onClick: () => toggleYoutubeVisible(),
@@ -1566,6 +1586,7 @@ export default function AppShell() {
       return (
         <div className="agent-terminal-room">
           <AgentWorktreeBadge sessionId={sessionId} />
+          <AgentPanelImages sessionId={sessionId} />
           <TerminalPane
             sessionId={sessionId}
             paneIndex={terminalPaneAssignments.indexOf(sessionId)}

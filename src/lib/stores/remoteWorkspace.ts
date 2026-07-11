@@ -19,6 +19,11 @@ export type RemoteConnection = {
   name: string;
   url: string;
   token: string;
+  /** Opt-in: auto-dial this remote on app startup so a workspace whose agents are
+   *  still running on the box comes back on its own — "close the laptop, reopen,
+   *  they're still there." At most one remote carries this flag. Default off, so
+   *  the app still boots Local unless the user asks for this. */
+  reconnectOnStartup?: boolean;
 };
 
 /** Just the transport coordinates the lower layers need. */
@@ -49,7 +54,7 @@ function safeConnection(raw: unknown): RemoteConnection | null {
   if (typeof r.url !== 'string' || typeof r.token !== 'string') return null;
   const id = typeof r.id === 'string' && r.id ? r.id : newId();
   const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : hostLabel(r.url);
-  return { id, name, url: r.url, token: r.token };
+  return { id, name, url: r.url, token: r.token, reconnectOnStartup: r.reconnectOnStartup === true };
 }
 
 function loadConnections(): RemoteConnection[] {
@@ -166,6 +171,25 @@ export function setConnectionStatus(status: ConnectionStatus) {
   connectionStatus.set(status);
 }
 
+/**
+ * Flag (or unflag) a remote to auto-reconnect on startup. At most one remote can
+ * carry the flag — one active workspace at a time — so setting it on one clears
+ * it on the rest.
+ */
+export function setReconnectOnStartup(id: string, value: boolean) {
+  remoteConnections.update((list) =>
+    list.map((c) => ({
+      ...c,
+      reconnectOnStartup: c.id === id ? value : value ? false : c.reconnectOnStartup,
+    })),
+  );
+}
+
+/** The remote flagged to auto-reconnect on startup, if any. */
+export function startupRemote(): RemoteConnection | null {
+  return get(remoteConnections).find((c) => c.reconnectOnStartup) ?? null;
+}
+
 // ── Connect / disconnect ──────────────────────────────────────────────────────
 
 /**
@@ -205,6 +229,27 @@ export async function connectRemote(id: string): Promise<void> {
       6000,
     );
   }
+}
+
+/**
+ * Auto-reconnect on startup (opt-in). If a saved remote is flagged
+ * `reconnectOnStartup` and nothing is connected yet, dial it. This is what makes
+ * "close the laptop, reopen, your agents are still running on the box" work
+ * without a manual reconnect. Safe by construction: `connectRemote` fails fast
+ * (10s) and rolls all the way back to Local if the box is offline, so a down
+ * remote just means a normal Local boot — never a half-connected startup.
+ */
+export async function maybeAutoReconnectRemote(): Promise<void> {
+  if (get(activeRemoteId)) return;
+  const target = startupRemote();
+  if (!target) return;
+  try {
+    const { showToast } = await import('./notification');
+    showToast(`Reconnecting to ${target.name}…`, 'info', 4000);
+  } catch {
+    /* toast is best-effort */
+  }
+  await connectRemote(target.id);
 }
 
 /**

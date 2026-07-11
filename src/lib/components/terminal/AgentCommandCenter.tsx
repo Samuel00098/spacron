@@ -9,14 +9,16 @@ import {
 } from '$lib/stores/orchestrator';
 import { settingsOpen } from '$lib/stores/layout';
 import { detectAgentAccess, type AgentAccessStatus } from '$lib/services/agent-access';
+import { knowledgeGraphOpen } from '$lib/services/orchestrator/knowledge';
 import { useStore } from '$lib/react/useStore';
+import AgentMailboxCards from '$lib/components/orchestrator/AgentMailboxCards';
 import './AgentCommandCenter.css';
 
 // ── agent colors ────────────────────────────────────────────────────────────
 const AGENT_COLORS: Record<string, string> = {
   claude: 'var(--accent)', codex: 'var(--success)', agy: 'var(--role-agent)', antigravity: 'var(--role-agent)',
   opencode: 'var(--role-tests)', pi: 'var(--role-build)', omp: 'var(--role-git)', 'oh-my-pi': 'var(--role-git)',
-  agent: 'var(--role-tests)', cursor: 'var(--role-tests)', hermes: 'var(--role-agent)',
+  agent: 'var(--role-tests)', cursor: 'var(--role-tests)', hermes: 'var(--role-agent)', grok: 'var(--text-primary)',
 };
 const agentColor = (cmd: string | null | undefined) => (cmd && AGENT_COLORS[cmd]) || 'var(--text-muted)';
 
@@ -106,6 +108,17 @@ export default function AgentCommandCenter() {
         </div>
         <div className="orc-header-right">
           <button
+            className="orc-icon-btn"
+            onClick={() => knowledgeGraphOpen.set(true)}
+            title="Memory graph — what the agents have learned"
+            aria-label="Open memory graph"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="5" cy="6" r="2.5" /><circle cx="19" cy="6" r="2.5" /><circle cx="12" cy="18" r="2.5" />
+              <path d="M7.3 7.2 10.6 15.9M16.7 7.2 13.4 15.9M7.5 6h9" />
+            </svg>
+          </button>
+          <button
             className="orc-reset-btn"
             onClick={() => resetOrchestratorSession(projectId)}
             title="Reset session — stops the running task and clears the chat (keeps what I've learned)"
@@ -129,6 +142,9 @@ export default function AgentCommandCenter() {
       {!checkingAgentAccess && !agentAccess.ready && (
         <div className="orc-lock-banner">{agentAccess.message}</div>
       )}
+
+      {/* ── "Needs you" strip: actionable agent-to-agent traffic ───────────────── */}
+      <AgentMailboxCards projectId={projectId} rootPath={project?.root_path ?? null} />
 
       {/* ── Chat transcript ────────────────────────────────────────────────────── */}
       <div className="orc-scroll" ref={scrollRef} onScroll={handleScroll}>

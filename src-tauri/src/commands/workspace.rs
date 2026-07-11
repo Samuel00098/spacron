@@ -152,6 +152,71 @@ pub fn workspace_open_project(path: String, state: State<AppState>) -> Result<Pr
         .map_err(|e| e.to_string())
 }
 
+/// Create a brand-new empty folder named `name` inside `parent`, then open it as a
+/// project. This is the "start fresh" path. Unlike `fs_create_dir` (which requires
+/// the target to already sit inside an open project root), this deliberately creates
+/// a directory *outside* every existing root and registers it as a new root in one
+/// step, so a user can spin up a project from nothing without first opening a folder.
+#[tauri::command]
+pub fn workspace_create_project(
+    parent: String,
+    name: String,
+    state: State<AppState>,
+) -> Result<Project, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Folder name cannot be empty.".to_string());
+    }
+    if name.chars().count() > 255 {
+        return Err("Folder name is too long.".to_string());
+    }
+    // A single new folder — reject separators, parent refs, leading dashes, and
+    // control characters so this can only ever create one directory under `parent`.
+    if name.contains('\0')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.starts_with('-')
+        || name == "."
+        || name == ".."
+        || name.contains("..")
+        || name.chars().any(|c| c.is_control())
+    {
+        return Err("Folder name contains invalid characters.".to_string());
+    }
+    // Characters that are illegal in Windows filenames (and best avoided elsewhere).
+    if name.contains(|c: char| matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
+        return Err("Folder name contains invalid characters.".to_string());
+    }
+
+    let parent_path = std::fs::canonicalize(PathBuf::from(&parent))
+        .map(crate::commands::clean_path_buf)
+        .map_err(|_| "The selected location does not exist.".to_string())?;
+    if !parent_path.is_dir() {
+        return Err("The selected location is not a folder.".to_string());
+    }
+
+    let target = crate::commands::clean_path_buf(parent_path.join(name));
+    if target.exists() {
+        return Err(format!("A folder named \"{name}\" already exists here."));
+    }
+
+    // Create exactly one directory (not create_dir_all) so a malformed name can't
+    // silently produce a chain of nested folders.
+    std::fs::create_dir(&target).map_err(|e| format!("Failed to create folder: {e}"))?;
+
+    // Canonicalize the freshly-created directory so its path (and therefore the
+    // project id derived from it) matches what opening the same folder later would
+    // produce, keeping the project id stable across sessions.
+    let root_path = std::fs::canonicalize(&target)
+        .map(crate::commands::clean_path_buf)
+        .unwrap_or(target);
+
+    state
+        .workspace_manager
+        .open_project(root_path)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn workspace_get_active(state: State<AppState>) -> Option<Project> {
     state.workspace_manager.get_active_project()

@@ -427,7 +427,38 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('have codex do x', ALL_AGENTS);
     expect(result.viaLLM).toBe(true);
-    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null }]);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null }]);
+  });
+
+  it('carries a valid team role through a spawn action', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"Splitting this up.","actions":[{"kind":"spawn","agent":"claude","prompt":"plan it","name":null,"role":"coordinator"}]}'
+    );
+
+    const result = await routeOrchestratorRequest('build a login system, plan first', ALL_AGENTS);
+    expect(result.actions).toEqual([
+      { kind: 'spawn', agent: 'claude', prompt: 'plan it', name: null, role: 'coordinator', files: null },
+    ]);
+  });
+
+  it('drops an unknown role to null', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[{"kind":"spawn","agent":"claude","prompt":"do x","name":null,"role":"wizard"}]}'
+    );
+
+    const result = await routeOrchestratorRequest('have claude do x', ALL_AGENTS);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'claude', prompt: 'do x', name: null, role: null, files: null }]);
+  });
+
+  it('carries a builder file claim through a spawn action', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[{"kind":"spawn","agent":"claude","prompt":"build the form","name":null,"role":"builder","files":["src/Login.tsx"," "," src/api.ts"]}]}'
+    );
+
+    const result = await routeOrchestratorRequest('build the login form', ALL_AGENTS);
+    expect(result.actions).toEqual([
+      { kind: 'spawn', agent: 'claude', prompt: 'build the form', name: null, role: 'builder', files: ['src/Login.tsx', 'src/api.ts'] },
+    ]);
   });
 
   it('reverts to canned reply in conversational mode when no agents are running', async () => {

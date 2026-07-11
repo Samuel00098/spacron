@@ -72,6 +72,7 @@ const openSettings = vi.hoisted(() => vi.fn());
 const sanitiseActiveView = vi.hoisted(() => vi.fn((v: string) => v));
 const createTerminalSession = vi.hoisted(() => vi.fn(async (): Promise<number | null> => 99));
 const sendPromptToSession = vi.hoisted(() => vi.fn());
+const setSessionExecuting = vi.hoisted(() => vi.fn());
 const openFile = vi.hoisted(() => vi.fn(async (): Promise<void> => {}));
 const closeFile = vi.hoisted(() => vi.fn());
 const jumpToLine = vi.hoisted(() => ({ set: vi.fn() }));
@@ -117,6 +118,7 @@ vi.mock('$lib/stores/terminal', () => ({
   createTerminalSession,
   sendPromptToSession,
   sessionHasRunningProcess,
+  setSessionExecuting,
 }));
 
 import { orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
@@ -668,6 +670,70 @@ describe('orchestrator chat actions', () => {
     const task = get(orchestratorTasks)[0];
     expect(task.name).toBe('Backend');
     expect(task.status).toBe('in-progress');
+  });
+
+  it('holds a spawn behind a confirmation in voice mode and only launches after the user affirms', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Handing this to Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    // Turn 1: the user asks for work in a spoken conversation — we must ask first.
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module', {
+      voiceConversation: true,
+    });
+
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(get(orchestratorTasks)).toHaveLength(0);
+    let transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1]).toMatchObject({
+      role: 'assistant',
+      pending: false,
+    });
+    expect(transcript[transcript.length - 1].text).toMatch(/\?$/);
+    expect(transcript[transcript.length - 1].text.toLowerCase()).toContain('launch');
+
+    // Turn 2: the user confirms — now the held spawn actually runs.
+    await sendChatMessage('project-1', '/repo', 'yes go ahead', {
+      voiceConversation: true,
+    });
+
+    // "yes" must NOT be re-routed as a fresh request — the held action runs directly.
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo', { activate: true, skipAutoBrief: true });
+    expect(get(orchestratorTasks)).toHaveLength(1);
+    transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1]).toMatchObject({ role: 'assistant', text: 'Handing this to Claude.' });
+  });
+
+  it('discards a held spawn when the user declines', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Handing this to Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module', { voiceConversation: true });
+    await sendChatMessage('project-1', '/repo', "no, don't", { voiceConversation: true });
+
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(get(orchestratorTasks)).toHaveLength(0);
+    // The decline was handled locally, without routing it as a new request.
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT gate spawns outside voice mode (typed dispatch stays immediate)', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Handing this to Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module');
+
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)).toHaveLength(1);
   });
 
   it('sends a follow-up to a running named agent without spawning a new one once the lease is ready', async () => {
