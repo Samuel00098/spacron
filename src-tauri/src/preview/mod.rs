@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{FromRequestParts, State, WebSocketUpgrade},
+    extract::{FromRequestParts, Path, State, WebSocketUpgrade},
     http::{Request, Response, StatusCode},
     response::IntoResponse,
     routing::any,
@@ -377,12 +377,100 @@ const NAV_SNIPPET: &str = r#"<script data-spacron-nav-rewrite>
 })();
 </script>"#;
 
+const YTM_FLAG: &str = "spacron-ytm-bridge";
+// Injected ONLY into proxied music.youtube.com pages (the Music mode embed).
+// Two jobs, both scoped to that host so no other proxied site is affected:
+//
+// 1. Request bridge (the part that makes playback WORK). YT Music's player
+//    fetches its API (`/youtubei/v1/...`) and the audio segments (absolute
+//    `https://*.googlevideo.com/videoplayback` URLs) with fetch/XHR. Under the
+//    proxy the page's origin is the loopback proxy, so root-relative API calls
+//    resolve to the proxy root (correct only while the recorded external-origin
+//    fallback happens to point at music.youtube.com — it's a single shared slot
+//    the preview browser can steal), and the cross-origin googlevideo XHRs are
+//    CORS-blocked outright, which is why tracks never start. The bridge patches
+//    fetch/XHR/sendBeacon to rewrite both shapes onto the explicit
+//    `/proxy/{scheme}/{host}` form: deterministic routing for API calls, and
+//    the audio stream becomes same-origin (streamed through the proxy, which
+//    also holds the .youtube.com cookie jar). It must be injected at the TOP of
+//    <head> so it wraps fetch/XHR before the player scripts capture them.
+//
+// 2. Chrome strip (cosmetics). Hides YTM's site shell — left guide, logo,
+//    premium upsell banners — so the embed reads as a music player rather than
+//    a website in a box. Search box and player bar stay. Selectors are
+//    best-effort against YTM's current markup; if Google renames them the
+//    worst case is a hidden element reappearing, never broken playback.
+const YTM_SNIPPET: &str = r#"<script data-spacron-ytm-bridge>
+(() => {
+    if (window.__spacronYtmBridge) return;
+    window.__spacronYtmBridge = true;
+    const m = location.pathname.match(/^\/proxy\/(https?)\/([^/]+)/);
+    if (!m) return;
+    const realScheme = m[1], realHost = m[2];
+    const proxyOrigin = location.origin;
+    const rewrite = (raw) => {
+        let u;
+        try { u = new URL(String(raw), location.href); } catch (e) { return null; }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+        if (u.origin === proxyOrigin) {
+            // Already an explicit proxy path — leave it alone. Anything else on
+            // the proxy origin is a root-relative call the page meant for its
+            // real host (e.g. /youtubei/v1/player) — pin it there explicitly
+            // instead of relying on the shared external-origin fallback.
+            if (u.pathname.startsWith('/proxy/')) return null;
+            return proxyOrigin + '/proxy/' + realScheme + '/' + realHost + u.pathname + u.search;
+        }
+        return proxyOrigin + '/proxy/' + u.protocol.replace(':', '') + '/' + u.host + u.pathname + u.search;
+    };
+    const origFetch = window.fetch;
+    window.fetch = function (input, init) {
+        try {
+            if (input instanceof Request) {
+                const r = rewrite(input.url);
+                if (r) input = new Request(r, input);
+            } else {
+                const r = rewrite(input);
+                if (r) input = r;
+            }
+        } catch (e) { /* fall through with the original input */ }
+        return origFetch.call(this, input, init);
+    };
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        try { const r = rewrite(url); if (r) url = r; } catch (e) {}
+        return origOpen.call(this, method, url, ...rest);
+    };
+    if (navigator.sendBeacon) {
+        const origBeacon = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = function (url, data) {
+            try { const r = rewrite(url); if (r) url = r; } catch (e) {}
+            try { return origBeacon(url, data); } catch (e) { return false; }
+        };
+    }
+})();
+</script>
+<style data-spacron-ytm-chrome>
+ytmusic-guide-renderer,
+#mini-guide,
+ytmusic-guide-mini-renderer,
+ytmusic-mealbar-promo-renderer,
+ytmusic-banner-promo-renderer,
+ytmusic-nav-bar .left-content {
+    display: none !important;
+}
+ytmusic-app-layout {
+    --ytmusic-guide-width: 0px;
+    --ytmusic-mini-guide-width: 0px;
+}
+</style>"#;
+
 #[derive(Clone)]
 pub struct ProxyState {
     pub target_port: Arc<Mutex<u16>>,
     pub preferred_local_host: Arc<Mutex<Option<String>>>,
     pub active_external_origins: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
+    pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     pub external_origin_fallback: bool,
     pub client: Client,
     pub local_client: Client,
@@ -395,6 +483,7 @@ pub struct PreviewManager {
     local_dev_proxy_ports: Arc<Mutex<HashMap<String, u16>>>,
     pub active_external_origins: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
+    pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
@@ -407,6 +496,7 @@ impl PreviewManager {
             local_dev_proxy_ports: Arc::new(Mutex::new(HashMap::new())),
             active_external_origins: Arc::new(Mutex::new(std::collections::HashMap::new())),
             active_project_id,
+            project_root: Arc::new(std::sync::RwLock::new(None)),
             shutdown_tx: Arc::new(Mutex::new(None)),
         }
     }
@@ -430,12 +520,17 @@ impl PreviewManager {
             preferred_local_host: self.preferred_local_host.clone(),
             active_external_origins: self.active_external_origins.clone(),
             active_project_id: self.active_project_id.clone(),
+            project_root: self.project_root.clone(),
             external_origin_fallback: true,
             client: preview_http_client(),
             local_client: preview_local_http_client(),
         };
 
-        let app = Router::new().fallback(any(proxy_handler)).with_state(state);
+        let app = Router::new()
+            .route("/local-file", any(serve_local_file))
+            .route("/local-file/{*file_path}", any(serve_local_file_path))
+            .fallback(any(proxy_handler))
+            .with_state(state);
 
         let addr = SocketAddr::from(([127, 0, 0, 1], proxy_port));
 
@@ -494,12 +589,17 @@ impl PreviewManager {
             preferred_local_host: Arc::new(Mutex::new(Some(normalized_host))),
             active_external_origins: self.active_external_origins.clone(),
             active_project_id: self.active_project_id.clone(),
+            project_root: self.project_root.clone(),
             external_origin_fallback: false,
             client: preview_http_client(),
             local_client: preview_local_http_client(),
         };
 
-        let app = Router::new().fallback(any(proxy_handler)).with_state(state);
+        let app = Router::new()
+            .route("/local-file", any(serve_local_file))
+            .route("/local-file/{*file_path}", any(serve_local_file_path))
+            .fallback(any(proxy_handler))
+            .with_state(state);
         let addr = SocketAddr::from(([127, 0, 0, 1], proxy_port));
 
         async_runtime::spawn(async move {
@@ -567,6 +667,12 @@ impl PreviewManager {
         }
         Ok(())
     }
+
+    pub fn set_project_root(&self, root: Option<std::path::PathBuf>) {
+        if let Ok(mut guard) = self.project_root.write() {
+            *guard = root;
+        }
+    }
 }
 
 fn normalize_local_host(host: Option<&str>) -> Result<String, String> {
@@ -579,7 +685,18 @@ fn normalize_local_host(host: Option<&str>) -> Result<String, String> {
 }
 
 fn preview_http_client() -> Client {
-    preview_http_client_builder().build().unwrap_or_default()
+    preview_http_client_builder()
+        // Server-side cookie jar for proxied *external* sites. The proxy serves
+        // them under its loopback origin, so any Set-Cookie scoped to the real
+        // site (e.g. `Domain=.youtube.com`) is rejected by the WebView as a
+        // domain mismatch. Sites that gate content on a cookie round-trip —
+        // YouTube Music's consent bounce is the canonical case — then redirect
+        // forever and never play. The jar lives here instead: this client talks
+        // to the real origin, so those cookies are valid for it, persist across
+        // requests for the app session, and the embedded site works logged-out.
+        .cookie_store(true)
+        .build()
+        .unwrap_or_default()
 }
 
 fn preview_local_http_client() -> Client {
@@ -904,6 +1021,506 @@ fn local_dev_hosts(preferred_host: Option<&str>) -> Vec<&'static str> {
         _ => {}
     }
     hosts
+}
+
+/// Serve a local file from the project directory through the proxy.
+/// Used for previewing HTML files (and their relative CSS/JS/image dependencies)
+/// directly from the file system. The `path` query parameter specifies the
+/// absolute file path. For HTML files, a `<base>` tag is injected so that
+/// relative URLs in the document resolve correctly through this same route.
+async fn serve_local_file(
+    State(state): State<ProxyState>,
+    req: Request<Body>,
+) -> Response<Body> {
+    let query = req.uri().query().unwrap_or("");
+    let path: String = form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default();
+
+    if path.is_empty() {
+        return local_file_error(
+            StatusCode::BAD_REQUEST,
+            "🔗",
+            "No file specified",
+            "The preview link didn't include a file to open.",
+            None,
+        );
+    }
+
+    // Validate the file path is within the project root.
+    let project_root = state
+        .project_root
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let Some(root) = project_root else {
+        return local_file_error(
+            StatusCode::BAD_REQUEST,
+            "📂",
+            "No project open",
+            "Open a project folder in Spacron first, then preview a file inside it.",
+            Some("The preview can only serve files that live inside the currently open project."),
+        );
+    };
+
+    let file_path = std::path::PathBuf::from(&path);
+    let canonical = if file_path.exists() {
+        std::fs::canonicalize(&file_path).unwrap_or_else(|_| file_path.clone())
+    } else {
+        return local_file_error(
+            StatusCode::NOT_FOUND,
+            "🔍",
+            "File not found",
+            "This file no longer exists on disk.",
+            Some("It may have been moved, renamed, or deleted since the preview was opened."),
+        );
+    };
+    // On Windows `canonicalize` yields a `\\?\` verbatim path, but the stored
+    // project root was stripped via `clean_path_buf`. Normalize the same way so
+    // the traversal check below compares like-for-like (see clean_path_buf).
+    let canonical = crate::commands::clean_path_buf(canonical);
+
+    // Ensure the resolved path stays inside the project root (path traversal guard).
+    if !canonical.starts_with(&root) {
+        return local_file_error(
+            StatusCode::FORBIDDEN,
+            "⛔",
+            "Outside the project",
+            "This file is outside the open project folder, so the preview won't serve it.",
+            Some("Open the folder that contains this file as your project, then try again."),
+        );
+    }
+
+    // Read the file.
+    let content = match std::fs::read(&canonical) {
+        Ok(c) => c,
+        Err(e) => {
+            return local_file_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "⚠️",
+                "Couldn't read file",
+                "Spacron couldn't read this file from disk.",
+                Some(&e.to_string()),
+            )
+        }
+    };
+
+    // Enforce a 50 MB size limit to prevent memory exhaustion.
+    if content.len() > 50 * 1024 * 1024 {
+        return local_file_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "📦",
+            "File too large",
+            "This file is over the 50 MB preview limit.",
+            None,
+        );
+    }
+
+    let mime = guess_local_file_mime(&canonical);
+    let is_html = mime.contains("text/html");
+
+    if is_html {
+        // Inject a <base> tag so relative URLs (CSS, JS, images) resolve through
+        // this same /local-file route, preserving correct directory context.
+        let html = String::from_utf8_lossy(&content);
+        let dir = canonical
+            .parent()
+            .unwrap_or(&root)
+            .to_string_lossy()
+            .to_string();
+
+        // Compute the base href from the request's Host header (the proxy origin).
+        let proxy_host = req
+            .headers()
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("127.0.0.1");
+        let base_href = format!(
+            "http://{}/local-file/{}/",
+            proxy_host,
+            encode_dir_for_base_href(&dir)
+        );
+
+        let base_tag = format!("<base href=\"{}\">", html_escape_attr(&base_href));
+        // A <base> tag only applies to elements the parser encounters AFTER it,
+        // so it must be the FIRST thing in <head> — injecting it before </head>
+        // (after the document's <link rel="stylesheet"> tags) left every
+        // relative stylesheet/script href resolving against the document URL
+        // (/local-file?path=…) instead of the base. Those requests fell through
+        // to the dev-server proxy and failed, so the page rendered as bare
+        // unstyled HTML. Insert right after the <head> opening tag; fall back
+        // to right after <html>, then to prepending for head-less fragments.
+        let insert_at = find_opening_tag_end(&html, "head")
+            .or_else(|| find_opening_tag_end(&html, "html"));
+        let injected = match insert_at {
+            Some(index) => {
+                let mut output = String::with_capacity(html.len() + base_tag.len() + 16);
+                output.push_str(&html[..index]);
+                output.push_str("\n");
+                output.push_str(&base_tag);
+                output.push_str("\n");
+                output.push_str(&html[index..]);
+                output
+            }
+            None => format!("{}\n{}", base_tag, html),
+        };
+
+        return Response::builder()
+            .header("Content-Type", "text/html; charset=utf-8")
+            .header("Cache-Control", "no-cache")
+            .body(Body::from(injected))
+            .unwrap_or_else(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()
+            });
+    }
+
+    Response::builder()
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-cache")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()
+        })
+}
+
+/// Serve a local file using the URL path component instead of a query parameter.
+/// Used by the `<base>` tag injected into HTML previews so that relative URLs
+/// (CSS, JS, images) resolve correctly through this route.
+async fn serve_local_file_path(
+    State(state): State<ProxyState>,
+    Path(file_path): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    // The Axum wildcard parameter includes a leading `/`, strip it.
+    let decoded = match percent_encoding::percent_decode_str(&file_path).decode_utf8() {
+        Ok(d) => d.into_owned(),
+        Err(_) => {
+            return local_file_error_for(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "⚠️",
+                "Invalid path",
+                "The requested file path couldn't be decoded.",
+                None,
+            )
+        }
+    };
+
+    if decoded.is_empty() {
+        return local_file_error_for(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "⚠️",
+            "Empty path",
+            "No file path was provided.",
+            None,
+        );
+    }
+
+    let project_root = state
+        .project_root
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let Some(root) = project_root else {
+        return local_file_error_for(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "📂",
+            "No project open",
+            "Open a project folder in Spacron first, then preview a file inside it.",
+            Some("The preview can only serve files that live inside the currently open project."),
+        );
+    };
+
+    let path = std::path::PathBuf::from(&decoded);
+    let canonical = if path.exists() {
+        std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone())
+    } else {
+        return local_file_error_for(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "🔍",
+            "File not found",
+            "This file no longer exists on disk.",
+            Some("It may have been moved, renamed, or deleted since the preview was opened."),
+        );
+    };
+    // Match the normalization applied to the stored project root (clean_path_buf)
+    // so the Windows `\\?\` verbatim prefix doesn't break the traversal check.
+    let canonical = crate::commands::clean_path_buf(canonical);
+
+    if !canonical.starts_with(&root) {
+        return local_file_error_for(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "⛔",
+            "Outside the project",
+            "This file is outside the open project folder, so the preview won't serve it.",
+            Some("Open the folder that contains this file as your project, then try again."),
+        );
+    }
+
+    let content = match std::fs::read(&canonical) {
+        Ok(c) => c,
+        Err(e) => {
+            return local_file_error_for(
+                &headers,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "⚠️",
+                "Couldn't read file",
+                "Spacron couldn't read this file from disk.",
+                Some(&e.to_string()),
+            )
+        }
+    };
+
+    if content.len() > 50 * 1024 * 1024 {
+        return local_file_error_for(
+            &headers,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "📦",
+            "File too large",
+            "This file is over the 50 MB preview limit.",
+            None,
+        );
+    }
+
+    let mime = guess_local_file_mime(&canonical);
+
+    Response::builder()
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-cache")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()
+        })
+}
+
+/// Render a friendly, self-contained HTML page for a failed local-file preview
+/// navigation, so the preview panel shows a styled message instead of raw
+/// status text. The page is theme-aware (adapts to the webview's light/dark
+/// preference) and has no external dependencies.
+fn local_file_error(
+    status: StatusCode,
+    glyph: &str,
+    title: &str,
+    message: &str,
+    hint: Option<&str>,
+) -> Response<Body> {
+    let hint_html = match hint {
+        Some(h) if !h.is_empty() => {
+            format!("<p class=\"hint\">{}</p>", html_escape_attr(h))
+        }
+        _ => String::new(),
+    };
+    let body = format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  html, body {{ height: 100%; margin: 0; }}
+  body {{
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100%; padding: 24px;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e6e8ee;
+  }}
+  .card {{
+    width: 100%; max-width: 440px; text-align: center; padding: 40px 32px;
+    background: #171a21; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px;
+  }}
+  .glyph {{ font-size: 44px; line-height: 1; margin-bottom: 16px; }}
+  h1 {{ font-size: 18px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }}
+  .msg {{ font-size: 14px; line-height: 1.55; margin: 0; opacity: 0.85; }}
+  .hint {{ font-size: 13px; line-height: 1.5; margin: 14px 0 0; color: #9aa1ad; }}
+  .status {{
+    display: inline-block; margin-top: 20px; padding: 3px 10px;
+    font: 500 11px/1 ui-monospace, "JetBrains Mono", Menlo, monospace;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    border-radius: 999px; background: rgba(255,255,255,0.06); color: #9aa1ad;
+  }}
+  @media (prefers-color-scheme: light) {{
+    body {{ background: #f6f7f9; color: #1c2027; }}
+    .card {{ background: #fff; border-color: rgba(0,0,0,0.08); box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+    .hint {{ color: #5b616e; }}
+    .status {{ background: rgba(0,0,0,0.05); color: #6b7280; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="glyph">{glyph}</div>
+    <h1>{title}</h1>
+    <p class="msg">{message}</p>
+    {hint_html}
+    <div class="status">{code} {reason}</div>
+  </div>
+</body>
+</html>"##,
+        title = html_escape_attr(title),
+        glyph = glyph,
+        message = html_escape_attr(message),
+        hint_html = hint_html,
+        code = status.as_u16(),
+        reason = status.canonical_reason().unwrap_or(""),
+    );
+
+    Response::builder()
+        .status(status)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Cache-Control", "no-cache")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| (status, message.to_string()).into_response())
+}
+
+/// Byte offset just past the `>` of the first `<tag …>` opening tag, matched
+/// ASCII case-insensitively. Longer tag names sharing the prefix don't match
+/// (`<header>` is not `<head>`), and closing tags (`</head>`) are skipped
+/// because their name starts with `/`. Used to place the injected `<base>` at
+/// the *top* of `<head>`, where it precedes every URL-bearing element.
+fn find_opening_tag_end(html: &str, tag: &str) -> Option<usize> {
+    let bytes = html.as_bytes();
+    let tag_bytes = tag.as_bytes();
+    let mut i = 0;
+    while i + 1 + tag_bytes.len() <= bytes.len() {
+        if bytes[i] == b'<'
+            && bytes[i + 1..].len() >= tag_bytes.len()
+            && bytes[i + 1..i + 1 + tag_bytes.len()].eq_ignore_ascii_case(tag_bytes)
+        {
+            let after_name = i + 1 + tag_bytes.len();
+            match bytes.get(after_name) {
+                // `<head>` — done.
+                Some(b'>') => return Some(after_name + 1),
+                // `<head lang=…>` / `<head/>` — skip to the closing `>`.
+                Some(c) if c.is_ascii_whitespace() || *c == b'/' => {
+                    return html[after_name..].find('>').map(|j| after_name + j + 1);
+                }
+                // `<header…` or EOF — not our tag; keep scanning.
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Decide whether a request expects an HTML error page. Sub-resource fetches
+/// (CSS/JS/images) must keep their real status + plain body — an HTML page
+/// mislabeled as CSS would just be noise — but top-level navigations should get
+/// the styled page. Chromium webviews send `Sec-Fetch-Dest: document`; the
+/// `Accept: text/html` check is a fallback for WebKit-based webviews.
+fn wants_html_error(headers: &axum::http::HeaderMap) -> bool {
+    let dest_is_document = headers
+        .get("sec-fetch-dest")
+        .and_then(|v| v.to_str().ok())
+        .map(|d| d.eq_ignore_ascii_case("document"))
+        .unwrap_or(false);
+    if dest_is_document {
+        return true;
+    }
+    headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("text/html"))
+        .unwrap_or(false)
+}
+
+/// Like [`local_file_error`] but falls back to a plain status + text body for
+/// non-document (sub-resource) requests.
+fn local_file_error_for(
+    headers: &axum::http::HeaderMap,
+    status: StatusCode,
+    glyph: &str,
+    title: &str,
+    message: &str,
+    hint: Option<&str>,
+) -> Response<Body> {
+    if wants_html_error(headers) {
+        local_file_error(status, glyph, title, message, hint)
+    } else {
+        (status, message.to_string()).into_response()
+    }
+}
+
+/// Percent-encode an absolute directory path for use as the `<base href>` URL
+/// in local-file previews.
+///
+/// Normalizes Windows `\` separators to `/` and encodes only the characters
+/// that are unsafe in a URL path, while **preserving `/` as a real separator**
+/// and `:` for the Windows drive letter. This matters for two reasons:
+///
+/// 1. Spaces become `%20` (not `+` as `form_urlencoded` would produce), so a
+///    path like `.../Real Projects/...` round-trips through
+///    `percent_decode_str` on the way back instead of staying a literal `+`.
+/// 2. Keeping `/` as a separator means the directory is many URL segments, so
+///    `../` references in the page (e.g. `../static/icon.png`) resolve to the
+///    correct sibling directory instead of collapsing the whole path.
+fn encode_dir_for_base_href(dir: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+    // Control chars plus the characters that would break URL-path parsing.
+    // `/` and `:` are deliberately left un-encoded (see doc comment).
+    const SET: &AsciiSet = &CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'#')
+        .add(b'%')
+        .add(b'<')
+        .add(b'>')
+        .add(b'?')
+        .add(b'`')
+        .add(b'{')
+        .add(b'}')
+        .add(b'|')
+        .add(b'^')
+        .add(b'\\');
+    let normalized = dir.replace('\\', "/");
+    utf8_percent_encode(&normalized, SET).to_string()
+}
+
+/// Guess MIME type from file extension (no external crate needed).
+fn guess_local_file_mime(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8".to_string(),
+        "css" => "text/css; charset=utf-8".to_string(),
+        "js" | "mjs" | "jsx" => "application/javascript; charset=utf-8".to_string(),
+        "ts" | "tsx" => "application/javascript; charset=utf-8".to_string(),
+        "json" => "application/json; charset=utf-8".to_string(),
+        "xml" => "application/xml; charset=utf-8".to_string(),
+        "svg" => "image/svg+xml".to_string(),
+        "png" => "image/png".to_string(),
+        "jpg" | "jpeg" | "jpe" | "jfif" => "image/jpeg".to_string(),
+        "gif" => "image/gif".to_string(),
+        "webp" => "image/webp".to_string(),
+        "bmp" => "image/bmp".to_string(),
+        "ico" | "cur" => "image/x-icon".to_string(),
+        "avif" => "image/avif".to_string(),
+        "tif" | "tiff" => "image/tiff".to_string(),
+        "woff" => "font/woff".to_string(),
+        "woff2" => "font/woff2".to_string(),
+        "ttf" => "font/ttf".to_string(),
+        "otf" => "font/otf".to_string(),
+        "eot" => "application/vnd.ms-fontobject".to_string(),
+        "mp3" => "audio/mpeg".to_string(),
+        "mp4" => "video/mp4".to_string(),
+        "webm" => "video/webm".to_string(),
+        "ogg" => "audio/ogg".to_string(),
+        "wasm" => "application/wasm".to_string(),
+        "txt" | "md" | "markdown" => "text/plain; charset=utf-8".to_string(),
+        "map" => "application/json; charset=utf-8".to_string(),
+        _ => "application/octet-stream".to_string(),
+    }
 }
 
 async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> Response<Body> {
@@ -1312,6 +1929,22 @@ async fn proxy_external_url(
         headers.remove("host");
         headers.remove("origin");
         headers.remove("referer");
+        // The browser's cookies are scoped to the loopback proxy origin, not the
+        // real target — forwarding them both leaks unrelated proxied sites'
+        // cookies upstream and, worse, disables the client's cookie jar (reqwest
+        // only injects jar cookies when the request has no Cookie header). The
+        // jar owns cookies for external targets; see preview_http_client().
+        headers.remove("cookie");
+        // Negotiate only encodings this client can decode. Forwarding the
+        // browser's list (which includes zstd) lets the origin pick an encoding
+        // reqwest passes through raw — and since Content-Encoding is stripped
+        // from the re-served response, the WebView would receive undecodable
+        // bytes. Pinning to gzip/br guarantees the proxy always re-serves
+        // plaintext bodies.
+        headers.insert(
+            reqwest::header::ACCEPT_ENCODING,
+            "gzip, br".parse().unwrap(),
+        );
         headers.remove("x-forwarded-for");
         headers.remove("x-forwarded-host");
         headers.remove("x-forwarded-proto");
@@ -1340,8 +1973,17 @@ async fn proxy_external_url(
     };
     *reqwest_req.body_mut() = Some(reqwest::Body::from(bytes));
 
+    // Kept for a one-shot replay after the consent interstitial is resolved
+    // server-side (body is Bytes, so the clone always succeeds).
+    let retry_req = reqwest_req.try_clone();
+
     match client.execute(reqwest_req).await {
         Ok(res) => {
+            // Never surface Google's consent interstitial in the preview/panel —
+            // it cannot be completed from inside the iframe. Resolve it in the
+            // proxy and carry on with the original request; see
+            // maybe_resolve_youtube_consent.
+            let res = maybe_resolve_youtube_consent(&client, res, retry_req).await;
             // Record the origin this response actually came from (the client does
             // not follow redirects, so this is the requested target's origin).
             let final_url = res.url();
@@ -1378,6 +2020,129 @@ async fn proxy_external_url(
             format!("Proxy error: {}", describe_request_error(&err)),
         )
             .into_response(),
+    }
+}
+
+/// Hidden-input fields of Google's consent interstitial ("Before you
+/// continue"), extracted so the proxy can replay the form server-side. Each
+/// field is taken once (the page repeats them across its Accept/Reject forms)
+/// and the per-form choice flags (`set_*`) are skipped — the caller appends
+/// the choice it wants itself.
+fn consent_form_params(html: &str) -> Vec<(String, String)> {
+    let re = regex::Regex::new(r#"name="([^"]+)"\s+value="([^"]*)""#).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut params = Vec::new();
+    for cap in re.captures_iter(html) {
+        let name = cap[1].to_string();
+        if name.starts_with("set_") || !seen.insert(name.clone()) {
+            continue;
+        }
+        params.push((name, cap[2].replace("&amp;", "&")));
+    }
+    params
+}
+
+/// Google gates youtube.com properties behind a consent interstitial: the
+/// first request 302s to consent.youtube.com, and the real page only loads
+/// after the consent form is submitted. Inside the preview iframe that page is
+/// a dead end — its buttons submit the form *programmatically*, which fires no
+/// `submit` event, so the injected nav rewriter never re-points the POST at
+/// the proxy and the iframe escapes to the raw consent origin, whose
+/// frame-ancestors headers then block it. Clicking Accept/Reject appears to do
+/// nothing.
+///
+/// So the banner is never shown: when a proxied response redirects to
+/// consent.youtube.com, fetch the consent page with the same cookie jar,
+/// replay its form with the privacy-preserving "Reject all" choice
+/// (`set_eom=true` — no additional cookies or personalization), and retry the
+/// original request, which now sails through. Any failure along the way falls
+/// back to returning the original redirect (the banner, exactly as before).
+async fn maybe_resolve_youtube_consent(
+    client: &Client,
+    res: reqwest::Response,
+    retry: Option<reqwest::Request>,
+) -> reqwest::Response {
+    if !res.status().is_redirection() {
+        return res;
+    }
+    let consent_url = match res
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|loc| url::Url::parse(loc).ok())
+    {
+        Some(u) if u.host_str() == Some("consent.youtube.com") => u,
+        _ => return res,
+    };
+    let Some(retry) = retry else {
+        return res;
+    };
+
+    // Carry the original request's browser identity: the consent frontend
+    // serves a formless "browser deprecated" page to unknown user agents.
+    let ua = retry.headers().get(reqwest::header::USER_AGENT).cloned();
+    let lang = retry
+        .headers()
+        .get(reqwest::header::ACCEPT_LANGUAGE)
+        .cloned();
+    let with_identity = |mut req: reqwest::RequestBuilder| {
+        if let Some(ua) = &ua {
+            req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        if let Some(lang) = &lang {
+            req = req.header(reqwest::header::ACCEPT_LANGUAGE, lang);
+        }
+        req
+    };
+
+    let page = match with_identity(client.get(consent_url)).send().await {
+        Ok(page_res) => match page_res.text().await {
+            Ok(text) => text,
+            Err(_) => return res,
+        },
+        Err(_) => return res,
+    };
+    let mut params = consent_form_params(&page);
+    // `escs` is the consent form's one-time token; without it this isn't the
+    // form we know how to replay — don't blind-fire a save request.
+    if !params.iter().any(|(name, _)| name == "escs") {
+        return res;
+    }
+    params.push(("set_eom".to_string(), "true".to_string()));
+
+    // Hand-rolled application/x-www-form-urlencoded body — reqwest's .form()
+    // helper is behind a cargo feature this build doesn't enable.
+    let form_body = params
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC),
+                percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    if with_identity(client.post("https://consent.youtube.com/save"))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(form_body)
+        .send()
+        .await
+        .is_err()
+    {
+        return res;
+    }
+
+    // The jar now holds the SOCS consent cookie, so the replay should get the
+    // real page. If consent didn't stick, the replay is just the same consent
+    // redirect and the previous behavior (banner in the panel) remains.
+    match client.execute(retry).await {
+        Ok(retried) => retried,
+        Err(_) => res,
     }
 }
 
@@ -1650,6 +2415,13 @@ async fn build_preview_response(
         } else {
             injected
         };
+        // YouTube Music embed: bridge its fetch/XHR onto the proxy (playback)
+        // and strip the site chrome (cosmetics). Host-scoped; see YTM_SNIPPET.
+        let injected = if strip_embed_headers && is_ytm_host(&final_url) {
+            inject_ytm_snippet(&injected)
+        } else {
+            injected
+        };
 
         let mut builder = Response::builder().status(status);
         for (key, value) in headers.iter() {
@@ -1795,6 +2567,37 @@ fn inject_nav_rewrite_script(html: &str) -> String {
     format!("{}{}", html, NAV_SNIPPET)
 }
 
+/// True when a proxied external response came from the YouTube Music host —
+/// the only host that gets the YTM bridge/chrome-strip injection.
+fn is_ytm_host(final_url: &str) -> bool {
+    url::Url::parse(final_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h == "music.youtube.com"))
+        .unwrap_or(false)
+}
+
+/// Insert the YTM snippet at the top of <head>. Unlike the other injected
+/// scripts (appended before </body>), the request bridge must run BEFORE the
+/// page's own scripts so it wraps fetch/XHR before the player captures them.
+fn inject_ytm_snippet(html: &str) -> String {
+    if html.contains(YTM_FLAG) {
+        return html.to_string();
+    }
+    // Find the opening <head> tag (with or without attributes), not <header>.
+    let head_at = html.find("<head>").or_else(|| html.find("<head "));
+    if let Some(pos) = head_at {
+        if let Some(close) = html[pos..].find('>') {
+            let insert_at = pos + close + 1;
+            let mut output = String::with_capacity(html.len() + YTM_SNIPPET.len());
+            output.push_str(&html[..insert_at]);
+            output.push_str(YTM_SNIPPET);
+            output.push_str(&html[insert_at..]);
+            return output;
+        }
+    }
+    format!("{}{}", YTM_SNIPPET, html)
+}
+
 fn inject_scroll_script(html: &str) -> String {
     if html.contains(SCROLL_FLAG) {
         return html.to_string();
@@ -1936,8 +2739,171 @@ async fn handle_websocket(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_first_party_host, proxy_request_allowed};
-    use axum::http::HeaderMap;
+    use super::{
+        consent_form_params, encode_dir_for_base_href, inject_ytm_snippet, is_first_party_host,
+        is_ytm_host, local_file_error, proxy_request_allowed, wants_html_error,
+    };
+    use axum::http::{HeaderMap, StatusCode};
+
+    #[test]
+    fn consent_form_params_dedupes_unescapes_and_skips_choice_flags() {
+        // Shaped like Google's consent page: several <form>s repeating the same
+        // hidden fields, each with its own set_* choice flag.
+        let html = r#"
+          <form action="https://consent.youtube.com/save" method="POST">
+            <input type="hidden" name="gl" value="NG">
+            <input type="hidden" name="continue" value="https://music.youtube.com/?cbrd=1&amp;x=1">
+            <input type="hidden" name="escs" value="AZ8E49TOKEN">
+            <input type="hidden" name="set_ytc" value="true">
+          </form>
+          <form action="https://consent.youtube.com/save" method="POST">
+            <input type="hidden" name="gl" value="NG">
+            <input type="hidden" name="escs" value="AZ8E49TOKEN">
+            <input type="hidden" name="set_eom" value="true">
+          </form>"#;
+        let params = consent_form_params(html);
+        assert_eq!(params.iter().filter(|(name, _)| name == "gl").count(), 1);
+        assert!(params.contains(&(
+            "continue".to_string(),
+            "https://music.youtube.com/?cbrd=1&x=1".to_string()
+        )));
+        assert!(params.contains(&("escs".to_string(), "AZ8E49TOKEN".to_string())));
+        // Choice flags are the caller's decision, never scraped from the page.
+        assert!(!params.iter().any(|(name, _)| name.starts_with("set_")));
+    }
+
+    #[test]
+    fn ytm_host_matches_only_music_youtube() {
+        assert!(is_ytm_host("https://music.youtube.com/?cbrd=1"));
+        assert!(!is_ytm_host("https://www.youtube.com/"));
+        assert!(!is_ytm_host("https://consent.youtube.com/m?pc=ytm"));
+        assert!(!is_ytm_host("https://evil-music.youtube.com.example.com/"));
+        assert!(!is_ytm_host("not a url"));
+    }
+
+    #[test]
+    fn ytm_snippet_lands_at_top_of_head_and_is_idempotent() {
+        // The bridge must run before the page's own scripts, so it goes right
+        // after the opening <head> tag — not before </body> like the others.
+        let html = "<!doctype html><html><head><script>app</script></head><body></body></html>";
+        let injected = inject_ytm_snippet(html);
+        let head_end = injected.find("<head>").unwrap() + "<head>".len();
+        assert!(injected[head_end..].starts_with("<script data-spacron-ytm-bridge>"));
+        assert!(injected.find("spacron-ytm-bridge").unwrap() < injected.find("app").unwrap());
+        // Re-injecting must not duplicate the snippet.
+        assert_eq!(inject_ytm_snippet(&injected), injected);
+
+        // <head lang="en"> variant still gets the snippet inside the tag.
+        let with_attrs = "<html><head lang=\"en\"><title>t</title></head></html>";
+        let injected = inject_ytm_snippet(with_attrs);
+        assert!(injected.contains("<head lang=\"en\"><script data-spacron-ytm-bridge>"));
+
+        // No <head> at all: snippet is prepended rather than dropped.
+        let headless = "<body>hi</body>";
+        assert!(inject_ytm_snippet(headless).starts_with("<script data-spacron-ytm-bridge>"));
+    }
+
+    #[test]
+    fn error_page_is_html_with_status_and_escaped_message() {
+        let resp = local_file_error(
+            StatusCode::NOT_FOUND,
+            "🔍",
+            "File not found",
+            "Missing <file> & gone",
+            Some("try again"),
+        );
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn wants_html_error_true_for_document_and_html_accept() {
+        let mut doc = HeaderMap::new();
+        doc.insert("sec-fetch-dest", "document".parse().unwrap());
+        assert!(wants_html_error(&doc));
+
+        let mut accept_html = HeaderMap::new();
+        accept_html.insert("accept", "text/html,application/xhtml+xml".parse().unwrap());
+        assert!(wants_html_error(&accept_html));
+    }
+
+    #[test]
+    fn wants_html_error_false_for_subresource_fetch() {
+        // A stylesheet request: not a document, Accept is text/css.
+        let mut css = HeaderMap::new();
+        css.insert("sec-fetch-dest", "style".parse().unwrap());
+        css.insert("accept", "text/css,*/*;q=0.1".parse().unwrap());
+        assert!(!wants_html_error(&css));
+
+        // A script request typically sends Accept: */*.
+        let mut js = HeaderMap::new();
+        js.insert("sec-fetch-dest", "script".parse().unwrap());
+        js.insert("accept", "*/*".parse().unwrap());
+        assert!(!wants_html_error(&js));
+    }
+
+    #[test]
+    fn opening_tag_end_finds_head_variants_and_rejects_lookalikes() {
+        use super::find_opening_tag_end;
+        // Plain <head>.
+        let html = "<!DOCTYPE html><html><head><link href=\"a.css\"></head></html>";
+        let idx = find_opening_tag_end(html, "head").unwrap();
+        assert_eq!(&html[..idx], "<!DOCTYPE html><html><head>");
+        // <head> with attributes; case-insensitive.
+        let html = "<HTML><HEAD profile=\"x\"><title>t</title></HEAD></HTML>";
+        let idx = find_opening_tag_end(html, "head").unwrap();
+        assert_eq!(&html[..idx], "<HTML><HEAD profile=\"x\">");
+        // <header> must NOT match "head"; </head> must not match either.
+        assert_eq!(find_opening_tag_end("<body><header>x</header></body>", "head"), None);
+        assert_eq!(find_opening_tag_end("</head>", "head"), None);
+        // Fallback target: <html> without a <head>.
+        let html = "<html><body>hi</body></html>";
+        let idx = find_opening_tag_end(html, "html").unwrap();
+        assert_eq!(&html[..idx], "<html>");
+        // Nothing to find in a fragment.
+        assert_eq!(find_opening_tag_end("<p>hi</p>", "head"), None);
+    }
+
+    #[test]
+    fn base_href_encodes_spaces_as_percent20_not_plus() {
+        // A Windows path containing a space (the real-world failure case).
+        let dir = r"C:\Users\sam\Real Projects\spacron\website";
+        let encoded = encode_dir_for_base_href(dir);
+        // Space must be %20 so it survives percent_decode_str on the way back.
+        assert!(encoded.contains("Real%20Projects"), "got: {encoded}");
+        assert!(!encoded.contains('+'), "got: {encoded}");
+        // Separators and drive-letter colon are preserved as real URL path parts.
+        assert!(encoded.starts_with("C:/Users/sam/"), "got: {encoded}");
+        assert!(!encoded.contains('\\'), "got: {encoded}");
+    }
+
+    #[test]
+    fn base_href_resource_url_round_trips_through_percent_decode() {
+        // Simulate the browser resolving `style.css` against the injected base
+        // and the server decoding the captured wildcard path back to disk form.
+        let dir = r"C:\Users\sam\Real Projects\spacron\website";
+        let encoded = encode_dir_for_base_href(dir);
+        let resource_path = format!("{encoded}/style.css");
+        let decoded = percent_encoding::percent_decode_str(&resource_path)
+            .decode_utf8()
+            .unwrap()
+            .into_owned();
+        assert_eq!(
+            decoded,
+            "C:/Users/sam/Real Projects/spacron/website/style.css"
+        );
+    }
+
+    #[test]
+    fn base_href_keeps_separators_for_parent_references() {
+        // `../` in the page must be able to escape into a sibling directory, so
+        // the directory has to be many segments, not one opaque blob.
+        let encoded = encode_dir_for_base_href(r"C:\a\b\website");
+        assert_eq!(encoded.matches('/').count(), 3, "got: {encoded}");
+    }
 
     fn headers_with_origin(origin: Option<&str>) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -2201,5 +3167,209 @@ mod tests {
             "content-security-policy"
         ));
         assert!(!super::should_strip_preview_header("cache-control"));
+    }
+}
+
+/// End-to-end tests for the `/local-file` preview routes: build the same Router
+/// the proxy serves, bind it on a real loopback port, and drive it with an HTTP
+/// client exactly like the preview WebView does — HTML document via
+/// `/local-file?path=…`, then its subresources via the injected `<base>` href.
+#[cfg(test)]
+mod local_file_e2e {
+    use super::*;
+    use axum::routing::any;
+    use std::sync::RwLock;
+
+    /// Mirror of `start_proxy`'s router, minus the Tauri runtime.
+    async fn spawn_test_proxy(project_root: Option<std::path::PathBuf>) -> u16 {
+        let state = ProxyState {
+            target_port: Arc::new(Mutex::new(5173)),
+            preferred_local_host: Arc::new(Mutex::new(None)),
+            active_external_origins: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_project_id: Arc::new(RwLock::new(None)),
+            project_root: Arc::new(RwLock::new(project_root)),
+            external_origin_fallback: true,
+            client: preview_http_client(),
+            local_client: preview_local_http_client(),
+        };
+        let app = Router::new()
+            .route("/local-file", any(serve_local_file))
+            .route("/local-file/{*file_path}", any(serve_local_file_path))
+            .fallback(any(proxy_handler))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test proxy");
+        let port = listener.local_addr().expect("local addr").port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        port
+    }
+
+    fn test_client() -> Client {
+        // no_proxy: keep loopback requests off any system/env HTTP proxy.
+        Client::builder().no_proxy().build().expect("client")
+    }
+
+    /// Canonicalize + clean the way `workspace_open_project` produces the root
+    /// the frontend later hands to `preview_set_project_root`.
+    fn canonical_root(path: &std::path::Path) -> std::path::PathBuf {
+        crate::commands::clean_path_buf(std::fs::canonicalize(path).expect("canonicalize root"))
+    }
+
+    fn local_file_url(port: u16, file: &std::path::Path) -> String {
+        let query: String = form_urlencoded::Serializer::new(String::new())
+            .append_pair("path", file.to_string_lossy().as_ref())
+            .finish();
+        format!("http://127.0.0.1:{port}/local-file?{query}")
+    }
+
+    fn extract_base_href(html: &str) -> String {
+        let start = html.find("<base href=\"").expect("base tag injected") + "<base href=\"".len();
+        let end = html[start..].find('"').expect("closing quote") + start;
+        html[start..end].to_string()
+    }
+
+    #[tokio::test]
+    async fn serves_html_document_and_relative_subresources() {
+        // Directory names include spaces to mirror real-world roots like
+        // "Real Projects" — the encoding path this feature originally broke on.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = canonical_root(tmp.path());
+        let site = root.join("site pages");
+        std::fs::create_dir_all(site.join("img")).unwrap();
+        std::fs::write(
+            site.join("index.html"),
+            "<!DOCTYPE html><html><head><link rel=\"stylesheet\" href=\"styles.css\"></head>\
+             <body><img src=\"img/logo.svg\"><script src=\"../shared.js\"></script></body></html>",
+        )
+        .unwrap();
+        std::fs::write(site.join("styles.css"), "body { color: teal; }").unwrap();
+        std::fs::write(site.join("img").join("logo.svg"), "<svg></svg>").unwrap();
+        std::fs::write(root.join("shared.js"), "console.log('shared')").unwrap();
+
+        let port = spawn_test_proxy(Some(root.clone())).await;
+        let client = test_client();
+
+        // 1. The HTML document, requested the way `previewLocalFile` builds it.
+        let doc_url = local_file_url(port, &site.join("index.html"));
+        let resp = client.get(&doc_url).send().await.expect("doc request");
+        assert_eq!(resp.status(), 200, "document should serve");
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(content_type.contains("text/html"), "got: {content_type}");
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("stylesheet"), "original HTML preserved");
+
+        // The <base> must be parsed BEFORE the stylesheet <link>: browsers only
+        // apply a base to elements that come after it, so a base injected at the
+        // end of <head> leaves the CSS resolving against the document URL and
+        // the page renders unstyled.
+        let base_pos = body.find("<base href=").expect("base tag present");
+        let link_pos = body.find("<link").expect("stylesheet link present");
+        assert!(
+            base_pos < link_pos,
+            "<base> must precede the stylesheet <link> or the browser ignores it for that link"
+        );
+
+        // 2. The injected <base> must resolve this document's relative URLs.
+        let base = extract_base_href(&body);
+        let base_url = url::Url::parse(&base).expect("base href parses");
+
+        // Same-directory stylesheet.
+        let css = client
+            .get(base_url.join("styles.css").unwrap())
+            .header("sec-fetch-dest", "style")
+            .send()
+            .await
+            .expect("css request");
+        assert_eq!(css.status(), 200, "stylesheet should serve via base href");
+        assert_eq!(css.text().await.unwrap(), "body { color: teal; }");
+
+        // Nested image.
+        let img = client
+            .get(base_url.join("img/logo.svg").unwrap())
+            .send()
+            .await
+            .expect("img request");
+        assert_eq!(img.status(), 200, "nested image should serve");
+
+        // Parent-directory reference (`../shared.js`) — needs the base href to
+        // keep `/` as segment separators so `..` resolves to the real sibling.
+        let js = client
+            .get(base_url.join("../shared.js").unwrap())
+            .send()
+            .await
+            .expect("js request");
+        assert_eq!(js.status(), 200, "parent-relative script should serve");
+        assert_eq!(js.text().await.unwrap(), "console.log('shared')");
+    }
+
+    #[tokio::test]
+    async fn refuses_files_outside_the_project_root() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let outside = tempfile::TempDir::new().expect("outside tempdir");
+        let root = canonical_root(tmp.path());
+        let secret = outside.path().join("secret.html");
+        std::fs::write(&secret, "<html>secret</html>").unwrap();
+
+        let port = spawn_test_proxy(Some(root)).await;
+        let client = test_client();
+
+        // Query form.
+        let resp = client
+            .get(local_file_url(port, &secret))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), 403, "outside-root file must be refused");
+
+        // Wildcard (base-href) form.
+        let encoded = encode_dir_for_base_href(&secret.to_string_lossy());
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/local-file/{encoded}"))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), 403, "wildcard route must refuse too");
+    }
+
+    #[tokio::test]
+    async fn requires_a_project_root_before_serving() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let file = tmp.path().join("index.html");
+        std::fs::write(&file, "<html></html>").unwrap();
+
+        let port = spawn_test_proxy(None).await;
+        let client = test_client();
+        let resp = client
+            .get(local_file_url(port, &file))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), 400, "no root set → refuse with 400");
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("No project open"), "friendly error page");
+    }
+
+    #[tokio::test]
+    async fn missing_file_gets_styled_not_found_page() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = canonical_root(tmp.path());
+        let port = spawn_test_proxy(Some(root.clone())).await;
+        let client = test_client();
+        let resp = client
+            .get(local_file_url(port, &root.join("gone.html")))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), 404);
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("File not found"));
     }
 }

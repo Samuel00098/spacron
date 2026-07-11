@@ -36,11 +36,12 @@ notify = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 portable-pty = "0.8"
 axum = { version = "0.8.9", features = ["ws"] }
-reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli"] }
+reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli", "cookies"] }
 tokio-tungstenite = "0.29.0"
 futures-util = "0.3.32"
 sha2 = "0.10"
 url = "2"
+percent-encoding = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 ignore = "0.4"
