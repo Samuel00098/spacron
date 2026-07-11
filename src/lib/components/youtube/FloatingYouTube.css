@@ -44,12 +44,9 @@
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18), /* dark bottom rim shade */
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   transition: 
-    width 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-    height 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    /* Ease the whole-panel fade driven by the transparency slider. */
     opacity 140ms ease;
 }
 
