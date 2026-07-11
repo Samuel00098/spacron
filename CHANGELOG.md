@@ -20,6 +20,10 @@ A release featuring agent team roles with a shared mailbox, the Grok CLI as a ne
 - **YouTube search improvements** — Updated the InnerTube search parameters so that album and playlist searches return actual albums and playlists.
 - **Website download route** — New `/download` route on the website that detects your OS and redirects straight to the right installer from the latest GitHub release, falling back to the releases page when no matching asset exists.
 
+### Changed — License
+
+- **Relicensed to proprietary** — Spacron is now closed-source, proprietary software (© Samuel Solesi, all rights reserved), replacing Apache-2.0. The `LICENSE` file, README, CONTRIBUTING, `package.json`, `Cargo.toml`, and website footer are updated to match. Versions published under earlier licenses remain available under those terms.
+
 ### Changed
 
 - **Removed the terminal layout picker** — The preset layout dropdown in the terminal toolbar is gone; pane arrangements are now built directly by splitting (right/below) and dragging panes.

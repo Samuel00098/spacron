@@ -52,4 +52,4 @@ src/lib/services/     # Frontend services (voice, keychain, etc.)
 
 ## License
 
-Spacron is open source under the **Apache License 2.0** (see [LICENSE](LICENSE)). By contributing, you agree that your contributions will be licensed under the same license.
+Spacron is **proprietary software** (see [LICENSE](LICENSE)). By contributing, you assign all right, title, and interest in your contribution to Samuel Solesi, who may use, modify, and distribute it under any terms.

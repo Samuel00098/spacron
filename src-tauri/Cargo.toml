@@ -4,7 +4,8 @@ version = "0.6.5"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"
-license = "Apache-2.0"
+license-file = "../LICENSE"
+publish = false
 default-run = "spacron"
 
 [lib]

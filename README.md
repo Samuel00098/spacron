@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Proprietary-red" alt="License"></a>
   <img src="https://img.shields.io/badge/Tauri-2-blue?logo=tauri" alt="Tauri">
   <img src="https://img.shields.io/badge/Rust-2021-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/React-19-blue?logo=react" alt="React">
@@ -124,6 +124,6 @@ npm run tauri dev
 
 ## 📄 License
 
-Spacron is open source under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for the full terms.
+Spacron is **proprietary software**. All rights reserved — see the [LICENSE](LICENSE) file for the full terms. The source code may not be copied, modified, or redistributed without written permission.
 
 Copyright © 2026 Samuel Solesi

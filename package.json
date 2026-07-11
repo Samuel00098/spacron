@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "version": "node scripts/sync-version.js && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml"
   },
-  "license": "Apache-2.0",
+  "private": true,
+  "license": "UNLICENSED",
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",

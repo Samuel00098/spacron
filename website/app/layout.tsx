@@ -37,16 +37,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="nav-links">
               <a href="/#features">Features</a>
               <Link href="/changelog">Changelog</Link>
-              <a href="https://github.com/Samuel00098/spacron" target="_blank" rel="noopener noreferrer">
-                GitHub
+              <a href="https://github.com/Samuel00098/spacron-releases/releases" target="_blank" rel="noopener noreferrer">
+                Releases
               </a>
             </div>
           </nav>
           <main>{children}</main>
           <footer className="footer">
             <p>
-              Spacron &middot; Apache 2.0 &middot;
-              <a href="https://github.com/Samuel00098/spacron" target="_blank" rel="noopener noreferrer"> GitHub</a>
+              Spacron &middot; &copy; 2026 Samuel Solesi. All rights reserved. &middot;
+              <a href="https://github.com/Samuel00098/spacron-releases/releases" target="_blank" rel="noopener noreferrer"> Releases</a>
             </p>
           </footer>
         </div>
