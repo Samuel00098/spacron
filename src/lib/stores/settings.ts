@@ -102,6 +102,7 @@ export const enableLsp = persistentWritable('enableLsp', true);
 // Explorer
 export const showHidden = persistentWritable('showHidden', false);
 export const showSnapshotsTab = persistentWritable('showSnapshotsTab', false);
+export const siteUrl = persistentWritable('siteUrl', '');
 
 // Notifications
 export const notificationsEnabled = persistentWritable('notificationsEnabled', true);
@@ -683,6 +684,19 @@ export const voiceReplyProvider = persistentWritable<AiProviderId>('voiceReplyPr
 export const ttsVoice = persistentWritable<string>('ttsVoice', 'austin');
 
 /**
+ * Spoken-reply pacing and tone for the classic pipeline TTS. Which one takes
+ * effect depends on the OpenAI/OpenRouter speech model, mirroring OpenAI's API:
+ * - `voiceReplyTtsSpeed` (0.25–4.0) applies to the classic `tts-1`/`tts-1-hd`
+ *   models, which accept a dedicated `speed` param.
+ * - `voiceReplyTtsInstructions` applies to `gpt-4o-mini-tts` (the default),
+ *   which ignores `speed` and instead takes free-text pacing/emotion guidance
+ *   (e.g. "Warm, upbeat pair-programming tone at a brisk pace").
+ * Both are ignored by providers/models that don't support them.
+ */
+export const voiceReplyTtsSpeed = persistentWritable<number>('voiceReplyTtsSpeed', 1);
+export const voiceReplyTtsInstructions = persistentWritable<string>('voiceReplyTtsInstructions', '');
+
+/**
  * Which engine powers the hands-free voice conversation:
  * - 'pipeline': the classic STT → orchestrator brain → TTS loop, works with
  *   any configured provider combination.
@@ -1179,6 +1193,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceConversationTtsModelByProvider': voiceConversationTtsModelByProvider.set(value as Record<string, string>); break;
     case 'voiceConversationTtsVoiceByProvider': voiceConversationTtsVoiceByProvider.set(value as Record<string, string>); break;
     case 'voiceReplyProvider': voiceReplyProvider.set(value as AiProviderId); break;
+    case 'voiceReplyTtsSpeed': voiceReplyTtsSpeed.set(value as number); break;
+    case 'voiceReplyTtsInstructions': voiceReplyTtsInstructions.set(value as string); break;
     case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
     case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
@@ -1196,6 +1212,7 @@ export function updateSetting(key: string, value: unknown) {
     case 'terminalShell':    terminalShell.set(value as string); break;
     case 'terminalFontSize': terminalFontSize.set(value as number); break;
     case 'terminalRenderer': terminalRenderer.set(value as 'webgl' | 'canvas' | 'dom'); break;
+    case 'siteUrl':          siteUrl.set(value as string); break;
   }
 }
 
@@ -1226,6 +1243,8 @@ export function resetSettingsToDefault() {
   voiceConversationTtsModelByProvider.set({});
   voiceConversationTtsVoiceByProvider.set({});
   voiceReplyProvider.set('groq');
+  voiceReplyTtsSpeed.set(1);
+  voiceReplyTtsInstructions.set('');
   voiceConversationEngine.set('pipeline');
   openaiRealtimeModel.set('gpt-realtime-2.1-mini');
   openaiRealtimeVoice.set('marin');
@@ -1249,6 +1268,6 @@ export function resetSettingsToDefault() {
   terminalScrollback.set(5000);
   terminalFontSize.set(14);
   terminalRenderer.set('canvas');
-
+  siteUrl.set('');
 }
 

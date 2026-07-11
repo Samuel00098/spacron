@@ -1,0 +1,32 @@
+# Vercel only needs `node website/build.mjs` + `website/out/`.
+# Skip everything unrelated to keep the build sandbox lean.
+
+# Rust / Tauri — not used by the website build at all
+src-tauri/
+
+# Pre-built output — rebuilt fresh by build.mjs every time
+dist/
+website/out/
+
+# Scratch / test files committed to the repo root
+*.bin
+enc_headers.txt
+cj.txt
+ytm*.html
+pilot.html
+consent_live.html
+*.png
+
+# Data files only used at runtime by the desktop app
+albums.json
+browse_album.json
+next_album.json
+player.json
+player_live.json
+playlists.json
+search_albums.json
+
+# Docs / local tooling
+docs/
+scripts/
+static/
