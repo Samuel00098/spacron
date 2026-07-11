@@ -102,7 +102,6 @@ export const enableLsp = persistentWritable('enableLsp', true);
 // Explorer
 export const showHidden = persistentWritable('showHidden', false);
 export const showSnapshotsTab = persistentWritable('showSnapshotsTab', false);
-export const siteUrl = persistentWritable('siteUrl', '');
 
 // Notifications
 export const notificationsEnabled = persistentWritable('notificationsEnabled', true);
@@ -1212,7 +1211,6 @@ export function updateSetting(key: string, value: unknown) {
     case 'terminalShell':    terminalShell.set(value as string); break;
     case 'terminalFontSize': terminalFontSize.set(value as number); break;
     case 'terminalRenderer': terminalRenderer.set(value as 'webgl' | 'canvas' | 'dom'); break;
-    case 'siteUrl':          siteUrl.set(value as string); break;
   }
 }
 
@@ -1268,6 +1266,5 @@ export function resetSettingsToDefault() {
   terminalScrollback.set(5000);
   terminalFontSize.set(14);
   terminalRenderer.set('canvas');
-  siteUrl.set('');
 }
 

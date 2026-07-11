@@ -201,7 +201,6 @@ function createSettingsState() {
     terminalFontSize: persistentValue('terminalFontSize', 14),
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
-    siteUrl: persistentValue('siteUrl', ''),
   };
 }
 
@@ -300,7 +299,6 @@ const defaults: SettingsValues = {
   terminalFontSize: 14,
   terminalRenderer: 'canvas',
   showSnapshotsTab: false,
-  siteUrl: '',
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({
@@ -355,7 +353,6 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
       showSnapshotsTab: 'showSnapshotsTab',
-      siteUrl: 'siteUrl',
     };
     const stateKey = setters[key];
     if (stateKey) {

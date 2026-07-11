@@ -70,7 +70,6 @@ import {
   xaiRealtimeVoice,
   xaiRealtimeVoiceOptions,
   wordWrap,
-  siteUrl,
   type AiModelOption,
   type AiProviderId,
   type KeyboardShortcut,
@@ -690,7 +689,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentEnableLsp = useStore(enableLsp);
   const currentShowHidden = useStore(showHidden);
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
-  const currentSiteUrl = useStore(siteUrl);
   const currentNotifications = useStore(notificationsEnabled);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
@@ -2321,17 +2319,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     )}
                   </div>
                   {updateMessage && <p className="settings-message">{updateMessage}</p>}
-                </Section>
-
-                <Section title="Website">
-                  <SettingRow title="Site URL / Domain" detail="Domain for the marketing site and changelogs. Falls back to https://spacron.vercel.app if empty.">
-                    <input 
-                      value={currentSiteUrl} 
-                      onChange={(event) => siteUrl.set(event.target.value)} 
-                      placeholder="https://spacron.vercel.app" 
-                      spellCheck={false} 
-                    />
-                  </SettingRow>
                 </Section>
 
                 <Section title="Maintenance">
