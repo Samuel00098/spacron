@@ -21,20 +21,13 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#100C08',
+  themeColor: '#0e0e0e',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+      <head />
       <body>
         <div className="container">
           <nav className="nav">
