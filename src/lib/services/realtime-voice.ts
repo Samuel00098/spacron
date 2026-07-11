@@ -458,9 +458,13 @@ export async function startRealtimeVoiceSession(options: {
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      const localSdp = offer.sdp ?? pc.localDescription?.sdp ?? '';
+      if (!localSdp.trim().startsWith('v=0')) {
+        throw new Error('Could not create a valid SDP offer.');
+      }
 
       const answerSdp = await invoke<string>('openai_realtime_connect', {
-        offerSdp: offer.sdp ?? '',
+        offerSdp: localSdp,
         model,
         voice,
         instructions,
@@ -579,3 +583,4 @@ export async function startRealtimeVoiceSession(options: {
     announce,
   };
 }
+

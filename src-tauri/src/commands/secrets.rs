@@ -485,6 +485,32 @@ fn build_audio_transcription_multipart_body(
     body
 }
 
+
+fn openai_realtime_offer_is_plausible(offer_sdp: &str) -> bool {
+    let mut saw_version = false;
+    let mut saw_origin = false;
+    let mut saw_session_name = false;
+    let mut saw_timing = false;
+    let mut saw_media = false;
+
+    for line in offer_sdp.lines() {
+        let line = line.trim_end();
+        if line == "v=0" {
+            saw_version = true;
+        } else if line.starts_with("o=") {
+            saw_origin = true;
+        } else if line.starts_with("s=") {
+            saw_session_name = true;
+        } else if line.starts_with("t=") {
+            saw_timing = true;
+        } else if line.starts_with("m=") {
+            saw_media = true;
+        }
+    }
+
+    saw_version && saw_origin && saw_session_name && saw_timing && saw_media
+}
+
 fn keychain_username(provider: &str) -> String {
     format!("{provider}_api_key")
 }
@@ -1729,10 +1755,12 @@ pub async fn openai_realtime_connect(
         return Err("Invalid voice id".to_string());
     }
     let offer_sdp = offer_sdp.trim().to_string();
-    // An SDP offer always starts with a version line; anything else is garbage.
-    if !offer_sdp.starts_with("v=") || offer_sdp.len() > 65_536 {
+    if offer_sdp.len() > 65_536 || !openai_realtime_offer_is_plausible(&offer_sdp) {
         return Err("Invalid SDP offer".to_string());
     }
+    // OpenAI's SDP parser (pion) errors with `EOF` when the final line lacks a
+    // newline; browsers terminate every SDP line, but trim() above strips it.
+    let offer_sdp = format!("{offer_sdp}\r\n");
     let tools = match tools {
         Some(serde_json::Value::Array(items)) => serde_json::Value::Array(items),
         Some(serde_json::Value::Null) | None => serde_json::Value::Array(Vec::new()),
@@ -1756,32 +1784,17 @@ pub async fn openai_realtime_connect(
         "tool_choice": "auto"
     });
 
-    // reqwest's `multipart` feature isn't enabled; hand-roll the form body the
-    // same way the audio-transcription path does.
-    let boundary = "spacron-openai-realtime-boundary";
-    let mut body = Vec::new();
-    body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\n{offer_sdp}\r\n")
-            .as_bytes(),
-    );
-    body.extend_from_slice(
-        format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{}\r\n",
-            session
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-
     let client = shared_http_client(Duration::from_secs(30))?;
     let response = client
         .post("https://api.openai.com/v1/realtime/calls")
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
+        // Plain text fields with no per-part content type, exactly like the
+        // `FormData.set("sdp", …)` example in OpenAI's WebRTC guide.
+        .multipart(
+            reqwest::multipart::Form::new()
+                .text("sdp", offer_sdp)
+                .text("session", session.to_string()),
         )
-        .body(body)
         .send()
         .await
         .map_err(|err| safe_request_error("Failed to contact OpenAI Realtime", err))?;
