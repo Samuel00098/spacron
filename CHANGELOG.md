@@ -3,6 +3,23 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.5] - 2026-07-11
+
+A release featuring new preset themes, background customization, YouTube Music enhancements, and automatic Vercel domain detection.
+
+### Added
+
+- **Preset themes & 4K backgrounds** — Added 4 new preset themes with corresponding 4K background images (including 2 light and 2 dark 4K WebP backgrounds) to provide rich, visual aesthetics.
+- **Embedded YouTube Music playback** — Made embedded YouTube Music playable by implementing a cookie jar, request bridge, and server-side consent resolution. A keyless player is now the default for Music mode.
+- **YouTube search improvements** — Updated the InnerTube search parameters so that album and playlist searches return actual albums and playlists.
+
+### Changed
+
+- **Vercel domain detection** — Removed the manual `siteUrl` setting UI in favor of automatic Vercel domain detection.
+- **Project cleanup** — Removed the legacy `site/` directory to deploy the `website/` directory directly, and added `.vercelignore`.
+- **Rebranded website landing page** — Rebranded the landing page under `website/` to a minimal cnvs.dev-style design.
+
+
 ## [v0.6.4] - 2026-07-09
 
 An orchestration release: the voice/orchestrator brain can now plan a large task and fan the sub-tasks out to your already-running agents, the prompt bar shows live agent task cards, voice replies can speak through xAI, and the conversational brain confirms before it acts.
