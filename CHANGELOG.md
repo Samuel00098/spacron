@@ -3,9 +3,9 @@
 All notable changes to Spacron will be documented here.
 
 
-## [v0.6.5] - 2026-07-11
+## [v0.6.6] - 2026-07-11
 
-A release featuring agent team roles with a shared mailbox, the Grok CLI as a new built-in agent, opt-in remote auto-reconnect, new preset themes, background customization, YouTube Music enhancements, a rebuilt website with a smart download route, and automatic Vercel domain detection.
+A release featuring agent team roles with a shared mailbox, the Grok CLI as a new built-in agent, opt-in remote auto-reconnect, local HTML preview, TTS pacing controls, a downloadable website, and a proprietary license.
 
 ### Added
 
@@ -15,9 +15,6 @@ A release featuring agent team roles with a shared mailbox, the Grok CLI as a ne
 - **Start a project from nothing** — You can now create a brand-new empty folder and open it as a project in one step, from the welcome screen, empty workspace, and Project HUD — no need to make the folder outside the app first.
 - **Local HTML file preview** — The preview panel can open an HTML file straight off disk through the background proxy's `/local-file` route, with the proxy port rebuilt on restore so persisted preview tabs survive app restarts.
 - **TTS pacing & tone controls** — Voice replies gain per-model pacing: a playback speed for `tts-1`/`tts-1-hd` and free-text pacing/emotion instructions for `gpt-4o-mini-tts`, gated per model in Rust so unsupported providers never receive a bad field.
-- **Preset themes & 4K backgrounds** — Added 4 new preset themes with corresponding 4K background images (including 2 light and 2 dark 4K WebP backgrounds) to provide rich, visual aesthetics.
-- **Embedded YouTube Music playback** — Made embedded YouTube Music playable by implementing a cookie jar, request bridge, and server-side consent resolution. A keyless player is now the default for Music mode.
-- **YouTube search improvements** — Updated the InnerTube search parameters so that album and playlist searches return actual albums and playlists.
 - **Website download route** — New `/download` route on the website that detects your OS and redirects straight to the right installer from the latest GitHub release, falling back to the releases page when no matching asset exists.
 
 ### Changed — License
@@ -27,16 +24,30 @@ A release featuring agent team roles with a shared mailbox, the Grok CLI as a ne
 ### Changed
 
 - **Removed the terminal layout picker** — The preset layout dropdown in the terminal toolbar is gone; pane arrangements are now built directly by splitting (right/below) and dragging panes.
-- **Vercel domain detection** — Removed the manual `siteUrl` setting UI in favor of automatic Vercel domain detection.
-- **Project cleanup** — Removed the legacy `site/` directory to deploy the `website/` directory directly, and added `.vercelignore`.
 - **Rebuilt website** — The landing page under `website/` was rebuilt as a Next.js app: first with a minimal cnvs.dev-style dark theme, then restyled with the app's own colors and a full-width layout. The in-app changelog link now points at the new deployment.
-
 - **Prompt bar input** — The floating prompt bar's input and voice transcript now grow up to three lines and then scroll, keeping the newest words in view while you speak.
 
 ### Fixed
 
 - **Website metadata** — Removed a stray `<head/>` tag that broke Next.js metadata rendering, and corrected the Linux download asset name.
 - **Connectivity probe hardening** — The remote "is it online?" probe now refuses link-local and cloud-metadata hosts, matching the guard already applied to authenticated AI requests, so a tampered base URL can't be used as a reachability oracle for internal hosts.
+
+
+## [v0.6.5] - 2026-07-11
+
+A release featuring new preset themes, background customization, YouTube Music enhancements, and automatic Vercel domain detection.
+
+### Added
+
+- **Preset themes & 4K backgrounds** — Added 4 new preset themes with corresponding 4K background images (including 2 light and 2 dark 4K WebP backgrounds) to provide rich, visual aesthetics.
+- **Embedded YouTube Music playback** — Made embedded YouTube Music playable by implementing a cookie jar, request bridge, and server-side consent resolution. A keyless player is now the default for Music mode.
+- **YouTube search improvements** — Updated the InnerTube search parameters so that album and playlist searches return actual albums and playlists.
+
+### Changed
+
+- **Vercel domain detection** — Removed the manual `siteUrl` setting UI in favor of automatic Vercel domain detection.
+- **Project cleanup** — Removed the legacy `site/` directory to deploy the `website/` directory directly, and added `.vercelignore`.
+- **Rebranded website landing page** — Rebranded the landing page under `website/` to a minimal cnvs.dev-style design.
 
 
 ## [v0.6.4] - 2026-07-09
