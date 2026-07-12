@@ -3,6 +3,17 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.8] - 2026-07-12
+
+A patch release that makes realtime voice mode actually usable — spoken commands now execute instead of being swallowed by a confirmation gate, and OpenAI Realtime calls no longer fail to connect — plus persistent file-explorer selection across app restarts.
+
+### Fixed
+
+- **Realtime voice commands execute** — spoken commands through the GPT/Grok Realtime engines ("open Claude Code") were acknowledged but never ran: the voice model rephrases everything before it reaches the orchestrator, so the confirmation gate waited for a literal "yes" that could never arrive. The realtime bridge now executes tool calls immediately, and the voice model is instructed to confirm ambiguous or destructive requests verbally first; the classic voice pipeline keeps the orchestrator-side gate.
+- **OpenAI Realtime calls connect again** — every realtime call was rejected with `400 invalid_offer` because trimming the SDP offer stripped the trailing newline OpenAI's parser requires. The terminator is restored after validation, with added SDP plausibility checks on both the renderer and Rust sides.
+- **Explorer selection survives restarts** — the file you last clicked in the explorer and your expanded folders are now saved with the rest of the per-project state, so reopening the app restores exactly what you had selected (previously the selection only survived project switches within a session).
+
+
 ## [v0.6.7] - 2026-07-11
 
 A release focused on the YouTube Music experience and custom shortcut rework: the embedded music.youtube.com site is gone in favor of a refined keyless player, the side-by-side responsive tracklist, and persistent playback state. Custom shortcuts shift from terminal commands to app actions, dropdowns gain modal-safe boundary detection, and various UI polish rounds out the release.
