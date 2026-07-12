@@ -210,6 +210,8 @@ interface PersistedProjectState {
   openFiles: string[];
   activeFile: string | null;
   expandedPaths: string[];
+  /** Explorer's active (last-clicked) entry, restored after an app restart. */
+  selectedPath?: string | null;
   terminalLayout?: string;
   terminalPanes?: PersistedTerminalPane[];
   /** The workspace's ambient room arrangement (Focus / Split / Gallery). */
@@ -275,6 +277,7 @@ function saveProjectStateToStorage(projectId: string) {
     openFiles: get(openFiles).slice(0, 100),
     activeFile: get(activeFile),
     expandedPaths: Array.from(get(expandedPaths)).slice(0, 500),
+    selectedPath: get(selectedPath),
     terminalLayout: 'single',
     terminalPanes,
     ambient: get(layoutSnapshot).ambient,
@@ -330,6 +333,8 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   const expandedPaths = Array.isArray(r.expandedPaths)
     ? (r.expandedPaths as unknown[]).filter(isSafePath)
     : [];
+
+  const selectedPath = isSafePath(r.selectedPath) ? r.selectedPath : null;
 
   // cwd: must be a safe path; role: alphanumeric + common separators only, no control chars
   const rawPanes = Array.isArray(r.terminalPanes) ? r.terminalPanes : [];
@@ -412,7 +417,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, terminalPanes, terminalLayout, ambient, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, layout, preview };
 }
 
 function loadProjectStateFromStorage(projectId: string): PersistedProjectState | null {
@@ -600,8 +605,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         if (hadEditorFiles) {
           if (generation !== restoreProjectStateGeneration) return;
           await restoreEditorFiles(persisted.openFiles, persisted.activeFile);
-          expandedPaths.set(new Set(persisted.expandedPaths));
         }
+        if (generation !== restoreProjectStateGeneration) return;
+        expandedPaths.set(new Set(persisted.expandedPaths));
+        selectedPath.set(persisted.selectedPath ?? null);
+        selectedPaths.set(new Set(persisted.selectedPath ? [persisted.selectedPath] : []));
 
         if (persisted.preview) {
           if (generation !== restoreProjectStateGeneration) return;
