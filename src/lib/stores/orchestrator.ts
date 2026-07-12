@@ -1956,6 +1956,10 @@ export async function sendChatMessage(
         appState: getAppContextSnapshot(projectId, rootPath),
         llmConfig,
         conversational: !!opts?.voiceConversation,
+        // The realtime bridge (skipConfirmation) runs actions the moment the
+        // brain returns them — tell the brain so it replies declaratively
+        // instead of asking a "want me to go ahead?" it can't honor.
+        confirmationGated: !opts?.skipConfirmation,
       });
     } catch (err) {
       console.error('Orchestrator routing error:', err);
