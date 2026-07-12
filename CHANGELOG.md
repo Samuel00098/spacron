@@ -3,6 +3,19 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.9] - 2026-07-12
+
+A patch release that removes the voice-mode confirmation gate entirely. The assistant no longer performs an action and then asks "want me to go ahead?" — every action executes immediately, and spoken replies state what's happening instead of asking permission for something that already ran.
+
+### Fixed
+
+- **Actions no longer run before their confirmation** — the old confirmation hold only ever covered spawn/send/close, so app-control actions (navigate, open a file, preview, run, settings) always executed immediately while the voice assistant was instructed to reply with a confirmation question — "open X" opened X and *then* asked. On the realtime engines the hold couldn't resolve at all, since the voice model rephrases speech and a literal "yes" never arrives. The gate is removed on every path, so the app never again asks you to approve something it already did.
+
+### Changed
+
+- **Voice assistant acts immediately and speaks declaratively** — the orchestrator brain is now told that every action it returns executes the moment it's returned; when it genuinely needs permission or clarification, it asks first with no actions attached and acts on the next turn. A code-side backstop rewrites any leftover "want me to go ahead?"-style reply into a declarative acknowledgement ("On it — launching Claude.") so what you hear can never contradict what happened.
+
+
 ## [v0.6.8] - 2026-07-12
 
 A patch release that makes realtime voice mode actually usable — spoken commands now execute instead of being swallowed by a confirmation gate, and OpenAI Realtime calls no longer fail to connect — plus persistent file-explorer selection across app restarts.
