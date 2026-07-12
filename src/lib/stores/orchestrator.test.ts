@@ -723,6 +723,24 @@ describe('orchestrator chat actions', () => {
     expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
   });
 
+  it('does NOT gate spawns when the realtime voice bridge passes skipConfirmation', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Handing this to Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    // The realtime model rephrases requests, so the user's literal "yes" can
+    // never reach us — the spawn must run on the same turn.
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module', {
+      voiceConversation: true,
+      skipConfirmation: true,
+    });
+
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)).toHaveLength(1);
+  });
+
   it('does NOT gate spawns outside voice mode (typed dispatch stays immediate)', async () => {
     routeOrchestratorRequest.mockResolvedValue({
       reply: 'Handing this to Claude.',

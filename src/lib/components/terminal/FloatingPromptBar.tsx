@@ -96,6 +96,7 @@ const REALTIME_VOICE_INSTRUCTIONS = [
   'Personality: a sharp, friendly pair-programming partner. Sound natural and conversational — contractions, brief reactions, no corporate filler.',
   'Keep spoken replies short: one to three sentences unless the user asks for detail. Never read code, file paths, or long output aloud verbatim — summarize what it means instead.',
   'Whenever the user wants project work done or asked about — spawning or closing agents, giving an agent a task, checking progress or output, navigating the app — call the spacron_orchestrator tool with a clear standalone request, then relay its answer conversationally. For casual conversation, just talk; do not call the tool.',
+  'Calling the tool executes the request immediately — there is no separate confirmation step after it. When the user clearly asked for something, call the tool right away instead of only saying you will. Only ask a clarifying question first when the request is ambiguous or destructive (like closing agents).',
   'If a tool result is long, give the gist and offer to go deeper.',
 ].join('\n');
 
@@ -707,6 +708,10 @@ export default function FloatingPromptBar() {
       await sendChatMessage(project.id, project.root_path, request, {
         forcedAgent: get(agentForcedAgent),
         voiceConversation: true,
+        // The realtime model rephrases every request, so the orchestrator's
+        // "yes"/"no" confirmation round-trip can never complete — the model
+        // confirms with the user verbally before calling the tool instead.
+        skipConfirmation: true,
       });
     } finally {
       setAgentSending(false);

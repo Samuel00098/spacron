@@ -1852,12 +1852,24 @@ function confirmationQuestion(actions: OrchestratorAction[], reply: string): str
  * brain decides to act — creates a task and launches the chosen agent.
  *
  * `forcedAgent` (a preset command, or 'auto') lets the user override routing.
+ *
+ * `skipConfirmation` bypasses the voice-mode confirmation gate. The realtime
+ * speech-to-speech bridge sets it because the voice model rephrases every
+ * request before it reaches us — the user's literal "yes"/"no" never arrives,
+ * so a held confirmation could never be resolved and actions would just loop
+ * back into another hold. That bridge's model confirms with the user verbally
+ * before calling its tool instead.
  */
 export async function sendChatMessage(
   projectId: string,
   rootPath: string,
   text: string,
-  opts?: { projectName?: string; forcedAgent?: string; voiceConversation?: boolean }
+  opts?: {
+    projectName?: string;
+    forcedAgent?: string;
+    voiceConversation?: boolean;
+    skipConfirmation?: boolean;
+  }
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed || !projectId) return;
@@ -1900,7 +1912,10 @@ export async function sendChatMessage(
   // When we asked the user to confirm a spawn/send/close last turn, this turn's
   // message is their answer — resolve it here instead of re-routing "yes".
   let resolvingHeld = false;
-  const held = opts?.voiceConversation ? pendingConfirmations.get(projectId) : undefined;
+  const held =
+    opts?.voiceConversation && !opts?.skipConfirmation
+      ? pendingConfirmations.get(projectId)
+      : undefined;
   if (held) pendingConfirmations.delete(projectId);
 
   if (held && DECLINE_RE.test(trimmed)) {
@@ -1954,7 +1969,12 @@ export async function sendChatMessage(
   // In conversational mode, never launch/message/close an agent on the same turn
   // the user asked. Stash the agent-launching actions, ask for a go-ahead, and
   // wait for the user's next message (resolved at the top of this function).
-  if (opts?.voiceConversation && !resolvingHeld && result.actions.some(isAgentAction)) {
+  if (
+    opts?.voiceConversation &&
+    !opts?.skipConfirmation &&
+    !resolvingHeld &&
+    result.actions.some(isAgentAction)
+  ) {
     pendingConfirmations.set(projectId, {
       actions: result.actions,
       reply: result.reply,

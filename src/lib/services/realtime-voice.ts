@@ -84,7 +84,7 @@ const ORCHESTRATOR_TOOL = {
   type: 'function',
   name: 'spacron_orchestrator',
   description:
-    "Send a request to Spacron's agent orchestrator. Use it whenever the user wants project work done or asks about it: spawning/closing AI coding agents (Claude, Codex, Gemini, …), assigning them tasks, checking what agents are doing, reading their output, or navigating the app. Do NOT use it for casual conversation.",
+    "Send a request to Spacron's agent orchestrator. Use it whenever the user wants project work done or asks about it: spawning/closing AI coding agents (Claude, Codex, Gemini, …), assigning them tasks, checking what agents are doing, reading their output, or navigating the app. The orchestrator acts on the request immediately. Do NOT use it for casual conversation.",
   parameters: {
     type: 'object',
     properties: {
