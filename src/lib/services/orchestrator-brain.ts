@@ -158,13 +158,6 @@ export interface RouteContext {
    * conversation and only acts (spawn/send/close) on an explicit request.
    */
   conversational?: boolean;
-  /**
-   * Whether the caller enforces the code-side confirmation hold on agent
-   * actions (classic voice pipeline). False on the realtime bridge, where
-   * returned actions execute immediately — the reply must be declarative,
-   * never a "want me to go ahead?" question. Defaults to true.
-   */
-  confirmationGated?: boolean;
 }
 
 export interface RouteLlmConfig {
@@ -626,8 +619,7 @@ function buildSystemPrompt(
   running: RunningAgentRef[],
   reviewing: RunningAgentRef[],
   conversational = false,
-  profile: string[] = [],
-  confirmationGated = true
+  profile: string[] = []
 ): string {
   const list = agents.map((a) => `- ${a.command} — ${a.name}`).join('\n');
   const runningList = running.length
@@ -739,9 +731,7 @@ function buildSystemPrompt(
           '- DO spawn/send/close or use APP-CONTROL actions when the user clearly asks you to do something — e.g. "fix X", "build Y", "run the tests", "open the preview", "switch to Dracula", "open an agent and add X", "spawn claude to fix Y", "have an agent do Z".',
            '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
            '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
-           ...(confirmationGated
-             ? ['- CONFIRMATION GATE — When the user asks you to spawn, send, or close an agent, INCLUDE the spawn/send/close action as usual AND phrase your "reply" as a short confirmation question that names what you are about to do — e.g. "I\'ll launch Claude to refactor the auth module, want me to go ahead?". The app HOLDS the action and only runs it once the user affirms ("yes", "go ahead", "do it", …) on their next turn, so you never act on the same turn you were asked. Always end such a reply with a question; never claim you have already done it.']
-             : ['- ACTIONS RUN IMMEDIATELY — Any spawn/send/close action you return is executed the moment you return it; there is NO held-action confirmation step. Phrase your "reply" as a short declarative statement of what you are doing — e.g. "Launching Claude to refactor the auth module." NEVER pair an action with a "want me to go ahead?" question; by the time the user hears it, the action has already run. If you truly need permission or clarification first, ask the question with an EMPTY actions array and act on the next turn once they answer.']),
+           '- ACTIONS RUN IMMEDIATELY — Every action you return (spawn/send/close AND app-control like navigate, open-file, preview, run, setting) is executed the moment you return it; there is NO held-action confirmation step. Phrase your "reply" as a short declarative statement of what you are doing — e.g. "Launching Claude to refactor the auth module." NEVER pair an action with a "want me to go ahead?" question; by the time the user hears it, the action has already run. If you truly need permission or clarification first, ask the question with an EMPTY actions array and act on the next turn once they answer.',
            '- TERMINAL OUTPUT SUMMARIZATION — When reporting what an agent did, NEVER read raw terminal output aloud. Paraphrase naturally: say which files changed, what commands were run, whether tests passed, and what state the agent ended in. Use the "Recent agent/task status and terminal output" section above as your source.',
         ]
       : []),
@@ -977,7 +967,7 @@ export async function routeOrchestratorRequest(
     const def = getProviderDef(provider);
     const primaryModel = ctx?.llmConfig?.model ?? get(currentAiModel);
     const modelsToTry = [primaryModel, ...def.models.map((m) => m.id).filter((id) => id !== primaryModel)];
-    const systemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile, ctx?.confirmationGated ?? true);
+    const systemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile);
     const userText = buildUserText(message, ctx);
 
     for (const model of modelsToTry) {

@@ -1786,64 +1786,52 @@ function msgId(): string {
   return `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-// ── Confirmation gate (conversational / voice mode) ─────────────────────────
-// In a spoken conversation the assistant must ASK before it launches, messages,
-// or closes an agent — it should never act on the same turn it was asked. We
-// can't rely on the LLM to withhold the action (it routinely returns the
-// "want me to go ahead?" reply AND the spawn in one response), so the hold is
-// enforced here in code: agent-launching actions are stashed per project, the
-// user is asked, and they only run once the user affirms on the NEXT turn.
-interface PendingConfirmation {
-  actions: OrchestratorAction[];
-  /** The assistant's original (declarative) reply, shown once the user confirms. */
-  reply: string;
-  viaLLM: boolean;
-}
-const pendingConfirmations = new Map<string, PendingConfirmation>();
+// ── Reply/action consistency ─────────────────────────────────────────────────
+// Actions execute the moment the brain returns them — there is no held-action
+// confirmation step on any path. (The old voice-mode hold was removed: the
+// realtime engines rephrase speech so a literal "yes" could never arrive, and
+// app-control actions were never held anyway — so the spoken "want me to?"
+// routinely trailed an action that had already run.) The remaining risk is the
+// LLM pairing actions with a permission question; when it does, the reply is
+// rewritten into a declarative acknowledgement so the user is never asked to
+// approve something that has already happened.
+const PERMISSION_QUESTION_RE =
+  /\b(want me to|should i|shall i|do you want|would you like|may i|can i|ready for me to|say the word|give me the go[- ]?ahead|go ahead)\b/i;
 
-// Affirmations that release a held action. Anchored at the start so a sentence
-// that merely contains "no" or "yes" mid-way isn't misread.
-const AFFIRM_RE =
-  /^\s*(y(es|eah|ep|up|a)?|sure|ok(ay)?|go( ahead| for it| on)?|do it|please do|sounds good|let'?s (do it|go)|absolutely|affirmative|proceed|confirm(ed)?|send it|make it so|fire away)\b/i;
-const DECLINE_RE =
-  /^\s*(no|nope|nah|don'?t|do not|stop|cancel|never ?mind|not (yet|now)|hold off|forget it|leave it|wait)\b/i;
-
-/** True for actions that touch the agent fleet — the ones gated behind a confirm. */
-function isAgentAction(action: OrchestratorAction): boolean {
-  return action.kind === 'spawn' || action.kind === 'send' || action.kind === 'close';
-}
-
-/**
- * A short, natural confirmation question derived from the actions the assistant
- * wants to take. Keeps the LLM's own phrasing when it already asked (reply ends
- * with "?"), otherwise builds a clean standalone question so a declarative reply
- * ("Handing this to Claude.") never contradicts the fact that we're waiting.
- */
-function confirmationQuestion(actions: OrchestratorAction[], reply: string): string {
-  const trimmedReply = reply.trim();
-  if (/\?\s*$/.test(trimmedReply)) return trimmedReply;
-
+/** A short present-progressive description of the actions being executed. */
+function describeActionsInProgress(actions: OrchestratorAction[]): string {
   const spawns = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'spawn' }> => a.kind === 'spawn');
   const sends = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'send' }> => a.kind === 'send');
   const closes = actions.filter((a): a is Extract<OrchestratorAction, { kind: 'close' }> => a.kind === 'close');
 
   const bits: string[] = [];
   if (spawns.length === 1) {
-    bits.push(`launch ${getAgentDisplayName(spawns[0].agent) ?? spawns[0].agent}`);
+    bits.push(`launching ${getAgentDisplayName(spawns[0].agent) ?? spawns[0].agent}`);
   } else if (spawns.length > 1) {
-    bits.push(`launch ${spawns.length} agents`);
+    bits.push(`launching ${spawns.length} agents`);
   }
-  if (sends.length === 1) bits.push(`send that to ${sends[0].target}`);
-  else if (sends.length > 1) bits.push(`dispatch ${sends.length} tasks`);
+  if (sends.length === 1) bits.push(`sending that to ${sends[0].target}`);
+  else if (sends.length > 1) bits.push(`dispatching ${sends.length} tasks`);
   if (closes.length === 1) {
     const t = closes[0].target.toLowerCase();
-    bits.push(t === 'all' || t === 'everything' ? 'close all the agents' : `close ${closes[0].target}`);
+    bits.push(t === 'all' || t === 'everything' ? 'closing all the agents' : `closing ${closes[0].target}`);
   } else if (closes.length > 1) {
-    bits.push('close those agents');
+    bits.push('closing those agents');
   }
 
-  const what = bits.join(' and ') || 'go ahead';
-  return `Want me to ${what}?`;
+  return bits.join(' and ') || 'doing that now';
+}
+
+/**
+ * If the reply is a permission question about actions that are executing right
+ * now, replace it with a declarative acknowledgement. A genuine clarifying
+ * question comes with an EMPTY actions array (per the brain's instructions)
+ * and passes through untouched.
+ */
+function declarativeReply(actions: OrchestratorAction[], reply: string): string {
+  const trimmedReply = reply.trim();
+  if (!/\?\s*$/.test(trimmedReply) || !PERMISSION_QUESTION_RE.test(trimmedReply)) return reply;
+  return `On it — ${describeActionsInProgress(actions)}.`;
 }
 
 /**
@@ -1853,12 +1841,9 @@ function confirmationQuestion(actions: OrchestratorAction[], reply: string): str
  *
  * `forcedAgent` (a preset command, or 'auto') lets the user override routing.
  *
- * `skipConfirmation` bypasses the voice-mode confirmation gate. The realtime
- * speech-to-speech bridge sets it because the voice model rephrases every
- * request before it reaches us — the user's literal "yes"/"no" never arrives,
- * so a held confirmation could never be resolved and actions would just loop
- * back into another hold. That bridge's model confirms with the user verbally
- * before calling its tool instead.
+ * Actions the brain returns execute immediately on every path — there is no
+ * confirmation hold. If the user should be asked first, the brain asks with an
+ * empty actions array and acts on the next turn.
  */
 export async function sendChatMessage(
   projectId: string,
@@ -1868,7 +1853,6 @@ export async function sendChatMessage(
     projectName?: string;
     forcedAgent?: string;
     voiceConversation?: boolean;
-    skipConfirmation?: boolean;
   }
 ): Promise<void> {
   const trimmed = text.trim();
@@ -1909,31 +1893,10 @@ export async function sendChatMessage(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true });
 
   let result: RouteResult;
-  // When we asked the user to confirm a spawn/send/close last turn, this turn's
-  // message is their answer — resolve it here instead of re-routing "yes".
-  let resolvingHeld = false;
-  const held =
-    opts?.voiceConversation && !opts?.skipConfirmation
-      ? pendingConfirmations.get(projectId)
-      : undefined;
-  if (held) pendingConfirmations.delete(projectId);
-
-  if (held && DECLINE_RE.test(trimmed)) {
-    patchChat(projectId, assistantId, {
-      text: "Okay, I'll hold off. Just say the word whenever you want me to.",
-      pending: false,
-    });
-    return;
-  }
-
   const forced = opts?.forcedAgent && opts.forcedAgent !== 'auto'
     ? agents.find((a) => a.command === opts.forcedAgent)
     : null;
-  if (held && AFFIRM_RE.test(trimmed)) {
-    // Confirmed — run exactly what we held, with the original declarative reply.
-    result = { reply: held.reply, actions: held.actions, viaLLM: held.viaLLM };
-    resolvingHeld = true;
-  } else if (forced) {
+  if (forced) {
     result = {
       reply: `Handing this to ${forced.name}.`,
       actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed }],
@@ -1956,10 +1919,6 @@ export async function sendChatMessage(
         appState: getAppContextSnapshot(projectId, rootPath),
         llmConfig,
         conversational: !!opts?.voiceConversation,
-        // The realtime bridge (skipConfirmation) runs actions the moment the
-        // brain returns them — tell the brain so it replies declaratively
-        // instead of asking a "want me to go ahead?" it can't honor.
-        confirmationGated: !opts?.skipConfirmation,
       });
     } catch (err) {
       console.error('Orchestrator routing error:', err);
@@ -1967,29 +1926,13 @@ export async function sendChatMessage(
     }
   }
 
-  patchChat(projectId, assistantId, { text: result.reply, pending: false });
-
-  // ── Confirmation gate ──────────────────────────────────────────────────────
-  // In conversational mode, never launch/message/close an agent on the same turn
-  // the user asked. Stash the agent-launching actions, ask for a go-ahead, and
-  // wait for the user's next message (resolved at the top of this function).
-  if (
-    opts?.voiceConversation &&
-    !opts?.skipConfirmation &&
-    !resolvingHeld &&
-    result.actions.some(isAgentAction)
-  ) {
-    pendingConfirmations.set(projectId, {
-      actions: result.actions,
-      reply: result.reply,
-      viaLLM: result.viaLLM,
-    });
-    patchChat(projectId, assistantId, {
-      text: confirmationQuestion(result.actions, result.reply),
-      pending: false,
-    });
-    return;
+  // Never pair executing actions with a "want me to?" reply — the actions run
+  // right below, so the reply must state what's happening, not ask permission.
+  if (result.actions.length) {
+    result = { ...result, reply: declarativeReply(result.actions, result.reply) };
   }
+
+  patchChat(projectId, assistantId, { text: result.reply, pending: false });
 
   // ── Reconnaissance (started now, awaited after spawning) ──────────────────
   // Kick recon off immediately so its LLM calls (plan + craft) overlap with the

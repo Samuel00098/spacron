@@ -708,10 +708,6 @@ export default function FloatingPromptBar() {
       await sendChatMessage(project.id, project.root_path, request, {
         forcedAgent: get(agentForcedAgent),
         voiceConversation: true,
-        // The realtime model rephrases every request, so the orchestrator's
-        // "yes"/"no" confirmation round-trip can never complete — the model
-        // confirms with the user verbally before calling the tool instead.
-        skipConfirmation: true,
       });
     } finally {
       setAgentSending(false);

@@ -672,73 +672,60 @@ describe('orchestrator chat actions', () => {
     expect(task.status).toBe('in-progress');
   });
 
-  it('holds a spawn behind a confirmation in voice mode and only launches after the user affirms', async () => {
+  it('executes voice-mode spawns on the same turn, with no confirmation hold', async () => {
     routeOrchestratorRequest.mockResolvedValue({
       reply: 'Handing this to Claude.',
       actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
       viaLLM: true,
     });
 
-    // Turn 1: the user asks for work in a spoken conversation — we must ask first.
     await sendChatMessage('project-1', '/repo', 'refactor the auth module', {
       voiceConversation: true,
     });
 
-    expect(spawnAgentPreset).not.toHaveBeenCalled();
-    expect(get(orchestratorTasks)).toHaveLength(0);
-    let transcript = get(chatMessages)['project-1'];
-    expect(transcript[transcript.length - 1]).toMatchObject({
-      role: 'assistant',
-      pending: false,
-    });
-    expect(transcript[transcript.length - 1].text).toMatch(/\?$/);
-    expect(transcript[transcript.length - 1].text.toLowerCase()).toContain('launch');
-
-    // Turn 2: the user confirms — now the held spawn actually runs.
-    await sendChatMessage('project-1', '/repo', 'yes go ahead', {
-      voiceConversation: true,
-    });
-
-    // "yes" must NOT be re-routed as a fresh request — the held action runs directly.
     expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
     expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo', { activate: true, skipAutoBrief: true });
     expect(get(orchestratorTasks)).toHaveLength(1);
-    transcript = get(chatMessages)['project-1'];
-    expect(transcript[transcript.length - 1]).toMatchObject({ role: 'assistant', text: 'Handing this to Claude.' });
   });
 
-  it('discards a held spawn when the user declines', async () => {
+  it('rewrites a permission-question reply into a declarative one when actions execute', async () => {
     routeOrchestratorRequest.mockResolvedValue({
-      reply: 'Handing this to Claude.',
+      reply: "I'll launch Claude to refactor the auth module, want me to go ahead?",
       actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
       viaLLM: true,
     });
 
-    await sendChatMessage('project-1', '/repo', 'refactor the auth module', { voiceConversation: true });
-    await sendChatMessage('project-1', '/repo', "no, don't", { voiceConversation: true });
-
-    expect(spawnAgentPreset).not.toHaveBeenCalled();
-    expect(get(orchestratorTasks)).toHaveLength(0);
-    // The decline was handled locally, without routing it as a new request.
-    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
-  });
-
-  it('does NOT gate spawns when the realtime voice bridge passes skipConfirmation', async () => {
-    routeOrchestratorRequest.mockResolvedValue({
-      reply: 'Handing this to Claude.',
-      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
-      viaLLM: true,
-    });
-
-    // The realtime model rephrases requests, so the user's literal "yes" can
-    // never reach us — the spawn must run on the same turn.
     await sendChatMessage('project-1', '/repo', 'refactor the auth module', {
       voiceConversation: true,
-      skipConfirmation: true,
     });
 
+    // The spawn ran immediately, so the user must never hear "want me to?".
     expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
-    expect(get(orchestratorTasks)).toHaveLength(1);
+    const transcript = get(chatMessages)['project-1'];
+    const assistant = transcript.filter((m) => m.role === 'assistant');
+    expect(assistant.length).toBeGreaterThan(0);
+    for (const m of assistant) {
+      expect(m.text.toLowerCase()).not.toContain('want me to go ahead');
+    }
+    expect(assistant.some((m) => m.text.toLowerCase().includes('launching'))).toBe(true);
+  });
+
+  it('leaves a genuine clarifying question (empty actions) untouched in voice mode', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Which module do you want me to refactor?',
+      actions: [],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'refactor it', { voiceConversation: true });
+
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1]).toMatchObject({
+      role: 'assistant',
+      text: 'Which module do you want me to refactor?',
+      pending: false,
+    });
   });
 
   it('does NOT gate spawns outside voice mode (typed dispatch stays immediate)', async () => {
