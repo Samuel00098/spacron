@@ -1,3 +1,5 @@
+pub mod cookies;
+
 use axum::{
     body::Body,
     extract::{FromRequestParts, Path, State, WebSocketUpgrade},
@@ -6,6 +8,7 @@ use axum::{
     routing::any,
     Router,
 };
+use cookies::PersistentJar;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -377,37 +380,37 @@ const NAV_SNIPPET: &str = r#"<script data-spacron-nav-rewrite>
 })();
 </script>"#;
 
-const YTM_FLAG: &str = "spacron-ytm-bridge";
-// Injected ONLY into proxied music.youtube.com pages (the Music mode embed).
-// Two jobs, both scoped to that host so no other proxied site is affected:
+const BRIDGE_FLAG: &str = "spacron-proxy-bridge";
+// Universal request bridge, injected at the TOP of <head> of EVERY proxied
+// external page (it must wrap fetch/XHR before the page's own scripts capture
+// them). Generalized from the bridge that originally shipped YTM playback —
+// the same two failure modes break most dynamic sites under the proxy:
 //
-// 1. Request bridge (the part that makes playback WORK). YT Music's player
-//    fetches its API (`/youtubei/v1/...`) and the audio segments (absolute
-//    `https://*.googlevideo.com/videoplayback` URLs) with fetch/XHR. Under the
-//    proxy the page's origin is the loopback proxy, so root-relative API calls
-//    resolve to the proxy root (correct only while the recorded external-origin
-//    fallback happens to point at music.youtube.com — it's a single shared slot
-//    the preview browser can steal), and the cross-origin googlevideo XHRs are
-//    CORS-blocked outright, which is why tracks never start. The bridge patches
-//    fetch/XHR/sendBeacon to rewrite both shapes onto the explicit
-//    `/proxy/{scheme}/{host}` form: deterministic routing for API calls, and
-//    the audio stream becomes same-origin (streamed through the proxy, which
-//    also holds the .youtube.com cookie jar). It must be injected at the TOP of
-//    <head> so it wraps fetch/XHR before the player scripts capture them.
+// 1. Root-relative API calls (`fetch('/api/…')`). Under the proxy the page's
+//    origin is the loopback proxy, so these resolve to the proxy root and only
+//    work while the shared recorded-origin fallback happens to point at the
+//    right host. The bridge pins them onto the explicit
+//    `/proxy/{scheme}/{host}` form — deterministic routing per page.
+// 2. Cross-origin fetch/XHR (CDNs, API subdomains, `googlevideo` streams).
+//    From the loopback origin these are CORS-blocked outright. Rewritten
+//    through the proxy they become same-origin, and the proxy's cookie jar
+//    supplies the real site's cookies.
 //
-// 2. Chrome strip (cosmetics). Hides YTM's site shell — left guide, logo,
-//    premium upsell banners — so the embed reads as a music player rather than
-//    a website in a box. Search box and player bar stay. Selectors are
-//    best-effort against YTM's current markup; if Google renames them the
-//    worst case is a hidden element reappearing, never broken playback.
-const YTM_SNIPPET: &str = r#"<script data-spacron-ytm-bridge>
+// It also bridges WebSocket (via the proxy's `/proxy-ws/{ws|wss}/{host}` route
+// — chat/collab apps are dead without it), EventSource, and sendBeacon, and
+// wraps history.pushState/replaceState so SPA route changes keep the
+// `/proxy/{scheme}/{host}` prefix (a bare `history.pushState(0,'','/inbox')`
+// would strand the iframe on the proxy root, breaking reload and the address
+// bar) while reporting each change to the app shell's address bar.
+const BRIDGE_SNIPPET: &str = r#"<script data-spacron-proxy-bridge>
 (() => {
-    if (window.__spacronYtmBridge) return;
-    window.__spacronYtmBridge = true;
+    if (window.__spacronProxyBridge) return;
+    window.__spacronProxyBridge = true;
     const m = location.pathname.match(/^\/proxy\/(https?)\/([^/]+)/);
     if (!m) return;
     const realScheme = m[1], realHost = m[2];
     const proxyOrigin = location.origin;
+    const prefix = '/proxy/' + realScheme + '/' + realHost;
     const rewrite = (raw) => {
         let u;
         try { u = new URL(String(raw), location.href); } catch (e) { return null; }
@@ -415,10 +418,10 @@ const YTM_SNIPPET: &str = r#"<script data-spacron-ytm-bridge>
         if (u.origin === proxyOrigin) {
             // Already an explicit proxy path — leave it alone. Anything else on
             // the proxy origin is a root-relative call the page meant for its
-            // real host (e.g. /youtubei/v1/player) — pin it there explicitly
-            // instead of relying on the shared external-origin fallback.
-            if (u.pathname.startsWith('/proxy/')) return null;
-            return proxyOrigin + '/proxy/' + realScheme + '/' + realHost + u.pathname + u.search;
+            // real host (e.g. /api/session) — pin it there explicitly instead
+            // of relying on the shared recorded-origin fallback.
+            if (u.pathname.startsWith('/proxy/') || u.pathname.startsWith('/proxy-ws/')) return null;
+            return proxyOrigin + prefix + u.pathname + u.search;
         }
         return proxyOrigin + '/proxy/' + u.protocol.replace(':', '') + '/' + u.host + u.pathname + u.search;
     };
@@ -447,9 +450,81 @@ const YTM_SNIPPET: &str = r#"<script data-spacron-ytm-bridge>
             try { return origBeacon(url, data); } catch (e) { return false; }
         };
     }
+    // WebSocket: route through the proxy's ws bridge. A root-relative
+    // `new WebSocket('/socket')` resolves against the loopback proxy host, so
+    // pin it to the page's real host; absolute ws(s) URLs to any host go
+    // through the bridge too so wss handshakes carry the site's cookies.
+    const wsRewrite = (raw) => {
+        let u;
+        try { u = new URL(String(raw), location.href); } catch (e) { return null; }
+        if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return null;
+        if (u.host === location.host) {
+            if (u.pathname.startsWith('/proxy-ws/')) return null;
+            const scheme = realScheme === 'https' ? 'wss' : 'ws';
+            return 'ws://' + location.host + '/proxy-ws/' + scheme + '/' + realHost + u.pathname + u.search;
+        }
+        return 'ws://' + location.host + '/proxy-ws/' + u.protocol.replace(':', '') + '/' + u.host + u.pathname + u.search;
+    };
+    if (window.WebSocket) {
+        window.WebSocket = new Proxy(window.WebSocket, {
+            construct(target, args) {
+                try { const r = wsRewrite(args[0]); if (r) args[0] = r; } catch (e) {}
+                return new target(...args);
+            }
+        });
+    }
+    if (window.EventSource) {
+        window.EventSource = new Proxy(window.EventSource, {
+            construct(target, args) {
+                try { const r = rewrite(args[0]); if (r) args[0] = r; } catch (e) {}
+                return new target(...args);
+            }
+        });
+    }
+    // SPA route changes: keep the URL on the /proxy path and tell the shell.
+    const toProxyPath = (raw) => {
+        if (raw === undefined || raw === null || raw === '') return null;
+        let u;
+        try { u = new URL(String(raw), location.href); } catch (e) { return null; }
+        if (u.origin === proxyOrigin) {
+            if (u.pathname.startsWith('/proxy/')) return null;
+            return prefix + u.pathname + u.search + u.hash;
+        }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+        return '/proxy/' + u.protocol.replace(':', '') + '/' + u.host + u.pathname + u.search + u.hash;
+    };
+    const decodeSelf = () => {
+        const mm = location.pathname.match(/^\/proxy\/(https?)\/([^/]+)(\/.*)?$/);
+        if (!mm) return '';
+        return mm[1] + '://' + mm[2] + (mm[3] || '') + location.search + location.hash;
+    };
+    const reportLocation = () => {
+        const url = decodeSelf();
+        if (!url) return;
+        try { parent.postMessage({ type: 'forge-preview:location', url: url }, '*'); } catch (e) {}
+    };
+    ['pushState', 'replaceState'].forEach((fn) => {
+        const orig = history[fn];
+        if (typeof orig !== 'function') return;
+        history[fn] = function (state, title, url) {
+            try { const r = toProxyPath(url); if (r !== null) url = r; } catch (e) {}
+            const out = orig.call(this, state, title, url);
+            reportLocation();
+            return out;
+        };
+    });
 })();
-</script>
-<style data-spacron-ytm-chrome>
+</script>"#;
+
+const YTM_FLAG: &str = "spacron-ytm-chrome";
+// Injected ONLY into proxied music.youtube.com pages (the Music mode embed):
+// hides YTM's site shell — left guide, logo, premium upsell banners — so the
+// embed reads as a music player rather than a website in a box. Search box and
+// player bar stay. Selectors are best-effort against YTM's current markup; if
+// Google renames them the worst case is a hidden element reappearing, never
+// broken playback. (YTM's request bridging is handled by the universal
+// BRIDGE_SNIPPET above, which grew out of the YTM-specific bridge.)
+const YTM_SNIPPET: &str = r#"<style data-spacron-ytm-chrome>
 ytmusic-guide-renderer,
 #mini-guide,
 ytmusic-guide-mini-renderer,
@@ -472,6 +547,7 @@ pub struct ProxyState {
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
     pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     pub external_origin_fallback: bool,
+    pub cookie_jar: Arc<PersistentJar>,
     pub client: Client,
     pub local_client: Client,
 }
@@ -485,10 +561,16 @@ pub struct PreviewManager {
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
     pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    /// Disk-persisted cookie jar shared by every proxy instance, so logins on
+    /// proxied external sites survive app restarts (see cookies.rs).
+    cookie_jar: Arc<PersistentJar>,
 }
 
 impl PreviewManager {
-    pub fn new(active_project_id: Arc<std::sync::RwLock<Option<String>>>) -> Self {
+    pub fn new(
+        active_project_id: Arc<std::sync::RwLock<Option<String>>>,
+        config_dir: std::path::PathBuf,
+    ) -> Self {
         PreviewManager {
             target_port: Arc::new(Mutex::new(5173)),
             preferred_local_host: Arc::new(Mutex::new(None)),
@@ -498,6 +580,7 @@ impl PreviewManager {
             active_project_id,
             project_root: Arc::new(std::sync::RwLock::new(None)),
             shutdown_tx: Arc::new(Mutex::new(None)),
+            cookie_jar: PersistentJar::load(config_dir.join("preview-cookies.json")),
         }
     }
 
@@ -515,6 +598,7 @@ impl PreviewManager {
         let (tx, rx) = oneshot::channel::<()>();
         *shutdown_tx_lock = Some(tx);
 
+        self.cookie_jar.ensure_saver();
         let state = ProxyState {
             target_port: self.target_port.clone(),
             preferred_local_host: self.preferred_local_host.clone(),
@@ -522,7 +606,8 @@ impl PreviewManager {
             active_project_id: self.active_project_id.clone(),
             project_root: self.project_root.clone(),
             external_origin_fallback: true,
-            client: preview_http_client(),
+            cookie_jar: self.cookie_jar.clone(),
+            client: preview_http_client(self.cookie_jar.clone()),
             local_client: preview_local_http_client(),
         };
 
@@ -584,6 +669,7 @@ impl PreviewManager {
             .unwrap_or_else(|e| e.into_inner())
             .insert(key, proxy_port);
 
+        self.cookie_jar.ensure_saver();
         let state = ProxyState {
             target_port: Arc::new(Mutex::new(port)),
             preferred_local_host: Arc::new(Mutex::new(Some(normalized_host))),
@@ -591,7 +677,8 @@ impl PreviewManager {
             active_project_id: self.active_project_id.clone(),
             project_root: self.project_root.clone(),
             external_origin_fallback: false,
-            client: preview_http_client(),
+            cookie_jar: self.cookie_jar.clone(),
+            client: preview_http_client(self.cookie_jar.clone()),
             local_client: preview_local_http_client(),
         };
 
@@ -625,7 +712,14 @@ impl PreviewManager {
             let _ = tx.send(());
         }
         *self.proxy_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // Don't leave freshly-set login cookies riding on the 3s debounce.
+        self.cookie_jar.flush_if_dirty();
         Ok(())
+    }
+
+    /// Drop every stored preview-proxy cookie (part of "clear browsing data").
+    pub fn clear_cookies(&self) {
+        self.cookie_jar.clear();
     }
 
     pub fn set_target_port(&self, port: u16) -> Result<(), String> {
@@ -684,7 +778,7 @@ fn normalize_local_host(host: Option<&str>) -> Result<String, String> {
     }
 }
 
-fn preview_http_client() -> Client {
+fn preview_http_client(jar: Arc<PersistentJar>) -> Client {
     preview_http_client_builder()
         // Server-side cookie jar for proxied *external* sites. The proxy serves
         // them under its loopback origin, so any Set-Cookie scoped to the real
@@ -692,9 +786,10 @@ fn preview_http_client() -> Client {
         // domain mismatch. Sites that gate content on a cookie round-trip —
         // YouTube Music's consent bounce is the canonical case — then redirect
         // forever and never play. The jar lives here instead: this client talks
-        // to the real origin, so those cookies are valid for it, persist across
-        // requests for the app session, and the embedded site works logged-out.
-        .cookie_store(true)
+        // to the real origin, so those cookies are valid for it. The jar is the
+        // disk-persisted PersistentJar (shared across every proxy instance), so
+        // logins on proxied sites survive app restarts.
+        .cookie_provider(jar)
         .build()
         .unwrap_or_default()
 }
@@ -1560,9 +1655,6 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
         == Some("websocket".to_string());
 
     if is_ws {
-        if path.starts_with("/proxy") {
-            return StatusCode::BAD_REQUEST.into_response();
-        }
         // Validate WebSocket origin. Browsers always attach an Origin to a WS
         // handshake, so we require one and demand it be first-party loopback. We
         // deliberately do NOT accept `Origin: null` — it's never something we emit,
@@ -1581,6 +1673,65 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
             .unwrap_or(false);
         if !ws_origin_valid {
             return StatusCode::FORBIDDEN.into_response();
+        }
+
+        // External WebSocket bridge (`/proxy-ws/{ws|wss}/{host}/path`) —
+        // injected pages rewrite their socket URLs onto this route (see
+        // BRIDGE_SNIPPET) because the page itself lives on the loopback proxy
+        // origin and could otherwise only reach the local dev forwarder.
+        if parts.uri.path().starts_with("/proxy-ws/") {
+            let Some(target_ws) =
+                get_ws_target_from_proxy_path(parts.uri.path(), parts.uri.query())
+            else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            // Same SSRF gates as the HTTP `/proxy` route, run on the http(s)
+            // equivalent of the ws URL.
+            let http_equiv = target_ws
+                .replacen("ws://", "http://", 1)
+                .replacen("wss://", "https://", 1);
+            if is_private_target(&http_equiv) && !is_loopback_host_target(&http_equiv) {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+            if let Ok(parsed) = url::Url::parse(&http_equiv) {
+                if let Some(port) = parsed.port() {
+                    if is_restricted_port(port) {
+                        return StatusCode::FORBIDDEN.into_response();
+                    }
+                }
+                if let Some(host) = parsed.host_str() {
+                    if host.parse::<std::net::IpAddr>().is_err()
+                        && !is_loopback_host_target(&http_equiv)
+                    {
+                        let port = parsed.port_or_known_default().unwrap_or(80);
+                        if has_blocked_resolved_ip(host, port).await {
+                            return StatusCode::FORBIDDEN.into_response();
+                        }
+                    }
+                }
+            }
+            // The real site's cookies + a matching Origin, so authed sockets
+            // (the normal case for logged-in web apps) complete their handshake.
+            let target_url = url::Url::parse(&http_equiv).ok();
+            let cookie_header =
+                target_url.as_ref().and_then(|u| state.cookie_jar.cookie_header_for(u));
+            let ws_origin = target_url
+                .as_ref()
+                .and_then(|u| u.host_str().map(|h| format!("{}://{}", u.scheme(), h)));
+            match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
+                Ok(ws) => {
+                    return ws
+                        .on_upgrade(move |socket| {
+                            handle_external_websocket(socket, target_ws, cookie_header, ws_origin)
+                        })
+                        .into_response();
+                }
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            }
+        }
+
+        if path.starts_with("/proxy") {
+            return StatusCode::BAD_REQUEST.into_response();
         }
         match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
             Ok(ws) => {
@@ -1634,28 +1785,37 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
                     }
                 }
 
-                let mut origin_to_store = None;
-                if let Ok(target) = url.parse::<url::Url>() {
-                    let scheme = target.scheme();
-                    let host = target.host_str().unwrap_or("");
-                    let origin = match target.port() {
-                        Some(port) => format!("{}://{}:{}", scheme, host, port),
-                        None => format!("{}://{}", scheme, host),
-                    };
-                    origin_to_store = Some(origin);
-                }
+                // Record the fallback origin only for *document* navigations
+                // (wants_html_error = "this request is for a page"). The slot
+                // resolves root-relative subresource/API requests that arrive
+                // on the proxy root, so it must track the page the user is ON —
+                // recording every explicit `/proxy/...` fetch let any CDN/API
+                // subresource steal the slot and break the page's own
+                // root-relative loads.
+                if wants_html_error(&parts.headers) {
+                    let mut origin_to_store = None;
+                    if let Ok(target) = url.parse::<url::Url>() {
+                        let scheme = target.scheme();
+                        let host = target.host_str().unwrap_or("");
+                        let origin = match target.port() {
+                            Some(port) => format!("{}://{}:{}", scheme, host, port),
+                            None => format!("{}://{}", scheme, host),
+                        };
+                        origin_to_store = Some(origin);
+                    }
 
-                let active_project = state
-                    .active_project_id
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                if let Some(ref project_id) = active_project {
-                    let mut origins = state
-                        .active_external_origins
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    origins.insert(project_id.clone(), origin_to_store.clone());
+                    let active_project = state
+                        .active_project_id
+                        .read()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    if let Some(ref project_id) = active_project {
+                        let mut origins = state
+                            .active_external_origins
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        origins.insert(project_id.clone(), origin_to_store.clone());
+                    }
                 }
 
                 return proxy_external_url(
@@ -1919,6 +2079,10 @@ async fn proxy_external_url(
         format!("http://{}", host)
     };
 
+    // Whether this request is a page navigation (vs a subresource/API fetch) —
+    // decided from the incoming headers BEFORE they're rewritten for upstream.
+    let is_document = wants_html_error(&parts.headers);
+
     let method = parts.method.clone();
     let mut reqwest_req = reqwest::Request::new(method, target.clone());
 
@@ -1929,6 +2093,16 @@ async fn proxy_external_url(
         headers.remove("host");
         headers.remove("origin");
         headers.remove("referer");
+        // Fetch-metadata headers describe the *embedding* context (dest=iframe,
+        // site=cross-site) — exactly what we're stripping X-Frame-Options to
+        // hide. Sites that enforce them (Google login, some Cloudflare setups)
+        // refuse the request outright, so drop them like the other
+        // proxy-revealing headers; a plain top-level navigation omits nothing.
+        headers.remove("sec-fetch-dest");
+        headers.remove("sec-fetch-mode");
+        headers.remove("sec-fetch-site");
+        headers.remove("sec-fetch-user");
+        headers.remove("sec-fetch-storage-access");
         // The browser's cookies are scoped to the loopback proxy origin, not the
         // real target — forwarding them both leaks unrelated proxied sites'
         // cookies upstream and, worse, disables the client's cookie jar (reqwest
@@ -1994,15 +2168,19 @@ async fn proxy_external_url(
                 None => format!("{}://{}", scheme, host),
             };
 
-            let active_project = active_project_id
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            if let Some(project_id) = active_project {
-                let mut origins = active_external_origins
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                origins.insert(project_id, Some(origin));
+            // Fallback-slot recording is document-only, same as the request-side
+            // recording in proxy_handler (subresources must not steal the slot).
+            if is_document {
+                let active_project = active_project_id
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let Some(project_id) = active_project {
+                    let mut origins = active_external_origins
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    origins.insert(project_id, Some(origin));
+                }
             }
 
             build_preview_response(
@@ -2415,8 +2593,17 @@ async fn build_preview_response(
         } else {
             injected
         };
-        // YouTube Music embed: bridge its fetch/XHR onto the proxy (playback)
-        // and strip the site chrome (cosmetics). Host-scoped; see YTM_SNIPPET.
+        // Universal request bridge for every external page: pins root-relative
+        // fetch/XHR/WS calls onto the explicit /proxy form and makes
+        // cross-origin API calls same-origin. Head-top so it wraps fetch/XHR
+        // before the page's own scripts capture them; see BRIDGE_SNIPPET.
+        let injected = if strip_embed_headers {
+            inject_bridge_snippet(&injected)
+        } else {
+            injected
+        };
+        // YouTube Music embed: strip the site chrome (cosmetics only — its
+        // request bridging is covered by the universal bridge above).
         let injected = if strip_embed_headers && is_ytm_host(&final_url) {
             inject_ytm_snippet(&injected)
         } else {
@@ -2576,26 +2763,39 @@ fn is_ytm_host(final_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Insert the YTM snippet at the top of <head>. Unlike the other injected
-/// scripts (appended before </body>), the request bridge must run BEFORE the
-/// page's own scripts so it wraps fetch/XHR before the player captures them.
-fn inject_ytm_snippet(html: &str) -> String {
-    if html.contains(YTM_FLAG) {
-        return html.to_string();
-    }
+/// Insert `snippet` at the top of <head>. Unlike the other injected scripts
+/// (appended before </body>), anything that wraps browser APIs must run BEFORE
+/// the page's own scripts, so it goes right after the opening <head> tag.
+fn inject_at_head_top(html: &str, snippet: &str) -> String {
     // Find the opening <head> tag (with or without attributes), not <header>.
     let head_at = html.find("<head>").or_else(|| html.find("<head "));
     if let Some(pos) = head_at {
         if let Some(close) = html[pos..].find('>') {
             let insert_at = pos + close + 1;
-            let mut output = String::with_capacity(html.len() + YTM_SNIPPET.len());
+            let mut output = String::with_capacity(html.len() + snippet.len());
             output.push_str(&html[..insert_at]);
-            output.push_str(YTM_SNIPPET);
+            output.push_str(snippet);
             output.push_str(&html[insert_at..]);
             return output;
         }
     }
-    format!("{}{}", YTM_SNIPPET, html)
+    format!("{}{}", snippet, html)
+}
+
+/// The universal request bridge for proxied external pages; see BRIDGE_SNIPPET.
+fn inject_bridge_snippet(html: &str) -> String {
+    if html.contains(BRIDGE_FLAG) {
+        return html.to_string();
+    }
+    inject_at_head_top(html, BRIDGE_SNIPPET)
+}
+
+/// The YTM chrome-strip style; see YTM_SNIPPET.
+fn inject_ytm_snippet(html: &str) -> String {
+    if html.contains(YTM_FLAG) {
+        return html.to_string();
+    }
+    inject_at_head_top(html, YTM_SNIPPET)
 }
 
 fn inject_scroll_script(html: &str) -> String {
@@ -2622,14 +2822,77 @@ fn inject_scroll_script(html: &str) -> String {
     format!("{}{}", html, SCROLL_SNIPPET)
 }
 
+/// Parse `/proxy-ws/{ws|wss}/{host}{path}` (+ query) into the real socket URL.
+fn get_ws_target_from_proxy_path(path: &str, query: Option<&str>) -> Option<String> {
+    let rest = path.strip_prefix("/proxy-ws/")?;
+    let mut segments = rest.splitn(3, '/');
+    let scheme = segments.next()?;
+    let authority = segments.next()?;
+    if scheme != "ws" && scheme != "wss" {
+        return None;
+    }
+    if authority.is_empty() {
+        return None;
+    }
+    let remainder = segments.next().unwrap_or("");
+    let mut target = format!("{scheme}://{authority}/{remainder}");
+    if let Some(query) = query.filter(|value| !value.is_empty()) {
+        target.push('?');
+        target.push_str(query);
+    }
+    Some(target)
+}
+
+/// Bridge a proxied external page's WebSocket to its real remote endpoint
+/// (`wss` included — rustls). The handshake carries the site's cookies from
+/// the shared persistent jar plus a matching `Origin`, so sockets that require
+/// an authenticated session (the normal case for logged-in web apps) connect.
+async fn handle_external_websocket(
+    client_ws: axum::extract::ws::WebSocket,
+    target_ws_url: String,
+    cookie_header: Option<String>,
+    origin: Option<String>,
+) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request = match target_ws_url.as_str().into_client_request() {
+        Ok(req) => req,
+        Err(err) => {
+            eprintln!("Invalid external WS target {}: {}", target_ws_url, err);
+            return;
+        }
+    };
+    if let Some(cookies) = cookie_header {
+        if let Ok(value) = cookies.parse() {
+            request.headers_mut().insert("Cookie", value);
+        }
+    }
+    if let Some(origin) = origin {
+        if let Ok(value) = origin.parse() {
+            request.headers_mut().insert("Origin", value);
+        }
+    }
+
+    let target_conn = match connect_async(request).await {
+        Ok((conn, _)) => conn,
+        Err(err) => {
+            eprintln!(
+                "Failed to connect to external WS server {}: {}",
+                target_ws_url, err
+            );
+            return;
+        }
+    };
+
+    bridge_ws_streams(client_ws, target_conn).await;
+}
+
 async fn handle_websocket(
     client_ws: axum::extract::ws::WebSocket,
     target_port: u16,
     path: String,
     preferred_host: Option<String>,
 ) {
-    let (mut client_write, mut client_read) = client_ws.split();
-
     let mut target_conn = None;
     let mut last_error = None;
     for host in local_dev_hosts(preferred_host.as_deref()) {
@@ -2657,6 +2920,19 @@ async fn handle_websocket(
             return;
         }
     };
+
+    bridge_ws_streams(client_ws, target_conn).await;
+}
+
+/// Pump messages in both directions between the preview WebView's socket and a
+/// connected upstream socket until either side closes.
+async fn bridge_ws_streams(
+    client_ws: axum::extract::ws::WebSocket,
+    target_conn: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) {
+    let (mut client_write, mut client_read) = client_ws.split();
     let (mut target_write, mut target_read) = target_conn.split();
 
     let client_to_target = async {
@@ -2740,8 +3016,9 @@ async fn handle_websocket(
 #[cfg(test)]
 mod tests {
     use super::{
-        consent_form_params, encode_dir_for_base_href, inject_ytm_snippet, is_first_party_host,
-        is_ytm_host, local_file_error, proxy_request_allowed, wants_html_error,
+        consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
+        inject_bridge_snippet, inject_ytm_snippet, is_first_party_host, is_ytm_host,
+        local_file_error, proxy_request_allowed, wants_html_error,
     };
     use axum::http::{HeaderMap, StatusCode};
 
@@ -2782,25 +3059,54 @@ mod tests {
     }
 
     #[test]
-    fn ytm_snippet_lands_at_top_of_head_and_is_idempotent() {
+    fn bridge_snippet_lands_at_top_of_head_and_is_idempotent() {
         // The bridge must run before the page's own scripts, so it goes right
         // after the opening <head> tag — not before </body> like the others.
         let html = "<!doctype html><html><head><script>app</script></head><body></body></html>";
-        let injected = inject_ytm_snippet(html);
+        let injected = inject_bridge_snippet(html);
         let head_end = injected.find("<head>").unwrap() + "<head>".len();
-        assert!(injected[head_end..].starts_with("<script data-spacron-ytm-bridge>"));
-        assert!(injected.find("spacron-ytm-bridge").unwrap() < injected.find("app").unwrap());
+        assert!(injected[head_end..].starts_with("<script data-spacron-proxy-bridge>"));
+        assert!(injected.find("spacron-proxy-bridge").unwrap() < injected.find("app").unwrap());
         // Re-injecting must not duplicate the snippet.
-        assert_eq!(inject_ytm_snippet(&injected), injected);
+        assert_eq!(inject_bridge_snippet(&injected), injected);
 
         // <head lang="en"> variant still gets the snippet inside the tag.
         let with_attrs = "<html><head lang=\"en\"><title>t</title></head></html>";
-        let injected = inject_ytm_snippet(with_attrs);
-        assert!(injected.contains("<head lang=\"en\"><script data-spacron-ytm-bridge>"));
+        let injected = inject_bridge_snippet(with_attrs);
+        assert!(injected.contains("<head lang=\"en\"><script data-spacron-proxy-bridge>"));
 
         // No <head> at all: snippet is prepended rather than dropped.
         let headless = "<body>hi</body>";
-        assert!(inject_ytm_snippet(headless).starts_with("<script data-spacron-ytm-bridge>"));
+        assert!(inject_bridge_snippet(headless).starts_with("<script data-spacron-proxy-bridge>"));
+    }
+
+    #[test]
+    fn ytm_style_injects_into_head_and_is_idempotent() {
+        let html = "<!doctype html><html><head><title>t</title></head><body></body></html>";
+        let injected = inject_ytm_snippet(html);
+        assert!(injected.contains("<style data-spacron-ytm-chrome>"));
+        assert_eq!(inject_ytm_snippet(&injected), injected);
+    }
+
+    #[test]
+    fn ws_proxy_path_parses_to_real_socket_url() {
+        assert_eq!(
+            get_ws_target_from_proxy_path("/proxy-ws/wss/chat.example.com/socket", None),
+            Some("wss://chat.example.com/socket".to_string())
+        );
+        assert_eq!(
+            get_ws_target_from_proxy_path("/proxy-ws/ws/host:8080/live", Some("v=2")),
+            Some("ws://host:8080/live?v=2".to_string())
+        );
+        // Bare host, no path.
+        assert_eq!(
+            get_ws_target_from_proxy_path("/proxy-ws/wss/host.example", None),
+            Some("wss://host.example/".to_string())
+        );
+        // Only ws/wss schemes; empty host rejected.
+        assert_eq!(get_ws_target_from_proxy_path("/proxy-ws/http/host/x", None), None);
+        assert_eq!(get_ws_target_from_proxy_path("/proxy-ws//host/x", None), None);
+        assert_eq!(get_ws_target_from_proxy_path("/proxy/https/host/x", None), None);
     }
 
     #[test]
@@ -3182,6 +3488,9 @@ mod local_file_e2e {
 
     /// Mirror of `start_proxy`'s router, minus the Tauri runtime.
     async fn spawn_test_proxy(project_root: Option<std::path::PathBuf>) -> u16 {
+        let cookie_jar = PersistentJar::load(
+            std::env::temp_dir().join(format!("spacron-test-cookies-{}.json", std::process::id())),
+        );
         let state = ProxyState {
             target_port: Arc::new(Mutex::new(5173)),
             preferred_local_host: Arc::new(Mutex::new(None)),
@@ -3189,7 +3498,8 @@ mod local_file_e2e {
             active_project_id: Arc::new(RwLock::new(None)),
             project_root: Arc::new(RwLock::new(project_root)),
             external_origin_fallback: true,
-            client: preview_http_client(),
+            cookie_jar: cookie_jar.clone(),
+            client: preview_http_client(cookie_jar),
             local_client: preview_local_http_client(),
         };
         let app = Router::new()

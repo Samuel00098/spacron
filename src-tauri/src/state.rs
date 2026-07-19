@@ -57,7 +57,7 @@ impl AppState {
             workspace_manager: WorkspaceManager::new(config_dir.clone(), active_project_id.clone()),
             pty_manager: PtyManager::new(),
             lsp_bridge: LspBridge::new(),
-            preview_manager: PreviewManager::new(active_project_id),
+            preview_manager: PreviewManager::new(active_project_id, config_dir.clone()),
             write_rate_limiter: WriteRateLimiter::new(),
             config_dir,
         }

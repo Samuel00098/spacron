@@ -107,8 +107,15 @@ pub async fn preview_open_in_browser(url: String, app: tauri::AppHandle) -> Resu
 /// this to the native WebView2, WKWebView, or WebKitGTK clear operation for the
 /// current OS.
 #[tauri::command]
-pub async fn preview_clear_browsing_data(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn preview_clear_browsing_data(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     use tauri::Manager;
+
+    // The proxy's server-side jar holds the logins for proxied external sites
+    // (persisted to disk) — clearing browsing data must forget those too.
+    state.preview_manager.clear_cookies();
 
     let window = app
         .get_webview_window("main")
