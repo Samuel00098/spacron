@@ -82,8 +82,25 @@ impl PersistentJar {
         }
         // Write via a temp file + rename so a crash mid-write can't leave a
         // truncated JSON that silently drops every stored login on next start.
+        // The file holds live session tokens, so on Unix it's created 0o600
+        // (owner-only) instead of inheriting the umask; the rename preserves
+        // that mode. On Windows the app config dir's DACL is already scoped to
+        // the user profile.
         let tmp = self.path.with_extension("json.tmp");
-        if let Err(err) = std::fs::write(&tmp, &json).and_then(|()| {
+        let write_tmp = || -> std::io::Result<()> {
+            use std::io::Write;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&tmp)?;
+            file.write_all(&json)?;
+            file.sync_all()
+        };
+        if let Err(err) = write_tmp().and_then(|()| {
             std::fs::rename(&tmp, &self.path).or_else(|_| {
                 // Windows rename-over-existing can fail; fall back to replace.
                 std::fs::remove_file(&self.path).ok();
