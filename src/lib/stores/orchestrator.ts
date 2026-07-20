@@ -1684,6 +1684,7 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
     // Adopted agents have no `ownerTaskId` lease (see leasedSessionLive); a live
     // session is enough to route a follow-up into.
     if (!live?.isRunning || (!task.adopted && live.ownerTaskId !== task.id)) return false;
+
     const sent = await sendOrchestratorFollowUpWhenReady(task.assignedSessionId, withAgentTaskPanelContext(prompt, task.projectId), {
       shouldContinue: () => leasedSessionLive(task.id, task.assignedSessionId!),
     });
