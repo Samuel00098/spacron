@@ -304,21 +304,31 @@
   padding-bottom: var(--overlay-clear);
 }
 
+/* Stage Manager focus: the active panel fills the stage (resting on top of the
+   dock via the rooms-table's --overlay-clear padding) while the other open
+   rooms sit alongside as a vertical rail of raised cards — each card its own
+   tile, no overlap. */
 .app-shell .rooms-table.ambient-focus {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
-  justify-items: center;
-  align-items: start;
+}
+
+/* No side rail rendered (single open room) — give the stage the full width. */
+.app-shell .rooms-table.ambient-focus:not(:has(> .room-stack)) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .app-shell .rooms-table.ambient-focus .focused-room {
-  width: 95%;
-  max-width: 1320px;
-  aspect-ratio: 1.65;
-  max-height: min(100%, 780px, calc(72 * var(--app-vh, 1vh)));
+  width: 100%;
+  height: 100%;
   border-radius: 12px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  /* Lit top bevel + contact/ambient shadow pair lifts the stage off the desk. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 2px 4px rgba(0, 0, 0, 0.28),
+    0 14px 30px rgba(0, 0, 0, 0.34),
+    0 34px 76px rgba(0, 0, 0, 0.5);
   border: 1px solid var(--border);
   overflow: clip;
   /* https://issues.chromium.org/40863759 — backdrop-filter in a child
@@ -332,26 +342,26 @@
 .app-shell .rooms-table.ambient-focus .room-stack {
   display: flex;
   flex-direction: column;
-  align-items: center;
   width: 100%;
+  height: 100%;
   gap: 12px;
   min-height: 0;
-  overflow: visible;
-  padding: 8px 0;
-  mask-image: none;
-  -webkit-mask-image: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 6px;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   gap: 12px;
   width: 100%;
-  justify-content: safe center;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 4px 8px;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: visible;
+  padding: 4px 2px;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row::-webkit-scrollbar {
@@ -359,26 +369,47 @@
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
-  width: 270px;
-  height: 80px;
-  min-height: 80px;
+  width: 100%;
+  height: auto;
+  min-height: 172px;
   flex-shrink: 0;
-  padding: 12px 16px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: space-between;
   align-items: flex-start;
-  gap: 6px;
-  border-radius: 10px;
-  background: rgba(var(--editor-bg-rgb, 30, 30, 40), 0.5);
+  gap: 8px;
+  border-radius: 14px;
+  /* 3D tile: lit face gradient, bright top edge / dark bottom edge, and a
+     contact + ambient shadow pair so each card reads as its own raised slab. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 45%, rgba(0, 0, 0, 0.12) 100%),
+    rgba(var(--editor-bg-rgb, 30, 30, 40), 0.6);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-  transition: all 0.18s ease;
+  border-top-color: rgba(255, 255, 255, 0.14);
+  border-bottom-color: rgba(0, 0, 0, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.22),
+    0 2px 3px rgba(0, 0, 0, 0.24),
+    0 12px 26px rgba(0, 0, 0, 0.3);
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  /* `backwards` (not the inherited `both`) releases the entry animation's final
+     transform after it ends, so the hover lift transform can take effect. */
+  animation-fill-mode: backwards;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 45%, rgba(0, 0, 0, 0.1) 100%),
+    rgba(var(--editor-bg-rgb, 30, 30, 40), 0.72);
   border-color: var(--accent);
+  transform: translateY(-4px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
+    0 4px 8px rgba(0, 0, 0, 0.3),
+    0 22px 46px rgba(0, 0, 0, 0.42);
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-header {
@@ -405,18 +436,14 @@
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-name {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   width: 100%;
   text-align: left;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card-preview {
-  display: none;
 }
 
 .app-shell .rooms-table.ambient-development {
@@ -1940,10 +1967,14 @@
     height: auto;
     overflow-x: auto;
     overflow-y: visible;
+    mask-image: none;
+    -webkit-mask-image: none;
   }
   .app-shell .rooms-table.ambient-focus .room-cards-row {
+    flex-direction: row;
     flex-wrap: wrap;
     justify-content: center;
+    gap: 10px;
     overflow: visible;
     padding: 4px 0;
   }
@@ -1953,6 +1984,11 @@
     min-width: 160px;
     min-height: 64px;
     height: 64px;
+    justify-content: center;
+  }
+
+  .app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-preview {
+    display: none;
   }
 
   .app-shell .rooms-table.ambient-focus .minimized-room-stack {
@@ -2132,4 +2168,171 @@ html.is-webkitgtk .app-shell .composer-strip {
   transform: none !important;
   view-transition-name: none !important;
   will-change: auto !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   3D depth pass — one shared extrusion language for every shell surface.
+   Each surface gets: a lit top bevel + shaded bottom edge (the "slab" edges),
+   and a paired contact shadow (tight, dark) + ambient shadow (wide, soft) so
+   panels, chrome, cards and keys all read as raised 3D pieces instead of flat
+   glass. Tokens below are theme-tuned; rules only reshape lighting/shadows,
+   never layout. */
+
+.app-shell {
+  --depth-bevel:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.24);
+  --depth-shadow-sm:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 6px 14px rgba(0, 0, 0, 0.28);
+  --depth-shadow-md:
+    0 2px 4px rgba(0, 0, 0, 0.28),
+    0 14px 30px rgba(0, 0, 0, 0.36);
+  --depth-shadow-lg:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 16px 36px rgba(0, 0, 0, 0.38),
+    0 40px 90px rgba(0, 0, 0, 0.5);
+  --depth-pressed:
+    inset 0 2px 5px rgba(0, 0, 0, 0.35),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+:root.light-theme .app-shell {
+  --depth-bevel:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.07);
+  --depth-shadow-sm:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 14px rgba(0, 0, 0, 0.08);
+  --depth-shadow-md:
+    0 2px 4px rgba(0, 0, 0, 0.08),
+    0 14px 30px rgba(0, 0, 0, 0.1);
+  --depth-shadow-lg:
+    0 2px 4px rgba(0, 0, 0, 0.08),
+    0 16px 36px rgba(0, 0, 0, 0.1),
+    0 40px 90px rgba(0, 0, 0, 0.14);
+  --depth-pressed:
+    inset 0 2px 5px rgba(0, 0, 0, 0.12),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* ── Panels: every room frame + both stage variants ── */
+.app-shell .room-panel {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-lg);
+}
+
+/* Re-assert over the theme-specific room-panel shadows so depth is uniform. */
+:root.solid-theme .app-shell .room-panel,
+:root.light-theme .app-shell .room-panel {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-lg);
+}
+
+.app-shell .rooms-table.ambient-development .focused-room > * {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    var(--depth-shadow-lg);
+}
+
+/* ── Side utility drawers: keep their glass rims, add real lift ── */
+.app-shell .left-utility-panel {
+  box-shadow:
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
+    var(--depth-shadow-md);
+}
+
+.app-shell .right-utility-panel {
+  box-shadow:
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
+    var(--depth-shadow-md);
+}
+
+/* ── Bottom chrome: dock, mode switcher, prompt pill ── */
+.app-shell .room-dock {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
+}
+
+:root.light-theme .app-shell .room-dock {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.app-shell .ambient-switcher,
+:root.solid-theme .app-shell .ambient-switcher,
+:root.light-theme .app-shell .ambient-switcher {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-sm);
+}
+
+.app-shell .composer-strip .floating-prompt-bar {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
+}
+
+/* ── Cards & chips: gallery rail cards, split chips, agents, minimized ── */
+.app-shell .room-card {
+  border: 1px solid var(--border);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(0, 0, 0, 0.45);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.01) 45%, rgba(0, 0, 0, 0.1) 100%),
+    color-mix(in srgb, var(--bg-primary) 40%, transparent);
+  box-shadow: var(--depth-bevel), var(--depth-shadow-sm);
+}
+
+.app-shell .room-card:hover {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
+}
+
+:root.light-theme .app-shell .room-card {
+  border-top-color: rgba(255, 255, 255, 0.8);
+  border-bottom-color: rgba(0, 0, 0, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.15) 45%, rgba(0, 0, 0, 0.02) 100%),
+    color-mix(in srgb, #ffffff 40%, transparent);
+}
+
+.app-shell .split-switch-item,
+.app-shell .minimized-room,
+.app-shell .agent-room-card {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-sm);
+}
+
+.app-shell .split-switch-item:hover,
+.app-shell .minimized-room:hover,
+.app-shell .agent-room-card:hover,
+.app-shell .agent-room-card.active {
+  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
+}
+
+/* ── Keys: every small button gets an extruded hover and a pressed-in active ── */
+.app-shell .svt-btn:hover,
+.app-shell .room-action:hover,
+.app-shell .ambient-switch-btn:hover,
+.app-shell .drawer-tab-btn:hover,
+.app-shell .drawer-close-btn:hover,
+.app-shell .split-target-btn:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.app-shell .svt-btn:active,
+.app-shell .room-action:active,
+.app-shell .ambient-switch-btn:active,
+.app-shell .drawer-tab-btn:active,
+.app-shell .drawer-close-btn:active,
+.app-shell .split-target-btn:active,
+.app-shell .minimized-room:active,
+.app-shell .room-card:active {
+  box-shadow: var(--depth-pressed);
+}
+
+/* Selected mode/tool reads as a key held down, not a floating one. */
+.app-shell .ambient-switch-btn.active,
+.app-shell .svt-btn.svt-active,
+.app-shell .drawer-tab-btn.active,
+.app-shell .split-target-btn.active {
+  box-shadow: var(--depth-pressed);
 }

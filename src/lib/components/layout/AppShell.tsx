@@ -385,7 +385,7 @@ export default function AppShell() {
   const [auxEditorHeight, setAuxEditorHeight] = useState(layoutState.auxEditorHeight);
   const [focusedRoom, setFocusedRoom] = useState<RoomId | null>('terminal');
   const [minimizedRooms, setMinimizedRooms] = useState<Set<RoomId>>(() => new Set());
-  const [ambientLayout, setAmbientLayout] = useState<AmbientLayout>('focus');
+  const [ambientLayout, setAmbientLayout] = useState<AmbientLayout>('gallery');
   // Each ambient layout keeps its own minimize/focus state so switching modes
   // never pollutes another mode's arrangement.
   const perLayoutState = useRef<Record<AmbientLayout, { focused: RoomId | null; minimized: Set<RoomId> }>>({
@@ -2073,19 +2073,28 @@ export default function AppShell() {
                   {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
                   <ActivityButton
                     item={{
+                      id: 'focus',
+                      title: ambientLayout === 'focus' ? 'Back to split' : 'Focus — single panel',
+                      active: ambientLayout === 'focus',
+                      onClick: () => switchAmbientLayout(ambientLayout === 'focus' ? 'gallery' : 'focus'),
+                      icon: <Icon><rect x="4" y="4" width="16" height="16" rx="1.5" /></Icon>,
+                    }}
+                  />
+                  <ActivityButton
+                    item={{
                       id: 'split',
-                      title: ambientLayout === 'gallery' ? 'Exit split view' : 'Split view — two panels side by side',
+                      title: ambientLayout === 'gallery' ? 'Back to split' : 'Split — two panels',
                       active: ambientLayout === 'gallery',
-                      onClick: () => switchAmbientLayout(ambientLayout === 'gallery' ? 'focus' : 'gallery'),
+                      onClick: () => switchAmbientLayout(ambientLayout === 'gallery' ? 'gallery' : 'gallery'),
                       icon: <Icon><rect x="3" y="4" width="7.5" height="16" rx="1.3" /><rect x="13.5" y="4" width="7.5" height="16" rx="1.3" /></Icon>,
                     }}
                   />
                   <ActivityButton
                     item={{
                       id: 'fleet',
-                      title: ambientLayout === 'vibe' ? 'Back to workspace' : 'Fleet — all agents',
+                      title: ambientLayout === 'vibe' ? 'Back to split' : 'Fleet — all agents',
                       active: ambientLayout === 'vibe',
-                      onClick: () => switchAmbientLayout(ambientLayout === 'vibe' ? 'focus' : 'vibe'),
+                      onClick: () => switchAmbientLayout(ambientLayout === 'vibe' ? 'gallery' : 'vibe'),
                       icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
                     }}
                   />
