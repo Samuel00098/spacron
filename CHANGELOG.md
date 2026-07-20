@@ -3,6 +3,22 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.6.10] - 2026-07-20
+
+A release that makes proxied sites in the preview browser behave like real tabs — logins persist across restarts and most web apps now load and work correctly — plus a redesigned Focus layout and an app-wide pass of 3D depth styling.
+
+### Added
+
+- **Persistent logins in the preview browser** — the proxy's upstream client now keeps a cookie jar on disk (cleared by "clear browsing data", flushed on stop, and saved periodically), so signing into a proxied site survives an app restart instead of starting over every session. The jar file is created owner-only (0600 on Unix; Windows keeps the user-profile DACL of the config directory) since it holds live session tokens.
+- **Universal request bridge for proxied sites** — fetch/XHR/sendBeacon/EventSource and WebSocket traffic from a proxied page is now routed through the proxy automatically (generalized from the old YouTube-Music-only bridge), fixing CORS failures and broken relative-URL resolution that previously made most external SPAs unusable inside the preview browser. `history.pushState`/`replaceState` is wrapped too, so client-side route changes keep the address bar in sync.
+- **Dedicated Focus toggle** — Focus is now its own dock button instead of sharing one with Split, so switching layouts is unambiguous.
+
+### Changed
+
+- **Focus layout redesigned** — the focused panel now sits beside a vertical rail of the other open rooms as full-width raised cards (Stage Manager–style) instead of a horizontal strip underneath it, with a scroll mask and taller card content.
+- **App-wide 3D depth pass** — panels, dock chrome, cards, chips, and buttons across the shell now share one consistent lit-edge-and-shadow language (bevel highlight, contact shadow, ambient shadow, pressed state) in place of the previous per-component shadows.
+
+
 ## [v0.6.9] - 2026-07-12
 
 A patch release that removes the voice-mode confirmation gate entirely. The assistant no longer performs an action and then asks "want me to go ahead?" — every action executes immediately, and spoken replies state what's happening instead of asking permission for something that already ran.
