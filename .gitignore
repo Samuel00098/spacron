@@ -21,6 +21,8 @@ vite.config.ts.timestamp-*
 *_elevation_analysis.md
 *_go_mainstream.md
 ai-researcher-report-*.md
+docs/market-research-2026.md
+docs/premium-experience-roadmap.md
 
 # Local agent/review reports — generated artifacts, not source
 code-reviewer-report-*.md
