@@ -748,9 +748,10 @@ export const xaiRealtimeVoiceOptions: TtsVoiceOption[] = [
 ];
 
 /**
- * When on, the orchestrator speaks a status update aloud each time an agent
- * finishes/blocks/fails, independent of whether the voice conversation overlay
- * is open. Completed turns include the AI transcript recap when one is available.
+ * When on, the orchestrator gives a soft audible nudge (a short chime) each
+ * time an agent finishes/blocks/fails, independent of whether the voice
+ * conversation overlay is open. The recap lives in the chat completion card;
+ * during a live realtime voice call the model mentions it in a one-liner instead.
  */
 export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
 

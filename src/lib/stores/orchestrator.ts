@@ -42,7 +42,7 @@ import {
   announceAgentCompletions,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
-import { speak, getVoiceReplyConfigError } from '$lib/services/tts';
+import { playNudge } from '$lib/services/nudge';
 import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
 import {
   createTaskRecord,
@@ -492,54 +492,32 @@ async function generateTranscriptSummary(
   });
 }
 
-// Warn once per session (not once per completion) when announcements are on but
-// the reply-TTS provider can't speak, instead of dropping every announcement
-// silently — a misconfigured provider otherwise looks exactly like a bug.
-let announceConfigWarned = false;
-
 /**
- * Speak a status update aloud when an agent turn ends, so the user gets a
- * hands-free heads-up ("Codex finished: Add dark mode — added the toggle in
- * Settings.tsx") whether or not the voice conversation overlay is open. When a
- * transcript summary is available it is spoken after the status line; blocked/
- * failed turns announce immediately with the reason left to the on-screen card.
+ * Give a light audible nudge when an agent turn ends — enough to pull the
+ * user's attention, not a spoken report. Outside voice mode this is a soft
+ * status-flavored chime (no TTS provider needed); during a live realtime voice
+ * call the model drops a short one-liner instead, since a chime would be odd
+ * mid-conversation. The recap lives in the chat completion card, not the audio.
  */
 function announceCompletionAloud(
   name: string,
   status: CompletionSummary['status'],
-  title: string,
-  summary?: string | null
+  title: string
 ): void {
   if (!get(announceAgentCompletions)) return;
-  const line =
-    status === 'blocked' ? `${name} needs your input: ${title}.` :
-    status === 'failed' ? `${name} failed: ${title}.` :
-    summary ? `${name} finished: ${title}. ${summary}` :
-    `${name} finished: ${title}.`;
   if (get(agentVoiceModeActive)) {
-    // Voice conversation open. With a realtime engine, inject the update
-    // into the live call so the model announces it in its own voice. With the
-    // pipeline engine (announceViaRealtimeVoice returns false), the auto-speak
-    // effect reads the completion card instead — skip here to avoid
-    // double-speaking.
+    const line =
+      status === 'blocked' ? `${name} needs your input: ${title}.` :
+      status === 'failed' ? `${name} failed: ${title}.` :
+      `${name} finished: ${title}.`;
+    // With a realtime engine, inject the update into the live call so the model
+    // mentions it in its own voice. With the pipeline engine
+    // (announceViaRealtimeVoice returns false), the auto-speak effect reads the
+    // completion card instead — skip here to avoid double-speaking.
     announceViaRealtimeVoice(line);
     return;
   }
-  const configError = getVoiceReplyConfigError();
-  if (configError) {
-    if (!announceConfigWarned) {
-      announceConfigWarned = true;
-      showToast(
-        `Agent announcements are on but can't be spoken: ${configError}`,
-        'warning',
-        9000,
-        false,
-        { label: 'Open Settings', onClick: openSettings }
-      );
-    }
-    return;
-  }
-  void speak(line).catch(() => {});
+  playNudge(status);
 }
 
 /** True while `sessionId` is the live, running terminal still leased to `taskId`. */
@@ -764,28 +742,10 @@ async function completeLeasedTask(
 
   const chatMsgId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const willSummarize = !!(updated.transcript?.trim()) && isAiAvailable();
-  const voiceMode = get(agentVoiceModeActive);
 
-  // Kick off the transcript summary in every mode (not just voice), so both the
-  // chat card and the spoken announcement carry a real recap of what the agent
-  // did instead of a canned "finished" line. Resolves null on failure.
-  const summaryPromise: Promise<string | null> = willSummarize && updated.transcript
-    ? generateTranscriptSummary(updated.transcript, completionStatus)
-        .then((raw) => raw.trim() || null)
-        .catch(() => null)
-    : Promise.resolve(null);
-
-  // In voice mode, block on summary generation so the live call speaks a
-  // meaningful result in one utterance.
-  let voiceSummary: string | null = null;
-  if (voiceMode) voiceSummary = await summaryPromise;
-
-  // Announce now unless we're waiting on a summary to enrich a "done" line;
-  // blocked/failed lines carry the reason via the title and go out immediately.
-  const deferAnnouncement = !voiceMode && completionStatus === 'done' && willSummarize;
-  if (!deferAnnouncement) {
-    announceCompletionAloud(name, completionStatus, task.title, voiceSummary);
-  }
+  // The audible cue is just a nudge — it never waits on (or speaks) the
+  // summary. The recap is generated in the background for the chat card.
+  announceCompletionAloud(name, completionStatus, task.title);
 
   const completionData: CompletionSummary = {
     status: completionStatus,
@@ -793,8 +753,8 @@ async function completeLeasedTask(
     taskTitle: task.title,
     elapsedSec: elapsed,
     reason: completionReason ?? null,
-    summary: voiceSummary,
-    summaryPending: willSummarize && !voiceSummary,
+    summary: null,
+    summaryPending: willSummarize,
   };
 
   appendChat(task.projectId, {
@@ -805,16 +765,16 @@ async function completeLeasedTask(
     completion: completionData,
   });
 
-  if (willSummarize && !voiceSummary) {
+  if (willSummarize && updated.transcript) {
     const projectId = task.projectId;
-    void summaryPromise.then((summary) => {
-      patchChat(projectId, chatMsgId, {
-        completion: { ...completionData, summary, summaryPending: false },
+    void generateTranscriptSummary(updated.transcript, completionStatus)
+      .then((raw) => raw.trim() || null)
+      .catch(() => null)
+      .then((summary) => {
+        patchChat(projectId, chatMsgId, {
+          completion: { ...completionData, summary, summaryPending: false },
+        });
       });
-      if (deferAnnouncement) {
-        announceCompletionAloud(name, completionStatus, task.title, summary);
-      }
-    });
   }
 }
 

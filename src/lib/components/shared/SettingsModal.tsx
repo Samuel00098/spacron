@@ -1982,10 +1982,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     </SettingRow>
                   )}
                   <SettingRow
-                    title="Announce agent results"
-                    detail="Speak a status line aloud when an agent finishes, blocks, or fails — even when voice mode is closed."
+                    title="Agent result nudge"
+                    detail="Play a soft chime when an agent finishes, blocks, or fails — even when voice mode is closed. The recap lands in the chat card."
                   >
-                    <Toggle label="Toggle agent result announcements" checked={announceCompletions} onChange={announceAgentCompletions.set} />
+                    <Toggle label="Toggle agent result nudge" checked={announceCompletions} onChange={announceAgentCompletions.set} />
                   </SettingRow>
                 </Section>
               </>
