@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
 import { loadJson } from '$lib/utils/storage';
-import { requestAmbientLayout, requestRoomControl } from '../layoutControl';
+import { requestRoomControl } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
@@ -204,7 +204,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       persistLayout(next);
       return next;
     });
-    requestAmbientLayout('development');
   },
   closeEnvManager: () => {
     set((l) => {
@@ -212,7 +211,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       persistLayout(next);
       return next;
     });
-    requestAmbientLayout('focus');
   },
 
   toggleSidebar: () => {
@@ -257,7 +255,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       if (view === 'http') {
         const next: LayoutState = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
-        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'tasks') {
@@ -268,25 +265,21 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       if (view === 'db') {
         const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
-        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'containers') {
         const next: LayoutState = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
-        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'toolbox') {
         const next: LayoutState = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
         persistLayout(next);
-        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'env') {
         const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
         persistLayout(next);
-        queueMicrotask(() => requestAmbientLayout('development'));
         return next;
       }
       if (view === 'youtube') {
@@ -353,14 +346,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('focus');
     } else {
       set((l) => {
         const next = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('development');
     }
   },
 
@@ -382,14 +373,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('focus');
     } else {
       set((l) => {
         const next = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('development');
     }
   },
 
@@ -401,14 +390,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('focus');
     } else {
       set((l) => {
         const next = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('development');
     }
   },
 
@@ -420,14 +407,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('focus');
     } else {
       set((l) => {
         const next = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('development');
     }
   },
 
@@ -440,7 +425,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('focus');
     } else {
       set((l) => {
         const next = {
@@ -457,7 +441,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       });
-      requestAmbientLayout('development');
     }
   },
 

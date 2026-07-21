@@ -1862,12 +1862,12 @@ export default function AppShell() {
   function switchAmbientLayout(requested: AmbientLayout) {
     // One-window shell: only `focus` (the single terminal/agent screen), `vibe`
     // (the optional Fleet grid) and `gallery` (the Split view — two rooms side by
-    // side) are reachable. Any request for development/preview — including
-    // incidental ones from tool toggles that call
-    // requestAmbientLayout('development') — collapses to focus, so opening a tool
-    // never re-tiles the layout or unmounts the terminal. `gallery` is only ever
-    // requested by an explicit user action (the Split toggle / cycle shortcut),
-    // never incidentally, so entering the Split view always stays intentional.
+    // side) are reachable. Any request for development/preview collapses to
+    // focus. The right-drawer tools no longer request a layout at all — the
+    // drawer is a side panel that works in every layout, so opening Toolbox/
+    // HTTP/DB/Containers/Env can't pull you out of Split or Fleet. `gallery` is
+    // only ever requested by an explicit user action (the Split toggle / cycle
+    // shortcut), so entering the Split view always stays intentional.
     const nextLayout: AmbientLayout =
       requested === 'vibe' ? 'vibe' : requested === 'gallery' ? 'gallery' : 'focus';
     if (nextLayout === ambientLayout) return;
