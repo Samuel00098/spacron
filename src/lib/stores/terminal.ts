@@ -214,12 +214,22 @@ const terminalProjectStates = new Map<string, TerminalProjectState>();
 // correct. Each entry carries its own `projectId`.
 export const allProjectSessions = writable<TerminalSessionInfo[]>([]);
 
+// The same idea one level up: each project's WHOLE terminal state (sessions,
+// pane assignments, mosaic, …). The terminal room mounts one TerminalPanel per
+// open project and parks the inactive ones, and a parked panel reads its slice
+// from here — the visible `paneAssignments`/`terminalMosaic`/… stores always
+// describe the active project only.
+export const projectTerminalStates = writable<Map<string, TerminalProjectState>>(new Map());
+
 function publishAllProjectSessions() {
   const out: TerminalSessionInfo[] = [];
-  for (const state of terminalProjectStates.values()) {
+  const snapshot = new Map<string, TerminalProjectState>();
+  for (const [id, state] of terminalProjectStates) {
     for (const session of state.sessions) out.push({ ...session });
+    snapshot.set(id, cloneProjectState(state));
   }
   allProjectSessions.set(out);
+  projectTerminalStates.set(snapshot);
 }
 
 const terminalSessionProjects = new Map<number, string>();

@@ -476,6 +476,15 @@ body.dragging-row { cursor: row-resize !important; }
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
 }
 
+/* A mosaic cell whose shell was promoted to an agent — the live terminal now
+   lives in that agent's own room, so this cell only points at it. */
+.terminal-fullscreen .empty-pane-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 .terminal-fullscreen .empty-pane-actions {
   display: flex;
   flex-direction: column;

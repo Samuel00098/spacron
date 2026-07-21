@@ -22,10 +22,12 @@ import {
   devActivePaneIndex,
   devGridLayout,
   devTerminalMosaic,
+  projectTerminalStates,
   type GridLayout,
   type TerminalMosaic,
+  type TerminalSessionInfo,
 } from '$lib/stores/terminal';
-import { activeProject } from '$lib/stores/workspace';
+import { activeProject, projects } from '$lib/stores/workspace';
 import { activeFile } from '$lib/stores/editor';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
@@ -72,14 +74,59 @@ function dispatchPaneResizeEnd() {
 // the drag itself from a plain mousedown on the pane titlebar.
 const PANE_DRAG_THRESHOLD = 5;
 
-export default function TerminalPanel({ devMode = false }: { devMode?: boolean } = {}) {
-  const allSessions = useStore(devMode ? devSessions : sessions);
-  const activeId = useStore(devMode ? devActiveSessionId : activeSessionId);
-  const assignments = useStore(devMode ? devPaneAssignments : paneAssignmentsOrig);
-  const activePane = useStore(devMode ? devActivePaneIndex : activePaneIndex);
-  const currentLayout = useStore(devMode ? devGridLayout : gridLayout);
-  const storeMosaic = useStore(devMode ? devTerminalMosaic : terminalMosaic);
-  const project = useStore(activeProject);
+// Shown by a parked panel whose project has no terminal state yet. Frozen and
+// module-level so its identity is stable across renders.
+const EMPTY_PANEL_STATE = Object.freeze({
+  sessions: [] as TerminalSessionInfo[],
+  activeSessionId: null as number | null,
+  gridLayout: 'single' as GridLayout,
+  mosaic: null as TerminalMosaic | null,
+  paneAssignments: [null] as (number | null)[],
+  activePaneIndex: 0,
+});
+
+export default function TerminalPanel({
+  devMode = false,
+  projectId = null,
+  isActiveProject = true,
+}: { devMode?: boolean; projectId?: string | null; isActiveProject?: boolean } = {}) {
+  const visibleSessions = useStore(devMode ? devSessions : sessions);
+  const visibleActiveId = useStore(devMode ? devActiveSessionId : activeSessionId);
+  const visibleAssignments = useStore(devMode ? devPaneAssignments : paneAssignmentsOrig);
+  const visibleActivePane = useStore(devMode ? devActivePaneIndex : activePaneIndex);
+  const visibleLayout = useStore(devMode ? devGridLayout : gridLayout);
+  const visibleMosaic = useStore(devMode ? devTerminalMosaic : terminalMosaic);
+  const allProjectStates = useStore(projectTerminalStates);
+  const activeProjectValue = useStore(activeProject);
+  const openProjects = useStore(projects);
+
+  // The terminal room mounts one panel per open project so a project switch
+  // parks a panel instead of unmounting it — unmounting disposes every xterm
+  // underneath, and rebuilding one replays raw scrollback into a fresh terminal.
+  //
+  // A PARKED panel (its project isn't the active one) reads that project's own
+  // state, because the visible stores always mirror the active project. It is
+  // display-only: every effect below that writes state, spawns a shell or binds
+  // a window listener is gated on `isActiveProject`, so a parked panel can
+  // neither steal input nor mutate the project you are actually working in.
+  const isParked = !isActiveProject && !devMode && Boolean(projectId);
+  // A parked panel NEVER falls back to the visible stores. Its project may have
+  // no terminal state yet (it is added to the open list before its state is
+  // restored), and borrowing the active project's state there would mount a
+  // second TerminalPane for sessions the visible panel already owns — two xterms
+  // on one session id, fighting over a single data callback, so the one you are
+  // looking at goes dead. An empty state renders an empty panel, which is right.
+  const parked = isParked ? allProjectStates.get(projectId!) ?? EMPTY_PANEL_STATE : null;
+
+  const allSessions = parked ? parked.sessions : visibleSessions;
+  const activeId = parked ? parked.activeSessionId : visibleActiveId;
+  const assignments = parked ? parked.paneAssignments : visibleAssignments;
+  const activePane = parked ? parked.activePaneIndex : visibleActivePane;
+  const currentLayout = parked ? parked.gridLayout : visibleLayout;
+  const storeMosaic = parked ? parked.mosaic : visibleMosaic;
+  const project = parked && projectId
+    ? openProjects.get(projectId) ?? activeProjectValue
+    : activeProjectValue;
   const file = useStore(activeFile);
   const tabsRef = useAction<HTMLDivElement>(clampHorizontalScroll);
 
@@ -639,6 +686,10 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   }
 
   useEffect(() => {
+    // Parked panels are display-only — `paneAssignments` is the ACTIVE project's
+    // store, so writing it from a background panel would reshuffle the panes of
+    // the project the user is actually in.
+    if (!isActiveProject) return;
     paneAssignments.update((current) => {
       let changed = false;
       const next = [...current];
@@ -655,7 +706,7 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
 
       return changed ? next : current;
     });
-  }, [allSessions, shellSessions]);
+  }, [allSessions, shellSessions, isActiveProject]);
 
   // Auto-open a shell so the terminal room lands on a live terminal instead of the
   // empty "Open Shell" placeholder. Only fires when pane 0 has nothing to show and
@@ -665,6 +716,9 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   // session first.
   const autoOpenedShellRef = useRef(false);
   useEffect(() => {
+    // Never auto-spawn a shell from a parked panel: `createTerminalSession`
+    // targets the active project, so it would open a stray terminal there.
+    if (!isActiveProject) return;
     if (autoOpenedShellRef.current) return;
     const id = window.setTimeout(() => {
       if (autoOpenedShellRef.current) return;
@@ -675,9 +729,13 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
       void createTerminalSession(getStartingCwd(), 0);
     }, 80);
     return () => window.clearTimeout(id);
-  }, [shellSessions]);
+  }, [shellSessions, isActiveProject]);
 
+  // These are single global slots, so only the panel for the active project may
+  // claim them — otherwise a parked panel would grow/close cells in the mosaic
+  // the user is looking at.
   useEffect(() => {
+    if (!isActiveProject) return;
     registerMosaicGrow(addTiledPane);
     registerMosaicClose((paneIndex) => {
       if (columnsRef.current.reduce((sum, column) => sum + column.cells.length, 0) > 1) {
@@ -688,7 +746,7 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
       registerMosaicGrow(null);
       registerMosaicClose(null);
     };
-  }, []);
+  }, [isActiveProject]);
 
   // Keep the visible grid in sync with the canonical layout. A persisted custom
   // mosaic wins; otherwise fall back to the named preset. This reacts to the
@@ -716,6 +774,9 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
   }, [assignments]);
 
   useEffect(() => {
+    // A parked panel is pointer-inert, so it has no drag to track — and binding
+    // these would run every mounted project's drag handlers on one gesture.
+    if (!isActiveProject) return;
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => {
@@ -724,7 +785,7 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
       // Drop the drag cursor class if we unmount mid-drag.
       document.body.classList.remove('dragging-pane');
     };
-  }, [handleMouseMove, handleMouseUp]);
+  }, [handleMouseMove, handleMouseUp, isActiveProject]);
 
   useEffect(() => {
     function handleWindowKeyDown(event: KeyboardEvent) {
@@ -759,13 +820,23 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
       }
     }
 
+    // One keydown handler, not one per mounted project — Alt+Arrow must move a
+    // pane in the project you're in, not in every parked one too.
+    if (!isActiveProject) return;
     window.addEventListener('keydown', handleWindowKeyDown);
     return () => window.removeEventListener('keydown', handleWindowKeyDown);
-  }, [activePane]);
+  }, [activePane, isActiveProject]);
 
   const maximizedCell = maximizedPaneIndex !== null
     ? columns.flatMap((column) => column.cells).find((cell) => cell.index === maximizedPaneIndex)
     : null;
+  const maximizedCellIsAgent = (() => {
+    if (!maximizedCell) return false;
+    const id = assignments[maximizedCell.index];
+    if (id == null) return false;
+    const session = allSessions.find((entry) => entry.id === id);
+    return Boolean(session && isAgentSession(session));
+  })();
 
   return (
     <div className="terminal-fullscreen">
@@ -810,7 +881,10 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
       >
         {maximizedCell ? (
           <div className="terminal-maximized-layer">
-            {assignments[maximizedCell.index] != null && (
+            {/* Same duplicate guard as the cells below: if this pane's session
+                was promoted to an agent while maximized, its terminal now lives
+                in the agent room and must not be mounted a second time here. */}
+            {assignments[maximizedCell.index] != null && !maximizedCellIsAgent && (
               <TerminalPane
                 key={assignments[maximizedCell.index] ?? undefined}
                 sessionId={assignments[maximizedCell.index] as number}
@@ -844,7 +918,28 @@ export default function TerminalPanel({ devMode = false }: { devMode?: boolean }
                         data-drop-label={isDropTarget ? `Insert ${paneDropState!.over!.edge}` : undefined}
                         style={{ flex: `${cellHeights[colIdx]?.[cellIdx] ?? 100} 1 0%` }}
                       >
-                        {sessionId != null ? (
+                        {isAgentCell ? (
+                          /* This session was promoted to an agent (the user
+                             typed `claude`/`codex` into a plain shell), so it
+                             now has its own agent room. Mounting a TerminalPane
+                             here too would put TWO xterms on one session id —
+                             and `registerDataCallback` keeps a single callback
+                             per session, so one of them would silently stop
+                             receiving output. Show a pointer instead. */
+                          <div className="empty-pane-container agent-moved-pane">
+                            <div className="empty-pane-actions">
+                              <span className="empty-pane-hint">
+                                {assignedSession?.agentName || assignedSession?.title || 'Agent'} is open in its own room
+                              </span>
+                              <button
+                                className="empty-action-btn"
+                                onClick={() => { assignToPane(cell.index, null); }}
+                              >
+                                Free this pane
+                              </button>
+                            </div>
+                          </div>
+                        ) : sessionId != null ? (
                           <TerminalPane
                             key={sessionId}
                             sessionId={sessionId}

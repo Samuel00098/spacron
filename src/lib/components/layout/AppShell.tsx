@@ -358,6 +358,15 @@ export default function AppShell() {
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
+  const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
+  // Stable order so a panel never changes position (and gets re-parented) as
+  // projects come and go; the active project is always included even if
+  // `openProjectIds` hasn't caught up mid-switch.
+  const terminalHostProjectIds = useMemo(() => {
+    const ids = [...openProjectIdList];
+    if (activeProjectIdValue && !ids.includes(activeProjectIdValue)) ids.push(activeProjectIdValue);
+    return ids;
+  }, [openProjectIdList, activeProjectIdValue]);
   const shortcuts = useSettingsStore((s) => s.userShortcuts);
   const currentActiveSessionId = useStore(activeSessionId);
   const activeSessionIdRef = useRef(currentActiveSessionId);
@@ -1645,9 +1654,29 @@ export default function AppShell() {
       // The terminal room is the user's personal terminal only. Agents never
       // surface here — each runs in its own `agent:N` room (reachable from the
       // room dock / stack), keeping this grid free of agent panes and churn.
+      //
+      // One panel per OPEN PROJECT, with the inactive ones parked (hidden, but
+      // mounted and laid out at full size). A single panel would have to re-map
+      // its cells to the incoming project's sessions on every switch, which
+      // unmounts each pane's xterm and rebuilds it from replayed scrollback.
+      // Parked panels are display-only — see `isActiveProject` in TerminalPanel.
       return (
         <div className="terminal-room-body">
-          <TerminalPanel />
+          {terminalHostProjectIds.length > 0 ? (
+            terminalHostProjectIds.map((pid) => (
+              <div
+                key={pid}
+                className={`terminal-project-layer${pid === activeProjectIdValue ? '' : ' parked'}`}
+                inert={pid !== activeProjectIdValue}
+              >
+                <TerminalPanel projectId={pid} isActiveProject={pid === activeProjectIdValue} />
+              </div>
+            ))
+          ) : (
+            <div className="terminal-project-layer">
+              <TerminalPanel />
+            </div>
+          )}
           {projectSwitching && <div className="project-switch-overlay" />}
         </div>
       );

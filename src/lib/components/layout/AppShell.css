@@ -1478,6 +1478,24 @@
   container-name: center-panel;
 }
 
+/* One layer per open project — only the active project's is shown. Parked
+   layers are absolutely positioned at full size and hidden with visibility (not
+   display), so their terminals stay measured and correct instead of reflowing
+   to zero, and switching projects is a visibility flip rather than a rebuild. */
+.app-shell .terminal-project-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-shell .terminal-project-layer.parked {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .app-shell .agent-terminal-room {
   flex: 1;
   min-width: 0;
