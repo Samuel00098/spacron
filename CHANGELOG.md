@@ -5,7 +5,7 @@ All notable changes to Spacron will be documented here.
 
 ## [v0.7.0] - 2026-07-21
 
-Terminals and agents now stay alive wherever you go. Previously, leaving a room — visiting Home, switching layout, minimizing, or moving to another project — unmounted its terminal and rebuilt it by replaying scrollback into a fresh one, which left full-screen agent TUIs rendering garbage or nothing at all. Every one of those paths now keeps the pane mounted, so a running agent is exactly where you left it when you come back.
+Terminals and agents now stay alive wherever you go. Previously, leaving a room — visiting Home, switching layout, minimizing, or moving to another project — unmounted its terminal and rebuilt it by replaying scrollback into a fresh one, which left full-screen agent TUIs rendering garbage or nothing at all. Every one of those paths now keeps the pane mounted, so a running agent is exactly where you left it when you come back. Agent completions also stop talking at you: the cue is now a soft chime plus a recap card in the chat.
 
 ### Fixed
 
@@ -18,6 +18,8 @@ Terminals and agents now stay alive wherever you go. Previously, leaving a room 
 
 ### Changed
 
+- **Agent completions nudge instead of announce** — when an agent finishes, blocks, or fails, Spacron now plays a short synthesized two-note chime (rising = done, repeated = blocked, falling = failed) instead of speaking a status line aloud. The chime is Web Audio, so it needs no TTS provider or API key, and the AI recap of what the agent actually did still lands in the chat completion card. During a live realtime voice call the model keeps dropping a spoken one-liner rather than a chime. The setting is now "Agent result nudge".
+- **Agent recaps are generated in every mode** — the completion summary used to be produced only in voice mode, and the announcement itself was silently skipped whenever the reply-TTS provider had no API key, so outside voice mode you got nothing and no explanation. The recap is now generated regardless of mode and surfaced with the cue.
 - **Focus stage inset from the left drawer** — the focused panel is separated from the drawer by the same gap the stage uses elsewhere, so the two raised cards no longer read as one merged slab.
 
 
