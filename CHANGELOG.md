@@ -3,6 +3,24 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.7.0] - 2026-07-21
+
+Terminals and agents now stay alive wherever you go. Previously, leaving a room — visiting Home, switching layout, minimizing, or moving to another project — unmounted its terminal and rebuilt it by replaying scrollback into a fresh one, which left full-screen agent TUIs rendering garbage or nothing at all. Every one of those paths now keeps the pane mounted, so a running agent is exactly where you left it when you come back.
+
+### Fixed
+
+- **Panes survive Home and layout switches** — Home is now an overlay instead of a screen that tears down the workspace, `openWorkspace()` no-ops when you're already in the target workspace, and the stage mounts from every open room rather than only the visible ones. Minimizing a room, switching layout, or opening the Fleet/empty states hides the terminal instead of disposing it.
+- **Agent panes survive project switches** — agent rooms were derived from a store that only ever reflects the active project, so leaving a project disposed its agents' terminals. Panes are now mounted from sessions across all open projects and hidden when out of view, and they still resolve their title, preset and owning project while in the background.
+- **Personal terminal panes survive project switches** — the terminal room mounted a single panel bound to the active project, so switching re-mapped its cells onto the incoming project's sessions and rebuilt every terminal. Each open project now gets its own panel, with inactive ones parked and display-only.
+- **A shell promoted to an agent no longer starves one of its terminals** — typing `claude` in a mosaic shell kept its grid slot while also opening an agent room, and only one of the two terminals received output. The mosaic cell now links to the agent's room instead of mounting a duplicate pane.
+- **The agent worktree badge stays visible** — the badge resolved its session from the active project's list only, so it vanished on a project switch even while the agent kept working. The worktree is also persisted now, so a restart no longer leaves the badge blank and orphans the worktree on close.
+- **Side panels no longer re-tile the layout** — opening or closing Toolbox, HTTP, DB, Containers or Env forced a layout change, pulling you out of Split or Fleet. The right drawer works in every layout and now leaves it alone.
+
+### Changed
+
+- **Focus stage inset from the left drawer** — the focused panel is separated from the drawer by the same gap the stage uses elsewhere, so the two raised cards no longer read as one merged slab.
+
+
 ## [v0.6.10] - 2026-07-20
 
 A release that makes proxied sites in the preview browser behave like real tabs — logins persist across restarts and most web apps now load and work correctly — plus a redesigned Focus layout and an app-wide pass of 3D depth styling.
