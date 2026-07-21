@@ -5,7 +5,7 @@ import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
-import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, terminalRoomOpen } from './layout';
+import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, terminalRoomOpen, homeScreenOpen } from './layout';
 import { layoutSnapshot, requestAmbientLayout, type AmbientLayout } from './layoutControl';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
@@ -852,6 +852,8 @@ export function createNewWorkspace(name?: string) {
 
   recentWorkspaces.update((ws) => [newWorkspace, ...ws]);
   activeWorkspaceId.set(id);
+  // Every entry point into a workspace closes the Home overlay (see homeScreenOpen).
+  homeScreenOpen.set(false);
 
   // Clear current active project and folder list
   clearActiveProject();
@@ -860,6 +862,18 @@ export function createNewWorkspace(name?: string) {
 }
 
 export async function openWorkspace(workspaceId: string) {
+  // Re-entering the workspace you are already in (the usual Home → back trip) is
+  // a no-op beyond closing the Home overlay. The full path below clears every
+  // store, re-opens each project from the backend and re-runs restoreProjectState
+  // — for the SAME workspace that rebuilds state that is already live, and any
+  // terminal pane that unmounted in the meantime has to reattach by replaying its
+  // scrollback. Replaying a full-screen agent TUI's raw stream into a fresh xterm
+  // is what left agents rendering garbage (or nothing) after a trip home.
+  if (workspaceId === get(activeWorkspaceId) && get(projects).size > 0) {
+    homeScreenOpen.set(false);
+    return;
+  }
+
   // Save the current project's state before leaving it so it can be restored later
   saveCurrentProjectState();
   // Drop any debounced autosave still queued from the outgoing project — the
@@ -890,6 +904,8 @@ export async function openWorkspace(workspaceId: string) {
   const wsList = get(recentWorkspaces);
   const targetWs = wsList.find((w) => w.id === workspaceId);
   if (!targetWs) return;
+
+  homeScreenOpen.set(false);
 
   // Clear current project stores
   clearAllStores();
@@ -975,6 +991,7 @@ async function attachProjectToActiveWorkspace(project: Project, path: string) {
 
   activeProjectId.set(project.id);
   setActiveTerminalProject(project.id);
+  homeScreenOpen.set(false);
   await restoreProjectState(project.id, project.root_path);
 
   // Update active workspace

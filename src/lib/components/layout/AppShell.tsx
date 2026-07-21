@@ -53,6 +53,7 @@ import {
   closeAgentSpawn,
   openEnvManager,
   terminalRoomOpen as terminalRoomOpenStore,
+  homeScreenOpen,
 } from '$lib/stores/layout';
 import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
 import { toggleCommandPalette } from '$lib/stores/commandpalette';
@@ -348,6 +349,11 @@ export default function AppShell() {
 
   const layoutState = useLayoutStore();
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  // Home is an overlay on top of the still-mounted workspace (see
+  // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
+  // so it is the only thing rendered.
+  const homeOpen = useStore(homeScreenOpen);
+  const showWelcome = !workspaceId || homeOpen;
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
   const shortcuts = useSettingsStore((s) => s.userShortcuts);
@@ -1933,15 +1939,21 @@ export default function AppShell() {
     // decide which panes are visible and how they lay out.
     const isVibe = ambientLayout === 'vibe';
     const isSplit = ambientLayout === 'gallery';
-    const persistentStageRooms = visibleRooms.filter(isPersistentRoomId);
-    const hasAgents = persistentStageRooms.some(isAgentRoomId);
+    // Mounted from `openRooms`, NOT `visibleRooms`: a minimized room is still an
+    // open one, so it keeps its xterm mounted (just hidden) instead of being
+    // disposed. Minimizing — and any layout switch that swaps in a different
+    // minimized set, since each mode keeps its own — used to unmount the pane and
+    // force the terminal to rebuild and reattach on restore.
+    const persistentStageRooms = openRooms.filter(isPersistentRoomId);
+    const visibleStageRooms = visibleRooms.filter(isPersistentRoomId);
+    const hasAgents = visibleStageRooms.some(isAgentRoomId);
 
     // Which rooms occupy the stage right now:
     //   focus → the active room only
     //   split → primary (active) + secondary (split), side by side
     //   vibe  → every running agent
     const stageRooms: RoomId[] = isVibe
-      ? persistentStageRooms.filter(isAgentRoomId)
+      ? visibleStageRooms.filter(isAgentRoomId)
       : isSplit
         ? ([activeRoom, splitRoom].filter((room): room is RoomId => room !== null))
         : activeRoom
@@ -1951,26 +1963,14 @@ export default function AppShell() {
     // Non-terminal rooms that must be mounted as their own pane (editor/preview/…).
     const nonPersistentStageRooms = stageRooms.filter((room) => !isPersistentRoomId(room));
 
-    // Empty states unmount nothing worth keeping (no agents / no active room), so
-    // they can short-circuit — matching the prior Focus/Fleet empty behaviour.
-    if (isVibe && !hasAgents) {
-      return (
-        <>
-          <div className="focused-room empty-stage" aria-label="No agents running">
-            <p className="vibe-empty-msg">Open an agent to see it here</p>
-          </div>
-          {renderMinimizedRooms()}
-        </>
-      );
-    }
-    if (!isVibe && !activeRoom) {
-      return (
-        <>
-          <div className="focused-room empty-stage" aria-label="Empty workspace" />
-          {renderMinimizedRooms()}
-        </>
-      );
-    }
+    // Empty states (Fleet with no agents / no active room) must NOT short-circuit
+    // past the stage: returning a bare placeholder here unmounts every mounted
+    // pane, so flipping to Fleet with only a personal terminal open would dispose
+    // that terminal. `stageRooms` is already empty in both cases, so the stage
+    // renders with every pane hidden — the message just layers on top of it.
+    const emptyStageMessage = isVibe && !hasAgents
+      ? 'Open an agent to see it here'
+      : (!isVibe && !activeRoom ? '' : null);
 
     const stageModifier = isVibe ? ' vibe-grid' : isSplit ? ' split-grid' : '';
     // In Split, force the primary room to the left column and the secondary to the
@@ -1984,7 +1984,11 @@ export default function AppShell() {
         <div
           className={`focused-room stage-layers${stageModifier}`}
           style={isSplit ? ({ '--split-cols': stageRooms.length } as React.CSSProperties) : undefined}
+          aria-label={emptyStageMessage ? 'No agents running' : undefined}
         >
+          {emptyStageMessage !== null && (
+            <p className="vibe-empty-msg stage-empty-msg">{emptyStageMessage}</p>
+          )}
           {persistentStageRooms.map((room) => {
             // Focus: only the active pane is visible. Split: the primary+secondary
             // panes. Fleet: every agent pane. Off-stage terminals stay mounted but
@@ -2026,8 +2030,16 @@ export default function AppShell() {
       <UpdateBanner />
 
       <div className="zoom-wrapper">
-        {workspaceId ? (
-          <div className="zoom-content">
+        {/* The workspace stays MOUNTED whenever one is open — the Home screen
+            below layers over it rather than replacing it. Unmounting this
+            subtree disposes every xterm, so a trip home would kill each
+            terminal's view and force a reattach-by-replay on return (which is
+            what broke running agents' rendering). `home-hidden` hides it with
+            visibility, never display, so the panes keep their measured size and
+            are instantly correct when Home closes. */}
+        <div className="zoom-content">
+        {workspaceId && (
+          <div className={`workspace-layer${homeOpen ? ' home-hidden' : ''}`} inert={homeOpen}>
             {projectSwitching && <div className="project-switching-overlay" />}
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
@@ -2106,15 +2118,16 @@ export default function AppShell() {
               </div>
             </div>
           </div>
-        ) : (
-          <div className="zoom-content">
-            <div className="welcome-fullpage">
-              <div className="welcome-main">
-                <WelcomeScreen />
-              </div>
+        )}
+
+        {showWelcome && (
+          <div className={`welcome-fullpage${workspaceId ? ' over-workspace' : ''}`}>
+            <div className="welcome-main">
+              <WelcomeScreen />
             </div>
           </div>
         )}
+        </div>
 
         {/* Free-floating YouTube pop-up. Mounted at the app root (outside the
             ambient rooms grid) so it overlays any page and survives Focus /

@@ -2,7 +2,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
-import { openQuickCapture, openSettings } from '$lib/stores/layout';
+import { homeScreenOpen, openQuickCapture, openSettings } from '$lib/stores/layout';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
@@ -53,10 +53,14 @@ export default function TitleBar() {
     }
   }
 
+  // Home is an overlay over the live workspace, not a teardown. Nulling
+  // `activeWorkspaceId` here used to unmount every room — disposing each xterm
+  // and forcing a reattach-by-replay on return, which broke running agents'
+  // rendering. Raising the overlay leaves every PTY view mounted and fitted.
   function goHome() {
     const pid = useWorkspaceStore.getState().activeProjectId;
     if (pid) saveProjectState(pid);
-    useWorkspaceStore.getState().__set('activeWorkspaceId', null);
+    homeScreenOpen.set(true);
   }
 
   async function goBack() {

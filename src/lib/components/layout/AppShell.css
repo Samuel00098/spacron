@@ -30,6 +30,35 @@
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  /* Containing block for the Home overlay layered over a live workspace. */
+  position: relative;
+}
+
+/* The live workspace. It stays mounted while the Home screen is up so no xterm
+   is ever disposed on a trip home — `.home-hidden` uses visibility (never
+   display:none), which keeps every terminal pane laid out at full size, so
+   nothing reflows to zero and Home closing is instantly correct. */
+.app-shell .workspace-layer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.app-shell .workspace-layer.home-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Home layered over a live workspace: taken out of flow so it fills the shell
+   on its own. Deliberately no background — the workspace behind it is
+   visibility:hidden and paints nothing, so the wallpaper shows through exactly
+   as it does on the standalone Home screen. */
+.app-shell .welcome-fullpage.over-workspace {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
 }
 
 .app-shell .app-body {
@@ -550,6 +579,20 @@
   margin: auto;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* The empty-stage message now renders INSIDE the persistent stage (so nothing
+   unmounts when Fleet has no agents / no room is active). Centre it over the
+   stage rather than letting it participate in the layers/grid flow. */
+.app-shell .stage-layers > .stage-empty-msg {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
 }
 
 /* Fleet (vibe): kill entrance animation so every panel appears at once.

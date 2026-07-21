@@ -64,6 +64,14 @@ export const envManagerOpen = writable(false);
 export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
 
+// The Home (welcome) screen is an OVERLAY, not a route. Navigating home used to
+// null `activeWorkspaceId`, which unmounted the whole workspace tree — every
+// xterm was disposed and had to reattach-by-replay on the way back, which is
+// what killed a running agent's rendering. Keeping the workspace mounted behind
+// this flag means going home and coming back is a pure visibility toggle: the
+// PTY view is never rebuilt.
+export const homeScreenOpen = writable(false);
+
 // Mirror the modal flags out of Zustand for non-React (writable) consumers.
 useLayoutStore.subscribe((state) => {
   settingsOpen.set(state.settingsOpen);
