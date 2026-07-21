@@ -748,9 +748,9 @@ export const xaiRealtimeVoiceOptions: TtsVoiceOption[] = [
 ];
 
 /**
- * When on, the orchestrator speaks a short status line aloud each time an agent
- * finishes/blocks/fails ("Codex finished: Add dark mode"), independent of whether
- * the voice conversation overlay is open. The detailed recap stays on-demand.
+ * When on, the orchestrator speaks a status update aloud each time an agent
+ * finishes/blocks/fails, independent of whether the voice conversation overlay
+ * is open. Completed turns include the AI transcript recap when one is available.
  */
 export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
 

@@ -492,13 +492,17 @@ async function generateTranscriptSummary(
   });
 }
 
+// Warn once per session (not once per completion) when announcements are on but
+// the reply-TTS provider can't speak, instead of dropping every announcement
+// silently — a misconfigured provider otherwise looks exactly like a bug.
+let announceConfigWarned = false;
+
 /**
- * Speak a one-line status update aloud when an agent turn ends, so the user gets
- * a hands-free heads-up ("Codex finished: Add dark mode") whether or not the
- * voice conversation overlay is open. Best-effort: silently skipped when the
- * toggle is off or no reply-capable TTS provider is configured. The detailed
- * recap is intentionally left to the on-demand summary the orchestrator gives
- * when the user asks for one in voice mode.
+ * Speak a status update aloud when an agent turn ends, so the user gets a
+ * hands-free heads-up ("Codex finished: Add dark mode — added the toggle in
+ * Settings.tsx") whether or not the voice conversation overlay is open. When a
+ * transcript summary is available it is spoken after the status line; blocked/
+ * failed turns announce immediately with the reason left to the on-screen card.
  */
 function announceCompletionAloud(
   name: string,
@@ -510,7 +514,7 @@ function announceCompletionAloud(
   const line =
     status === 'blocked' ? `${name} needs your input: ${title}.` :
     status === 'failed' ? `${name} failed: ${title}.` :
-    summary ? summary :
+    summary ? `${name} finished: ${title}. ${summary}` :
     `${name} finished: ${title}.`;
   if (get(agentVoiceModeActive)) {
     // Voice conversation open. With a realtime engine, inject the update
@@ -521,7 +525,20 @@ function announceCompletionAloud(
     announceViaRealtimeVoice(line);
     return;
   }
-  if (getVoiceReplyConfigError()) return;
+  const configError = getVoiceReplyConfigError();
+  if (configError) {
+    if (!announceConfigWarned) {
+      announceConfigWarned = true;
+      showToast(
+        `Agent announcements are on but can't be spoken: ${configError}`,
+        'warning',
+        9000,
+        false,
+        { label: 'Open Settings', onClick: openSettings }
+      );
+    }
+    return;
+  }
   void speak(line).catch(() => {});
 }
 
@@ -749,18 +766,26 @@ async function completeLeasedTask(
   const willSummarize = !!(updated.transcript?.trim()) && isAiAvailable();
   const voiceMode = get(agentVoiceModeActive);
 
-  // In voice mode, block on summary generation so we can speak a meaningful
-  // result aloud instead of a canned line.
-  let voiceSummary: string | null = null;
-  if (willSummarize && voiceMode && updated.transcript) {
-    try {
-      voiceSummary = (await generateTranscriptSummary(updated.transcript, completionStatus)).trim();
-    } catch {
-      // fall through to canned line
-    }
-  }
+  // Kick off the transcript summary in every mode (not just voice), so both the
+  // chat card and the spoken announcement carry a real recap of what the agent
+  // did instead of a canned "finished" line. Resolves null on failure.
+  const summaryPromise: Promise<string | null> = willSummarize && updated.transcript
+    ? generateTranscriptSummary(updated.transcript, completionStatus)
+        .then((raw) => raw.trim() || null)
+        .catch(() => null)
+    : Promise.resolve(null);
 
-  announceCompletionAloud(name, completionStatus, task.title, voiceSummary);
+  // In voice mode, block on summary generation so the live call speaks a
+  // meaningful result in one utterance.
+  let voiceSummary: string | null = null;
+  if (voiceMode) voiceSummary = await summaryPromise;
+
+  // Announce now unless we're waiting on a summary to enrich a "done" line;
+  // blocked/failed lines carry the reason via the title and go out immediately.
+  const deferAnnouncement = !voiceMode && completionStatus === 'done' && willSummarize;
+  if (!deferAnnouncement) {
+    announceCompletionAloud(name, completionStatus, task.title, voiceSummary);
+  }
 
   const completionData: CompletionSummary = {
     status: completionStatus,
@@ -782,19 +807,14 @@ async function completeLeasedTask(
 
   if (willSummarize && !voiceSummary) {
     const projectId = task.projectId;
-    const transcript = updated.transcript!;
-    void (async () => {
-      try {
-        const raw = await generateTranscriptSummary(transcript, completionStatus);
-        patchChat(projectId, chatMsgId, {
-          completion: { ...completionData, summary: raw.trim(), summaryPending: false },
-        });
-      } catch {
-        patchChat(projectId, chatMsgId, {
-          completion: { ...completionData, summaryPending: false },
-        });
+    void summaryPromise.then((summary) => {
+      patchChat(projectId, chatMsgId, {
+        completion: { ...completionData, summary, summaryPending: false },
+      });
+      if (deferAnnouncement) {
+        announceCompletionAloud(name, completionStatus, task.title, summary);
       }
-    })();
+    });
   }
 }
 
