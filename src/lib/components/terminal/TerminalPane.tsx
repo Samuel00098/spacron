@@ -34,6 +34,7 @@ import {
   activateSessionInPane,
   devSessions,
   devPaneAssignments,
+  allProjectSessions,
 } from '$lib/stores/terminal';
 import {
   terminalFontSize,
@@ -45,7 +46,7 @@ import {
 } from '$lib/stores/settings';
 import { activeTheme } from '$lib/stores/theme';
 import { setActiveView, showTerminal } from '$lib/stores/layout';
-import { activeProject } from '$lib/stores/workspace';
+import { activeProject, projects } from '$lib/stores/workspace';
 import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
 import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/runHistory';
@@ -169,6 +170,11 @@ export default function TerminalPane({
   };
 
   const allSessions = useStore(sessions);
+  // `sessions` only holds the ACTIVE project. An agent pane belonging to a
+  // project you've switched away from stays mounted (so its xterm and scrollback
+  // survive), and must still resolve its own metadata — otherwise it would show
+  // as dead/untitled the moment you leave its project.
+  const crossProjectSessions = useStore(allProjectSessions);
   const activeThemeValue = useStore(activeTheme);
   const fontFamily = useStore(resolvedFontFamily);
   const fontSize = useStore(terminalFontSize);
@@ -176,7 +182,8 @@ export default function TerminalPane({
   const scrollback = useStore(terminalScrollback);
   const configuredShell = useStore(terminalShell);
   const renderer = useStore(terminalRenderer);
-  const project = useStore(activeProject);
+  const activeProjectValue = useStore(activeProject);
+  const openProjects = useStore(projects);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -205,7 +212,20 @@ export default function TerminalPane({
     };
   }, [windowsBuild]);
 
-  const sessionInfo = allSessions.find((s) => s.id === sessionId);
+  const isForeignSession = !allSessions.some((s) => s.id === sessionId);
+  const sessionInfo = isForeignSession
+    ? crossProjectSessions.find((s) => s.id === sessionId)
+    : allSessions.find((s) => s.id === sessionId);
+  // Label disambiguation ("Claude 2") compares against siblings, so a pane from
+  // a background project has to be compared against ITS project's sessions.
+  const siblingSessions = isForeignSession && sessionInfo
+    ? crossProjectSessions.filter((s) => s.projectId === sessionInfo.projectId)
+    : allSessions;
+  // A pane kept alive for a background project must resolve paths and titles
+  // against ITS project, not whichever one happens to be open.
+  const project = isForeignSession && sessionInfo?.projectId
+    ? openProjects.get(sessionInfo.projectId) ?? activeProjectValue
+    : activeProjectValue;
 
   const promptPath = useMemo(() => {
     const activePath = currentShellCwd || project?.root_path;
@@ -220,13 +240,13 @@ export default function TerminalPane({
     return parts[parts.length - 1] || 'shell';
   }, [currentShellCwd, project?.root_path]);
 
-  const sessionLabel = sessionInfo ? getSessionLabel(sessionInfo, allSessions) : promptPath;
+  const sessionLabel = sessionInfo ? getSessionLabel(sessionInfo, siblingSessions) : promptPath;
   // Badge shows the orchestrator-assigned assistant name (e.g. "Trinity"), falling
   // back to the agent CLI's product name. The main title is driven by the CLI's
   // OSC title (what it reports it's doing) — the two no longer share a field, so
   // both stay visible at once.
   const agentName = sessionInfo?.agentName?.trim() || getAgentDisplayName(sessionInfo?.agentPreset);
-  const paneTitleText = sessionInfo ? getSessionPaneDisplayTitle(sessionInfo, allSessions) : promptPath;
+  const paneTitleText = sessionInfo ? getSessionPaneDisplayTitle(sessionInfo, siblingSessions) : promptPath;
   const paneSecondaryText = sessionInfo ? getSessionPaneSecondaryTitle(sessionInfo) : '';
   const isDead = sessionInfo ? !sessionInfo.isRunning : false;
   const isLightTheme = activeThemeValue?.type === 'light';

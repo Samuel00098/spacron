@@ -204,6 +204,24 @@ function cloneProjectState(state: TerminalProjectState): TerminalProjectState {
 }
 
 const terminalProjectStates = new Map<string, TerminalProjectState>();
+
+// Every non-dev session in EVERY project that has terminal state, not just the
+// visible one. `sessions` only ever reflects the active project, so a UI driven
+// by it must unmount a project's panes when you switch away — and unmounting a
+// TerminalPane disposes its xterm, forcing a lossy reattach-by-replay when you
+// come back. The room stage mounts from this list and merely HIDES the panes of
+// background projects, so their terminals (and scrollback) stay live and
+// correct. Each entry carries its own `projectId`.
+export const allProjectSessions = writable<TerminalSessionInfo[]>([]);
+
+function publishAllProjectSessions() {
+  const out: TerminalSessionInfo[] = [];
+  for (const state of terminalProjectStates.values()) {
+    for (const session of state.sessions) out.push({ ...session });
+  }
+  allProjectSessions.set(out);
+}
+
 const terminalSessionProjects = new Map<number, string>();
 // Project id → working-tree root, registered by the workspace store as projects
 // open. Lets a session resolve its repo root for the rules-file brief even when
@@ -254,6 +272,7 @@ function updateProjectState(
   const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   const next = updater(cloneProjectState(getProjectState(projectId, isDev)));
   stateMap.set(projectId, next);
+  if (!isDev) publishAllProjectSessions();
   if (projectId === (isDev ? activeDevTerminalProjectId : activeTerminalProjectId)) {
     setVisibleProjectState(next, isDev);
   }
@@ -278,6 +297,7 @@ export function getTerminalProjectState(projectId: string, isDev = false): Termi
 export function restoreTerminalProjectState(projectId: string, state: TerminalProjectState, isDev = false) {
   const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   stateMap.set(projectId, cloneProjectState(state));
+  if (!isDev) publishAllProjectSessions();
   if ((isDev ? activeDevTerminalProjectId : activeTerminalProjectId) === projectId) {
     setVisibleProjectState(getProjectState(projectId, isDev), isDev);
   }
@@ -1758,6 +1778,10 @@ export async function killAllSessions() {
   devSessionIds.clear();
   commandBlocks.set(new Map());
   _pendingBlockText.clear();
+  // Each killSession above already emptied its project's session list through
+  // updateProjectState; this just makes sure the cross-project view agrees even
+  // if a project had state but no live pty.
+  publishAllProjectSessions();
 }
 
 export async function killSession(id: number) {

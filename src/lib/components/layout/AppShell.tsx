@@ -73,6 +73,7 @@ import {
   paneAssignments,
   setActiveSession,
   sessions as terminalSessions,
+  allProjectSessions,
   commandHistory,
 } from '$lib/stores/terminal';
 
@@ -356,6 +357,7 @@ export default function AppShell() {
   const showWelcome = !workspaceId || homeOpen;
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
+  const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const shortcuts = useSettingsStore((s) => s.userShortcuts);
   const currentActiveSessionId = useStore(activeSessionId);
   const activeSessionIdRef = useRef(currentActiveSessionId);
@@ -473,6 +475,10 @@ export default function AppShell() {
     };
   }, [workspaceId, ambientLayout]);
   const allTerminalSessions = useStore(terminalSessions);
+  // Sessions across EVERY project, not just the active one — the stage mounts
+  // background projects' agent panes from this so switching projects hides them
+  // instead of disposing their xterms.
+  const crossProjectSessions = useStore(allProjectSessions);
   const terminalPaneAssignments = useStore(paneAssignments);
   const history = useStore(commandHistory);
 
@@ -505,6 +511,26 @@ export default function AppShell() {
     [agentSessions],
   );
 
+  // Agent rooms for every project, including the ones you are not currently in.
+  // These are NOT user-facing rooms (they never reach the dock, the room stack or
+  // `activeRoom`) — they exist purely so the stage can keep a background
+  // project's agent pane mounted-but-hidden. Disposing it instead would tear
+  // down its xterm, and rebuilding one replays the raw scrollback into a fresh
+  // terminal, which is what leaves an agent TUI drawing garbage.
+  // Bounded to the projects currently open in this workspace. Terminal state
+  // outlives a workspace switch (the pty map is process-global), so without this
+  // the stage would keep mounting panes for a workspace the user has left.
+  const mountedAgentRoomIds = useMemo<AgentRoomId[]>(
+    () => {
+      const open = new Set(openProjectIdList);
+      return crossProjectSessions
+        .filter((session) => session.isRunning && isAgentSession(session))
+        .filter((session) => !session.projectId || open.has(session.projectId))
+        .map((session) => `agent:${session.id}` as AgentRoomId);
+    },
+    [crossProjectSessions, openProjectIdList],
+  );
+
   // Auto-focus a freshly spawned agent so it opens in the focus screen. The
   // first run only records the current agents, so restored/pre-existing agents
   // on app startup don't steal focus from the default room.
@@ -523,6 +549,20 @@ export default function AppShell() {
     focusRoom(added[added.length - 1]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentRoomIds]);
+
+  // Panes now survive a project switch hidden rather than being rebuilt, so
+  // nothing repaints them on the way back: their size is unchanged (hidden with
+  // visibility, so they stay laid out), and only the newly-active pane redraws
+  // on its own. A canvas/WebGL glyph atlas can go stale while a pane sits
+  // hidden, so kick the same refit+repaint pass a layout switch uses once the
+  // switch settles.
+  const prevProjectSwitchingRef = useRef(projectSwitching);
+  useEffect(() => {
+    const wasSwitching = prevProjectSwitchingRef.current;
+    prevProjectSwitchingRef.current = projectSwitching;
+    if (wasSwitching && !projectSwitching) notifyPanesResized();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectSwitching]);
 
   const openRooms = useMemo<RoomId[]>(
     () => {
@@ -1496,15 +1536,27 @@ export default function AppShell() {
     return null;
   }
 
+  // Falls back to the cross-project list so a background project's agent pane —
+  // mounted but hidden — still resolves its title and preset instead of
+  // rendering as a nameless "Agent".
   function getAgentSessionForRoom(id: AgentRoomId) {
     const sessionId = getAgentRoomSessionId(id);
-    return allTerminalSessions.find((session) => session.id === sessionId) ?? null;
+    return (
+      allTerminalSessions.find((session) => session.id === sessionId)
+      ?? crossProjectSessions.find((session) => session.id === sessionId)
+      ?? null
+    );
   }
 
   function roomTitle(id: RoomId) {
     if (isAgentRoomId(id)) {
       const session = getAgentSessionForRoom(id);
-      return session ? getSessionPromptTargetLabel(session, allTerminalSessions) : 'Agent';
+      if (!session) return 'Agent';
+      // Disambiguate against the session's OWN project's siblings.
+      const siblings = allTerminalSessions.some((entry) => entry.id === session.id)
+        ? allTerminalSessions
+        : crossProjectSessions.filter((entry) => entry.projectId === session.projectId);
+      return getSessionPromptTargetLabel(session, siblings);
     }
     if (id === 'dev-terminal') return 'Terminal';
     if (id === 'workspace') {
@@ -1566,7 +1618,11 @@ export default function AppShell() {
     if (id === 'workspace') return <SidebarContent tab={layoutState.sidebarTab} />;
     if (isAgentRoomId(id)) {
       const sessionId = getAgentRoomSessionId(id);
-      const session = allTerminalSessions.find((entry) => entry.id === sessionId);
+      // Cross-project lookup: a background project's agent stays mounted here
+      // (hidden), and resolving only against the active project's sessions would
+      // swap its TerminalPane for this placeholder — unmounting the xterm, which
+      // is exactly what we keep the pane around to avoid.
+      const session = getAgentSessionForRoom(id);
       if (!session) {
         return <div className="agent-panel-empty">Agent session closed</div>;
       }
@@ -1939,12 +1995,25 @@ export default function AppShell() {
     // decide which panes are visible and how they lay out.
     const isVibe = ambientLayout === 'vibe';
     const isSplit = ambientLayout === 'gallery';
-    // Mounted from `openRooms`, NOT `visibleRooms`: a minimized room is still an
-    // open one, so it keeps its xterm mounted (just hidden) instead of being
-    // disposed. Minimizing — and any layout switch that swaps in a different
-    // minimized set, since each mode keeps its own — used to unmount the pane and
-    // force the terminal to rebuild and reattach on restore.
-    const persistentStageRooms = openRooms.filter(isPersistentRoomId);
+    // What gets MOUNTED, which is deliberately wider than what gets shown:
+    //   • `openRooms`, not `visibleRooms` — a minimized room is still open, so it
+    //     keeps its xterm (just hidden). Minimizing, and any layout switch that
+    //     swaps in another mode's minimized set, used to unmount the pane.
+    //   • plus every other project's agent rooms, so switching projects hides
+    //     their panes instead of disposing them.
+    // Everything not on `stageRooms` renders with `.stage-hidden`.
+    //
+    // Ordered deterministically (shells first, then agents by session id — which
+    // is monotonic, so it's creation order) rather than by whichever list a room
+    // came from. An agent moves between those two lists as you switch projects,
+    // and letting that reorder the children would make React re-parent a live
+    // pane's DOM on every switch.
+    const persistentStageRooms: RoomId[] = [
+      ...(['terminal', 'dev-terminal'] as RoomId[]).filter((room) => openRooms.includes(room)),
+      ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
+        (a, b) => getAgentRoomSessionId(a) - getAgentRoomSessionId(b),
+      ),
+    ];
     const visibleStageRooms = visibleRooms.filter(isPersistentRoomId);
     const hasAgents = visibleStageRooms.some(isAgentRoomId);
 
