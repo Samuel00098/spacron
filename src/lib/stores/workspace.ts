@@ -194,6 +194,16 @@ bindProjectAutosave();
 
 // ── Per-project localStorage persistence ──────────────────────────────────
 
+/** An agent's isolated git worktree, as persisted alongside its pane. Mirrors
+ *  `WorktreeInfo` in services/orchestrator/worktree-manager. */
+interface PersistedWorktree {
+  path: string;
+  branch: string;
+  baseBranch: string;
+  baseCommit: string;
+  createdAt: number;
+}
+
 interface PersistedTerminalPane {
   backendSessionId?: number | null;
   role: string | null;
@@ -204,6 +214,7 @@ interface PersistedTerminalPane {
   agentName?: string | null;
   agentPreset?: string | null;
   taskSummary?: string | null;
+  worktree?: PersistedWorktree | null;
 }
 
 interface PersistedProjectState {
@@ -270,6 +281,15 @@ function saveProjectStateToStorage(projectId: string) {
         agentName: session.agentName ?? null,
         agentPreset: session.agentPreset ?? null,
         taskSummary: session.taskSummary ?? null,
+        worktree: session.worktree
+          ? {
+              path: session.worktree.path,
+              branch: session.worktree.branch,
+              baseBranch: session.worktree.baseBranch,
+              baseCommit: session.worktree.baseCommit,
+              createdAt: session.worktree.createdAt,
+            }
+          : null,
       };
     });
   const currentLayout = get(layout);
@@ -320,6 +340,34 @@ function isSafeLabel(v: unknown, maxLength = 512): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= maxLength && !/[\0\x01-\x1f]/.test(v);
 }
 
+/** Validate a persisted agent worktree. Branch names go straight into git
+ *  commands on removal, so they're held to git's own naming rules rather than a
+ *  generic label check; anything malformed drops the whole record. */
+function sanitisePersistedWorktree(raw: unknown): PersistedWorktree | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const w = raw as Record<string, unknown>;
+  if (!isSafePath(w.path)) return null;
+  const isBranch = (v: unknown): v is string =>
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= 255 &&
+    /^[\w\-./]+$/.test(v) &&
+    !v.startsWith('-') &&
+    !v.startsWith('/') &&
+    !v.endsWith('/') &&
+    !v.includes('..');
+  if (!isBranch(w.branch) || !isBranch(w.baseBranch)) return null;
+  if (typeof w.baseCommit !== 'string' || !/^[0-9a-f]{7,64}$/i.test(w.baseCommit)) return null;
+  const createdAt = typeof w.createdAt === 'number' && Number.isFinite(w.createdAt) ? w.createdAt : Date.now();
+  return {
+    path: w.path,
+    branch: w.branch,
+    baseBranch: w.baseBranch,
+    baseCommit: w.baseCommit,
+    createdAt,
+  };
+}
+
 function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -351,10 +399,11 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     const agentName = isSafeLabel(pane.agentName, 80) ? pane.agentName : null;
     const agentPreset = isSafeLabel(pane.agentPreset, 128) && /^[\w\-./:@ ]{1,128}$/.test(pane.agentPreset) ? pane.agentPreset : null;
     const taskSummary = isSafeLabel(pane.taskSummary, 256) ? pane.taskSummary : null;
+    const worktree = sanitisePersistedWorktree(pane.worktree);
     // Back-compat: entries persisted before hasSession existed are treated as
     // occupied panes so previously-saved terminals still get recreated.
     const hasSession = pane.hasSession === undefined ? true : Boolean(pane.hasSession);
-    return { backendSessionId, role, cwd, hasSession, title, paneTitle, agentName, agentPreset, taskSummary };
+    return { backendSessionId, role, cwd, hasSession, title, paneTitle, agentName, agentPreset, taskSummary, worktree };
   });
 
   const terminalLayout = typeof r.terminalLayout === 'string' ? r.terminalLayout : undefined;
@@ -688,6 +737,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
               agentPreset: pane.agentPreset,
               role: pane.role,
               taskSummary: pane.taskSummary,
+              worktree: pane.worktree ?? null,
             };
             if (pane.agentPreset) {
               // Agents are their own rooms — they must NOT be slotted into the

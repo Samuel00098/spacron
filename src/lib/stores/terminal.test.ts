@@ -66,6 +66,8 @@ import {
   setSessionAgentName,
   setSessionOwnerTask,
   setSessionTaskSummary,
+  setSessionWorktree,
+  applyRestoredSessionMetadata,
   startCommandBlock,
   sendAgentPromptDirect,
   sendPromptToSession,
@@ -556,6 +558,56 @@ describe('unified agent briefing', () => {
 
     const session = get(sessions).find(s => s.id === sessionId);
     expect(session?.briefed).toBeFalsy();
+  });
+});
+
+describe('worktree metadata across restore', () => {
+  const projectId = 'project-terminal-worktree-restore';
+  const worktree = {
+    path: '/parent/.spacron-worktrees/repo/spacron-neo-342ci1',
+    branch: 'spacron/neo-342ci1',
+    baseBranch: 'main',
+    baseCommit: '6170ecf',
+    createdAt: 1_700_000_000_000,
+  };
+
+  beforeEach(() => {
+    setActiveTerminalProject(projectId);
+  });
+
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+  });
+
+  it('restores an agent into its isolated worktree so the badge survives a restart', async () => {
+    const sessionId = await createTerminalSession(worktree.path, undefined, projectId, {
+      assignPane: false,
+      agentPreset: 'claude',
+    });
+    expect(sessionId).not.toBeNull();
+
+    // Cold start: the pane comes back from localStorage, and its worktree rides
+    // along on the restore metadata rather than being dropped.
+    relaunchRestoredAgentSession(sessionId!, 'claude', {
+      agentName: 'Neo',
+      role: 'Agent',
+      worktree,
+    });
+
+    expect(get(sessions).find((s) => s.id === sessionId)?.worktree).toEqual(worktree);
+  });
+
+  it('keeps an existing worktree when restore metadata omits it', async () => {
+    const sessionId = await createTerminalSession(worktree.path, undefined, projectId, {
+      assignPane: false,
+      agentPreset: 'claude',
+    });
+    setSessionWorktree(sessionId!, worktree);
+
+    applyRestoredSessionMetadata(sessionId!, { agentName: 'Neo' });
+
+    expect(get(sessions).find((s) => s.id === sessionId)?.worktree).toEqual(worktree);
   });
 });
 

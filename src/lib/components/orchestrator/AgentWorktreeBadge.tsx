@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { orchestratorTasks } from '$lib/stores/orchestrator';
-import { sessions } from '$lib/stores/terminal';
+import { allProjectSessions, devSessions, sessions } from '$lib/stores/terminal';
 import { getWorktreeStatus, type WorktreeStatus } from '$lib/services/orchestrator/worktree-manager';
 import { useStore } from '$lib/react/useStore';
 import './AgentWorktreeBadge.css';
@@ -17,15 +17,25 @@ interface Props {
  */
 export default function AgentWorktreeBadge({ sessionId }: Props) {
   const tasks = useStore(orchestratorTasks);
-  const allSessions = useStore(sessions);
+  // Resolve the session from every store it can live in, not just the active
+  // project's: `sessions` holds the active project only, but the stage keeps a
+  // background project's agent pane mounted (and this badge with it), and agents
+  // spawned in the Development ambient live in `devSessions` — which never
+  // reaches `allProjectSessions`. Looking in one store alone made the badge
+  // vanish on a project switch even though the agent was still in its worktree.
+  const activeSessions = useStore(sessions);
+  const crossProjectSessions = useStore(allProjectSessions);
+  const devProjectSessions = useStore(devSessions);
   // The worktree lives on the session for floating-bar agents and on the task for
   // orchestrator-dispatched ones — surface whichever this agent has.
   const worktree = useMemo(
     () =>
-      allSessions.find((s) => s.id === sessionId)?.worktree ??
+      activeSessions.find((s) => s.id === sessionId)?.worktree ??
+      crossProjectSessions.find((s) => s.id === sessionId)?.worktree ??
+      devProjectSessions.find((s) => s.id === sessionId)?.worktree ??
       tasks.find((task) => task.assignedSessionId === sessionId)?.worktree ??
       null,
-    [allSessions, tasks, sessionId],
+    [activeSessions, crossProjectSessions, devProjectSessions, tasks, sessionId],
   );
 
   const [status, setStatus] = useState<WorktreeStatus | null>(null);

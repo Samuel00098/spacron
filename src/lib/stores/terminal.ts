@@ -743,6 +743,7 @@ function registerPtySession(
     cwd: cwd ?? existing?.cwd ?? null,
     taskSummary: metadata.taskSummary ?? existing?.taskSummary ?? null,
     ownerTaskId: existing?.ownerTaskId ?? null,
+    worktree: metadata.worktree ?? existing?.worktree ?? null,
   };
 
   updateProjectState(owningProjectId, (state) => ({
@@ -1131,6 +1132,11 @@ export type RestoredSessionMetadata = {
   agentPreset?: string | null;
   role?: string | null;
   taskSummary?: string | null;
+  // Carried across restarts so a restored agent is still known to be running in
+  // its isolated worktree. The agent relaunches there either way (its `cwd` is
+  // persisted), so dropping this only blinded the UI — and left the worktree
+  // orphaned, since cleanup on close keys off this field.
+  worktree?: WorktreeInfo | null;
 };
 
 export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessionMetadata) {
@@ -1151,6 +1157,7 @@ export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessi
         agentPreset,
         role,
         taskSummary: metadata.taskSummary ?? x.taskSummary ?? x.taskSummary ?? null,
+        worktree: metadata.worktree ?? x.worktree ?? null,
         briefed: agentPreset ? false : x.briefed,
         isExecuting: false,
         lastExitCode: null,
