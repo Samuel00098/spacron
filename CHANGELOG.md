@@ -3,6 +3,23 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.7.2] - 2026-07-22
+
+The stream-safe music idea from v0.7.1 is replaced with one that actually holds up: point Spacron at your own folder of royalty-free tracks and it plays them straight off disk. Source control also stops fighting you when you scroll.
+
+### Added
+
+- **Local music library** — the media player gains a third source, "Local", alongside YouTube and YouTube Music. Point it at a folder and Spacron scans it (recursively, capped at 5000 tracks) and plays the files off disk with its own queue, shuffle and repeat. Track and artist names come from filenames. Licence sidecars sitting next to your downloads — certificates, terms, credits — are surfaced in the UI rather than buried, since those are the proof used to clear a Content ID claim. Spacron ships no audio of its own; it is a player, never a distributor.
+
+### Fixed
+
+- **Source control sections scroll in their own space** — Changes and Commits (Graph) shared one scroll container, so a long list of changed files pushed the commit graph out of view and the entire panel scrolled as a single strip. Each section now owns its scroll area and the two divide the panel's height between them, so neither can shove the other off-screen and the section headers stay put while their contents scroll.
+
+### Removed
+
+- **Stream-Safe YouTube preset catalog** — the "Stream Safe" music filter and its grid of curated playlists, added in v0.7.1, are gone. The premise didn't survive contact: tracks labelled "no copyright" on YouTube are largely re-uploads whose real rights holder's Content ID fingerprint still matches, and crediting a track satisfies its licence without having any effect on the automated claim. The local library replaces it.
+
+
 ## [v0.7.1] - 2026-07-22
 
 A small release for anyone who codes on stream: the music panel can now put on a playlist that won't get a VOD claimed or a broadcast muted.
