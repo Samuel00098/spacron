@@ -3,6 +3,15 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.7.1] - 2026-07-22
+
+A small release for anyone who codes on stream: the music panel can now put on a playlist that won't get a VOD claimed or a broadcast muted.
+
+### Added
+
+- **Stream-Safe music catalog** — YouTube Music search gains a fourth filter, "Stream Safe", which shows a grid of curated DMCA-free playlists (StreamBeats Lofi, Synthwave and Chill, NoCopyrightSounds, Lofi Girl creator-safe, and the YouTube Audio Library) instead of search results. Picking one plays the whole playlist, and the now-playing card carries a "Stream-Safe Certified" badge so you can tell at a glance that what's playing is cleared.
+
+
 ## [v0.7.0] - 2026-07-21
 
 Terminals and agents now stay alive wherever you go. Previously, leaving a room — visiting Home, switching layout, minimizing, or moving to another project — unmounted its terminal and rebuilt it by replaying scrollback into a fresh one, which left full-screen agent TUIs rendering garbage or nothing at all. Every one of those paths now keeps the pane mounted, so a running agent is exactly where you left it when you come back. Agent completions also stop talking at you: the cue is now a soft chime plus a recap card in the chat.
