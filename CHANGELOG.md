@@ -3,6 +3,20 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.7.3] - 2026-07-22
+
+Media player search stopped returning a single screen of results.
+
+### Fixed
+
+- **Search returns hundreds of results instead of 20** — every search fetched exactly one page and then cut it off at 24, so a query returned about 20 rows no matter what was available. Search now follows YouTube's continuation tokens the way the site itself does when you scroll, up to 500 results or 25 pages, whichever comes first. In practice a video search returns ~350 and a music search ~430, and searches that run out of results earlier simply stop. Results appear page by page as they arrive, so the first rows show up as fast as they used to and the rest fill in behind them; starting a new search abandons the one in flight rather than letting it finish in the background.
+- **Video search no longer dead-ends after two pages** — paging through video results followed the wrong continuation token. Search responses also carry a token per filter chip ("Shorts", "Under 4 minutes", …), and on continuation responses those are emitted before the results list's own token, so following the first one silently re-ran the search as a filtered query and returned rows already seen. The results list's token is now selected explicitly.
+
+### Changed
+
+- **Data API searches take 50 results in one request** — for users who supply their own YouTube Data API key, the page size goes from 24 to the endpoint's maximum of 50. This path deliberately does *not* page like the keyless one: each Data API search costs 100 units of a 10,000/day quota, and paging to the same depth would cut a user to roughly 16 searches a day.
+
+
 ## [v0.7.2] - 2026-07-22
 
 The stream-safe music idea from v0.7.1 is replaced with one that actually holds up: point Spacron at your own folder of royalty-free tracks and it plays them straight off disk. Source control also stops fighting you when you scroll.
