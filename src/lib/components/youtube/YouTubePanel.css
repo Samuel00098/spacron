@@ -1100,133 +1100,15 @@
   color: var(--text-secondary);
 }
 
-/* --- Stream-Safe Preset Grid & Badges ----------------------------------- */
-.youtube-panel .yt-filter-pill.yt-filter-safe {
-  border-color: rgba(16, 185, 129, 0.4);
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
+/* Local-library mode: the YouTube body is collapsed rather than unmounted so
+   the IFrame player keeps its loaded video and playback position while the
+   on-disk library is on screen. */
+.youtube-panel .yt-body-hidden {
+  display: none;
 }
 
-.youtube-panel .yt-filter-pill.yt-filter-safe:hover,
-.youtube-panel .yt-filter-pill.yt-filter-safe.active {
-  background: #10b981;
-  color: #ffffff;
-  border-color: #10b981;
-}
-
-.youtube-panel .yt-stream-safe-badge-now-playing {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  padding: 2px 8px;
-  border-radius: 12px;
-}
-
-.youtube-panel .yt-stream-safe-container {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.youtube-panel .yt-stream-safe-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 10px;
-}
-
-.youtube-panel .yt-stream-safe-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.youtube-panel .yt-stream-safe-sub {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-
-.youtube-panel .yt-stream-safe-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
-}
-
-.youtube-panel .yt-stream-safe-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  background: var(--bg-secondary);
-  cursor: pointer;
-  transition: all 150ms ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.youtube-panel .yt-stream-safe-card:hover {
-  border-color: #10b981;
-  background: color-mix(in srgb, var(--bg-secondary) 80%, #10b981 20%);
-  transform: translateY(-1px);
-}
-
-.youtube-panel .yt-stream-safe-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  margin-bottom: 6px;
-}
-
-.youtube-panel .yt-stream-safe-badge {
-  font-size: 10px;
-  font-weight: 700;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.15);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.youtube-panel .yt-stream-safe-cat {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.youtube-panel .yt-stream-safe-card-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.youtube-panel .yt-stream-safe-card-desc {
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.35;
-  margin-bottom: 10px;
-  flex: 1 1 auto;
-}
-
-.youtube-panel .yt-stream-safe-card-action {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #10b981;
+/* Keeps the header's icon buttons right-aligned in local mode, where the
+   search form that normally fills that space is not rendered. */
+.youtube-panel .yt-local-spacer {
+  flex: 1;
 }

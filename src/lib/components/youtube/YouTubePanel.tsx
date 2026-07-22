@@ -16,12 +16,11 @@ import {
   goHome,
   fetchAlbumTracks,
   clearAlbumTracks,
-  playStreamSafePreset,
-  toggleStreamSafeOnly,
-  STREAM_SAFE_PRESETS,
   type MusicFilter,
 } from '$lib/stores/youtube';
+import { pausePlayback as pauseLocalPlayback } from '$lib/stores/musicLibrary';
 import { loadYouTubeApi, type YTPlayer, type YTPlayerVars } from '$lib/utils/youtubeApi';
+import LocalMusicPanel from './LocalMusicPanel';
 import './YouTubePanel.css';
 
 /** Format a second count as m:ss for the music transport bar. */
@@ -359,6 +358,24 @@ export default function YouTubePanel() {
   }, [playbackKey, reloadNonce]);
 
   const isMusic = state.mode === 'music';
+  const isLocal = state.mode === 'local';
+
+  // Only one source makes sound at a time. Switching to the local library
+  // pauses the IFrame player; switching back pauses the local audio element.
+  // Both keep their loaded track, so switching back and forth doesn't lose
+  // your place in either.
+  useEffect(() => {
+    if (isLocal) {
+      try {
+        playerRef.current?.pauseVideo();
+      } catch {
+        /* player not ready yet */
+      }
+      setMusicPlaying(false);
+    } else {
+      pauseLocalPlayback();
+    }
+  }, [isLocal]);
 
   // Keep the album/playlist tracklist in sync with what's playing: fetch it
   // when a playlist/album loads (keyless InnerTube `next` call), clear it when
@@ -506,7 +523,21 @@ export default function YouTubePanel() {
             </svg>
             <span className="yt-mode-text">Music</span>
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={state.mode === 'local'}
+            className={`yt-mode-btn${state.mode === 'local' ? ' active' : ''}`}
+            onClick={() => setMode('local')}
+            title="Play music from your own folder"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            <span className="yt-mode-text">Library</span>
+          </button>
         </div>
+        {!isLocal && (
         <form className="yt-search" onSubmit={onSubmit}>
           <svg className="yt-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" />
@@ -539,7 +570,9 @@ export default function YouTubePanel() {
             )}
           </button>
         </form>
-        {state.current && state.results.length > 0 && (
+        )}
+        {isLocal && <div className="yt-local-spacer" />}
+        {!isLocal && state.current && state.results.length > 0 && (
           <button
             className={`yt-icon-btn${resultsOpen ? ' active' : ''}`}
             title="Search results"
@@ -552,6 +585,7 @@ export default function YouTubePanel() {
             </svg>
           </button>
         )}
+        {!isLocal && (
         <button
           className={`yt-icon-btn${showSettings ? ' active' : ''}`}
           title="API key settings"
@@ -563,9 +597,12 @@ export default function YouTubePanel() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
+        )}
       </header>
 
-      {showSettings && (
+      {isLocal && <LocalMusicPanel />}
+
+      {!isLocal && showSettings && (
         <div className="yt-settings">
           <label htmlFor="yt-api-key">YouTube Data API v3 key (optional)</label>
           <input
@@ -584,24 +621,24 @@ export default function YouTubePanel() {
 
       {isMusic && (
         <div className="yt-music-filters" role="tablist" aria-label="Music search filter">
-          {(['songs', 'albums', 'playlists', 'stream-safe'] as MusicFilter[]).map((filter) => (
+          {(['songs', 'albums', 'playlists'] as MusicFilter[]).map((filter) => (
             <button
               key={filter}
               type="button"
               role="tab"
               aria-selected={state.musicFilter === filter}
-              className={`yt-filter-pill${filter === 'stream-safe' ? ' yt-filter-safe' : ''}${
-                state.musicFilter === filter ? ' active' : ''
-              }`}
+              className={`yt-filter-pill${state.musicFilter === filter ? ' active' : ''}`}
               onClick={() => setMusicFilter(filter)}
             >
-              {filter === 'stream-safe' ? '🛡️ Stream Safe' : filter.charAt(0).toUpperCase() + filter.slice(1)}
+              {filter.charAt(0).toUpperCase() + filter.slice(1)}
             </button>
           ))}
         </div>
       )}
 
-      <div className="yt-body">
+      {/* Hidden (not unmounted) in local mode so the IFrame player keeps its
+          loaded video and position while the library is on screen. */}
+      <div className={`yt-body${isLocal ? ' yt-body-hidden' : ''}`}>
         {/* Results dropdown over the player — only while a video is playing. */}
         {resultsOpen && state.current && state.results.length > 0 && (
           <>
@@ -670,11 +707,6 @@ export default function YouTubePanel() {
                   <div className="yt-music-meta">
                     <div className="yt-music-title" title={activeTitle}>{activeTitle}</div>
                     {activeChannel && <div className="yt-music-artist">{activeChannel}</div>}
-                    {(state.current?.isStreamSafe || activeChannel.includes('Stream Safe')) && (
-                      <div className="yt-stream-safe-badge-now-playing">
-                        🛡️ Stream-Safe Certified
-                      </div>
-                    )}
                   </div>
                   <div className="yt-music-controls">
                     <div className="yt-music-btns">
@@ -805,46 +837,7 @@ export default function YouTubePanel() {
           </div>
         )}
 
-        {(!hasPlayer || state.musicFilter === 'stream-safe') && state.results.length === 0 && (
-          <div className="yt-stream-safe-container scrollable">
-            <div className="yt-stream-safe-header">
-              <div className="yt-stream-safe-title">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  <path d="m9 12 2 2 4-4" />
-                </svg>
-                <span>Stream-Safe Music Catalog</span>
-              </div>
-              <span className="yt-stream-safe-sub">0% Copyright Risk • Twitch, YouTube & Kick Approved</span>
-            </div>
-
-            <div className="yt-stream-safe-grid">
-              {STREAM_SAFE_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className="yt-stream-safe-card"
-                  onClick={() => playStreamSafePreset(preset.id)}
-                >
-                  <div className="yt-stream-safe-card-top">
-                    <span className="yt-stream-safe-badge">🛡️ DMCA Safe</span>
-                    <span className="yt-stream-safe-cat">{preset.category}</span>
-                  </div>
-                  <div className="yt-stream-safe-card-title">{preset.name}</div>
-                  <div className="yt-stream-safe-card-desc">{preset.description}</div>
-                  <div className="yt-stream-safe-card-action">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                    <span>Play Playlist</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {!hasPlayer && state.musicFilter !== 'stream-safe' && state.results.length === 0 && (
+        {!hasPlayer && state.results.length === 0 && (
           <div className="yt-empty">
             {isMusic ? (
               <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -860,7 +853,7 @@ export default function YouTubePanel() {
             )}
             <p>
               {isMusic
-                ? 'Search for songs, albums, or playlists — or select Stream Safe above.'
+                ? 'Search for songs, albums, or playlists — or paste a YouTube Music link.'
                 : 'Search for something or paste a YouTube link to start watching.'}
             </p>
           </div>

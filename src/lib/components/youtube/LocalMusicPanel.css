@@ -1,0 +1,548 @@
+/* Local music library panel — the on-disk source inside the media player.
+   Uses the same theme tokens as YouTubePanel so both sources look like one
+   player rather than two bolted together. */
+
+.lm-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* --- empty state --------------------------------------------------------- */
+
+.lm-panel .lm-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.lm-panel .lm-empty svg {
+  opacity: 0.4;
+  margin-bottom: 2px;
+}
+
+.lm-panel .lm-empty h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lm-panel .lm-empty p {
+  margin: 0;
+  max-width: 380px;
+  line-height: 1.5;
+  font-size: 12.5px;
+}
+
+.lm-panel .lm-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.lm-panel .lm-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.lm-panel .lm-secondary:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+/* Sits under the buttons: explains why StreamBeats specifically, so the button
+   isn't an unexplained outbound link. */
+.lm-panel .lm-tip {
+  max-width: 380px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.lm-panel .lm-tip strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.lm-panel .lm-primary {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.lm-panel .lm-primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.lm-panel .lm-primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* --- toolbar ------------------------------------------------------------- */
+
+.lm-panel .lm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.lm-panel .lm-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+}
+
+.lm-panel .lm-search svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.lm-panel .lm-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.lm-panel .lm-search input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.lm-panel .lm-count {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-panel .lm-icon-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.lm-panel .lm-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.lm-panel .lm-icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lm-panel .lm-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* --- chosen folder line -------------------------------------------------- */
+
+.lm-panel .lm-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  /* Long paths truncate from the left so the folder name stays readable. */
+  direction: rtl;
+  text-align: left;
+}
+
+.lm-panel .lm-folder > * {
+  direction: ltr;
+}
+
+.lm-panel .lm-unlink {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.lm-panel .lm-unlink:hover {
+  color: var(--text-primary);
+}
+
+/* --- licence files ------------------------------------------------------- */
+
+.lm-panel .lm-licenses {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.lm-panel .lm-licenses-head {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+
+.lm-panel .lm-license-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lm-panel .lm-license-row:hover {
+  background: var(--bg-hover);
+}
+
+/* --- status / list ------------------------------------------------------- */
+
+.lm-panel .lm-status {
+  padding: 7px 11px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.lm-panel .lm-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+
+.lm-panel .lm-loading,
+.lm-panel .lm-none {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.lm-panel .lm-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.lm-panel .lm-row:hover {
+  background: var(--bg-hover);
+}
+
+.lm-panel .lm-row.active {
+  background: var(--bg-tertiary);
+}
+
+.lm-panel .lm-row.active .lm-row-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lm-panel .lm-row-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.lm-panel .lm-row:hover .lm-row-icon,
+.lm-panel .lm-row.active .lm-row-icon {
+  opacity: 1;
+}
+
+.lm-panel .lm-row.active .lm-row-icon {
+  color: var(--accent);
+}
+
+.lm-panel .lm-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lm-panel .lm-row-title,
+.lm-panel .lm-row-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lm-panel .lm-row-title {
+  font-size: 12.5px;
+}
+
+.lm-panel .lm-row-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.lm-panel .lm-row-ext {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.65;
+  letter-spacing: 0.04em;
+}
+
+/* --- transport ----------------------------------------------------------- */
+
+.lm-panel .lm-transport {
+  flex-shrink: 0;
+  padding: 9px 12px 11px;
+  border-top: 1px solid var(--border);
+  background: var(--frost-surface, var(--bg-secondary));
+  backdrop-filter: blur(var(--glass-blur, 0)) saturate(var(--glass-saturate, 1));
+}
+
+.lm-panel .lm-now {
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.lm-panel .lm-now-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lm-panel .lm-now-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lm-panel .lm-seek {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lm-panel .lm-time {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 30px;
+}
+
+.lm-panel .lm-time:last-of-type {
+  text-align: right;
+}
+
+/* Range inputs are styled from scratch so the seek bar reads as a progress
+   fill rather than a system slider. */
+.lm-panel input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+
+.lm-panel .lm-seek-bar {
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--lm-progress, 0%),
+    var(--border) var(--lm-progress, 0%),
+    var(--border) 100%
+  );
+}
+
+.lm-panel input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+
+.lm-panel input[type='range']::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+
+.lm-panel .lm-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.lm-panel .lm-ctl {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.lm-panel .lm-ctl:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.lm-panel .lm-ctl.on {
+  color: var(--accent);
+}
+
+.lm-panel .lm-play {
+  width: 34px;
+  height: 34px;
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.lm-panel .lm-play:hover {
+  background: var(--accent);
+  color: var(--button-text);
+  opacity: 0.88;
+}
+
+.lm-panel .lm-repeat-one {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.lm-panel .lm-volume {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  color: var(--text-secondary);
+}
+
+.lm-panel .lm-volume input[type='range'] {
+  width: 62px;
+}
+
+/* Narrow panel: the volume slider is the first thing worth losing. */
+@media (max-width: 380px) {
+  .lm-panel .lm-volume input[type='range'] {
+    width: 40px;
+  }
+}

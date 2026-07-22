@@ -10,6 +10,7 @@ pub mod github;
 pub mod http;
 pub mod lsp;
 pub mod mobile;
+pub mod music_library;
 pub mod notification;
 pub mod parakeet;
 pub mod preview;

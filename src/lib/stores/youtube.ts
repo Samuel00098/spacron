@@ -17,77 +17,24 @@ export type YouTubeResult = {
   channel: string;
   thumbnail: string;
   type?: 'video' | 'song' | 'album' | 'playlist';
-  /** True when track/playlist is from a verified stream-safe copyright-cleared catalog */
-  isStreamSafe?: boolean;
 };
 
-export type StreamSafePreset = {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  playlistId: string;
-  thumbnailUrl?: string;
-};
-
-export const STREAM_SAFE_PRESETS: StreamSafePreset[] = [
-  {
-    id: 'lofi-streambeats',
-    name: 'StreamBeats Lofi',
-    category: 'Lofi',
-    description: '100% Royalty-Free & DMCA-Safe Lofi Beats by Harris Heller',
-    playlistId: 'PLw-VjHDlEOgsb9y91T1m9kK_z6N70V31u',
-  },
-  {
-    id: 'synthwave-streambeats',
-    name: 'StreamBeats Synthwave',
-    category: 'Synthwave',
-    description: 'Retro Cyberpunk & Synthwave Stream-Safe Audio',
-    playlistId: 'PLw-VjHDlEOgs658kA5Cjh4_8d4G29r3rY',
-  },
-  {
-    id: 'ncs-gaming',
-    name: 'NoCopyrightSounds (NCS)',
-    category: 'EDM / Gaming',
-    description: 'High-energy Gaming & EDM Hits (Creator Attribution Safe)',
-    playlistId: 'PLRBp0Fe2GpgnIhAfd3m05G_iQG0nZ12g3',
-  },
-  {
-    id: 'chill-streambeats',
-    name: 'StreamBeats Chill & Acoustic',
-    category: 'Chill',
-    description: 'Relaxing Acoustic & Ambient Chill tracks for background work',
-    playlistId: 'PLw-VjHDlEOgtXN1w7-o_JgJqC7z0mO_k_',
-  },
-  {
-    id: 'lofi-girl-safe',
-    name: 'Lofi Girl - Creator Safe',
-    category: 'Lofi',
-    description: 'Official Lofi Girl Streamer & Creator-Safe Library',
-    playlistId: 'PL6NdkXsTSv6OM8LpWc9x3ZzYF0hG6f7_2',
-  },
-  {
-    id: 'youtube-audio-library',
-    name: 'YouTube Audio Library Top Hits',
-    category: 'Audio Library',
-    description: 'Official YouTube Creator Studio Copyright-Cleared Catalog',
-    playlistId: 'PLht8qxjXG4LOxYxp_D685gA',
-  },
-];
-
-/** Search/playback surface: regular YouTube videos, or YouTube Music tracks.
+/** Search/playback surface: regular YouTube videos, YouTube Music tracks, or
+ *  the user's own on-disk library.
+ *
  *  Music tracks are the same underlying video ids the IFrame player already
  *  plays — they're just surfaced via the Music InnerTube client so search
- *  returns songs rather than general videos. */
-export type YouTubeMode = 'video' | 'music';
-export type MusicFilter = 'songs' | 'albums' | 'playlists' | 'stream-safe';
+ *  returns songs rather than general videos. `local` is the odd one out: it
+ *  bypasses the IFrame entirely and is owned by the musicLibrary store. */
+export type YouTubeMode = 'video' | 'music' | 'local';
+export type MusicFilter = 'songs' | 'albums' | 'playlists';
 
 export type YouTubeState = {
   /** Optional YouTube Data API v3 key for the rich thumbnail-grid search. */
   apiKey: string;
   /** Whether search/results are scoped to YouTube (video) or YouTube Music. */
   mode: YouTubeMode;
-  /** Whether YouTube Music search results are filtered to Songs, Albums, Playlists, or Stream-Safe. */
+  /** Whether YouTube Music search results are filtered to Songs, Albums, or Playlists. */
   musicFilter: MusicFilter;
   /** Current search box text. */
   query: string;
@@ -110,8 +57,6 @@ export type YouTubeState = {
   albumLoading?: boolean;
   /** Tracks belonging to the currently playing album/playlist. */
   albumTracks?: YouTubeResult[];
-  /** Filter search results to Stream-Safe / Royalty-Free content only */
-  streamSafeOnly?: boolean;
 };
 
 const STORAGE_KEY = 'spacron_youtube';
@@ -131,7 +76,7 @@ function loadPersisted(): Persisted {
     const base = defaultPersisted();
     return {
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : base.apiKey,
-      mode: parsed.mode === 'music' ? 'music' : 'video',
+      mode: parsed.mode === 'music' || parsed.mode === 'local' ? parsed.mode : 'video',
       musicFilter:
         parsed.musicFilter === 'albums' || parsed.musicFilter === 'playlists'
           ? parsed.musicFilter
@@ -245,27 +190,6 @@ export function setMusicFilter(musicFilter: MusicFilter) {
   if (s.query.trim()) {
     void searchVideos(s.query);
   }
-}
-
-export function toggleStreamSafeOnly() {
-  youtubeState.update((s) => ({ ...s, streamSafeOnly: !s.streamSafeOnly }));
-  persist();
-  const s = get(youtubeState);
-  if (s.query.trim()) {
-    void searchVideos(s.query);
-  }
-}
-
-export function playStreamSafePreset(presetId: string) {
-  const preset = STREAM_SAFE_PRESETS.find((p) => p.id === presetId) ?? STREAM_SAFE_PRESETS[0];
-  playVideo({
-    playlistId: preset.playlistId,
-    title: preset.name,
-    channel: `🛡️ Stream Safe Certified (${preset.category})`,
-    thumbnail: `https://i.ytimg.com/vi/mqdefault.jpg`,
-    type: 'playlist',
-    isStreamSafe: true,
-  });
 }
 
 export function setQuery(query: string) {

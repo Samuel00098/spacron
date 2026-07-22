@@ -180,6 +180,8 @@ pub fn run() {
             commands::fs_watch::start_fs_watch,
             commands::fs_watch::stop_fs_watch,
             commands::http::http_send_request,
+            commands::music_library::music_library_scan,
+            commands::music_library::music_library_reveal,
             commands::notification::notification_show,
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
