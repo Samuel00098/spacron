@@ -284,6 +284,25 @@ function thumbFor(videoId: string): string {
 }
 
 /**
+ * Ceilings on how far a search walks. These are backstops, not a target: in
+ * practice a search ends when YouTube stops handing out continuation tokens,
+ * which usually happens well before either limit. Results are published page by
+ * page as they arrive, so a long run fills the grid in rather than blocking it —
+ * only the search button is disabled while it works.
+ *
+ * Uncapped is deliberately not an option: each page is a network round-trip, and
+ * a query whose tokens keep resolving would otherwise request forever.
+ */
+const SEARCH_TARGET_RESULTS = 500;
+
+/** Roughly 20 rows land per page, so this is the binding limit of the two. */
+const MAX_SEARCH_PAGES = 25;
+
+/** Bumped per search. A slow earlier query's pages land after a newer query has
+ *  started, and without this they'd overwrite the newer results. */
+let searchGeneration = 0;
+
+/**
  * Run a search and populate the results grid.
  *
  * Two paths: with a YouTube Data API key we use the official, stable endpoint;
@@ -322,17 +341,30 @@ export async function searchVideos(query: string): Promise<void> {
     return;
   }
 
+  const generation = ++searchGeneration;
   youtubeState.update((s) => ({ ...s, loading: true, status: '' }));
+
+  // Each page is published as it lands, so the grid fills from the first
+  // response at the old speed instead of waiting on the whole run. Returns false
+  // once a newer search has started, which tells the page loop to stop early
+  // instead of spending round-trips on results that would be discarded.
+  const publish = (partial: YouTubeResult[]): boolean => {
+    if (generation !== searchGeneration) return false;
+    youtubeState.update((s) => ({ ...s, results: partial }));
+    return true;
+  };
+
   try {
     const snapshot = get(youtubeState);
     // YouTube Music uses its own InnerTube client so results are songs/albums/playlists.
     // The Data API has no music-scoped search, so music mode always goes keyless.
     const results =
       snapshot.mode === 'music'
-        ? await musicSearch(trimmed, snapshot.musicFilter)
+        ? await musicSearch(trimmed, snapshot.musicFilter, publish)
         : snapshot.apiKey.trim()
           ? await dataApiSearch(trimmed, snapshot.apiKey.trim())
-          : await innertubeSearch(trimmed);
+          : await innertubeSearch(trimmed, publish);
+    if (generation !== searchGeneration) return;
     youtubeState.update((s) => ({
       ...s,
       results,
@@ -340,6 +372,7 @@ export async function searchVideos(query: string): Promise<void> {
       status: results.length ? '' : 'No results found.',
     }));
   } catch (err) {
+    if (generation !== searchGeneration) return;
     youtubeState.update((s) => ({
       ...s,
       loading: false,
@@ -348,12 +381,19 @@ export async function searchVideos(query: string): Promise<void> {
   }
 }
 
-/** Official Data API v3 search (requires the user's API key). */
+/**
+ * Official Data API v3 search (requires the user's API key).
+ *
+ * Deliberately a single request, unlike the keyless paths below: every search
+ * call costs 100 quota units against a default allowance of 10,000/day, so
+ * paging to SEARCH_TARGET_RESULTS would cut a user to ~16 searches a day. 50 is
+ * the endpoint's per-page ceiling, so this takes as many rows as one call can.
+ */
 async function dataApiSearch(query: string, key: string): Promise<YouTubeResult[]> {
   const url = new URL('https://www.googleapis.com/youtube/v3/search');
   url.searchParams.set('part', 'snippet');
   url.searchParams.set('type', 'video');
-  url.searchParams.set('maxResults', '24');
+  url.searchParams.set('maxResults', '50');
   url.searchParams.set('q', query);
   url.searchParams.set('key', key);
 
@@ -379,37 +419,116 @@ async function dataApiSearch(query: string, key: string): Promise<YouTubeResult[
 // possible.
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 
-/** Keyless search via YouTube's internal InnerTube API. */
-async function innertubeSearch(query: string): Promise<YouTubeResult[]> {
+/**
+ * Keyless search via YouTube's internal InnerTube API.
+ *
+ * One response carries only about 20 rows — the rest sit behind a continuation
+ * token, which is what the website requests as you scroll. Pages are walked
+ * until SEARCH_TARGET_RESULTS is reached or YouTube stops handing out tokens.
+ */
+async function innertubeSearch(
+  query: string,
+  publish: (partial: YouTubeResult[]) => boolean,
+): Promise<YouTubeResult[]> {
   const url = `https://www.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}&prettyPrint=false`;
-  const payload = {
-    context: {
-      client: { clientName: 'WEB', clientVersion: '2.20240701.00.00', hl: 'en', gl: 'US' },
-    },
-    query,
+  const context = {
+    client: { clientName: 'WEB', clientVersion: '2.20240701.00.00', hl: 'en', gl: 'US' },
   };
-  const body = await httpPost(url, JSON.stringify(payload));
-  const data = JSON.parse(body);
-  const renderers: any[] = [];
-  collectVideoRenderers(data, renderers);
 
   const seen = new Set<string>();
   const results: YouTubeResult[] = [];
-  for (const vr of renderers) {
-    const videoId: string | undefined = vr?.videoId;
-    if (!videoId || seen.has(videoId)) continue;
-    seen.add(videoId);
-    const title =
-      vr?.title?.runs?.[0]?.text ?? vr?.title?.simpleText ?? 'Untitled';
-    const channel =
-      vr?.ownerText?.runs?.[0]?.text ??
-      vr?.longBylineText?.runs?.[0]?.text ??
-      vr?.shortBylineText?.runs?.[0]?.text ??
-      '';
-    results.push({ videoId, title, channel, thumbnail: thumbFor(videoId), type: 'video' });
-    if (results.length >= 24) break;
+  let continuation: string | null = null;
+
+  for (let page = 0; page < MAX_SEARCH_PAGES && results.length < SEARCH_TARGET_RESULTS; page++) {
+    // The first request carries the query; every later one replaces it with the
+    // token from the previous page.
+    const payload = continuation ? { context, continuation } : { context, query };
+    const body = await httpPost(url, JSON.stringify(payload));
+    const data = JSON.parse(body);
+    const renderers: any[] = [];
+    collectVideoRenderers(data, renderers);
+
+    const before = results.length;
+    for (const vr of renderers) {
+      const videoId: string | undefined = vr?.videoId;
+      if (!videoId || seen.has(videoId)) continue;
+      seen.add(videoId);
+      const title =
+        vr?.title?.runs?.[0]?.text ?? vr?.title?.simpleText ?? 'Untitled';
+      const channel =
+        vr?.ownerText?.runs?.[0]?.text ??
+        vr?.longBylineText?.runs?.[0]?.text ??
+        vr?.shortBylineText?.runs?.[0]?.text ??
+        '';
+      results.push({ videoId, title, channel, thumbnail: thumbFor(videoId), type: 'video' });
+      if (results.length >= SEARCH_TARGET_RESULTS) break;
+    }
+    if (!publish([...results])) break;
+
+    continuation = findContinuationToken(data);
+    // No token, or a page that added nothing new, means there is no more to walk.
+    if (!continuation || results.length === before) break;
   }
   return results;
+}
+
+/**
+ * Find the token that fetches the next page of results.
+ *
+ * Order matters here, and a blind "first continuationCommand.token in the
+ * response" search is specifically wrong. The results list owns a
+ * `continuationItemRenderer` appended as the last entry of its item list, but
+ * the search filter chips ("Shorts", "Under 4 minutes", …) each carry their own
+ * token under `navigationEndpoint` — and on continuation responses those chips
+ * are emitted *first*. Following a chip token silently re-runs the search as a
+ * filtered query, which returns the rows already seen and makes paging appear to
+ * dead-end after two pages. So: take the results renderer's token, and only fall
+ * back to a loose scan when the response doesn't use that shape.
+ */
+function findContinuationToken(node: unknown): string | null {
+  const items: any[] = [];
+  collectKeyed(node, 'continuationItemRenderer', items);
+  // Last one wins: it's the list's own "load more" sentinel.
+  for (let i = items.length - 1; i >= 0; i--) {
+    const token = items[i]?.continuationEndpoint?.continuationCommand?.token;
+    if (typeof token === 'string' && token) return token;
+  }
+  return findLooseContinuationToken(node);
+}
+
+/** Legacy `nextContinuationData` shape, plus a last-resort scan for any
+ *  `continuationCommand.token`, for responses without a continuationItemRenderer. */
+function findLooseContinuationToken(node: unknown): string | null {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findLooseContinuationToken(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  const obj = node as Record<string, any>;
+  const legacy = obj.nextContinuationData?.continuation;
+  if (typeof legacy === 'string' && legacy) return legacy;
+  const modern = obj.continuationCommand?.token;
+  if (typeof modern === 'string' && modern) return modern;
+  for (const value of Object.values(obj)) {
+    const found = findLooseContinuationToken(value);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Recursively collect every value stored under `key`, anywhere in the tree. */
+function collectKeyed(node: unknown, key: string, out: any[]): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectKeyed(item, key, out);
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  if (obj[key] && typeof obj[key] === 'object') out.push(obj[key]);
+  for (const value of Object.values(obj)) collectKeyed(value, key, out);
 }
 
 /** Recursively collect every `videoRenderer` object in the InnerTube response,
@@ -432,7 +551,11 @@ function collectVideoRenderers(node: unknown, out: any[]): void {
  * client). Supports songs, albums, and playlists. Results come back
  * as `musicResponsiveListItemRenderer` objects, so they are filtered and parsed.
  */
-async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeResult[]> {
+async function musicSearch(
+  query: string,
+  filter: MusicFilter,
+  publish: (partial: YouTubeResult[]) => boolean,
+): Promise<YouTubeResult[]> {
   const url = `https://music.youtube.com/youtubei/v1/search?key=${INNERTUBE_KEY}&prettyPrint=false`;
 
   // InnerTube search filter params (protobuf, same values ytmusicapi uses —
@@ -444,72 +567,97 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
     params = 'Eg-KAQwIABAAGAAgACgBMABqChAEEAMQCRAFEAo%3D'; // Playlists
   }
 
-  const payload = {
-    context: {
-      client: { clientName: 'WEB_REMIX', clientVersion: '1.20240701.01.00', hl: 'en', gl: 'US' },
-    },
-    query,
-    params,
+  const context = {
+    client: { clientName: 'WEB_REMIX', clientVersion: '1.20240701.01.00', hl: 'en', gl: 'US' },
   };
-  const body = await httpPost(url, JSON.stringify(payload));
-  const data = JSON.parse(body);
-  const renderers: any[] = [];
-  collectMusicRenderers(data, renderers);
 
   const seen = new Set<string>();
   const results: YouTubeResult[] = [];
-  const isList = filter === 'albums' || filter === 'playlists';
-  for (const item of renderers) {
-    const videoId = findWatchVideoId(item);
+  let continuation: string | null = null;
 
-    // Resolve the playable playlist id for list results. Albums prefer their
-    // OLAK5uy_… audio playlist (present directly in album search results);
-    // playlists fall back to the row's VLPL… browse target with the VL prefix
-    // stripped, since some rows only expose the id there.
-    let playlistId: string | undefined;
-    if (isList) {
-      const browseTarget: unknown = (item as any)?.navigationEndpoint?.browseEndpoint?.browseId;
-      const fromBrowse =
-        typeof browseTarget === 'string' && browseTarget.startsWith('VL')
-          ? browseTarget.slice(2)
-          : null;
-      playlistId =
-        filter === 'albums'
-          ? findOlakPlaylistId(item) ?? sanitizePlaylistId(findPlaylistId(item))
-          : sanitizePlaylistId(findPlaylistId(item)) ?? sanitizePlaylistId(fromBrowse);
+  // Same paging as innertubeSearch — a single music response is one shelf of
+  // roughly 20 rows, and the rest sit behind continuation tokens.
+  for (let page = 0; page < MAX_SEARCH_PAGES && results.length < SEARCH_TARGET_RESULTS; page++) {
+    const payload = continuation ? { context, continuation } : { context, query, params };
+    const body = await httpPost(url, JSON.stringify(payload));
+    const data = JSON.parse(body);
+    const renderers: any[] = [];
+    collectMusicRenderers(data, renderers);
+
+    const before = results.length;
+    for (const item of renderers) {
+      const row = parseMusicRow(item, filter);
+      if (!row || seen.has(row.idKey)) continue;
+      seen.add(row.idKey);
+      results.push(row.result);
+      if (results.length >= SEARCH_TARGET_RESULTS) break;
     }
-    const browseId = filter === 'albums' ? findAlbumBrowseId(item) ?? undefined : undefined;
+    if (!publish([...results])) break;
 
-    // Albums without a resolved playlist id can still play via their browseId
-    // (playMusicResult resolves it); anything else needs a concrete id.
-    const idKey = isList ? playlistId ?? browseId : videoId ?? undefined;
-    if (!idKey || seen.has(idKey)) continue;
-    seen.add(idKey);
+    continuation = findContinuationToken(data);
+    if (!continuation || results.length === before) break;
+  }
+  return results;
+}
 
-    const cols: any[] = Array.isArray(item?.flexColumns) ? item.flexColumns : [];
-    const colText = (i: number): string => {
-      const runs = cols[i]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-      if (!Array.isArray(runs)) return '';
-      return runs
-        .map((r: any) => (typeof r?.text === 'string' ? r.text : ''))
-        .join('')
-        .trim();
-    };
-    const title = colText(0) || 'Untitled';
-    // The subtitle column is "Artist • Album • …" for songs, but list results
-    // lead with their kind ("Album • Artist • Year", "Playlist • Author • …");
-    // skip that leading type word so the card shows the artist/author.
-    const subtitleParts = colText(1)
-      .split('•')
-      .map((p) => p.trim())
-      .filter(Boolean);
-    const typeWords = new Set(['album', 'single', 'ep', 'playlist']);
-    const channel =
-      (subtitleParts[0] && typeWords.has(subtitleParts[0].toLowerCase())
-        ? subtitleParts[1]
-        : subtitleParts[0]) ?? '';
+/** Turn one `musicResponsiveListItemRenderer` row into a result, or null when it
+ *  carries no id we can actually play. `idKey` is what dedupes across pages. */
+function parseMusicRow(
+  item: any,
+  filter: MusicFilter,
+): { idKey: string; result: YouTubeResult } | null {
+  const isList = filter === 'albums' || filter === 'playlists';
+  const videoId = findWatchVideoId(item);
 
-    results.push({
+  // Resolve the playable playlist id for list results. Albums prefer their
+  // OLAK5uy_… audio playlist (present directly in album search results);
+  // playlists fall back to the row's VLPL… browse target with the VL prefix
+  // stripped, since some rows only expose the id there.
+  let playlistId: string | undefined;
+  if (isList) {
+    const browseTarget: unknown = item?.navigationEndpoint?.browseEndpoint?.browseId;
+    const fromBrowse =
+      typeof browseTarget === 'string' && browseTarget.startsWith('VL')
+        ? browseTarget.slice(2)
+        : null;
+    playlistId =
+      filter === 'albums'
+        ? findOlakPlaylistId(item) ?? sanitizePlaylistId(findPlaylistId(item))
+        : sanitizePlaylistId(findPlaylistId(item)) ?? sanitizePlaylistId(fromBrowse);
+  }
+  const browseId = filter === 'albums' ? findAlbumBrowseId(item) ?? undefined : undefined;
+
+  // Albums without a resolved playlist id can still play via their browseId
+  // (playMusicResult resolves it); anything else needs a concrete id.
+  const idKey = isList ? playlistId ?? browseId : videoId ?? undefined;
+  if (!idKey) return null;
+
+  const cols: any[] = Array.isArray(item?.flexColumns) ? item.flexColumns : [];
+  const colText = (i: number): string => {
+    const runs = cols[i]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+    if (!Array.isArray(runs)) return '';
+    return runs
+      .map((r: any) => (typeof r?.text === 'string' ? r.text : ''))
+      .join('')
+      .trim();
+  };
+  const title = colText(0) || 'Untitled';
+  // The subtitle column is "Artist • Album • …" for songs, but list results
+  // lead with their kind ("Album • Artist • Year", "Playlist • Author • …");
+  // skip that leading type word so the card shows the artist/author.
+  const subtitleParts = colText(1)
+    .split('•')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const typeWords = new Set(['album', 'single', 'ep', 'playlist']);
+  const channel =
+    (subtitleParts[0] && typeWords.has(subtitleParts[0].toLowerCase())
+      ? subtitleParts[1]
+      : subtitleParts[0]) ?? '';
+
+  return {
+    idKey,
+    result: {
       // A song plays as its bare video: search attaches an RDAMVM… "radio"
       // playlistId which the IFrame embed player refuses to load.
       videoId: videoId || undefined,
@@ -519,10 +667,8 @@ async function musicSearch(query: string, filter: MusicFilter): Promise<YouTubeR
       channel,
       thumbnail: findThumbnail(item),
       type: isList ? (filter === 'albums' ? 'album' : 'playlist') : 'song',
-    });
-    if (results.length >= 24) break;
-  }
-  return results;
+    },
+  };
 }
 
 /** Radio/mix ids (RD…) are session-generated server-side lists the embedded
