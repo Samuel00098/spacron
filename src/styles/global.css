@@ -622,7 +622,7 @@ input:focus {
 .file-tree,
 .modal-body,
 .review-body,
-.sc-scrollable,
+.sc-section-body,
 .markdown-container,
 .results-container,
 .search-results-dropdown,
@@ -641,7 +641,7 @@ input:focus {
 /* Prevent horizontal layout shifts when scrollbars appear */
 .scrollable,
 .review-body,
-.sc-scrollable,
+.sc-section-body,
 .colors-list,
 .modal-body,
 .file-tree,
@@ -659,7 +659,7 @@ input:focus {
    extra bounce space or horizontal drift while resizing narrow panels. */
 :where(
   .scrollable,
-  .sc-scrollable,
+  .sc-section-body,
   .sticky-content,
   .colors-list,
   .tables-list,

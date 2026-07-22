@@ -397,6 +397,7 @@
 
 .source-control .sc-content {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -432,21 +433,45 @@
   color: var(--text-muted);
 }
 
-.source-control .sc-scrollable {
+/* Changes and Commits are sibling panes that split the leftover height. Neither
+   this column nor .sc-section scrolls — each section scrolls its own body, so a
+   long file list can never push the commit graph out of view. */
+.source-control .sc-sections {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overscroll-behavior: none;
+  overflow: hidden;
+}
+
+.source-control .sc-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* auto basis, so a short section stays short instead of claiming half the panel */
+  flex: 1 1 auto;
+}
+
+/* Collapsed sections are just their header — never grow. */
+.source-control .sc-section.collapsed {
+  flex: 0 0 auto;
+}
+
+.source-control .sc-section + .sc-section {
+  border-top: 1px solid var(--border);
+}
+
+.source-control .sc-section-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 .source-control .sc-section-head-row {
   display: flex;
   align-items: center;
-  position: sticky;
-  top: 0;
-  z-index: 5;
   background: var(--sidebar-bg);
 }
 
@@ -462,14 +487,11 @@
   text-align: left;
   cursor: pointer;
   user-select: none;
-  position: sticky;
-  top: 0;
-  z-index: 5;
   flex-shrink: 0;
 }
 
+/* Headers now sit outside their scroll body, so they stay put without sticky. */
 .source-control .sc-section-head-row .sc-section-header {
-  position: static;
   flex: 1;
 }
 

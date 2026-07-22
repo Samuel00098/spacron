@@ -752,103 +752,111 @@ export default function SourceControl() {
                 </button>
               </div>
 
-              <div className="sc-scrollable">
-                <div className="sc-section-head-row">
-                  <button className="sc-section-header" onClick={() => setChangesExpanded((expanded) => !expanded)} aria-expanded={changesExpanded}>
-                    <svg className={`chevron${changesExpanded ? ' expanded' : ''}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="9 18 15 12 9 6" />
-                    </svg>
-                    <span className="sc-section-title">Changes ({totalChanges})</span>
-                  </button>
-                  {totalChanges > 0 && (
-                    <label className="sc-select-all" title="Select all / none">
-                      <input ref={selectAllRef} type="checkbox" checked={allSelected} onChange={toggleAllFiles} aria-label="Select all files for commit" />
-                      <span>{selectedCount}/{totalChanges}</span>
-                    </label>
+              <div className="sc-sections">
+                <div className={`sc-section${changesExpanded ? '' : ' collapsed'}`}>
+                  <div className="sc-section-head-row">
+                    <button className="sc-section-header" onClick={() => setChangesExpanded((expanded) => !expanded)} aria-expanded={changesExpanded}>
+                      <svg className={`chevron${changesExpanded ? ' expanded' : ''}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                      <span className="sc-section-title">Changes ({totalChanges})</span>
+                    </button>
+                    {totalChanges > 0 && (
+                      <label className="sc-select-all" title="Select all / none">
+                        <input ref={selectAllRef} type="checkbox" checked={allSelected} onChange={toggleAllFiles} aria-label="Select all files for commit" />
+                        <span>{selectedCount}/{totalChanges}</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {changesExpanded && (
+                    <div className="sc-section-body">
+                      {gitStatus && totalChanges > 0 ? (
+                        <div className="sc-files">
+                          {(gitStatus.conflicted ?? []).map((file) => renderFileRow(file, 'conflicted', '!', true))}
+                          {gitStatus.modified.map((file) => renderFileRow(file, 'modified', 'M', true))}
+                          {gitStatus.added.map((file) => renderFileRow(file, 'added', 'A', true))}
+                          {gitStatus.deleted.map((file) => renderFileRow(file, 'deleted', 'D', false))}
+                          {gitStatus.untracked.map((file) => renderFileRow(file, 'untracked', 'U', true))}
+                        </div>
+                      ) : (
+                        <div className="sc-clean">
+                          <svg width="48" height="48" viewBox="0 0 64 64" fill="none" stroke="currentColor" className="animated-svg-floating">
+                            <circle cx="32" cy="32" r="28" fill="var(--bg-hover)" stroke="var(--border)" strokeWidth="1" />
+                            <circle cx="32" cy="32" r="20" fill="rgba(74, 222, 128, 0.08)" stroke="rgba(74, 222, 128, 0.2)" strokeWidth="1.5" />
+                            <path d="M22 18 L 32,28 M 32,28 L 32,46" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="22" cy="18" r="4" fill="var(--bg-secondary)" stroke="var(--text-muted)" strokeWidth="2" />
+                            <circle cx="32" cy="46" r="4" fill="var(--bg-secondary)" stroke="var(--text-muted)" strokeWidth="2" />
+                            <circle cx="42" cy="22" r="8" fill="var(--success)" stroke="var(--bg-secondary)" strokeWidth="2" />
+                            <polyline points="39 22 41 24 45 20" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          <p>Workspace is Clean</p>
+                          <p className="sub">No modifications detected in your git working tree.</p>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
-                {changesExpanded && (
-                  gitStatus && totalChanges > 0 ? (
-                    <div className="sc-files">
-                      {(gitStatus.conflicted ?? []).map((file) => renderFileRow(file, 'conflicted', '!', true))}
-                      {gitStatus.modified.map((file) => renderFileRow(file, 'modified', 'M', true))}
-                      {gitStatus.added.map((file) => renderFileRow(file, 'added', 'A', true))}
-                      {gitStatus.deleted.map((file) => renderFileRow(file, 'deleted', 'D', false))}
-                      {gitStatus.untracked.map((file) => renderFileRow(file, 'untracked', 'U', true))}
-                    </div>
-                  ) : (
-                    <div className="sc-clean">
-                      <svg width="48" height="48" viewBox="0 0 64 64" fill="none" stroke="currentColor" className="animated-svg-floating">
-                        <circle cx="32" cy="32" r="28" fill="var(--bg-hover)" stroke="var(--border)" strokeWidth="1" />
-                        <circle cx="32" cy="32" r="20" fill="rgba(74, 222, 128, 0.08)" stroke="rgba(74, 222, 128, 0.2)" strokeWidth="1.5" />
-                        <path d="M22 18 L 32,28 M 32,28 L 32,46" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
-                        <circle cx="22" cy="18" r="4" fill="var(--bg-secondary)" stroke="var(--text-muted)" strokeWidth="2" />
-                        <circle cx="32" cy="46" r="4" fill="var(--bg-secondary)" stroke="var(--text-muted)" strokeWidth="2" />
-                        <circle cx="42" cy="22" r="8" fill="var(--success)" stroke="var(--bg-secondary)" strokeWidth="2" />
-                        <polyline points="39 22 41 24 45 20" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      <p>Workspace is Clean</p>
-                      <p className="sub">No modifications detected in your git working tree.</p>
-                    </div>
-                  )
-                )}
+                <div className={`sc-section${commitsExpanded ? '' : ' collapsed'}`}>
+                  <button className="sc-section-header" onClick={() => setCommitsExpanded((expanded) => !expanded)} aria-expanded={commitsExpanded}>
+                    <svg className={`chevron${commitsExpanded ? ' expanded' : ''}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    <span className="sc-section-title">Commits (Graph)</span>
+                  </button>
 
-                <button className="sc-section-header" onClick={() => setCommitsExpanded((expanded) => !expanded)} aria-expanded={commitsExpanded}>
-                  <svg className={`chevron${commitsExpanded ? ' expanded' : ''}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="9 18 15 12 9 6" />
-                  </svg>
-                  <span className="sc-section-title">Commits (Graph)</span>
-                </button>
-
-                {commitsExpanded && (
-                  <div className="sc-commits-list">
-                    {gitHistory && gitHistory.length > 0 ? (
-                      gitHistory.map((entry, entryIndex) => (
-                        <div key={`${entry.hash ?? 'graph'}:${entryIndex}`} className={`history-row${entry.hash ? '' : ' graph-only'}`}>
-                          <span className="graph-col">{entry.graph.split('').map(renderGraphChar)}</span>
-                          {entry.hash && (
-                            <div className="commit-info">
-                              <div className="commit-meta">
-                                <span className="commit-hash" title={entry.hash}>{entry.hash}</span>
-                                {entry.refs && <span className="commit-ref-badge" title={entry.refs}>{entry.refs}</span>}
-                                <span className="commit-date" title={`Author: ${entry.author || ''}`}>{entry.date}</span>
-                              </div>
-                              <span className="commit-subject" title={entry.subject ?? undefined}>{entry.subject}</span>
+                  {commitsExpanded && (
+                    <div className="sc-section-body">
+                      {gitHistory && gitHistory.length > 0 ? (
+                        <div className="sc-commits-list">
+                          {gitHistory.map((entry, entryIndex) => (
+                            <div key={`${entry.hash ?? 'graph'}:${entryIndex}`} className={`history-row${entry.hash ? '' : ' graph-only'}`}>
+                              <span className="graph-col">{entry.graph.split('').map(renderGraphChar)}</span>
+                              {entry.hash && (
+                                <div className="commit-info">
+                                  <div className="commit-meta">
+                                    <span className="commit-hash" title={entry.hash}>{entry.hash}</span>
+                                    {entry.refs && <span className="commit-ref-badge" title={entry.refs}>{entry.refs}</span>}
+                                    <span className="commit-date" title={`Author: ${entry.author || ''}`}>{entry.date}</span>
+                                  </div>
+                                  <span className="commit-subject" title={entry.subject ?? undefined}>{entry.subject}</span>
+                                </div>
+                              )}
                             </div>
-                          )}
+                          ))}
                         </div>
-                      ))
-                    ) : isFetchingHistory ? (
-                      <div className="sc-loading-skeleton">
-                        {[0, 1, 2, 3].map((idx) => (
-                          <div key={idx} className="skeleton-item">
-                            <div className="skeleton-dot" />
-                            <div className="skeleton-col">
-                              <div className="skeleton-bar skeleton-commit-short" />
-                              <div className="skeleton-bar skeleton-commit-long" />
+                      ) : isFetchingHistory ? (
+                        <div className="sc-loading-skeleton">
+                          {[0, 1, 2, 3].map((idx) => (
+                            <div key={idx} className="skeleton-item">
+                              <div className="skeleton-dot" />
+                              <div className="skeleton-col">
+                                <div className="skeleton-bar skeleton-commit-short" />
+                                <div className="skeleton-bar skeleton-commit-long" />
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="sc-clean">
-                        <svg width="48" height="48" viewBox="0 0 64 64" fill="none" stroke="currentColor" className="animated-svg-floating">
-                          <circle cx="32" cy="32" r="28" fill="var(--bg-hover)" stroke="var(--border)" strokeWidth="1" />
-                          <path d="M32 14v36" stroke="var(--text-muted)" strokeDasharray="3,3" strokeWidth="2" />
-                          <circle cx="32" cy="20" r="4" fill="var(--text-muted)" />
-                          <circle cx="32" cy="32" r="4" fill="var(--text-muted)" />
-                          <circle cx="32" cy="44" r="4" fill="var(--text-muted)" />
-                          <circle cx="44" cy="32" r="7" fill="var(--warning)" stroke="var(--bg-secondary)" strokeWidth="1.5" />
-                          <line x1="44" y1="29" x2="44" y2="33" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
-                          <circle cx="44" cy="36" r="0.75" fill="#fff" />
-                        </svg>
-                        <p>No Commit History</p>
-                        <p className="sub">This branch has no commits recorded yet.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="sc-clean">
+                          <svg width="48" height="48" viewBox="0 0 64 64" fill="none" stroke="currentColor" className="animated-svg-floating">
+                            <circle cx="32" cy="32" r="28" fill="var(--bg-hover)" stroke="var(--border)" strokeWidth="1" />
+                            <path d="M32 14v36" stroke="var(--text-muted)" strokeDasharray="3,3" strokeWidth="2" />
+                            <circle cx="32" cy="20" r="4" fill="var(--text-muted)" />
+                            <circle cx="32" cy="32" r="4" fill="var(--text-muted)" />
+                            <circle cx="32" cy="44" r="4" fill="var(--text-muted)" />
+                            <circle cx="44" cy="32" r="7" fill="var(--warning)" stroke="var(--bg-secondary)" strokeWidth="1.5" />
+                            <line x1="44" y1="29" x2="44" y2="33" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="44" cy="36" r="0.75" fill="#fff" />
+                          </svg>
+                          <p>No Commit History</p>
+                          <p className="sub">This branch has no commits recorded yet.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </>
           )}
