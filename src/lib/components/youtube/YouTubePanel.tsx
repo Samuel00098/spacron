@@ -16,6 +16,9 @@ import {
   goHome,
   fetchAlbumTracks,
   clearAlbumTracks,
+  playStreamSafePreset,
+  toggleStreamSafeOnly,
+  STREAM_SAFE_PRESETS,
   type MusicFilter,
 } from '$lib/stores/youtube';
 import { loadYouTubeApi, type YTPlayer, type YTPlayerVars } from '$lib/utils/youtubeApi';
@@ -581,16 +584,18 @@ export default function YouTubePanel() {
 
       {isMusic && (
         <div className="yt-music-filters" role="tablist" aria-label="Music search filter">
-          {(['songs', 'albums', 'playlists'] as MusicFilter[]).map((filter) => (
+          {(['songs', 'albums', 'playlists', 'stream-safe'] as MusicFilter[]).map((filter) => (
             <button
               key={filter}
               type="button"
               role="tab"
               aria-selected={state.musicFilter === filter}
-              className={`yt-filter-pill${state.musicFilter === filter ? ' active' : ''}`}
+              className={`yt-filter-pill${filter === 'stream-safe' ? ' yt-filter-safe' : ''}${
+                state.musicFilter === filter ? ' active' : ''
+              }`}
               onClick={() => setMusicFilter(filter)}
             >
-              {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              {filter === 'stream-safe' ? '🛡️ Stream Safe' : filter.charAt(0).toUpperCase() + filter.slice(1)}
             </button>
           ))}
         </div>
@@ -665,6 +670,11 @@ export default function YouTubePanel() {
                   <div className="yt-music-meta">
                     <div className="yt-music-title" title={activeTitle}>{activeTitle}</div>
                     {activeChannel && <div className="yt-music-artist">{activeChannel}</div>}
+                    {(state.current?.isStreamSafe || activeChannel.includes('Stream Safe')) && (
+                      <div className="yt-stream-safe-badge-now-playing">
+                        🛡️ Stream-Safe Certified
+                      </div>
+                    )}
                   </div>
                   <div className="yt-music-controls">
                     <div className="yt-music-btns">
@@ -795,7 +805,46 @@ export default function YouTubePanel() {
           </div>
         )}
 
-        {!hasPlayer && state.results.length === 0 && (
+        {(!hasPlayer || state.musicFilter === 'stream-safe') && state.results.length === 0 && (
+          <div className="yt-stream-safe-container scrollable">
+            <div className="yt-stream-safe-header">
+              <div className="yt-stream-safe-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+                <span>Stream-Safe Music Catalog</span>
+              </div>
+              <span className="yt-stream-safe-sub">0% Copyright Risk • Twitch, YouTube & Kick Approved</span>
+            </div>
+
+            <div className="yt-stream-safe-grid">
+              {STREAM_SAFE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="yt-stream-safe-card"
+                  onClick={() => playStreamSafePreset(preset.id)}
+                >
+                  <div className="yt-stream-safe-card-top">
+                    <span className="yt-stream-safe-badge">🛡️ DMCA Safe</span>
+                    <span className="yt-stream-safe-cat">{preset.category}</span>
+                  </div>
+                  <div className="yt-stream-safe-card-title">{preset.name}</div>
+                  <div className="yt-stream-safe-card-desc">{preset.description}</div>
+                  <div className="yt-stream-safe-card-action">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                    <span>Play Playlist</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!hasPlayer && state.musicFilter !== 'stream-safe' && state.results.length === 0 && (
           <div className="yt-empty">
             {isMusic ? (
               <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -811,7 +860,7 @@ export default function YouTubePanel() {
             )}
             <p>
               {isMusic
-                ? 'Search for songs, albums, or playlists — or paste a YouTube Music link.'
+                ? 'Search for songs, albums, or playlists — or select Stream Safe above.'
                 : 'Search for something or paste a YouTube link to start watching.'}
             </p>
           </div>
