@@ -1143,8 +1143,8 @@ input[type='range']::-webkit-slider-thumb:active {
 :root:not(.solid-theme) .code-editor-container,
 :root:not(.solid-theme) .preview-panel,
 :root:not(.solid-theme) .http-client-panel {
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%)) !important;
+  backdrop-filter: blur(var(--glass-blur, 32px)) saturate(var(--glass-saturate, 190%)) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur, 32px)) saturate(var(--glass-saturate, 190%)) !important;
   background-image:
     radial-gradient(
       650px circle at var(--shine-x, 30%) var(--shine-y, 20%),
@@ -1185,7 +1185,6 @@ input[type='range']::-webkit-slider-thumb:active {
 :root:not(.solid-theme).light-theme .code-editor-container,
 :root:not(.solid-theme).light-theme .preview-panel,
 :root:not(.solid-theme).light-theme .http-client-panel {
-  background-color: color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent) !important;
   background-image:
     radial-gradient(
       650px circle at var(--shine-x, 30%) var(--shine-y, 20%),

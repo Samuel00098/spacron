@@ -77,8 +77,8 @@
       be brighter than the surface AND the far edge needs a real (coloured)
       shadow, or the pod has no discernible edge at all. */
 :root.light-theme {
-  --lg-tint:         rgba(255, 255, 255, 0.16);
-  --lg-tint-strong:  rgba(255, 255, 255, 0.28);
+  --lg-tint:         rgba(252, 252, 255, 0.84);
+  --lg-tint-strong:  rgba(253, 253, 255, 0.94);
 
   --lg-rim-hi:       rgba(255, 255, 255, 0.95);
   --lg-rim-mid:      rgba(255, 255, 255, 0.38);
