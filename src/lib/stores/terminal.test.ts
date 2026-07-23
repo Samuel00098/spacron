@@ -437,7 +437,7 @@ describe('unified agent briefing', () => {
     writeSpy.mockClear();
 
     markSessionAgentPreset(sessionId!, 'claude');
-    await sleep(350);
+    await sleep(400);
     expect(writeSpy.mock.calls.some((c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF'))).toBe(true);
 
     // The agent exits and the user launches it again in the same pane — input
@@ -445,7 +445,7 @@ describe('unified agent briefing', () => {
     // charter to the new process too.
     writeSpy.mockClear();
     markSessionAgentPreset(sessionId!, 'claude');
-    await sleep(350);
+    await sleep(400);
     expect(writeSpy.mock.calls.some((c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF'))).toBe(true);
 
     const session = get(sessions).find(s => s.id === sessionId);
@@ -564,7 +564,7 @@ describe('unified agent briefing', () => {
 describe('worktree metadata across restore', () => {
   const projectId = 'project-terminal-worktree-restore';
   const worktree = {
-    path: '/parent/.spacron-worktrees/repo/spacron-neo-342ci1',
+    path: '/repo/.spacron/worktrees/spacron-neo-342ci1',
     branch: 'spacron/neo-342ci1',
     baseBranch: 'main',
     baseCommit: '6170ecf',
