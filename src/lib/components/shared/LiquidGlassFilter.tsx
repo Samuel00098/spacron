@@ -79,8 +79,11 @@ export default function LiquidGlassFilter() {
     setDispMapUrl(url);
 
     // Pointer listener for dynamic Fresnel specular shine spot
+    const GLASS_SELECTOR =
+      '.lg-surface, .lg-interactive, .bento-card, .room-panel, .titlebar, .activity-bar, .sidebar-panel, .terminal-panel, .command-palette, .floating-search-bar, .project-hud, .settings-modal, .welcome-card, .glass-panel, .floating-pod, .modal-content, [class*="card"], [class*="panel"], [class*="modal"]';
+
     const handlePointerMove = (e: PointerEvent) => {
-      const target = (e.target as HTMLElement)?.closest?.('.lg-surface, .lg-interactive') as HTMLElement | null;
+      const target = (e.target as HTMLElement)?.closest?.(GLASS_SELECTOR) as HTMLElement | null;
       if (target) {
         const rect = target.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {

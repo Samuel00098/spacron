@@ -121,18 +121,16 @@
   background-color: var(--lg-tint);
   background-image: var(--lg-sheen);
   backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-saturate));
-  backdrop-filter: blur(var(--lg-blur)) url(#liquid-lens) saturate(var(--lg-saturate));
   -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-saturate));
-  -webkit-backdrop-filter: blur(var(--lg-blur)) url(#liquid-lens) saturate(var(--lg-saturate));
   box-shadow: var(--lg-shadow);
   border: 1px solid transparent;
   background-clip: padding-box;
 }
 
-/* Lens utility class */
+/* Glass optical lensing refraction effect */
+.lg-surface,
 .lg-lens {
-  backdrop-filter: blur(var(--lg-blur)) url(#liquid-lens) saturate(var(--lg-saturate)) !important;
-  -webkit-backdrop-filter: blur(var(--lg-blur)) url(#liquid-lens) saturate(var(--lg-saturate)) !important;
+  filter: url(#liquid-lens);
 }
 
 /* Layer 6 — asymmetric specular rim.
