@@ -143,8 +143,8 @@
 /* Left panel — frosted glass, right border */
 .app-shell .left-utility-panel {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) 18%, transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-right: 1px solid rgba(255, 255, 255, 0.09);
@@ -157,8 +157,8 @@
 /* Right panel — frosted glass, left border */
 .app-shell .right-utility-panel {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 40%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) 18%, transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-left: 1px solid rgba(255, 255, 255, 0.09);
@@ -177,8 +177,8 @@
 
 :root.light-theme .app-shell .left-utility-panel {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
-    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff 18%, transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-right-color: rgba(0, 0, 0, 0.1);
@@ -186,8 +186,8 @@
 
 :root.light-theme .app-shell .right-utility-panel {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
-    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff 18%, transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border-left-color: rgba(0, 0, 0, 0.1);
