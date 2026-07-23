@@ -286,27 +286,16 @@
   color: var(--text-primary);
 }
 
-.app-shell .left-utility-panel .drawer-body,
-.app-shell .right-utility-panel .drawer-body,
 .app-shell .utility-drawer .drawer-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
   display: flex;
-  background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 
-.app-shell .left-utility-panel .drawer-body > *,
-.app-shell .right-utility-panel .drawer-body > *,
 .app-shell .utility-drawer .drawer-body > * {
   flex: 1 1 auto;
   min-width: 0;
-  background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: none !important;
 }
 
 /* Horizontal flex container that holds left panel + rooms-table + right panel.
