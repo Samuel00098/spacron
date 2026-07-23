@@ -3,6 +3,7 @@ import { get } from '$lib/stores/storeCompat';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import AppShell from '$lib/components/layout/AppShell.tsx';
 import BackgroundMedia from '$lib/components/shared/BackgroundMedia.tsx';
+import LiquidGlassFilter from '$lib/components/shared/LiquidGlassFilter.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
@@ -183,6 +184,7 @@ export default function App() {
 
   return (
     <>
+      <LiquidGlassFilter />
       <BackgroundMedia />
       <AppShell />
 
