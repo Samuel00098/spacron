@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { activeProject, activeProjectId } from '$lib/stores/workspace';
 import { openFile } from '$lib/stores/editor';
 import { showToast } from '$lib/stores/notification';
