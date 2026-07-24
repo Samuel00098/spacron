@@ -10,8 +10,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 18px;
-  padding: 0 8px;
+  height: 24px;
+  padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 9999px;
   /* Solid surface: the vibrancy layer turns --bg-secondary translucent, so use
@@ -19,15 +19,29 @@
      every theme. */
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.2px;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.rs-chip:hover {
+.rs-chip:hover,
+.rs-chip.is-open {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* Active-state tinted pills, mirroring the app's `.sb-view-badge` idiom — an
+   accent (remote) / success (connected) wash mixed into the opaque surface so
+   the mode reads before you open the menu, while staying legible under
+   vibrancy/transparency themes. */
+.rs-chip-remote {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, rgba(var(--bg-secondary-rgb, 18, 18, 22), 1));
+}
+.rs-chip-connected {
+  border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, rgba(var(--bg-secondary-rgb, 18, 18, 22), 1));
 }
 
 .rs-chip-label {
@@ -36,6 +50,35 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Slightly larger status dot than the popover rows use, to balance the bigger
+   chip. */
+.rs-chip .rs-dot { width: 8px; height: 8px; }
+
+/* ── Mode icon (monitor = Local, cloud = remote) ────────────────────────────*/
+
+.rs-chip-mode {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+.rs-chip-mode svg { display: block; }
+.rs-chip:hover .rs-chip-mode,
+.rs-chip.is-open .rs-chip-mode { color: var(--text-secondary); }
+.rs-chip-remote .rs-chip-mode { color: var(--accent); }
+.rs-chip-connected .rs-chip-mode { color: var(--success); }
+
+/* ── Caret ──────────────────────────────────────────────────────────────── */
+
+.rs-chip-caret {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.rs-chip:hover .rs-chip-caret,
+.rs-chip.is-open .rs-chip-caret { color: var(--text-secondary); }
+.rs-chip.is-open .rs-chip-caret { transform: rotate(180deg); }
 
 /* ── Status dot ─────────────────────────────────────────────────────────── */
 

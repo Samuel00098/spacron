@@ -66,6 +66,10 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
   }, [open]);
 
   const busy = status === 'connecting' || status === 'reconnecting';
+  // Anything other than a clean "disconnected" means we're on (or heading to) a
+  // remote — drive the cloud icon + status dot off that, not just `active`,
+  // so the mode reads correctly mid-connect and on error.
+  const isRemote = status !== 'disconnected';
   const chipLabel = active
     ? status === 'reconnecting'
       ? `${active.name} · reconnecting`
@@ -90,12 +94,32 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
     <div className={`remote-status${!dropdownUp ? ' rs-drop-down' : ''}`} ref={rootRef}>
       <button
         type="button"
-        className="rs-chip"
+        className={`rs-chip${open ? ' is-open' : ''}${isRemote ? ' rs-chip-remote' : ''}${
+          status === 'connected' ? ' rs-chip-connected' : ''
+        }`}
         onClick={() => setOpen((v) => !v)}
         title="Remote workspace"
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
-        <span className={`rs-dot rs-${status}`} />
+        <span className="rs-chip-mode" aria-hidden="true">
+          {isRemote ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17.5 19a4.5 4.5 0 0 0 .5-8.98A6 6 0 0 0 6.34 9 4 4 0 0 0 6.5 19z" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          )}
+        </span>
         <span className="rs-chip-label">{chipLabel}</span>
+        {isRemote && <span className={`rs-dot rs-${status}`} />}
+        <svg className="rs-chip-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
       </button>
 
       {open && (

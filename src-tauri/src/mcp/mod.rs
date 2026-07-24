@@ -86,18 +86,9 @@ pub struct McpServerHandle {
     /// The agent registry (name → AgentEntry), shared with the MCP server.
     pub registry: Arc<Mutex<HashMap<String, AgentEntry>>>,
     notify_tx: broadcast::Sender<()>,
-    /// Channel that emits send-to-agent requests the frontend should service.
-    pub send_tx: broadcast::Sender<SendToAgentRequest>,
-    /// Channel that emits read-output requests the frontend should service.
-    pub read_tx: broadcast::Sender<ReadOutputRequest>,
-    /// Channel that emits spawn-agent requests the frontend should service.
-    pub spawn_tx: broadcast::Sender<SpawnRequest>,
     _shutdown_tx: oneshot::Sender<()>,
     /// The port the MCP server is listening on.
     pub port: u16,
-    write_cb: WriteFn,
-    read_cb: ReadFn,
-    spawn_fn: SpawnFn,
 }
 
 impl McpServerHandle {
@@ -118,21 +109,6 @@ impl McpServerHandle {
         let mut map = self.registry.lock().await;
         map.retain(|_, v| v.session_id != session_id);
         let _ = self.notify_tx.send(());
-    }
-
-    /// Subscribe to send-to-agent requests.
-    pub fn send_rx(&self) -> broadcast::Receiver<SendToAgentRequest> {
-        self.send_tx.subscribe()
-    }
-
-    /// Subscribe to read-output requests.
-    pub fn read_rx(&self) -> broadcast::Receiver<ReadOutputRequest> {
-        self.read_tx.subscribe()
-    }
-
-    /// Subscribe to spawn-agent requests.
-    pub fn spawn_rx(&self) -> broadcast::Receiver<SpawnRequest> {
-        self.spawn_tx.subscribe()
     }
 }
 
@@ -170,13 +146,13 @@ pub fn start(
     let server_state = Arc::new(ServerState {
         registry: registry.clone(),
         notify_tx: notify_tx.clone(),
-        send_tx: send_tx.clone(),
-        read_tx: read_tx.clone(),
-        spawn_tx: spawn_tx.clone(),
+        send_tx,
+        read_tx,
+        spawn_tx,
         port: actual_port,
-        write_cb: write_cb.clone(),
-        read_cb: read_cb.clone(),
-        spawn_fn: spawn_fn.clone(),
+        write_cb,
+        read_cb,
+        spawn_fn,
     });
 
     let app = Router::new()
@@ -212,14 +188,8 @@ pub fn start(
     let handle = McpServerHandle {
         registry,
         notify_tx,
-        send_tx,
-        read_tx,
-        spawn_tx,
         _shutdown_tx: shutdown_tx,
         port: actual_port,
-        write_cb,
-        read_cb,
-        spawn_fn,
     };
 
     Ok((handle, actual_port))
