@@ -15,6 +15,8 @@ import {
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
+import { getAgentBrand } from './agentBrands';
+import { AgentBrandMark } from './useAgentBrand';
 import './AgentSpawnModal.css';
 
 
@@ -165,23 +167,24 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       <div className="asm-card">
         <header className="asm-header">
           <div className="asm-title-row">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="asm-title-icon"
-            >
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <line x1="19" y1="8" x2="19" y2="14" />
-              <line x1="16" y1="11" x2="22" y2="11" />
-            </svg>
-            <span>Spawn Agents</span>
+            <span className="asm-title-badge" aria-hidden="true">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
+              </svg>
+            </span>
+            <div className="asm-title-text">
+              <span className="asm-title">Spawn Agents</span>
+              <span className="asm-subtitle">Pick a coding CLI to launch in a fresh worktree</span>
+            </div>
           </div>
           <button className="asm-close-btn" onClick={onclose} aria-label="Close dialog">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -197,13 +200,40 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           ) : (
             spawnPresets.map((preset) => {
               const count = spawnCounts.get(preset.command) ?? 0;
+              // Bundled brand drives the tile's --logo color; the mark itself is
+              // rendered via AgentBrandMark so a custom agent's dashboardicons
+              // logo shows here too (falling back to bundled/glyph).
+              const brand = getAgentBrand(preset.command, preset.name);
+              const selected = count > 0;
+              const logoColor =
+                brand.color === 'mono' ? 'var(--text-primary, #e8e8e8)' : brand.color;
               return (
-                <div key={preset.id} className={`asm-preset-row${count > 0 ? ' selected' : ''}`}>
-                  <div className="asm-preset-info">
-                    <span className="asm-preset-name">{preset.name}</span>
-                    <span className="asm-preset-desc">{preset.command}</span>
+                <div
+                  key={preset.id}
+                  className={`asm-card-item${selected ? ' selected' : ''}`}
+                  style={{ ['--logo' as string]: logoColor }}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
+                  onClick={() => !spawning && (selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command))}
+                  onKeyDown={(e) => {
+                    if ((e.key === 'Enter' || e.key === ' ') && !spawning) {
+                      e.preventDefault();
+                      selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command);
+                    }
+                  }}
+                >
+                  <div className="asm-logo" aria-hidden="true">
+                    <AgentBrandMark command={preset.command} name={preset.name} />
                   </div>
-                  <div className="asm-preset-controls">
+                  <div className="asm-card-info">
+                    <span className="asm-card-name">{preset.name}</span>
+                    <span className="asm-card-cmd">{preset.command}</span>
+                  </div>
+                  <div
+                    className={`asm-stepper${selected ? ' active' : ''}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <button
                       className="asm-btn asm-btn-decrement"
                       onClick={() => decrementSpawn(preset.command)}
@@ -229,13 +259,15 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
         </div>
 
         <footer className="asm-footer">
-          <span className="asm-hint">Enter to confirm · Esc to dismiss</span>
+          <span className="asm-hint">
+            <kbd>Enter</kbd> confirm · <kbd>Esc</kbd> dismiss
+          </span>
           <button
             className="asm-confirm-btn"
             onClick={() => void handleSpawnConfirm()}
             disabled={totalSpawnCount === 0 || spawning}
           >
-            {spawning ? 'Spawning...' : `Spawn${totalSpawnCount > 0 ? ` (${totalSpawnCount})` : ''}`}
+            {spawning ? 'Spawning…' : `Spawn${totalSpawnCount > 0 ? ` ${totalSpawnCount}` : ''}`}
           </button>
         </footer>
       </div>

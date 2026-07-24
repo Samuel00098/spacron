@@ -17,7 +17,7 @@ import './AgentCommandCenter.css';
 // ── agent colors ────────────────────────────────────────────────────────────
 const AGENT_COLORS: Record<string, string> = {
   claude: 'var(--accent)', codex: 'var(--success)', agy: 'var(--role-agent)', antigravity: 'var(--role-agent)',
-  opencode: 'var(--role-tests)', pi: 'var(--role-build)', omp: 'var(--role-git)', 'oh-my-pi': 'var(--role-git)',
+  opencode: 'var(--role-tests)', pi: 'var(--role-build)',
   agent: 'var(--role-tests)', cursor: 'var(--role-tests)', hermes: 'var(--role-agent)', grok: 'var(--text-primary)',
 };
 const agentColor = (cmd: string | null | undefined) => (cmd && AGENT_COLORS[cmd]) || 'var(--text-muted)';

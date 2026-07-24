@@ -19,6 +19,7 @@ import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
 
+import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
 import AgentPanelImages from '$lib/components/orchestrator/AgentPanelImages.tsx';
 import ContainersPanel from '$lib/components/containers/ContainersPanelLazy.tsx';
@@ -1594,7 +1595,11 @@ export default function AppShell() {
 
   function roomIcon(id: RoomId) {
     if (isAgentRoomId(id)) {
-      return <Icon><path d="M12 8V4H8" /><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M8 14h.01M16 14h.01" /><path d="M9 18h6" /></Icon>;
+      // Each agent room shows its CLI's real logo (Claude, Codex, Cursor, …)
+      // instead of a generic robot — matched by the session's launch command,
+      // with a web-fetched or letter fallback for unknown agents.
+      const session = getAgentSessionForRoom(id);
+      return <AgentBrandMark command={session?.agentPreset ?? null} name={roomTitle(id)} />;
     }
     switch (id) {
       case 'workspace':
@@ -1699,6 +1704,8 @@ export default function AppShell() {
   // and terminal churn.
   function renderRoomFrame(id: RoomId, featured = false) {
     const title = roomTitle(id);
+    // Agent rooms carry their CLI's real logo to the left of the title.
+    const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
     return (
       <section
         key={id}
@@ -1707,7 +1714,18 @@ export default function AppShell() {
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
       >
         <header className="room-header">
-          <button className="room-title" onClick={() => focusRoom(id)} title={`Focus ${title}`}>
+          <button
+            className={`room-title${agentSession ? ' has-brand' : ''}`}
+            onClick={() => focusRoom(id)}
+            title={`Focus ${title}`}
+          >
+            {agentSession && (
+              <AgentBrandMark
+                command={agentSession.agentPreset ?? null}
+                name={title}
+                className="room-title-brand"
+              />
+            )}
             <span className="room-kind">{roomKind(id)}</span>
             <span className="room-name">{title}</span>
           </button>

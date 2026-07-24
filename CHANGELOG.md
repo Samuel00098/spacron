@@ -3,6 +3,30 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.7.4] - 2026-07-24
+
+Agents running side by side in Spacron can now find and talk to each other, the spawn picker wears each tool's real logo, and the local music player holds more than one folder. Under the hood, agent worktrees moved inside the project, pasted screenshots stop piling up in your repo, and project search no longer freezes the window.
+
+### Added
+
+- **Agents can talk to each other** — Spacron now runs a small in-app server that every agent it launches is pointed at automatically, so a running agent can list the others, read another agent's terminal output, send it a message, or ask for a new agent to be spawned — without you copying anything between windows. Configuration is injected per tool at launch (an environment variable for Claude Code and Aider, a config file for Cursor and Codex CLI, and a generic `SPACRON_MCP_URL` for anything else), and agents register and unregister themselves as their terminals open and close, so the roster always reflects what's actually running.
+- **Real logos in the agent spawn picker** — each agent tile now shows its tool's actual brand mark instead of a letter. Known CLIs (Claude, Codex, Gemini, Cursor, Aider, Grok, …) use bundled marks matched by launch command; a custom agent whose command isn't one Spacron ships a mark for has its logo discovered off the web (the dashboard-icons catalogue first, then LobeHub's AI-brand set, then the tool's own site favicon) and cached, falling back to a letter glyph only when nothing is found. Matching is exact-on-slug so a custom agent never grabs an unrelated logo.
+- **Multiple folders in the local music library** — the "Local" media source is no longer limited to one folder. Add several, switch between them from a folder menu, and remove ones you no longer want; the active folder's tracks are what plays. Switching folders mid-song keeps the current track playing until you pick something new, and an existing single-folder setup is migrated into the new list automatically.
+
+### Changed
+
+- **Agent worktrees live inside the project** — the isolated checkouts Spacron creates for parallel agents moved from a sibling `.spacron-worktrees/` directory next to the project into `.spacron/worktrees/<branch>` inside it. Terminals, file operations and LSP are all confined to the open project roots, so a worktree outside the project could be created but never actually used; keeping them inside fixes that. They're excluded via `.git/info/exclude` (local-only, never committed) so they stay out of your git status, and the old sibling location is still recognised for cleanup of worktrees created before the move. The remote-workspace server got the same move.
+- **Changelog and agent-opened links open in the preview panel** — opening the changelog from inside the app, and URLs an agent asks to open, now load in Spacron's built-in preview browser instead of handing off to your system browser, so they stay in the workspace.
+- **Theme names match their backgrounds, and every wallpaper is sharper** — two themes were renamed to describe what you actually see ("Chicago Shoreline" → "Architectural Curves", "Manhattan Skyline Night" → "Cyber Neon Rooftop"), and the entire background set is now served as higher-resolution WebP (the remaining PNGs were removed), so wallpapers look crisper on large and high-DPI displays.
+- **Spawn picker and panel surfaces restyled** — the agent spawn picker was rebuilt around logo tiles with a step control that reveals on hover or selection, and the shell's panels now frost their own patch of wallpaper (see-through with a backdrop blur) rather than leaning on a single global wash, so text stays readable without hiding the background.
+
+### Fixed
+
+- **Pasted screenshots stop cluttering your repo** — pasting an image into the prompt used to write it into `<project>/.spacron/paste`, leaving screenshots accumulating inside the working tree. Pasted images now go to an app-owned scratch directory in the OS temp folder (the same way terminal agents like Claude Code and Cursor treat a paste — ephemeral, out of the codebase) and are wiped when the app exits. Images you pick from a file or drag in are unaffected.
+- **Project search no longer freezes the window** — searching across a project ran its filesystem walk and file reads on the main thread, so a large search could lock up the UI until it finished. The work now runs off-thread and the window stays responsive.
+- **Workspace tools hide on the Home screen** — the switcher, quick-capture, search and settings buttons in the title bar stayed visible over the Home overlay and welcome screen even though they had nothing to act on. They now hide until you're back in a workspace.
+
+
 ## [v0.7.3] - 2026-07-22
 
 Media player search stopped returning a single screen of results.

@@ -314,7 +314,7 @@ Each orchestrator agent can work in its own isolated git worktree (defined in `w
 - `workspace_git_remove_worktree` — Clean up the worktree (and optionally delete the branch)
 - `workspace_git_worktree_status` — Live changed-files / branch status
 
-Worktrees live in `.spacron-worktrees/<repo>` (outside the main working tree) so agents never pollute each other's state.
+Worktrees live in `.spacron/worktrees/<branch>` **inside** the project, so agents never pollute each other's state. They must be inside the project root: terminals and file ops are confined to the open project roots, so a worktree outside can be created but never used as a shell cwd. `.spacron/` is added to `.git/info/exclude` so the checkouts stay out of the user's git status.
 
 ### 5.4 PTY Architecture
 

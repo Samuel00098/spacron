@@ -199,43 +199,188 @@
   cursor: default;
 }
 
-/* --- chosen folder line -------------------------------------------------- */
+/* --- folder switcher ----------------------------------------------------- */
 
-.lm-panel .lm-folder {
+.lm-panel .lm-switcher {
+  position: relative;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lm-panel .lm-switcher-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 11px;
-  font-size: 11px;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 11px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.lm-panel .lm-switcher-btn:hover {
+  background: var(--bg-hover);
+}
+
+.lm-panel .lm-switcher-btn > svg:first-child {
+  flex-shrink: 0;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border);
+}
+
+.lm-panel .lm-switcher-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.lm-panel .lm-switcher-badge {
   flex-shrink: 0;
-  /* Long paths truncate from the left so the folder name stays readable. */
-  direction: rtl;
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-panel .lm-switcher-caret {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+/* Dropdown menu — sits above the track list without pushing it. */
+.lm-panel .lm-switcher-menu {
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  /* Fully opaque — matches the YouTube results dropdown so the folder list
+     stays readable rather than showing the track list through it. */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  box-shadow: 0 18px 50px -20px rgba(0, 0, 0, 0.7);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.lm-panel .lm-switcher-item {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.lm-panel .lm-switcher-item:hover {
+  background: var(--bg-hover);
+}
+
+.lm-panel .lm-switcher-pick {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px 6px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
   text-align: left;
 }
 
-.lm-panel .lm-folder > * {
-  direction: ltr;
+.lm-panel .lm-switcher-check {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--accent);
 }
 
-.lm-panel .lm-unlink {
-  margin-left: auto;
+.lm-panel .lm-switcher-item.active .lm-switcher-item-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lm-panel .lm-switcher-item-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lm-panel .lm-switcher-remove {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
   border: none;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
   cursor: pointer;
-  text-decoration: underline;
-  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
 
-.lm-panel .lm-unlink:hover {
+.lm-panel .lm-switcher-item:hover .lm-switcher-remove {
+  opacity: 1;
+}
+
+.lm-panel .lm-switcher-remove:hover {
+  background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+.lm-panel .lm-switcher-add {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin-top: 3px;
+  padding: 7px 6px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lm-panel .lm-switcher-add:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.lm-panel .lm-switcher-add:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lm-panel .lm-switcher-add svg {
+  flex-shrink: 0;
 }
 
 /* --- licence files ------------------------------------------------------- */

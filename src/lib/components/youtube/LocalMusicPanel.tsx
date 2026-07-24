@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import {
   musicLibraryState,
   scanFolder,
+  switchFolder,
+  removeFolder,
   refreshLibrary,
   playTrack,
   togglePlay,
@@ -16,11 +17,15 @@ import {
   cycleRepeat,
   setFilter,
   revealInFolder,
-  clearLibrary,
   visibleTracks,
   formatTime,
 } from '$lib/stores/musicLibrary';
 import './LocalMusicPanel.css';
+
+/** Last path segment — the folder's own name — for the switcher label. */
+function folderName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
 
 /** Where to get a stream-safe library from. StreamBeats is free, needs no
  *  attribution, and every track is pre-registered with YouTube Content ID and
@@ -35,6 +40,8 @@ export default function LocalMusicPanel() {
   const state = useStore(musicLibraryState);
   const [picking, setPicking] = useState(false);
   const [showLicenses, setShowLicenses] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement>(null);
   // The library is scanned once per mount, not on every state change — the
   // scan also re-grants asset-protocol access, which is lost on restart.
   const restored = useRef(false);
@@ -45,16 +52,26 @@ export default function LocalMusicPanel() {
     void refreshLibrary();
   }, []);
 
+  // Close the folder switcher on any click outside it.
+  useEffect(() => {
+    if (!switcherOpen) return;
+    function onDown(e: MouseEvent) {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setSwitcherOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [switcherOpen]);
+
   async function openStreamBeats() {
     if (!isTauriRuntime()) {
       window.open(STREAMBEATS_URL, '_blank', 'noopener,noreferrer');
       return;
     }
-    try {
-      await invoke('preview_open_in_browser', { url: STREAMBEATS_URL });
-    } catch {
-      /* browser refused to open — the URL is shown in the hint below anyway */
-    }
+    // Open StreamBeats inside the preview panel
+    const { openUrlInPreviewPanel } = await import('$lib/stores/preview');
+    await openUrlInPreviewPanel(STREAMBEATS_URL);
   }
 
   async function chooseFolder() {
@@ -74,8 +91,8 @@ export default function LocalMusicPanel() {
   const current = state.tracks.find((t) => t.path === state.currentPath) ?? null;
   const progress = state.duration > 0 ? (state.position / state.duration) * 100 : 0;
 
-  // --- empty state: no folder chosen yet ---------------------------------
-  if (!state.folder) {
+  // --- empty state: no folders added yet ---------------------------------
+  if (state.folders.length === 0) {
     return (
       <div className="lm-panel">
         <div className="lm-empty">
@@ -177,18 +194,95 @@ export default function LocalMusicPanel() {
             <path d="M21 3v6h-6" />
           </svg>
         </button>
-        <button type="button" className="lm-icon-btn" title="Change folder" aria-label="Change folder" onClick={chooseFolder}>
+        <button type="button" className="lm-icon-btn" title="Add another folder" aria-label="Add another folder" onClick={chooseFolder} disabled={picking}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <line x1="12" y1="11" x2="12" y2="17" />
+            <line x1="9" y1="14" x2="15" y2="14" />
           </svg>
         </button>
       </div>
 
-      <div className="lm-folder" title={state.folder}>
-        {state.folder}
-        <button type="button" className="lm-unlink" onClick={clearLibrary} title="Forget this folder">
-          Forget
+      {/* --- folder switcher: one folder active at a time --------------- */}
+      <div className="lm-switcher" ref={switcherRef}>
+        <button
+          type="button"
+          className="lm-switcher-btn"
+          onClick={() => setSwitcherOpen((v) => !v)}
+          aria-haspopup="listbox"
+          aria-expanded={switcherOpen}
+          title={state.folder}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+            <circle cx="18" cy="16" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+          </svg>
+          <span className="lm-switcher-name">{folderName(state.folder)}</span>
+          {state.folders.length > 1 && <span className="lm-switcher-badge">{state.folders.length}</span>}
+          <svg className="lm-switcher-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
         </button>
+
+        {switcherOpen && (
+          <div className="lm-switcher-menu" role="listbox" aria-label="Music folders">
+            {state.folders.map((f) => {
+              const isActive = f === state.folder;
+              return (
+                <div key={f} className={`lm-switcher-item${isActive ? ' active' : ''}`}>
+                  <button
+                    type="button"
+                    className="lm-switcher-pick"
+                    role="option"
+                    aria-selected={isActive}
+                    title={f}
+                    onClick={() => {
+                      setSwitcherOpen(false);
+                      void switchFolder(f);
+                    }}
+                  >
+                    <span className="lm-switcher-check">
+                      {isActive && (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      )}
+                    </span>
+                    <span className="lm-switcher-item-name">{folderName(f)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="lm-switcher-remove"
+                    title="Remove this folder"
+                    aria-label={`Remove ${folderName(f)}`}
+                    onClick={() => void removeFolder(f)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="lm-switcher-add"
+              disabled={picking}
+              onClick={() => {
+                setSwitcherOpen(false);
+                void chooseFolder();
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              {picking ? 'Choosing…' : 'Add folder…'}
+            </button>
+          </div>
+        )}
       </div>
 
       {showLicenses && state.licenseFiles.length > 0 && (

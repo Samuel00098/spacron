@@ -86,6 +86,7 @@ import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDow
 import { get } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { AgentBrandMark } from './useAgentBrand';
 import {
   customAgents,
   addCustomAgent,
@@ -492,7 +493,6 @@ const PRESET_AGENTS: PresetAgent[] = [
   { name: 'Antigravity', command: 'agy', readsRulesFile: true },
   { name: 'OpenCode', command: 'opencode', readsRulesFile: true },
   { name: 'Pi AI Agent', command: 'pi', readsRulesFile: false },
-  { name: 'Oh My Pi', command: 'omp', readsRulesFile: false },
   { name: 'Cursor', command: 'agent', readsRulesFile: true },
   { name: 'Grok CLI', command: 'grok', readsRulesFile: true },
 ];
@@ -2091,6 +2091,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     {/* Preset/Built-in Agents */}
                     {PRESET_AGENTS.filter(agent => !$removedPresetAgents.includes(agent.command)).map((agent) => (
                       <div className="agent-row built-in" key={agent.command}>
+                        <span className="agent-row-icon" aria-hidden="true">
+                          <AgentBrandMark command={agent.command} name={agent.name} />
+                        </span>
                         <div className="agent-meta">
                           <div className="agent-name-row">
                             <span className="agent-name">{agent.name}</span>
@@ -2121,6 +2124,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     {/* Custom Agents */}
                     {$customAgents.map((agent) => (
                       <div className="agent-row" key={agent.id}>
+                        <span className="agent-row-icon" aria-hidden="true">
+                          <AgentBrandMark command={agent.command} name={agent.name} />
+                        </span>
                         <div className="agent-meta">
                           <div className="agent-name-row">
                             <span className="agent-name">{agent.name}</span>

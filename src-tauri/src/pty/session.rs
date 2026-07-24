@@ -253,6 +253,14 @@ impl PtySession {
         writer.flush().map_err(|e| e.to_string())
     }
 
+    /// Read the terminal output buffer contents.
+    pub fn read_output(&self) -> Vec<u8> {
+        self.output_buffer
+            .lock()
+            .map(|buf| buf.clone())
+            .unwrap_or_default()
+    }
+
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
         let master = self.master.lock().map_err(|e| e.to_string())?;
         master

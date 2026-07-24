@@ -45,7 +45,7 @@ Grounding the plan in what already exists, so we extend rather than rebuild:
   character names (Neo, Trinity, …). This is the CNVS "named characters" idea, already shipped.
   We are **not** behind here.
 - **Isolation** — `commands::workspace::workspace_git_create_worktree` + `agent/worktree-manager.ts`
-  give each agent its own git worktree on a branch under `.spacron-worktrees/`. This is the
+  give each agent its own git worktree on a branch under `.spacron/worktrees/`. This is the
   substrate for file-ownership: agents already can't physically collide on disk.
 - **Review** — `agent/review-gate.ts` + the confirmation gate already gate work before it lands.
   This is the Reviewer role in embryo.

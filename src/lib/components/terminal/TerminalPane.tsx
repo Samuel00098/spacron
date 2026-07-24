@@ -89,6 +89,21 @@ function escapeRegExp(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Terminal *query* sequences a TUI emits once at startup to probe the emulator —
+// OSC color/palette reports (OSC 10/11/12, OSC 4;n, …), each ending in `;?`. They
+// render nothing. When one sits in replayed scrollback (reattaching to a live
+// session on app open), xterm re-answers it and the reply lands in the
+// already-running child's input as literal `]10;rgb:…` / `]11;rgb:…` junk (the
+// Codex reload bug). Scrubbing them from the replay stream is lossless and kills
+// the leak at its source, instead of relying on the timing-based
+// suppressReplayInput gate below — which reopens after 1.5s and so misses
+// answerbacks emitted by a slow or backgrounded replay parse.
+const OSC_QUERY_SEQUENCE = /\x1b\]\d+(?:;[^\x07\x1b]*)*;\?(?:\x07|\x1b\\)/g;
+
+function stripTerminalQueries(text: string): string {
+  return text.replace(OSC_QUERY_SEQUENCE, '');
+}
+
 function normalizePaneTitle(title: string) {
   return title.replace(/\s+/g, ' ').trim();
 }
@@ -738,6 +753,13 @@ export default function TerminalPane({
       fontFamily: get(resolvedFontFamily),
       fontWeight: 400,
       fontWeightBold: 700,
+      // The terminal surface is fully transparent (glass), so any glyph a TUI
+      // draws in a near-background tone (e.g. Antigravity's input text, which it
+      // colors near-black) vanishes into the wallpaper — black-on-black. xterm's
+      // minimumContrastRatio re-lightens/darkens only the glyphs that fail this
+      // ratio against the theme background, rescuing that text regardless of how
+      // the CLI colored it, while leaving already-legible output untouched.
+      minimumContrastRatio: 4.5,
       windowsPty,
       theme: {
         // Transparent surface, but light/dark RGB so TUIs can OSC-11 theme-detect.
@@ -757,7 +779,11 @@ export default function TerminalPane({
         // drawn in those colors (e.g. command tokens) is invisible on the light
         // background. Map them to readable dark tones instead of near-white.
         white: isLight ? '#24292f' : (initialColors['text-primary'] || '#e6edf3'),
-        brightBlack: initialColors['text-muted'] || (isLight ? '#24292f' : '#6e7681'),
+        // ANSI "bright black" is the dim/muted slot agent CLIs use for secondary
+        // text (Thinking lines, tips, hints). Over the see-through terminal it must
+        // stay legible, so map it to the brighter text-secondary token rather than
+        // text-muted; light mode already uses a dark high-contrast tone.
+        brightBlack: isLight ? '#24292f' : (initialColors['text-secondary'] || initialColors['text-muted'] || '#8b949e'),
         brightRed: initialSyntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
         brightGreen: initialColors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
         brightYellow: initialColors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
@@ -892,7 +918,12 @@ export default function TerminalPane({
           suppressReplayInput = false;
         };
         const replayGateTimer = setTimeout(clearReplayGate, 1500);
-        term.write(existingBuffer, () => {
+        // Scrub the child's startup color/palette *queries* out of the replayed
+        // history first: they render nothing, but leaving them in makes xterm
+        // re-answer them and the reply lands in the running child's input as
+        // literal `]10;rgb:…` / `]11;rgb:…` junk. This removes the leak at its
+        // source; the gate above is now only a backstop.
+        term.write(stripTerminalQueries(existingBuffer), () => {
           clearTimeout(replayGateTimer);
           clearReplayGate();
         });
@@ -1130,7 +1161,9 @@ export default function TerminalPane({
         magenta: syntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
         cyan: syntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
         white: isLight ? '#24292f' : (colors['text-primary'] || '#e6edf3'),
-        brightBlack: isLight ? '#24292f' : (colors['text-muted'] || '#6e7681'),
+        // Dim/muted ANSI slot — brightened to text-secondary so agent-CLI secondary
+        // text stays readable over the see-through terminal (see initial theme above).
+        brightBlack: isLight ? '#24292f' : (colors['text-secondary'] || colors['text-muted'] || '#8b949e'),
         brightRed: syntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
         brightGreen: colors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
         brightYellow: colors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),

@@ -54,6 +54,7 @@ import {
 } from '$lib/stores/background';
 import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
+import { initMcpBridge } from '$lib/stores/mcpBridge';
 import { isTauriRuntime } from '$lib/utils/tauri';
 
 const ZOOM_LEVELS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
@@ -94,6 +95,7 @@ export default function App() {
     initDefaultCommands();
     if (isTauriRuntime()) {
       requestNotificationPermission();
+      initMcpBridge();
       // Opt-in: if a remote is flagged to reconnect on startup, dial it so a
       // workspace whose agents are still running on the box comes back on its own.
       // Fails fast + rolls back to Local if the box is offline, so this can't hang boot.

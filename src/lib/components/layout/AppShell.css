@@ -828,8 +828,11 @@
 :root:not(.solid-theme):not(.is-webkitgtk) .app-shell .left-utility-panel,
 :root:not(.solid-theme):not(.is-webkitgtk) .app-shell .right-utility-panel {
   background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+  /* Keep the panels see-through (no tint) but lightly frost the wallpaper behind
+     them — a modest blur rather than the base 40px, so it reads as "a bit blurred"
+     instead of fully transparent. */
+  backdrop-filter: blur(18px) saturate(130%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(130%) !important;
 }
 
 .app-shell .room-panel.featured {
@@ -1391,6 +1394,54 @@
   height: 18px;
 }
 
+/* ── Agent brand marks ──────────────────────────────────────────────────────
+   An agent's CLI logo, reused across the room header, the minimized-room chip,
+   room cards, and the split-switch. It fills whatever icon box contains it and
+   paints a `currentColor` mark in the brand color set inline by AgentBrandMark.
+   Placed after the icon-container `svg` rules above so it wins on equal
+   specificity. */
+.app-shell .agent-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.app-shell .agent-brand-mark > svg,
+.app-shell .agent-brand-mark > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Room header: logo to the left, spanning the kind/name stack. */
+.app-shell .room-title.has-brand {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "brand kind"
+    "brand name";
+  column-gap: 9px;
+  align-items: center;
+}
+
+.app-shell .room-title.has-brand .room-kind {
+  grid-area: kind;
+}
+
+.app-shell .room-title.has-brand .room-name {
+  grid-area: name;
+}
+
+.app-shell .room-title-brand {
+  grid-area: brand;
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .app-shell .minimized-room-label {
   min-width: 0;
   max-width: 120px;
@@ -1902,11 +1953,16 @@
 }
 
 .app-shell .composer-strip {
-  /* Kept out of the root snapshot so the prompt bar holds still during mode
-     switches instead of fading with the background. Floats over the workspace
-     with no band/background of its own — just the prompt pill on top of the
-     content behind it. */
-  view-transition-name: spacron-composer;
+  /* IMPORTANT: no view-transition-name / transform / will-change / contain here.
+     Each of those makes this strip a CSS "backdrop root", which isolates the
+     floating prompt bar's backdrop-filter from the workspace behind it — the
+     bar's frosted-glass blur then samples only this empty transparent strip and
+     the bar looks flat/transparent instead of frosted (matches the media player
+     only once the strip is NOT a backdrop root). We previously gave this
+     view-transition-name: spacron-composer to hold the bar steady during ambient
+     mode switches; that is sacrificed for the glass. The strip floats over the
+     workspace with no band/background of its own — just the prompt pill on top of
+     the content behind it. */
   flex-shrink: 0;
   width: min(720px, 100%);
   padding: 0;
@@ -2081,10 +2137,15 @@
     height: auto;
   }
 
-.app-shell .room-dock,
-.app-shell .composer-strip {
+.app-shell .room-dock {
   will-change: transform;
 }
+
+/* NOTE: .composer-strip deliberately does NOT get `will-change: transform`.
+   will-change:transform makes it a backdrop root, which would isolate the
+   floating prompt bar's backdrop-filter from the terminal behind it and kill
+   the frosted-glass blur. The view-transition-name below is enough to hold the
+   composer still during mode switches. */
 
 .app-shell .room-stack {
     min-height: 78px;

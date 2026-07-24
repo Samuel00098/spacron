@@ -996,8 +996,66 @@ pub fn workspace_git_discard_all(
 // ── Agent worktree isolation ────────────────────────────────────────────────
 // Each orchestrator agent works in its own git worktree on a dedicated branch,
 // so multiple agents can edit the same repository concurrently without stepping
-// on each other. Worktrees live in a sibling `.spacron-worktrees/<repo>` directory
-// (outside the main tree) so they never appear in the project's own git status.
+// on each other.
+//
+// Worktrees live *inside* the project at `.spacron/worktrees/<branch>`. They must
+// be inside the root: terminals, file ops and LSP are all confined to the open
+// project roots (`file_system::require_in_project`), so a worktree anywhere else
+// can be created but never *used* — `terminal_create` rejects its cwd and the
+// agent silently falls back to the project root. `.spacron/` is already the app's
+// project-local data directory and is added to `.git/info/exclude`, so the
+// checkouts stay out of the user's git status.
+
+/// The managed worktree area for a project: `<project>/.spacron/worktrees`.
+fn worktree_area(root: &std::path::Path) -> PathBuf {
+    root.join(".spacron").join("worktrees")
+}
+
+/// Pre-0.7.4 location: a sibling `<project_parent>/.spacron-worktrees/<repo>`
+/// directory. Still accepted by remove/status so worktrees recorded in persisted
+/// sessions before the move can still be cleaned up.
+fn legacy_worktree_area(root: &std::path::Path) -> Option<PathBuf> {
+    let repo = root.file_name()?.to_str()?;
+    Some(root.parent()?.join(".spacron-worktrees").join(repo))
+}
+
+/// Whether `path` sits inside `area`. Compared case-insensitively on Windows,
+/// where the same directory legitimately reaches us with different casing.
+fn is_under(path: &std::path::Path, area: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        let (p, a) = (
+            path.to_string_lossy().to_lowercase().replace('\\', "/"),
+            area.to_string_lossy().to_lowercase().replace('\\', "/"),
+        );
+        let a = a.trim_end_matches('/');
+        p == a || p.starts_with(&format!("{a}/"))
+    }
+    #[cfg(not(windows))]
+    {
+        path.starts_with(area)
+    }
+}
+
+/// Keep the worktree checkouts out of the user's git surface by excluding the
+/// whole `.spacron/` data directory in `.git/info/exclude` (local-only, never
+/// committed). Without this a nested worktree shows up as an untracked directory
+/// in the project's own status — and `git add -A` would try to embed it.
+/// Best-effort: a linked worktree or a repo without an exclude file is skipped.
+fn ensure_spacron_excluded(root: &std::path::Path) {
+    let exclude = root.join(".git").join("info").join("exclude");
+    let Ok(current) = std::fs::read_to_string(&exclude) else {
+        return; // no plain .git/info/exclude — not a standard checkout
+    };
+    if current
+        .lines()
+        .any(|l| matches!(l.trim(), "/.spacron/" | ".spacron/" | "/.spacron" | ".spacron"))
+    {
+        return;
+    }
+    let next = format!("{}\n/.spacron/\n", current.trim_end());
+    let _ = std::fs::write(&exclude, next);
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeInfo {
@@ -1061,18 +1119,14 @@ pub fn workspace_git_create_worktree(
     let base_commit = git_capture(root_path, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Could not resolve HEAD — the repository has no commits yet.".to_string())?;
 
-    let repo_name = root_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("project")
-        .to_string();
-    let parent = root_path
-        .parent()
-        .ok_or_else(|| "Repository has no parent directory.".to_string())?;
     let safe_branch = branch.replace('/', "-");
     let worktree_path =
-        crate::commands::clean_path_buf(parent.join(".spacron-worktrees").join(&repo_name).join(&safe_branch));
+        crate::commands::clean_path_buf(worktree_area(root_path).join(&safe_branch));
     let path_str = worktree_path.to_string_lossy().to_string();
+
+    // Do this before `git worktree add` so the checkout is never briefly visible
+    // in the project's git status.
+    ensure_spacron_excluded(root_path);
 
     // Reuse an existing worktree at this path (idempotent on retry/relaunch).
     if worktree_path.join(".git").exists() {
@@ -1126,7 +1180,7 @@ pub fn workspace_git_create_worktree(
 }
 
 /// Remove an agent worktree (and optionally delete its branch). Refuses to touch
-/// anything outside the managed `.spacron-worktrees` area as a safety guard.
+/// anything outside the project's managed worktree area as a safety guard.
 #[tauri::command]
 pub fn workspace_git_remove_worktree(
     project_id: String,
@@ -1142,8 +1196,12 @@ pub fn workspace_git_remove_worktree(
         .ok_or_else(|| "Project not found".to_string())?;
     let root_path = &project.root_path;
 
+    // Confine removal to this project's managed area — current or legacy — so a
+    // crafted path can never make us `git worktree remove` an arbitrary directory.
     let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
-    if !cleaned.to_string_lossy().contains(".spacron-worktrees") {
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
 
@@ -1182,7 +1240,7 @@ pub fn workspace_git_worktree_status(
     state: State<AppState>,
 ) -> Result<WorktreeStatus, String> {
     // Confine to the managed worktree area of an open project. Worktrees are
-    // created at <project_parent>/.spacron-worktrees/<repo>/<branch> (see
+    // created at <project>/.spacron/worktrees/<branch> (see
     // workspace_git_create_worktree), so a legitimate status query always sits
     // under some open project's area. Without this the command would run git in
     // any attacker-named path and leak whether it is a repo and its branch.
@@ -1191,12 +1249,12 @@ pub fn workspace_git_worktree_status(
         .map(crate::commands::clean_path_buf)
         .map_err(|_| "Not a git worktree.".to_string())?;
     let in_managed_area = state.workspace_manager.list_projects().iter().any(|p| {
-        p.root_path
-            .parent()
-            .and_then(|parent| std::fs::canonicalize(parent.join(".spacron-worktrees")).ok())
+        [Some(worktree_area(&p.root_path)), legacy_worktree_area(&p.root_path)]
+            .into_iter()
+            .flatten()
+            .filter_map(|area| std::fs::canonicalize(area).ok())
             .map(crate::commands::clean_path_buf)
-            .map(|area| canonical.starts_with(&area))
-            .unwrap_or(false)
+            .any(|area| is_under(&canonical, &area))
     });
     if !in_managed_area {
         return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
@@ -1855,6 +1913,47 @@ pub fn workspace_get_recent_daily_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- agent worktree area ---
+
+    #[test]
+    fn worktree_area_sits_inside_the_project_root() {
+        // The whole point of the 0.7.4 move: terminals are confined to the open
+        // project roots, so the area must be reachable from the root.
+        let root = PathBuf::from("/home/u/proj");
+        let area = worktree_area(&root);
+        assert!(area.starts_with(&root));
+        assert_eq!(area, root.join(".spacron").join("worktrees"));
+    }
+
+    #[test]
+    fn is_under_accepts_the_area_and_its_children() {
+        let area = PathBuf::from("/home/u/proj/.spacron/worktrees");
+        assert!(is_under(&area, &area));
+        assert!(is_under(&area.join("spacron-neo-342ci1"), &area));
+    }
+
+    #[test]
+    fn is_under_rejects_siblings_and_prefix_lookalikes() {
+        let area = PathBuf::from("/home/u/proj/.spacron/worktrees");
+        assert!(!is_under(&PathBuf::from("/home/u/proj/src"), &area));
+        assert!(!is_under(&PathBuf::from("/home/u/other"), &area));
+        // "worktrees-evil" must not pass just because it shares a prefix.
+        assert!(!is_under(
+            &PathBuf::from("/home/u/proj/.spacron/worktrees-evil"),
+            &area
+        ));
+    }
+
+    #[test]
+    fn legacy_area_is_still_recognised_for_cleanup() {
+        // Worktrees created before the move are recorded in persisted sessions;
+        // remove/status must still accept them or they can never be cleaned up.
+        let root = PathBuf::from("/home/u/proj");
+        let legacy = legacy_worktree_area(&root).expect("root has a parent and a name");
+        assert_eq!(legacy, PathBuf::from("/home/u/.spacron-worktrees/proj"));
+        assert!(is_under(&legacy.join("spacron-neo-342ci1"), &legacy));
+    }
 
     // --- sanitize_git_error ---
 

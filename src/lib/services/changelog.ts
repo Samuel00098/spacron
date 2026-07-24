@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '$lib/utils/tauri';
 
 // The marketing site. VITE_SITE_URL overrides at build time; the fallback is the
@@ -68,5 +67,6 @@ export async function openChangelogPage(version?: string) {
     return;
   }
 
-  await invoke('preview_open_in_browser', { url });
+  const { openUrlInPreviewPanel } = await import('$lib/stores/preview');
+  await openUrlInPreviewPanel(url);
 }

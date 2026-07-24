@@ -30,7 +30,10 @@ type ScanResult = {
 export type RepeatMode = 'off' | 'all' | 'one';
 
 export type MusicLibraryState = {
-  /** Chosen library folder ('' = none picked yet). */
+  /** Every saved library folder, in the order they were added. */
+  folders: string[];
+  /** The folder currently loaded and shown ('' = none picked yet). Always one
+   *  of `folders` unless the library is empty. */
   folder: string;
   tracks: LocalTrack[];
   /** Licence/certificate files found in the library, for Content ID disputes. */
@@ -53,10 +56,13 @@ export type MusicLibraryState = {
 
 const STORAGE_KEY = 'spacron_music_library';
 
-type Persisted = Pick<MusicLibraryState, 'folder' | 'currentPath' | 'volume' | 'shuffle' | 'repeat'>;
+type Persisted = Pick<
+  MusicLibraryState,
+  'folders' | 'folder' | 'currentPath' | 'volume' | 'shuffle' | 'repeat'
+>;
 
 function defaultPersisted(): Persisted {
-  return { folder: '', currentPath: null, volume: 0.7, shuffle: false, repeat: 'off' };
+  return { folders: [], folder: '', currentPath: null, volume: 0.7, shuffle: false, repeat: 'off' };
 }
 
 function loadPersisted(): Persisted {
@@ -66,8 +72,19 @@ function loadPersisted(): Persisted {
     if (!raw) return defaultPersisted();
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     const base = defaultPersisted();
+    // Migrate the old single-folder shape: a saved `folder` with no `folders`
+    // array becomes the first (and active) entry of the new list.
+    const savedFolder = typeof parsed.folder === 'string' ? parsed.folder : base.folder;
+    const folders = Array.isArray(parsed.folders)
+      ? parsed.folders.filter((f): f is string => typeof f === 'string')
+      : savedFolder
+        ? [savedFolder]
+        : [];
+    // The active folder must be one we actually have; fall back to the first.
+    const folder = folders.includes(savedFolder) ? savedFolder : folders[0] ?? '';
     return {
-      folder: typeof parsed.folder === 'string' ? parsed.folder : base.folder,
+      folders,
+      folder,
       currentPath: typeof parsed.currentPath === 'string' ? parsed.currentPath : null,
       volume:
         typeof parsed.volume === 'number' && parsed.volume >= 0 && parsed.volume <= 1
@@ -87,6 +104,7 @@ function loadPersisted(): Persisted {
 const initial = loadPersisted();
 
 export const musicLibraryState = writable<MusicLibraryState>({
+  folders: initial.folders,
   folder: initial.folder,
   tracks: [],
   licenseFiles: [],
@@ -107,6 +125,7 @@ function persist() {
   if (typeof window === 'undefined') return;
   const s = get(musicLibraryState);
   const toSave: Persisted = {
+    folders: s.folders,
     folder: s.folder,
     currentPath: s.currentPath,
     volume: s.volume,
@@ -186,28 +205,38 @@ export function visibleTracks(s: MusicLibraryState): LocalTrack[] {
 
 // --- actions -------------------------------------------------------------
 
-/** Scan (or rescan) a folder into the library. Also re-grants the asset-protocol
- *  scope, which is why it must run again on every app start, not just on pick. */
+/** Scan a folder into the library and make it the active one. Adds the folder
+ *  to the saved list if it's new, so this doubles as both "add folder" and
+ *  "switch to folder". Also re-grants the asset-protocol scope, which is why it
+ *  must run again on every app start, not just on pick. */
 export async function scanFolder(folder: string): Promise<void> {
   if (!folder) return;
   musicLibraryState.update((s) => ({ ...s, loading: true, status: '' }));
   try {
     const res = await invoke<ScanResult>('music_library_scan', { folder });
-    musicLibraryState.update((s) => ({
+    musicLibraryState.update((s) => {
+      // A remembered track that no longer exists shouldn't linger in the UI —
+      // but if it's the one actually playing (e.g. we're switching folders
+      // mid-song), keep it so the now-playing bar and audio don't desync.
+      const stillPlaying = Boolean(audio && !audio.paused && s.currentPath);
+      const keepCurrent = res.tracks.some((t) => t.path === s.currentPath) || stillPlaying;
+      const folders = s.folders.includes(res.folder) ? s.folders : [...s.folders, res.folder];
+      return {
       ...s,
+      folders,
       folder: res.folder,
       tracks: res.tracks,
       licenseFiles: res.licenseFiles,
       truncated: res.truncated,
       loading: false,
-      // A remembered track that no longer exists shouldn't linger in the UI.
-      currentPath: res.tracks.some((t) => t.path === s.currentPath) ? s.currentPath : null,
+      currentPath: keepCurrent ? s.currentPath : null,
       status: res.tracks.length
         ? res.truncated
           ? `Loaded the first ${res.tracks.length} tracks — the folder holds more.`
           : ''
         : 'No audio files found in that folder.',
-    }));
+      };
+    });
     persist();
   } catch (err) {
     musicLibraryState.update((s) => ({
@@ -223,6 +252,39 @@ export async function scanFolder(folder: string): Promise<void> {
 export async function refreshLibrary(): Promise<void> {
   const s = get(musicLibraryState);
   if (s.folder) await scanFolder(s.folder);
+}
+
+/** Make an already-saved folder the active one and load its tracks. No-op if
+ *  it's already active, so re-picking the current folder doesn't rescan. */
+export async function switchFolder(folder: string): Promise<void> {
+  if (!folder || get(musicLibraryState).folder === folder) return;
+  await scanFolder(folder);
+}
+
+/** Drop one folder from the saved list. If it was the active folder, switch to
+ *  another; if it was the last one, this clears the library entirely. */
+export async function removeFolder(folder: string): Promise<void> {
+  const s = get(musicLibraryState);
+  const remaining = s.folders.filter((f) => f !== folder);
+  if (remaining.length === s.folders.length) return; // wasn't in the list
+
+  if (remaining.length === 0) {
+    clearLibrary();
+    return;
+  }
+
+  // Removing an inactive folder just trims the list; the current view stays put.
+  if (folder !== s.folder) {
+    musicLibraryState.update((st) => ({ ...st, folders: remaining }));
+    persist();
+    return;
+  }
+
+  // Removing the active folder — commit the trimmed list first so the rescan
+  // (which merges the new active folder back in) can't resurrect the removed
+  // one, then switch to whatever's left.
+  musicLibraryState.update((st) => ({ ...st, folders: remaining }));
+  await scanFolder(remaining[0]);
 }
 
 export function playTrack(path: string): void {
@@ -360,7 +422,7 @@ export async function revealInFolder(path: string): Promise<void> {
   }
 }
 
-/** Stop playback and forget the chosen folder. */
+/** Stop playback and forget every saved folder. */
 export function clearLibrary(): void {
   const el = getAudio();
   if (el) {
@@ -370,6 +432,7 @@ export function clearLibrary(): void {
   }
   musicLibraryState.update((s) => ({
     ...s,
+    folders: [],
     folder: '',
     tracks: [],
     licenseFiles: [],

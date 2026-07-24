@@ -61,7 +61,8 @@ export default defineConfig({
     // spawning an orchestrator agent — which writes .spacron/orchestrator.json and
     // creates .spacron/worktrees/* (full repo copies) — trips Vite's file watcher
     // and triggers a full page reload of the app while you're dogfooding inside
-    // the Spacron repo. .worktrees is the legacy location.
+    // the Spacron repo. .worktrees is a legacy location; so is the sibling
+    // ../.spacron-worktrees, which is outside the project and never watched.
     watch: {
       ignored: ['**/src-tauri/**', '**/.spacron/**', '**/.worktrees/**'],
     },

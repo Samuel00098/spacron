@@ -705,6 +705,43 @@ fn git_diff(args: Value, workspace: &Path) -> Result<Value, String> {
     output.map(|s| Value::String(s))
 }
 
+/// The managed worktree area for the served workspace: `<workspace>/.spacron/worktrees`.
+/// Must be inside the workspace root — the remote server confines every terminal
+/// and file op to it (`require_in_roots`), so a worktree outside can be created
+/// but never used. Mirrors `commands::workspace::worktree_area`.
+fn worktree_area(workspace: &Path) -> PathBuf {
+    workspace.join(".spacron").join("worktrees")
+}
+
+/// Pre-0.7.4 sibling location, still accepted by remove/status so worktrees
+/// created before the move can be cleaned up.
+fn legacy_worktree_area(workspace: &Path) -> Option<PathBuf> {
+    let repo = workspace.file_name()?.to_str()?;
+    Some(workspace.parent()?.join(".spacron-worktrees").join(repo))
+}
+
+/// Whether `path` sits inside this workspace's managed worktree area (current or
+/// legacy). Case-insensitive on Windows.
+fn in_managed_worktree_area(path: &Path, workspace: &Path) -> bool {
+    let under = |area: &Path| -> bool {
+        #[cfg(windows)]
+        {
+            let (p, a) = (
+                path.to_string_lossy().to_lowercase().replace('\\', "/"),
+                area.to_string_lossy().to_lowercase().replace('\\', "/"),
+            );
+            let a = a.trim_end_matches('/');
+            p == a || p.starts_with(&format!("{a}/"))
+        }
+        #[cfg(not(windows))]
+        {
+            path.starts_with(area)
+        }
+    };
+    under(&worktree_area(workspace))
+        || legacy_worktree_area(workspace).is_some_and(|area| under(&area))
+}
+
 /// workspace_git_create_worktree: create an isolated git worktree for an agent.
 fn git_create_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     check_git_remote()?;
@@ -725,14 +762,9 @@ fn git_create_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     let base_commit = git_capture(workspace, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Could not resolve HEAD — the repository has no commits yet.".to_string())?;
 
-    let repo_name = workspace.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("project");
-    let parent = workspace.parent()
-        .ok_or_else(|| "Repository has no parent directory.".to_string())?;
     let safe_branch = branch.replace('/', "-");
     let worktree_path = crate::commands::clean_path_buf(
-        parent.join(".spacron-worktrees").join(repo_name).join(&safe_branch)
+        worktree_area(workspace).join(&safe_branch)
     );
     let path_str = worktree_path.to_string_lossy().to_string();
 
@@ -777,7 +809,7 @@ fn git_remove_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         .ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
 
     let cleaned = crate::commands::clean_path_buf(PathBuf::from(worktree_path));
-    if !cleaned.to_string_lossy().contains(".spacron-worktrees") {
+    if !in_managed_worktree_area(&cleaned, workspace) {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
 
@@ -812,7 +844,7 @@ fn git_remove_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
 }
 
 /// workspace_git_worktree_status: live changed-files + branch for a worktree.
-fn git_worktree_status(args: Value, _workspace: &Path) -> Result<Value, String> {
+fn git_worktree_status(args: Value, workspace: &Path) -> Result<Value, String> {
     check_git_remote()?;
     let worktree_path = args.get("worktreePath")
         .and_then(|v| v.as_str())
@@ -820,7 +852,7 @@ fn git_worktree_status(args: Value, _workspace: &Path) -> Result<Value, String> 
 
     let path = PathBuf::from(worktree_path);
     let cleaned = crate::commands::clean_path_buf(path);
-    if !cleaned.to_string_lossy().contains(".spacron-worktrees") {
+    if !in_managed_worktree_area(&cleaned, workspace) {
         return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
     }
     if !cleaned.join(".git").exists() {

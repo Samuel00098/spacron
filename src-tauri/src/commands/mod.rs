@@ -9,6 +9,7 @@ pub mod fs_watch;
 pub mod github;
 pub mod http;
 pub mod lsp;
+pub mod mcp;
 pub mod mobile;
 pub mod music_library;
 pub mod notification;

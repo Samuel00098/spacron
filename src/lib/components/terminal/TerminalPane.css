@@ -244,11 +244,16 @@
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim, 0.35));
 }
 
-/* Windows / macOS: remove the scrim entirely so the terminal is completely
-   see-through onto the wallpaper. Linux (WebKitGTK) keeps the 0.35 scrim above,
-   so its original look is untouched. */
+/* Windows / macOS: a GENTLE readability scrim (default 0.22) instead of a fully
+   transparent surface. Agent CLIs (Qoder, Claude Code, opencode…) draw secondary
+   text — "Thinking", tips boxes, hints — in ANSI dim/muted gray that vanishes when
+   laid directly over the wallpaper. This faint theme-colored backing (keyed off
+   --bg-secondary-rgb, so it matches every light/dark theme) restores contrast on
+   that dim text while the wallpaper still glows through. Tunable via
+   --terminal-scrim-glass (0 = fully see-through, 1 = opaque). Linux (WebKitGTK)
+   keeps its own 0.35 --terminal-scrim above, untouched. */
 :root:not(.solid-theme):not(.is-webkitgtk) .terminal-pane .xterm-container {
-  background: transparent !important;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim-glass, 0.22)) !important;
 }
 
 /* Liquid glass sheen overlay — specular diagonal reflection + vignette */

@@ -47,7 +47,6 @@ const ALL_AGENTS = [
   { command: 'agy', name: 'Antigravity' },
   { command: 'opencode', name: 'OpenCode' },
   { command: 'pi', name: 'Pi AI Agent' },
-  { command: 'omp', name: 'Oh My Pi' },
   { command: 'agent', name: 'Cursor' },
 ];
 
@@ -382,7 +381,6 @@ describe('routeOrchestratorRequest', () => {
       expect(resolveAgentCommand('open codex', ALL_AGENTS)).toBe('codex');
       expect(resolveAgentCommand('use Codex CLI to fix it', ALL_AGENTS)).toBe('codex');
       expect(resolveAgentCommand('spawn antigravity', ALL_AGENTS)).toBe('agy');
-      expect(resolveAgentCommand('launch oh my pi', ALL_AGENTS)).toBe('omp');
       expect(resolveAgentCommand('use cursor', ALL_AGENTS)).toBe('agent');
       expect(resolveAgentCommand('fire up opencode', ALL_AGENTS)).toBe('opencode');
     });

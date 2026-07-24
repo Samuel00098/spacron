@@ -11,7 +11,7 @@
   height: calc(100 * var(--app-vh, 1vh) + 6 * var(--user-bg-blur, 0px));
   object-fit: cover;
   object-position: center center;
-  opacity: var(--user-bg-opacity, 1);
+  opacity: var(--user-bg-opacity, 0.98);
   filter: blur(var(--user-bg-blur, 0px));
   pointer-events: none;
   user-select: none;

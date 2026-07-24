@@ -16,25 +16,18 @@
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* Premium Liquid Glass casing: frosted translucency, saturate boost, and a
-     diagonal gloss sheen reflection — layered over a fully opaque base so the
-     workspace behind the pop-up never bleeds through at full opacity. The
-     title-bar transparency slider (element `opacity`) still fades the whole
-     panel to see-through when the user wants it.
-     NOTE: the opaque base must live in `background-color` — in the shorthand,
-     only the LAST layer may be a bare color, and the color-mix frost layer is
-     a color too, so listing both made the whole declaration invalid and the
-     browser dropped it (leaving the pop-up fully transparent). The frost tint
-     is wrapped in a gradient so it is a legal image layer. It must also use
-     rgb(var(--bg-primary-rgb)): `var(--bg-primary)` is overridden to
-     rgba(...,0.15) by global.css when transparency mode is active. */
-  background-color: rgb(var(--bg-primary-rgb, 24, 24, 30));
-  background-image:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
-    linear-gradient(
-      color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent),
-      color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent)
-    );
+  /* Frosted glass matched exactly to the left/right side utility panels: a very
+     light frost-chrome tint over --bg-secondary (already translucent in glass
+     mode) so the workspace reads as a clean blur behind the player rather than a
+     milky wash. color-mix must be the FINAL layer of the `background` shorthand
+     (only the last layer may be a bare color); the gloss sheen is an image layer
+     above it. In solid-theme --frost-chrome resolves to 1.0, so color-mix goes
+     fully opaque and the blur is stripped globally — the player stays solid
+     there. The title-bar transparency slider fades the whole panel via element
+     `opacity`, independent of this fill. */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   border: 1px solid rgba(255, 255, 255, 0.12);

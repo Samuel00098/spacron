@@ -380,7 +380,7 @@ body::before {
 /* Background image pulled back to give the scrim layers more room to work.
    Lowering this makes busy/bright wallpapers less dominant over the UI. */
 html.has-bg-image body::before {
-  opacity: 0.76;
+  opacity: 1;
 }
 
 /* ── Mid-layer scrim ───────────────────────────────────────────────────────
@@ -389,9 +389,11 @@ html.has-bg-image body::before {
    and glass panel stays readable on any wallpaper — dark or light theme. */
 html.has-bg-image body::after,
 html.has-bg-media body::after {
-  /* Boost frost opacity so glass panels are more solid and readable —
-     sidebar, titlebar, editor, activity bar all benefit from this. */
-  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.68) !important;
+  /* The panels now frost their own patch of wallpaper (see-through + backdrop
+     blur), so this global wash no longer has to carry readability. Pull it well
+     back from the old near-opaque 0.68 so the wallpaper reads brightly through
+     the gaps between panels while text over glass stays legible. */
+  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.40) !important;
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -412,9 +414,9 @@ html.has-bg-media:not(.light-theme) #app::before {
   background:
     linear-gradient(
       180deg,
-      rgba(0, 0, 0, 0.42) 0%,
-      rgba(0, 0, 0, 0.52) 40%,
-      rgba(0, 0, 0, 0.62) 100%
+      rgba(0, 0, 0, 0.22) 0%,
+      rgba(0, 0, 0, 0.28) 40%,
+      rgba(0, 0, 0, 0.38) 100%
     );
   pointer-events: none;
 }
@@ -430,9 +432,9 @@ html.has-bg-media.light-theme #app::before {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.56) 0%,
-      rgba(255, 255, 255, 0.48) 50%,
-      rgba(255, 255, 255, 0.60) 100%
+      rgba(255, 255, 255, 0.40) 0%,
+      rgba(255, 255, 255, 0.34) 50%,
+      rgba(255, 255, 255, 0.44) 100%
     );
   pointer-events: none;
 }

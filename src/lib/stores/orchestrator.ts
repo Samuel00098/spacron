@@ -17,7 +17,7 @@ import { setActiveView, showTerminal, openSettings } from '$lib/stores/layout';
 import { sanitiseActiveView } from '$lib/stores/layout';
 import type { ActiveView } from '$lib/types/layout';
 import { openFile, closeFile, jumpToLine } from '$lib/stores/editor';
-import { navigatePreviewTab } from '$lib/stores/preview';
+import { navigatePreviewTab, ensureProxyRunning } from '$lib/stores/preview';
 import { getAppContextSnapshot, NAVIGABLE_VIEWS } from '$lib/services/orchestrator/app-context';
 import { applyAgentSetting } from '$lib/services/orchestrator/app-settings';
 import { loadJson } from '$lib/utils/storage';
@@ -1221,6 +1221,10 @@ export async function executeAppAction(
     case 'preview': {
       const url = action.url.trim();
       if (!url) return false;
+      // Ensure the background proxy is running so external URLs
+      // load reliably through the iframe, then navigate and reveal
+      // the preview panel so the user (or agent) sees the page.
+      await ensureProxyRunning();
       navigatePreviewTab(url);
       setActiveView('preview');
       return true;

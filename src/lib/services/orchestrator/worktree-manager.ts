@@ -5,10 +5,11 @@ import { backendInvoke } from '$lib/services/backend';
  *
  * Each orchestrator agent runs in its own git worktree on a dedicated branch
  * (forked from the project's current HEAD), so several agents can edit the same
- * repository at once without colliding. Worktrees live in a sibling
- * `.spacron-worktrees/<repo>` directory managed by the Rust backend, keeping the
- * user's main working tree untouched. This module owns deriving branch names and
- * driving the backend create / remove / status commands.
+ * repository at once without colliding. Worktrees live *inside* the project at
+ * `.spacron/worktrees/<branch>`, managed by the Rust backend — they have to be
+ * inside the root because terminals are confined to the open project roots, so a
+ * worktree elsewhere gets created but can never host a shell. This module owns
+ * deriving branch names and driving the backend create / remove / status commands.
  */
 
 export interface WorktreeInfo {

@@ -39,7 +39,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary);
+  /* Frosted glass matched exactly to the side utility panels: a very light
+     frost-chrome tint over the (already-translucent in glass mode) --bg-secondary,
+     so it reads as clear blur, not a milky wash. color-mix self-adapts to fully
+     opaque in solid-theme (where --frost-chrome resolves to 1.0). */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   color: var(--accent);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
@@ -74,7 +82,11 @@
   flex-direction: column;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 16px;
-  background: var(--bg-secondary);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -180,8 +192,10 @@
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   border-radius: 24px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent 62%),
-    var(--bg-secondary);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   box-shadow:
     0 22px 50px -24px rgba(0, 0, 0, 0.72),
     0 10px 22px -18px color-mix(in srgb, var(--accent) 34%, transparent),

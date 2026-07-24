@@ -1,6 +1,6 @@
 {
   "name": "spacron",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "A lightweight developer workspace",
   "type": "module",
   "scripts": {

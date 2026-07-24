@@ -328,7 +328,7 @@ const QUESTION_MARK_RE = /\?\s*$/;
 // when the user clearly asks to launch an agent or to have one do coding work —
 // everything else is treated as plain conversation, never a dispatch.
 const EXPLICIT_SPAWN_RE =
-  /\b(open|spawn|launch|start|fire up|boot up|kick off|create|use|have|get|tell|ask|put)\b[^.?!]*\b(agent|claude|codex|aider|opencode|antigravity|agy|cursor|pi|oh ?my ?pi|omp|grok|assistant|bot)\b/i;
+  /\b(open|spawn|launch|start|fire up|boot up|kick off|create|use|have|get|tell|ask|put)\b[^.?!]*\b(agent|claude|codex|aider|opencode|antigravity|agy|cursor|pi|grok|assistant|bot)\b/i;
 
 // Status-check patterns — intercepted before the LLM so we respond instantly.
 const STATUS_CHECK_RE = /^(status|what[‘’]?s (?:the )?status|what[‘’]?s running|list agents|show agents|which agents|what agents are running|show me the agents|what are (?:my |the )?agents doing|how (?:is|are) (?:the |my |that |those )?agents? doing|is (?:it|that|the agent) (?:done|finished|complete)|has (?:it|that|the agent) finished|are (?:they|the agents) (?:done|finished|complete))\b/i;
@@ -389,7 +389,6 @@ const AGENT_ALIASES: Record<string, string[]> = {
   agy: ['agy', 'antigravity'],
   opencode: ['opencode', 'open code'],
   pi: ['pi'],
-  omp: ['omp', 'oh my pi', 'oh-my-pi', 'ohmypi'],
   agent: ['cursor'],
   aider: ['aider'],
   grok: ['grok'],
@@ -675,7 +674,7 @@ function buildSystemPrompt(
     '- {"kind": "close-file", "path": "<path relative to project root>"}',
     '    Close an open editor file.',
     '- {"kind": "preview", "url": "<route or full URL>"}',
-    '    Point the preview browser at a route ("/login") or URL. Switch to the preview view first with a navigate action if it is not visible.',
+    '    Point the preview browser at a route ("/login") or URL. Navigate to every URL through this action — it opens inside the app, not in an external browser. Switch to the preview view first with a navigate action if it is not visible.',
     '- {"kind": "run", "command": "<shell command or a run-preset name>"}',
     '    Run a command in a terminal (e.g. "npm run dev", "npm test"). If the user names a saved run preset, pass its command. This is for plain shell commands — to do CODING work, spawn an agent instead.',
     '- {"kind": "task", "op": "create"|"todo"|"doing"|"done"|"delete", "title": "<task title>"}',
@@ -696,6 +695,7 @@ function buildSystemPrompt(
     '- The actions array may contain MULTIPLE actions. "open two claude agents" → two spawn actions.',
     '- Each spawn/send prompt must be fully self-contained — the agent has NO access to this conversation.',
     '- If the user refers to a running agent (by name, "the first one", "that agent"), prefer send/name over spawning a duplicate.',
+    '- Everything opens inside the app — when you need to visit a URL, use the preview action instead of opening the system browser.',
     '- If a task is awaiting review and the user wants more work, use send to resume it automatically instead of waiting for approval.',
     '- Use the task panel board in the user message as project truth. Prefer work that unblocks "In progress" items, then "To do" items. If the user asks for advice, suggest what should be done next and what can wait; use an empty actions array unless they explicitly ask you to act.',
     '- To shut an agent down that the user is finished with, use close (never spawn a new agent to "close" one).',

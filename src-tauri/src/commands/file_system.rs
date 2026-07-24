@@ -437,6 +437,56 @@ pub fn write_binary(path: &str, data: &[u8], roots: &[PathBuf]) -> Result<(), St
     std::fs::write(&file_path, data).map_err(|e| sanitize_io_error(e, path))
 }
 
+/// The app-owned scratch directory for clipboard-pasted images:
+/// `<os-temp>/spacron/pasted`. Lives outside every project so pastes never bloat
+/// a codebase; [`clear_pasted_images`] empties it on app exit.
+fn pasted_images_dir() -> PathBuf {
+    std::env::temp_dir().join("spacron").join("pasted")
+}
+
+/// Write a clipboard-pasted image to the app scratch dir and return its absolute
+/// path. A pasted image is raw clipboard pixels with no source file to reference,
+/// so the bytes have to be written somewhere — but the old path wrote them into
+/// `<project>/.spacron/paste`, which piled screenshots up inside the working tree.
+/// This writes to the OS temp dir instead, matching how terminal coding agents
+/// (Claude Code, Cursor) treat a paste: ephemeral, out of the codebase.
+///
+/// Unlike [`fs_write_binary`], this is deliberately NOT confined to a project
+/// root: the destination directory is fixed and app-controlled, and only the
+/// *filename* comes from the caller — reduced to a bare name so a crafted value
+/// can't traverse out of the scratch dir.
+#[tauri::command]
+pub fn save_pasted_image(name: String, data: Vec<u8>) -> Result<String, String> {
+    if data.len() > 100 * 1024 * 1024 {
+        return Err("Image too large to save (limit 100 MB)".to_string());
+    }
+    let dir = pasted_images_dir();
+    let dir_str = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(&dir).map_err(|e| sanitize_io_error(e, &dir_str))?;
+    let safe_name = Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.trim_start_matches('.'))
+        .filter(|n| !n.is_empty())
+        .unwrap_or("image.png");
+    let dest = dir.join(safe_name);
+    std::fs::write(&dest, &data).map_err(|e| sanitize_io_error(e, safe_name))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Delete the pasted-image scratch directory. Called on app exit so ephemeral
+/// clipboard pastes don't accumulate across sessions. A missing dir is not an
+/// error — nothing was pasted this run.
+#[tauri::command]
+pub fn clear_pasted_images() -> Result<(), String> {
+    let dir = pasted_images_dir();
+    if dir.exists() {
+        let dir_str = dir.to_string_lossy().to_string();
+        std::fs::remove_dir_all(&dir).map_err(|e| sanitize_io_error(e, &dir_str))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn fs_get_file_info(path: String, state: State<AppState>) -> Result<FileEntry, String> {
     get_file_info(&path, &project_roots(&state))

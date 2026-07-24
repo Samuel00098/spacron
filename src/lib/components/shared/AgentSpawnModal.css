@@ -2,9 +2,9 @@
   position: fixed;
   inset: 0;
   z-index: 8000;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12,40 +12,67 @@
 }
 
 .asm-card {
-  width: 460px;
+  width: 440px;
   max-width: calc(100 * var(--app-vw, 1vw) - 40px);
-  max-height: calc(80 * var(--app-vh, 1vh));
+  max-height: calc(84 * var(--app-vh, 1vh));
   background: rgba(var(--bg-secondary-rgb), 1);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-  border-radius: 12px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: asmSlideUp 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) forwards;
+  animation: asmSlideUp 0.28s cubic-bezier(0.34, 1.28, 0.64, 1) forwards;
 }
 
+/* ---- Header ---- */
 .asm-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  gap: 12px;
+  padding: 18px 20px 14px;
 }
 
 .asm-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary, #e0e0e0);
+  gap: 11px;
+  min-width: 0;
 }
 
-.asm-title-icon {
+.asm-title-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 9px;
   color: var(--accent, #3b82f6);
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.12);
+}
+
+.asm-title-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.asm-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary, #e8e8e8);
+}
+
+.asm-subtitle {
+  font-size: 11.5px;
+  color: var(--text-muted, #808080);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .asm-close-btn {
@@ -56,8 +83,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -66,75 +94,125 @@
   color: var(--text-primary, #fff);
 }
 
-
-
+/* ---- Agent list ---- */
 .asm-preset-list {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 4px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   min-height: 200px;
-  max-height: 400px;
+  max-height: 460px;
 }
 
 .asm-empty {
-  padding: 32px;
+  padding: 48px 32px;
   text-align: center;
   color: var(--text-muted, #808080);
   font-size: 13px;
 }
 
-.asm-preset-row {
+.asm-card-item {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text-primary, #fff) 3%, transparent);
+  gap: 13px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
   border: 1px solid transparent;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.14s ease, border-color 0.14s ease;
 }
 
-.asm-preset-row:hover {
-  background: color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);
+.asm-card-item:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 5%, transparent);
 }
 
-.asm-preset-row.selected {
+.asm-card-item:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+  background: color-mix(in srgb, var(--text-primary, #fff) 5%, transparent);
+}
+
+.asm-card-item.selected {
   background: rgba(var(--accent-rgb, 59, 130, 246), 0.1);
-  border-color: rgba(var(--accent-rgb, 59, 130, 246), 0.35);
+  border-color: rgba(var(--accent-rgb, 59, 130, 246), 0.3);
 }
 
-.asm-preset-info {
+/* ---- Logo tile ---- */
+.asm-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  color: var(--logo, var(--text-primary, #e8e8e8));
+  background: color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+  transition: background 0.14s ease;
+}
+
+.asm-card-item:hover .asm-logo,
+.asm-card-item.selected .asm-logo {
+  background: color-mix(in srgb, var(--text-primary, #fff) 10%, transparent);
+}
+
+.asm-logo svg,
+.asm-logo img {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.asm-card-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 65%;
+  min-width: 0;
+  flex: 1;
 }
 
-.asm-preset-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary, #e0e0e0);
+.asm-card-name {
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--text-primary, #e8e8e8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.asm-preset-desc {
+.asm-card-cmd {
   font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
   color: var(--text-muted, #808080);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.asm-preset-controls {
+/* ---- Stepper (revealed on hover / when selected) ---- */
+.asm-stepper {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  flex-shrink: 0;
   background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
-  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
   padding: 2px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  pointer-events: none;
+}
+
+.asm-card-item:hover .asm-stepper,
+.asm-card-item:focus-within .asm-stepper,
+.asm-stepper.active {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .asm-btn {
@@ -145,55 +223,70 @@
   justify-content: center;
   background: none;
   border: none;
-  border-radius: 4px;
-  color: var(--text-primary, #e0e0e0);
-  font-size: 14px;
+  border-radius: 6px;
+  color: var(--text-secondary, #c0c0c0);
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.13s, color 0.13s;
 }
 
 .asm-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--text-primary, #fff) 12%, transparent);
+  color: var(--text-primary, #fff);
 }
 
 .asm-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.28;
   cursor: not-allowed;
 }
 
 .asm-count-value {
   font-size: 12px;
-  font-weight: 600;
-  min-width: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  min-width: 15px;
   text-align: center;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary, #e8e8e8);
 }
 
+/* ---- Footer ---- */
 .asm-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: 13px 20px;
   border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  background: rgba(var(--bg-tertiary-rgb), 1);
 }
 
 .asm-hint {
   font-size: 11px;
   color: var(--text-muted, #808080);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.asm-hint kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 1.5px 5px;
+  border-radius: 5px;
+  color: var(--text-secondary, #b0b0b0);
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 }
 
 .asm-confirm-btn {
   padding: 8px 18px;
   background: var(--accent, #3b82f6);
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--button-text, #ffffff);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(var(--accent-rgb, 59, 130, 246), 0.2);
-  transition: background 0.15s, opacity 0.15s, transform 0.1s;
+  transition: background 0.14s, opacity 0.14s, transform 0.1s;
 }
 
 .asm-confirm-btn:hover:not(:disabled) {
@@ -201,13 +294,12 @@
 }
 
 .asm-confirm-btn:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 
 .asm-confirm-btn:disabled {
-  background: var(--text-muted, #404040);
-  color: color-mix(in srgb, var(--button-text, #fff) 30%, transparent);
-  box-shadow: none;
+  background: color-mix(in srgb, var(--text-muted, #404040) 45%, transparent);
+  color: color-mix(in srgb, var(--button-text, #fff) 35%, transparent);
   cursor: not-allowed;
 }
 

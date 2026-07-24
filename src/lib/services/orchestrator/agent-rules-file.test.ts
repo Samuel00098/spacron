@@ -23,7 +23,7 @@ describe('agentReadsRulesFile', () => {
   });
 
   it('returns false for agents without an auto-loaded rules file and for empty input', () => {
-    for (const id of ['pi', 'omp', 'aider', '', null, undefined]) {
+    for (const id of ['pi', 'aider', '', null, undefined]) {
       expect(agentReadsRulesFile(id as string)).toBe(false);
     }
   });

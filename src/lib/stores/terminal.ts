@@ -7,6 +7,7 @@ import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orches
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { removeTaskWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { activeTheme } from '$lib/stores/theme';
+import { registerAgent, unregisterAgent } from './mcpBridge';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -48,8 +49,6 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
   pi: 'Pi',
-  omp: 'Oh My Pi',
-  'oh-my-pi': 'Oh My Pi',
   agent: 'Cursor',
   cursor: 'Cursor',
   hermes: 'Hermes Agent',
@@ -352,12 +351,11 @@ const MAX_SESSION_BUFFER_CHARS = 250000;
 // Maps a launched executable (the first real token of a command, basename
 // only) to the agent preset it represents. Detection keys off the executable
 // name — NOT any word appearing in the line — so subcommands/arguments like
-// `omp agent ...` aren't misattributed to Cursor's bare `agent` CLI.
+// `pi agent ...` aren't misattributed to Cursor's bare `agent` CLI.
 const AGENT_COMMAND_EXECUTABLES: Array<{ preset: string; names: string[] }> = [
   { preset: 'codex', names: ['codex'] },
   { preset: 'claude', names: ['claude', 'claude-code'] },
   { preset: 'opencode', names: ['opencode'] },
-  { preset: 'oh-my-pi', names: ['omp'] },
   { preset: 'pi', names: ['pi'] },
   { preset: 'antigravity', names: ['agy', 'antigravity'] },
   { preset: 'aider', names: ['aider'] },
@@ -709,6 +707,11 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   } else {
     showToast(`${label} closed`, 'info', 3000, true);
   }
+
+  // Unregister from MCP server so other agents stop seeing it
+  unregisterAgent(id).catch((e) =>
+    console.error('Failed to unregister agent from MCP server:', e),
+  );
 }
 
 function registerPtySession(
@@ -753,6 +756,13 @@ function registerPtySession(
       : [...state.sessions, info],
     activeSessionId: pty.id,
   }), isDev);
+
+  // Register with MCP server so other agents can discover this one
+  if (info.agentPreset && info.agentName) {
+    registerAgent(info.id, info.agentName, info.agentPreset, getSessionLabel(info, [info])).catch((e) =>
+      console.error('Failed to register agent with MCP server:', e),
+    );
+  }
 
   // Agent rooms (assignPane: false) live in `sessions` but never take a slot in
   // the user's personal terminal mosaic — assigning one would render its cell as
@@ -816,11 +826,40 @@ export async function createTerminalSession(
  
     const theme = get(activeTheme);
     const isLight = theme?.type === 'light';
-    const env = {
+    const env: Record<string, string> = {
       CLAUDE_CODE_THEME: isLight ? 'light' : 'dark',
       THEME: isLight ? 'light' : 'dark',
       COLORFGBG: isLight ? '0;15' : '15;0',
     };
+
+    // Inject MCP server config when launching an agent so it auto-discovers
+    // other running agents via the Spacron MCP bridge.
+    if (agentPreset) {
+      try {
+        const { getMcpPort, injectMcpConfigForAgent } = await import('./mcpBridge');
+        const port = await getMcpPort();
+
+        // Claude Code: env var injection
+        env['CLAUDE_CODE__MCP__SERVERS'] = JSON.stringify({
+          'spacron-mcp': { url: `http://127.0.0.1:${port}/sse` },
+        });
+
+        // Aider: env var injection (format: JSON string)
+        env['AIDER_MCP_SERVERS'] = JSON.stringify({
+          'spacron-mcp': { url: `http://127.0.0.1:${port}/sse` },
+        });
+
+        // Generic fallback for any CLI that looks for a simple env var
+        env['SPACRON_MCP_URL'] = `http://127.0.0.1:${port}/sse`;
+
+        // Config-file-based agents (Cursor, Codex CLI) — fire-and-forget
+        injectMcpConfigForAgent(agentPreset, resolvedCwd).catch((e) =>
+          console.warn('[mcp] config injection failed:', e),
+        );
+      } catch (e) {
+        console.warn('Could not inject MCP server config:', e);
+      }
+    }
 
     const ptyPromise = openPty(80, 24, {
       onData: (bytes) => {
@@ -1119,6 +1158,16 @@ export function setSessionAgentName(id: number, agentName: string | null) {
       x.id === id ? { ...x, agentName } : x
     ),
   }), isDev);
+
+  // If a real agent name was assigned, register it with the MCP server
+  if (agentName?.trim()) {
+    const session = getProjectState(projectId, isDev).sessions.find((x) => x.id === id);
+    if (session?.agentPreset) {
+      registerAgent(id, agentName, session.agentPreset, getSessionLabel(session, [session])).catch((e) =>
+        console.error('Failed to register agent with MCP server:', e),
+      );
+    }
+  }
 }
 
 export function applyOscPaneTitle(id: number, paneTitle: string): void {

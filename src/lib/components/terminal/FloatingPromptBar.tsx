@@ -454,31 +454,23 @@ export default function FloatingPromptBar() {
 
 
   const saveImageToDisk = useCallback(async (img: PastedImage): Promise<string | null> => {
-    // Write under the project's `.spacron/` dir (already the app's project-local
-    // scratch area and in the orchestrator's skip-dirs), NOT the OS temp dir: the
-    // fs_write_binary command enforces require_in_project, so a temp path outside
-    // the project root is rejected and the attachment silently fails on every OS.
-    const root = $activeProject?.root_path;
-    if (!root) return null;
+    // A pasted image is raw clipboard pixels with no source file to reference, so
+    // the bytes must be written somewhere. `save_pasted_image` writes them to an
+    // app-owned scratch dir OUTSIDE the project (the OS temp dir) and returns the
+    // absolute path — so pastes never bloat the codebase. This is what terminal
+    // agents like Claude Code / Cursor do: treat a paste as ephemeral. (The old
+    // path wrote into `<project>/.spacron/paste`, piling screenshots up in the
+    // working tree.) The scratch dir is wiped on app exit. File-picked/dragged
+    // images take the diskPath branch in materializeAttachments and skip this.
     try {
-      const base = root.replace(/\\/g, '/').replace(/\/+$/, '');
-      const dir = `${base}/.spacron/paste`;
-      // Sanitize to a bare filename so a name can't traverse out of the dir.
-      const safeName = (img.name.split(/[/\\]/).pop() || 'image.png').replace(/^\.+/, '');
-      try {
-        await invoke('fs_create_dir', { path: dir });
-      } catch {
-        /* already exists */
-      }
-      const savePath = `${dir}/${safeName}`;
       const data = Array.from(dataUrlToBytes(img.dataUrl));
-      await invoke('fs_write_binary', { path: savePath, data });
-      return savePath;
+      const savePath = await invoke<string>('save_pasted_image', { name: img.name, data });
+      return savePath.replace(/\\/g, '/');
     } catch (error) {
       console.error('Failed to save pasted image to disk:', error);
       return null;
     }
-  }, [$activeProject]);
+  }, []);
 
   const removeImage = useCallback((index: number) => {
     setPastedImages((prev) => {

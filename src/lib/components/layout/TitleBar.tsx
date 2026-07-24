@@ -30,6 +30,11 @@ export default function TitleBar() {
   const workspace = useWorkspaceStore((s) => (s.activeWorkspaceId ? s.recentWorkspaces.find((w) => w.id === s.activeWorkspaceId) ?? null : null));
   const goBackEnabled = useStore(canGoBack);
   const goForwardEnabled = useStore(canGoForward);
+  // Home is an overlay over the live workspace, so `workspaceId` stays set while
+  // it's up. Workspace-scoped tools (switcher, capture, search, settings) key off
+  // this instead so they disappear on the welcome screen too.
+  const homeOpen = useStore(homeScreenOpen);
+  const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
 
   async function minimize() {
     await win?.minimize();
@@ -181,7 +186,7 @@ export default function TitleBar() {
         data-tauri-drag-region
       >
         <div className="titlebar-controls-container" style={controlsContainerStyle}>
-          {workspaceId && (
+          {showWorkspaceTools && (
             <button
               className="titlebar-hud-trigger"
               onClick={toggleProjectHUD}
@@ -204,7 +209,7 @@ export default function TitleBar() {
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right">
 
-        {workspaceId && (
+        {showWorkspaceTools && (
           <>
             {/* Quick Capture button */}
             <button
@@ -253,7 +258,7 @@ export default function TitleBar() {
         )}
 
         {/* Settings button */}
-        {workspaceId && (
+        {showWorkspaceTools && (
           <button
             className="icon-btn"
             onClick={openSettings}

@@ -4,6 +4,7 @@ use crate::pty::manager::PtyManager;
 use crate::theme::registry::ThemeRegistry;
 use crate::workspace::manager::WorkspaceManager;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Per-session write rate limiter: tracks (window_start, bytes_in_window).
 /// Resets each second; caps at 1 MB/s per session to prevent runaway write loops.
@@ -42,7 +43,7 @@ impl WriteRateLimiter {
 pub struct AppState {
     pub theme_registry: ThemeRegistry,
     pub workspace_manager: WorkspaceManager,
-    pub pty_manager: PtyManager,
+    pub pty_manager: Arc<PtyManager>,
     pub lsp_bridge: LspBridge,
     pub preview_manager: PreviewManager,
     pub write_rate_limiter: WriteRateLimiter,
@@ -55,7 +56,7 @@ impl AppState {
         AppState {
             theme_registry: ThemeRegistry::new(config_dir.clone()),
             workspace_manager: WorkspaceManager::new(config_dir.clone(), active_project_id.clone()),
-            pty_manager: PtyManager::new(),
+            pty_manager: Arc::new(PtyManager::new()),
             lsp_bridge: LspBridge::new(),
             preview_manager: PreviewManager::new(active_project_id, config_dir.clone()),
             write_rate_limiter: WriteRateLimiter::new(),

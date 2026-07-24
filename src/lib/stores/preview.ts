@@ -496,6 +496,18 @@ export async function clearProxyTarget() {
 }
 
 /**
+ * Navigate the preview panel to an external URL (or local dev URL) instead
+ * of opening the system browser.  Ensures the background proxy is running
+ * and reveals the preview panel so the user sees the page immediately.
+ */
+export async function openUrlInPreviewPanel(url: string): Promise<void> {
+  await ensureProxyRunning();
+  navigatePreviewTab(url);
+  const { useLayoutStore } = await import('./zustand/layout');
+  useLayoutStore.getState().revealPreview();
+}
+
+/**
  * Update the project root path in the proxy so the `/local-file` route can
  * serve files from the correct directory.  Call this whenever the active
  * project changes.

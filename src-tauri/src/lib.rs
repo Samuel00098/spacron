@@ -1,6 +1,7 @@
 mod commands;
 mod error;
 mod lsp;
+mod mcp;
 mod preview;
 pub mod pty;
 // Headless remote-workspace server: reuses the PTY core over a WebSocket so the
@@ -14,7 +15,8 @@ mod workspace;
 
 use state::AppState;
 use std::io;
-use tauri::Manager;
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,7 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg_attr(
                 not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
                 allow(unused_variables)
@@ -144,9 +146,53 @@ pub fn run() {
                 });
             }
 
+            // ── Start the MCP agent-to-agent communication server ───────────
+            let app_state = AppState::new(config_dir.clone());
+            let pty_manager = app_state.pty_manager.clone();
+            let app_handle = app.handle().clone();
+            app.manage(app_state);
+
+            let write_cb: mcp::WriteFn = {
+                let pm = pty_manager.clone();
+                Arc::new(move |session_id, data| match pm.get(session_id) {
+                    Some(session) => session.write(data),
+                    None => Err(format!("Session {} not found", session_id)),
+                })
+            };
+
+            let read_cb: mcp::ReadFn = {
+                let pm = pty_manager.clone();
+                Arc::new(move |session_id| match pm.get(session_id) {
+                    Some(session) => session.read_output(),
+                    None => Vec::new(),
+                })
+            };
+
+            let spawn_fn: mcp::SpawnFn = {
+                let ah = app_handle.clone();
+                Arc::new(move |req| {
+                    let _ = ah.emit(
+                        "mcp:spawn-agent",
+                        serde_json::json!({
+                            "preset": req.preset,
+                            "prompt": req.prompt,
+                        }),
+                    );
+                })
+            };
+
+            match mcp::start(0, write_cb, read_cb, spawn_fn) {
+                Ok((handle, port)) => {
+                    app.manage(handle);
+                    eprintln!("MCP server started on port {}", port);
+                }
+                Err(e) => {
+                    eprintln!("Failed to start MCP server: {}", e);
+                }
+            }
+
             Ok(())
         })
-        .manage(AppState::new(config_dir))
         .invoke_handler(tauri::generate_handler![
             commands::theme::theme_list,
             commands::theme::theme_activate,
@@ -180,6 +226,7 @@ pub fn run() {
             commands::fs_watch::start_fs_watch,
             commands::fs_watch::stop_fs_watch,
             commands::http::http_send_request,
+            commands::http::fetch_agent_logo,
             commands::music_library::music_library_scan,
             commands::music_library::music_library_reveal,
             commands::notification::notification_show,
@@ -225,6 +272,8 @@ pub fn run() {
             commands::file_system::fs_read_binary,
             commands::file_system::fs_write_file,
             commands::file_system::fs_write_binary,
+            commands::file_system::save_pasted_image,
+            commands::file_system::clear_pasted_images,
             commands::file_system::fs_get_file_info,
             commands::search::search_in_project,
             commands::env_vars::env_vault_get,
@@ -269,9 +318,19 @@ pub fn run() {
             commands::mobile::ios_shutdown,
             commands::mobile::ios_open_simulator,
             commands::mobile::ios_screenshot,
+            commands::mcp::mcp_register_agent,
+            commands::mcp::mcp_unregister_agent,
+            commands::mcp::mcp_server_port,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running forge application");
+        .build(tauri::generate_context!())
+        .expect("error while building forge application")
+        .run(|_app, event| {
+            // Best-effort: wipe the ephemeral clipboard-pasted-image scratch dir on
+            // exit so screenshots pasted this session don't linger on disk.
+            if let tauri::RunEvent::Exit = event {
+                let _ = commands::file_system::clear_pasted_images();
+            }
+        });
 }
 
 /// Relocate the previous ("Soryq") config directory to the current one on first

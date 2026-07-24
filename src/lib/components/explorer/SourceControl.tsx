@@ -1,8 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeProject, activeProjectId } from '$lib/stores/workspace';
 import { openFile } from '$lib/stores/editor';
 import { showToast } from '$lib/stores/notification';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import FileIcon from './FileIcon.tsx';
 import {
   branchInfo,
@@ -208,7 +208,7 @@ export default function SourceControl() {
       setPublishOpen(false);
       setPublishDesc('');
       if (result.html_url) {
-        invoke('preview_open_in_browser', { url: result.html_url }).catch(() => {});
+        openUrlInPreviewPanel(result.html_url);
       }
       await refreshAll();
     } catch (err) {
@@ -484,7 +484,7 @@ export default function SourceControl() {
         {!githubTokenSaved && (
           <>
             <input className="publish-input" type="password" placeholder="Personal access token (ghp_...)" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} autoComplete="off" />
-            <button className="publish-help" onClick={() => invoke('preview_open_in_browser', { url: 'https://github.com/settings/tokens/new?scopes=repo&description=Spacron' }).catch(() => {})}>
+            <button className="publish-help" onClick={() => openUrlInPreviewPanel('https://github.com/settings/tokens/new?scopes=repo&description=Spacron')}>
               Create a token with 'repo' scope -&gt;
             </button>
           </>
