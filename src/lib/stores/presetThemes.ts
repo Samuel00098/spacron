@@ -85,7 +85,7 @@ export const presetThemes: Theme[] = [
   ),
 
   // ── AETHER CURVES (Light Architecture) ──────────────────────
-  createPresetTheme('aether-curves', 'Chicago Shoreline', 'light',
+  createPresetTheme('aether-curves', 'Architectural Curves', 'light',
     {
       'bg-primary': '#f8fafc',
       'bg-secondary': '#f1f5f9',
@@ -1559,7 +1559,7 @@ export const presetThemes: Theme[] = [
   ),
 
   // ── CYBER ROOFTOP (Dark Neon Cityscape) ───────────────────────
-  createPresetTheme('cyber-rooftop', 'Manhattan Skyline Night', 'dark',
+  createPresetTheme('cyber-rooftop', 'Cyber Neon Rooftop', 'dark',
     {
       'bg-primary': '#0b0914',
       'bg-secondary': '#06050b',
@@ -1687,7 +1687,7 @@ export const presetThemes: Theme[] = [
       'tag': '#c62828',
       'attribute': '#2e7d32',
     },
-    '/backgrounds/light-autumn-path.png',
+    '/backgrounds/light-autumn-path.webp',
     75,
     0
   ),
@@ -1754,7 +1754,7 @@ export const presetThemes: Theme[] = [
       'tag': '#ef4444',
       'attribute': '#10b981',
     },
-    '/backgrounds/light-balcony-morning.png',
+    '/backgrounds/light-balcony-morning.webp',
     75,
     0
   ),
@@ -1821,7 +1821,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f87171',
       'attribute': '#34d399',
     },
-    '/backgrounds/dark-tokyo-skyline.png',
+    '/backgrounds/dark-tokyo-skyline.webp',
     75,
     0
   ),
@@ -1888,7 +1888,7 @@ export const presetThemes: Theme[] = [
       'tag': '#ef4444',
       'attribute': '#10b981',
     },
-    '/backgrounds/dark-chicago-skyline.png',
+    '/backgrounds/dark-chicago-skyline.webp',
     75,
     0
   ),
