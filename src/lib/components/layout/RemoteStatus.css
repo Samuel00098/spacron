@@ -10,38 +10,43 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 9999px;
-  /* Solid surface: the vibrancy layer turns --bg-secondary translucent, so use
-     the raw RGB channels at full alpha to keep the chip opaque and legible in
-     every theme. */
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 9px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0.2px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
+  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--glass-rim) 80%, transparent);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
 }
 
 .rs-chip:hover,
 .rs-chip.is-open {
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2),
+              inset 0 1px 0 color-mix(in srgb, var(--glass-rim) 80%, transparent);
 }
 
-/* Active-state tinted pills, mirroring the app's `.sb-view-badge` idiom — an
-   accent (remote) / success (connected) wash mixed into the opaque surface so
-   the mode reads before you open the menu, while staying legible under
-   vibrancy/transparency themes. */
+.rs-chip:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Active-state tinted pills, mirroring the HUD trigger accent wash */
 .rs-chip-remote {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, rgba(var(--bg-secondary-rgb, 18, 18, 22), 1));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
 }
 .rs-chip-connected {
   border-color: color-mix(in srgb, var(--success) 32%, var(--border));
-  background: color-mix(in srgb, var(--success) 10%, rgba(var(--bg-secondary-rgb, 18, 18, 22), 1));
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-primary));
 }
 
 .rs-chip-label {
