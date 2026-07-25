@@ -1,8 +1,8 @@
-mod browser_window;
 mod commands;
 mod error;
 mod lsp;
 mod mcp;
+mod native_preview;
 mod preview;
 pub mod pty;
 // Headless remote-workspace server: reuses the PTY core over a WebSocket so the
@@ -337,11 +337,16 @@ pub fn run() {
             commands::mcp::mcp_unregister_agent,
             commands::mcp::mcp_server_port,
             commands::mcp::mcp_browser_respond,
-            commands::browser_window::browser_create_window,
-            commands::browser_window::browser_navigate_window,
-            commands::browser_window::browser_close_window,
-            commands::browser_window::browser_screenshot_window,
-            commands::browser_window::browser_window_is_open,
+            commands::native_preview::native_preview_create,
+            commands::native_preview::native_preview_navigate,
+            commands::native_preview::native_preview_set_bounds,
+            commands::native_preview::native_preview_show,
+            commands::native_preview::native_preview_hide,
+            commands::native_preview::native_preview_screenshot,
+            commands::native_preview::native_preview_eval,
+            commands::native_preview::native_preview_close,
+            commands::native_preview::native_preview_is_active,
+            commands::native_preview::native_preview_console_event,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

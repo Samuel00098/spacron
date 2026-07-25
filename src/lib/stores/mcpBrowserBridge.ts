@@ -14,6 +14,13 @@ import {
 } from './preview';
 import { previewConsoleLogs } from './previewConsole';
 import { setActiveView } from './layout';
+import {
+  nativePreviewActive,
+  nativePreviewUrl,
+  activateNativePreview,
+  deactivateNativePreview,
+  nativePreviewEval,
+} from './nativePreview';
 
 interface BrowserRequestPayload {
   request_id: string;
@@ -91,8 +98,11 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   const mode = (args.mode as string) || 'auto';
 
   if (mode === 'window') {
-    await invoke('browser_create_window', { url });
-    return `Opened "${url}" in a standalone browser window.`;
+    const el = getPreviewContentEl();
+    if (!el) throw new Error('Preview panel is not mounted.');
+    setActiveView('preview');
+    await activateNativePreview(url, el);
+    return `Opened "${url}" in native webview mode.`;
   }
 
   await ensureProxyRunning();
@@ -102,8 +112,10 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   if (mode === 'auto') {
     const loaded = await waitForPageResponse(5000);
     if (!loaded) {
-      await invoke('browser_create_window', { url });
-      return `Page refused iframe embedding. Opened "${url}" in a standalone browser window instead.`;
+      const el = getPreviewContentEl();
+      if (!el) throw new Error('Preview panel is not mounted.');
+      await activateNativePreview(url, el);
+      return `Page refused iframe embedding. Switched to native webview for "${url}".`;
     }
   }
 
@@ -111,6 +123,12 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
 }
 
 async function handleScreenshot(args: Record<string, unknown>): Promise<unknown> {
+  if (get(nativePreviewActive)) {
+    const pngBytes = await invoke<number[]>('native_preview_screenshot');
+    const base64 = bytesToBase64(new Uint8Array(pngBytes));
+    return { image_base64: base64, format: 'png' };
+  }
+
   const iframe = getActiveIframe();
   if (!iframe) throw new Error('No active preview iframe found. Is the preview panel open?');
 
@@ -133,6 +151,11 @@ async function handleScreenshot(args: Record<string, unknown>): Promise<unknown>
 }
 
 async function handleGetPageInfo(): Promise<unknown> {
+  if (get(nativePreviewActive)) {
+    const url = get(nativePreviewUrl);
+    return { url, title: '', readyState: 'native' };
+  }
+
   const tabs = get(previewTabs);
   const activeId = get(activePreviewTabId);
   const activeTab = tabs.find((t) => t.id === activeId);
@@ -162,6 +185,12 @@ async function handleReadDom(args: Record<string, unknown>): Promise<unknown> {
   const selector = (args.selector as string) || 'body';
   const format = (args.format as string) || 'text';
   const limit = (args.limit as number) || 10;
+
+  if (get(nativePreviewActive)) {
+    const script = `(function(){var els=document.querySelectorAll(${JSON.stringify(selector)});var out=[];for(var i=0;i<Math.min(els.length,${limit});i++){var el=els[i];out.push(${format === 'html' ? 'el.outerHTML' : 'el.innerText||el.textContent||""'});}return JSON.stringify({count:els.length,results:out});})()`;
+    await nativePreviewEval(script);
+    return { note: 'DOM query executed in native webview. Results emitted via console capture.' };
+  }
 
   const iframe = getActiveIframe();
   if (!iframe) throw new Error('No active preview iframe found. Is the preview panel open?');
@@ -204,6 +233,18 @@ async function handleInteract(
   const selector = args.selector as string;
   if (!selector) throw new Error('Missing required parameter: selector');
 
+  if (get(nativePreviewActive)) {
+    if (action === 'click') {
+      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 'not found';el.click();return 'clicked';})()`;
+      await nativePreviewEval(script);
+    } else {
+      const text = (args.text as string) || '';
+      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 'not found';el.focus();el.value=${JSON.stringify(text)};el.dispatchEvent(new Event('input',{bubbles:true}));${args.submit ? "el.closest('form')&&el.closest('form').requestSubmit();" : ''}return 'typed';})()`;
+      await nativePreviewEval(script);
+    }
+    return { action, selector, status: 'executed' };
+  }
+
   const iframe = getActiveIframe();
   if (!iframe) throw new Error('No active preview iframe found. Is the preview panel open?');
 
@@ -220,17 +261,20 @@ async function handleInteract(
 }
 
 async function handleCloseWindow(): Promise<string> {
-  try {
-    await invoke('browser_close_window');
-    return 'Browser window closed.';
-  } catch {
-    return 'No browser window was open.';
+  if (get(nativePreviewActive)) {
+    await deactivateNativePreview();
+    return 'Native webview hidden. Preview reverted to iframe mode.';
   }
+  return 'No native webview was active.';
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function getPreviewContentEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.preview-content');
+}
 
 function getActiveIframe(): HTMLIFrameElement | null {
   return document.querySelector<HTMLIFrameElement>('.preview-iframe.is-active');
