@@ -25,12 +25,7 @@ export default defineConfig({
     // app. JS minification is unaffected. See src/lib/components/layout/AppShell.css.
     cssMinify: false,
     rollupOptions: {
-      // `main` is the live React app (index.html). `pilot` is an isolated
-      // harness for rendering components in a browser during migration checks.
-      input: {
-        main: resolve('./index.html'),
-        pilot: resolve('./pilot.html'),
-      },
+      input: resolve('./index.html'),
       output: {
         // Split the largest third-party libraries into their own vendor chunks
         // so they stay cached across app-code changes and parse independently.
