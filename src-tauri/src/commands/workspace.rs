@@ -1232,6 +1232,193 @@ pub fn workspace_git_remove_worktree(
     Ok(())
 }
 
+/// Merge a worktree branch into the main checkout, then optionally clean up.
+/// Runs `git merge` from the main project root (not the worktree), returns
+/// success or a conflict/error message.
+///
+/// When `no_commit` is true (`--no-commit`), changes are staged in the main
+/// checkout without creating a merge commit — the user can review them in
+/// Source Control and commit themselves.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MergeWorktreeResult {
+    pub success: bool,
+    pub message: String,
+    pub conflicted: bool,
+}
+
+#[tauri::command]
+pub fn workspace_git_merge_worktree(
+    project_id: String,
+    worktree_path: String,
+    branch: String,
+    delete_after: Option<bool>,
+    no_commit: Option<bool>,
+    state: State<AppState>,
+) -> Result<MergeWorktreeResult, String> {
+    check_git_available().map_err(|e| format!("Git not available: {e}"))?;
+
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    if !root_path.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    if !is_valid_branch_name(&branch) {
+        return Err("Invalid branch name".to_string());
+    }
+
+    // Verify the worktree path is in the managed worktree area.
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to merge a path outside the managed worktree area.".to_string());
+    }
+
+    let no_commit = no_commit.unwrap_or(false);
+
+    // Ensure we're on the base branch (the main checkout, not the worktree).
+    // The merge happens from the main project root against the worktree branch.
+    // With --no-commit the changes are staged without creating a merge commit,
+    // letting the user review them in Source Control and commit manually.
+    let merge_msg = format!("Merge worktree branch '{}'", branch);
+    let mut merge_args: Vec<&str> = vec!["merge", "--no-ff"];
+    if no_commit {
+        merge_args.push("--no-commit");
+    }
+    merge_args.push(&branch);
+    if !no_commit {
+        merge_args.push("-m");
+        merge_args.push(&merge_msg);
+    }
+
+    let output = git_base()
+        .args(&merge_args)
+        .current_dir(root_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git merge: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        // Optionally clean up the worktree.
+        // When `no_commit` is true, only clean up if explicitly requested (default off).
+        let do_cleanup = if no_commit { delete_after.unwrap_or(false) } else { delete_after.unwrap_or(true) };
+        if do_cleanup {
+            let _ = git_base()
+                .args(["worktree", "remove", "--force", &worktree_path])
+                .current_dir(root_path)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+            let _ = git_base()
+                .args(["worktree", "prune"])
+                .current_dir(root_path)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+            // Also delete the branch since the worktree is gone.
+            let _ = git_base()
+                .args(["branch", "-D", &branch])
+                .current_dir(root_path)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+        }
+
+        let msg = if stderr.contains("Already up to date") {
+            "Already up to date — no new changes to merge.".to_string()
+        } else if no_commit {
+            format!("Changes from '{}' staged for review in Source Control — worktree kept for reference.", branch)
+        } else if delete_after.unwrap_or(true) {
+            format!("Branch '{}' merged and cleaned up successfully.", branch)
+        } else {
+            format!("Branch '{}' merged successfully.", branch)
+        };
+
+        Ok(MergeWorktreeResult {
+            success: true,
+            message: msg,
+            conflicted: false,
+        })
+    } else {
+        // Merge failed — check for conflicts
+        let has_conflicts = stderr.contains("conflict") || stdout.contains("CONFLICT");
+        if has_conflicts {
+            Ok(MergeWorktreeResult {
+                success: false,
+                message: format!(
+                    "Merge conflict — resolve conflicts in the main checkout, then commit.\n{} {}.",
+                    sanitize_git_error(&stderr),
+                    sanitize_git_error(&stdout)
+                ),
+                conflicted: true,
+            })
+        } else {
+            Ok(MergeWorktreeResult {
+                success: false,
+                message: format!(
+                    "Merge failed:\n{}{}",
+                    sanitize_git_error(&stderr),
+                    sanitize_git_error(&stdout)
+                ),
+                conflicted: false,
+            })
+        }
+    }
+}
+
+/// Check whether a worktree has any changes relative to its base commit.
+/// Checks both uncommitted working-tree changes and committed differences not
+/// yet in the base branch. Used to decide whether to show a merge prompt.
+#[tauri::command]
+pub fn workspace_git_worktree_has_changes(
+    project_id: String,
+    worktree_path: String,
+    base_commit: String,
+    branch: String,
+    state: State<AppState>,
+) -> Result<bool, String> {
+    check_git_available()?;
+
+    // Look up the project root so we can compare from the main checkout.
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    if !root_path.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    // 1. Check for uncommitted changes inside the worktree checkout.
+    let worktree_path_obj = std::path::Path::new(&worktree_path);
+    let porcelain = git_capture(worktree_path_obj, &["status", "--porcelain"])
+        .unwrap_or_default();
+    let has_uncommitted = porcelain.lines().any(|l| !l.trim().is_empty());
+    if has_uncommitted {
+        return Ok(true);
+    }
+
+    // 2. Check for committed changes NOT in the base commit.
+    //    `git rev-list --count <base_commit>..<branch>` returns the number of
+    //    commits reachable from <branch> but not from <base_commit>.
+    let count = git_capture(root_path, &["rev-list", "--count", &base_commit, "..", &branch]);
+    let has_committed = count
+        .as_deref()
+        .and_then(|c| c.parse::<i64>().ok())
+        .map(|n| n > 0)
+        .unwrap_or(false);
+
+    Ok(has_committed)
+}
+
 /// Live status for an agent worktree: number of changed files (staged, unstaged,
 /// and untracked) plus the current branch. Used to surface review-readiness.
 #[tauri::command]

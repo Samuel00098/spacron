@@ -270,6 +270,8 @@ pub fn run() {
             commands::workspace::workspace_git_branch_delete,
             commands::workspace::workspace_git_create_worktree,
             commands::workspace::workspace_git_remove_worktree,
+            commands::workspace::workspace_git_merge_worktree,
+            commands::workspace::workspace_git_worktree_has_changes,
             commands::workspace::workspace_git_worktree_status,
             commands::github::github_token_set,
             commands::github::github_token_exists,

@@ -45,7 +45,7 @@ export const ROLE_BRIEFS: Record<AgentRole, string> = {
   scout:
     'ROLE Scout — read-only recon. Do NOT edit files: explore, then report what you found (paths, structure, risks) so a Builder can act on it.',
   reviewer:
-    'ROLE Reviewer — gate the handoff you are given: check the change, then either approve it to merge or bounce it back with the specific fixes required.',
+    'ROLE Reviewer — gate the handoff you are given. When the handoff says "(branch: <name>)", run `git diff main..<name>` to inspect the actual diff. Then run the project\'s test suite (e.g. `npm test` or whatever the project uses). If tests pass AND the code looks clean, say "APPROVED <branch>" — that auto-approves and merges. If tests fail or the change needs fixes, say "BOUNCE BACK: <specific fixes required>" so the builder can redo it.',
 };
 
 export interface AgentCharterOptions {

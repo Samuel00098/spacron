@@ -28,9 +28,10 @@ export type OrchestratorAction =
   /**
    * Launch a new agent. Omit `prompt` to open it idle/ready; `name` labels it.
    * `role` assigns a team charter (coordinator/builder/scout/reviewer) when the
-   * spawn is part of a divided plan.
+   * spawn is part of a divided plan. Set `skipWorktree` to true for admin/
+   * release tasks (tagging, pushing, changelogs) that need the main branch.
    */
-  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null }
+  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; skipWorktree?: boolean }
   /** Push a new prompt to an already-running agent, addressed by its name. */
   | { kind: 'send'; target: string; prompt: string }
   /** Give a running agent a name (or rename it). */
@@ -659,6 +660,7 @@ function buildSystemPrompt(
     '    Launch a NEW agent. Omit/null "prompt" to just open it idle and ready. Leave "name" null — the app auto-assigns a name (e.g. "Trinity"). Only set "name" to echo a specific name the USER explicitly chose; never invent generic labels like "claude-1" or "agent 2".',
     '    "role" (optional): when you divide ONE goal across a TEAM, tag each spawn with its role so it gets the right charter — "coordinator" (plans + sequences the sub-tasks), "builder" (implements one sub-task), "scout" (read-only recon, no edits), "reviewer" (gates each hand-off). Leave null for an ordinary single agent.',
     '    "files" (optional): for a builder in a divided plan, the repo-relative files that sub-task will own. The app posts a claim so no two builders edit the same file at once — a spawn whose files overlap a live claim is held until released. Only set it when you know the files; otherwise omit.',
+    '    "skipWorktree" (optional, boolean): set to true for admin/release tasks (tagging, pushing, changelogs, version bumps, deploy) so the agent runs directly in the project root instead of an isolated git worktree. Defaults to false — the app ALSO auto-detects it from the prompt content, so you typically do not need to set this explicitly.',
     '- {"kind": "send", "target": "<running agent name>", "prompt": "<full standalone prompt>"}',
     '    Give a new task to an agent that is ALREADY running. Use this instead of spawning when the user refers to an existing agent.',
     '- {"kind": "name", "target": "<running agent name or unnamed reference>", "name": "<new name>"}',
@@ -773,6 +775,12 @@ function parseFileList(raw: unknown): string[] | null {
   return files.length ? files : null;
 }
 
+/** Admin/release keywords that signal a task should bypass worktree isolation
+ * so git tag/push/changelog operations work on the main branch directly. Exported
+ * so sendChatMessage can also apply the same check to heuristic-route spawns. */
+export const ADMIN_KEYWORD_RE =
+  /\b(tag|release|changelog|version\s*bump|publish|push\s+(to\s+)?(remote|origin|upstream)|npm\s+publish|deploy|ship|cut\s+(a\s+)?release)\b/i;
+
 function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -784,7 +792,13 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     const name = str(obj.name);
     const role = parseRole(obj.role);
     const files = parseFileList(obj.files);
-    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files };
+    // The brain can explicitly set skipWorktree, or we auto-detect it from
+    // admin/release keywords in the prompt so e.g. "tag v2.0 and push"
+    // automatically bypasses isolation without the LLM needing to know about it.
+    const skipWorktree =
+      obj.skipWorktree === true ||
+      (!!prompt && ADMIN_KEYWORD_RE.test(prompt));
+    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files, skipWorktree };
   }
   if (kind === 'send') {
     const target = str(obj.target);

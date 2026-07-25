@@ -56,6 +56,14 @@ export interface OrchestratorTask {
    * task runs directly in the project root (non-git project, or isolation off).
    */
   worktree?: WorktreeInfo | null;
+  /**
+   * When true, the agent runs directly in the project root instead of an
+   * isolated worktree. Useful for admin/release tasks (tagging, pushing,
+   * changelogs) where the agent needs direct access to the main branch.
+   * Only meaningful when the project is a git repo, otherwise there is no
+   * isolation to skip.
+   */
+  skipWorktree?: boolean;
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;
