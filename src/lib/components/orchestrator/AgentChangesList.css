@@ -1,0 +1,129 @@
+.agent-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-changes .ac-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-changes .ac-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.agent-changes .ac-sub {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.agent-changes .ac-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-changes .ac-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'main button'
+    'meta button';
+  align-items: center;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(var(--bg-secondary-rgb, 30, 30, 40), 0.35);
+}
+
+.agent-changes .ac-row.conflicted {
+  border-color: var(--warning, #d89b3c);
+  background: rgba(216, 155, 60, 0.08);
+}
+
+.agent-changes .ac-row-main {
+  grid-area: main;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-changes .ac-agent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.agent-changes .ac-branch {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-changes .ac-tag {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: rgba(var(--bg-secondary-rgb, 30, 30, 40), 0.8);
+  flex-shrink: 0;
+}
+
+.agent-changes .ac-row-meta {
+  grid-area: meta;
+  min-width: 0;
+}
+
+.agent-changes .ac-count {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.agent-changes .ac-conflict {
+  font-size: 10.5px;
+  color: var(--warning, #d89b3c);
+}
+
+.agent-changes .ac-stage-btn {
+  grid-area: button;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agent-changes .ac-stage-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.agent-changes .ac-stage-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

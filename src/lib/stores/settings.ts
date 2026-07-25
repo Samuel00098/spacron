@@ -106,6 +106,16 @@ export const showSnapshotsTab = persistentWritable('showSnapshotsTab', false);
 // Notifications
 export const notificationsEnabled = persistentWritable('notificationsEnabled', true);
 
+// Agent git worktrees
+// Default for whether a spawned agent gets its own isolated worktree and branch.
+// The Isolated / Main repo toggle in the spawn modal overrides it per spawn; turn
+// this off to have every agent work directly in the project root instead.
+export const agentWorktrees = persistentWritable('agentWorktrees', true);
+// Move each agent's changes into the main checkout on their own, so the app can be
+// run and tested against them without pressing anything. Off leaves the same work
+// visible in the Agent changes list with a Stage button per agent.
+export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges', true);
+
 // Window
 export type CloseBehavior = 'quit' | 'minimize';
 export const closeBehavior = persistentWritable<CloseBehavior>('closeBehavior', 'quit');

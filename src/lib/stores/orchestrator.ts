@@ -72,7 +72,15 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, stageTaskWorktree, getWorktreeHasChanges } from '$lib/services/orchestrator/worktree-manager';
+import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import {
+  initWorktreeReconciler,
+  reconcileNow,
+  forgetWorktree,
+  stageWorktreeNow,
+  type TrackedWorktree,
+} from '$lib/services/orchestrator/worktree-reconciler';
+import { autoStageAgentChanges } from '$lib/stores/settings';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
@@ -115,6 +123,7 @@ import {
   sendPromptToSession,
   sessionHasRunningProcess,
   setSessionExecuting,
+  setSessionWorktree,
 } from '$lib/stores/terminal';
 
 export type {
@@ -714,7 +723,8 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
     const result = await mergeTaskWorktree(task.projectId, worktree, true);
     if (result.success) {
       // The merge removed the worktree and branch; drop the now-dangling ref.
-      patchTask(handoff.taskId, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
+      forgetWorktree(worktree.path);
+      patchTask(handoff.taskId, (t) => ({ ...t, worktree: null }));
       logTaskActivity(task.id, 'info', `Auto-merged branch ${worktree.branch} after approval`);
       logTaskActivity(handoff.taskId, 'info', `Branch ${worktree.branch} merged after approval`);
       showToast(`Approved & merged — ${handoff.from}'s branch merged into main`, 'success', 8000, true);
@@ -885,7 +895,8 @@ export async function mergeAndApproveMailboxCard(
         if (result.success) {
           merged = true;
           // The merge removed the worktree and branch; drop the dangling ref.
-          patchTask(card.taskId, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
+          forgetWorktree(worktree.path);
+          patchTask(card.taskId, (t) => ({ ...t, worktree: null }));
           showToast(`Merged branch '${worktree.branch}' into main`, 'success', 4000);
         } else if (result.conflicted) {
           showToast(`Merge conflict — resolve then approve: ${result.message}`, 'warning', 10000);
@@ -915,27 +926,42 @@ export async function mergeAndApproveMailboxCard(
 }
 
 /**
- * Clean up worktrees whose changes were staged into the main checkout via
- * `stageTaskWorktree` and have now been committed. Called after a successful
- * git commit in Source Control.
+ * Reclaim the worktrees of agents that are finished and fully staged, after a
+ * successful commit in Source Control.
  *
- * Only tasks flagged `worktreeStaged` are touched. The previous version removed
- * the worktree of EVERY finished task in the project and passed
- * `deleteBranch = true`, so committing one agent's staged work force-deleted
- * every other finished agent's worktree and branch — including work that had
- * never been staged, reviewed, or merged anywhere. That is unrecoverable, so
- * the flag is required rather than inferred from task status.
+ * Two rules, both learned the hard way:
+ *
+ * 1. **Only agents that are actually gone.** A live agent keeps its worktree —
+ *    that is its working directory. Deleting it out from under a running process
+ *    breaks the agent, and on Windows can't even fully succeed, leaving an
+ *    orphaned directory behind.
+ * 2. **Only when git says nothing is outstanding.** `reclaimWorktree` stages any
+ *    remainder and re-checks before deleting. An earlier version keyed off a
+ *    sticky `worktreeStaged` boolean, so committing one agent's work force-deleted
+ *    branches still holding work nobody had reviewed — unrecoverable.
  */
 export async function cleanupStaleWorktrees(projectId: string): Promise<void> {
+  const finished = new Set(['complete', 'failed', 'cancelled']);
   const tasks = get(orchestratorTasks).filter(
-    (t) => t.projectId === projectId && t.worktree && t.worktreeStaged
+    (t) => t.projectId === projectId && t.worktree && finished.has(t.status) && !agentSessionLive(t)
   );
   for (const task of tasks) {
-    if (task.worktree) {
-      await removeTaskWorktree(projectId, task.worktree, true);
-      patchTask(task.id, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
+    if (!task.worktree) continue;
+    const outcome = await reclaimWorktree(projectId, task.worktree, { deleteBranch: true });
+    if (outcome.removed) {
+      forgetWorktree(task.worktree.path);
+      patchTask(task.id, (t) => ({ ...t, worktree: null }));
     }
+    // Not removed → it still holds work (or needs a conflict resolved). Leave it
+    // alone; the Agent changes list is already showing it.
   }
+}
+
+/** Whether the agent that owns this task still has a live terminal pane. */
+function agentSessionLive(task: OrchestratorTask): boolean {
+  const id = task.assignedSessionId ?? task.lastSessionId ?? null;
+  if (id == null) return false;
+  return getTerminalProjectState(task.projectId).sessions.some((s) => s.id === id && s.isRunning);
 }
 
 /**
@@ -993,42 +1019,12 @@ async function completeLeasedTask(
   } else if (updated.status === 'failed') {
     showToast(`${name} failed — ${task.title}`, 'error', 8000, true);
   } else {
-    // If the task has a worktree with actual changes, offer to stage them for
-    // review in Source Control instead of auto-merging. The user can then review
-    // the diff, edit files, and commit when ready.
-    // Read the worktree off `updated`, not the pre-transition `task` snapshot.
-    const finishedWorktree = updated.worktree ?? null;
-    if (finishedWorktree && projectPaths.has(updated.projectId) && await getWorktreeHasChanges(updated.projectId, finishedWorktree)) {
-      showToast(
-        `${name} finished — changes ready in Source Control`,
-        'success',
-        12000,
-        false,
-        {
-          label: 'Stage & Review',
-          onClick: () => {
-            void (async () => {
-              try {
-                const result = await stageTaskWorktree(updated.projectId, finishedWorktree);
-                if (result.success) {
-                  // Mark it staged so the post-commit cleanup may remove it.
-                  patchTask(updated.id, (t) => ({ ...t, worktreeStaged: true }));
-                  showToast(`Changes from '${finishedWorktree.branch}' staged — open Source Control to review and commit`, 'success', 8000);
-                } else if (result.conflicted) {
-                  showToast(`Merge conflict: ${result.message}`, 'warning', 10000);
-                } else {
-                  showToast(`Failed to stage changes: ${result.message}`, 'error', 8000);
-                }
-              } catch (err) {
-                showToast(`Failed to stage changes: ${err}`, 'error', 8000);
-              }
-            })();
-          },
-        }
-      );
-    } else {
-      showToast(`${name} finished — ${task.title}`, 'success', 6000, true);
-    }
+    // The worktree is handled by the reconciler, not here. Nudging it just makes
+    // staging feel immediate at the moment a turn ends; the guarantee that the
+    // work is noticed comes from its poll, which still holds after this task
+    // reaches `complete`, after the thread is cleared, and across restarts.
+    if (updated.worktree && projectPaths.has(updated.projectId)) void reconcileNow();
+    showToast(`${name} finished — ${task.title}`, 'success', 6000, true);
   }
 
   // Post a completion summary to the chat panel so the user sees what happened.
@@ -2504,7 +2500,101 @@ function adoptDetectedAgent(sessionId: number, projectId: string, preset: string
   adoptLiveAgentSession(projectId, session, preset);
 }
 
+/**
+ * Every agent worktree worth watching, from BOTH ownership paths — the spawn
+ * modal keeps its worktree on the terminal session, orchestrator dispatch keeps it
+ * on the task (see `.spacron/memory/agent-worktrees.md`). Missing either one is how
+ * an agent's work goes unnoticed, so the reconciler is given both.
+ *
+ * Deliberately keyed off worktrees rather than task status: a `complete` task and a
+ * cleared thread both still have a worktree, and both still need staging.
+ */
+function trackedWorktrees(): TrackedWorktree[] {
+  const byPath = new Map<string, TrackedWorktree>();
+
+  for (const [projectId] of projectPaths) {
+    const live = getTerminalProjectState(projectId).sessions;
+    for (const session of live) {
+      if (!session.worktree) continue;
+      byPath.set(session.worktree.path, {
+        projectId,
+        agentName: session.agentName?.trim() || getAgentDisplayName(session.agentPreset) || 'Agent',
+        worktree: session.worktree,
+        live: session.isRunning === true,
+      });
+    }
+  }
+
+  for (const task of get(orchestratorTasks)) {
+    if (!task.worktree || !projectPaths.has(task.projectId)) continue;
+    // A session-owned entry already carries live status; don't downgrade it.
+    if (byPath.has(task.worktree.path)) continue;
+    const sessionId = task.assignedSessionId ?? task.lastSessionId ?? null;
+    const live =
+      sessionId != null &&
+      getTerminalProjectState(task.projectId).sessions.some((s) => s.id === sessionId && s.isRunning);
+    byPath.set(task.worktree.path, {
+      projectId: task.projectId,
+      agentName:
+        task.name?.trim() ||
+        (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ||
+        'Agent',
+      worktree: task.worktree,
+      live,
+    });
+  }
+
+  return [...byPath.values()];
+}
+
+/**
+ * Write a reconciler result back onto whichever record owns the worktree. Both are
+ * updated when both match, so a session-owned worktree that later gets adopted onto
+ * a task can't end up with two disagreeing baselines.
+ */
+function persistWorktreePatch(projectId: string, worktreePath: string, patch: Partial<WorktreeInfo>): void {
+  for (const task of get(orchestratorTasks)) {
+    if (task.worktree?.path !== worktreePath) continue;
+    patchTask(task.id, (t) =>
+      t.worktree ? { ...t, worktree: { ...t.worktree, ...patch } } : t
+    );
+  }
+  const session = getTerminalProjectState(projectId).sessions.find((s) => s.worktree?.path === worktreePath);
+  if (session?.worktree) {
+    setSessionWorktree(session.id, { ...session.worktree, ...patch });
+  }
+}
+
+/** Stage one agent's outstanding work on demand — the "Stage" button's entry point. */
+export async function stageAgentWorktree(projectId: string, worktree: WorktreeInfo): Promise<void> {
+  const result = await stageWorktreeNow(projectId, worktree);
+  if (result.ok) {
+    showToast(result.message, 'success', 6000);
+  } else if (result.conflicted) {
+    showToast(result.message, 'warning', 12000);
+  } else {
+    showToast(`Couldn't stage changes: ${result.message}`, 'error', 8000);
+  }
+  void reconcileNow();
+}
+
 if (typeof window !== 'undefined') {
+  initWorktreeReconciler({
+    list: trackedWorktrees,
+    persist: persistWorktreePatch,
+    autoStage: () => get(autoStageAgentChanges) !== false,
+    onStaged: (work, stagedFiles) => {
+      showToast(
+        `${work.agentName}'s ${stagedFiles} file change${stagedFiles === 1 ? '' : 's'} are in Source Control — ready to test`,
+        'success',
+        6000,
+      );
+    },
+    onConflict: (work, message) => {
+      showToast(`${work.agentName}: ${message}`, 'warning', 14000, true);
+    },
+  });
+
   // A user typed an agent CLI into a terminal themselves — adopt it so agent
   // mode is aware of it and can read/drive it (see adoptDetectedAgent).
   onAgentDetected(({ sessionId, projectId, preset }) => {
@@ -2540,49 +2630,14 @@ if (typeof window !== 'undefined') {
       if (updated) {
         void handleReviewerVerdict(updated);
       }
-      // If the agent had a worktree with actual changes, offer to merge.
-      // Adopted tasks may not carry the worktree on the task object (the worktree
-      // lives on the session), so also look up the session's worktree as fallback.
-      // Offer to stage the worktree changes into Source Control for review,
-      // rather than auto-merging. The worktree is kept until the user commits
-      // in Source Control, at which point `cleanupStaleWorktrees` cleans it up.
+      // An adopted agent's worktree lives on the session, not the task, so make
+      // sure the task carries it before the reconciler enumerates tasks — that is
+      // what keeps this agent's work visible now that its process is gone.
       const exitSession = getTerminalProjectState(projectId).sessions.find((s) => s.id === sessionId);
       const effectiveWorktree = task.worktree ?? exitSession?.worktree ?? null;
       if (effectiveWorktree && projectPaths.has(projectId)) {
-        const agentName = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
-        void (async () => {
-          const hasChanges = await getWorktreeHasChanges(projectId, effectiveWorktree);
-          if (hasChanges) {
-            showToast(
-              `${agentName} finished — changes ready in Source Control`,
-              'info',
-              12000,
-              false,
-              {
-                label: 'Stage & Review',
-                onClick: () => {
-                  void (async () => {
-                    try {
-                      const result = await stageTaskWorktree(projectId, effectiveWorktree);
-                      if (result.success) {
-                        // Mark it staged so the post-commit cleanup may remove it.
-                        patchTask(task.id, (t) => ({ ...t, worktree: effectiveWorktree, worktreeStaged: true }));
-                        showToast(`Changes from '${effectiveWorktree.branch}' staged — open Source Control to review and commit`, 'success', 8000);
-                      } else if (result.conflicted) {
-                        showToast(`Merge conflict: ${result.message}`, 'warning', 10000);
-                      } else {
-                        showToast(`Failed to stage changes: ${result.message}`, 'error', 8000);
-                      }
-                    } catch (err) {
-                      showToast(`Failed to stage changes: ${err}`, 'error', 8000);
-                    }
-                  })();
-                },
-              }
-            );
-          }
-          // No changes — silently skip the merge prompt; the agent just answered a question.
-        })();
+        patchTask(task.id, (t) => ({ ...t, worktree: effectiveWorktree }));
+        void reconcileNow();
       }
       return;
     }

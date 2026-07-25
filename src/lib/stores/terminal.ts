@@ -5,7 +5,8 @@ import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
 import { getCustomAgents } from '$lib/stores/customAgents';
-import { removeTaskWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
 import { activeTheme } from '$lib/stores/theme';
 import { registerAgent, unregisterAgent } from './mcpBridge';
 
@@ -836,21 +837,24 @@ export async function createTerminalSession(
     // other running agents via the Spacron MCP bridge.
     if (agentPreset) {
       try {
-        const { getMcpPort, injectMcpConfigForAgent } = await import('./mcpBridge');
-        const port = await getMcpPort();
+        const { getMcpUrl, injectMcpConfigForAgent } = await import('./mcpBridge');
+        // Carries the `?token=` the MCP server requires — never rebuild this URL
+        // from the bare port, or the agent connects unauthenticated and loses
+        // every cross-agent tool.
+        const mcpUrl = await getMcpUrl();
 
         // Claude Code: env var injection
         env['CLAUDE_CODE__MCP__SERVERS'] = JSON.stringify({
-          'spacron-mcp': { url: `http://127.0.0.1:${port}/sse` },
+          'spacron-mcp': { url: mcpUrl },
         });
 
         // Aider: env var injection (format: JSON string)
         env['AIDER_MCP_SERVERS'] = JSON.stringify({
-          'spacron-mcp': { url: `http://127.0.0.1:${port}/sse` },
+          'spacron-mcp': { url: mcpUrl },
         });
 
         // Generic fallback for any CLI that looks for a simple env var
-        env['SPACRON_MCP_URL'] = `http://127.0.0.1:${port}/sse`;
+        env['SPACRON_MCP_URL'] = mcpUrl;
 
         // Config-file-based agents (Cursor, Codex CLI) — fire-and-forget
         injectMcpConfigForAgent(agentPreset, resolvedCwd).catch((e) =>
@@ -1860,7 +1864,35 @@ export async function killSession(id: number) {
 
   if (projectId) {
     const closing = getProjectState(projectId, isDev).sessions.find((s) => s.id === id);
-    if (closing?.worktree) void removeTaskWorktree(projectId, closing.worktree, false);
+    // Closing the pane is where a worktree's disk space comes back, but it used to
+    // remove the checkout outright — destroying any edits the agent had not
+    // committed. Reclaim instead: stage what's outstanding (which snapshots
+    // uncommitted work onto the branch) and only delete once git confirms nothing
+    // is left. If it can't be moved, keep the worktree and say so.
+    if (closing?.worktree) {
+      const worktree = closing.worktree;
+      void (async () => {
+        const outcome = await reclaimWorktree(projectId, worktree, { deleteBranch: false });
+        if (outcome.removed) {
+          forgetWorktree(worktree.path);
+          if (outcome.staged > 0) {
+            showToast(
+              `Staged ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} from the closed agent — review in Source Control`,
+              'info',
+              7000,
+            );
+          }
+        } else {
+          showToast(
+            outcome.reason === 'conflict'
+              ? `Kept branch '${worktree.branch}' — its changes conflict with your working tree and need resolving`
+              : `Kept branch '${worktree.branch}' — it still holds ${outcome.pendingFiles} unstaged file change${outcome.pendingFiles === 1 ? '' : 's'}`,
+            'warning',
+            10000,
+          );
+        }
+      })();
+    }
   }
 
   if (projectId) {

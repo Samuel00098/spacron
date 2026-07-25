@@ -1,0 +1,268 @@
+import { writable, get } from '$lib/stores/storeCompat';
+import {
+  getWorktreeDelta,
+  stageWorktreeChanges,
+  stageBaseline,
+  type WorktreeInfo,
+} from './worktree-manager';
+
+/**
+ * Keeps the main checkout in step with every live agent worktree.
+ *
+ * ## Why this exists
+ *
+ * Staging used to be triggered by an *event* — "an agent's turn finished" — and
+ * that made real work invisible in ordinary situations:
+ *
+ * - More messages in the same thread: the task had already reached `complete`,
+ *   a terminal state, so no later turn could ever raise the prompt again.
+ * - A cleared or brand-new thread in the same worktree: no task was bound to the
+ *   worktree at all, so nothing was watching it.
+ * - A missed 12-second toast, a restart, or an agent that kept writing after its
+ *   turn was marked done: same result — changes on disk, nobody looking.
+ *
+ * The changes always lived in git; only the *knowledge that they existed* lived in
+ * ephemeral thread state. So this reconciler ignores thread and task state
+ * entirely and asks git one question on a timer: does this worktree hold anything
+ * the main checkout hasn't been given? That question is always answerable, which
+ * is why every case above is covered by construction rather than by special-casing.
+ *
+ * Turn-completion events still fire `reconcileNow` so staging feels instant — but
+ * they are an optimisation, never the guarantee.
+ */
+
+/** One worktree the reconciler is watching, and who it belongs to. */
+export interface TrackedWorktree {
+  projectId: string;
+  /** Display name for the owning agent, e.g. "Alex". */
+  agentName: string;
+  worktree: WorktreeInfo;
+  /** True while the owning agent's pane is still alive. */
+  live: boolean;
+}
+
+/** Outstanding work in one worktree, as surfaced to the UI. */
+export interface PendingWork {
+  projectId: string;
+  agentName: string;
+  worktree: WorktreeInfo;
+  branch: string;
+  /** Files waiting to reach the main checkout. */
+  pendingFiles: number;
+  /** True when a previous stage left conflict markers for the user to resolve. */
+  conflicted: boolean;
+  conflictedFiles: string[];
+  live: boolean;
+}
+
+/**
+ * Everything currently waiting to be staged, keyed by worktree path. Drives the
+ * "Agent changes" list. Empty when the main checkout has caught up with every
+ * agent, which is the steady state when auto-staging is on.
+ */
+export const pendingWorktreeWork = writable<Record<string, PendingWork>>({});
+
+/** How often to ask git. Matches the worktree badge's existing poll cadence. */
+const POLL_MS = 4000;
+
+/**
+ * How long a worktree must be free of new writes before we snapshot it. Prevents
+ * capturing a file the agent is in the middle of writing — the reason auto-staging
+ * is per-quiet-period rather than truly continuous.
+ */
+const QUIET_MS = 2500;
+
+type Providers = {
+  /** Every worktree worth watching, from both the session- and task-owned paths. */
+  list: () => TrackedWorktree[];
+  /** Persist a new baseline (and conflict state) back onto whoever owns it. */
+  persist: (projectId: string, worktreePath: string, patch: Partial<WorktreeInfo>) => void;
+  /** Whether auto-staging is switched on. */
+  autoStage: () => boolean;
+  onStaged?: (work: PendingWork, stagedFiles: number) => void;
+  onConflict?: (work: PendingWork, message: string) => void;
+};
+
+let providers: Providers | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
+let running = false;
+
+/** Last observed head per worktree, with when it changed — drives the quiet check. */
+const lastSeen = new Map<string, { head: string; dirty: number; at: number }>();
+/** Worktrees currently being staged, so a slow stage can't overlap the next tick. */
+const inFlight = new Set<string>();
+
+export function initWorktreeReconciler(p: Providers): void {
+  providers = p;
+  if (timer) return;
+  timer = setInterval(() => void reconcileNow(), POLL_MS);
+}
+
+export function stopWorktreeReconciler(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
+  providers = null;
+  lastSeen.clear();
+  inFlight.clear();
+  pendingWorktreeWork.set({});
+}
+
+/**
+ * Forget a worktree we're no longer tracking (removed, or its agent is gone), so
+ * its row disappears from the pending list and its quiet-period state is dropped.
+ */
+export function forgetWorktree(worktreePath: string): void {
+  lastSeen.delete(worktreePath);
+  inFlight.delete(worktreePath);
+  pendingWorktreeWork.update((all) => {
+    if (!(worktreePath in all)) return all;
+    const next = { ...all };
+    delete next[worktreePath];
+    return next;
+  });
+}
+
+/**
+ * Run one reconcile pass immediately. Safe to call from turn-completion events and
+ * from the poll timer — overlapping calls are collapsed.
+ */
+export async function reconcileNow(): Promise<void> {
+  if (!providers || running) return;
+  running = true;
+  try {
+    const tracked = providers.list();
+    const seenPaths = new Set(tracked.map((t) => t.worktree.path));
+
+    // Drop rows for worktrees that no longer exist.
+    for (const path of Object.keys(get(pendingWorktreeWork))) {
+      if (!seenPaths.has(path)) forgetWorktree(path);
+    }
+
+    for (const entry of tracked) {
+      await reconcileOne(entry);
+    }
+  } finally {
+    running = false;
+  }
+}
+
+async function reconcileOne(entry: TrackedWorktree): Promise<void> {
+  const p = providers;
+  if (!p) return;
+  const { projectId, worktree, agentName, live } = entry;
+  const path = worktree.path;
+  if (inFlight.has(path)) return;
+
+  const delta = await getWorktreeDelta(projectId, worktree);
+  if (!delta) return; // worktree gone or git unavailable — leave state untouched
+
+  if (delta.upToDate) {
+    forgetWorktree(path);
+    return;
+  }
+
+  const work: PendingWork = {
+    projectId,
+    agentName,
+    worktree,
+    branch: worktree.branch,
+    pendingFiles: delta.pendingFiles,
+    conflicted: worktree.stageConflict === true,
+    conflictedFiles: [],
+    live,
+  };
+  // Keep any conflicted-file list a previous stage recorded. A plain poll has no
+  // way to recompute it, and blindly spreading `work` over the row wiped the very
+  // detail the user needs to go and resolve.
+  pendingWorktreeWork.update((all) => ({
+    ...all,
+    [path]: { ...all[path], ...work, conflictedFiles: all[path]?.conflictedFiles ?? [] },
+  }));
+
+  // A worktree whose last stage conflicted waits for the user — re-applying the
+  // same patch would just recreate the same conflict every few seconds.
+  if (worktree.stageConflict) return;
+  if (!p.autoStage()) return;
+
+  // Only stage once the worktree has stopped changing, so a snapshot never
+  // captures a half-written file.
+  const now = Date.now();
+  const prev = lastSeen.get(path);
+  const changed = !prev || prev.head !== delta.head || prev.dirty !== delta.dirtyFiles;
+  if (changed) {
+    lastSeen.set(path, { head: delta.head, dirty: delta.dirtyFiles, at: now });
+    return;
+  }
+  if (now - prev.at < QUIET_MS) return;
+
+  inFlight.add(path);
+  try {
+    const result = await stageWorktreeChanges(projectId, worktree);
+    if (result.upToDate) {
+      p.persist(projectId, path, { lastStagedCommit: result.stagedCommit });
+      forgetWorktree(path);
+      return;
+    }
+    if (result.success) {
+      // Record the new baseline before anything else: if this is lost, the same
+      // delta is staged twice.
+      p.persist(projectId, path, { lastStagedCommit: result.stagedCommit, stageConflict: false });
+      lastSeen.delete(path);
+      forgetWorktree(path);
+      p.onStaged?.(work, result.stagedFiles);
+      return;
+    }
+
+    // Failed. Leave the baseline alone — the delta is not represented in the main
+    // checkout, so it must stay outstanding.
+    if (result.conflicted) {
+      p.persist(projectId, path, { stageConflict: true });
+      pendingWorktreeWork.update((all) => ({
+        ...all,
+        [path]: { ...all[path], ...work, conflicted: true, conflictedFiles: result.conflictedFiles },
+      }));
+      p.onConflict?.(work, result.message);
+    }
+  } catch (err) {
+    console.warn('Worktree reconcile failed:', err);
+  } finally {
+    inFlight.delete(path);
+  }
+}
+
+/**
+ * Stage one worktree on demand (the "Stage" button, and the manual path when
+ * auto-staging is off). Clears a previous conflict flag so resolving conflicts and
+ * pressing Stage again resumes normal operation.
+ */
+export async function stageWorktreeNow(
+  projectId: string,
+  worktree: WorktreeInfo,
+): Promise<{ ok: boolean; message: string; conflicted: boolean }> {
+  const p = providers;
+  const path = worktree.path;
+  if (inFlight.has(path)) return { ok: false, message: 'Already staging…', conflicted: false };
+  inFlight.add(path);
+  try {
+    const result = await stageWorktreeChanges(projectId, worktree);
+    if (result.success) {
+      p?.persist(projectId, path, { lastStagedCommit: result.stagedCommit, stageConflict: false });
+      lastSeen.delete(path);
+      forgetWorktree(path);
+      return { ok: true, message: result.message, conflicted: false };
+    }
+    if (result.conflicted) p?.persist(projectId, path, { stageConflict: true });
+    return { ok: false, message: result.message, conflicted: result.conflicted };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+      conflicted: false,
+    };
+  } finally {
+    inFlight.delete(path);
+  }
+}
+
+/** Exposed for tests: what baseline a stage would use. */
+export const __stageBaseline = stageBaseline;

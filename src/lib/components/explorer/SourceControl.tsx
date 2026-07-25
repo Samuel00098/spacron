@@ -5,6 +5,7 @@ import { openFile } from '$lib/stores/editor';
 import { showToast } from '$lib/stores/notification';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import FileIcon from './FileIcon.tsx';
+import AgentChangesList from '../orchestrator/AgentChangesList';
 import {
   branchInfo,
   checkoutBranch,
@@ -315,8 +316,8 @@ export default function SourceControl() {
     try {
       await invoke<string>('workspace_git_commit', { projectId: id, message: commitMessage.trim(), files });
       showToast('Successfully committed changes!', 'success');
-      // After a successful commit, clean up any stale agent worktrees whose
-      // changes were staged via `stageTaskWorktree`.
+      // After a successful commit, reclaim the worktrees of agents that are gone
+      // and fully staged. Anything still holding unstaged work is kept.
       void cleanupStaleWorktrees(id);
       setCommitMessage('');
       commitMessageRef.current = '';
@@ -667,6 +668,11 @@ export default function SourceControl() {
             </div>
           </>
         )}
+
+        {/* Agent work that hasn't reached this checkout yet. Sits above the change
+            list because it's the upstream step: stage it here and it appears below
+            as ordinary changes to review, test and commit. */}
+        <AgentChangesList />
 
         <div className="sc-content">
           {errorMsg && notAGitRepo ? (

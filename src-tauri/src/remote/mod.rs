@@ -398,6 +398,8 @@ fn handle_control(
                 "workspace_git_remove_worktree" => git_remove_worktree(args, &state.workspace),
                 "workspace_git_worktree_status" => git_worktree_status(args, &state.workspace),
                 "workspace_git_worktree_has_changes" => git_worktree_has_changes(args, &state.workspace),
+                "workspace_git_worktree_delta" => git_worktree_delta(args, &state.workspace),
+                "workspace_git_stage_worktree" => git_stage_worktree(args, &state.workspace),
                 "workspace_git_merge_worktree" => git_merge_worktree(args, &state.workspace),
                 _ => dispatch_invoke(&cmd, args, &[state.workspace.clone()]),
             };
@@ -967,6 +969,221 @@ fn is_valid_remote_branch_name(branch: &str) -> bool {
         && !b.ends_with(".lock")
         && !b.contains(['\0', ' ', '~', '^', ':', '?', '*', '[', '\\'])
         && !b.chars().any(|c| c.is_control())
+}
+
+/// A commit-ish about to be interpolated into a git revision range. Hex-only, so a
+/// persisted value can never be read as a git flag or a pathspec.
+fn is_valid_remote_commit_ish(rev: &str) -> bool {
+    let rev = rev.trim();
+    (4..=64).contains(&rev.len()) && rev.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Shared prologue for the delta/stage commands: validate the repo, branch,
+/// baseline and worktree path, returning the cleaned worktree path.
+fn worktree_command_setup<'a>(
+    args: &'a Value,
+    workspace: &Path,
+) -> Result<(PathBuf, &'a str, &'a str), String> {
+    check_git_remote()?;
+    if !workspace.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    let branch = args
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'branch' argument".to_string())?
+        .trim();
+    if !is_valid_remote_branch_name(branch) {
+        return Err("Invalid branch name".to_string());
+    }
+
+    let since_commit = args
+        .get("sinceCommit")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'sinceCommit' argument".to_string())?
+        .trim();
+    if !is_valid_remote_commit_ish(since_commit) {
+        return Err("Invalid commit".to_string());
+    }
+
+    let worktree_path = args
+        .get("worktreePath")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(worktree_path));
+    if !in_managed_worktree_area(&cleaned, workspace) {
+        return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    Ok((cleaned, branch, since_commit))
+}
+
+/// workspace_git_worktree_delta: what this worktree holds past `sinceCommit`.
+/// Mirrors `workspace_git_worktree_delta` in commands/workspace.rs.
+fn git_worktree_delta(args: Value, workspace: &Path) -> Result<Value, String> {
+    let (cleaned, branch, since_commit) = worktree_command_setup(&args, workspace)?;
+
+    let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
+        .ok_or_else(|| "Could not resolve the worktree's HEAD.".to_string())?;
+
+    let dirty_files = git_capture(&cleaned, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+
+    // Range must be ONE argv entry — a bare ".." makes git read the rest as a pathspec.
+    let range = format!("{}..{}", since_commit, branch);
+    let committed_files = git_capture(workspace, &["diff", "--name-only", &range])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+
+    Ok(json!({
+        "head": head,
+        "dirty_files": dirty_files,
+        "committed_files": committed_files,
+        "up_to_date": dirty_files == 0 && committed_files == 0,
+    }))
+}
+
+/// workspace_git_stage_worktree: snapshot the agent's uncommitted work onto its own
+/// branch, then apply `sinceCommit..HEAD` into the main checkout's index.
+///
+/// Mirrors `workspace_git_stage_worktree` in commands/workspace.rs — see that
+/// function for why this applies a patch rather than merging (a `--no-commit`
+/// merge leaves MERGE_HEAD and blocks every later stage).
+fn git_stage_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let (cleaned, branch, since_commit) = worktree_command_setup(&args, workspace)?;
+    let snapshot = args.get("snapshot").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    if snapshot {
+        let dirty = git_capture(&cleaned, &["status", "--porcelain"])
+            .unwrap_or_default()
+            .lines()
+            .any(|l| !l.trim().is_empty());
+        if dirty {
+            let _ = git_ok(&cleaned, &["add", "-A"]);
+            let mut commit: Vec<String> = Vec::new();
+            if git_capture(&cleaned, &["config", "user.email"]).is_none() {
+                commit.extend([
+                    "-c".into(),
+                    "user.name=Spacron".into(),
+                    "-c".into(),
+                    "user.email=agent@spacron.local".into(),
+                ]);
+            }
+            // --no-verify: automated snapshot on a throwaway branch, not a commit the
+            // user authored. The kept commit is written in Source Control.
+            commit.extend([
+                "commit".into(),
+                "--no-verify".into(),
+                "-m".into(),
+                "spacron: snapshot uncommitted agent work".into(),
+            ]);
+            let refs: Vec<&str> = commit.iter().map(|s| s.as_str()).collect();
+            let _ = git_ok(&cleaned, &refs);
+        }
+    }
+
+    let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
+        .ok_or_else(|| "Could not resolve the worktree's HEAD.".to_string())?;
+
+    let range = format!("{}..{}", since_commit, head);
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-renames", &range])
+        .current_dir(workspace)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git diff: {}", e))?;
+    if !diff.status.success() {
+        return Err("Could not read the worktree's changes.".to_string());
+    }
+
+    if diff.stdout.is_empty() {
+        return Ok(json!({
+            "success": true,
+            "message": "Already up to date — nothing new to stage.",
+            "conflicted": false,
+            "conflicted_files": Vec::<String>::new(),
+            "staged_commit": head,
+            "staged_files": 0,
+            "up_to_date": true,
+        }));
+    }
+
+    let staged_files = git_capture(workspace, &["diff", "--name-only", &range])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+
+    let mut child = std::process::Command::new("git")
+        .args(["apply", "--3way", "--index"])
+        .current_dir(workspace)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run git apply: {}", e))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "Could not write the patch to git apply.".to_string())?
+        .write_all(&diff.stdout)
+        .map_err(|e| format!("Failed to write patch: {}", e))?;
+    drop(child.stdin.take());
+    let applied = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to run git apply: {}", e))?;
+
+    if applied.status.success() {
+        return Ok(json!({
+            "success": true,
+            "message": format!("Staged {} file(s) from '{}' for review.", staged_files, branch),
+            "conflicted": false,
+            "conflicted_files": Vec::<String>::new(),
+            "staged_commit": head,
+            "staged_files": staged_files,
+            "up_to_date": false,
+        }));
+    }
+
+    let conflicted_files: Vec<String> = git_capture(workspace, &["diff", "--name-only", "--diff-filter=U"])
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let stderr = String::from_utf8_lossy(&applied.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&applied.stdout).to_string();
+    let conflicted = !conflicted_files.is_empty()
+        || stdout.contains("with conflicts")
+        || stderr.contains("with conflicts")
+        || stderr.contains("conflict");
+
+    Ok(json!({
+        "success": false,
+        "message": if conflicted {
+            format!("Changes from '{}' overlap edits already in your working tree. The conflicting files are marked for you to resolve; everything else was staged.", branch)
+        } else {
+            format!("Could not stage changes from '{}'.", branch)
+        },
+        "conflicted": conflicted,
+        "conflicted_files": conflicted_files,
+        "staged_commit": head,
+        "staged_files": staged_files,
+        "up_to_date": false,
+    }))
 }
 
 /// workspace_git_worktree_has_changes: check whether a worktree has any changes.

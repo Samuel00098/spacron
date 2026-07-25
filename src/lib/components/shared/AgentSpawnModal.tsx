@@ -15,6 +15,7 @@ import {
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
+import { agentWorktrees } from '$lib/stores/settings';
 
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
@@ -30,7 +31,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
   const [spawning, setSpawning] = useState(false);
-  const [skipWorktree, setSkipWorktree] = useState(false);
+  // Seeded from the global default; the Isolated / Main repo toggle below still
+  // overrides it for this spawn only.
+  const worktreesByDefault = useStore(agentWorktrees);
+  const [skipWorktree, setSkipWorktree] = useState(worktreesByDefault === false);
 
   const spawnPresets = useMemo(() => {
     void $customAgents;

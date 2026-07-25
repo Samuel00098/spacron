@@ -23,6 +23,29 @@ export interface WorktreeInfo {
   baseCommit: string;
   /** When the worktree was created (epoch ms). */
   createdAt: number;
+  /**
+   * Branch tip as of the last successful stage into the main checkout, or absent
+   * if never staged. This is the single source of truth for "what has the user
+   * already seen?" — everything after it is outstanding work.
+   *
+   * It replaced a boolean `worktreeStaged` flag, which could only ever say
+   * "staged at least once" and so was wrong the moment an agent kept working. A
+   * commit marker stays accurate across any number of turns, and lets cleanup
+   * distinguish "fully staged, safe to delete" from "still holds unstaged work"
+   * instead of guessing.
+   */
+  lastStagedCommit?: string | null;
+  /**
+   * Set when a stage left conflict markers in the main checkout. Auto-staging
+   * pauses for this worktree until the user resolves them, so the reconciler
+   * can't re-apply the same conflicting patch on a loop.
+   */
+  stageConflict?: boolean;
+}
+
+/** Where a stage should resume from: the last staged tip, else the fork point. */
+export function stageBaseline(worktree: WorktreeInfo): string {
+  return worktree.lastStagedCommit?.trim() || worktree.baseCommit;
 }
 
 export interface WorktreeStatus {
@@ -94,7 +117,12 @@ export async function createTaskWorktree(args: {
   }
 }
 
-/** Remove an agent worktree (best-effort). Optionally also delete its branch. */
+/**
+ * Remove an agent worktree (best-effort). Optionally also delete its branch.
+ *
+ * Prefer `reclaimWorktree` — this is the unconditional form and will happily
+ * delete work that was never staged.
+ */
 export async function removeTaskWorktree(
   projectId: string,
   worktree: WorktreeInfo,
@@ -110,6 +138,68 @@ export async function removeTaskWorktree(
   } catch (err) {
     console.warn('Worktree removal failed:', err);
   }
+}
+
+export type ReclaimOutcome =
+  | { removed: true; staged: number }
+  | { removed: false; reason: 'pending' | 'conflict' | 'error'; pendingFiles: number; message?: string };
+
+/**
+ * Reclaim a worktree's disk space, but never at the cost of the agent's work.
+ *
+ * Stages anything outstanding first (which snapshots uncommitted edits onto the
+ * branch), and only removes the checkout once git confirms nothing is left
+ * unstaged. If work can't be moved — a conflict needing a human, or a git failure
+ * — the worktree is kept and the reason reported.
+ *
+ * This exists because both previous cleanup paths could destroy work: the
+ * post-commit sweep force-deleted the branch based on a sticky "was staged once"
+ * flag, and closing an agent pane removed its checkout with uncommitted edits
+ * still in it.
+ */
+export async function reclaimWorktree(
+  projectId: string,
+  worktree: WorktreeInfo,
+  opts?: { deleteBranch?: boolean }
+): Promise<ReclaimOutcome> {
+  let staged = 0;
+  // Advances as we stage, so the final check compares against what the main
+  // checkout has actually been given — not the baseline we started from.
+  let baseline = worktree;
+  try {
+    const delta = await getWorktreeDelta(projectId, worktree);
+    if (delta && !delta.upToDate) {
+      const result = await stageWorktreeChanges(projectId, worktree);
+      if (!result.success) {
+        return {
+          removed: false,
+          reason: result.conflicted ? 'conflict' : 'error',
+          pendingFiles: delta.pendingFiles,
+          message: result.message,
+        };
+      }
+      staged = result.stagedFiles;
+      baseline = { ...worktree, lastStagedCommit: result.stagedCommit };
+    }
+
+    // Re-ask git rather than trusting the stage result: this is the last check
+    // before an irreversible delete. Catches anything the agent wrote while we
+    // were staging.
+    const after = await getWorktreeDelta(projectId, baseline);
+    if (after && !after.upToDate) {
+      return { removed: false, reason: 'pending', pendingFiles: after.pendingFiles };
+    }
+  } catch (err) {
+    return {
+      removed: false,
+      reason: 'error',
+      pendingFiles: 0,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await removeTaskWorktree(projectId, worktree, opts?.deleteBranch ?? false);
+  return { removed: true, staged };
 }
 
 export interface MergeWorktreeResult {
@@ -145,35 +235,106 @@ export async function mergeTaskWorktree(
   };
 }
 
+export interface WorktreeDelta {
+  /** Current tip of the worktree branch. */
+  head: string;
+  /** Uncommitted files sitting in the worktree. */
+  dirtyFiles: number;
+  /** Files changed by commits the main checkout hasn't been shown yet. */
+  committedFiles: number;
+  /** True when the main checkout already has everything this worktree holds. */
+  upToDate: boolean;
+  /** Total outstanding files — what the UI counts. */
+  pendingFiles: number;
+}
+
 /**
- * Stage a worktree's changes into the main checkout WITHOUT creating a merge
- * commit, so the user can review them in Source Control and commit manually.
+ * Ask git what this worktree is holding beyond its last staged point.
  *
- * The worktree and branch are deliberately KEPT here. Staged-but-uncommitted
- * changes can still be discarded in Source Control, so until the user actually
- * commits, the branch is the only durable copy of the agent's work — deleting it
- * at staging time made that discard unrecoverable. `cleanupStaleWorktrees`
- * removes it after a successful commit instead.
+ * Deliberately asks git rather than reading app state: it stays correct after a
+ * turn is marked complete, after the thread is cleared, across restarts, and for
+ * an agent that keeps working past the end of its turn. That property is the
+ * whole reason the reconciler can guarantee nothing goes unnoticed.
  */
-export async function stageTaskWorktree(
+export async function getWorktreeDelta(
   projectId: string,
   worktree: WorktreeInfo
-): Promise<MergeWorktreeResult> {
+): Promise<WorktreeDelta | null> {
+  try {
+    const raw = await backendInvoke<{
+      head: string;
+      dirty_files: number;
+      committed_files: number;
+      up_to_date: boolean;
+    }>('workspace_git_worktree_delta', {
+      projectId,
+      worktreePath: worktree.path,
+      branch: worktree.branch,
+      sinceCommit: stageBaseline(worktree),
+    });
+    return {
+      head: raw.head,
+      dirtyFiles: raw.dirty_files,
+      committedFiles: raw.committed_files,
+      upToDate: raw.up_to_date,
+      pendingFiles: Math.max(raw.dirty_files, raw.committed_files),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface StageWorktreeResult {
+  success: boolean;
+  message: string;
+  conflicted: boolean;
+  conflictedFiles: string[];
+  /** Branch tip this stage covered — persist as the worktree's `lastStagedCommit`. */
+  stagedCommit: string;
+  stagedFiles: number;
+  upToDate: boolean;
+}
+
+/**
+ * Stage everything this worktree holds beyond its baseline into the main checkout,
+ * so the changes can be run, tested, reviewed in Source Control, and committed.
+ *
+ * Snapshots the agent's uncommitted edits onto its own branch first, then applies
+ * the delta as a patch. Both matter: see `workspace_git_stage_worktree` in
+ * `commands/workspace.rs` for why merging can't be used here (it leaves MERGE_HEAD
+ * and blocks every later stage until the user commits).
+ *
+ * The worktree and branch are always KEPT. Staged-but-uncommitted changes can
+ * still be discarded in Source Control, so until the user commits, the branch is
+ * the only durable copy of the agent's work.
+ */
+export async function stageWorktreeChanges(
+  projectId: string,
+  worktree: WorktreeInfo
+): Promise<StageWorktreeResult> {
   const raw = await backendInvoke<{
     success: boolean;
     message: string;
     conflicted: boolean;
-  }>('workspace_git_merge_worktree', {
+    conflicted_files: string[];
+    staged_commit: string;
+    staged_files: number;
+    up_to_date: boolean;
+  }>('workspace_git_stage_worktree', {
     projectId,
     worktreePath: worktree.path,
     branch: worktree.branch,
-    deleteAfter: false,
-    noCommit: true,
+    sinceCommit: stageBaseline(worktree),
+    snapshot: true,
   });
   return {
     success: raw.success,
     message: raw.message,
     conflicted: raw.conflicted,
+    conflictedFiles: raw.conflicted_files ?? [],
+    stagedCommit: raw.staged_commit,
+    stagedFiles: raw.staged_files,
+    upToDate: raw.up_to_date,
   };
 }
 

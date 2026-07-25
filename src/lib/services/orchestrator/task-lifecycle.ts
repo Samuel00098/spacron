@@ -56,13 +56,11 @@ export interface OrchestratorTask {
    * task runs directly in the project root (non-git project, or isolation off).
    */
   worktree?: WorktreeInfo | null;
-  /**
-   * Set once this task's worktree changes have been staged into the main
-   * checkout via `stageTaskWorktree`. Only a staged worktree is safe to clean
-   * up after a commit — an unstaged one is still the only copy of that agent's
-   * work. See `cleanupStaleWorktrees`.
-   */
-  worktreeStaged?: boolean;
+  // NOTE: how much of the worktree the main checkout has seen lives on
+  // `worktree.lastStagedCommit`, not on a `worktreeStaged` boolean here. The
+  // boolean could only say "staged at least once", so it stayed true while the
+  // agent kept working, and the post-commit sweep then force-deleted branches
+  // holding work nobody had reviewed. See `reclaimWorktree`.
   /**
    * When true, the agent runs directly in the project root instead of an
    * isolated worktree. Useful for admin/release tasks (tagging, pushing,

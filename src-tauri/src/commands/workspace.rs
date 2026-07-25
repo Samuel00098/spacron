@@ -1,7 +1,8 @@
 use crate::state::AppState;
 use crate::workspace::project::Project;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tauri::State;
 
 pub(crate) fn sanitize_git_error(stderr: &str) -> String {
@@ -1475,6 +1476,344 @@ pub fn workspace_git_worktree_status(
     })
 }
 
+/// A commit-ish we are about to interpolate into a git revision range. Rejecting
+/// anything but a hex object name keeps a persisted-state value from ever being
+/// read as a git flag or a pathspec.
+fn is_valid_commit_ish(rev: &str) -> bool {
+    let rev = rev.trim();
+    (4..=64).contains(&rev.len()) && rev.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// What an agent worktree is holding that the main checkout has not seen yet.
+/// Cheap enough to poll: three `git` reads, no writes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorktreeDelta {
+    /// Current tip of the worktree branch.
+    pub head: String,
+    /// Uncommitted files inside the worktree (the agent is mid-work, or never
+    /// committed). These are invisible to a commit-range diff until snapshotted.
+    pub dirty_files: u32,
+    /// Files changed by commits after `since_commit` — work the agent committed
+    /// but that has not been staged into the main checkout yet.
+    pub committed_files: u32,
+    /// True when `since_commit` is already the branch tip and nothing is dirty,
+    /// i.e. the main checkout has everything this worktree holds.
+    pub up_to_date: bool,
+}
+
+/// Report what an agent worktree holds beyond `since_commit`.
+///
+/// This is the reconciler's signal, and it deliberately asks git rather than
+/// trusting app state: it stays correct across finished turns, cleared threads,
+/// restarts, and agents that keep working after their turn was marked done.
+#[tauri::command]
+pub fn workspace_git_worktree_delta(
+    project_id: String,
+    worktree_path: String,
+    branch: String,
+    since_commit: String,
+    state: State<AppState>,
+) -> Result<WorktreeDelta, String> {
+    check_git_available().map_err(|e| format!("Git not available: {e}"))?;
+
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    if !is_valid_branch_name(&branch) {
+        return Err("Invalid branch name".to_string());
+    }
+    if !is_valid_commit_ish(&since_commit) {
+        return Err("Invalid commit".to_string());
+    }
+
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
+        .ok_or_else(|| "Could not resolve the worktree's HEAD.".to_string())?;
+
+    let dirty_files = git_capture(&cleaned, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count() as u32;
+
+    // Range must be ONE argv entry — a bare ".." makes git read the rest as a
+    // pathspec and the command fails. See the note on worktree_has_changes.
+    let range = format!("{}..{}", since_commit.trim(), branch);
+    let committed_files = git_capture(root_path, &["diff", "--name-only", &range])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count() as u32;
+
+    Ok(WorktreeDelta {
+        up_to_date: dirty_files == 0 && committed_files == 0,
+        head,
+        dirty_files,
+        committed_files,
+    })
+}
+
+/// Outcome of staging an agent worktree's delta into the main checkout.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StageWorktreeResult {
+    pub success: bool,
+    pub message: String,
+    pub conflicted: bool,
+    /// Files left with conflict markers in the main checkout — the only case that
+    /// genuinely needs a human.
+    pub conflicted_files: Vec<String>,
+    /// Branch tip this stage covered. The caller persists it as the worktree's new
+    /// `lastStagedCommit`, so the next stage moves only what arrives after it, and
+    /// so cleanup can tell "fully staged" from "still holding unstaged work".
+    pub staged_commit: String,
+    pub staged_files: u32,
+    /// True when there was nothing new to move.
+    pub up_to_date: bool,
+}
+
+/// Stage an agent worktree's changes into the main checkout so they can be tested,
+/// reviewed in Source Control, and committed by hand.
+///
+/// Two deliberate differences from `workspace_git_merge_worktree`:
+///
+/// 1. **It snapshots first.** Uncommitted edits in the worktree are invisible to
+///    any commit-range diff, so they can neither be staged nor survive the
+///    checkout being removed. Committing them to the agent's own throwaway branch
+///    makes every piece of work representable as a commit range — that is what
+///    makes "nothing is lost" true rather than aspirational.
+///
+/// 2. **It applies a patch instead of merging.** `git merge --no-commit` leaves
+///    MERGE_HEAD behind, and git then refuses every later merge with "You have not
+///    concluded your merge" until the user commits. That makes merge-based staging
+///    a strictly one-shot operation per commit — fatal for repeated turns and for
+///    several agents feeding one checkout. Applying `since_commit..HEAD` with
+///    `git apply --3way --index` enters no merge state, so stages compose freely,
+///    and a conflict is confined to the files it actually touches instead of
+///    blocking the whole checkout.
+///
+/// The trade-off is that the branch is not recorded as merged. That costs nothing
+/// here: the user writes the real commit in Source Control, and worktree cleanup
+/// already force-deletes the branch.
+#[tauri::command]
+pub fn workspace_git_stage_worktree(
+    project_id: String,
+    worktree_path: String,
+    branch: String,
+    since_commit: String,
+    snapshot: Option<bool>,
+    state: State<AppState>,
+) -> Result<StageWorktreeResult, String> {
+    check_git_available().map_err(|e| format!("Git not available: {e}"))?;
+
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    if !root_path.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+    if !is_valid_branch_name(&branch) {
+        return Err("Invalid branch name".to_string());
+    }
+    if !is_valid_commit_ish(&since_commit) {
+        return Err("Invalid commit".to_string());
+    }
+
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to stage a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    // 1. Snapshot uncommitted work onto the agent's own branch.
+    if snapshot.unwrap_or(true) {
+        let dirty = git_capture(&cleaned, &["status", "--porcelain"])
+            .unwrap_or_default()
+            .lines()
+            .any(|l| !l.trim().is_empty());
+        if dirty {
+            let _ = git_base()
+                .args(["add", "-A"])
+                .current_dir(&cleaned)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+
+            // A repo with no configured identity would fail to commit; supply one
+            // only in that case so a real identity is never overridden.
+            let mut commit: Vec<String> = Vec::new();
+            if git_capture(&cleaned, &["config", "user.email"]).is_none() {
+                commit.extend([
+                    "-c".into(),
+                    "user.name=Spacron".into(),
+                    "-c".into(),
+                    "user.email=agent@spacron.local".into(),
+                ]);
+            }
+            // `--no-verify`: this is an automated snapshot on a throwaway branch that
+            // can fire many times per session, not a commit the user authored. Running
+            // their pre-commit hooks on each one would be both slow and surprising.
+            // The commit the user actually keeps is written in Source Control, where
+            // hooks run normally.
+            commit.extend([
+                "commit".into(),
+                "--no-verify".into(),
+                "-m".into(),
+                "spacron: snapshot uncommitted agent work".into(),
+            ]);
+            let _ = git_base()
+                .args(&commit)
+                .current_dir(&cleaned)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+        }
+    }
+
+    let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
+        .ok_or_else(|| "Could not resolve the worktree's HEAD.".to_string())?;
+
+    // 2. Diff the delta. `--binary` keeps non-text files applyable, `--no-renames`
+    //    emits plain add/delete pairs, which apply far more reliably than rename
+    //    hunks. Run from the main checkout so both endpoints resolve there.
+    let range = format!("{}..{}", since_commit.trim(), head);
+    let diff = git_base()
+        .args(["diff", "--binary", "--no-renames", &range])
+        .current_dir(root_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git diff: {}", e))?;
+
+    if !diff.status.success() {
+        return Err(format!(
+            "Could not read the worktree's changes: {}",
+            sanitize_git_error(&String::from_utf8_lossy(&diff.stderr))
+        ));
+    }
+
+    if diff.stdout.is_empty() {
+        return Ok(StageWorktreeResult {
+            success: true,
+            message: "Already up to date — nothing new to stage.".to_string(),
+            conflicted: false,
+            conflicted_files: Vec::new(),
+            staged_commit: head,
+            staged_files: 0,
+            up_to_date: true,
+        });
+    }
+
+    let staged_files = git_capture(root_path, &["diff", "--name-only", &range])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count() as u32;
+
+    // 3. Apply into the main checkout's index and working tree. `--3way` falls back
+    //    to a real merge per hunk, so the user's own edits are respected instead of
+    //    the patch being rejected wholesale.
+    let mut child = git_base()
+        .args(["apply", "--3way", "--index"])
+        .current_dir(root_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run git apply: {}", e))?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "Could not write the patch to git apply.".to_string())?
+        .write_all(&diff.stdout)
+        .map_err(|e| format!("Failed to write patch: {}", e))?;
+    drop(child.stdin.take());
+
+    let applied = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to run git apply: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&applied.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&applied.stderr).to_string();
+
+    if applied.status.success() {
+        return Ok(StageWorktreeResult {
+            success: true,
+            message: format!("Staged {} file(s) from '{}' for review.", staged_files, branch),
+            conflicted: false,
+            conflicted_files: Vec::new(),
+            staged_commit: head,
+            staged_files,
+            up_to_date: false,
+        });
+    }
+
+    // A 3-way apply that hit conflicts still writes the conflicting files with
+    // markers and stages everything else, so the work is present, not lost — it
+    // just needs a human. Report which files, and do NOT advance the caller's
+    // staged marker: the delta is not cleanly represented in the main checkout yet.
+    let conflicted_files: Vec<String> = git_capture(root_path, &["diff", "--name-only", "--diff-filter=U"])
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let looks_conflicted = !conflicted_files.is_empty()
+        || stdout.contains("with conflicts")
+        || stderr.contains("with conflicts")
+        || stderr.contains("conflict");
+
+    if looks_conflicted {
+        Ok(StageWorktreeResult {
+            success: false,
+            message: format!(
+                "Changes from '{}' overlap edits already in your working tree. The conflicting files are marked for you to resolve; everything else was staged.",
+                branch
+            ),
+            conflicted: true,
+            conflicted_files,
+            staged_commit: head,
+            staged_files,
+            up_to_date: false,
+        })
+    } else {
+        Ok(StageWorktreeResult {
+            success: false,
+            message: format!(
+                "Could not stage changes from '{}': {}{}",
+                branch,
+                sanitize_git_error(&stderr),
+                sanitize_git_error(&stdout)
+            ),
+            conflicted: false,
+            conflicted_files,
+            staged_commit: head,
+            staged_files,
+            up_to_date: false,
+        })
+    }
+}
+
 #[tauri::command]
 pub fn workspace_git_diff(
     project_id: String,
@@ -2154,6 +2493,27 @@ mod tests {
         let legacy = legacy_worktree_area(&root).expect("root has a parent and a name");
         assert_eq!(legacy, PathBuf::from("/home/u/.spacron-worktrees/proj"));
         assert!(is_under(&legacy.join("spacron-neo-342ci1"), &legacy));
+    }
+
+    // --- is_valid_commit_ish ---
+
+    #[test]
+    fn commit_ish_accepts_short_and_full_object_names() {
+        assert!(is_valid_commit_ish("380ac7f"));
+        assert!(is_valid_commit_ish("fb7ce5d1a2b3c4d5e6f708192a3b4c5d6e7f8091"));
+        assert!(is_valid_commit_ish(" 380ac7f "));
+    }
+
+    #[test]
+    fn commit_ish_rejects_anything_git_could_read_as_a_flag_or_path() {
+        // These reach the command from persisted state, and are interpolated into a
+        // revision range — a non-hex value must never get that far.
+        assert!(!is_valid_commit_ish("--upload-pack=evil"));
+        assert!(!is_valid_commit_ish("HEAD"));
+        assert!(!is_valid_commit_ish("main..evil"));
+        assert!(!is_valid_commit_ish("src/main.rs"));
+        assert!(!is_valid_commit_ish(""));
+        assert!(!is_valid_commit_ish("abc")); // too short to be an object name
     }
 
     // --- sanitize_git_error ---
