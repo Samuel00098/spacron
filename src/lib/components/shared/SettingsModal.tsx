@@ -8,9 +8,11 @@ import {
   aiCompletionModelByProvider,
   aiCompletionProvider,
   aiGhostTextEnabled,
+  agentWorktrees,
   aiProvider,
   aiProviders,
   appearance,
+  autoStageAgentChanges,
   backgroundImageBlur,
   backgroundImageEnabled,
   backgroundImageOpacity,
@@ -703,6 +705,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentShowHidden = useStore(showHidden);
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
   const currentNotifications = useStore(notificationsEnabled);
+  const currentAgentWorktrees = useStore(agentWorktrees);
+  const currentAutoStage = useStore(autoStageAgentChanges);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
   const currentFormatOnSave = useStore(formatOnSave);
@@ -2079,6 +2083,35 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'agents' && (
               <>
+                <Section title="Isolation & changes">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Each agent can work on its own git branch in a private checkout, so several can edit
+                    the project at once without colliding. Their finished changes are brought back into
+                    your working tree for you to run, review and commit in Source Control — a private
+                    checkout is only removed once everything in it has been brought across.
+                  </p>
+                  <SettingRow
+                    title="Isolate agents in worktrees"
+                    detail="Off runs every agent directly in the project folder instead. The Isolated / Main repo toggle in the spawn picker still overrides this per agent."
+                  >
+                    <Toggle
+                      label="Toggle agent worktree isolation"
+                      checked={currentAgentWorktrees}
+                      onChange={agentWorktrees.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Auto-stage agent changes"
+                    detail="Bring changes across on their own as agents finish. Off lists them under Agent changes in Source Control with a Stage button instead."
+                  >
+                    <Toggle
+                      label="Toggle automatic staging of agent changes"
+                      checked={currentAutoStage}
+                      onChange={autoStageAgentChanges.set}
+                    />
+                  </SettingRow>
+                </Section>
+
                 <Section title="Coding CLI agents">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Add your own agent CLI alongside the built-ins (Claude Code, Codex…). It appears in the

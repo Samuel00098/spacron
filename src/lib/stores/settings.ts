@@ -1236,6 +1236,8 @@ export function resetSettingsToDefault() {
   showHidden.set(false);
   showSnapshotsTab.set(false);
   notificationsEnabled.set(true);
+  agentWorktrees.set(true);
+  autoStageAgentChanges.set(true);
   closeBehavior.set('quit');
   aiProvider.set('openrouter');
   aiModelByProvider.set({});
