@@ -619,27 +619,29 @@ fn sse_event_stream(
     let tail = stream::unfold(
         (rx, tokio::time::interval(Duration::from_secs(15))),
         |(mut rx, mut tick)| async move {
-            loop {
-                tokio::select! {
-                    _ = rx.recv() => {
-                        let notif = serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "method": "notifications/tools/list_changed",
-                            "params": {}
-                        });
-                        return Some((
-                            Ok(Event::default().event("message").data(notif.to_string())),
-                            (rx, tick),
-                        ));
-                    }
-                    _ = tick.tick() => {
-                        return Some((
-                            Ok(Event::default().event("heartbeat").data("")),
-                            (rx, tick),
-                        ));
-                    }
-                    else => return None,
+            // No `loop` here: `unfold` is the loop — it calls this closure again
+            // for each item, and every arm below returns. Wrapping it in one made
+            // `cargo clippy` fail outright on `never_loop` (a deny-by-default
+            // lint), which is why clippy was red on this crate.
+            tokio::select! {
+                _ = rx.recv() => {
+                    let notif = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/tools/list_changed",
+                        "params": {}
+                    });
+                    Some((
+                        Ok(Event::default().event("message").data(notif.to_string())),
+                        (rx, tick),
+                    ))
                 }
+                _ = tick.tick() => {
+                    Some((
+                        Ok(Event::default().event("heartbeat").data("")),
+                        (rx, tick),
+                    ))
+                }
+                else => None,
             }
         },
     );

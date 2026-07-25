@@ -51,6 +51,22 @@ pub fn available_shells() -> Vec<ShellConfig> {
             });
         }
     } else {
+        // The user's own login shell comes first — it's what they actually use,
+        // and hardcoded paths miss it constantly: a Homebrew bash on macOS lives
+        // at /opt/homebrew/bin/bash, and on NixOS/Alpine/minimal containers
+        // /bin/zsh and /bin/bash may not exist at all (only /bin/sh does), which
+        // left this list empty and the shell picker with nothing to show.
+        // `detect_shell` already honoured $SHELL; `available_shells` did not, so
+        // the auto-detected default could not be re-selected by name once the
+        // user switched away from it.
+        if let Ok(shell) = std::env::var("SHELL") {
+            if Path::new(&shell).is_file() {
+                shells.push(ShellConfig {
+                    program: shell,
+                    args: vec!["-l".into()],
+                });
+            }
+        }
         for sh in &["/bin/zsh", "/bin/bash", "/bin/sh"] {
             if Path::new(sh).exists() {
                 shells.push(ShellConfig {
@@ -59,12 +75,24 @@ pub fn available_shells() -> Vec<ShellConfig> {
                 });
             }
         }
-        if let Some(p) = which("fish") {
-            shells.push(ShellConfig {
-                program: p,
-                args: vec!["-l".into()],
-            });
+        for shell in &["fish", "nu", "elvish", "xonsh"] {
+            if let Some(p) = which(shell) {
+                shells.push(ShellConfig {
+                    program: p,
+                    args: if *shell == "fish" {
+                        vec!["-l".into()]
+                    } else {
+                        // Only fish shares the POSIX `-l` spelling; nu/elvish/xonsh
+                        // either reject it or treat it as a file argument.
+                        vec![]
+                    },
+                });
+            }
         }
+        // $SHELL frequently duplicates one of the well-known paths above.
+        // Deduplicate on the program so the picker doesn't list it twice.
+        let mut seen = std::collections::HashSet::new();
+        shells.retain(|s| seen.insert(s.program.clone()));
     }
 
     shells
@@ -162,4 +190,43 @@ pub fn detect_shell() -> ShellConfig {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The picker must never come back empty — a distro without /bin/bash or
+    /// /bin/zsh (NixOS, Alpine, slim containers) used to produce exactly that.
+    #[test]
+    fn available_shells_is_never_empty() {
+        assert!(
+            !available_shells().is_empty(),
+            "at least one shell must always be offered"
+        );
+    }
+
+    /// Whatever `detect_shell` picks has to be selectable again by name, which
+    /// means it must appear in the list `terminal_create` validates against.
+    /// On Unix `detect_shell` honours $SHELL, so $SHELL has to be in the list.
+    #[test]
+    fn detected_shell_is_offered_in_the_list() {
+        let detected = detect_shell();
+        let shells = available_shells();
+        assert!(
+            shells.iter().any(|s| s.program == detected.program),
+            "detect_shell chose {:?}, which available_shells() does not offer: {:?}",
+            detected.program,
+            shells.iter().map(|s| &s.program).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn shells_are_not_listed_twice() {
+        let shells = available_shells();
+        let mut seen = std::collections::HashSet::new();
+        for s in &shells {
+            assert!(seen.insert(&s.program), "duplicate shell entry: {}", s.program);
+        }
+    }
 }

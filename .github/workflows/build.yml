@@ -66,11 +66,24 @@ jobs:
       - name: Typecheck frontend
         run: npm run check
 
+      - name: Test frontend
+        run: npm test
+
       - name: Build frontend bundle
         run: npm run build
 
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Runs on all three platforms deliberately. A large part of the backend is
+      # platform-conditional — path canonicalisation and the Windows `\\?\`
+      # prefix, symlink confinement (`#[cfg(unix)]` tests that cannot run on
+      # Windows at all), shell detection, the PTY layer — so a suite that only
+      # ever runs on the author's machine leaves the other two platforms
+      # unverified. Before this step the matrix compiled three platforms and
+      # tested none.
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build Tauri app
         run: npm run tauri build -- --debug --no-bundle ${{ matrix.args }}

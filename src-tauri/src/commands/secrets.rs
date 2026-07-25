@@ -520,8 +520,20 @@ fn keychain_entry(provider: &str) -> Result<Entry, String> {
         .map_err(|err| format!("Failed to access the system keychain: {err}"))
 }
 
-#[tauri::command]
-pub fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
+/// Read a provider's API key out of the OS keychain.
+///
+/// Deliberately **not** a `#[tauri::command]`, and deliberately not `pub`: this
+/// returns the raw secret, so exposing it on the IPC surface would let anything
+/// running in the WebView read every provider key with one `invoke`. It carried
+/// the attribute before without being listed in `generate_handler!` — harmless in
+/// itself, but one line away from doing real damage, and it read as if the
+/// frontend were meant to call it. The frontend only ever needs
+/// [`provider_api_key_exists`]; requests are authenticated in Rust, with the
+/// frontend passing `apiKey: ''` and this resolving the real value backend-side.
+///
+/// `commands::github` already follows this rule for its token — this brings the
+/// two into line.
+fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
     }

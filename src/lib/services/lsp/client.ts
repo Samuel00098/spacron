@@ -140,7 +140,16 @@ async function resolveLspConnection(
   const conn = await backendInvoke<LspConnection>('lsp_start', { root, language: serverLang });
 
   if (target) {
+    // The remote `/lsp` route lives on the remote host, which the app's
+    // `connect-src` (`ws://127.0.0.1:*` only) forbids the WebView from dialing —
+    // the same CSP block that stopped the PTY socket. Go through the backend's
+    // loopback relay so the URL is one the policy allows; the relay forwards
+    // bytes untouched, so the one-time token still reaches the server intact.
     const u = new URL(target.url);
+    const relayPort = await invoke<number>('remote_relay_start', { url: target.url });
+    u.protocol = 'ws:';
+    u.hostname = '127.0.0.1';
+    u.port = String(relayPort);
     u.pathname = '/lsp';
     u.search = `?token=${encodeURIComponent(conn.token)}`;
     return { uri: u.toString(), rootUri: conn.root_uri };

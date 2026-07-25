@@ -16,6 +16,7 @@ pub mod music_library;
 pub mod notification;
 pub mod parakeet;
 pub mod preview;
+pub mod remote_relay;
 pub mod search;
 pub mod secrets;
 pub mod terminal;

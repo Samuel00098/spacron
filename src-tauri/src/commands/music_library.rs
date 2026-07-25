@@ -166,7 +166,9 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<LocalTrack>, licenses: &mut Vec<
 /// The asset-protocol scope is widened at runtime to exactly the folder the
 /// user picked, rather than baking a broad glob into tauri.conf.json — nothing
 /// outside a folder they explicitly chose is ever readable through `asset:`.
-#[tauri::command]
+/// `async`: a full recursive scan of a music folder is disk-bound and unbounded
+/// in size; on the main thread it stalls the UI for the whole scan.
+#[tauri::command(async)]
 pub fn music_library_scan(app: AppHandle, folder: String) -> Result<MusicLibrary, String> {
     let root = PathBuf::from(&folder);
     if !root.is_dir() {

@@ -8,7 +8,7 @@ use axum::{
     routing::any,
     Router,
 };
-use cookies::PersistentJar;
+use cookies::{PartitionedJars, PersistentJar};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -613,9 +613,49 @@ pub struct ProxyState {
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
     pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     pub external_origin_fallback: bool,
-    pub cookie_jar: Arc<PersistentJar>,
-    pub client: Client,
+    /// Cookie jars keyed by the top-level origin the user is on. See
+    /// [`cookies::PartitionedJars`] for why this is partitioned rather than
+    /// shared, and `preview::proxy_origin_e2e` for the attack it stops.
+    pub cookie_jars: Arc<PartitionedJars>,
+    /// The committed top-level origin, set by the frontend before it points the
+    /// preview iframe anywhere. `None` until the first real navigation.
+    pub active_partition: Arc<std::sync::RwLock<Option<String>>>,
+    /// One upstream client per partition, each bound to that partition's jar.
+    /// reqwest resolves cookies through the client's own store and the trait
+    /// gives us no request context to switch on, so the partition has to be
+    /// chosen by picking the client.
+    pub partition_clients: Arc<Mutex<HashMap<String, Client>>>,
     pub local_client: Client,
+}
+
+impl ProxyState {
+    /// The partition key for requests arriving right now: whatever top-level
+    /// origin the frontend last committed, or the default bucket before any.
+    pub fn partition(&self) -> String {
+        self.active_partition
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| cookies::DEFAULT_PARTITION.to_string())
+    }
+
+    /// The upstream client carrying the current partition's cookies.
+    pub fn client(&self) -> Client {
+        let partition = self.partition();
+        let mut clients = self.partition_clients.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(client) = clients.get(&partition) {
+            return client.clone();
+        }
+        let client = preview_http_client(self.cookie_jars.get(&partition));
+        clients.insert(partition, client.clone());
+        client
+    }
+
+    /// The current partition's jar, for the paths that bypass the reqwest client
+    /// (the external WebSocket bridge builds its own `Cookie` header).
+    pub fn cookie_jar(&self) -> Arc<PersistentJar> {
+        self.cookie_jars.get(&self.partition())
+    }
 }
 
 pub struct PreviewManager {
@@ -627,9 +667,13 @@ pub struct PreviewManager {
     pub active_project_id: Arc<std::sync::RwLock<Option<String>>>,
     pub project_root: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    /// Disk-persisted cookie jar shared by every proxy instance, so logins on
-    /// proxied external sites survive app restarts (see cookies.rs).
-    cookie_jar: Arc<PersistentJar>,
+    /// Disk-persisted cookie jars, partitioned by top-level origin and shared by
+    /// every proxy instance, so logins on proxied external sites survive app
+    /// restarts without leaking across sites (see cookies.rs).
+    cookie_jars: Arc<PartitionedJars>,
+    /// Committed top-level origin, published by the frontend.
+    active_partition: Arc<std::sync::RwLock<Option<String>>>,
+    partition_clients: Arc<Mutex<HashMap<String, Client>>>,
 }
 
 impl PreviewManager {
@@ -646,8 +690,35 @@ impl PreviewManager {
             active_project_id,
             project_root: Arc::new(std::sync::RwLock::new(None)),
             shutdown_tx: Arc::new(Mutex::new(None)),
-            cookie_jar: PersistentJar::load(config_dir.join("preview-cookies.json")),
+            // Directory, not a single file: one jar per top-level origin. The
+            // pre-partition `preview-cookies.json` is deliberately left alone
+            // rather than migrated — its cookies have no recorded partition, so
+            // there is no safe bucket to put them in, and guessing would
+            // reintroduce the cross-site leak. Users re-log-in once on sites they
+            // had signed into through the preview browser.
+            cookie_jars: PartitionedJars::new(config_dir.join("preview-cookies")),
+            active_partition: Arc::new(std::sync::RwLock::new(None)),
+            partition_clients: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Record the top-level origin the preview has navigated to. Called by the
+    /// frontend *before* it assigns `iframe.src`, so every request the resulting
+    /// page makes — document, subresource, nested frame, or scripted fetch —
+    /// resolves against the right cookie partition.
+    pub fn set_active_partition(&self, origin: Option<String>) {
+        let normalized = origin.and_then(|raw| {
+            url::Url::parse(&raw).ok().and_then(|u| {
+                u.host_str().map(|host| match u.port() {
+                    Some(port) => format!("{}://{}:{}", u.scheme(), host, port),
+                    None => format!("{}://{}", u.scheme(), host),
+                })
+            })
+        });
+        *self
+            .active_partition
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = normalized;
     }
 
     pub fn start_proxy(&self) -> Result<u16, String> {
@@ -664,7 +735,6 @@ impl PreviewManager {
         let (tx, rx) = oneshot::channel::<()>();
         *shutdown_tx_lock = Some(tx);
 
-        self.cookie_jar.ensure_saver();
         let state = ProxyState {
             target_port: self.target_port.clone(),
             preferred_local_host: self.preferred_local_host.clone(),
@@ -672,8 +742,9 @@ impl PreviewManager {
             active_project_id: self.active_project_id.clone(),
             project_root: self.project_root.clone(),
             external_origin_fallback: true,
-            cookie_jar: self.cookie_jar.clone(),
-            client: preview_http_client(self.cookie_jar.clone()),
+            cookie_jars: self.cookie_jars.clone(),
+            active_partition: self.active_partition.clone(),
+            partition_clients: self.partition_clients.clone(),
             local_client: preview_local_http_client(),
         };
 
@@ -735,7 +806,6 @@ impl PreviewManager {
             .unwrap_or_else(|e| e.into_inner())
             .insert(key, proxy_port);
 
-        self.cookie_jar.ensure_saver();
         let state = ProxyState {
             target_port: Arc::new(Mutex::new(port)),
             preferred_local_host: Arc::new(Mutex::new(Some(normalized_host))),
@@ -743,8 +813,9 @@ impl PreviewManager {
             active_project_id: self.active_project_id.clone(),
             project_root: self.project_root.clone(),
             external_origin_fallback: false,
-            cookie_jar: self.cookie_jar.clone(),
-            client: preview_http_client(self.cookie_jar.clone()),
+            cookie_jars: self.cookie_jars.clone(),
+            active_partition: self.active_partition.clone(),
+            partition_clients: self.partition_clients.clone(),
             local_client: preview_local_http_client(),
         };
 
@@ -779,13 +850,19 @@ impl PreviewManager {
         }
         *self.proxy_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // Don't leave freshly-set login cookies riding on the 3s debounce.
-        self.cookie_jar.flush_if_dirty();
+        self.cookie_jars.flush_all();
         Ok(())
     }
 
     /// Drop every stored preview-proxy cookie (part of "clear browsing data").
     pub fn clear_cookies(&self) {
-        self.cookie_jar.clear();
+        self.cookie_jars.clear_all();
+        // Drop the per-partition clients too; each holds a handle to a jar we just
+        // emptied, and a stale client would keep serving its cached cookies.
+        self.partition_clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     pub fn set_target_port(&self, port: u16) -> Result<(), String> {
@@ -1780,7 +1857,7 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
             // (the normal case for logged-in web apps) complete their handshake.
             let target_url = url::Url::parse(&http_equiv).ok();
             let cookie_header =
-                target_url.as_ref().and_then(|u| state.cookie_jar.cookie_header_for(u));
+                target_url.as_ref().and_then(|u| state.cookie_jar().cookie_header_for(u));
             let ws_origin = target_url
                 .as_ref()
                 .and_then(|u| u.host_str().map(|h| format!("{}://{}", u.scheme(), h)));
@@ -1885,7 +1962,7 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
                 }
 
                 return proxy_external_url(
-                    state.client.clone(),
+                    state.client(),
                     &url,
                     state.active_external_origins.clone(),
                     state.active_project_id.clone(),
@@ -1927,7 +2004,7 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
     if let Some(origin) = opt_origin {
         let full_url = format!("{}{}", origin, path);
         return proxy_external_url(
-            state.client.clone(),
+            state.client(),
             &full_url,
             state.active_external_origins.clone(),
             state.active_project_id.clone(),
@@ -3581,8 +3658,8 @@ mod local_file_e2e {
 
     /// Mirror of `start_proxy`'s router, minus the Tauri runtime.
     async fn spawn_test_proxy(project_root: Option<std::path::PathBuf>) -> u16 {
-        let cookie_jar = PersistentJar::load(
-            std::env::temp_dir().join(format!("spacron-test-cookies-{}.json", std::process::id())),
+        let cookie_jars = PartitionedJars::new(
+            std::env::temp_dir().join(format!("spacron-test-cookies-{}", std::process::id())),
         );
         let state = ProxyState {
             target_port: Arc::new(Mutex::new(5173)),
@@ -3591,8 +3668,9 @@ mod local_file_e2e {
             active_project_id: Arc::new(RwLock::new(None)),
             project_root: Arc::new(RwLock::new(project_root)),
             external_origin_fallback: true,
-            cookie_jar: cookie_jar.clone(),
-            client: preview_http_client(cookie_jar),
+            cookie_jars,
+            active_partition: Arc::new(RwLock::new(None)),
+            partition_clients: Arc::new(Mutex::new(HashMap::new())),
             local_client: preview_local_http_client(),
         };
         let app = Router::new()
@@ -3776,3 +3854,6 @@ mod local_file_e2e {
         assert!(body.contains("File not found"));
     }
 }
+
+#[cfg(test)]
+mod proxy_origin_e2e;

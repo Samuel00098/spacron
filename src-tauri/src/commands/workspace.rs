@@ -1,8 +1,10 @@
 use crate::state::AppState;
 use crate::workspace::project::Project;
+use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tauri::State;
 
 pub(crate) fn sanitize_git_error(stderr: &str) -> String {
@@ -97,12 +99,27 @@ pub(crate) fn git_base() -> Command {
     cmd
 }
 
+/// Cached `git --version` output. Only a *successful* probe is stored: git does
+/// not vanish mid-session, but it can well be installed mid-session, so a failure
+/// must re-probe rather than pin "git is missing" until restart.
+static GIT_VERSION: OnceLock<String> = OnceLock::new();
+
 /// Check whether `git` is available on the system PATH. Returns the `--version`
 /// output on success, or a descriptive error explaining that git is not found.
+///
+/// Every write-side git command calls this, and spawning a process costs ~250 ms
+/// on a large repo, so the answer is memoized after the first success. It also
+/// goes through `git_base()` — a bare `Command::new("git")` misses
+/// CREATE_NO_WINDOW and flashes a console window on Windows on every commit.
 pub(crate) fn check_git_available() -> Result<String, String> {
-    match Command::new("git").arg("--version").output() {
+    if let Some(version) = GIT_VERSION.get() {
+        return Ok(version.clone());
+    }
+    match git_base().arg("--version").output() {
         Ok(out) if out.status.success() => {
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let _ = GIT_VERSION.set(version.clone());
+            Ok(version)
         }
         Ok(_) => Err("git --version exited with non-zero status".to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -111,6 +128,44 @@ pub(crate) fn check_git_available() -> Result<String, String> {
             Err(super::deps::GIT.missing_message())
         }
         Err(e) => Err(format!("Failed to run git --version: {e}")),
+    }
+}
+
+/// One lock per repository root, guarding the commands that write that repo's
+/// index or working tree.
+///
+/// Until these commands moved off the main thread they were serialized by the
+/// event loop, so nothing could interleave. Now that they run concurrently, two
+/// index writers racing — the user committing while the worktree reconciler
+/// applies an agent's patch, say — would collide on `.git/index.lock` and fail
+/// one of them with a cryptic error. This restores exactly the mutual exclusion
+/// the main thread used to provide, and nothing more: read-only commands
+/// (status, log, diff, branches) take no lock and still run in parallel. Git
+/// itself degrades gracefully when its opportunistic index refresh can't take
+/// the lock, so readers need no protection.
+/// Each per-repo lock is leaked so it lives for the process and callers can hold a
+/// plain `MutexGuard<'static, ()>`. Bounded by the number of distinct project roots
+/// opened in a session — a handful of pointers, never freed, never grows unbounded.
+static REPO_LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
+
+/// Acquire the write lock for `root`. Hold the returned guard for the duration of
+/// the git invocations that mutate the repo.
+///
+/// Poisoning is ignored deliberately: the guard protects nothing but ordering, so
+/// a panic in an unrelated command must not wedge every later git write.
+fn lock_repo_write(root: &Path) -> MutexGuard<'static, ()> {
+    let registry = REPO_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let lock: &'static Mutex<()> = {
+        let mut map = match registry.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.entry(root.to_path_buf())
+            .or_insert_with(|| &*Box::leak(Box::new(Mutex::new(()))))
+    };
+    match lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -235,7 +290,7 @@ pub fn workspace_get_recent(
     state.workspace_manager.get_recent_projects()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_commit(
     project_id: String,
     message: String,
@@ -282,6 +337,10 @@ pub fn workspace_git_commit(
         Some(_) => return Err("No files selected to commit.".to_string()),
         None => None,
     };
+
+    // Hold the repo write lock across the add + commit pair so the reconciler
+    // can't apply an agent patch between them and land in this commit.
+    let _repo = lock_repo_write(root_path);
 
     // 1. Stage changes. With a selection, stage only those paths (the "--"
     //    separator stops paths that begin with "-" from being read as flags);
@@ -343,7 +402,7 @@ pub fn workspace_git_commit(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_push(project_id: String, state: State<AppState>) -> Result<String, String> {
     let projects = state.workspace_manager.list_projects();
     let project = projects
@@ -407,7 +466,7 @@ pub fn workspace_git_push(project_id: String, state: State<AppState>) -> Result<
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result<String, String> {
     let projects = state.workspace_manager.list_projects();
     let project = projects
@@ -584,7 +643,11 @@ pub struct SearchResult {
     pub line_content: String,
 }
 
-#[tauri::command]
+/// `async` because this walks the entire project tree and reads every candidate
+/// file into memory. On the main thread (a plain `#[tauri::command]`) that froze
+/// the whole window for the duration of the scan — seconds on a large repo, and
+/// it scales with the user's project, not ours.
+#[tauri::command(async)]
 pub fn workspace_search_codebase(
     project_path: String,
     query: String,
@@ -710,7 +773,7 @@ pub struct GitStatus {
     pub total_deletions: i32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_status(
     project_id: String,
     state: State<AppState>,
@@ -840,7 +903,7 @@ pub fn workspace_git_status(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_discard_file(
     project_id: String,
     file_path: String,
@@ -878,6 +941,8 @@ pub fn workspace_git_discard_file(
     if !canonical_check.starts_with(root_path) {
         return Err("Access denied: path is outside project root".to_string());
     }
+
+    let _repo = lock_repo_write(root_path);
 
     // 1. Get current git status to see if file is untracked
     let status_output = git_base()
@@ -943,7 +1008,7 @@ pub fn workspace_git_discard_file(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_discard_all(
     project_id: String,
     confirmation: String,
@@ -964,6 +1029,10 @@ pub fn workspace_git_discard_all(
     if confirmation.trim() != "discard all changes" {
         return Err("Discard all requires explicit confirmation.".to_string());
     }
+
+    // Held across reset + clean so no concurrent write lands in between and gets
+    // destroyed by the clean without ever having been seen.
+    let _repo = lock_repo_write(root_path);
 
     // 1. Reset all tracked changes
     let reset_output = git_base()
@@ -1086,7 +1155,7 @@ fn is_valid_branch_name(branch: &str) -> bool {
 /// for one agent. Returns the worktree's absolute path plus branch metadata, or
 /// an error when the project isn't a git repo (the caller then runs the agent in
 /// the project root instead).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_create_worktree(
     project_id: String,
     branch: String,
@@ -1114,6 +1183,10 @@ pub fn workspace_git_create_worktree(
     if !is_valid_branch_name(branch) {
         return Err("Invalid branch name".to_string());
     }
+
+    // `git worktree add` writes .git/worktrees and the branch ref; serialize it
+    // against the other repo writers.
+    let _repo = lock_repo_write(root_path);
 
     let base_branch =
         git_capture(root_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".to_string());
@@ -1182,7 +1255,7 @@ pub fn workspace_git_create_worktree(
 
 /// Remove an agent worktree (and optionally delete its branch). Refuses to touch
 /// anything outside the project's managed worktree area as a safety guard.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_remove_worktree(
     project_id: String,
     worktree_path: String,
@@ -1205,6 +1278,8 @@ pub fn workspace_git_remove_worktree(
     if !in_managed_area {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
+
+    let _repo = lock_repo_write(root_path);
 
     let _ = git_base()
         .args(["worktree", "remove", "--force", &worktree_path])
@@ -1247,7 +1322,7 @@ pub struct MergeWorktreeResult {
     pub conflicted: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_merge_worktree(
     project_id: String,
     worktree_path: String,
@@ -1282,6 +1357,8 @@ pub fn workspace_git_merge_worktree(
     }
 
     let no_commit = no_commit.unwrap_or(false);
+
+    let _repo = lock_repo_write(root_path);
 
     // Ensure we're on the base branch (the main checkout, not the worktree).
     // The merge happens from the main project root against the worktree branch.
@@ -1376,7 +1453,7 @@ pub fn workspace_git_merge_worktree(
 /// Check whether a worktree has any changes relative to its base commit.
 /// Checks both uncommitted working-tree changes and committed differences not
 /// yet in the base branch. Used to decide whether to show a merge prompt.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_worktree_has_changes(
     project_id: String,
     worktree_path: String,
@@ -1436,7 +1513,7 @@ pub fn workspace_git_worktree_has_changes(
 
 /// Live status for an agent worktree: number of changed files (staged, unstaged,
 /// and untracked) plus the current branch. Used to surface review-readiness.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_worktree_status(
     worktree_path: String,
     state: State<AppState>,
@@ -1506,7 +1583,7 @@ pub struct WorktreeDelta {
 /// This is the reconciler's signal, and it deliberately asks git rather than
 /// trusting app state: it stays correct across finished turns, cleared threads,
 /// restarts, and agents that keep working after their turn was marked done.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_worktree_delta(
     project_id: String,
     worktree_path: String,
@@ -1607,7 +1684,7 @@ pub struct StageWorktreeResult {
 /// The trade-off is that the branch is not recorded as merged. That costs nothing
 /// here: the user writes the real commit in Source Control, and worktree cleanup
 /// already force-deletes the branch.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_stage_worktree(
     project_id: String,
     worktree_path: String,
@@ -1690,6 +1767,13 @@ pub fn workspace_git_stage_worktree(
 
     let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Could not resolve the worktree's HEAD.".to_string())?;
+
+    // Everything from here touches the *main* checkout's index (step 1 above only
+    // wrote the worktree's own). Taking the lock now — not earlier — keeps the
+    // snapshot, which is the slow part, off the critical section, while still
+    // guaranteeing the diff and the `apply --index` see the same index the user's
+    // commit isn't halfway through rewriting.
+    let _repo = lock_repo_write(root_path);
 
     // 2. Diff the delta. `--binary` keeps non-text files applyable, `--no-renames`
     //    emits plain add/delete pairs, which apply far more reliably than rename
@@ -1814,7 +1898,7 @@ pub fn workspace_git_stage_worktree(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_diff(
     project_id: String,
     file_path: Option<String>,
@@ -1921,7 +2005,7 @@ pub fn workspace_git_diff(
 /// Resolve a merge conflict in `file_path` by collapsing each conflict block to
 /// a single side. `resolution` is "ours", "theirs", or "both". The file is
 /// rewritten and staged with `git add` so Git treats the conflict as handled.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_resolve_conflict(
     project_id: String,
     file_path: String,
@@ -1955,6 +2039,8 @@ pub fn workspace_resolve_conflict(
 
     std::fs::write(&absolute_path, resolved)
         .map_err(|e| format!("Failed to write resolved file: {}", e))?;
+
+    let _repo = lock_repo_write(root_path);
 
     let output = git_base()
         .args(["add", "--", &file_path])
@@ -2040,7 +2126,7 @@ pub struct GitLogEntry {
     pub subject: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_log(
     project_id: String,
     state: State<AppState>,
@@ -2170,7 +2256,26 @@ pub struct GitBranchInfo {
     pub has_remote: bool,
 }
 
-#[tauri::command]
+/// Parse git's `%(upstream:track)` field into `(ahead, behind)`.
+///
+/// The field is a human-readable bracketed summary — `[ahead 2]`, `[behind 1]`,
+/// `[ahead 2, behind 1]`, `[gone]`, or empty — so anything unrecognised yields
+/// zeros rather than an error; a bad count must not fail the whole branch list.
+fn parse_upstream_track(track: &str) -> (usize, usize) {
+    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
+    let (mut ahead, mut behind) = (0usize, 0usize);
+    for part in inner.split(',') {
+        let part = part.trim();
+        if let Some(count) = part.strip_prefix("ahead ") {
+            ahead = count.trim().parse().unwrap_or(0);
+        } else if let Some(count) = part.strip_prefix("behind ") {
+            behind = count.trim().parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind)
+}
+
+#[tauri::command(async)]
 pub fn workspace_git_branches(
     project_id: String,
     state: State<AppState>,
@@ -2179,8 +2284,17 @@ pub fn workspace_git_branches(
     if !root_path.join(".git").exists() {
         return Err("Not a git repository".to_string());
     }
+    // One `for-each-ref` yields the branch lists *and* the current branch's
+    // upstream and ahead/behind counts. This used to be four separate git
+    // processes (branch -a, remote, rev-parse @{u}, rev-list) — ~1 s on a large
+    // repo, and the Source Control panel calls it on every refresh.
     let output = git_base()
-        .args(["branch", "-a", "--format=%(refname:short)|||%(HEAD)"])
+        .args([
+            "for-each-ref",
+            "--format=%(refname)|||%(refname:short)|||%(HEAD)|||%(upstream:short)|||%(upstream:track)",
+            "refs/heads",
+            "refs/remotes",
+        ])
         .current_dir(&root_path)
         .output()
         .map_err(|e| e.to_string())?;
@@ -2188,47 +2302,56 @@ pub fn workspace_git_branches(
     let mut current = String::new();
     let mut local = Vec::new();
     let mut remote = Vec::new();
+    let mut upstream: Option<String> = None;
+    let (mut ahead, mut behind) = (0usize, 0usize);
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(2, "|||").collect();
-        if parts.len() < 2 {
+        let parts: Vec<&str> = line.split("|||").collect();
+        if parts.len() < 5 {
             continue;
         }
-        let name = parts[0].trim().to_string();
-        let is_head = parts[1].trim() == "*";
-        if name.starts_with("remotes/") {
-            let short = name.trim_start_matches("remotes/").to_string();
-            if !short.contains("/HEAD") {
-                remote.push(short);
+        // The full refname is what distinguishes a local branch from a
+        // remote-tracking one; the short form alone is ambiguous (a local
+        // branch may legitimately be named "origin/thing").
+        let is_remote = parts[0].trim().starts_with("refs/remotes/");
+        let name = parts[1].trim().to_string();
+        let is_head = parts[2].trim() == "*";
+        if is_remote {
+            // refs/remotes entries are already short ("origin/main"); drop the
+            // origin/HEAD symref, which is not a branch anyone can check out.
+            if !name.contains("/HEAD") {
+                remote.push(name);
             }
-        } else {
-            if is_head {
-                current = name.clone();
-            }
-            local.push(name);
+            continue;
         }
+        if is_head {
+            current = name.clone();
+            // `%(upstream:track)` is "[ahead 2, behind 1]", "[gone]", or empty.
+            // "[gone]" means the remote branch was deleted; report no upstream,
+            // matching what `rev-parse @{u}` used to do (it fails outright), so
+            // the panel still offers to publish the branch.
+            let track = parts[4].trim();
+            let up = parts[3].trim();
+            if !up.is_empty() && track != "[gone]" {
+                upstream = Some(up.to_string());
+                let (a, b) = parse_upstream_track(track);
+                ahead = a;
+                behind = b;
+            }
+        }
+        local.push(name);
     }
 
-    // Remote / upstream tracking info. `@{u}` resolves the current branch's
-    // upstream; rev-list --left-right --count prints "<behind>\t<ahead>".
+    // A detached HEAD marks no ref, so nothing above set `current`.
+    if current.is_empty() {
+        current = git_capture(&root_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap_or_else(|| "HEAD".to_string());
+    }
+
+    // Kept as its own call: a remote can be configured with nothing fetched yet,
+    // so the presence of refs/remotes entries is not a substitute.
     let has_remote = git_capture(&root_path, &["remote"])
         .map(|s| !s.is_empty())
         .unwrap_or(false);
-    let upstream = git_capture(
-        &root_path,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .filter(|s| !s.is_empty());
-    let (mut ahead, mut behind) = (0usize, 0usize);
-    if let Some(ref up) = upstream {
-        let spec = format!("{}...HEAD", up);
-        if let Some(counts) =
-            git_capture(&root_path, &["rev-list", "--left-right", "--count", &spec])
-        {
-            let mut it = counts.split_whitespace();
-            behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        }
-    }
 
     Ok(GitBranchInfo {
         current,
@@ -2241,7 +2364,7 @@ pub fn workspace_git_branches(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_checkout(
     project_id: String,
     branch: String,
@@ -2252,6 +2375,7 @@ pub fn workspace_git_checkout(
     if !root_path.join(".git").exists() {
         return Err("This project is not a Git repository.".to_string());
     }
+    let _repo = lock_repo_write(&root_path);
     let output = git_base()
         .args(["switch", &branch])
         .current_dir(&root_path)
@@ -2264,7 +2388,7 @@ pub fn workspace_git_checkout(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_branch_create(
     project_id: String,
     name: String,
@@ -2295,7 +2419,7 @@ pub fn workspace_git_branch_create(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_git_branch_delete(
     project_id: String,
     name: String,
@@ -2453,6 +2577,24 @@ pub fn workspace_get_recent_daily_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- upstream tracking ---
+
+    #[test]
+    fn parses_both_directions_from_upstream_track() {
+        assert_eq!(parse_upstream_track("[ahead 2, behind 1]"), (2, 1));
+        assert_eq!(parse_upstream_track("[ahead 17]"), (17, 0));
+        assert_eq!(parse_upstream_track("[behind 3]"), (0, 3));
+    }
+
+    #[test]
+    fn treats_absent_or_unparseable_tracking_as_level() {
+        // Empty (no upstream), "[gone]" (remote branch deleted), and anything
+        // unexpected must all read as 0/0 rather than failing the branch list.
+        assert_eq!(parse_upstream_track(""), (0, 0));
+        assert_eq!(parse_upstream_track("[gone]"), (0, 0));
+        assert_eq!(parse_upstream_track("[ahead lots]"), (0, 0));
+    }
 
     // --- agent worktree area ---
 

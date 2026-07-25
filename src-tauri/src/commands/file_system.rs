@@ -47,7 +47,93 @@ pub fn require_in_roots(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
     if !roots.iter().any(|r| canonical.starts_with(r)) {
         return Err("Access denied: path is outside any open project".to_string());
     }
+    // The checks above resolve symlinks only when the OS can — `canonicalize`
+    // needs the whole chain to exist. A *dangling* symlink is invisible to them
+    // (`Path::exists` follows the link and reports false), so the path falls
+    // through the "new file" branch, reads as inside the root, and the caller's
+    // `fs::write` / `create_dir_all` then follows the link and lands outside it.
+    // This closes that gap by inspecting the links themselves.
+    require_no_escaping_symlink(&canonical, roots)
+}
+
+/// How many links deep to follow before giving up. Matches the spirit of the
+/// kernel's own `ELOOP` cap; a chain longer than this is pathological.
+const MAX_SYMLINK_HOPS: usize = 16;
+
+/// Reject `path` if any component of it is a symlink resolving outside `roots`.
+///
+/// `canonicalize` cannot help here: it fails outright when the target doesn't
+/// exist, which is exactly the case that escapes. So this walks the path one
+/// component at a time and uses `symlink_metadata` — which does *not* follow the
+/// link — to see each link as a link, then resolves the chain lexically and
+/// confines the result.
+///
+/// Intermediate components matter as much as the final one: `write_file` calls
+/// `create_dir_all(parent)`, and `create_dir_all` happily follows a dangling
+/// directory symlink and materialises the target outside the project.
+fn require_no_escaping_symlink(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        prefix.push(component.as_os_str());
+        // Not present at all — a genuinely new path segment, nothing to follow.
+        let Ok(meta) = std::fs::symlink_metadata(&prefix) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        let mut resolved = prefix.clone();
+        for _ in 0..MAX_SYMLINK_HOPS {
+            let Ok(target) = std::fs::read_link(&resolved) else {
+                break; // no longer a link: the chain ended
+            };
+            resolved = if target.is_absolute() {
+                target
+            } else {
+                // A relative link resolves against the directory holding it.
+                resolved
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .join(target)
+            };
+            resolved = crate::commands::clean_path_buf(lexically_normalize(&resolved));
+            if !roots.iter().any(|r| resolved.starts_with(r)) {
+                return Err(
+                    "Access denied: path crosses a symlink pointing outside any open project"
+                        .to_string(),
+                );
+            }
+            // Target is inside a root, but it may itself be a link out — keep going.
+            match std::fs::symlink_metadata(&resolved) {
+                Ok(m) if m.file_type().is_symlink() => continue,
+                _ => break,
+            }
+        }
+    }
     Ok(())
+}
+
+/// Resolve `.` and `..` purely lexically, with no filesystem access.
+///
+/// Needed because the paths handled here may not exist, so `canonicalize` is not
+/// available. A leading `..` that would climb above the path root is dropped
+/// rather than escaping — callers confine the result against the project roots
+/// immediately afterwards, so a truncated path fails that check.
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut out: Vec<std::path::Component> = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                // Never pop a prefix/root component (`C:\`, `/`).
+                if let Some(std::path::Component::Normal(_)) = out.last() {
+                    out.pop();
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out.iter().collect()
 }
 
 fn resolve_path(path: &str) -> Result<PathBuf, String> {
@@ -121,7 +207,18 @@ pub struct FileEntry {
     pub modified: String,
 }
 
-#[tauri::command]
+/// Every command in this module does blocking disk I/O, so they are all declared
+/// `#[tauri::command(async)]` — Tauri runs a plain `#[tauri::command]` on the
+/// main thread, where a single large read, a recursive copy, or a `remove_dir_all`
+/// over `node_modules` freezes the whole window (including dragging it) until it
+/// finishes. `async` moves them onto the async runtime instead. Same reasoning as
+/// the git commands in `commands::workspace`, which were moved off the main
+/// thread for exactly this reason; these were simply missed at the time.
+///
+/// Concurrency is safe here: each command re-checks project confinement itself
+/// and the operations touch independent paths. Two writes racing on one file was
+/// already possible from the frontend and is unchanged by this.
+#[tauri::command(async)]
 pub fn fs_read_dir(path: String, state: State<AppState>) -> Result<Vec<FileEntry>, String> {
     read_dir(&path, &project_roots(&state))
 }
@@ -169,7 +266,7 @@ pub fn read_dir(path: &str, roots: &[PathBuf]) -> Result<Vec<FileEntry>, String>
     Ok(entries)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_create_file(path: String, state: State<AppState>) -> Result<(), String> {
     create_file(&path, &project_roots(&state))
 }
@@ -184,7 +281,7 @@ pub fn create_file(path: &str, roots: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_create_dir(path: String, state: State<AppState>) -> Result<(), String> {
     create_dir(&path, &project_roots(&state))
 }
@@ -195,7 +292,7 @@ pub fn create_dir(path: &str, roots: &[PathBuf]) -> Result<(), String> {
     std::fs::create_dir_all(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_rename(from: String, to: String, state: State<AppState>) -> Result<(), String> {
     rename(&from, &to, &project_roots(&state))
 }
@@ -208,7 +305,7 @@ pub fn rename(from: &str, to: &str, roots: &[PathBuf]) -> Result<(), String> {
     std::fs::rename(&from_path, &to_path).map_err(|e| format!("Failed to rename: {}", e.kind()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_delete(path: String, state: State<AppState>) -> Result<(), String> {
     delete(&path, &project_roots(&state))
 }
@@ -223,7 +320,7 @@ pub fn delete(path: &str, roots: &[PathBuf]) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_copy(from: String, to: String, state: State<AppState>) -> Result<(), String> {
     copy(&from, &to, &project_roots(&state))
 }
@@ -361,6 +458,105 @@ mod tests {
 
     // --- redact_path ---
 
+    // --- symlink confinement (S3) ---
+
+    #[test]
+    fn lexically_normalize_resolves_dot_and_dotdot() {
+        assert_eq!(
+            lexically_normalize(Path::new("a/b/../c")),
+            PathBuf::from("a/c")
+        );
+        assert_eq!(
+            lexically_normalize(Path::new("a/./b")),
+            PathBuf::from("a/b")
+        );
+        // Climbing past the start truncates rather than escaping; the caller's
+        // root check then rejects the result.
+        assert_eq!(lexically_normalize(Path::new("a/../..")), PathBuf::from(""));
+    }
+
+    #[test]
+    fn plain_paths_are_unaffected_by_the_symlink_check() {
+        let dir = TempDir::new().unwrap();
+        let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).unwrap());
+        let roots = vec![root.clone()];
+        std::fs::write(root.join("real.txt"), "x").unwrap();
+        // An existing regular file and a not-yet-created file both pass.
+        assert!(require_no_escaping_symlink(&root.join("real.txt"), &roots).is_ok());
+        assert!(require_no_escaping_symlink(&root.join("new.txt"), &roots).is_ok());
+        assert!(require_no_escaping_symlink(&root.join("sub/deep/new.txt"), &roots).is_ok());
+    }
+
+    /// The escape this check exists to stop. Unix-only: creating a symlink on
+    /// Windows needs elevation or Developer Mode, so the behaviour is asserted on
+    /// the platforms where the remote server (the transport that actually relies
+    /// on this confinement) runs.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_out_of_the_project_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).unwrap());
+        let outside_root =
+            crate::commands::clean_path_buf(std::fs::canonicalize(outside.path()).unwrap());
+        let roots = vec![root.clone()];
+
+        // Target deliberately does NOT exist: `Path::exists` follows the link and
+        // reports false, which is what let this through before.
+        let victim = outside_root.join("authorized_keys");
+        let link = root.join("innocent.txt");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert!(!link.exists(), "precondition: the link dangles");
+
+        let err = require_in_roots(&link, &roots).unwrap_err();
+        assert!(err.contains("symlink"), "got: {err}");
+
+        // And the command layer refuses rather than creating the outside file.
+        assert!(write_file(&link.to_string_lossy(), "pwned", &roots).is_err());
+        assert!(!victim.exists(), "must not have been created outside the root");
+    }
+
+    /// `write_file` calls `create_dir_all(parent)`, which follows a dangling
+    /// *directory* symlink just as readily — so intermediate components are
+    /// checked too, not only the final one.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_directory_symlink_component_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).unwrap());
+        let outside_root =
+            crate::commands::clean_path_buf(std::fs::canonicalize(outside.path()).unwrap());
+        let roots = vec![root.clone()];
+
+        let victim_dir = outside_root.join("escaped");
+        std::os::unix::fs::symlink(&victim_dir, root.join("linkdir")).unwrap();
+
+        let target = root.join("linkdir").join("file.txt");
+        assert!(require_in_roots(&target, &roots).is_err());
+        assert!(write_file(&target.to_string_lossy(), "pwned", &roots).is_err());
+        assert!(!victim_dir.exists(), "must not have been created outside the root");
+    }
+
+    /// A symlink that stays inside the project is ordinary and must keep working
+    /// — repos legitimately contain them.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_staying_inside_the_project_is_allowed() {
+        let dir = TempDir::new().unwrap();
+        let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).unwrap());
+        let roots = vec![root.clone()];
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::os::unix::fs::symlink(root.join("pkg").join("target.txt"), root.join("alias.txt"))
+            .unwrap();
+        assert!(require_in_roots(&root.join("alias.txt"), &roots).is_ok());
+        assert!(write_file(&root.join("alias.txt").to_string_lossy(), "ok", &roots).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(root.join("pkg").join("target.txt")).unwrap(),
+            "ok"
+        );
+    }
+
     #[test]
     fn redact_path_keeps_only_filename() {
         let result = redact_path("/home/user/secrets/password.txt");
@@ -375,7 +571,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_read_file(path: String, state: State<AppState>) -> Result<String, String> {
     read_file(&path, &project_roots(&state))
 }
@@ -389,7 +585,7 @@ pub fn read_file(path: &str, roots: &[PathBuf]) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_read_binary(path: String, state: State<AppState>) -> Result<Vec<u8>, String> {
     read_binary(&path, &project_roots(&state))
 }
@@ -403,7 +599,7 @@ pub fn read_binary(path: &str, roots: &[PathBuf]) -> Result<Vec<u8>, String> {
     std::fs::read(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_write_file(path: String, content: String, state: State<AppState>) -> Result<(), String> {
     write_file(&path, &content, &project_roots(&state))
 }
@@ -420,7 +616,7 @@ pub fn write_file(path: &str, content: &str, roots: &[PathBuf]) -> Result<(), St
     std::fs::write(&file_path, content).map_err(|e| sanitize_io_error(e, path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_write_binary(path: String, data: Vec<u8>, state: State<AppState>) -> Result<(), String> {
     write_binary(&path, &data, &project_roots(&state))
 }
@@ -455,7 +651,7 @@ fn pasted_images_dir() -> PathBuf {
 /// root: the destination directory is fixed and app-controlled, and only the
 /// *filename* comes from the caller — reduced to a bare name so a crafted value
 /// can't traverse out of the scratch dir.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_pasted_image(name: String, data: Vec<u8>) -> Result<String, String> {
     if data.len() > 100 * 1024 * 1024 {
         return Err("Image too large to save (limit 100 MB)".to_string());
@@ -477,7 +673,7 @@ pub fn save_pasted_image(name: String, data: Vec<u8>) -> Result<String, String> 
 /// Delete the pasted-image scratch directory. Called on app exit so ephemeral
 /// clipboard pastes don't accumulate across sessions. A missing dir is not an
 /// error — nothing was pasted this run.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_pasted_images() -> Result<(), String> {
     let dir = pasted_images_dir();
     if dir.exists() {
@@ -487,7 +683,7 @@ pub fn clear_pasted_images() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fs_get_file_info(path: String, state: State<AppState>) -> Result<FileEntry, String> {
     get_file_info(&path, &project_roots(&state))
 }

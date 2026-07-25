@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import { remoteTarget, setConnectionStatus } from '$lib/stores/remoteWorkspace';
 import type { PtyHandlers, PtySession, ShellInfo } from './pty-bridge';
@@ -54,6 +55,9 @@ class RemotePtyConnection {
   // Sessions being silently re-attached after a reconnect; their replay frame is
   // dropped (already on screen) rather than fed to onReplay.
   private readonly reattaching = new Map<number, number>(); // reqId -> session id
+  // Loopback URL standing in for `url`, once the backend relay is up (see
+  // socketUrl). Null until first dial.
+  private relayUrl: string | null = null;
   // Set once the caller explicitly disconnects, so an intentional socket close
   // isn't treated as a drop to reconnect from.
   private closed = false;
@@ -63,6 +67,28 @@ class RemotePtyConnection {
   constructor(url: string, token: string) {
     this.url = url;
     this.token = token;
+  }
+
+  /**
+   * The URL the WebView is actually allowed to dial.
+   *
+   * The app's `connect-src` permits `ws://127.0.0.1:*` and nothing else, so a
+   * direct `ws://<remote-host>:9000/pty` is blocked by CSP before it leaves the
+   * page (`securitypolicyviolation: connect-src <- ws://…`). The backend binds a
+   * loopback relay to the real host and we dial that instead — same handshake,
+   * same subprotocol token, same frames, but an origin the policy allows. See
+   * `commands/remote_relay.rs`.
+   *
+   * Cached per connection: the relay is keyed by upstream host in Rust and
+   * reused, so a reconnect resolves to the same port.
+   */
+  private async socketUrl(): Promise<string> {
+    if (this.relayUrl) return this.relayUrl;
+    const original = new URL(this.url);
+    const port = await invoke<number>('remote_relay_start', { url: this.url });
+    // Keep the path and query — the server routes on `/pty` vs `/lsp`.
+    this.relayUrl = `ws://127.0.0.1:${port}${original.pathname}${original.search}`;
+    return this.relayUrl;
   }
 
   private ensure(): Promise<void> {
@@ -81,28 +107,35 @@ class RemotePtyConnection {
       this.reconnectTimer = null;
     }
     setConnectionStatus(kind);
-    this.ready = new Promise<void>((resolve, reject) => {
-      // Authenticate via subprotocol, not a `?token=` query param — keeps the
-      // token out of URLs/logs, and it's the only header the browser WebSocket
-      // API lets us set. The server echoes back `spacron.v1` to complete the
-      // handshake. Token must be a valid WS subprotocol token (alphanumeric /
-      // base64url). See spacron-server's ws_handler.
-      const ws = new WebSocket(this.url, ['spacron.v1', `token.${this.token}`]);
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = () => {
-        this.backoff = RECONNECT_BASE_MS;
-        setConnectionStatus('connected');
-        // Re-attach sessions and watches that outlived the old socket. On the
-        // first connect both sets are empty, so this is a no-op.
-        this.resumeSessions();
-        this.rearmWatches();
-        resolve();
-      };
-      ws.onerror = () => reject(new Error('Remote workspace WebSocket error'));
-      ws.onclose = () => this.handleClose();
-      ws.onmessage = (ev) => this.handleMessage(ev);
-      this.ws = ws;
-    });
+    // The relay has to be up before the socket can be opened, so `ready` chains
+    // off it. A relay failure (bad URL, unsupported scheme) rejects `ready` the
+    // same way a failed handshake does, so callers surface it identically.
+    this.ready = this.socketUrl().then(
+      (target) =>
+        new Promise<void>((resolve, reject) => {
+          // Authenticate via subprotocol, not a `?token=` query param — keeps the
+          // token out of URLs/logs, and it's the only header the browser WebSocket
+          // API lets us set. The server echoes back `spacron.v1` to complete the
+          // handshake. Token must be a valid WS subprotocol token (alphanumeric /
+          // base64url). See spacron-server's ws_handler. The relay forwards the
+          // handshake byte-for-byte, so the token still travels end-to-end.
+          const ws = new WebSocket(target, ['spacron.v1', `token.${this.token}`]);
+          ws.binaryType = 'arraybuffer';
+          ws.onopen = () => {
+            this.backoff = RECONNECT_BASE_MS;
+            setConnectionStatus('connected');
+            // Re-attach sessions and watches that outlived the old socket. On the
+            // first connect both sets are empty, so this is a no-op.
+            this.resumeSessions();
+            this.rearmWatches();
+            resolve();
+          };
+          ws.onerror = () => reject(new Error('Remote workspace WebSocket error'));
+          ws.onclose = () => this.handleClose();
+          ws.onmessage = (ev) => this.handleMessage(ev);
+          this.ws = ws;
+        }),
+    );
     return this.ready;
   }
 

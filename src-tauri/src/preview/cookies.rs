@@ -14,12 +14,14 @@
 //! matching real browser behavior. The file is plain JSON in the app config
 //! dir, readable only by the user's own account.
 
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use base64::Engine as _;
 use reqwest::header::HeaderValue;
 
 pub struct PersistentJar {
@@ -142,6 +144,116 @@ impl PersistentJar {
             None
         } else {
             Some(value)
+        }
+    }
+}
+
+/// The partition every request falls back to when no top-level origin has been
+/// committed yet (a fresh tab, `about:blank`, a local-file preview).
+pub const DEFAULT_PARTITION: &str = "\u{0}default";
+
+/// Cookie jars partitioned by the **top-level** origin the user navigated to.
+///
+/// # Why partition at all
+///
+/// Every proxied site is served from the one loopback proxy origin, so the
+/// browser's same-origin policy cannot separate two sites the way it would in a
+/// real browser: script on page A can `fetch()` page B's proxy URL, or simply
+/// frame it, and read the result — it is all "same origin" to the WebView. With
+/// a single shared jar the proxy would attach B's real session cookies to that
+/// request, turning any page the user visits into a reader of every other
+/// logged-in site. `preview::proxy_origin_e2e` demonstrates the attack.
+///
+/// Partitioning is the same fix browsers shipped for third-party tracking
+/// (Firefox Total Cookie Protection / Chrome CHIPS): cookies are keyed not just
+/// by the site that set them but by the top-level site you were on at the time.
+/// A request made while the user is on `https://evil.example` looks up the
+/// `https://evil.example` partition, which has never seen a Google login, so no
+/// Google cookie is attached — no matter how the request was made, `fetch` or
+/// nested iframe alike. The user's real Google session lives in the
+/// `https://mail.google.com` partition and is used only when that is the page
+/// they are actually on.
+///
+/// # Why the partition key must come from the app, not the request
+///
+/// The partition is set explicitly by the frontend before it assigns
+/// `iframe.src`, because the frontend is the only party that knows which
+/// navigation is *top-level*. Inferring it from request traffic — "this looks
+/// like a document load, so it must be the new top-level page" — is exactly what
+/// the framing attack subverts: a nested `<iframe src="/proxy/…/mail.google.com">`
+/// is also a document load.
+///
+/// # Storage
+///
+/// One JSON file per partition under `dir`, named by the base64url of the
+/// partition key so any origin maps to a distinct, filesystem-safe name on every
+/// platform. Only persistent cookies are written (see [`PersistentJar`]).
+pub struct PartitionedJars {
+    dir: PathBuf,
+    jars: RwLock<HashMap<String, Arc<PersistentJar>>>,
+}
+
+impl PartitionedJars {
+    pub fn new(dir: PathBuf) -> Arc<Self> {
+        Arc::new(PartitionedJars {
+            dir,
+            jars: RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Base64url so `https://a-b.com` and `https://a_b.com` can never collide
+    /// onto one file — a collision would silently merge two sites' cookies and
+    /// reopen the very hole this exists to close.
+    fn file_name(partition: &str) -> String {
+        format!(
+            "{}.json",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(partition.as_bytes())
+        )
+    }
+
+    /// The jar for `partition`, loading it from disk on first use.
+    pub fn get(self: &Arc<Self>, partition: &str) -> Arc<PersistentJar> {
+        if let Some(jar) = self
+            .jars
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(partition)
+        {
+            return jar.clone();
+        }
+        let mut jars = self.jars.write().unwrap_or_else(|e| e.into_inner());
+        // Re-check: another thread may have loaded it while we waited.
+        if let Some(jar) = jars.get(partition) {
+            return jar.clone();
+        }
+        let jar = PersistentJar::load(self.dir.join(Self::file_name(partition)));
+        jar.ensure_saver();
+        jars.insert(partition.to_string(), jar.clone());
+        jar
+    }
+
+    /// Flush every loaded partition (app exit).
+    pub fn flush_all(&self) {
+        for jar in self.jars.read().unwrap_or_else(|e| e.into_inner()).values() {
+            jar.flush_if_dirty();
+        }
+    }
+
+    /// "Clear browsing data": drop every partition, in memory and on disk.
+    pub fn clear_all(&self) {
+        let mut jars = self.jars.write().unwrap_or_else(|e| e.into_inner());
+        for jar in jars.values() {
+            jar.clear();
+        }
+        jars.clear();
+        // Sweep the directory too, so partitions that were never loaded this run
+        // don't survive a "clear everything".
+        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
         }
     }
 }

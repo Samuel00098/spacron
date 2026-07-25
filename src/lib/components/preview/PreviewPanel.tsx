@@ -483,7 +483,67 @@ export default function PreviewPanel() {
     [buildLocalProxyUrl, buildExternalProxyUrl, proxyPortValue, proxyStartedValue],
   );
 
-  const activeIframeSrc = activeTab ? buildIframeSrc(activeTab.loadUrl ?? activeTab.url) : '';
+  // ── Cookie-partition handshake ──────────────────────────────────────────
+  //
+  // The proxy partitions its cookie jars by the top-level origin the user is on,
+  // so a page can never borrow another site's session (see
+  // `preview::cookies::PartitionedJars`). We are the only party that knows which
+  // navigation is top-level, so we publish it — and we must do so *before* the
+  // iframe starts loading, or the document request (and any Set-Cookie on it)
+  // lands in the previous site's partition.
+  //
+  // Hence the handshake: `committedUrl` trails `desiredUrl` by exactly one
+  // backend round-trip. The active iframe keeps rendering the previous URL for
+  // that instant rather than blanking, so nothing flickers or reloads.
+  const desiredUrl = activeTab ? (activeTab.loadUrl ?? activeTab.url) : '';
+  const [committedUrl, setCommittedUrl] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Absolute http(s) URLs carry a real origin; about:blank, local-file
+      // previews and relative dev-server paths have none and use the default
+      // partition.
+      let origin: string | null = null;
+      try {
+        const parsed = new URL(normalizeUrl(desiredUrl));
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          origin = parsed.origin;
+        }
+      } catch {
+        /* not an absolute URL — default partition */
+      }
+      try {
+        await invoke('preview_set_active_origin', { origin });
+      } catch (err) {
+        // Never strand the preview on a failed IPC: fall through and load. The
+        // worst case is a request served from the default partition, which holds
+        // no other site's credentials.
+        console.error('Failed to set preview cookie partition:', err);
+      }
+      if (!cancelled) setCommittedUrl(desiredUrl);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [desiredUrl]);
+
+  // Background tabs keep their own URL: their src never changes here, so they
+  // are not reloaded by a partition switch. They do share the foreground
+  // partition while they are in the background, which can only ever *withhold*
+  // their cookies, never hand them someone else's — safe, but it means a
+  // background tab's polling requests go out uncredentialed until you focus it.
+  // Fully per-tab partitioning needs a per-tab path prefix on the proxy; see the
+  // note in cookies.rs.
+  const srcForTab = useCallback(
+    (tab: { id: string; url: string; loadUrl?: string }) =>
+      buildIframeSrc(
+        tab.id === activeTabId ? committedUrl || (tab.loadUrl ?? tab.url) : (tab.loadUrl ?? tab.url),
+      ),
+    [buildIframeSrc, activeTabId, committedUrl],
+  );
+
+  const activeIframeSrc = activeTab ? buildIframeSrc(committedUrl || desiredUrl) : '';
 
   const showYoutubeHomepageWarning =
     !proxyStartedValue &&
@@ -907,6 +967,25 @@ export default function PreviewPanel() {
         if (!/^https?:\/\//i.test(reported)) return;
         // Only the active tab owns the visible address bar.
         if (activeTabRef.current?.id !== sourceTabId) return;
+        // A link click or form submit inside the page moved the top-level
+        // document to a new origin, so the cookie partition has to follow it —
+        // otherwise the new site's own requests would keep resolving against the
+        // origin the user arrived from. This runs after the document has loaded
+        // (that is the earliest the page can report itself), so it corrects the
+        // partition for everything the page does from here on. Only the
+        // top-level frame reaches this handler: a nested iframe's `event.source`
+        // does not match any tab's `contentWindow`, so `sourceTabId` is undefined
+        // above and we have already returned — which is what keeps a framed
+        // victim from claiming the partition.
+        try {
+          const reportedOrigin = new URL(reported).origin;
+          void invoke('preview_set_active_origin', { origin: reportedOrigin }).catch((err) =>
+            console.error('Failed to update preview cookie partition:', err),
+          );
+        } catch {
+          /* unparseable URL — leave the partition as it is */
+        }
+
         const wasDriven = drivenLoadTabsRef.current.delete(sourceTabId);
         if (reported === activeTabRef.current?.url) return; // already accurate
         if (wasDriven) {
@@ -1637,7 +1716,7 @@ export default function PreviewPanel() {
               <div className="device-screen">
                 <div className="preview-frame-stack">
                   {(tabs || []).map((tab) => {
-                    const tabSrc = buildIframeSrc(tab.loadUrl ?? tab.url);
+                    const tabSrc = srcForTab(tab);
                     if (!tabSrc) return null;
                     return (
                       <iframe
@@ -1662,7 +1741,7 @@ export default function PreviewPanel() {
           ) : (
             <div className="preview-frame-stack">
               {(tabs || []).map((tab) => {
-                const tabSrc = buildIframeSrc(tab.loadUrl ?? tab.url);
+                const tabSrc = srcForTab(tab);
                 if (!tabSrc) return null;
                 return (
                   <iframe

@@ -942,14 +942,22 @@ export async function mergeAndApproveMailboxCard(
  *    remainder and re-checks before deleting. An earlier version keyed off a
  *    sticky `worktreeStaged` boolean, so committing one agent's work force-deleted
  *    branches still holding work nobody had reviewed — unrecoverable.
+ *
+ * Returns how many worktrees it attempted, so the caller knows whether the main
+ * checkout may have moved underneath it. Reclaiming stages any remainder into the
+ * index, so a non-zero result means a displayed git status is now stale. Zero —
+ * the common case, no finished agents — means nothing was touched and no refresh
+ * is warranted.
  */
-export async function cleanupStaleWorktrees(projectId: string): Promise<void> {
+export async function cleanupStaleWorktrees(projectId: string): Promise<number> {
   const finished = new Set(['complete', 'failed', 'cancelled']);
   const tasks = get(orchestratorTasks).filter(
     (t) => t.projectId === projectId && t.worktree && finished.has(t.status) && !agentSessionLive(t)
   );
+  let attempted = 0;
   for (const task of tasks) {
     if (!task.worktree) continue;
+    attempted += 1;
     const outcome = await reclaimWorktree(projectId, task.worktree, { deleteBranch: true });
     if (outcome.removed) {
       forgetWorktree(task.worktree.path);
@@ -958,6 +966,7 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<void> {
     // Not removed → it still holds work (or needs a conflict resolved). Leave it
     // alone; the Agent changes list is already showing it.
   }
+  return attempted;
 }
 
 /** Whether the agent that owns this task still has a live terminal pane. */

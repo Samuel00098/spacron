@@ -322,12 +322,17 @@ export default function SourceControl() {
     try {
       await invoke<string>('workspace_git_commit', { projectId: id, message: commitMessage.trim(), files });
       showToast('Successfully committed changes!', 'success');
-      // After a successful commit, reclaim the worktrees of agents that are gone
-      // and fully staged. Anything still holding unstaged work is kept.
-      void cleanupStaleWorktrees(id);
       setCommitMessage('');
       commitMessageRef.current = '';
       await refreshAll();
+      // Reclaim the worktrees of agents that are gone and fully staged; anything
+      // still holding unstaged work is kept. Deliberately *after* refreshAll:
+      // this costs several git round trips per finished agent, and running it
+      // first delayed the commit's visible result by that much. It can move the
+      // index (reclaiming stages any remainder), so refresh again if it acted.
+      void cleanupStaleWorktrees(id).then((attempted) => {
+        if (attempted > 0) void refreshAll();
+      });
     } catch (err) {
       console.error(err);
       showToast(String(err) || 'Git commit failed.', 'error');

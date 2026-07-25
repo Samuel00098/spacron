@@ -12,7 +12,9 @@ pub struct DbQueryResult {
     pub is_select: bool,
 }
 
-#[tauri::command]
+/// `async`: an arbitrary user query can run for an unbounded time, and on the
+/// main thread that blocks the entire UI until the database returns.
+#[tauri::command(async)]
 pub fn db_list_tables(path: String, state: State<AppState>) -> Result<Vec<String>, String> {
     let p = Path::new(&path);
     super::file_system::require_in_project(p, &state)?;
@@ -34,7 +36,7 @@ pub fn db_list_tables(path: String, state: State<AppState>) -> Result<Vec<String
     Ok(tables)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn db_execute_query(
     path: String,
     query: String,

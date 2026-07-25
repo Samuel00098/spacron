@@ -105,6 +105,20 @@ pub async fn preview_open_in_browser(url: String, app: tauri::AppHandle) -> Resu
 /// webview, so stale auth cookies — e.g. a JWT minted against a skewed clock —
 /// and cached assets can accumulate in the platform webview profile. Tauri maps
 /// this to the native WebView2, WKWebView, or WebKitGTK clear operation for the
+/// Publish the top-level origin the preview browser has navigated to.
+///
+/// This is the key the proxy's cookie jars are partitioned by, so it decides
+/// which site's credentials a request may carry. The frontend calls it *before*
+/// pointing the iframe anywhere, and it is deliberately the frontend's job: only
+/// the app knows which navigation is top-level. Inferring it from request
+/// traffic ("this looks like a document load") is precisely what a nested
+/// `<iframe src="/proxy/…/victim">` subverts. Pass `None` for `about:blank` or a
+/// local-file preview, which fall back to the default partition.
+#[tauri::command]
+pub fn preview_set_active_origin(origin: Option<String>, state: State<AppState>) {
+    state.preview_manager.set_active_partition(origin);
+}
+
 /// current OS.
 #[tauri::command]
 pub async fn preview_clear_browsing_data(
