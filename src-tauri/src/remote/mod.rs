@@ -856,7 +856,7 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing 'branch' argument".to_string())?;
     let branch = branch.trim();
-    if branch.is_empty() || branch.starts_with('-') || branch.contains("..") {
+    if !is_valid_remote_branch_name(branch) {
         return Err("Invalid branch name".to_string());
     }
 
@@ -869,8 +869,14 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         return Err("Refusing to merge a path outside the managed worktree area.".to_string());
     }
 
-    let delete_after = args.get("deleteAfter").and_then(|v| v.as_bool()).unwrap_or(true);
     let no_commit = args.get("noCommit").and_then(|v| v.as_bool()).unwrap_or(false);
+    // With --no-commit the changes are only staged, so the branch is still the
+    // sole record of them: default to KEEPING the worktree unless the caller
+    // explicitly asks otherwise. Matches workspace.rs.
+    let delete_after = args
+        .get("deleteAfter")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!no_commit);
 
     // Run git merge from the main workspace root.
     let mut cmd_args: Vec<&str> = vec!["merge", "--no-ff"];
@@ -891,7 +897,9 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         .map_err(|e| format!("Failed to run git merge: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();        if output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
         if delete_after {
             let _ = std::process::Command::new("git")
                 .args(["worktree", "remove", "--force", worktree_path])
@@ -912,6 +920,8 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
 
         let msg = if stderr.contains("Already up to date") {
             "Already up to date — no new changes to merge.".to_string()
+        } else if no_commit && delete_after {
+            format!("Changes from '{branch}' staged for review in Source Control — worktree and branch removed.")
         } else if no_commit {
             format!("Changes from '{branch}' staged for review in Source Control — worktree kept for reference.")
         } else if delete_after {
@@ -927,16 +937,36 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         }))
     } else {
         let has_conflicts = stderr.contains("conflict") || stdout.contains("CONFLICT");
+        // Route git output through the same redactor the local path uses so
+        // absolute paths don't leak back to the client.
+        let err_out = crate::commands::workspace::sanitize_git_error(&stderr);
+        let std_out = crate::commands::workspace::sanitize_git_error(&stdout);
         Ok(json!({
             "success": false,
             "message": if has_conflicts {
-                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{}{}", stderr, stdout)
+                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{}{}", err_out, std_out)
             } else {
-                format!("Merge failed:\n{}{}", stderr, stdout)
+                format!("Merge failed:\n{}{}", err_out, std_out)
             },
             "conflicted": has_conflicts,
         }))
     }
+}
+
+/// Branch-name validation for the remote control path. Mirrors the rules in
+/// `commands::workspace::is_valid_branch_name` (which is private to that module).
+fn is_valid_remote_branch_name(branch: &str) -> bool {
+    let b = branch.trim();
+    !b.is_empty()
+        && b.len() <= 255
+        && !b.starts_with('-')
+        && !b.starts_with('.')
+        && !b.contains("..")
+        && !b.contains("//")
+        && !b.ends_with('/')
+        && !b.ends_with(".lock")
+        && !b.contains(['\0', ' ', '~', '^', ':', '?', '*', '[', '\\'])
+        && !b.chars().any(|c| c.is_control())
 }
 
 /// workspace_git_worktree_has_changes: check whether a worktree has any changes.
@@ -956,21 +986,34 @@ fn git_worktree_has_changes(args: Value, workspace: &Path) -> Result<Value, Stri
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing 'branch' argument".to_string())?;
 
-    let worktree_path_obj = Path::new(worktree_path);
+    if !is_valid_remote_branch_name(branch) {
+        return Err("Invalid branch name".to_string());
+    }
+
+    // Only inspect worktrees we manage, matching the guard on git_merge_worktree.
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(worktree_path));
+    if !in_managed_worktree_area(&cleaned, workspace) {
+        return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
+    }
 
     // 1. Check for uncommitted changes.
-    let porcelain = git_capture(worktree_path_obj, &["status", "--porcelain"]).unwrap_or_default();
+    let porcelain = git_capture(&cleaned, &["status", "--porcelain"]).unwrap_or_default();
     let has_uncommitted = porcelain.lines().any(|l| !l.trim().is_empty());
     if has_uncommitted {
         return Ok(json!(true));
     }
 
-    // 2. Check for committed changes not in base.
-    let count = git_capture(workspace, &["rev-list", "--count", base_commit, "..", branch])
-        .and_then(|c| c.parse::<i64>().ok())
-        .unwrap_or(0);
-
-    Ok(json!(count > 0))
+    // 2. Check for committed changes not in base. The range MUST be a single
+    //    argv entry — passing "<base>", "..", "<branch>" makes git treat `..` as
+    //    the end of revisions and the rest as a pathspec, which always fails.
+    let range = format!("{}..{}", base_commit, branch);
+    match git_capture(workspace, &["rev-list", "--count", &range]) {
+        // A genuine count: 0 really means "nothing new on the branch".
+        Some(out) => Ok(json!(out.trim().parse::<i64>().map(|n| n > 0).unwrap_or(true))),
+        // git failed — assume there may be changes rather than silently hiding
+        // the agent's work behind a "nothing to review" result.
+        None => Ok(json!(true)),
+    }
 }
 
 /// workspace_git_worktree_status: live changed-files + branch for a worktree.

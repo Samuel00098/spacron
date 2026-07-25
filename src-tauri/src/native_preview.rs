@@ -170,8 +170,12 @@ impl NativePreviewManager {
             })
             .map_err(|e| e.to_string())?;
 
-        rx.recv()
-            .map_err(|_| "Screenshot capture was interrupted".to_string())?
+        // `with_webview` dispatches to the main thread; if that thread is busy or
+        // the webview goes away, an unbounded recv() would wedge this command
+        // forever. Bound the wait so the MCP browser tool surfaces a real error
+        // instead of hanging until its own 15s timeout.
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| "Screenshot capture timed out or was interrupted".to_string())?
     }
 
     pub fn close(&self, app: &AppHandle) {

@@ -74,6 +74,7 @@ import {
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
 import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, stageTaskWorktree, getWorktreeHasChanges } from '$lib/services/orchestrator/worktree-manager';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
+import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import {
   getProjectMemoryLines,
@@ -558,43 +559,54 @@ function findTeamReviewer(projectId: string, excludeTaskId: string): string | nu
     ?? null;
 }
 
-/** Regex that detects a bounce-back signal in a Reviewer's terminal output. */
-const BOUNCE_BACK_RE = /BOUNCE\s+BACK\s*:\s*(.+)/i;
+/** Only a Reviewer's own output can approve or bounce back a handoff. */
+function isReviewer(task: OrchestratorTask): boolean {
+  return task.role === 'reviewer';
+}
 
-/** Regex that detects an approval signal in a Reviewer's terminal output.
- * Captures the branch name after \"APPROVED\". */
-const APPROVED_RE = /APPROVED\s+(\S+)/i;
+const AGENT_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer'];
+
+/**
+ * Narrow a terminal session's `role` to an orchestrator `AgentRole`.
+ *
+ * `session.role` is the terminal PANE LABEL — a free-form string that is the
+ * agent's own name ("Trinity") for orchestrator agents, and "Build" / "Server" /
+ * "Agent" elsewhere. It is not the team role. The previous `as AgentRole` cast
+ * merely silenced the type error, so adopted tasks were given nonsense roles:
+ * `ROLE_BRIEFS[role]` came back undefined and `task.role === 'builder'` never
+ * matched, which meant adopted agents never produced a handoff. Anything that
+ * isn't a real role becomes null.
+ */
+function toAgentRole(value: string | null | undefined): AgentRole | null {
+  const v = value?.trim().toLowerCase();
+  return v && (AGENT_ROLES as readonly string[]).includes(v) ? (v as AgentRole) : null;
+}
 
 /**
  * When a Reviewer bounces a handoff back, route the feedback to the Builder
  * automatically. Posts a note to the mailbox addressed to the Builder so the
  * orchestrator brain sees it on the next turn and can re-dispatch the work.
  */
-async function handleBounceBack(task: OrchestratorTask): Promise<void> {
-  if (task.status !== 'complete') return;
+async function handleBounceBack(task: OrchestratorTask): Promise<boolean> {
+  if (task.status !== 'complete' || !isReviewer(task)) return false;
 
-  const transcript = getTaskTranscript(task);
-  if (!transcript) return;
-
-  const match = BOUNCE_BACK_RE.exec(transcript);
-  if (!match) return;
-
-  const feedback = match[1].trim();
-  if (!feedback) return;
+  const verdict = parseReviewerVerdict(getTaskTranscript(task));
+  if (verdict?.kind !== 'bounce') return false;
+  const feedback = verdict.feedback;
 
   const from = task.name
     ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
     ?? task.agentPreset
     ?? 'Reviewer';
   const rootPath = projectPaths.get(task.projectId);
-  if (!rootPath) return;
+  if (!rootPath) return false;
 
   // Find the original Builder by looking for the last handoff addressed to this Reviewer
   const messages = getProjectMailbox(task.projectId);
   const handoff = [...messages]
     .reverse()
     .find((m) => m.kind === 'handoff' && m.to === from && m.taskId);
-  if (!handoff) return;
+  if (!handoff) return false;
 
   // Post the feedback to the mailbox so it surfaces in the orchestrator context
   await postMailboxMessage(task.projectId, rootPath, {
@@ -645,6 +657,7 @@ async function handleBounceBack(task: OrchestratorTask): Promise<void> {
     redelivered ? 'success' : 'info',
     8000, true,
   );
+  return true;
 }
 
 /**
@@ -653,13 +666,11 @@ async function handleBounceBack(task: OrchestratorTask): Promise<void> {
  * worktree, and merges it into main with cleanup.
  */
 async function handleApproved(task: OrchestratorTask): Promise<void> {
-  if (task.status !== 'complete') return;
+  if (task.status !== 'complete' || !isReviewer(task)) return;
 
-  const transcript = getTaskTranscript(task);
-  if (!transcript) return;
-
-  const match = APPROVED_RE.exec(transcript);
-  if (!match) return;
+  const verdict = parseReviewerVerdict(getTaskTranscript(task));
+  if (verdict?.kind !== 'approved') return;
+  const approvedBranch = verdict.branch;
 
   const from = task.name
     ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
@@ -682,9 +693,28 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
     return;
   }
 
+  // The Reviewer names the branch it approved. Merging a DIFFERENT branch than
+  // the one that was reviewed would defeat the point of the gate, so require
+  // them to agree before touching git.
+  if (approvedBranch !== worktree.branch) {
+    logTaskActivity(
+      task.id,
+      'blocked',
+      `Approval named branch '${approvedBranch}' but the handoff's worktree is '${worktree.branch}' — not merging.`,
+    );
+    showToast(
+      `Reviewer approved '${approvedBranch}' but ${handoff.from} is on '${worktree.branch}' — merge skipped, review manually`,
+      'warning',
+      10000, true,
+    );
+    return;
+  }
+
   try {
     const result = await mergeTaskWorktree(task.projectId, worktree, true);
     if (result.success) {
+      // The merge removed the worktree and branch; drop the now-dangling ref.
+      patchTask(handoff.taskId, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
       logTaskActivity(task.id, 'info', `Auto-merged branch ${worktree.branch} after approval`);
       logTaskActivity(handoff.taskId, 'info', `Branch ${worktree.branch} merged after approval`);
       showToast(`Approved & merged — ${handoff.from}'s branch merged into main`, 'success', 8000, true);
@@ -696,6 +726,20 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
   } catch (err) {
     showToast(`Auto-merge failed: ${err}`, 'error', 8000);
   }
+}
+
+/**
+ * Apply a Reviewer's verdict at most once per finished turn.
+ *
+ * A bounce-back and an approval are mutually exclusive outcomes, but they used
+ * to be fired as two independent `void` calls — so a transcript matching both
+ * (which, before the regexes were anchored, was every transcript) would merge
+ * the branch AND tell the builder to redo the work. Bounce-back wins: it is the
+ * conservative outcome, and it touches no git state.
+ */
+async function handleReviewerVerdict(task: OrchestratorTask): Promise<void> {
+  if (await handleBounceBack(task)) return;
+  await handleApproved(task);
 }
 
 async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurnOutcome): Promise<void> {
@@ -840,6 +884,8 @@ export async function mergeAndApproveMailboxCard(
         const result = await mergeTaskWorktree(projectId, worktree, true);
         if (result.success) {
           merged = true;
+          // The merge removed the worktree and branch; drop the dangling ref.
+          patchTask(card.taskId, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
           showToast(`Merged branch '${worktree.branch}' into main`, 'success', 4000);
         } else if (result.conflicted) {
           showToast(`Merge conflict — resolve then approve: ${result.message}`, 'warning', 10000);
@@ -869,20 +915,25 @@ export async function mergeAndApproveMailboxCard(
 }
 
 /**
- * Clean up stale worktrees for completed tasks that were staged via
- * `stageTaskWorktree`. Called after a successful git commit in Source Control
- * so the worktree directory and branch are removed once their changes are
- * committed. Finds all completed tasks with worktrees in this project and
- * removes them.
+ * Clean up worktrees whose changes were staged into the main checkout via
+ * `stageTaskWorktree` and have now been committed. Called after a successful
+ * git commit in Source Control.
+ *
+ * Only tasks flagged `worktreeStaged` are touched. The previous version removed
+ * the worktree of EVERY finished task in the project and passed
+ * `deleteBranch = true`, so committing one agent's staged work force-deleted
+ * every other finished agent's worktree and branch — including work that had
+ * never been staged, reviewed, or merged anywhere. That is unrecoverable, so
+ * the flag is required rather than inferred from task status.
  */
 export async function cleanupStaleWorktrees(projectId: string): Promise<void> {
   const tasks = get(orchestratorTasks).filter(
-    (t) => t.projectId === projectId && t.worktree && (t.status === 'complete' || t.status === 'failed' || t.status === 'cancelled')
+    (t) => t.projectId === projectId && t.worktree && t.worktreeStaged
   );
   for (const task of tasks) {
     if (task.worktree) {
       await removeTaskWorktree(projectId, task.worktree, true);
-      patchTask(task.id, (t) => ({ ...t, worktree: null }));
+      patchTask(task.id, (t) => ({ ...t, worktree: null, worktreeStaged: false }));
     }
   }
 }
@@ -932,8 +983,7 @@ async function completeLeasedTask(
     const rememberedTask = get(orchestratorTasks).find((t) => t.id === updated.id) ?? updated;
     void rememberTask(updated.projectId, projectPaths.get(updated.projectId), rememberedTask);
     void postAgentTurnToMailbox(updated, outcome);
-    void handleBounceBack(updated);
-    void handleApproved(updated);
+    void handleReviewerVerdict(updated);
   }
 
   if (opts?.notify === false || !updated) return;
@@ -946,7 +996,9 @@ async function completeLeasedTask(
     // If the task has a worktree with actual changes, offer to stage them for
     // review in Source Control instead of auto-merging. The user can then review
     // the diff, edit files, and commit when ready.
-    if (task.worktree && projectPaths.has(task.projectId) && await getWorktreeHasChanges(task.projectId, task.worktree)) {
+    // Read the worktree off `updated`, not the pre-transition `task` snapshot.
+    const finishedWorktree = updated.worktree ?? null;
+    if (finishedWorktree && projectPaths.has(updated.projectId) && await getWorktreeHasChanges(updated.projectId, finishedWorktree)) {
       showToast(
         `${name} finished — changes ready in Source Control`,
         'success',
@@ -957,9 +1009,11 @@ async function completeLeasedTask(
           onClick: () => {
             void (async () => {
               try {
-                const result = await stageTaskWorktree(task.projectId, task.worktree!);
+                const result = await stageTaskWorktree(updated.projectId, finishedWorktree);
                 if (result.success) {
-                  showToast(`Changes from '${task.worktree!.branch}' staged — open Source Control to review and commit`, 'success', 8000);
+                  // Mark it staged so the post-commit cleanup may remove it.
+                  patchTask(updated.id, (t) => ({ ...t, worktreeStaged: true }));
+                  showToast(`Changes from '${finishedWorktree.branch}' staged — open Source Control to review and commit`, 'success', 8000);
                 } else if (result.conflicted) {
                   showToast(`Merge conflict: ${result.message}`, 'warning', 10000);
                 } else {
@@ -1777,7 +1831,7 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
   ];
   const name = session.agentName?.trim() || pickAssistantName(taken);
   const adopted: OrchestratorTask = {
-    ...transitionTask(createTaskRecord(projectId, '', agentPreset, name, (session.role ?? null) as AgentRole | null), 'in-progress'),
+    ...transitionTask(createTaskRecord(projectId, '', agentPreset, name, toAgentRole(session.role)), 'in-progress'),
     title: session.taskSummary || session.paneTitle || session.title || 'Idle terminal agent',
     assignedSessionId: session.id,
     adopted: true,
@@ -2484,8 +2538,7 @@ if (typeof window !== 'undefined') {
       captureTaskTranscript(task.id, sessionId);
       const updated = patchTask(task.id, (t) => ({ ...transitionTask(t, 'complete'), assignedSessionId: null }));
       if (updated) {
-        void handleBounceBack(updated);
-        void handleApproved(updated);
+        void handleReviewerVerdict(updated);
       }
       // If the agent had a worktree with actual changes, offer to merge.
       // Adopted tasks may not carry the worktree on the task object (the worktree
@@ -2512,6 +2565,8 @@ if (typeof window !== 'undefined') {
                     try {
                       const result = await stageTaskWorktree(projectId, effectiveWorktree);
                       if (result.success) {
+                        // Mark it staged so the post-commit cleanup may remove it.
+                        patchTask(task.id, (t) => ({ ...t, worktree: effectiveWorktree, worktreeStaged: true }));
                         showToast(`Changes from '${effectiveWorktree.branch}' staged — open Source Control to review and commit`, 'success', 8000);
                       } else if (result.conflicted) {
                         showToast(`Merge conflict: ${result.message}`, 'warning', 10000);

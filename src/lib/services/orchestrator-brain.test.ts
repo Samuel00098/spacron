@@ -39,7 +39,7 @@ vi.mock('$lib/stores/settings', () => ({
   getProviderBaseUrl,
 }));
 
-import { routeOrchestratorRequest, resolveAgentCommand } from './orchestrator-brain';
+import { routeOrchestratorRequest, resolveAgentCommand, ADMIN_KEYWORD_RE } from './orchestrator-brain';
 
 const ALL_AGENTS = [
   { command: 'codex', name: 'Codex CLI' },
@@ -425,7 +425,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('have codex do x', ALL_AGENTS);
     expect(result.viaLLM).toBe(true);
-    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null }]);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false }]);
   });
 
   it('carries a valid team role through a spawn action', async () => {
@@ -435,7 +435,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('build a login system, plan first', ALL_AGENTS);
     expect(result.actions).toEqual([
-      { kind: 'spawn', agent: 'claude', prompt: 'plan it', name: null, role: 'coordinator', files: null },
+      { kind: 'spawn', agent: 'claude', prompt: 'plan it', name: null, role: 'coordinator', files: null, skipWorktree: false },
     ]);
   });
 
@@ -445,7 +445,7 @@ describe('routeOrchestratorRequest', () => {
     );
 
     const result = await routeOrchestratorRequest('have claude do x', ALL_AGENTS);
-    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'claude', prompt: 'do x', name: null, role: null, files: null }]);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'claude', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false }]);
   });
 
   it('carries a builder file claim through a spawn action', async () => {
@@ -455,7 +455,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('build the login form', ALL_AGENTS);
     expect(result.actions).toEqual([
-      { kind: 'spawn', agent: 'claude', prompt: 'build the form', name: null, role: 'builder', files: ['src/Login.tsx', 'src/api.ts'] },
+      { kind: 'spawn', agent: 'claude', prompt: 'build the form', name: null, role: 'builder', files: ['src/Login.tsx', 'src/api.ts'], skipWorktree: false },
     ]);
   });
 
@@ -471,5 +471,37 @@ describe('routeOrchestratorRequest', () => {
     expect(result.actions).toEqual([]);
     expect(result.viaLLM).toBe(false);
     expect(result.reply).toContain('Say the word');
+  });
+});
+
+describe('ADMIN_KEYWORD_RE', () => {
+  // Matching here makes a spawn skip git-worktree isolation and run directly in
+  // the shared main checkout. A false positive silently removes the isolation
+  // that stops concurrent agents trampling each other, so ordinary feature work
+  // must never match. The first version used bare nouns (tag|ship|deploy|
+  // publish|release) and matched all of the prompts below.
+  const ORDINARY_WORK = [
+    'add an alt tag to the hero image',
+    'fix the ship date field on the order form',
+    'restyle the deploy button in the toolbar',
+    'update the release notes component copy',
+    'rename the tag helper in utils',
+    'publish is misspelled in the footer, fix it',
+  ];
+  it.each(ORDINARY_WORK)('does not bypass isolation for: %s', (prompt) => {
+    expect(ADMIN_KEYWORD_RE.test(prompt)).toBe(false);
+  });
+
+  const RELEASE_ADMIN = [
+    'git tag v2.0 and push it',
+    'cut a release for 1.4',
+    'bump the version to 0.8.0',
+    'run npm publish',
+    'push to origin once tests pass',
+    'update the changelog for this release',
+    'deploy to production',
+  ];
+  it.each(RELEASE_ADMIN)('bypasses isolation for: %s', (prompt) => {
+    expect(ADMIN_KEYWORD_RE.test(prompt)).toBe(true);
   });
 });

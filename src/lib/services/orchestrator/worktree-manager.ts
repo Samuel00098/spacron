@@ -148,8 +148,12 @@ export async function mergeTaskWorktree(
 /**
  * Stage a worktree's changes into the main checkout WITHOUT creating a merge
  * commit, so the user can review them in Source Control and commit manually.
- * The worktree and branch are cleaned up immediately since the changes are
- * now in the main checkout's staging area.
+ *
+ * The worktree and branch are deliberately KEPT here. Staged-but-uncommitted
+ * changes can still be discarded in Source Control, so until the user actually
+ * commits, the branch is the only durable copy of the agent's work — deleting it
+ * at staging time made that discard unrecoverable. `cleanupStaleWorktrees`
+ * removes it after a successful commit instead.
  */
 export async function stageTaskWorktree(
   projectId: string,
@@ -163,7 +167,7 @@ export async function stageTaskWorktree(
     projectId,
     worktreePath: worktree.path,
     branch: worktree.branch,
-    deleteAfter: true,
+    deleteAfter: false,
     noCommit: true,
   });
   return {

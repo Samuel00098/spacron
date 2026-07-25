@@ -1397,10 +1397,21 @@ pub fn workspace_git_worktree_has_changes(
         return Err("This project is not a Git repository.".to_string());
     }
 
+    if !is_valid_branch_name(&branch) {
+        return Err("Invalid branch name".to_string());
+    }
+
+    // Only inspect worktrees we manage, matching the guard on
+    // `workspace_git_merge_worktree` — this runs git in the given directory.
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to inspect a path outside the managed worktree area.".to_string());
+    }
+
     // 1. Check for uncommitted changes inside the worktree checkout.
-    let worktree_path_obj = std::path::Path::new(&worktree_path);
-    let porcelain = git_capture(worktree_path_obj, &["status", "--porcelain"])
-        .unwrap_or_default();
+    let porcelain = git_capture(&cleaned, &["status", "--porcelain"]).unwrap_or_default();
     let has_uncommitted = porcelain.lines().any(|l| !l.trim().is_empty());
     if has_uncommitted {
         return Ok(true);
@@ -1408,15 +1419,18 @@ pub fn workspace_git_worktree_has_changes(
 
     // 2. Check for committed changes NOT in the base commit.
     //    `git rev-list --count <base_commit>..<branch>` returns the number of
-    //    commits reachable from <branch> but not from <base_commit>.
-    let count = git_capture(root_path, &["rev-list", "--count", &base_commit, "..", &branch]);
-    let has_committed = count
-        .as_deref()
-        .and_then(|c| c.parse::<i64>().ok())
-        .map(|n| n > 0)
-        .unwrap_or(false);
-
-    Ok(has_committed)
+    //    commits reachable from <branch> but not from <base_commit>. The range
+    //    MUST be a single argv entry — passing "<base>", "..", "<branch>" makes
+    //    git treat `..` as the end of revisions and the rest as a pathspec, which
+    //    always fails with "no such path in the working tree".
+    let range = format!("{}..{}", base_commit, branch);
+    match git_capture(root_path, &["rev-list", "--count", &range]) {
+        // A genuine count: 0 really means "nothing new on the branch".
+        Some(out) => Ok(out.trim().parse::<i64>().map(|n| n > 0).unwrap_or(true)),
+        // git failed — assume there may be changes rather than silently hiding
+        // the agent's work behind a "nothing to review" result.
+        None => Ok(true),
+    }
 }
 
 /// Live status for an agent worktree: number of changed files (staged, unstaged,

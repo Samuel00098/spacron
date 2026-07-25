@@ -77,6 +77,7 @@ const openFile = vi.hoisted(() => vi.fn(async (): Promise<void> => {}));
 const closeFile = vi.hoisted(() => vi.fn());
 const jumpToLine = vi.hoisted(() => ({ set: vi.fn() }));
 const navigatePreviewTab = vi.hoisted(() => vi.fn());
+const ensureProxyRunning = vi.hoisted(() => vi.fn(async () => {}));
 const getAppContextSnapshot = vi.hoisted(() => vi.fn(() => ({})));
 const sessionHasRunningProcess = vi.hoisted(() => vi.fn((s: MockLiveSession) => {
   const role = (s as { role?: string | null }).role?.toLowerCase();
@@ -85,7 +86,14 @@ const sessionHasRunningProcess = vi.hoisted(() => vi.fn((s: MockLiveSession) => 
 const NAVIGABLE_VIEWS = vi.hoisted(() => ['editor', 'terminal', 'preview', 'review', 'http', 'tasks', 'db', 'containers', 'toolbox', 'settings']);
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
-vi.mock('$lib/services/orchestrator-brain', () => ({ routeOrchestratorRequest }));
+// `sendChatMessage` also reads ADMIN_KEYWORD_RE from this module to decide
+// whether a heuristic-route spawn should skip worktree isolation, so the mock
+// has to provide it too. A bare `{ routeOrchestratorRequest }` mock made every
+// spawn-executing test throw on the missing export.
+vi.mock('$lib/services/orchestrator-brain', () => ({
+  routeOrchestratorRequest,
+  ADMIN_KEYWORD_RE: /\bgit\s+tag\b|\bcut(ting)?\s+(a\s+)?release\b/i,
+}));
 vi.mock('$lib/services/agent-access', () => ({
   detectAgentAccess,
   getAgentAccessBlockedMessage: () => 'To access the agent, add an API key or load a local model into the application.',
@@ -93,7 +101,9 @@ vi.mock('$lib/services/agent-access', () => ({
 vi.mock('$lib/stores/notification', () => ({ showToast }));
 vi.mock('$lib/stores/layout', () => ({ showTerminal, setActiveView, openSettings, sanitiseActiveView }));
 vi.mock('$lib/stores/editor', () => ({ openFile, closeFile, jumpToLine }));
-vi.mock('$lib/stores/preview', () => ({ navigatePreviewTab }));
+// `executeAppAction` awaits ensureProxyRunning() before navigating the preview,
+// so the mock must expose it alongside navigatePreviewTab.
+vi.mock('$lib/stores/preview', () => ({ navigatePreviewTab, ensureProxyRunning }));
 vi.mock('$lib/services/orchestrator/app-context', () => ({ getAppContextSnapshot, NAVIGABLE_VIEWS }));
 vi.mock('$lib/stores/runs', () => ({ getPresetRuns }));
 vi.mock('$lib/stores/terminal', () => ({

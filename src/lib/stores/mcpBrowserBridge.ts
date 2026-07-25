@@ -187,9 +187,16 @@ async function handleReadDom(args: Record<string, unknown>): Promise<unknown> {
   const limit = (args.limit as number) || 10;
 
   if (get(nativePreviewActive)) {
-    const script = `(function(){var els=document.querySelectorAll(${JSON.stringify(selector)});var out=[];for(var i=0;i<Math.min(els.length,${limit});i++){var el=els[i];out.push(${format === 'html' ? 'el.outerHTML' : 'el.innerText||el.textContent||""'});}return JSON.stringify({count:els.length,results:out});})()`;
-    await nativePreviewEval(script);
-    return { note: 'DOM query executed in native webview. Results emitted via console capture.' };
+    // `native_preview_eval` maps to Tauri's `webview.eval`, which is
+    // fire-and-forget — the script's return value is discarded and there is no
+    // channel back from an external page. Returning a "results emitted via
+    // console capture" note here was false: nothing logs the value, and the
+    // native webview has no capability entry so its IPC is unavailable too.
+    // Fail loudly rather than hand the agent a fabricated success.
+    throw new Error(
+      'browser_read_dom is not available in native webview mode (no result channel from the page). ' +
+      'Use browser_navigate with mode:"iframe" to read the DOM.',
+    );
   }
 
   const iframe = getActiveIframe();
@@ -235,14 +242,24 @@ async function handleInteract(
 
   if (get(nativePreviewActive)) {
     if (action === 'click') {
-      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 'not found';el.click();return 'clicked';})()`;
+      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return;el.click();})()`;
       await nativePreviewEval(script);
     } else {
       const text = (args.text as string) || '';
-      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return 'not found';el.focus();el.value=${JSON.stringify(text)};el.dispatchEvent(new Event('input',{bubbles:true}));${args.submit ? "el.closest('form')&&el.closest('form').requestSubmit();" : ''}return 'typed';})()`;
+      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return;el.focus();el.value=${JSON.stringify(text)};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));${args.submit ? "var f=el.closest('form');if(f)f.requestSubmit();" : ''}})()`;
       await nativePreviewEval(script);
     }
-    return { action, selector, status: 'executed' };
+    // `webview.eval` is fire-and-forget, so we cannot know whether the selector
+    // matched. Say so instead of reporting a success the page may never have
+    // performed — an agent acting on a false "clicked" is worse than an unknown.
+    return {
+      action,
+      selector,
+      status: 'dispatched',
+      verified: false,
+      note: 'Native webview mode cannot confirm the element existed or that the action took effect. ' +
+        'Use mode:"iframe" if you need a confirmed result.',
+    };
   }
 
   const iframe = getActiveIframe();
@@ -299,6 +316,10 @@ function postMessageRoundTrip(
     }, timeoutMs);
 
     function handler(event: MessageEvent) {
+      // Only accept a reply from the exact frame we asked. The preview loads
+      // arbitrary third-party pages, so without this any frame on the page (or a
+      // nested ad iframe) could forge a response and feed the agent bogus DOM.
+      if (event.source !== iframe.contentWindow) return;
       const data = event.data;
       if (data?.type === 'forge-mcp:response' && data?.requestId === requestId) {
         clearTimeout(timer);

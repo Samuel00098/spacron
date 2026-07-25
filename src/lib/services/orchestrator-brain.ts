@@ -775,11 +775,34 @@ function parseFileList(raw: unknown): string[] | null {
   return files.length ? files : null;
 }
 
-/** Admin/release keywords that signal a task should bypass worktree isolation
- * so git tag/push/changelog operations work on the main branch directly. Exported
- * so sendChatMessage can also apply the same check to heuristic-route spawns. */
-export const ADMIN_KEYWORD_RE =
-  /\b(tag|release|changelog|version\s*bump|publish|push\s+(to\s+)?(remote|origin|upstream)|npm\s+publish|deploy|ship|cut\s+(a\s+)?release)\b/i;
+/**
+ * Admin/release phrases that signal a task should bypass worktree isolation so
+ * git tag/push/changelog operations work on the main branch directly. Exported
+ * so sendChatMessage can apply the same check to heuristic-route spawns.
+ *
+ * These must be VERB PHRASES, not bare nouns. The first version matched bare
+ * `tag`, `ship`, `deploy`, `publish` and `release`, so everyday feature work —
+ * "add an image tag", "fix the ship date field", "restyle the deploy button",
+ * "update the release notes component" — silently dropped the agent into the
+ * shared main checkout, which is the exact collision worktree isolation exists
+ * to prevent. Prefer the explicit `skipWorktree` flag; this is a narrow fallback.
+ */
+export const ADMIN_KEYWORD_RE = new RegExp(
+  [
+    /\bgit\s+tag\b/,
+    /\b(create|add|push|cut)\s+(a\s+)?(new\s+)?(git\s+)?tag\b/,
+    /\bcut(ting)?\s+(a\s+)?release\b/,
+    /\b(publish|ship)\s+(a\s+)?(new\s+)?release\b/,
+    /\brelease\s+v?\d/,
+    /\b(bump|update)\s+(the\s+)?version\b/,
+    /\bversion\s*bump\b/,
+    /\b(npm|cargo|pnpm|yarn)\s+publish\b/,
+    /\bpush\s+(to\s+)?(remote|origin|upstream)\b/,
+    /\bupdate\s+(the\s+)?changelog\b/,
+    /\bdeploy\s+(to\s+)?(prod|production|staging|vercel|netlify)\b/,
+  ].map((r) => r.source).join('|'),
+  'i',
+);
 
 function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | null {
   if (!raw || typeof raw !== 'object') return null;
