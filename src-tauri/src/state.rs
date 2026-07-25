@@ -1,3 +1,4 @@
+use crate::browser_window::BrowserWindowManager;
 use crate::lsp::bridge::LspBridge;
 use crate::preview::PreviewManager;
 use crate::pty::manager::PtyManager;
@@ -46,6 +47,7 @@ pub struct AppState {
     pub pty_manager: Arc<PtyManager>,
     pub lsp_bridge: LspBridge,
     pub preview_manager: PreviewManager,
+    pub browser_window: BrowserWindowManager,
     pub write_rate_limiter: WriteRateLimiter,
     pub config_dir: PathBuf,
 }
@@ -59,6 +61,7 @@ impl AppState {
             pty_manager: Arc::new(PtyManager::new()),
             lsp_bridge: LspBridge::new(),
             preview_manager: PreviewManager::new(active_project_id, config_dir.clone()),
+            browser_window: BrowserWindowManager::new(),
             write_rate_limiter: WriteRateLimiter::new(),
             config_dir,
         }

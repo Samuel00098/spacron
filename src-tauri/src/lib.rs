@@ -1,3 +1,4 @@
+mod browser_window;
 mod commands;
 mod error;
 mod lsp;
@@ -181,7 +182,21 @@ pub fn run() {
                 })
             };
 
-            match mcp::start(0, write_cb, read_cb, spawn_fn) {
+            let browser_emit_fn: mcp::BrowserEmitFn = {
+                let ah = app_handle.clone();
+                Arc::new(move |request_id, tool, args| {
+                    let _ = ah.emit(
+                        "mcp:browser-request",
+                        serde_json::json!({
+                            "request_id": request_id,
+                            "tool": tool,
+                            "args": args,
+                        }),
+                    );
+                })
+            };
+
+            match mcp::start(0, write_cb, read_cb, spawn_fn, browser_emit_fn) {
                 Ok((handle, port)) => {
                     app.manage(handle);
                     eprintln!("MCP server started on port {}", port);
@@ -321,6 +336,12 @@ pub fn run() {
             commands::mcp::mcp_register_agent,
             commands::mcp::mcp_unregister_agent,
             commands::mcp::mcp_server_port,
+            commands::mcp::mcp_browser_respond,
+            commands::browser_window::browser_create_window,
+            commands::browser_window::browser_navigate_window,
+            commands::browser_window::browser_close_window,
+            commands::browser_window::browser_screenshot_window,
+            commands::browser_window::browser_window_is_open,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

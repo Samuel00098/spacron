@@ -34,6 +34,7 @@ import {
   selectPreviewBrowserTab,
   closePreviewBrowserTab,
 } from '$lib/stores/preview';
+import { previewConsoleLogs, pushConsoleLog, clearConsoleLogs as clearConsoleLogsStore } from '$lib/stores/previewConsole';
 import { showToast } from '$lib/stores/notification';
 import {
   browsingHistory,
@@ -334,11 +335,10 @@ export default function PreviewPanel() {
   const [showHistory, setShowHistory] = useState(false);
   const [viewportMode, setViewportMode] = useState<ViewportMode>('responsive');
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo | null>(null);
-  const [consoleLogs, setConsoleLogs] = useState<PreviewConsoleLog[]>([]);
+  const consoleLogs = useStore(previewConsoleLogs);
   const [showConsole, setShowConsole] = useState(false);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
 
-  const consoleLogIdRef = useRef(0);
   const loadFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const tabListRef = useAction<HTMLDivElement>(clampHorizontalScroll);
@@ -970,15 +970,12 @@ export default function PreviewPanel() {
         const payload = event.data.payload || {};
         const level = ['log', 'info', 'warn', 'error', 'debug'].includes(payload.level) ? payload.level : 'log';
         if (activeTabRef.current?.id === sourceTabId) {
-          consoleLogIdRef.current += 1;
-          const nextLog: PreviewConsoleLog = {
-            id: consoleLogIdRef.current,
+          pushConsoleLog({
             level,
             message: String(payload.message || ''),
             url: payload.url,
             timestamp: payload.timestamp || new Date().toISOString(),
-          };
-          setConsoleLogs((prev) => [...prev.slice(-199), nextLog]);
+          });
         }
         if ((level === 'error' || level === 'warn') && activeTabRef.current?.id === sourceTabId) {
           setShowConsole(true);
@@ -1023,7 +1020,7 @@ export default function PreviewPanel() {
   );
 
   const clearConsoleLogs = useCallback(() => {
-    setConsoleLogs([]);
+    clearConsoleLogsStore();
   }, []);
 
   const takeScreenshot = useCallback(async () => {

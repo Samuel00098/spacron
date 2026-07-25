@@ -15,6 +15,7 @@ import { homeDir } from '@tauri-apps/api/path';
 import { createTerminalSession, getSessionLabel } from './terminal';
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
+import { initMcpBrowserBridge } from './mcpBrowserBridge';
 
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
@@ -118,6 +119,8 @@ export function initMcpBridge(): void {
   });
 
   console.log('[mcp] Bridge initialized, listening for spawn-agent events');
+
+  initMcpBrowserBridge();
 }
 
 // ---------------------------------------------------------------------------

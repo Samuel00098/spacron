@@ -23,6 +23,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use dashmap::DashMap;
 use futures_util::stream::{self, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,7 +31,7 @@ use std::{
     convert::Infallible,
     net::SocketAddr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, Mutex, oneshot};
 
@@ -42,6 +43,19 @@ pub type ReadFn = Arc<dyn Fn(u32) -> Vec<u8> + Send + Sync>;
 
 /// Callback for forwarding a spawn-agent request to the frontend.
 pub type SpawnFn = Arc<dyn Fn(SpawnRequest) + Send + Sync>;
+
+/// Callback for emitting a browser-tool request to the frontend via Tauri event.
+/// Arguments: (request_id, tool_name, args_json).
+pub type BrowserEmitFn = Arc<dyn Fn(&str, &str, serde_json::Value) + Send + Sync>;
+
+/// A pending browser-tool request awaiting a response from the frontend.
+pub struct PendingBrowserRequest {
+    pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
+    pub created_at: Instant,
+}
+
+/// Shared map of in-flight browser requests, keyed by request ID.
+pub type PendingRequests = Arc<DashMap<String, PendingBrowserRequest>>;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -89,6 +103,8 @@ pub struct McpServerHandle {
     _shutdown_tx: oneshot::Sender<()>,
     /// The port the MCP server is listening on.
     pub port: u16,
+    /// In-flight browser-tool requests awaiting frontend responses.
+    pub pending_browser: PendingRequests,
 }
 
 impl McpServerHandle {
@@ -110,6 +126,17 @@ impl McpServerHandle {
         map.retain(|_, v| v.session_id != session_id);
         let _ = self.notify_tx.send(());
     }
+
+    /// Resolve a pending browser-tool request with a result from the frontend.
+    pub fn resolve_browser_request(
+        &self,
+        request_id: &str,
+        result: Result<serde_json::Value, String>,
+    ) {
+        if let Some((_, pending)) = self.pending_browser.remove(request_id) {
+            let _ = pending.tx.send(result);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,11 +150,13 @@ impl McpServerHandle {
 /// - `write_cb`: callback to write data into a PTY session.
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
+/// - `browser_emit_fn`: callback to emit a browser-tool request to the frontend.
 pub fn start(
     port: u16,
     write_cb: WriteFn,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
+    browser_emit_fn: BrowserEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
     let actual_port = if port == 0 {
         get_free_port().ok_or_else(|| "Could not find a free port for the MCP server".to_string())?
@@ -142,6 +171,7 @@ pub fn start(
     let (read_tx, _) = broadcast::channel::<ReadOutputRequest>(32);
     let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(32);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let pending_browser: PendingRequests = Arc::new(DashMap::new());
 
     let server_state = Arc::new(ServerState {
         registry: registry.clone(),
@@ -153,6 +183,18 @@ pub fn start(
         write_cb,
         read_cb,
         spawn_fn,
+        browser_emit_fn,
+        pending_browser: pending_browser.clone(),
+    });
+
+    // Background sweep: drop pending browser requests older than 30s.
+    let sweep_map = pending_browser.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            sweep_map.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(30));
+        }
     });
 
     let app = Router::new()
@@ -190,6 +232,7 @@ pub fn start(
         notify_tx,
         _shutdown_tx: shutdown_tx,
         port: actual_port,
+        pending_browser,
     };
 
     Ok((handle, actual_port))
@@ -209,6 +252,8 @@ struct ServerState {
     write_cb: WriteFn,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
+    browser_emit_fn: BrowserEmitFn,
+    pending_browser: PendingRequests,
 }
 
 // ---------------------------------------------------------------------------
@@ -338,12 +383,177 @@ fn tool_spawn_agent() -> serde_json::Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Browser tool definitions
+// ---------------------------------------------------------------------------
+
+fn tool_browser_navigate() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_navigate",
+        "description": "Navigate the embedded browser preview to a URL. Use mode='window' for sites that block iframe embedding (Google, GitHub, etc.).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to navigate to."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["iframe", "window", "auto"],
+                    "description": "iframe: use the preview panel. window: open a real browser window. auto (default): try iframe first, fall back to window if the page refuses embedding."
+                }
+            },
+            "required": ["url"]
+        }
+    })
+}
+
+fn tool_browser_screenshot() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_screenshot",
+        "description": "Capture a screenshot of the current browser preview as a base64-encoded PNG image.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector to screenshot a specific element. If omitted, captures the full viewport."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
+fn tool_browser_get_page_info() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_get_page_info",
+        "description": "Get the current URL, page title, and document readyState of the browser preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    })
+}
+
+fn tool_browser_read_dom() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_read_dom",
+        "description": "Read the text content or HTML of elements matching a CSS selector in the browser preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to match elements. Defaults to 'body'."
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["text", "html"],
+                    "description": "Return innerText or outerHTML. Defaults to 'text'."
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Max number of elements to return. Defaults to 10."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
+fn tool_browser_console_logs() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_console_logs",
+        "description": "Read captured console output (log, warn, error) from the browser preview page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "enum": ["all", "error", "warn"],
+                    "description": "Filter by log level. Defaults to 'all'."
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Max number of entries to return. Defaults to 50."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
+fn tool_browser_click() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_click",
+        "description": "Click an element in the browser preview matching a CSS selector.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the element to click."
+                }
+            },
+            "required": ["selector"]
+        }
+    })
+}
+
+fn tool_browser_type() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_type",
+        "description": "Type text into an input or textarea element in the browser preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the input element."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to type into the element."
+                },
+                "submit": {
+                    "type": "boolean",
+                    "description": "Press Enter after typing. Defaults to false."
+                }
+            },
+            "required": ["selector", "text"]
+        }
+    })
+}
+
+fn tool_browser_close_window() -> serde_json::Value {
+    serde_json::json!({
+        "name": "browser_close_window",
+        "description": "Close the standalone browser window (Tier 2) if one is open.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    })
+}
+
 fn all_tools() -> Vec<serde_json::Value> {
     vec![
         tool_list_agents(),
         tool_send_to_agent(),
         tool_read_agent_output(),
         tool_spawn_agent(),
+        tool_browser_navigate(),
+        tool_browser_screenshot(),
+        tool_browser_get_page_info(),
+        tool_browser_read_dom(),
+        tool_browser_console_logs(),
+        tool_browser_click(),
+        tool_browser_type(),
+        tool_browser_close_window(),
     ]
 }
 
@@ -635,6 +845,54 @@ async fn handle_tool_call(
                     )}
                 ]}),
             ))
+        }
+
+        // ── Browser tools — dispatched to the frontend via request-response bridge ──
+        t if t.starts_with("browser_") => {
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = oneshot::channel();
+
+            state.pending_browser.insert(
+                request_id.clone(),
+                PendingBrowserRequest {
+                    tx,
+                    created_at: Instant::now(),
+                },
+            );
+
+            (state.browser_emit_fn)(&request_id, tool_name, args);
+
+            match tokio::time::timeout(Duration::from_secs(15), rx).await {
+                Ok(Ok(Ok(result))) => {
+                    let text = match &result {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                    };
+                    Json(JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
+                    ))
+                }
+                Ok(Ok(Err(err))) => {
+                    Json(JsonRpcResponse::error(id, -32000, err))
+                }
+                Ok(Err(_)) => {
+                    Json(JsonRpcResponse::error(id, -32000, "Browser request was cancelled."))
+                }
+                Err(_) => {
+                    state.pending_browser.remove(&request_id);
+                    Json(JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        "Browser tool timed out waiting for a response (15s). The preview may not be open.",
+                    ))
+                }
+            }
         }
 
         _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: '{}'", tool_name))),

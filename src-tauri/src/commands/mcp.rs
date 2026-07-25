@@ -40,3 +40,24 @@ pub async fn mcp_unregister_agent(
 pub fn mcp_server_port(handle: State<'_, McpServerHandle>) -> Result<u16, String> {
     Ok(handle.port)
 }
+
+/// Resolve a pending browser-tool request with a result from the frontend.
+/// Called by the MCP browser bridge after executing a browser tool.
+#[tauri::command]
+pub fn mcp_browser_respond(
+    handle: State<'_, McpServerHandle>,
+    request_id: String,
+    success: bool,
+    data: serde_json::Value,
+) -> Result<(), String> {
+    let result = if success {
+        Ok(data)
+    } else {
+        Err(data
+            .as_str()
+            .unwrap_or("Unknown browser tool error")
+            .to_string())
+    };
+    handle.resolve_browser_request(&request_id, result);
+    Ok(())
+}
