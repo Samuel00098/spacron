@@ -15,6 +15,15 @@ export default defineConfig({
   },
   clearScreen: false,
   build: {
+    // CSS minification is disabled because the minifier corrupts multi-function
+    // `backdrop-filter` / `-webkit-backdrop-filter` values — it strips the space
+    // between filter functions (e.g. `blur(18px) saturate(130%)` → the invalid
+    // `blur(18px)saturate(130%)`), which WebView2 rejects. That silently killed
+    // every frosted-glass panel in packaged builds while dev (unminified) looked
+    // correct. Leaving CSS unminified keeps the built stylesheet byte-faithful to
+    // what dev serves; the size cost is irrelevant for a locally-loaded desktop
+    // app. JS minification is unaffected. See src/lib/components/layout/AppShell.css.
+    cssMinify: false,
     rollupOptions: {
       // `main` is the live React app (index.html). `pilot` is an isolated
       // harness for rendering components in a browser during migration checks.
