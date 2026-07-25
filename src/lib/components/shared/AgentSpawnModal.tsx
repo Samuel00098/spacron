@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
@@ -15,15 +15,10 @@ import {
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
-import { setSessionRole } from '$lib/stores/terminal';
-import type { AgentRole } from '$lib/services/orchestrator/agent-charter';
-import { loadJson } from '$lib/utils/storage';
+
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
 import './AgentSpawnModal.css';
-
-const ROLE_STORAGE_KEY = 'spacron_spawn_role';
-
 
 
 export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
@@ -36,11 +31,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
   const [spawning, setSpawning] = useState(false);
   const [skipWorktree, setSkipWorktree] = useState(false);
-  const [role, setRole] = useState<AgentRole | ''>(
-    () => loadJson<AgentRole | ''>(ROLE_STORAGE_KEY, '')
-  );
-  const [roleOpen, setRoleOpen] = useState(false);
-  const roleRef = useRef<HTMLDivElement>(null);
 
   const spawnPresets = useMemo(() => {
     void $customAgents;
@@ -114,7 +104,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           }            if (id !== null) {
             takenNames.push(name);
             applyOrchestratorAgentName(id, name);
-            if (role) setSessionRole(id, role);
             if (worktree) setSessionWorktree(id, worktree);
             spawnedNames.push(name);
             lastId = id;
@@ -150,7 +139,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, project, isDev, onclose, role]);
+  }, [spawnCounts, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && totalSpawnCount > 0 && !spawning) {
@@ -159,26 +148,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     }
     if (e.key === 'Escape') onclose();
   }
-
-  useEffect(() => {
-    if (role) {
-      localStorage.setItem(ROLE_STORAGE_KEY, JSON.stringify(role));
-    } else {
-      localStorage.removeItem(ROLE_STORAGE_KEY);
-    }
-  }, [role]);
-
-  // Close the role dropdown on outside click
-  useEffect(() => {
-    if (!roleOpen) return;
-    const handleOutside = (e: MouseEvent) => {
-      if (roleRef.current && !roleRef.current.contains(e.target as Node)) {
-        setRoleOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, [roleOpen]);
 
   function handleBackdropClick(e: React.MouseEvent) {
     if (e.target === e.currentTarget) onclose();
@@ -290,54 +259,31 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
         <footer className="asm-footer">
           <div className="asm-footer-left">
-            <div className="asm-role-collapsed" ref={roleRef}>
+            <div className="asm-mode-toggle" title="Isolated: agent works in a git worktree branch · Main repo: agent runs directly in the project root (needed for git tag/push)">
               <button
-                className={`asm-role-toggle${role ? ' has-role' : ''}`}
-                onClick={() => setRoleOpen(!roleOpen)}
-                title="Assign a team role"
-                aria-label="Assign a team role for handoff and review"
-                aria-expanded={roleOpen}
+                className={`asm-mode-btn${!skipWorktree ? ' active' : ''}`}
+                onClick={() => setSkipWorktree(false)}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M20 7h-9a5 5 0 0 0-5 5v2a5 5 0 0 0 5 5h1v2l3-2h5a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" />
-                  <line x1="8" y1="12" x2="14" y2="12" />
-                  <line x1="8" y1="16" x2="14" y2="16" />
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                 </svg>
-                <span className="asm-role-toggle-label">{role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Role'}</span>
-                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={`asm-chevron${roleOpen ? ' open' : ''}`}>
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <span>Isolated</span>
               </button>
-              {roleOpen && (
-                <>
-                  <div className="asm-role-backdrop" onClick={() => setRoleOpen(false)} />
-                  <div className="asm-role-dropdown">
-                    {(['coordinator', 'scout', 'builder', 'reviewer'] as const).map((r) => (
-                      <button
-                        key={r}
-                        className={`asm-role-item${role === r ? ' active' : ''}`}
-                        data-role={r}
-                        onClick={() => {
-                          setRole(role === r ? '' : r);
-                          setRoleOpen(false);
-                        }}
-                      >
-                        <span className="asm-role-indicator" />
-                        <span>{r.charAt(0).toUpperCase() + r.slice(1)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+              <button
+                className={`asm-mode-btn${skipWorktree ? ' active' : ''}`}
+                onClick={() => setSkipWorktree(true)}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+                <span>Main repo</span>
+              </button>
             </div>
-            <label className="asm-isolate-toggle" title="When on, the agent runs directly in the project root so git tag, push, and other admin operations work on the main branch">
-              <input
-                type="checkbox"
-                checked={skipWorktree}
-                onChange={(e) => setSkipWorktree(e.target.checked)}
-              />
-              <span className="asm-toggle-label">Main repo</span>
-            </label>
           </div>
           <button
             className="asm-confirm-btn"
