@@ -138,6 +138,12 @@ export default function SourceControl() {
     ? gitStatus.modified.length + gitStatus.added.length + gitStatus.deleted.length + gitStatus.untracked.length + (gitStatus.conflicted?.length ?? 0)
     : 0;
 
+  // With files on screen the change list gets first claim on the pane height and
+  // scrolls itself; the commit graph takes what's left below it. Only while both
+  // sections are open — a collapsed Commits should give its space back — and only
+  // with real changes, so the "workspace is clean" art doesn't reserve the pane.
+  const changesLead = changesExpanded && commitsExpanded && totalChanges > 0;
+
   useEffect(() => {
     if (selectAllRef.current) {
       selectAllRef.current.indeterminate = selectedCount > 0 && !allSelected;
@@ -764,7 +770,7 @@ export default function SourceControl() {
               </div>
 
               <div className="sc-sections">
-                <div className={`sc-section${changesExpanded ? '' : ' collapsed'}`}>
+                <div className={`sc-section${changesExpanded ? '' : ' collapsed'}${changesLead ? ' leads' : ''}`}>
                   <div className="sc-section-head-row">
                     <button className="sc-section-header" onClick={() => setChangesExpanded((expanded) => !expanded)} aria-expanded={changesExpanded}>
                       <svg className={`chevron${changesExpanded ? ' expanded' : ''}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

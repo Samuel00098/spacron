@@ -458,6 +458,18 @@
   flex: 0 0 auto;
 }
 
+/* When there are files to review, Changes leads: it keeps the height its list
+   needs — up to 60% of the pane, scrolling inside past that — and Commits takes
+   whatever is left, directly below. Without this the two sections shrink in
+   proportion to their content, so a long history out-shrinks a short file list
+   and Changes ends up a sliver. `leads` is only set while both sections are
+   expanded and there's at least one change, so a collapsed Commits still hands
+   its space back and a clean workspace doesn't reserve 60% for a placeholder. */
+.source-control .sc-section.leads {
+  flex: 1 0 auto;
+  max-height: 60%;
+}
+
 .source-control .sc-section + .sc-section {
   border-top: 1px solid var(--border);
 }
