@@ -930,7 +930,7 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         Ok(json!({
             "success": false,
             "message": if has_conflicts {
-                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{} {}.{}", stderr, stdout)
+                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{}{}", stderr, stdout)
             } else {
                 format!("Merge failed:\n{}{}", stderr, stdout)
             },
