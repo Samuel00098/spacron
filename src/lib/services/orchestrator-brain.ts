@@ -86,6 +86,16 @@ export interface AgentOutputRef extends RunningAgentRef {
   freshness?: string | null;
 }
 
+/** One agent's transcript, fetched on demand to be read aloud. */
+export interface AgentTranscriptRead {
+  /** The agent as the user refers to it ("Iris") — used in the spoken lead-in. */
+  name: string;
+  /** Cleaned transcript text, terminal escapes and redraw noise already stripped. */
+  text: string;
+  /** True when older output was dropped to keep the spoken read a sane length. */
+  truncated: boolean;
+}
+
 /**
  * A structured read of what the user currently sees and is working with across
  * the whole application. Lets the orchestrator answer questions about the app
@@ -148,6 +158,20 @@ export interface RouteContext {
   runningAgents?: RunningAgentRef[];
   reviewingAgents?: RunningAgentRef[];
   taskOutputs?: AgentOutputRef[];
+  /**
+   * Pull ONE agent's full cleaned transcript, for reading aloud on request.
+   *
+   * Supplied by the orchestrator, which owns transcripts; the brain only decides
+   * that a read was asked for. Deliberately a callback rather than another field
+   * on `taskOutputs`: full transcripts are far too large to carry in the route
+   * prompt for every agent on every turn, and this fetches exactly one, only
+   * when the user actually asks.
+   *
+   * Takes the raw message rather than a pre-matched name so resolution can span
+   * both tasks and untracked live sessions — the brain only sees the former.
+   * Returns null when no agent in the message can be resolved.
+   */
+  readAgentTranscript?: (request: string) => AgentTranscriptRead | null;
   /** The evolving brain profile — durable things learned about the user + project. */
   profile?: string[];
   /** Full read of the application UI state (active page, editor, terminals, …). */
@@ -276,7 +300,10 @@ function buildUserText(message: string, ctx?: RouteContext): string {
       if (r.reason) parts.push(`  Reason: ${compactText(r.reason, 180)}`);
       if (r.recentOutput?.trim()) {
         const isPlan = r.status === 'complete' && r.recentOutput.length > 200;
-        const tailCount = isPlan ? 80 : 10;
+        // Voice mode is where the user asks to have an agent's output read back
+        // to them, and a 10-line tail routinely cuts off the very thing they
+        // asked for — the answer usually sits above the agent's closing prompt.
+        const tailCount = isPlan ? 80 : ctx?.conversational ? 40 : 10;
         const lines = r.recentOutput.trim().split('\n').slice(-tailCount).join('\n');
         parts.push(`  Terminal output (${isPlan ? 'full plan' : 'recent tail'}):\n${lines}`);
       }
@@ -338,6 +365,28 @@ const STATUS_CHECK_RE = /^(status|what[‘’]?s (?:the )?status|what[‘’]?s 
 // Intercept before routing so we never send a new message to the agent.
 const OUTPUT_QUERY_RE =
   /^(what did|what has|what[‘’]?s|show me what|get|fetch|read|check|see what|summari[sz]e|tell me what)\b.{0,80}\b(said?|respond(?:ed)?|wrot[eo]|output(?:ted)?|terminal|result(?:s)?|response|reply|answer|return(?:ed)?|produc(?:ed)?|finish(?:ed)?|complet(?:ed)?|done)\b/i;
+
+/**
+ * An explicit request to have an agent's output READ ALOUD, as opposed to the
+ * "what did it say" summary that `OUTPUT_QUERY_RE` answers. Checked first,
+ * because these phrasings match that pattern too but want the full transcript
+ * rather than a 20-line digest: "read out what Iris outputted", "read me Iris's
+ * output", "what was the Iris output? can you read it out for me".
+ */
+const READ_ALOUD_RE = new RegExp(
+  [
+    // "read out what Iris did", "read Iris's output aloud", "read that back to me"
+    /\bread\b[^.?!]{0,60}\b(?:out loud|out|aloud|to me|back to me|back)\b/.source,
+    // "read me the output", "read it", "read through what it wrote"
+    /\bread (?:me|it|that|through|the)\b/.source,
+    // "say that out loud" — same intent, different verb
+    /\bsay\b[^.?!]{0,40}\b(?:out loud|aloud)\b/.source,
+    // "give me the full output", "what's the whole transcript"
+    /\b(?:full|whole|entire|complete)\s+(?:output|transcript|response|answer|log)\b/.source,
+    /\bplay back\b/.source,
+  ].join('|'),
+  'i',
+);
 
 const TASK_ADVICE_RE =
   /\b(what should|what[‘’]?s next|what next|next task|should we|prioriti[sz]e|recommend|suggest)\b/i;
@@ -499,6 +548,21 @@ function formatOutputReply(refs: AgentOutputRef[], conversational = false): stri
     return `${intro}\n\nLatest terminal output:\n\`\`\`\n${output}\n\`\`\``;
   });
   return parts.join('\n\n');
+}
+
+/**
+ * The spoken form of a read-aloud request. The transcript is passed through
+ * as-is (the orchestrator already stripped terminal noise); only the framing
+ * sentence is added, so the user hears what the agent actually wrote rather
+ * than a paraphrase of it.
+ */
+function formatReadAloud(read: AgentTranscriptRead): string {
+  const text = read.text.trim();
+  if (!text) return `${read.name} has not produced any output yet.`;
+  const lead = read.truncated
+    ? `Here is the most recent part of ${read.name}'s output.`
+    : `Here is ${read.name}'s output.`;
+  return `${lead}\n\n${text}`;
 }
 
 function formatTaskPanelAdvice(taskPanel: string[]): string {
@@ -734,7 +798,8 @@ function buildSystemPrompt(
            '- A question, an observation, thinking out loud, brainstorming, or describing a problem is NOT a request to spawn. When in any doubt, DO NOT act — just talk and, if useful, offer to put an agent on it.',
            '- Never spawn an agent merely because the message mentions code or a task. Wait for the explicit go-ahead.',
            '- ACTIONS RUN IMMEDIATELY — Every action you return (spawn/send/close AND app-control like navigate, open-file, preview, run, setting) is executed the moment you return it; there is NO held-action confirmation step. Phrase your "reply" as a short declarative statement of what you are doing — e.g. "Launching Claude to refactor the auth module." NEVER pair an action with a "want me to go ahead?" question; by the time the user hears it, the action has already run. If you truly need permission or clarification first, ask the question with an EMPTY actions array and act on the next turn once they answer.',
-           '- TERMINAL OUTPUT SUMMARIZATION — When reporting what an agent did, NEVER read raw terminal output aloud. Paraphrase naturally: say which files changed, what commands were run, whether tests passed, and what state the agent ended in. Use the "Recent agent/task status and terminal output" section above as your source.',
+           '- READING AN AGENT\'S OUTPUT ALOUD — When the user asks what an agent produced, said, wrote, or found ("read me what Agent A did", "what did Trinity output?"), DO relay the actual content from the "Recent agent/task status and terminal output" section — that is the answer they want, not a status line. Convert it into speech: read the substance in plain spoken English, skip escape codes, box-drawing characters, progress bars and log noise, say file paths as words ("the orchestrator store" rather than spelling out src slash lib slash stores), and describe code by what it does instead of reading it character by character. Never dump raw terminal text verbatim.',
+           '- If the output is long, lead with what the agent concluded or produced, then offer to go deeper ("that\'s the gist — want the detail on any part?") rather than reading everything at once.',
         ]
       : []),
   ].join('\n');
@@ -982,6 +1047,16 @@ export async function routeOrchestratorRequest(
   // Fast-path: status check — respond instantly from live state, no LLM needed.
   if (STATUS_CHECK_RE.test(trimmed)) {
     return { reply: formatStatusReply(outputRefs(ctx)), actions: [], viaLLM: false };
+  }
+
+  // Fast-path: "read out what Iris outputted" — the user wants to HEAR the
+  // agent's actual output, not a digest of it. Handled before the LLM on
+  // purpose: routing through the model would paraphrase the very text they
+  // asked to have read verbatim, and burn a call to do it. Falls through to the
+  // summary path below when nothing matches the name they used.
+  if (READ_ALOUD_RE.test(trimmed) && ctx?.readAgentTranscript) {
+    const read = ctx.readAgentTranscript(trimmed);
+    if (read) return { reply: formatReadAloud(read), actions: [], viaLLM: false };
   }
 
   // Fast-path: output query — user wants to read what an agent said/wrote.

@@ -1,6 +1,7 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { attachPty, openPty, type PtySession } from '$lib/services/pty-bridge';
-import { terminalShell } from '$lib/stores/settings';
+import { terminalShell, announceAgentCompletions } from '$lib/stores/settings';
+import { playNudge } from '$lib/services/nudge';
 import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
@@ -698,6 +699,10 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const clean = code === 0;
 
   if (isAgent) {
+    // Exit is the other way an agent's work ends (the turn watcher covers agents
+    // that stay in their REPL). Pair the toast with the same chime so the cue is
+    // the same however the agent was started and however it ended.
+    if (get(announceAgentCompletions)) playNudge(clean ? 'done' : 'failed');
     if (clean) {
       showToast(`${label} finished its work`, 'success', 6000, true);
     } else {

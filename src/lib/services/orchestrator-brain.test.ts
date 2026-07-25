@@ -61,6 +61,94 @@ describe('routeOrchestratorRequest', () => {
     currentAiModel.set('gpt-4.1');
   });
 
+  describe('read-aloud requests', () => {
+    const transcript = { name: 'Iris', text: 'Added the login form and ran the tests.', truncated: false };
+
+    it('reads a named agent transcript back verbatim without calling the LLM', async () => {
+      const readAgentTranscript = vi.fn().mockReturnValue(transcript);
+
+      const result = await routeOrchestratorRequest('read out what Iris outputted', ALL_AGENTS, {
+        conversational: true,
+        readAgentTranscript,
+      });
+
+      // The whole point of the fast path: no paraphrase, no LLM round trip.
+      expect(invoke).not.toHaveBeenCalled();
+      expect(result.viaLLM).toBe(false);
+      expect(result.actions).toEqual([]);
+      expect(result.reply).toContain('Added the login form and ran the tests.');
+      // The resolver gets the raw message so it can match names the brain cannot see.
+      expect(readAgentTranscript).toHaveBeenCalledWith('read out what Iris outputted');
+    });
+
+    it('handles the question-then-ask phrasing', async () => {
+      const readAgentTranscript = vi.fn().mockReturnValue(transcript);
+
+      const result = await routeOrchestratorRequest(
+        'What was the Iris output? Can you read it out for me?',
+        ALL_AGENTS,
+        { conversational: true, readAgentTranscript },
+      );
+
+      expect(readAgentTranscript).toHaveBeenCalled();
+      expect(result.reply).toContain('Added the login form and ran the tests.');
+    });
+
+    it('flags a truncated read so the user knows there is more', async () => {
+      const readAgentTranscript = vi.fn().mockReturnValue({ ...transcript, truncated: true });
+
+      const result = await routeOrchestratorRequest('read me Iris output', ALL_AGENTS, {
+        conversational: true,
+        readAgentTranscript,
+      });
+
+      expect(result.reply).toContain('most recent part');
+    });
+
+    it('falls through to the summary path when the named agent cannot be resolved', async () => {
+      const readAgentTranscript = vi.fn().mockReturnValue(null);
+
+      const result = await routeOrchestratorRequest('read out what Ghost produced', ALL_AGENTS, {
+        conversational: true,
+        readAgentTranscript,
+        taskOutputs: [
+          {
+            name: 'Iris',
+            agent: 'claude',
+            title: 'Login form',
+            status: 'complete',
+            recentOutput: 'Added the login form.',
+          },
+        ],
+      });
+
+      expect(readAgentTranscript).toHaveBeenCalled();
+      // Answers from what it does know rather than reading out the wrong agent.
+      expect(result.reply).toContain('Iris');
+      expect(result.viaLLM).toBe(false);
+    });
+
+    it('leaves ordinary output questions on the summary path', async () => {
+      const readAgentTranscript = vi.fn().mockReturnValue(transcript);
+
+      await routeOrchestratorRequest('what did Iris say?', ALL_AGENTS, {
+        conversational: true,
+        readAgentTranscript,
+        taskOutputs: [
+          {
+            name: 'Iris',
+            agent: 'claude',
+            title: 'Login form',
+            status: 'complete',
+            recentOutput: 'Added the login form.',
+          },
+        ],
+      });
+
+      expect(readAgentTranscript).not.toHaveBeenCalled();
+    });
+  });
+
   it('includes durable task memory and only recent user messages in the prompt context', async () => {
     invoke.mockResolvedValueOnce('{"reply":"Sure.","actions":[]}');
 

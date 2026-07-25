@@ -28,6 +28,7 @@ import {
   type RouteResult,
   type RouteLlmConfig,
   type AgentOutputRef,
+  type AgentTranscriptRead,
   type RunningAgentRef,
   type OrchestratorAction,
 } from '$lib/services/orchestrator-brain';
@@ -44,6 +45,7 @@ import {
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
+import { playNudge } from '$lib/services/nudge';
 import {
   createTaskRecord,
   transitionTask,
@@ -54,6 +56,7 @@ import { classifyTaskAfterExecution } from '$lib/services/orchestrator/review-ga
 import {
   makeActivityEvent,
   appendActivity,
+  captureTranscript,
   MAX_ACTIVITY_EVENTS,
   MAX_TRANSCRIPT_CHARS,
   type ActivityKind,
@@ -123,6 +126,7 @@ import {
   sessionHasRunningProcess,
   setSessionExecuting,
   setSessionWorktree,
+  setActiveSession,
 } from '$lib/stores/terminal';
 
 export type {
@@ -527,6 +531,7 @@ function announceCompletionAloud(
     announceViaRealtimeVoice(line);
     return;
   }
+  playNudge(status);
 }
 
 /** True while `sessionId` is the live, running terminal still leased to `taskId`. */
@@ -1833,7 +1838,91 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
   orchestratorTasks.update((all) => [...all, adopted]);
   if (!session.agentName?.trim()) applyOrchestratorAgentName(session.id, name);
   logTaskActivity(adopted.id, 'dispatch', `Adopted live ${getAgentDisplayName(agentPreset) ?? agentPreset} session.`);
+  watchAdoptedAgentTurns(adopted.id, session.id);
   return adopted;
+}
+
+/**
+ * Minimum gap between two turn-end cues for the same adopted session.
+ *
+ * The watcher re-arms after every turn, and an attention prompt left sitting in
+ * the buffer tail can re-satisfy the blocked signal as soon as the agent prints
+ * anything else. Without a floor that turns into a burst of chimes for what the
+ * user experiences as one pause.
+ */
+const ADOPTED_NUDGE_COOLDOWN_MS = 15_000;
+const lastAdoptedNudgeAt = new Map<number, number>();
+
+/**
+ * Give agents the user launched by hand the same turn-end cue as orchestrated
+ * ones — a chime plus a bottom-corner toast that jumps to the terminal.
+ *
+ * Adopted agents never pass through goal dispatch, which is the only place a
+ * turn watcher was ever armed, so until now the spawn-detector route produced
+ * no cue at all: the sole completion path was process exit, and that path is
+ * deliberately silent for adopted sessions (the user drove it directly, so an
+ * orchestrator completion card would be noise).
+ *
+ * This keeps that reasoning intact — no completion card, no AI transcript
+ * summary, no mailbox post — and adds only the notification. The task stays
+ * `in-progress` and the watcher re-arms, because the user is still working in
+ * that terminal; ending the task on its first quiet moment would sever the
+ * session from agent mode while they were mid-conversation with it.
+ */
+function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
+  void (async () => {
+    for (;;) {
+      const outcome = await getAgentAdapter(sessionId).watchTurn({
+        shouldContinue: () => leasedSessionLive(taskId, sessionId),
+      });
+      if (outcome.kind === 'aborted') return;
+
+      const task = get(orchestratorTasks).find((t) => t.id === taskId);
+      if (!task) return;
+
+      const last = lastAdoptedNudgeAt.get(sessionId) ?? 0;
+      if (Date.now() - last >= ADOPTED_NUDGE_COOLDOWN_MS) {
+        lastAdoptedNudgeAt.set(sessionId, Date.now());
+        notifyAdoptedTurnEnd(task, outcome);
+      }
+    }
+  })();
+}
+
+/** The chime + toast pair for one adopted agent's turn end. */
+function notifyAdoptedTurnEnd(task: OrchestratorTask, outcome: AgentTurnOutcome): void {
+  const name =
+    task.name
+    ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
+    ?? task.agentPreset
+    ?? 'Agent';
+  const sessionId = task.assignedSessionId;
+  const openTerminal = sessionId != null
+    ? { label: 'Show', onClick: () => setActiveSession(sessionId) }
+    : undefined;
+
+  logTaskActivity(task.id, outcome.kind === 'blocked' ? 'blocked' : 'finished',
+    outcome.kind === 'blocked' ? outcome.reason : 'Finished its turn.');
+
+  if (get(announceAgentCompletions)) {
+    // In voice mode the realtime model relays it in its own voice; a chime on
+    // top of a live call is jarring. Same split as announceCompletionAloud.
+    if (get(agentVoiceModeActive)) {
+      announceViaRealtimeVoice(
+        outcome.kind === 'blocked'
+          ? `${name} needs your input.`
+          : `${name} finished its turn.`
+      );
+    } else {
+      playNudge(outcome.kind === 'blocked' ? 'blocked' : 'done');
+    }
+  }
+
+  if (outcome.kind === 'blocked') {
+    showToast(`${name} needs your input`, 'warning', 9000, true, openTerminal);
+  } else {
+    showToast(`${name} finished — ready to check`, 'success', 6000, true, openTerminal);
+  }
 }
 
 function matchesLiveAgentTarget(session: LiveTerminalSession, wanted: string): boolean {
@@ -1889,6 +1978,95 @@ export function getRunningAgentRefs(projectId: string): RunningAgentRef[] {
     });
 
   return [...taskRefs, ...liveSessionRefs];
+}
+
+/**
+ * How much of one agent's transcript to hand back for reading aloud.
+ *
+ * Not the whole thing: a long-running agent's buffer runs to tens of thousands
+ * of characters, and speech is roughly 15 chars/second, so an uncapped read
+ * would be a monologue the user cannot interrupt usefully. This is a few
+ * minutes of audio — enough to cover what an agent actually reported at the end
+ * of a turn — and the reply tells them when older output was cut, so they can
+ * ask for more. It also stays under the 8k cap that `handleFunctionCall` puts
+ * on realtime tool results.
+ */
+const READ_ALOUD_MAX_CHARS = 6000;
+
+/**
+ * Find the agent the user named and return its cleaned transcript to be read
+ * aloud. Backs `RouteContext.readAgentTranscript`.
+ *
+ * Searches orchestrator tasks first, then live terminal sessions the
+ * orchestrator has not adopted, so an agent is findable however it was started.
+ * With no name in the message, falls back to the most recently active agent —
+ * "read that back to me" after a completion notification should just work.
+ */
+function readAgentTranscriptFor(projectId: string, request: string): AgentTranscriptRead | null {
+  const wanted = request.toLowerCase();
+
+  const named = <T,>(items: T[], nameOf: (item: T) => string | null | undefined): T | null => {
+    // Longest name first: "Iris" must not win over "Iris Two" when both exist.
+    const candidates = items
+      .map((item) => ({ item, name: nameOf(item)?.trim() ?? '' }))
+      .filter((c) => c.name.length > 1)
+      .sort((a, b) => b.name.length - a.name.length);
+    return candidates.find((c) => wanted.includes(c.name.toLowerCase()))?.item ?? null;
+  };
+
+  const tasks = get(orchestratorTasks)
+    .filter((t) => t.projectId === projectId && t.status !== 'todo')
+    .sort((a, b) => (lastTaskSignalAt(b) ?? 0) - (lastTaskSignalAt(a) ?? 0));
+  const liveSessions = getTerminalProjectState(projectId).sessions
+    .filter((s) => s.isRunning && s.agentPreset)
+    .sort((a, b) => (b.lastActivatedAt ?? 0) - (a.lastActivatedAt ?? 0));
+
+  const finish = (name: string, raw: string): AgentTranscriptRead | null => {
+    const clean = captureTranscript(raw, READ_ALOUD_MAX_CHARS);
+    if (!clean.trim()) return { name, text: '', truncated: false };
+    // captureTranscript marks a dropped head with a leading ellipsis line.
+    return { name, text: clean, truncated: clean.startsWith('…\n') };
+  };
+
+  const task = named(tasks, (t) => t.name);
+  if (task) {
+    return finish(
+      task.name ?? getAgentDisplayName(task.agentPreset) ?? 'That agent',
+      getTaskTranscript(task)
+    );
+  }
+
+  const session = named(liveSessions, (s) => s.agentName);
+  if (session) {
+    return finish(
+      session.agentName?.trim() || getAgentDisplayName(session.agentPreset) || 'That agent',
+      getAgentAdapter(session.id).snapshot()
+    );
+  }
+
+  // No name matched. Fall back to the most recent agent when the request is
+  // clearly about "it"/"that", or when there is only one candidate so there is
+  // nothing to get wrong. Otherwise return null: the user named something we
+  // could not resolve (a typo, or speech-to-text mangling "Iris"), and the
+  // summary path answering is better than confidently reading the wrong agent.
+  const unambiguous = tasks.length + liveSessions.length === 1;
+  if (unambiguous || /\b(it|that|them|the agent|last|latest|everything)\b/i.test(request)) {
+    const recentTask = tasks[0];
+    if (recentTask) {
+      return finish(
+        recentTask.name ?? getAgentDisplayName(recentTask.agentPreset) ?? 'That agent',
+        getTaskTranscript(recentTask)
+      );
+    }
+    const recentSession = liveSessions[0];
+    if (recentSession) {
+      return finish(
+        recentSession.agentName?.trim() || getAgentDisplayName(recentSession.agentPreset) || 'That agent',
+        getAgentAdapter(recentSession.id).snapshot()
+      );
+    }
+  }
+  return null;
 }
 
 /** Recent task state plus terminal output for conversational status/output answers. */
@@ -2198,6 +2376,7 @@ export async function sendChatMessage(
         runningAgents: getRunningAgentRefs(projectId),
         reviewingAgents: getReviewableAgentRefs(projectId),
         taskOutputs: getAgentOutputRefs(projectId),
+        readAgentTranscript: (request) => readAgentTranscriptFor(projectId, request),
         profile: getProfileLines(projectId),
         appState: getAppContextSnapshot(projectId, rootPath),
         llmConfig,
@@ -2499,6 +2678,34 @@ function adoptDetectedAgent(sessionId: number, projectId: string, preset: string
 }
 
 /**
+ * Adopt an agent started from the Spawn Agents modal.
+ *
+ * The modal reaches the same `spawnAgentPreset` as everything else, but that
+ * function adds the session to `suppressAgentDetection` while it types the
+ * command, so the `onAgentDetected` broadcast — the typed-launch path — never
+ * fires for it. Modal-spawned agents therefore had no orchestrator task.
+ *
+ * Reading their output already worked without one: `getRunningAgentRefs` picks
+ * up untracked live agent sessions directly and gives the brain a
+ * `BRAIN_OUTPUT_TAIL` slice. What a task adds is (a) a turn watcher, the only
+ * source of a turn-end cue — otherwise nothing fires until the process exits —
+ * and (b) an entry in `getAgentOutputRefs`, which carries status, freshness and
+ * a longer tail than the running-agents list.
+ *
+ * No double-listing: `trackedSessionIds` counts adopted tasks, so the session
+ * moves out of the untracked branch of `getRunningAgentRefs` as it gains a task.
+ *
+ * Safe to call more than once: `adoptLiveAgentSession` returns the existing task
+ * when the session is already bound to one. Orchestrator dispatch must NOT call
+ * this — it owns its own task and lease (`terminal-lease.ts`).
+ */
+export function adoptSpawnedAgent(sessionId: number, projectId: string): void {
+  const session = getTerminalProjectState(projectId).sessions.find((s) => s.id === sessionId);
+  if (!session?.agentPreset || session.ownerTaskId) return;
+  adoptLiveAgentSession(projectId, session, session.agentPreset);
+}
+
+/**
  * Every agent worktree worth watching, from BOTH ownership paths — the spawn
  * modal keeps its worktree on the terminal session, orchestrator dispatch keeps it
  * on the task (see `.spacron/memory/agent-worktrees.md`). Missing either one is how
@@ -2626,6 +2833,7 @@ if (typeof window !== 'undefined') {
   onSessionExit(({ sessionId, projectId, code }) => {
     // The session is gone — tear down its agent adapter (clears any poll timers).
     disposeAgentAdapter(sessionId);
+    lastAdoptedNudgeAt.delete(sessionId);
     const task = get(orchestratorTasks).find(
       (t) => t.status === 'in-progress' && t.assignedSessionId === sessionId
     );

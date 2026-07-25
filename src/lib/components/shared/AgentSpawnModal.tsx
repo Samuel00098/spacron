@@ -15,6 +15,7 @@ import {
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
+import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
 import { agentWorktrees } from '$lib/stores/settings';
 
 import { getAgentBrand } from './agentBrands';
@@ -109,6 +110,12 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             takenNames.push(name);
             applyOrchestratorAgentName(id, name);
             if (worktree) setSessionWorktree(id, worktree);
+            // Register with the orchestrator so this agent gets the same
+            // turn-end cue and readable-output treatment as a dispatched one.
+            // The typed-launch detector deliberately skips modal spawns, so
+            // without this they stay invisible to agent mode. Must come after
+            // applyOrchestratorAgentName so the task adopts the assigned name.
+            if (projectId) adoptSpawnedAgent(id, projectId);
             spawnedNames.push(name);
             lastId = id;
             total++;
