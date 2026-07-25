@@ -30,9 +30,11 @@ const detectAgentAccess = vi.hoisted(() =>
     })
   )
 );
-type MockLiveSession = { id: number; isRunning: boolean; ownerTaskId: string | null; lastExitCode?: number | null; agentName?: string | null; agentPreset?: string | null; isExecuting?: boolean; role?: string | null };
+type MockLiveSession = { id: number; isRunning: boolean; ownerTaskId: string | null; lastExitCode?: number | null; agentName?: string | null; agentPreset?: string | null; isExecuting?: boolean; role?: string | null; worktree?: Record<string, unknown> | null };
+// Takes the real signature (projectId, isDev) so tests can return different
+// sessions per ambient — the Development ambient keeps its own state map.
 const getTerminalProjectState = vi.hoisted(() =>
-  vi.fn((): { sessions: MockLiveSession[] } => ({ sessions: [] }))
+  vi.fn((_projectId?: string, _isDev?: boolean): { sessions: MockLiveSession[] } => ({ sessions: [] }))
 );
 const sessionSubscribers = vi.hoisted(() => [] as Array<(value: MockLiveSession[]) => void>);
 const sessions = vi.hoisted(() => ({
@@ -131,7 +133,7 @@ vi.mock('$lib/stores/terminal', () => ({
   setSessionExecuting,
 }));
 
-import { orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
+import { trackedWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
@@ -1105,5 +1107,83 @@ describe('orchestrator chat actions', () => {
     // Clearing the name removes the badge and resets the tab to the default role.
     expect(setSessionAgentName).toHaveBeenCalledWith(42, null);
     expect(setSessionRole).toHaveBeenCalledWith(42, 'Agent');
+  });
+});
+
+describe('trackedWorktrees', () => {
+  const wt = (path: string, branch: string) => ({
+    path, branch, baseBranch: 'main', baseCommit: 'aaaaaaa1', createdAt: 0,
+  });
+
+  beforeEach(async () => {
+    await loadProjectOrchestratorTasks({ id: 'project-1', root_path: '/repo' });
+    orchestratorTasks.set([]);
+  });
+
+  it('picks up an agent spawned from the Spawn Agents picker', () => {
+    // The picker keeps the worktree on the SESSION, not on a task — there is no
+    // orchestrator task at all. Missing this path means a hand-spawned agent's
+    // work is never staged.
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? { sessions: [] } : {
+        sessions: [{
+          id: 7, isRunning: true, ownerTaskId: null, agentName: 'Alex',
+          worktree: wt('/repo/.spacron/worktrees/alex', 'spacron/alex-1'),
+        }],
+      });
+
+    const tracked = trackedWorktrees();
+
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0]).toMatchObject({ projectId: 'project-1', agentName: 'Alex', live: true });
+  });
+
+  it('picks up an agent spawned into the Development ambient', () => {
+    // Regression guard: dev-ambient sessions live in a separate state map that
+    // `getTerminalProjectState` does not reach by default, so scanning only the
+    // normal ambient silently lost every one of these agents' changes.
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? {
+        sessions: [{
+          id: 9, isRunning: true, ownerTaskId: null, agentName: 'Iris',
+          worktree: wt('/repo/.spacron/worktrees/iris', 'spacron/iris-2'),
+        }],
+      } : { sessions: [] });
+
+    const tracked = trackedWorktrees();
+
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0]).toMatchObject({ agentName: 'Iris', live: true });
+  });
+
+  it('picks up an orchestrator-dispatched agent whose task has finished', () => {
+    getTerminalProjectState.mockImplementation(() => ({ sessions: [] }));
+    const seed = createOrchestratorTask('project-1', 'Some goal', 'claude', 'Backend');
+    orchestratorTasks.set([{
+      ...seed, status: 'complete', assignedSessionId: null, lastSessionId: 42,
+      worktree: wt('/repo/.spacron/worktrees/backend', 'spacron/backend-3'),
+    }]);
+
+    const tracked = trackedWorktrees();
+
+    expect(tracked).toHaveLength(1);
+    // Its pane is gone, but the worktree is still tracked — that is the whole point.
+    expect(tracked[0]).toMatchObject({ agentName: 'Backend', live: false });
+  });
+
+  it('lists one entry when a session and a task name the same worktree', () => {
+    const shared = wt('/repo/.spacron/worktrees/shared', 'spacron/shared-4');
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? { sessions: [] } : {
+        sessions: [{ id: 5, isRunning: true, ownerTaskId: null, agentName: 'Alex', worktree: shared }],
+      });
+    const seed = createOrchestratorTask('project-1', 'Some goal', 'claude', 'Backend');
+    orchestratorTasks.set([{ ...seed, status: 'complete', worktree: shared }]);
+
+    const tracked = trackedWorktrees();
+
+    expect(tracked).toHaveLength(1);
+    // The session entry wins, so live status isn't downgraded to false.
+    expect(tracked[0]).toMatchObject({ agentName: 'Alex', live: true });
   });
 });

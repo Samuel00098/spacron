@@ -43,7 +43,6 @@ import {
   announceAgentCompletions,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
-import { playNudge } from '$lib/services/nudge';
 import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
 import {
   createTaskRecord,
@@ -528,7 +527,6 @@ function announceCompletionAloud(
     announceViaRealtimeVoice(line);
     return;
   }
-  playNudge(status);
 }
 
 /** True while `sessionId` is the live, running terminal still leased to `taskId`. */
@@ -961,7 +959,7 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<void> {
 function agentSessionLive(task: OrchestratorTask): boolean {
   const id = task.assignedSessionId ?? task.lastSessionId ?? null;
   if (id == null) return false;
-  return getTerminalProjectState(task.projectId).sessions.some((s) => s.id === id && s.isRunning);
+  return sessionIsRunning(task.projectId, id);
 }
 
 /**
@@ -2509,19 +2507,24 @@ function adoptDetectedAgent(sessionId: number, projectId: string, preset: string
  * Deliberately keyed off worktrees rather than task status: a `complete` task and a
  * cleared thread both still have a worktree, and both still need staging.
  */
-function trackedWorktrees(): TrackedWorktree[] {
+export function trackedWorktrees(): TrackedWorktree[] {
   const byPath = new Map<string, TrackedWorktree>();
 
   for (const [projectId] of projectPaths) {
-    const live = getTerminalProjectState(projectId).sessions;
-    for (const session of live) {
-      if (!session.worktree) continue;
-      byPath.set(session.worktree.path, {
-        projectId,
-        agentName: session.agentName?.trim() || getAgentDisplayName(session.agentPreset) || 'Agent',
-        worktree: session.worktree,
-        live: session.isRunning === true,
-      });
+    // BOTH ambients. Sessions spawned in the Development ambient live in a
+    // separate state map that `getTerminalProjectState` doesn't reach by default
+    // (see the store-lookup gotcha in `.spacron/memory/agent-worktrees.md`), so
+    // scanning only the normal one silently loses every dev-ambient agent's work.
+    for (const isDev of [false, true]) {
+      for (const session of getTerminalProjectState(projectId, isDev).sessions) {
+        if (!session.worktree) continue;
+        byPath.set(session.worktree.path, {
+          projectId,
+          agentName: session.agentName?.trim() || getAgentDisplayName(session.agentPreset) || 'Agent',
+          worktree: session.worktree,
+          live: session.isRunning === true,
+        });
+      }
     }
   }
 
@@ -2530,9 +2533,7 @@ function trackedWorktrees(): TrackedWorktree[] {
     // A session-owned entry already carries live status; don't downgrade it.
     if (byPath.has(task.worktree.path)) continue;
     const sessionId = task.assignedSessionId ?? task.lastSessionId ?? null;
-    const live =
-      sessionId != null &&
-      getTerminalProjectState(task.projectId).sessions.some((s) => s.id === sessionId && s.isRunning);
+    const live = sessionId != null && sessionIsRunning(task.projectId, sessionId);
     byPath.set(task.worktree.path, {
       projectId: task.projectId,
       agentName:
@@ -2559,10 +2560,25 @@ function persistWorktreePatch(projectId: string, worktreePath: string, patch: Pa
       t.worktree ? { ...t, worktree: { ...t.worktree, ...patch } } : t
     );
   }
-  const session = getTerminalProjectState(projectId).sessions.find((s) => s.worktree?.path === worktreePath);
-  if (session?.worktree) {
-    setSessionWorktree(session.id, { ...session.worktree, ...patch });
+  // Both ambients, for the same reason as `trackedWorktrees`: a dev-ambient
+  // session's baseline would otherwise never be written back, so its work would be
+  // staged again on every pass.
+  for (const isDev of [false, true]) {
+    const session = getTerminalProjectState(projectId, isDev).sessions.find(
+      (s) => s.worktree?.path === worktreePath
+    );
+    if (session?.worktree) {
+      setSessionWorktree(session.id, { ...session.worktree, ...patch });
+      return;
+    }
   }
+}
+
+/** Whether a session is live, looking in both the normal and Development ambients. */
+function sessionIsRunning(projectId: string, sessionId: number): boolean {
+  return [false, true].some((isDev) =>
+    getTerminalProjectState(projectId, isDev).sessions.some((s) => s.id === sessionId && s.isRunning)
+  );
 }
 
 /** Stage one agent's outstanding work on demand — the "Stage" button's entry point. */
