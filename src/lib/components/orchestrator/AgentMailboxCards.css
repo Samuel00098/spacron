@@ -114,6 +114,16 @@
 }
 .orc-mb-file.more { color: var(--text-muted); background: transparent; }
 
+.orc-mb-file.orc-mb-branch {
+  color: var(--role-reviewer, var(--accent));
+  background: color-mix(in srgb, var(--role-reviewer, var(--accent)) 10%, transparent);
+  border-color: color-mix(in srgb, var(--role-reviewer, var(--accent)) 20%, var(--border));
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-weight: 600;
+}
+
 /* ── Actions ──────────────────────────────────────────────────────────────── */
 .orc-mb-actions,
 .orc-mb-reply-actions {

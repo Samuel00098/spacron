@@ -34,6 +34,9 @@ export interface MailboxMessage {
   taskId?: string | null;
   /** For claim/release: the repo-relative files this task owns. */
   files?: string[];
+  /** For handoff: the worktree branch the builder was working on, so the
+   *  Reviewer can reference it. */
+  worktreeBranch?: string;
   text: string;
   createdAt: number;
 }
@@ -97,7 +100,8 @@ function isMailboxMessage(value: unknown): value is MailboxMessage {
     typeof m.text === 'string' &&
     typeof m.createdAt === 'number' &&
     (m.files === undefined || (Array.isArray(m.files) && m.files.every((f) => typeof f === 'string'))) &&
-    (m.taskId === undefined || m.taskId === null || typeof m.taskId === 'string')
+    (m.taskId === undefined || m.taskId === null || typeof m.taskId === 'string') &&
+    (m.worktreeBranch === undefined || m.worktreeBranch === null || typeof m.worktreeBranch === 'string')
   );
 }
 
@@ -121,6 +125,8 @@ export interface NewMailboxMessage {
   kind: MailboxKind;
   taskId?: string | null;
   files?: string[];
+  /** For handoff: the worktree branch the builder was working on. */
+  worktreeBranch?: string;
   text: string;
 }
 
@@ -133,6 +139,7 @@ export function createMailboxMessage(input: NewMailboxMessage, now = Date.now())
     kind: input.kind,
     taskId: input.taskId ?? null,
     files: normalizeFiles(input.files),
+    worktreeBranch: input.worktreeBranch,
     text: compactText(input.text, 500),
     createdAt: now,
   };
@@ -246,6 +253,9 @@ export interface MailboxCard {
   kind: MailboxKind;
   taskId: string | null;
   files: string[];
+  /** The builder's worktree branch, shown on handoff cards so the Reviewer
+   *  can reference the branch. */
+  worktreeBranch?: string;
   text: string;
   createdAt: number;
   /** True when the card asks for a human decision (report / handoff / ask). */
@@ -260,6 +270,7 @@ function toCard(message: MailboxMessage): MailboxCard {
     kind: message.kind,
     taskId: message.taskId ?? null,
     files: message.files ?? [],
+    worktreeBranch: message.worktreeBranch,
     text: message.text,
     createdAt: message.createdAt,
     actionable: ACTIONABLE_KINDS.includes(message.kind),

@@ -50,3 +50,20 @@
   color: var(--warning);
   font-weight: 600;
 }
+
+/* Main-repo badge variant — shown when the agent runs without isolation */
+.wt-badge.main-repo {
+  color: var(--text-tertiary, #606060);
+}
+
+.wt-badge.main-repo .wt-icon {
+  color: var(--text-tertiary, #606060);
+}
+
+.wt-badge.main-repo .wt-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-muted, #808080);
+}

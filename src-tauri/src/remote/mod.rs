@@ -397,6 +397,8 @@ fn handle_control(
                 "workspace_git_create_worktree" => git_create_worktree(args, &state.workspace),
                 "workspace_git_remove_worktree" => git_remove_worktree(args, &state.workspace),
                 "workspace_git_worktree_status" => git_worktree_status(args, &state.workspace),
+                "workspace_git_worktree_has_changes" => git_worktree_has_changes(args, &state.workspace),
+                "workspace_git_merge_worktree" => git_merge_worktree(args, &state.workspace),
                 _ => dispatch_invoke(&cmd, args, &[state.workspace.clone()]),
             };
             match result {
@@ -841,6 +843,134 @@ fn git_remove_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     }
 
     Ok(Value::Null)
+}
+
+/// workspace_git_merge_worktree: merge a worktree branch into the main checkout.
+fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
+    check_git_remote()?;
+    if !workspace.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    let branch = args.get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'branch' argument".to_string())?;
+    let branch = branch.trim();
+    if branch.is_empty() || branch.starts_with('-') || branch.contains("..") {
+        return Err("Invalid branch name".to_string());
+    }
+
+    let worktree_path = args.get("worktreePath")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(worktree_path));
+    if !in_managed_worktree_area(&cleaned, workspace) {
+        return Err("Refusing to merge a path outside the managed worktree area.".to_string());
+    }
+
+    let delete_after = args.get("deleteAfter").and_then(|v| v.as_bool()).unwrap_or(true);
+    let no_commit = args.get("noCommit").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Run git merge from the main workspace root.
+    let mut cmd_args: Vec<&str> = vec!["merge", "--no-ff"];
+    if no_commit {
+        cmd_args.push("--no-commit");
+    }
+    let merge_msg = format!("Merge worktree branch '{}'", branch);
+    cmd_args.push(branch);
+    if !no_commit {
+        cmd_args.push("-m");
+        cmd_args.push(&merge_msg);
+    }
+    let output = std::process::Command::new("git")
+        .args(&cmd_args)
+        .current_dir(workspace)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git merge: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();        if output.status.success() {
+        if delete_after {
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", worktree_path])
+                .current_dir(workspace)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "prune"])
+                .current_dir(workspace)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(workspace)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+        }
+
+        let msg = if stderr.contains("Already up to date") {
+            "Already up to date — no new changes to merge.".to_string()
+        } else if no_commit {
+            format!("Changes from '{branch}' staged for review in Source Control — worktree kept for reference.")
+        } else if delete_after {
+            format!("Branch '{branch}' merged and cleaned up successfully.")
+        } else {
+            format!("Branch '{branch}' merged successfully.")
+        };
+
+        Ok(json!({
+            "success": true,
+            "message": msg,
+            "conflicted": false,
+        }))
+    } else {
+        let has_conflicts = stderr.contains("conflict") || stdout.contains("CONFLICT");
+        Ok(json!({
+            "success": false,
+            "message": if has_conflicts {
+                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{} {}.{}", stderr, stdout)
+            } else {
+                format!("Merge failed:\n{}{}", stderr, stdout)
+            },
+            "conflicted": has_conflicts,
+        }))
+    }
+}
+
+/// workspace_git_worktree_has_changes: check whether a worktree has any changes.
+fn git_worktree_has_changes(args: Value, workspace: &Path) -> Result<Value, String> {
+    check_git_remote()?;
+    if !workspace.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    let worktree_path = args.get("worktreePath")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+    let base_commit = args.get("baseCommit")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'baseCommit' argument".to_string())?;
+    let branch = args.get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'branch' argument".to_string())?;
+
+    let worktree_path_obj = Path::new(worktree_path);
+
+    // 1. Check for uncommitted changes.
+    let porcelain = git_capture(worktree_path_obj, &["status", "--porcelain"]).unwrap_or_default();
+    let has_uncommitted = porcelain.lines().any(|l| !l.trim().is_empty());
+    if has_uncommitted {
+        return Ok(json!(true));
+    }
+
+    // 2. Check for committed changes not in base.
+    let count = git_capture(workspace, &["rev-list", "--count", base_commit, "..", branch])
+        .and_then(|c| c.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    Ok(json!(count > 0))
 }
 
 /// workspace_git_worktree_status: live changed-files + branch for a worktree.

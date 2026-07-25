@@ -112,6 +112,89 @@ export async function removeTaskWorktree(
   }
 }
 
+export interface MergeWorktreeResult {
+  success: boolean;
+  message: string;
+  conflicted: boolean;
+}
+
+/**
+ * Fully merge a worktree branch into the main checkout (creates a merge commit)
+ * and optionally clean up. Returns the merge result with success/conflict info.
+ */
+export async function mergeTaskWorktree(
+  projectId: string,
+  worktree: WorktreeInfo,
+  deleteAfter = true
+): Promise<MergeWorktreeResult> {
+  const raw = await backendInvoke<{
+    success: boolean;
+    message: string;
+    conflicted: boolean;
+  }>('workspace_git_merge_worktree', {
+    projectId,
+    worktreePath: worktree.path,
+    branch: worktree.branch,
+    deleteAfter,
+    noCommit: false,
+  });
+  return {
+    success: raw.success,
+    message: raw.message,
+    conflicted: raw.conflicted,
+  };
+}
+
+/**
+ * Stage a worktree's changes into the main checkout WITHOUT creating a merge
+ * commit, so the user can review them in Source Control and commit manually.
+ * The worktree and branch are cleaned up immediately since the changes are
+ * now in the main checkout's staging area.
+ */
+export async function stageTaskWorktree(
+  projectId: string,
+  worktree: WorktreeInfo
+): Promise<MergeWorktreeResult> {
+  const raw = await backendInvoke<{
+    success: boolean;
+    message: string;
+    conflicted: boolean;
+  }>('workspace_git_merge_worktree', {
+    projectId,
+    worktreePath: worktree.path,
+    branch: worktree.branch,
+    deleteAfter: true,
+    noCommit: true,
+  });
+  return {
+    success: raw.success,
+    message: raw.message,
+    conflicted: raw.conflicted,
+  };
+}
+
+/**
+ * Check whether a worktree has any changes relative to its base commit.
+ * Returns false when there are no uncommitted changes AND no new commits
+ * beyond the base — meaning there's nothing to merge.
+ * On error, returns true (safe default) to avoid hiding a potential merge.
+ */
+export async function getWorktreeHasChanges(
+  projectId: string,
+  worktree: WorktreeInfo
+): Promise<boolean> {
+  try {
+    return await backendInvoke<boolean>('workspace_git_worktree_has_changes', {
+      projectId,
+      worktreePath: worktree.path,
+      baseCommit: worktree.baseCommit,
+      branch: worktree.branch,
+    });
+  } catch {
+    return true; // safe default — assume there might be changes
+  }
+}
+
 /** Live changed-files / branch status for a worktree, or null if unavailable. */
 export async function getWorktreeStatus(worktree: WorktreeInfo): Promise<WorktreeStatus | null> {
   try {

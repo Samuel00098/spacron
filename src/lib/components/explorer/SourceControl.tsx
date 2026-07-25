@@ -24,6 +24,7 @@ import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import { createGithubRepo, githubTokenExists, saveGithubToken } from '$lib/services/github';
 import { useStore } from '$lib/react/useStore';
 import { useGitStatusCache, type GitStatusData as GitStatus, type GitLogEntry } from '$lib/stores/zustand/gitStatus';
+import { cleanupStaleWorktrees } from '$lib/stores/orchestrator';
 import './SourceControl.css';
 
 type FileKind = 'modified' | 'added' | 'deleted' | 'untracked' | 'conflicted';
@@ -314,6 +315,9 @@ export default function SourceControl() {
     try {
       await invoke<string>('workspace_git_commit', { projectId: id, message: commitMessage.trim(), files });
       showToast('Successfully committed changes!', 'success');
+      // After a successful commit, clean up any stale agent worktrees whose
+      // changes were staged via `stageTaskWorktree`.
+      void cleanupStaleWorktrees(id);
       setCommitMessage('');
       commitMessageRef.current = '';
       await refreshAll();

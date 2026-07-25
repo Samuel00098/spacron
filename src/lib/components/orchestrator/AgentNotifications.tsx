@@ -4,7 +4,9 @@ import { useStore } from '$lib/react/useStore';
 import {
   chatMessages,
   approveMailboxCard,
+  mergeAndApproveMailboxCard,
   replyToMailboxCard,
+  orchestratorTasks,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
 import {
@@ -13,8 +15,8 @@ import {
   getMailboxCards,
   dismissMailboxCard,
   type MailboxCard,
-  type MailboxKind,
 } from '$lib/services/orchestrator/mailbox';
+import MailboxCardView from './MailboxCard';
 import './AgentNotifications.css';
 
 // How long a plain "finished" card lingers before it clears itself, like a
@@ -23,22 +25,6 @@ import './AgentNotifications.css';
 const DONE_AUTODISMISS_MS = 10000;
 // Cap how many completion cards stack at once so a busy fleet can't bury the bar.
 const MAX_COMPLETION_CARDS = 4;
-
-const KIND_GLYPH: Record<MailboxKind, string> = {
-  claim: '🔒', release: '🔓', handoff: '➡️', ask: '❓', report: '📣', done: '✅', note: '📝',
-};
-const KIND_LABEL: Record<MailboxKind, string> = {
-  claim: 'claim', release: 'release', handoff: 'hand-off', ask: 'question', report: 'report', done: 'done', note: 'note',
-};
-
-function ageLabel(ts: number, now: number): string {
-  const mins = Math.floor(Math.max(0, now - ts) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 function formatSecs(s: number | null | undefined): string {
   if (s == null) return '';
@@ -68,6 +54,7 @@ export default function AgentNotifications() {
   const allMail = useStore(mailbox);
   const seen = useStore(mailboxSeen);
   const allChat = useStore(chatMessages);
+  const tasks = useStore(orchestratorTasks);
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -161,17 +148,20 @@ export default function AgentNotifications() {
     <div className="agent-notifs" aria-label="Agent notifications">
       {items.map((item) =>
         item.kind === 'mail' ? (
-          <MailNotification
+          <MailboxCardView
             key={item.key}
             card={item.card}
             now={now}
+            className="agent-notif"
             replying={replyingId === item.card.id}
             replyText={replyText}
+            hasWorktree={!!(item.card.kind === 'handoff' && item.card.taskId && tasks.some((t) => t.id === item.card.taskId && t.worktree))}
             onStartReply={() => startReply(item.card.id)}
             onCancelReply={cancelReply}
             onReplyChange={setReplyText}
             onSubmitReply={() => submitReply(item.card)}
             onApprove={() => void approveMailboxCard(projectId, item.card, rootPath)}
+            onMergeApprove={() => void mergeAndApproveMailboxCard(projectId, item.card, rootPath)}
             onDismiss={() => dismissMailboxCard(item.card.id)}
           />
         ) : (
@@ -181,77 +171,6 @@ export default function AgentNotifications() {
             onDismiss={() => dismissCompletion(item.msg.id)}
           />
         ),
-      )}
-    </div>
-  );
-}
-
-function MailNotification({
-  card, now, replying, replyText,
-  onStartReply, onCancelReply, onReplyChange, onSubmitReply, onApprove, onDismiss,
-}: {
-  card: MailboxCard;
-  now: number;
-  replying: boolean;
-  replyText: string;
-  onStartReply: () => void;
-  onCancelReply: () => void;
-  onReplyChange: (v: string) => void;
-  onSubmitReply: () => void;
-  onApprove: () => void;
-  onDismiss: () => void;
-}) {
-  return (
-    <div className={`agent-notif orc-mb-card orc-mb-${card.kind}`}>
-      <div className="orc-mb-meta">
-        <span className="orc-mb-kind" title={KIND_LABEL[card.kind]}>
-          <span className="orc-mb-glyph" aria-hidden="true">{KIND_GLYPH[card.kind]}</span>
-          {KIND_LABEL[card.kind]}
-        </span>
-        <span className="orc-mb-route">
-          <strong>{card.from}</strong>
-          <span className="orc-mb-arrow"> → </span>
-          {card.to ?? 'team'}
-        </span>
-        <span className="orc-mb-age">{ageLabel(card.createdAt, now)}</span>
-      </div>
-
-      <div className="orc-mb-text">{card.text}</div>
-
-      {card.files.length > 0 && (
-        <div className="orc-mb-files">
-          {card.files.slice(0, 4).map((f) => (
-            <span className="orc-mb-file" key={f} title={f}>{f}</span>
-          ))}
-          {card.files.length > 4 && <span className="orc-mb-file more">+{card.files.length - 4}</span>}
-        </div>
-      )}
-
-      {replying ? (
-        <div className="orc-mb-reply">
-          <textarea
-            className="orc-mb-reply-input"
-            value={replyText}
-            autoFocus
-            rows={2}
-            placeholder={`Reply to ${card.from}…`}
-            onChange={(e) => onReplyChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmitReply(); }
-              else if (e.key === 'Escape') { e.preventDefault(); onCancelReply(); }
-            }}
-          />
-          <div className="orc-mb-reply-actions">
-            <button className="orc-mb-btn ghost" onClick={onCancelReply}>Cancel</button>
-            <button className="orc-mb-btn primary" onClick={onSubmitReply} disabled={!replyText.trim()}>Send</button>
-          </div>
-        </div>
-      ) : (
-        <div className="orc-mb-actions">
-          <button className="orc-mb-btn primary" onClick={onApprove} title="Tell the agent to proceed">Approve</button>
-          <button className="orc-mb-btn" onClick={onStartReply} title="Send the agent a follow-up">Reply</button>
-          <button className="orc-mb-btn ghost" onClick={onDismiss} title="Clear this card">Dismiss</button>
-        </div>
       )}
     </div>
   );
