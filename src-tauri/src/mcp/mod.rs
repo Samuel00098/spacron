@@ -15,10 +15,11 @@
 //! or by subscribing to [`McpServerHandle`] channels.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive},
-        IntoResponse, Sse,
+        IntoResponse, Response, Sse,
     },
     routing::{get, post},
     Json, Router,
@@ -103,6 +104,9 @@ pub struct McpServerHandle {
     _shutdown_tx: oneshot::Sender<()>,
     /// The port the MCP server is listening on.
     pub port: u16,
+    /// Shared secret agents must include as `?token=…` when connecting. Handed
+    /// to the frontend so it can write the full URL into each agent's MCP config.
+    pub token: String,
     /// In-flight browser-tool requests awaiting frontend responses.
     pub pending_browser: PendingRequests,
 }
@@ -172,6 +176,10 @@ pub fn start(
     let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(32);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let pending_browser: PendingRequests = Arc::new(DashMap::new());
+    // Bearer-equivalent shared secret. Loopback binding alone does not isolate
+    // us: on a multi-user machine another local account can reach 127.0.0.1 but
+    // cannot read this user's agent config files, which is where the token lives.
+    let token = uuid::Uuid::new_v4().simple().to_string();
 
     let server_state = Arc::new(ServerState {
         registry: registry.clone(),
@@ -180,6 +188,7 @@ pub fn start(
         read_tx,
         spawn_tx,
         port: actual_port,
+        token: token.clone(),
         write_cb,
         read_cb,
         spawn_fn,
@@ -232,6 +241,7 @@ pub fn start(
         notify_tx,
         _shutdown_tx: shutdown_tx,
         port: actual_port,
+        token,
         pending_browser,
     };
 
@@ -249,6 +259,8 @@ struct ServerState {
     read_tx: broadcast::Sender<ReadOutputRequest>,
     spawn_tx: broadcast::Sender<SpawnRequest>,
     port: u16,
+    /// Shared secret every request must present as `?token=…`. See [`authorize`].
+    token: String,
     write_cb: WriteFn,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
@@ -390,7 +402,7 @@ fn tool_spawn_agent() -> serde_json::Value {
 fn tool_browser_navigate() -> serde_json::Value {
     serde_json::json!({
         "name": "browser_navigate",
-        "description": "Navigate the embedded browser preview to a URL. Use mode='window' for sites that block iframe embedding (Google, GitHub, etc.).",
+        "description": "Navigate the browser preview to a URL. Use mode='window' for sites that block iframe embedding (Google, GitHub, etc.), or mode='system' to just hand a URL to the user's own browser.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -400,8 +412,8 @@ fn tool_browser_navigate() -> serde_json::Value {
                 },
                 "mode": {
                     "type": "string",
-                    "enum": ["iframe", "window", "auto"],
-                    "description": "iframe: use the preview panel. window: open a real browser window. auto (default): try iframe first, fall back to window if the page refuses embedding."
+                    "enum": ["iframe", "window", "system", "auto"],
+                    "description": "iframe: use the preview panel — the only mode with full control (browser_read_dom, browser_click, browser_type all need the bridge the proxy injects into embedded pages). window: open a standalone in-app browser window, which renders sites that refuse embedding; browser_screenshot and browser_close_window work on it, but DOM reads and clicks do not. system: open in the user's default OS browser — nothing is embedded, so no other browser tool can act on that page; use it only to hand a link to the user. auto (default): try iframe first, fall back to a standalone window if the page refuses embedding."
                 }
             },
             "required": ["url"]
@@ -565,12 +577,24 @@ type SseEvent = Result<Event, Infallible>;
 
 async fn sse_handler(
     State(state): State<Arc<ServerState>>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+    Query(query): Query<AuthQuery>,
+) -> Response {
+    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
+        return rejection;
+    }
+
     let rx = state.notify_tx.subscribe();
-    let endpoint_url = format!("http://127.0.0.1:{}/message", state.port);
+    // The client POSTs wherever this endpoint event points, so carrying the token
+    // here means /message stays authenticated with no client-side config.
+    let endpoint_url = format!(
+        "http://127.0.0.1:{}/message?token={}",
+        state.port, state.token
+    );
 
     Sse::new(sse_event_stream(endpoint_url, rx))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response()
 }
 
 /// Build the SSE event stream for an MCP transport session.
@@ -629,7 +653,19 @@ fn sse_event_stream(
 
 async fn message_handler(
     State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Query(query): Query<AuthQuery>,
     Json(req): Json<JsonRpcRequest>,
+) -> Response {
+    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
+        return rejection;
+    }
+    dispatch_message(state, req).await.into_response()
+}
+
+async fn dispatch_message(
+    state: Arc<ServerState>,
+    req: JsonRpcRequest,
 ) -> Json<JsonRpcResponse> {
     let id = req.id.clone();
 
@@ -787,11 +823,13 @@ async fn handle_tool_call(
                     // Read output from the target PTY session
                     let output = (state.read_cb)(sid);
                     let output_str = String::from_utf8_lossy(&output);
-                    // Keep last ~50KB to avoid huge responses
-                    let text = if output_str.len() > 51200 {
+                    // Keep last ~50KB to avoid huge responses. The cut must land
+                    // on a char boundary or the slice panics — see
+                    // `tail_from_char_boundary`.
+                    let text = if output_str.len() > MAX_OUTPUT_BYTES {
                         format!("... [{} bytes trimmed] ...\n{}",
                             output_str.len(),
-                            &output_str[output_str.len() - 51200..])
+                            tail_from_char_boundary(&output_str, MAX_OUTPUT_BYTES))
                     } else {
                         output_str.to_string()
                     };
@@ -903,6 +941,85 @@ async fn handle_tool_call(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Cap on how much PTY output `read_agent_output` returns in one response.
+const MAX_OUTPUT_BYTES: usize = 51200;
+
+/// Keep the last `max_bytes` of `s`, snapping the cut *forward* to the next
+/// UTF-8 character boundary.
+///
+/// Slicing a `str` at a raw byte offset panics when the offset lands inside a
+/// multi-byte character. Agent TUI output is full of box-drawing characters
+/// (`─`, `│`, `╭`), so for a cut at an arbitrary offset that is the common
+/// case, not a rare one.
+fn tail_from_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut start = s.len() - max_bytes;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
+}
+
+/// Constant-time byte comparison, so token validation doesn't leak match
+/// progress via timing. Mirrors `remote::ct_eq`.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Gate every request on two independent checks.
+///
+/// 1. **No `Origin` header.** MCP CLI clients (Claude Code, Codex, Cursor) never
+///    send one; browsers always do. Rejecting any request that carries one is
+///    what stops a DNS-rebinding attack, where a hostile page re-resolves its
+///    own domain to 127.0.0.1 and becomes same-origin with us. The JSON
+///    content-type requirement alone does not cover that case.
+/// 2. **Matching `?token=`.** Defends against a local process that can reach the
+///    port but cannot read this user's agent config files — e.g. another account
+///    on a shared machine. The token rides in the query string rather than a
+///    header because the SSE transport gives MCP clients no way to set headers
+///    from a bare URL, and this listener is loopback-only, so there is no proxy
+///    or CDN log for the URL to leak into.
+///
+/// Returns `Some(response)` when the request must be refused, `None` when it may
+/// proceed.
+fn reject_unauthorized(
+    state: &ServerState,
+    headers: &HeaderMap,
+    query: &AuthQuery,
+) -> Option<Response> {
+    if headers.contains_key(header::ORIGIN) {
+        return Some(
+            (
+                StatusCode::FORBIDDEN,
+                "browser origins are not permitted to reach the Spacron MCP server",
+            )
+                .into_response(),
+        );
+    }
+
+    let presented = query.token.as_deref().unwrap_or("");
+    if !ct_eq(presented.as_bytes(), state.token.as_bytes()) {
+        return Some((StatusCode::UNAUTHORIZED, "invalid or missing token").into_response());
+    }
+
+    None
+}
+
+/// The `?token=…` every route requires.
+#[derive(Deserialize, Default)]
+struct AuthQuery {
+    token: Option<String>,
+}
+
 fn get_free_port() -> Option<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
@@ -936,5 +1053,291 @@ impl axum::serve::Listener for NoDelayListener {
                 }
             }
         }
+    }
+}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_with_token(token: &str) -> ServerState {
+        let (notify_tx, _) = broadcast::channel::<()>(1);
+        let (send_tx, _) = broadcast::channel::<SendToAgentRequest>(1);
+        let (read_tx, _) = broadcast::channel::<ReadOutputRequest>(1);
+        let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(1);
+        ServerState {
+            registry: Arc::new(Mutex::new(HashMap::new())),
+            notify_tx,
+            send_tx,
+            read_tx,
+            spawn_tx,
+            port: 1234,
+            token: token.to_string(),
+            write_cb: Arc::new(|_, _| Ok(())),
+            read_cb: Arc::new(|_| Vec::new()),
+            spawn_fn: Arc::new(|_| {}),
+            browser_emit_fn: Arc::new(|_, _, _| {}),
+            pending_browser: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn q(token: Option<&str>) -> AuthQuery {
+        AuthQuery {
+            token: token.map(String::from),
+        }
+    }
+
+    // --- tail_from_char_boundary -------------------------------------------
+
+    #[test]
+    fn tail_returns_whole_string_when_under_cap() {
+        assert_eq!(tail_from_char_boundary("hello", 100), "hello");
+    }
+
+    #[test]
+    fn tail_cutting_inside_a_multibyte_char_does_not_panic() {
+        // 'y' at byte 0, U+2500 (3 bytes) at 1..4, then ASCII filler. Sized so
+        // the naive `len - max` offset lands at byte 2 — inside the box-drawing
+        // character. This is the exact shape of real agent TUI output.
+        let mut s = String::from("y─");
+        s.push_str(&"x".repeat(51198));
+        assert_eq!(s.len() - MAX_OUTPUT_BYTES, 2);
+        assert!(!s.is_char_boundary(2));
+
+        let tail = tail_from_char_boundary(&s, MAX_OUTPUT_BYTES);
+
+        // Snapped forward past the split character rather than panicking.
+        assert!(tail.starts_with('x'));
+        assert_eq!(tail.len(), 51198);
+    }
+
+    #[test]
+    fn tail_keeps_a_clean_cut_exact() {
+        let s = "z".repeat(MAX_OUTPUT_BYTES + 10);
+        let tail = tail_from_char_boundary(&s, MAX_OUTPUT_BYTES);
+        assert_eq!(tail.len(), MAX_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn tail_never_splits_a_char_for_any_offset() {
+        // Sweep every cut point across an all-multibyte string.
+        let s: String = "─".repeat(200); // 600 bytes
+        for max in 1..s.len() {
+            let tail = tail_from_char_boundary(&s, max);
+            assert!(std::str::from_utf8(tail.as_bytes()).is_ok());
+            assert!(tail.len() <= max);
+        }
+    }
+
+    // --- authorize ----------------------------------------------------------
+
+    #[test]
+    fn authorize_accepts_a_matching_token_with_no_origin() {
+        let state = state_with_token("good-token");
+        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("good-token"))).is_none());
+    }
+
+    #[test]
+    fn authorize_rejects_a_wrong_token() {
+        let state = state_with_token("good-token");
+        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("bad-token"))).is_some());
+    }
+
+    #[test]
+    fn authorize_rejects_a_missing_token() {
+        let state = state_with_token("good-token");
+        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(None)).is_some());
+    }
+
+    #[test]
+    fn authorize_rejects_a_token_that_is_a_prefix_of_the_real_one() {
+        let state = state_with_token("good-token");
+        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("good"))).is_some());
+    }
+
+    #[test]
+    fn authorize_rejects_any_request_carrying_an_origin_even_with_a_valid_token() {
+        // The DNS-rebinding case: a hostile page re-resolves its domain to
+        // 127.0.0.1, so it is same-origin and its fetch is not preflighted.
+        // Browsers always attach Origin; MCP CLI clients never do.
+        let state = state_with_token("good-token");
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        assert!(reject_unauthorized(&state, &headers, &q(Some("good-token"))).is_some());
+    }
+
+    #[test]
+    fn authorize_rejects_a_null_origin() {
+        let state = state_with_token("good-token");
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, "null".parse().unwrap());
+        assert!(reject_unauthorized(&state, &headers, &q(Some("good-token"))).is_some());
+    }
+
+    // --- ct_eq --------------------------------------------------------------
+
+    #[test]
+    fn ct_eq_matches_only_identical_slices() {
+        assert!(ct_eq(b"abc", b"abc"));
+        assert!(!ct_eq(b"abc", b"abd"));
+        assert!(!ct_eq(b"abc", b"ab"));
+        assert!(!ct_eq(b"", b"a"));
+        assert!(ct_eq(b"", b""));
+    }
+
+    // --- end-to-end over real HTTP -----------------------------------------
+    //
+    // The agent-to-agent transport had no test at all before this. These drive
+    // an actually-bound server the way a CLI agent does, so they cover the
+    // wiring (routing, extractor order, auth rejection) that testing `authorize`
+    // in isolation cannot.
+
+    /// Boot a real server and return `(base_url, token, handle)`.
+    fn boot() -> (String, String, McpServerHandle) {
+        let (handle, port) = start(
+            0,
+            Arc::new(|_, _| Ok(())),
+            Arc::new(|_| b"agent output".to_vec()),
+            Arc::new(|_| {}),
+            Arc::new(|_, _, _| {}),
+        )
+        .expect("server should start");
+        let token = handle.token.clone();
+        (format!("http://127.0.0.1:{port}"), token, handle)
+    }
+
+    async fn wait_until_listening(base: &str, token: &str) {
+        let client = reqwest::Client::new();
+        for _ in 0..100 {
+            let ok = client
+                .post(format!("{base}/message?token={token}"))
+                .json(&serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize"}))
+                .send()
+                .await
+                .is_ok();
+            if ok {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("MCP server never came up");
+    }
+
+    #[tokio::test]
+    async fn a_valid_token_reaches_the_tools() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Iris", "claude", "Agent 1").await;
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "list_agents" }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Iris"), "expected the registered agent, got: {text}");
+    }
+
+    #[tokio::test]
+    async fn send_to_agent_still_works_end_to_end() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Trinity", "codex", "Agent 2").await;
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "send_to_agent",
+                    "arguments": { "name": "Trinity", "message": "status?" }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        assert!(body.get("error").is_none(), "unexpected error: {body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Trinity"));
+    }
+
+    #[tokio::test]
+    async fn a_request_without_a_token_is_rejected() {
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let status = reqwest::Client::new()
+            .post(format!("{base}/message"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": { "name": "list_agents" }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+
+        assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_browser_origin_is_rejected_even_with_the_right_token() {
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        // What a DNS-rebound page looks like on the wire.
+        let status = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .header("Origin", "https://evil.example")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                "params": {
+                    "name": "send_to_agent",
+                    "arguments": { "name": "Iris", "message": "rm -rf /" }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+
+        assert_eq!(status, reqwest::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_sse_route_is_gated_too() {
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client.get(format!("{base}/sse")).send().await.unwrap().status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(format!("{base}/sse?token={token}"))
+                .header("Origin", "https://evil.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
     }
 }

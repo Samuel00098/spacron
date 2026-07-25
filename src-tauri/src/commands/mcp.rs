@@ -41,6 +41,18 @@ pub fn mcp_server_port(handle: State<'_, McpServerHandle>) -> Result<u16, String
     Ok(handle.port)
 }
 
+/// The full authenticated SSE URL to write into an agent's MCP config.
+///
+/// Returned whole rather than as port + token so callers can't assemble it
+/// wrongly and silently produce a config that fails to authenticate.
+#[tauri::command]
+pub fn mcp_server_url(handle: State<'_, McpServerHandle>) -> Result<String, String> {
+    Ok(format!(
+        "http://127.0.0.1:{}/sse?token={}",
+        handle.port, handle.token
+    ))
+}
+
 /// Resolve a pending browser-tool request with a result from the frontend.
 /// Called by the MCP browser bridge after executing a browser tool.
 #[tauri::command]

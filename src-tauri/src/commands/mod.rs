@@ -1,6 +1,7 @@
 pub mod app_flags;
 pub mod audio;
 pub mod background;
+pub mod browser_window;
 pub mod db;
 pub mod deps;
 pub mod env_vars;
@@ -12,7 +13,6 @@ pub mod lsp;
 pub mod mcp;
 pub mod mobile;
 pub mod music_library;
-pub mod native_preview;
 pub mod notification;
 pub mod parakeet;
 pub mod preview;

@@ -22,6 +22,7 @@ import { initMcpBrowserBridge } from './mcpBrowserBridge';
 // ---------------------------------------------------------------------------
 
 let serverPort: number | null = null;
+let serverUrl: string | null = null;
 let initialized = false;
 
 /** Get the port the MCP server is listening on. */
@@ -30,6 +31,19 @@ export async function getMcpPort(): Promise<number> {
     serverPort = (await invoke('mcp_server_port')) as number;
   }
   return serverPort!;
+}
+
+/**
+ * The full SSE URL agents must connect to, including the `?token=` the server
+ * requires. Built in Rust and returned whole so the token can never be dropped
+ * on the way through — a URL missing it authenticates as nobody and the agent
+ * silently loses every cross-agent tool.
+ */
+export async function getMcpUrl(): Promise<string> {
+  if (serverUrl === null) {
+    serverUrl = (await invoke('mcp_server_url')) as string;
+  }
+  return serverUrl!;
 }
 
 /** Register an agent with the MCP server so other agents can discover it. */
@@ -136,10 +150,9 @@ export function initMcpBridge(): void {
  * JSON-RPC messages to `http://127.0.0.1:{port}/message`.
  */
 export async function buildMcpServerConfig(): Promise<Record<string, unknown>> {
-  const port = await getMcpPort();
   return {
     'spacron-mcp': {
-      url: `http://127.0.0.1:${port}/sse`,
+      url: await getMcpUrl(),
     },
   };
 }
@@ -164,8 +177,7 @@ export async function injectMcpConfigForAgent(
   preset: string,
   projectRoot?: string,
 ): Promise<void> {
-  const port = await getMcpPort();
-  const mcpUrl = `http://127.0.0.1:${port}/sse`;
+  const mcpUrl = await getMcpUrl();
 
   switch (preset) {
     case 'cursor':

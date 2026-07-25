@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "image-png", "unstable"] }
+tauri = { version = "2", features = ["protocol-asset", "image-png"] }
 window-vibrancy = "0.5"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"

@@ -14,13 +14,6 @@ import {
 } from './preview';
 import { previewConsoleLogs } from './previewConsole';
 import { setActiveView } from './layout';
-import {
-  nativePreviewActive,
-  nativePreviewUrl,
-  activateNativePreview,
-  deactivateNativePreview,
-  nativePreviewEval,
-} from './nativePreview';
 
 interface BrowserRequestPayload {
   request_id: string;
@@ -97,12 +90,28 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
 
   const mode = (args.mode as string) || 'auto';
 
+  // Hand the URL to the host OS's default browser. Nothing is embedded, so none
+  // of the other browser tools can act on the result — this is for "just open
+  // this for the user", not for driving a page.
+  if (mode === 'system') {
+    await invoke('preview_open_in_browser', { url });
+    return (
+      `Opened "${url}" in the system default browser. It is outside the app, so ` +
+      `browser_read_dom / browser_click / browser_type / browser_screenshot cannot ` +
+      `act on it — use mode:"iframe" or mode:"window" if you need to drive the page.`
+    );
+  }
+
+  // Standalone pop-up window: a real Tauri window, so it renders sites that refuse
+  // iframe embedding. It stays in-app (screenshot and close work on it), but it has
+  // no injected postMessage bridge, so the DOM/interaction tools cannot drive it.
   if (mode === 'window') {
-    const el = getPreviewContentEl();
-    if (!el) throw new Error('Preview panel is not mounted.');
-    setActiveView('preview');
-    await activateNativePreview(url, el);
-    return `Opened "${url}" in native webview mode.`;
+    await invoke('browser_create_window', { url });
+    return (
+      `Opened "${url}" in a standalone browser window. browser_screenshot and ` +
+      `browser_close_window act on it; browser_read_dom / browser_click / browser_type ` +
+      `need the preview iframe and are unavailable while it is open.`
+    );
   }
 
   await ensureProxyRunning();
@@ -112,10 +121,20 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
   if (mode === 'auto') {
     const loaded = await waitForPageResponse(5000);
     if (!loaded) {
-      const el = getPreviewContentEl();
-      if (!el) throw new Error('Preview panel is not mounted.');
-      await activateNativePreview(url, el);
-      return `Page refused iframe embedding. Switched to native webview for "${url}".`;
+      // A missing bridge response only means "refused embedding" for pages the
+      // proxy actually injected MCP_SNIPPET into. Pages loaded outside the proxy
+      // (about:blank, direct YouTube /embed/ URLs) have no bridge by design and
+      // would otherwise false-negative here, spawning a pop-up window for a page
+      // that was rendering perfectly well.
+      if (!isBridgeCapableIframe()) {
+        return (
+          `Navigated preview to "${url}". The page is not served through the injecting ` +
+          `proxy, so the DOM/interaction tools are unavailable for it; left it in the ` +
+          `preview panel. Pass mode:"window" if you need to drive it.`
+        );
+      }
+      await invoke('browser_create_window', { url });
+      return `Page refused iframe embedding. Opened "${url}" in a standalone browser window instead.`;
     }
   }
 
@@ -123,10 +142,12 @@ async function handleNavigate(args: Record<string, unknown>): Promise<string> {
 }
 
 async function handleScreenshot(args: Record<string, unknown>): Promise<unknown> {
-  if (get(nativePreviewActive)) {
-    const pngBytes = await invoke<number[]>('native_preview_screenshot');
+  // A standalone window is what the agent is actually looking at, so capture it
+  // rather than the iframe sitting behind it in the panel.
+  if (await isBrowserWindowOpen()) {
+    const pngBytes = await invoke<number[]>('browser_screenshot_window');
     const base64 = bytesToBase64(new Uint8Array(pngBytes));
-    return { image_base64: base64, format: 'png' };
+    return { image_base64: base64, format: 'png', source: 'window' };
   }
 
   const iframe = getActiveIframe();
@@ -151,11 +172,6 @@ async function handleScreenshot(args: Record<string, unknown>): Promise<unknown>
 }
 
 async function handleGetPageInfo(): Promise<unknown> {
-  if (get(nativePreviewActive)) {
-    const url = get(nativePreviewUrl);
-    return { url, title: '', readyState: 'native' };
-  }
-
   const tabs = get(previewTabs);
   const activeId = get(activePreviewTabId);
   const activeTab = tabs.find((t) => t.id === activeId);
@@ -186,18 +202,7 @@ async function handleReadDom(args: Record<string, unknown>): Promise<unknown> {
   const format = (args.format as string) || 'text';
   const limit = (args.limit as number) || 10;
 
-  if (get(nativePreviewActive)) {
-    // `native_preview_eval` maps to Tauri's `webview.eval`, which is
-    // fire-and-forget — the script's return value is discarded and there is no
-    // channel back from an external page. Returning a "results emitted via
-    // console capture" note here was false: nothing logs the value, and the
-    // native webview has no capability entry so its IPC is unavailable too.
-    // Fail loudly rather than hand the agent a fabricated success.
-    throw new Error(
-      'browser_read_dom is not available in native webview mode (no result channel from the page). ' +
-      'Use browser_navigate with mode:"iframe" to read the DOM.',
-    );
-  }
+  await assertNoStandaloneWindow('browser_read_dom');
 
   const iframe = getActiveIframe();
   if (!iframe) throw new Error('No active preview iframe found. Is the preview panel open?');
@@ -240,27 +245,7 @@ async function handleInteract(
   const selector = args.selector as string;
   if (!selector) throw new Error('Missing required parameter: selector');
 
-  if (get(nativePreviewActive)) {
-    if (action === 'click') {
-      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return;el.click();})()`;
-      await nativePreviewEval(script);
-    } else {
-      const text = (args.text as string) || '';
-      const script = `(function(){var el=document.querySelector(${JSON.stringify(selector)});if(!el)return;el.focus();el.value=${JSON.stringify(text)};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));${args.submit ? "var f=el.closest('form');if(f)f.requestSubmit();" : ''}})()`;
-      await nativePreviewEval(script);
-    }
-    // `webview.eval` is fire-and-forget, so we cannot know whether the selector
-    // matched. Say so instead of reporting a success the page may never have
-    // performed — an agent acting on a false "clicked" is worse than an unknown.
-    return {
-      action,
-      selector,
-      status: 'dispatched',
-      verified: false,
-      note: 'Native webview mode cannot confirm the element existed or that the action took effect. ' +
-        'Use mode:"iframe" if you need a confirmed result.',
-    };
-  }
+  await assertNoStandaloneWindow(`browser_${action}`);
 
   const iframe = getActiveIframe();
   if (!iframe) throw new Error('No active preview iframe found. Is the preview panel open?');
@@ -278,23 +263,61 @@ async function handleInteract(
 }
 
 async function handleCloseWindow(): Promise<string> {
-  if (get(nativePreviewActive)) {
-    await deactivateNativePreview();
-    return 'Native webview hidden. Preview reverted to iframe mode.';
+  try {
+    await invoke('browser_close_window');
+    return 'Browser window closed.';
+  } catch {
+    return 'No browser window was open.';
   }
-  return 'No native webview was active.';
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getPreviewContentEl(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('.preview-content');
-}
-
 function getActiveIframe(): HTMLIFrameElement | null {
   return document.querySelector<HTMLIFrameElement>('.preview-iframe.is-active');
+}
+
+/**
+ * Refuse a page-driving tool while a standalone window is open.
+ *
+ * These tools only reach the preview iframe (they need the postMessage bridge the
+ * proxy injects, which the standalone window has no equivalent of). With a window
+ * open, the iframe is not what the agent is looking at, so running them anyway
+ * would read — or worse, click — a page nobody asked about. Fail with a way out
+ * instead of acting on the wrong document.
+ */
+async function assertNoStandaloneWindow(tool: string): Promise<void> {
+  if (!(await isBrowserWindowOpen())) return;
+  throw new Error(
+    `A standalone browser window is open, and ${tool} can only act on the preview ` +
+      `iframe — running it now would target a different page than the one on screen. ` +
+      `Call browser_close_window first, or re-navigate with mode:"iframe".`,
+  );
+}
+
+/** Whether the standalone pop-up browser window is currently open. */
+async function isBrowserWindowOpen(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('browser_window_is_open');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the active iframe is one the background proxy served, and therefore
+ * one that should have MCP_SNIPPET injected. Everything the proxy serves is on
+ * the loopback origin; anything else (about:blank, a direct YouTube embed, or an
+ * empty src while the proxy is still starting) has no bridge and must not be
+ * read as evidence that the site blocked embedding.
+ */
+function isBridgeCapableIframe(): boolean {
+  const iframe = getActiveIframe();
+  if (!iframe) return false;
+  const src = iframe.getAttribute('src') || '';
+  return src.startsWith('http://127.0.0.1:');
 }
 
 /**
@@ -329,8 +352,25 @@ function postMessageRoundTrip(
     }
 
     window.addEventListener('message', handler);
-    iframe.contentWindow?.postMessage(fullMessage, '*');
+    // Pin the target origin to the proxy that injected the bridge. With '*' the
+    // payload — which for browser_type carries whatever text the agent was told
+    // to enter — would be delivered to whatever origin the frame happens to hold
+    // by then, e.g. after a redirect off the proxy.
+    iframe.contentWindow?.postMessage(fullMessage, bridgeTargetOrigin(iframe));
   });
+}
+
+/**
+ * The origin the injected MCP bridge lives on: the loopback proxy that served
+ * the page. Falls back to '*' only when the src isn't parseable, which means
+ * there is no bridge to talk to and the round trip will time out anyway.
+ */
+function bridgeTargetOrigin(iframe: HTMLIFrameElement): string {
+  try {
+    return new URL(iframe.getAttribute('src') || '').origin;
+  } catch {
+    return '*';
+  }
 }
 
 /**

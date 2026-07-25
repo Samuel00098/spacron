@@ -35,15 +35,6 @@ import {
   closePreviewBrowserTab,
 } from '$lib/stores/preview';
 import { previewConsoleLogs, pushConsoleLog, clearConsoleLogs as clearConsoleLogsStore } from '$lib/stores/previewConsole';
-import {
-  nativePreviewActive,
-  nativePreviewUrl,
-  activateNativePreview,
-  deactivateNativePreview,
-  syncNativePreviewBounds,
-  navigateNativePreview,
-  nativePreviewEval,
-} from '$lib/stores/nativePreview';
 import { showToast } from '$lib/stores/notification';
 import {
   browsingHistory,
@@ -198,32 +189,6 @@ function isAbsoluteUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
-/**
- * Resolve a preview URL into something the native webview can actually load,
- * or null when there is nothing loadable.
- *
- * The Rust side (`native_preview_create` / `_navigate`) runs a strict
- * `url::Url::parse()` and rejects anything that isn't an absolute http/https
- * URL. The toggle used to hand it `inputUrl || currentUrlValue` completely raw,
- * so the everyday cases all failed at the boundary:
- *   - "localhost:3000" parses with scheme "localhost" → rejected
- *   - "google.com" → "relative URL without a base" → rejected
- *   - "about:blank" / "" → rejected (or skipped by the falsy guard)
- * Every one of those rejections was swallowed by a bare `void`, so the button
- * looked completely dead. Route through the same `normalizeUrl` the iframe path
- * uses, and resolve proxy-relative paths against the proxy origin.
- */
-function resolveNativeUrl(raw: string, proxyPort: number | null): string | null {
-  const normalized = normalizeUrl(raw ?? '');
-  if (!normalized || normalized === 'about:blank') return null;
-  if (isAbsoluteUrl(normalized)) return normalized;
-  // Proxy-relative ("/path") — only meaningful once the proxy has a port.
-  if (normalized.startsWith('/') && proxyPort) {
-    return `http://127.0.0.1:${proxyPort}${normalized}`;
-  }
-  return null;
-}
-
 function parseLocalDevUrl(url: string): { host: string; port: number; path: string } | null {
   try {
     const parsed = new URL(url);
@@ -358,7 +323,6 @@ export default function PreviewPanel() {
   const isConnectingValue = useStore(isConnecting);
   const browsingHistoryValue = useStore(browsingHistory);
   const project = useStore(activeProject);
-  const isNativeMode = useStore(nativePreviewActive);
 
   const iframeElementsRef = useRef<Record<string, HTMLIFrameElement | undefined>>({});
   const previewContentRef = useRef<HTMLDivElement>(null);
@@ -608,23 +572,6 @@ export default function PreviewPanel() {
   const navigateTo = useCallback(
     async (rawUrl: string) => {
       const normalized = normalizeUrl(rawUrl);
-      if (isNativeMode) {
-        // Same strict-parse boundary as the toggle: resolve to an absolute
-        // http(s) URL first, and surface a failure instead of rejecting silently.
-        const target = resolveNativeUrl(rawUrl, portRef.current);
-        if (!target) {
-          showToast(`Can't open "${rawUrl}" in native mode — needs an http(s) address`, 'warning');
-          return;
-        }
-        try {
-          await navigateNativePreview(target);
-          setInputUrl(target);
-        } catch (err) {
-          console.error('[native-preview] navigate failed:', err);
-          showToast(`Native preview navigation failed: ${err instanceof Error ? err.message : err}`, 'error', 8000);
-        }
-        return;
-      }
       const localDev = parseLocalDevUrl(normalized);
       if (localDev) {
         await clearProxyTarget();
@@ -644,7 +591,7 @@ export default function PreviewPanel() {
       setInputUrl(normalized);
       startLoadFeedback();
     },
-    [startLoadFeedback, markDrivenLoad, isNativeMode],
+    [startLoadFeedback, markDrivenLoad],
   );
 
   const handleNavigate = useCallback(
@@ -664,40 +611,28 @@ export default function PreviewPanel() {
   );
 
   const goBack = useCallback(() => {
-    if (isNativeMode) {
-      void nativePreviewEval('history.back()');
-      return;
-    }
     if (!canGoBack) return;
     markDrivenLoad();
     goBackPreviewTab();
     setInputUrl(currentUrl as unknown as string);
     startLoadFeedback();
-  }, [canGoBack, startLoadFeedback, markDrivenLoad, isNativeMode]);
+  }, [canGoBack, startLoadFeedback, markDrivenLoad]);
 
   const goForward = useCallback(() => {
-    if (isNativeMode) {
-      void nativePreviewEval('history.forward()');
-      return;
-    }
     if (!canGoForward) return;
     markDrivenLoad();
     goForwardPreviewTab();
     startLoadFeedback();
-  }, [canGoForward, startLoadFeedback, markDrivenLoad, isNativeMode]);
+  }, [canGoForward, startLoadFeedback, markDrivenLoad]);
 
   const refresh = useCallback(() => {
-    if (isNativeMode) {
-      void nativePreviewEval('location.reload()');
-      return;
-    }
     const activeIframe = getActiveIframeElement();
     if (activeIframe) {
       markDrivenLoad();
       startLoadFeedback(activeTabRef.current?.id);
       activeIframe.src = activeIframe.src;
     }
-  }, [getActiveIframeElement, startLoadFeedback, markDrivenLoad, isNativeMode]);
+  }, [getActiveIframeElement, startLoadFeedback, markDrivenLoad]);
 
   const clearBrowsingData = useCallback(async () => {
     if (clearingData) return;
@@ -1296,44 +1231,6 @@ export default function PreviewPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    if (!isNativeMode) return;
-    const el = previewContentRef.current;
-    if (!el) return;
-    const sync = () => syncNativePreviewBounds(el);
-    const observer = new ResizeObserver(sync);
-    observer.observe(el);
-    window.addEventListener('resize', sync);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', sync);
-    };
-  }, [isNativeMode]);
-
-  // Tear the native webview down when the preview panel goes away.
-  //
-  // AppShell renders panels conditionally (`if (id === 'preview') return
-  // <PreviewPanel />`), so switching to the editor or terminal UNMOUNTS this
-  // component. The native webview is an OS-level child of the window painted on
-  // top of the page — it does not unmount with React. Without this it kept
-  // floating over whatever view replaced it, and because the toggle had gone
-  // with the panel there was no way left to dismiss it.
-  const nativeModeRef = useRef(isNativeMode);
-  nativeModeRef.current = isNativeMode;
-  useEffect(() => {
-    return () => {
-      if (nativeModeRef.current) void deactivateNativePreview();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isNativeMode) return;
-    const unsub = nativePreviewUrl.subscribe((url) => {
-      if (url) setInputUrl(url);
-    });
-    return unsub;
-  }, [isNativeMode]);
-
   return (
     <div className="preview-panel">
       <div className="preview-tabs">
@@ -1442,8 +1339,7 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn inspect-btn${inspectMode ? ' active' : ''}`}
             onClick={toggleInspectMode}
-            disabled={isNativeMode}
-            title={isNativeMode ? 'Not available in native mode' : inspectMode ? 'Exit Add Element to Chat' : 'Add Element to Chat'}
+            title={inspectMode ? 'Exit Add Element to Chat' : 'Add Element to Chat'}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 3l7 18 2.5-7.5L20 13 3 3z" />
@@ -1506,7 +1402,6 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn viewport-btn${viewportMode === 'responsive' ? ' active' : ''}`}
             onClick={() => setViewportMode('responsive')}
-            disabled={isNativeMode}
             title="Responsive (full width)"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1519,7 +1414,6 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn viewport-btn${viewportMode === 'tablet' ? ' active' : ''}`}
             onClick={() => setViewportMode('tablet')}
-            disabled={isNativeMode}
             title="Tablet (768px)"
           >
             <svg width="13" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1532,7 +1426,6 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn viewport-btn${viewportMode === 'mobile' ? ' active' : ''}`}
             onClick={() => setViewportMode('mobile')}
-            disabled={isNativeMode}
             title="Mobile (375px)"
           >
             <svg width="10" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1542,51 +1435,6 @@ export default function PreviewPanel() {
             </svg>
           </button>
         </div>
-
-        <button
-          className={`nav-btn native-toggle-btn${isNativeMode ? ' active' : ''}`}
-          onClick={() => {
-            void (async () => {
-              try {
-                if (isNativeMode) {
-                  await deactivateNativePreview();
-                  return;
-                }
-                const el = previewContentRef.current;
-                if (!el) {
-                  showToast('Preview panel is not ready yet', 'warning');
-                  return;
-                }
-                const target = resolveNativeUrl(inputUrl || currentUrlValue, portRef.current);
-                if (!target) {
-                  showToast('Load a page in the preview first — native mode needs a URL', 'info');
-                  return;
-                }
-                await activateNativePreview(target, el);
-              } catch (err) {
-                // These calls cross into Rust and can fail for real reasons
-                // (bad URL, webview creation refused). Previously the whole
-                // handler was a bare `void`, so every failure was silent and the
-                // button just looked broken.
-                console.error('[native-preview] toggle failed:', err);
-                showToast(`Native preview failed: ${err instanceof Error ? err.message : err}`, 'error', 8000);
-              }
-            })();
-          }}
-          title={isNativeMode ? 'Switch to iframe preview' : 'Switch to native webview (bypasses embedding restrictions)'}
-        >
-          {isNativeMode ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 014-10z" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <path d="M8 21h8M12 17v4" />
-            </svg>
-          )}
-        </button>
 
         <form className="address-bar" onSubmit={handleNavigate}>
           <span className={`protocol-badge ${protocolBadge.toLowerCase()}`}>{protocolBadge}</span>
@@ -1779,9 +1627,7 @@ export default function PreviewPanel() {
         className={`preview-content${viewportMode !== 'responsive' ? ' viewport-constrained' : ''}`}
         ref={previewContentRef}
       >
-        {isNativeMode ? (
-          <div className="native-preview-placeholder" />
-        ) : activeIframeSrc ? (
+        {activeIframeSrc ? (
           viewportMode !== 'responsive' ? (
             <div
               className={`device-shell${viewportMode === 'mobile' ? ' is-mobile' : ''}${viewportMode === 'tablet' ? ' is-tablet' : ''}`}
