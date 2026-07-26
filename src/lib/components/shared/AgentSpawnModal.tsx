@@ -31,7 +31,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const isDev = layout.ambient === 'development';
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
-  const [spawning, setSpawning] = useState(false);
   // Seeded from the global default; the Isolated / Main repo toggle below still
   // overrides it for this spawn only.
   const worktreesByDefault = useStore(agentWorktrees);
@@ -150,10 +149,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, project, isDev, onclose]);
+  }, [spawnCounts, project, isDev, skipWorktree, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && totalSpawnCount > 0 && !spawning) {
+    if (e.key === 'Enter' && totalSpawnCount > 0) {
       e.preventDefault();
       void handleSpawnConfirm();
     }
@@ -225,9 +224,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                   role="button"
                   tabIndex={0}
                   aria-pressed={selected}
-                  onClick={() => !spawning && (selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command))}
+                  onClick={() => (selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command))}
                   onKeyDown={(e) => {
-                    if ((e.key === 'Enter' || e.key === ' ') && !spawning) {
+                    if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command);
                     }
@@ -247,7 +246,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                     <button
                       className="asm-btn asm-btn-decrement"
                       onClick={() => decrementSpawn(preset.command)}
-                      disabled={count === 0 || spawning}
+                      disabled={count === 0}
                       aria-label={`Decrease count for ${preset.name}`}
                     >
                       −
@@ -256,7 +255,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                     <button
                       className="asm-btn asm-btn-increment"
                       onClick={() => incrementSpawn(preset.command)}
-                      disabled={spawning}
                       aria-label={`Increase count for ${preset.name}`}
                     >
                       +
@@ -299,9 +297,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           <button
             className="asm-confirm-btn"
             onClick={() => void handleSpawnConfirm()}
-            disabled={totalSpawnCount === 0 || spawning}
+            disabled={totalSpawnCount === 0}
           >
-            {spawning ? 'Spawning…' : `Spawn${totalSpawnCount > 0 ? ` ${totalSpawnCount}` : ''}`}
+            {`Spawn${totalSpawnCount > 0 ? ` ${totalSpawnCount}` : ''}`}
           </button>
         </footer>
       </div>
