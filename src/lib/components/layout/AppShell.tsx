@@ -1929,19 +1929,35 @@ export default function AppShell() {
   }
 
   function getMiniPreview(id: RoomId) {
-    // Agent rooms are terminal-based — use the terminal preview pattern.
+    // Agent rooms are terminal-based, but their content is the agent's own
+    // session — NOT the personal shell's `commandHistory`. Reading that made
+    // every agent card render identical text, which defeats the thumbnail.
     if (isAgentRoomId(id)) {
-      const cmds = (history || []).slice(0, 4);
+      const session = getAgentSessionForRoom(id);
+      // What the CLI reports it is doing (OSC title), then the task it was
+      // briefed with — the two lines that actually differ between agents.
+      const lines = [session?.paneTitle, session?.taskSummary]
+        .filter((line): line is string => !!line && line.trim().length > 0);
+      const status = !session
+        ? 'session ended'
+        : session.isExecuting
+          ? 'working…'
+          : session.isRunning
+            ? 'idle'
+            : `exit ${session.lastExitCode ?? 0}`;
       return (
         <div className="mini-term">
-          {cmds.map((cmd, i) => (
-            <div key={i}>
-              <div><span className="mini-prompt">❯</span> <span className="mini-cmd">{cmd.slice(0, 36)}</span></div>
-              {i === cmds.length - 1 && <div className="mini-output">$ exit 0</div>}
-            </div>
+          <div>
+            <span className="mini-prompt">❯</span>{' '}
+            <span className="mini-cmd">{(session?.agentPreset ?? 'agent').slice(0, 36)}</span>
+          </div>
+          {lines.map((line, i) => (
+            <div key={i} className="mini-output">{line.slice(0, 40)}</div>
           ))}
-          {cmds.length === 0 && <div className="mini-output">Agent running…</div>}
-          <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
+          <div className="mini-output">{status}</div>
+          {session?.isExecuting && (
+            <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
+          )}
         </div>
       );
     }
@@ -2036,6 +2052,11 @@ export default function AppShell() {
   }
 
   function renderRoomCard(id: RoomId) {
+    // The rail also renders in the `development` and `preview` layouts, which
+    // have none of the pile/thumbnail CSS (it is all scoped to .ambient-focus).
+    // Emitting the mini preview there would drop an unscaled, opaque mock into
+    // the card, so it is focus-only — those layouts keep the text preview.
+    const isFocusRail = ambientLayout === 'focus';
     return (
       <button key={id} className="room-card bento-card" onClick={() => focusRoom(id)} title={`Open ${roomTitle(id)}`}>
         <div className="room-card-header">
@@ -2043,12 +2064,14 @@ export default function AppShell() {
           <span className="room-card-kind">{roomKind(id)}</span>
         </div>
         <span className="room-card-name">{roomTitle(id)}</span>
-        {ambientLayout === 'focus' ? null : getRoomPreview(id)}
-        <div className="room-card-mini-preview">
-          <div className="room-card-mini-inner">
-            {getMiniPreview(id)}
+        {isFocusRail ? null : getRoomPreview(id)}
+        {isFocusRail && (
+          <div className="room-card-mini-preview">
+            <div className="room-card-mini-inner">
+              {getMiniPreview(id)}
+            </div>
           </div>
-        </div>
+        )}
       </button>
     );
   }

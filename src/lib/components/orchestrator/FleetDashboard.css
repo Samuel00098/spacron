@@ -402,10 +402,12 @@
 }
 
 /* The base branch name is arbitrary-length; clamp it so it can't stretch the
-   button past the card. The full name is in the button's title. */
+   button past the card and wrap the action row. 60px fits the names this is
+   almost always pointing at (`main`, `master`, `develop`) in full; anything
+   longer ellipsises, with the full name in the button's title. */
 .fc-btn-branch {
   display: inline-block;
-  max-width: 84px;
+  max-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -451,79 +451,72 @@
     0 22px 46px rgba(0, 0, 0, 0.42);
 }
 
-/* ── Pile effect: overlapping cards like a deck ─────────────────────────
-   When 2+ cards exist in the focus-mode room-cards-row, switch from a
-   spaced column to a tight pile where back cards peek out from behind
-   the front card — Apple Stage Manager-inspired depth cue.
+/* ── Pile effect: a deck stacked downwards ──────────────────────────────
+   With 2+ cards the focus rail stops being a spaced column and becomes an
+   overlapping deck: each card sits below the previous one and paints ON
+   TOP of it, so what stays visible of every card is its own top edge —
+   the icon, kind and name. That is what makes every card pickable: each
+   one owns an uncovered `--pile-reveal`-tall band containing its header,
+   and hovering it raises the whole card clear of the deck.
 
-   Adaptive sizing: card height shrinks as more cards are added so the
-   sidebar stays compact without scrolling. The pile overlap (margin-top)
-   scales proportionally to keep ~30-35% of each back card visible. */
+   GEOMETRY IS DRIVEN BY TWO CUSTOM PROPERTIES, SET ONCE ON THE ROW:
 
-/* Activate pile mode when there are 2+ cards: kill the gap, reserve
-   bottom padding so the piled cards don't clip at the scroll edge. */
+     --pile-card-h   the card's exact height (not a min — see below)
+     --pile-reveal   how much of each card's top stays uncovered
+
+   and the overlap is derived: `margin-top: reveal - height`. Keep it that
+   way. The original version hand-wrote a height ladder and a matching
+   margin ladder as five `:has(> :nth-child(N))` rules each, and BOTH
+   ladders were inert:
+
+   - Every one of those selectors has identical specificity — `:has()`
+     takes the specificity of its argument, and `:nth-child()` is
+     class-level, so all ten were (0,7,0). A later generic
+     `margin-top: -120px` rule therefore beat all five margin values, and
+     the overlap never adapted to the count at all.
+   - The heights were `min-height`, but the card's content floor (padding +
+     header + name + the thumbnail's own min-height) is ~148px, so every
+     value below that did nothing either.
+
+   With the two fighting, 4+ open rooms overlapped by more than the card
+   was tall and the deck collapsed into itself. Hence: one height, one
+   reveal, one derived margin, and a real `height` so the ladder binds.
+
+   `--pile-reveal` must stay >= padding-top(16) + header(16) + gap(8) +
+   name(18) = 58px, or the band stops showing the card's name and you are
+   back to picking blind. */
+
+/* Activate deck mode when there are 2+ cards: kill the gap, reserve
+   bottom padding so the deck doesn't clip at the scroll edge.
+   These three blocks are the ONLY place the ladder lives — each one
+   matches a superset of the previous, so source order picks the last. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) {
+  --pile-card-h: 172px;
+  --pile-reveal: 66px;
   gap: 0;
-  padding-bottom: 80px;
+  padding-bottom: 24px;
 }
 
-/* ── Adaptive card height: shrink as count increases ───────────────
-   Visible portion of back cards stays ~25-30% across all counts. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card {
-  min-height: 158px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(3)) .room-card {
-  min-height: 138px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) .room-card {
-  min-height: 120px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(5)) .room-card {
-  min-height: 105px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) .room-card {
-  min-height: 95px;
-}
-
-/* ── Adaptive pile overlap: scale margin-top with card height ──────
-   Back cards overlap less as they get shorter so ~25-30% of
-   each back card remains visible. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+2) {
-  margin-top: -118px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(3)) .room-card:nth-child(n+2) {
-  margin-top: -105px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) .room-card:nth-child(n+2) {
-  margin-top: -88px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(5)) .room-card:nth-child(n+2) {
-  margin-top: -76px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) .room-card:nth-child(n+2) {
-  margin-top: -68px;
-}
-
-/* ── Adaptive bottom padding: scale with card count ──────────────
-   Prevents excessive dead scroll space when cards are short. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) {
-  padding-bottom: 65px;
+  --pile-card-h: 158px;
+  --pile-reveal: 62px;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) {
-  padding-bottom: 50px;
+  --pile-card-h: 146px;
+  --pile-reveal: 58px;
 }
 
-/* All cards in pile mode: smooth transitions for hover/resize. */
+/* Fixed height (not min-height) so the derived overlap is exact. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card {
+  height: var(--pile-card-h);
+  min-height: var(--pile-card-h);
+  overflow: hidden;
+  /* No z-index: among `position: relative` siblings with `z-index: auto`
+     the painting order IS the DOM order, so each card naturally lands on
+     top of the one before it. That is the whole downward-stack effect —
+     do not reintroduce a descending z-index ladder here. */
+  position: relative;
   transition:
     transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.24s ease,
@@ -533,38 +526,44 @@
     background 0.18s ease;
 }
 
-/* Front card: full visibility, top of pile. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(1) {
-  z-index: 5;
-  position: relative;
+/* The thumbnail's 60px floor is for the single-card case, where the card
+   is content-sized. In the deck the card height is fixed, so let the
+   thumbnail take whatever is left instead of overflowing the card. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card .room-card-mini-preview {
+  min-height: 0;
 }
 
-/* Back cards: offset downward, dimmed, slightly scaled — each card
-   peeks out just enough to show its header (icon + kind label). */
+/* Every card after the first is pulled up under its predecessor so exactly
+   `--pile-reveal` of that predecessor stays visible. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+2) {
-  margin-top: -120px;
-  position: relative;
-  z-index: 4;
-  opacity: 0.85;
-  transform: scale(0.97);
+  margin-top: calc(var(--pile-reveal) - var(--pile-card-h));
+}
+
+/* Depth cue, counted from the BOTTOM: the last card is the one fully on
+   show, and cards recede as they get more covered. `transform-origin:
+   center top` keeps each card's top edge pinned, so scaling never eats
+   into the reveal band — the visible strip is exactly --pile-reveal. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+2) {
+  opacity: 0.92;
+  transform: scale(0.985);
   transform-origin: center top;
 }
 
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+3) {
-  z-index: 3;
-  opacity: 0.72;
-  transform: scale(0.94);
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+3) {
+  opacity: 0.84;
+  transform: scale(0.97);
 }
 
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+4) {
-  z-index: 2;
-  opacity: 0.6;
-  transform: scale(0.91);
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+4) {
+  opacity: 0.76;
+  transform: scale(0.955);
 }
 
-/* Hover: lift the hovered card out of the pile — it rises to the top
-   with a subtle upward drift and enhanced shadow for depth. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover {
+/* Hover/focus: the card pops clear of the deck — z-index beats every
+   sibling, so the whole card (thumbnail included) is visible and clickable,
+   not just its header band. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover,
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:focus-visible {
   z-index: 10;
   opacity: 1;
   transform: translateY(-8px) scale(1.02);
@@ -611,11 +610,18 @@
 }
 
 /* ── Miniature live preview thumbnails ─────────────────────────────────
-   Each room card gets a scaled-down visual representation of its
-   actual content, rendered at full size then shrunk via CSS transform.
-   The container clips to a fixed viewport so only the top-left
-   portion is visible — mimicking a real window thumbnail. */
+   Each room card gets a scaled-down visual representation of its content:
+   the inner box is laid out at 1/--mini-scale of the container and then
+   scaled back down, so the room's chrome renders at "real" pixel sizes
+   and lands miniaturised at exactly the container's bounds.
+
+   Do NOT go back to a fixed inner size (it was 380x280 at scale 0.55 =
+   209x154). The container is 260-350px wide and 40-90px tall depending on
+   room count, so a fixed inner leaves a wide dead strip on the right while
+   clipping most of the height. Sizing off the container is what keeps the
+   thumbnail filling its box at every card count. */
 .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
+  --mini-scale: 0.5;
   width: 100%;
   flex: 1;
   min-height: 60px;
@@ -625,10 +631,11 @@
   position: relative;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.04);
-  /* Frosted glass: let the parent card's backdrop-filter show through
-     while adding a light frost over the miniature content. */
-  backdrop-filter: blur(2px) saturate(120%);
-  -webkit-backdrop-filter: blur(2px) saturate(120%);
+  /* No backdrop-filter here: the .mini-* child paints an opaque background
+     over the full box, so a blur behind it can never be seen — it was only
+     ever an extra compositing layer per card. (And this subtree sits inside
+     .focused-room's `contain: paint` backdrop root anyway, so it would
+     sample the card rather than the app.) */
 }
 
 :root.light-theme .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
@@ -636,13 +643,10 @@
   border-color: rgba(0, 0, 0, 0.08);
 }
 
-/* The inner container is rendered at full size (matching the real room)
-   then scaled down to fit the thumbnail viewport. transform-origin
-   top-left ensures the visible portion starts at the top-left corner. */
 .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-inner {
-  width: 380px;
-  height: 280px;
-  transform: scale(0.55);
+  width: calc(100% / var(--mini-scale));
+  height: calc(100% / var(--mini-scale));
+  transform: scale(var(--mini-scale));
   transform-origin: top left;
   pointer-events: none;
   position: absolute;
@@ -651,7 +655,7 @@
 }
 
 /* ── Miniature terminal preview ──────────────────────────────────────── */
-.app-shell .mini-term {
+.app-shell .rooms-table.ambient-focus .mini-term {
   width: 100%;
   height: 100%;
   background: #1a1b26;
@@ -689,7 +693,7 @@
 }
 
 /* ── Light theme: miniature terminal ──────────────────────────────── */
-:root.light-theme .app-shell .mini-term {
+:root.light-theme .app-shell .rooms-table.ambient-focus .mini-term {
   background: #fafafa;
   color: #383a42;
 }
@@ -703,7 +707,7 @@
 }
 
 /* ── Miniature editor preview ────────────────────────────────────────── */
-.app-shell .mini-editor {
+.app-shell .rooms-table.ambient-focus .mini-editor {
   width: 100%;
   height: 100%;
   background: #1a1b26;
@@ -753,7 +757,7 @@
 .app-shell .mini-editor .mini-code .mini-plain { color: #a9b1d6; }
 
 /* ── Light theme: miniature editor ───────────────────────────────── */
-:root.light-theme .app-shell .mini-editor { background: #fafafa; }
+:root.light-theme .app-shell .rooms-table.ambient-focus .mini-editor { background: #fafafa; }
 :root.light-theme .app-shell .mini-editor .mini-gutter { background: #f0f0f0; color: #c4c6c9; }
 :root.light-theme .app-shell .mini-editor .mini-code .mini-kw { color: #a626a4; }
 :root.light-theme .app-shell .mini-editor .mini-code .mini-fn { color: #4078f2; }
@@ -766,7 +770,7 @@
 :root.light-theme .app-shell .mini-editor .mini-code .mini-plain { color: #383a42; }
 
 /* ── Miniature preview/browser frame ─────────────────────────────────── */
-.app-shell .mini-browser {
+.app-shell .rooms-table.ambient-focus .mini-browser {
   width: 100%;
   height: 100%;
   background: #1a1b26;
@@ -842,7 +846,7 @@
 }
 
 /* ── Light theme: miniature browser ──────────────────────────────── */
-:root.light-theme .app-shell .mini-browser { background: #ffffff; }
+:root.light-theme .app-shell .rooms-table.ambient-focus .mini-browser { background: #ffffff; }
 :root.light-theme .app-shell .mini-browser .mini-browser-bar { background: #f0f0f0; border-bottom-color: #ddd; }
 :root.light-theme .app-shell .mini-browser .mini-browser-url { background: #fff; border-color: #ccc; }
 :root.light-theme .app-shell .mini-browser .mini-browser-content .mini-heading { background: #333; }
@@ -850,7 +854,7 @@
 :root.light-theme .app-shell .mini-browser .mini-browser-content .mini-block { background: #e8e8e8; }
 
 /* ── Miniature generic panel preview ─────────────────────────────────── */
-.app-shell .mini-panel {
+.app-shell .rooms-table.ambient-focus .mini-panel {
   width: 100%;
   height: 100%;
   background: #1a1b26;
@@ -899,14 +903,14 @@
 .app-shell .mini-panel .mini-panel-body .mini-row:nth-child(5) { width: 60%; }
 
 /* ── Light theme: miniature panel ────────────────────────────────── */
-:root.light-theme .app-shell .mini-panel { background: #fafafa; }
+:root.light-theme .app-shell .rooms-table.ambient-focus .mini-panel { background: #fafafa; }
 :root.light-theme .app-shell .mini-panel .mini-panel-header { background: #f0f0f0; border-bottom-color: #e0e0e0; }
 :root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab { background: #e0e0e0; }
 :root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab.active { background: #4078f2; }
 :root.light-theme .app-shell .mini-panel .mini-panel-body .mini-row { background: #e8e8e8; }
 
 /* ── Miniature workspace/file-tree preview ───────────────────────────── */
-.app-shell .mini-workspace {
+.app-shell .rooms-table.ambient-focus .mini-workspace {
   width: 100%;
   height: 100%;
   background: #1a1b26;
@@ -961,7 +965,7 @@
 .app-shell .mini-workspace .mini-main .mini-line:nth-child(5) { width: 45%; }
 
 /* ── Light theme: miniature workspace ────────────────────────────── */
-:root.light-theme .app-shell .mini-workspace { background: #fafafa; }
+:root.light-theme .app-shell .rooms-table.ambient-focus .mini-workspace { background: #fafafa; }
 :root.light-theme .app-shell .mini-workspace .mini-sidebar { background: #f0f0f0; }
 :root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item { background: #ddd; }
 :root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item.folder { background: #4078f2; }
@@ -2378,23 +2382,33 @@
 }
 
 /* ── Stage Manager transition ─────────────────────────────────────────
-   When switching stages in Focus mode, the outgoing stage shrinks and
-   slides toward the sidebar while the incoming stage expands from the
-   sidebar direction. The View Transitions API snapshots old/new states
-   and these rules customize the cross-fade into a spatial movement. */
+   When switching stages in Focus mode, the outgoing stage shrinks toward
+   the card rail while the incoming stage expands out of it. The View
+   Transitions API snapshots old/new and these rules turn the default
+   cross-fade into a spatial movement.
+
+   `transform-origin: 100% 50%` is what makes it read as "toward the rail":
+   the rail is the right-hand grid column, so scaling about the right edge
+   collapses the stage in that direction. Scaling about the centre (the
+   default) just made the panel shrink in place, which is why the original
+   needed a translateX nudge to suggest any direction at all.
+
+   NOTE: this is still a scale/fade at the stage's own position, not a
+   morph into the specific card that was clicked. Real positional
+   continuity needs a shared `view-transition-name` handed to the clicked
+   card for the duration of the transition — worth doing, but it must not
+   collide with another named element or the whole transition aborts. */
 .app-shell ::view-transition-old(spacron-stage) {
   animation: stage-shrink-out 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: 100% 50%;
 }
 
 .app-shell ::view-transition-new(spacron-stage) {
   animation: stage-expand-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: 100% 50%;
 }
 
-/* ── Room card entrance: staggered slide-in ───────────────────────────
-   When the sidebar cards re-render after a stage switch, each card
-   slides in from the left with a slight delay — reinforcing the
-   spatial continuity of the Stage Manager metaphor. */
-/* Outgoing stage: shrinks down and slides right toward the sidebar. */
+/* Outgoing stage: collapses toward the rail on the right. */
 @keyframes stage-shrink-out {
   from {
     opacity: 1;
@@ -2402,15 +2416,15 @@
   }
   to {
     opacity: 0;
-    transform: scale(0.88) translateX(24px);
+    transform: scale(0.86) translateX(28px);
   }
 }
 
-/* Incoming stage: expands from a small, right-shifted state into full view. */
+/* Incoming stage: expands out of the rail into full view. */
 @keyframes stage-expand-in {
   from {
     opacity: 0;
-    transform: scale(0.88) translateX(24px);
+    transform: scale(0.86) translateX(28px);
   }
   to {
     opacity: 1;
@@ -2787,6 +2801,12 @@
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+
+  /* The thumbnail cursor blinks forever; stop it rather than freezing it
+     mid-cycle, so the caret stays drawn. */
+  .app-shell .mini-cursor {
+    animation: none !important;
   }
 
   .app-shell ::view-transition-old(root),
