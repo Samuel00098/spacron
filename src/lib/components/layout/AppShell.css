@@ -493,8 +493,14 @@
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) {
   --pile-card-h: 172px;
   --pile-reveal: 66px;
+  /* How far a hovered card lifts. The fan below subtracts it so the lift
+     never opens a seam between the hovered card and the one under it. */
+  --pile-lift: 6px;
   gap: 0;
-  padding-bottom: 24px;
+  /* Reserve the fan's travel. Transformed boxes count toward scrollable
+     overflow, so without this the fan would grow .room-stack's scroll
+     extent on hover and flash a scrollbar, reflowing the whole rail. */
+  padding-bottom: calc(var(--pile-card-h) - var(--pile-reveal) + 16px);
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) {
@@ -517,7 +523,13 @@
      top of the one before it. That is the whole downward-stack effect —
      do not reintroduce a descending z-index ladder here. */
   position: relative;
+  /* `translate` and `scale` are the animated pair here, not `transform` —
+     the fan and the depth cue are set as individual properties so they
+     compose. Both are compositor-friendly, so fanning a deck of cards
+     costs no layout. */
   transition:
+    translate 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    scale 0.28s cubic-bezier(0.16, 1, 0.3, 1),
     transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.24s ease,
     color 0.16s ease,
@@ -542,21 +554,45 @@
 /* Depth cue, counted from the BOTTOM: the last card is the one fully on
    show, and cards recede as they get more covered. `transform-origin:
    center top` keeps each card's top edge pinned, so scaling never eats
-   into the reveal band — the visible strip is exactly --pile-reveal. */
+   into the reveal band — the visible strip is exactly --pile-reveal.
+
+   These use the individual `scale` property, NOT `transform: scale()`, so
+   they compose with the fan's `translate` below instead of one clobbering
+   the other. Keep both as individual properties. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+2) {
   opacity: 0.92;
-  transform: scale(0.985);
+  scale: 0.985;
   transform-origin: center top;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+3) {
   opacity: 0.84;
-  transform: scale(0.97);
+  scale: 0.97;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+4) {
   opacity: 0.76;
-  transform: scale(0.955);
+  scale: 0.955;
+}
+
+/* ── Fan: a hovered card makes room instead of taking it ────────────────
+   Cards do not grow on hover — the height is always --pile-card-h. What
+   "popping" does is raise the card to z-index 10, which draws its full
+   body over whatever is beneath it. Since only --pile-reveal of each card
+   is uncovered at rest, that pop blankets the next TWO OR THREE header
+   bands, and the pointer is then inside the popped card wherever you move
+   it. You could not reach the card below without leaving the rail
+   entirely, then coming back.
+
+   So: slide every following card down by exactly what the pop covers
+   (card height minus the reveal, less the lift so no seam opens). The next
+   card's band lands flush under the popped card's bottom edge — still
+   visible, and the pointer crosses straight into it, which hands the pop
+   to that card in turn. Running the cursor down the rail now walks the
+   deck one card at a time. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover ~ .room-card,
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:focus-visible ~ .room-card {
+  translate: 0 calc(var(--pile-card-h) - var(--pile-reveal) - var(--pile-lift));
 }
 
 /* Hover/focus: the card pops clear of the deck — z-index beats every
@@ -566,7 +602,13 @@
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:focus-visible {
   z-index: 10;
   opacity: 1;
-  transform: translateY(-8px) scale(1.02);
+  /* `transform: none` cancels the non-deck `.room-card:hover` rules, which
+     set `transform: translateY(-4px)`. They target a different property
+     from our `translate`/`scale`, so without this the two would compose
+     and the lift would double up. */
+  transform: none;
+  translate: 0 calc(var(--pile-lift) * -1);
+  scale: 1.02;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 -2px 3px rgba(0, 0, 0, 0.18),
