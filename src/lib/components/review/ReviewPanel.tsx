@@ -1,10 +1,45 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+/**
+ * Code Review — the full-window review surface.
+ *
+ * Master-detail in one panel: the changed-file list on the left, the selected
+ * file's diff filling the rest. It used to be two components — this one showing
+ * only the diff, and a `ReviewSidebarPanel` in the left drawer showing the list
+ * *and* its own copy of the diff. They duplicated `parseDiff`, `makeSplitRows`,
+ * both diff tables and ~550 lines of CSS between them, disagreed on syntax
+ * highlighting, and rendered the same diff twice when both were open. A
+ * two-column diff also cannot be read in a drawer: at ~350px each side gets
+ * about 35 characters. Merged 2026-07-26; the drawer keeps `HunkDiffView` inside
+ * Source Control, which is a different job (stage while you commit).
+ */
+import { useEffect, useRef, useState, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { activeProjectId } from '$lib/stores/workspace';
+import { activeProjectId, activeProject } from '$lib/stores/workspace';
+import { showToast } from '$lib/stores/notification';
+import { openFile } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
 import { reviewSelectedFile } from '$lib/stores/reviewSelectedFile';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import './ReviewPanel.css';
+
+interface ChangedFile {
+  path: string;
+  name: string;
+  status: 'modified' | 'added' | 'deleted' | 'untracked';
+  additions: number;
+  deletions: number;
+}
+
+const STATUS_LABELS: Record<ChangedFile['status'], string> = {
+  modified: 'M',
+  added: 'A',
+  deleted: 'D',
+  untracked: 'U',
+};
+
+function getFilename(path: string): string {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1];
+}
 
 interface DiffLine {
   type: 'header' | 'hunk-header' | 'addition' | 'deletion' | 'normal';
@@ -170,11 +205,20 @@ function makeSplitRows(lines: DiffLine[]): SplitRow[] {
 
 export default function ReviewPanel() {
   const projectId = useStore(activeProjectId);
+  const project = useStore(activeProject);
   const selectedFilePath = useStore(reviewSelectedFile);
 
   const [fileDiff, setFileDiff] = useState<string | null>(null);
   const [isLoadingDiff, setIsLoadingDiff] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Changed-file list — migrated in from the deleted sidebar panel.
+  const [files, setFiles] = useState<ChangedFile[]>([]);
+  const [branch, setBranch] = useState<string>('');
+  const [totalAdditions, setTotalAdditions] = useState<number>(0);
+  const [totalDeletions, setTotalDeletions] = useState<number>(0);
+  const [isFetching, setIsFetching] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
 
   const [diffMode, setDiffMode] = useState<'inline' | 'split'>(() => {
     const saved = localStorage.getItem('spacron_diff_mode');
@@ -182,6 +226,14 @@ export default function ReviewPanel() {
   });
 
   useEffect(() => { localStorage.setItem('spacron_diff_mode', diffMode); }, [diffMode]);
+
+  // Shares the `spacron_diff_wrap` key with ReviewSidebarPanel: the two are the
+  // same diff in two presentations, so the preference should not fork. On by
+  // default; `!== '0'` so only an explicit opt-out turns it off.
+  const [wrapLines, setWrapLines] = useState<boolean>(
+    () => localStorage.getItem('spacron_diff_wrap') !== '0',
+  );
+  useEffect(() => { localStorage.setItem('spacron_diff_wrap', wrapLines ? '1' : '0'); }, [wrapLines]);
 
   const handleNativeWheel = useCallback((e: WheelEvent) => {
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -198,6 +250,90 @@ export default function ReviewPanel() {
   const genRef = useRef(0);
   const projectIdRef = useRef<string | null>(projectId);
   projectIdRef.current = projectId;
+  const listGenRef = useRef(0);
+
+  const fetchStatus = useCallback(async () => {
+    const pid = projectIdRef.current;
+    if (!pid) return;
+    const gen = ++listGenRef.current;
+    setIsFetching(true);
+    setListError(null);
+    try {
+      const status = await invoke<{
+        branch: string;
+        modified: string[];
+        added: string[];
+        deleted: string[];
+        untracked: string[];
+        file_stats: Record<string, [number, number]>;
+        total_additions: number;
+        total_deletions: number;
+      }>('workspace_git_status', { projectId: pid });
+
+      if (gen !== listGenRef.current) return;
+
+      setBranch(status.branch);
+      setTotalAdditions(status.total_additions);
+      setTotalDeletions(status.total_deletions);
+
+      const getStats = (path: string): [number, number] => status.file_stats[path] || [0, 0];
+      const list: ChangedFile[] = [];
+      const push = (paths: string[], fileStatus: ChangedFile['status']) => {
+        for (const path of paths) {
+          const [additions, deletions] = getStats(path);
+          list.push({ path, name: getFilename(path), status: fileStatus, additions, deletions });
+        }
+      };
+      push(status.modified, 'modified');
+      push(status.added, 'added');
+      push(status.deleted, 'deleted');
+      push(status.untracked, 'untracked');
+
+      setFiles(list);
+    } catch (err) {
+      if (gen !== listGenRef.current) return;
+      setListError(String(err));
+      setFiles([]);
+    } finally {
+      if (gen === listGenRef.current) setIsFetching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setFiles([]);
+    setBranch('');
+    setTotalAdditions(0);
+    setTotalDeletions(0);
+    setListError(null);
+    reviewSelectedFile.set(null);
+    if (projectId) void fetchStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  function selectFile(filePath: string) {
+    reviewSelectedFile.set(selectedFilePath === filePath ? null : filePath);
+  }
+
+  async function openFileInEditor(path: string, event: ReactMouseEvent) {
+    event.stopPropagation();
+    if (!project) return;
+    await openFile(`${project.root_path}/${path}`);
+  }
+
+  async function discardFile(file: ChangedFile, event: ReactMouseEvent) {
+    event.stopPropagation();
+    const pid = projectIdRef.current;
+    if (!pid) return;
+    if (!confirm(`Discard all changes to ${file.path}? This cannot be undone.`)) return;
+    try {
+      await invoke('workspace_git_discard_file', { projectId: pid, filePath: file.path });
+      showToast(`Discarded changes for ${file.name}`, 'success');
+      if (selectedFilePath === file.path) reviewSelectedFile.set(null);
+      await fetchStatus();
+    } catch (err) {
+      showToast(`Failed to discard changes: ${err}`, 'error');
+    }
+  }
 
   // Fetch the diff whenever the selected file or project changes
   useEffect(() => {
@@ -235,45 +371,153 @@ export default function ReviewPanel() {
 
   return (
     <div className="review-panel">
-      {/* Header */}
-      <div className="sc-header" style={{ justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          {selectedFilePath ? (
-            <>
-              <FileIcon name={fileName} isDir={false} />
-              <span className="sc-title" title={selectedFilePath} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {selectedFilePath}
-              </span>
-              {diffStats.additions + diffStats.deletions > 0 && (
-                <span className="diff-stats" style={{ flexShrink: 0 }}>
-                  <span className="stat-add">+{diffStats.additions}</span>
-                  <span className="stat-del">-{diffStats.deletions}</span>
-                </span>
-              )}
-            </>
-          ) : (
-            <>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <circle cx="18" cy="18" r="3" />
-                <circle cx="6" cy="6" r="3" />
-                <path d="M13 6h3a2 2 0 0 1 2 2v7" />
-                <path d="M11 18H8a2 2 0 0 1-2-2V9" />
+      {/* Header — always identifies the panel, then the branch it is reviewing. */}
+      <div className="sc-header rp-header">
+        <div className="rp-header-left">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="rp-header-icon">
+            <circle cx="18" cy="18" r="3" />
+            <circle cx="6" cy="6" r="3" />
+            <path d="M13 6h3a2 2 0 0 1 2 2v7" />
+            <path d="M11 18H8a2 2 0 0 1-2-2V9" />
+          </svg>
+          <span className="sc-title rp-panel-title">Code Review</span>
+          {branch && (
+            <span className="rp-branch" title="Branch being reviewed">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="6" y1="3" x2="6" y2="15" />
+                <circle cx="18" cy="6" r="3" />
+                <circle cx="6" cy="18" r="3" />
+                <path d="M18 9a9 9 0 0 1-9 9" />
               </svg>
-              <span className="sc-title" style={{ color: 'var(--text-muted)' }}>Code Review</span>
-            </>
+              {branch}
+            </span>
+          )}
+          {files.length > 0 && (
+            <span className="rp-file-count">{files.length} file{files.length === 1 ? '' : 's'}</span>
+          )}
+          {(totalAdditions > 0 || totalDeletions > 0) && (
+            <span className="diff-stats">
+              <span className="stat-add">+{totalAdditions}</span>
+              <span className="stat-del">-{totalDeletions}</span>
+            </span>
           )}
         </div>
 
-        {selectedFilePath && (
-          <div className="diff-mode-toggle" style={{ flexShrink: 0 }}>
+        <div className="rp-header-right">
+          <div className="diff-mode-toggle">
             <button className={`toggle-btn ${diffMode === 'inline' ? 'active' : ''}`} onClick={() => setDiffMode('inline')} title="Inline diff">Inline</button>
             <button className={`toggle-btn ${diffMode === 'split' ? 'active' : ''}`} onClick={() => setDiffMode('split')} title="Split diff">Split</button>
           </div>
-        )}
+
+          <button
+            className={`toolbar-btn icon-only${wrapLines ? ' wrap-active' : ''}`}
+            style={{ flexShrink: 0 }}
+            onClick={() => setWrapLines((on) => !on)}
+            aria-pressed={wrapLines}
+            title={wrapLines ? 'Wrapping long lines to the panel — click to scroll instead' : 'Wrap long lines to the panel width instead of scrolling sideways'}
+            aria-label="Wrap long lines"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <path d="M3 12h15a3 3 0 0 1 0 6h-4" />
+              <polyline points="16 15 13 18 16 21" />
+              <line x1="3" y1="18" x2="8" y2="18" />
+            </svg>
+          </button>
+
+          <button
+            className={`toolbar-btn icon-only${isFetching ? ' spin' : ''}`}
+            onClick={() => void fetchStatus()}
+            disabled={isFetching || !projectId}
+            title="Refresh the changed-file list"
+            aria-label="Refresh"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <polyline points="21 3 21 8 16 8" />
+            </svg>
+          </button>
+        </div>
       </div>
 
-      {/* Body */}
-      <div className="review-body">
+      {/* Master-detail: file list left, the selected file's diff filling the rest. */}
+      <div className="rp-split">
+        <aside className="rp-files" aria-label="Changed files">
+          {listError ? (
+            <div className="rp-files-empty">
+              <span>{listError}</span>
+              <button className="btn-retry" onClick={() => void fetchStatus()}>Retry</button>
+            </div>
+          ) : !projectId ? (
+            <div className="rp-files-empty"><span>Open a project to review changes.</span></div>
+          ) : files.length === 0 && !isFetching ? (
+            <div className="rp-files-empty">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>Working tree is clean.</span>
+            </div>
+          ) : (
+            files.map((file) => (
+              <button
+                key={file.path}
+                className={`rp-file-row${selectedFilePath === file.path ? ' selected' : ''}`}
+                onClick={() => selectFile(file.path)}
+                title={file.path}
+              >
+                <span className={`rp-status-badge rp-status-${file.status}`}>{STATUS_LABELS[file.status]}</span>
+                <FileIcon name={file.name} isDir={false} />
+                <span className="rp-file-name">{file.path}</span>
+                {(file.additions > 0 || file.deletions > 0) && (
+                  <span className="rp-file-stats">
+                    <span className="stat-add">+{file.additions}</span>
+                    <span className="stat-del">-{file.deletions}</span>
+                  </span>
+                )}
+                <span className="rp-row-actions">
+                  <span
+                    className="rp-icon-btn"
+                    role="button"
+                    tabIndex={-1}
+                    title="Open in editor"
+                    onClick={(event) => void openFileInEditor(file.path, event)}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                  </span>
+                  <span
+                    className="rp-icon-btn rp-discard-btn"
+                    role="button"
+                    tabIndex={-1}
+                    title="Discard changes"
+                    onClick={(event) => void discardFile(file, event)}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <polyline points="3 3 3 8 8 8" />
+                    </svg>
+                  </span>
+                </span>
+              </button>
+            ))
+          )}
+        </aside>
+
+        <div className="review-body rp-detail">
+        {selectedFilePath && (
+          <div className="rp-detail-head">
+            <FileIcon name={fileName} isDir={false} />
+            <span className="rp-detail-path" title={selectedFilePath}>{selectedFilePath}</span>
+            {diffStats.additions + diffStats.deletions > 0 && (
+              <span className="diff-stats">
+                <span className="stat-add">+{diffStats.additions}</span>
+                <span className="stat-del">-{diffStats.deletions}</span>
+              </span>
+            )}
+          </div>
+        )}
         {!selectedFilePath ? (
           <div className="sc-clean">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.5">
@@ -282,7 +526,7 @@ export default function ReviewPanel() {
               <line x1="9" y1="13" x2="15" y2="13" />
               <line x1="9" y1="17" x2="15" y2="17" />
             </svg>
-            <p>Select a file from the <strong>Code Review</strong> tab to view its diff.</p>
+            <p>Pick a file on the left to see its diff.</p>
           </div>
         ) : errorMsg ? (
           <div className="sc-error">
@@ -310,12 +554,15 @@ export default function ReviewPanel() {
             <div className="file-card expanded">
               <div className="file-card-body" ref={cardBodyRef}>
                 {diffMode === 'split' ? (
-                  <table className="diff-table split-diff">
+                  <table className={`diff-table split-diff${wrapLines ? ' wrap' : ''}`}>
+                    {/* Widths live in CSS, not inline styles, so the container
+                        queries in ReviewPanel.css can shrink the line-number
+                        gutters when the pane is narrow. */}
                     <colgroup>
-                      <col style={{ width: '40px' }} />
-                      <col style={{ width: 'calc(50% - 40px)' }} />
-                      <col style={{ width: '40px' }} />
-                      <col style={{ width: 'calc(50% - 40px)' }} />
+                      <col className="col-ln" />
+                      <col className="col-code" />
+                      <col className="col-ln" />
+                      <col className="col-code" />
                     </colgroup>
                     <tbody>
                       {makeSplitRows(parsed!).map((row, idx) => {
@@ -362,7 +609,7 @@ export default function ReviewPanel() {
                     </tbody>
                   </table>
                 ) : (
-                  <table className="diff-table inline-diff">
+                  <table className={`diff-table inline-diff${wrapLines ? ' wrap' : ''}`}>
                     <colgroup>
                       <col style={{ width: '40px' }} />
                       <col style={{ width: '40px' }} />
@@ -415,6 +662,7 @@ export default function ReviewPanel() {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

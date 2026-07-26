@@ -2444,6 +2444,507 @@ pub fn workspace_git_branch_delete(
     }
 }
 
+// ─── Explicit-path staging (§7) ──────────────────────────────────────────────
+//
+// Spacron runs several agents against one shared working tree, so `git add -A`
+// is not a curation nicety here — it sweeps another agent's in-flight edits, and
+// any file the user was midway through, into your commit. Everything below
+// stages by explicit path or by explicit patch. Nothing in this section ever
+// runs a blanket add.
+
+/// Resolve the repository a source-control command should act on.
+///
+/// `repo_path` lets the caller target an agent's worktree instead of the open
+/// project — the Fleet Dashboard reviews worktrees through this same diff and
+/// staging surface. It is accepted **only** when it names a checkout inside a
+/// known project's managed worktree area, so a stray path cannot turn these
+/// commands into an arbitrary-repository write primitive.
+fn resolve_repo(
+    project_id: &str,
+    repo_path: Option<&str>,
+    state: &AppState,
+) -> Result<PathBuf, String> {
+    let root_path = get_project_path(project_id, state)?;
+    let Some(raw) = repo_path.map(str::trim).filter(|p| !p.is_empty()) else {
+        if !root_path.join(".git").exists() {
+            return Err("This project is not a Git repository.".to_string());
+        }
+        return Ok(root_path);
+    };
+
+    let candidate = std::fs::canonicalize(PathBuf::from(raw))
+        .map(crate::commands::clean_path_buf)
+        .map_err(|_| "That repository path does not exist.".to_string())?;
+
+    if candidate == root_path {
+        return Ok(candidate);
+    }
+    let allowed = is_under(&candidate, &worktree_area(&root_path))
+        || legacy_worktree_area(&root_path)
+            .is_some_and(|area| is_under(&candidate, &area));
+    if !allowed {
+        return Err("That path is not a worktree of this project.".to_string());
+    }
+    // A linked worktree has a `.git` *file*, not a directory.
+    if !candidate.join(".git").exists() {
+        return Err("That path is not a Git worktree.".to_string());
+    }
+    Ok(candidate)
+}
+
+/// Validate a batch of repo-relative paths destined for a git argv.
+fn validate_paths(paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("No files selected.".to_string());
+    }
+    for path in paths {
+        if path.trim().is_empty() {
+            return Err("A selected file path is empty.".to_string());
+        }
+        validate_relative_path(path)?;
+    }
+    Ok(())
+}
+
+fn run_git(root: &std::path::Path, args: &[&str], what: &str) -> Result<String, String> {
+    let output = git_base()
+        .args(args)
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to {what}: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Failed to {what}: {}{}",
+            sanitize_git_error(&stderr),
+            sanitize_git_error(&stdout)
+        ))
+    }
+}
+
+fn stage_paths_at(root: &std::path::Path, paths: &[String]) -> Result<(), String> {
+    let _repo = lock_repo_write(root);
+    // `-A` **scoped to the listed paths** so deletions and newly-tracked files
+    // inside the selection are recorded. `--` stops a path beginning with `-`
+    // from being read as a flag.
+    let mut args: Vec<&str> = vec!["add", "-A", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    run_git(root, &args, "stage the selected files").map(|_| ())
+}
+
+/// Stage exactly these paths. Replaces the blanket `git add -A`.
+#[tauri::command(async)]
+pub fn workspace_git_stage_paths(
+    project_id: String,
+    paths: Vec<String>,
+    repo_path: Option<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    check_git_available()?;
+    validate_paths(&paths)?;
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    stage_paths_at(&root, &paths)
+}
+
+fn unstage_paths_at(root: &std::path::Path, paths: &[String]) -> Result<(), String> {
+    let _repo = lock_repo_write(root);
+    // `git reset -- <paths>` fails on a repo with no commits yet (no HEAD to
+    // reset to); `rm --cached` is the equivalent there.
+    let has_head = git_capture(root, &["rev-parse", "--verify", "HEAD"]).is_some();
+    if has_head {
+        let mut args: Vec<&str> = vec!["reset", "-q", "HEAD", "--"];
+        args.extend(paths.iter().map(String::as_str));
+        run_git(root, &args, "unstage the selected files").map(|_| ())
+    } else {
+        let mut args: Vec<&str> = vec!["rm", "--cached", "-q", "-r", "--"];
+        args.extend(paths.iter().map(String::as_str));
+        run_git(root, &args, "unstage the selected files").map(|_| ())
+    }
+}
+
+/// Remove exactly these paths from the index, leaving the working tree alone.
+#[tauri::command(async)]
+pub fn workspace_git_unstage_paths(
+    project_id: String,
+    paths: Vec<String>,
+    repo_path: Option<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    check_git_available()?;
+    validate_paths(&paths)?;
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    unstage_paths_at(&root, &paths)
+}
+
+fn apply_patch_at(root: &std::path::Path, patch: &str, reverse: bool) -> Result<(), String> {
+    let _repo = lock_repo_write(root);
+
+    let mut args: Vec<&str> = vec!["apply", "--cached", "--unidiff-zero", "--whitespace=nowarn"];
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push("-");
+
+    let mut child = git_base()
+        .args(&args)
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run git apply: {e}"))?;
+
+    {
+        use std::io::Write;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "git apply refused its stdin".to_string())?;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("Failed to send the patch to git: {e}"))?;
+        // Dropping stdin closes the pipe; git blocks forever without this.
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("git apply did not finish: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "Could not {} that change: {}",
+        if reverse { "unstage" } else { "stage" },
+        sanitize_git_error(&stderr)
+    ))
+}
+
+/// Apply a patch to the index only — the mechanism behind hunk and line staging.
+///
+/// `reverse` un-applies it, which is how unstaging a hunk works: the patch comes
+/// from `git diff --cached` and is reversed back out of the index.
+#[tauri::command(async)]
+pub fn workspace_git_apply_patch(
+    project_id: String,
+    patch: String,
+    reverse: bool,
+    repo_path: Option<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    check_git_available()?;
+    if patch.trim().is_empty() {
+        return Err("Nothing to apply.".to_string());
+    }
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    apply_patch_at(&root, &patch, reverse)
+}
+
+fn commit_staged_at(root: &std::path::Path, message: &str, amend: bool) -> Result<String, String> {
+    let _repo = lock_repo_write(root);
+
+    if amend && git_capture(root, &["rev-parse", "--verify", "HEAD"]).is_none() {
+        return Err("There is no commit to amend yet.".to_string());
+    }
+
+    // Refuse an empty commit explicitly rather than letting git's own message
+    // ("nothing to commit, working tree clean") imply the user's changes vanished.
+    if !amend {
+        let staged = git_base()
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .map_err(|e| format!("Failed to inspect the index: {e}"))?;
+        if staged.success() {
+            return Err("Nothing is staged. Stage a file or a hunk first.".to_string());
+        }
+    }
+
+    let mut args: Vec<&str> = vec!["commit", "-m", message];
+    if amend {
+        args.push("--amend");
+    }
+    run_git(root, &args, "commit")
+}
+
+/// Commit whatever is in the index. No implicit add — the caller decides what
+/// is staged, which is the whole point of the staged/unstaged split.
+#[tauri::command(async)]
+pub fn workspace_git_commit_staged(
+    project_id: String,
+    message: String,
+    amend: bool,
+    repo_path: Option<String>,
+    state: State<AppState>,
+) -> Result<String, String> {
+    check_git_available()?;
+    if message.trim().is_empty() {
+        return Err("Commit message cannot be empty.".to_string());
+    }
+    if message.len() > 10_000 {
+        return Err("Commit message is too long (limit 10 000 characters)".to_string());
+    }
+    if message.contains('\0') {
+        return Err("Commit message contains invalid characters.".to_string());
+    }
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    commit_staged_at(&root, &message, amend)
+}
+
+/// The staged (HEAD→index) and unstaged (index→worktree) diffs for one file, or
+/// for the whole repo when `file_path` is omitted.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GitSplitDiff {
+    pub staged: String,
+    pub unstaged: String,
+    /// True when the file is untracked, so `unstaged` was synthesised rather
+    /// than produced by git — it cannot be hunk-staged, only added whole.
+    pub untracked: bool,
+}
+
+fn diff_split_at(
+    root: &std::path::Path,
+    file_path: Option<String>,
+    base_ref: Option<&str>,
+) -> Result<GitSplitDiff, String> {
+    let path = file_path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    if let Some(ref p) = path {
+        validate_relative_path(p)?;
+    }
+
+    let mut untracked = false;
+    if let Some(ref p) = path {
+        let tracked = git_base()
+            .args(["ls-files", "--error-unmatch", "--", p])
+            .current_dir(root)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !tracked {
+            // Not in the index and not in HEAD: everything about it is new, and
+            // there is no old side for git to diff against.
+            untracked = true;
+            let absolute = root.join(p);
+            if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+                if !is_under(&crate::commands::clean_path_buf(canonical), root) {
+                    return Err("Access denied: path is outside the repository".to_string());
+                }
+            }
+            let content = std::fs::read_to_string(&absolute).unwrap_or_default();
+            let count = content.lines().count();
+            let mut diff = format!(
+                "diff --git a/{p} b/{p}\n--- /dev/null\n+++ b/{p}\n@@ -0,0 +1,{count} @@\n"
+            );
+            for line in content.lines() {
+                diff.push('+');
+                diff.push_str(line);
+                diff.push('\n');
+            }
+            return Ok(GitSplitDiff {
+                staged: String::new(),
+                unstaged: if count == 0 { String::new() } else { diff },
+                untracked,
+            });
+        }
+    }
+
+    // The Fleet Dashboard reviews a worktree against the commit it branched
+    // from, not against its own index — an agent is expected to have committed
+    // its work, so the interesting delta is `base_ref..worktree`, committed and
+    // uncommitted parts alike. `git diff <base_ref>` (no `..`) is a tree-to-
+    // worktree comparison that covers exactly that in one call, so this mode
+    // has no "staged" side — there is no index question being asked here.
+    if let Some(base) = base_ref {
+        let mut args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff", base];
+        if let Some(ref p) = path {
+            args.extend(["--", p.as_str()]);
+        }
+        return Ok(GitSplitDiff {
+            staged: String::new(),
+            unstaged: run_git(root, &args, "read the worktree diff")?,
+            untracked,
+        });
+    }
+
+    let mut staged_args: Vec<&str> = vec!["diff", "--cached", "--no-color", "--no-ext-diff"];
+    let mut unstaged_args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff"];
+    if let Some(ref p) = path {
+        staged_args.extend(["--", p.as_str()]);
+        unstaged_args.extend(["--", p.as_str()]);
+    }
+
+    Ok(GitSplitDiff {
+        staged: run_git(root, &staged_args, "read the staged diff")?,
+        unstaged: run_git(root, &unstaged_args, "read the unstaged diff")?,
+        untracked,
+    })
+}
+
+#[tauri::command(async)]
+pub fn workspace_git_diff_split(
+    project_id: String,
+    file_path: Option<String>,
+    repo_path: Option<String>,
+    base_ref: Option<String>,
+    state: State<AppState>,
+) -> Result<GitSplitDiff, String> {
+    if let Some(ref b) = base_ref {
+        if !is_valid_commit_ish(b) {
+            return Err("Invalid base commit".to_string());
+        }
+    }
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    diff_split_at(&root, file_path, base_ref.as_deref())
+}
+
+/// Per-file line stats for the Fleet Dashboard's `+N / -M` summary.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorktreeFileStat {
+    pub path: String,
+    pub additions: i32,
+    pub deletions: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorktreeDiffStat {
+    pub files: Vec<WorktreeFileStat>,
+    pub total_additions: i32,
+    pub total_deletions: i32,
+}
+
+fn worktree_diff_stat_at(root: &std::path::Path, base_ref: &str) -> Result<WorktreeDiffStat, String> {
+    // `git diff <base_ref>` (tree vs worktree, no `..`) covers everything the
+    // worktree holds beyond base_ref — committed and uncommitted alike — which
+    // is what the dashboard cares about: has the main checkout seen this yet?
+    let numstat = run_git(
+        root,
+        &["diff", "--numstat", "--no-renames", base_ref],
+        "read the worktree diff stat",
+    )?;
+    let name_status = run_git(
+        root,
+        &["diff", "--name-status", "--no-renames", base_ref],
+        "read the worktree change types",
+    )?;
+    let mut status_by_path: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for line in name_status.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let (Some(code), Some(path)) = (parts.next(), parts.next()) else { continue };
+        let status = match code.chars().next() {
+            Some('A') => "added",
+            Some('D') => "deleted",
+            _ => "modified",
+        };
+        status_by_path.insert(path.to_string(), status.to_string());
+    }
+
+    let mut files = Vec::new();
+    let mut total_additions = 0i32;
+    let mut total_deletions = 0i32;
+    for line in numstat.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        // Binary files report "-" for both counts; treat as zero rather than a
+        // parse failure that would drop the file from the list entirely.
+        let additions = parts[0].parse::<i32>().unwrap_or(0);
+        let deletions = parts[1].parse::<i32>().unwrap_or(0);
+        let path = parts[2].to_string();
+        total_additions += additions;
+        total_deletions += deletions;
+        let status = status_by_path.get(&path).cloned().unwrap_or_else(|| "modified".to_string());
+        files.push(WorktreeFileStat { path, additions, deletions, status });
+    }
+
+    // Untracked files never appear in `git diff <ref>` (it matches `git status`'s
+    // notion of "not part of history"), so they need a separate pass — same
+    // treatment `workspace_git_status` already gives them.
+    let untracked = run_git(
+        root,
+        &["ls-files", "--others", "--exclude-standard"],
+        "list untracked files",
+    )?;
+    for path in untracked.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if validate_relative_path(path).is_err() {
+            continue;
+        }
+        let absolute = root.join(path);
+        let additions = std::fs::metadata(&absolute)
+            .ok()
+            .filter(|m| m.len() <= 10 * 1024 * 1024)
+            .and_then(|_| std::fs::read_to_string(&absolute).ok())
+            .map(|c| c.lines().count() as i32)
+            .unwrap_or(0);
+        total_additions += additions;
+        files.push(WorktreeFileStat {
+            path: path.to_string(),
+            additions,
+            deletions: 0,
+            status: "untracked".to_string(),
+        });
+    }
+
+    Ok(WorktreeDiffStat {
+        files,
+        total_additions,
+        total_deletions,
+    })
+}
+
+/// `+N / -M` and a changed-file list for one agent worktree, measured against
+/// the commit it branched from — the Fleet Dashboard's per-agent card.
+#[tauri::command(async)]
+pub fn workspace_git_worktree_diff_stat(
+    project_id: String,
+    worktree_path: String,
+    base_commit: String,
+    state: State<AppState>,
+) -> Result<WorktreeDiffStat, String> {
+    check_git_available()?;
+    if !is_valid_commit_ish(&base_commit) {
+        return Err("Invalid base commit".to_string());
+    }
+    let root = resolve_repo(&project_id, Some(worktree_path.as_str()), &state)?;
+    worktree_diff_stat_at(&root, &base_commit)
+}
+
+fn staged_paths_at(root: &std::path::Path) -> Result<Vec<String>, String> {
+    // No HEAD yet: everything in the index is staged, and `diff --cached` has
+    // nothing to compare against.
+    let args: &[&str] = if git_capture(root, &["rev-parse", "--verify", "HEAD"]).is_some() {
+        &["diff", "--cached", "--name-only", "--no-renames"]
+    } else {
+        &["ls-files", "--cached"]
+    };
+    let out = run_git(root, args, "list staged files")?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Paths currently in the index, so the UI can split Changes into staged and
+/// unstaged without re-deriving it from porcelain codes on the frontend.
+#[tauri::command(async)]
+pub fn workspace_git_staged_paths(
+    project_id: String,
+    repo_path: Option<String>,
+    state: State<AppState>,
+) -> Result<Vec<String>, String> {
+    let root = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    staged_paths_at(&root)
+}
+
 #[tauri::command]
 pub fn workspace_set_active(
     project_id: Option<String>,
@@ -2806,5 +3307,294 @@ mod tests {
     fn extract_port_from_vite_config_returns_none_when_absent() {
         let config = "export default defineConfig({ server: { host: true } })";
         assert_eq!(extract_port_from_vite_config(config), None);
+    }
+
+    // --- §7 explicit-path staging, against a real repo ---
+    //
+    // This is the section the whole roadmap item calls "the strongest argument
+    // on the list": several agents editing one shared working tree, so a
+    // blanket `git add -A` sweeps in whatever any of them happened to be
+    // touching. These tests exercise real `git` against a throwaway repo rather
+    // than mocking it, because the thing worth proving is what actually lands
+    // in the index — a mock would just assert the code calls itself correctly.
+
+    struct TestRepo {
+        dir: tempfile::TempDir,
+    }
+
+    impl TestRepo {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path();
+            let run = |args: &[&str]| {
+                let status = git_base()
+                    .args(args)
+                    .current_dir(root)
+                    .status()
+                    .expect("git available for tests");
+                assert!(status.success(), "git {:?} failed", args);
+            };
+            run(&["init", "-q"]);
+            run(&["config", "user.email", "test@example.com"]);
+            run(&["config", "user.name", "Test"]);
+            Self { dir }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.dir.path()
+        }
+
+        fn write(&self, rel: &str, content: &str) {
+            let full = self.path().join(rel);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(full, content).unwrap();
+        }
+
+        fn commit_all(&self, message: &str) {
+            let status = git_base()
+                .args(["add", "-A"])
+                .current_dir(self.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let status = git_base()
+                .args(["commit", "-q", "-m", message])
+                .current_dir(self.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+    }
+
+    #[test]
+    fn stage_paths_leaves_an_unlisted_file_untouched() {
+        // The regression this whole section exists to close: staging file A must
+        // never pick up file B, even though a bare `git add -A` would.
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.write("b.txt", "two\n");
+        repo.commit_all("initial");
+
+        repo.write("a.txt", "one changed\n");
+        repo.write("b.txt", "two changed\n");
+
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).expect("stage a.txt");
+
+        let staged = staged_paths_at(repo.path()).expect("list staged");
+        assert_eq!(staged, vec!["a.txt".to_string()]);
+
+        // b.txt's edit is real but must still be sitting in the working tree,
+        // unstaged — exactly what an in-flight agent edit needs to survive.
+        let diff = diff_split_at(repo.path(), Some("b.txt".to_string()), None).unwrap();
+        assert!(diff.staged.is_empty());
+        assert!(diff.unstaged.contains("two changed"));
+    }
+
+    #[test]
+    fn stage_paths_records_a_new_untracked_file() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        repo.write("new.txt", "brand new\n");
+
+        stage_paths_at(repo.path(), &["new.txt".to_string()]).expect("stage new.txt");
+        assert_eq!(staged_paths_at(repo.path()).unwrap(), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn unstage_paths_reverts_the_index_without_touching_the_worktree() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        repo.write("a.txt", "one changed\n");
+
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).unwrap();
+        assert_eq!(staged_paths_at(repo.path()).unwrap(), vec!["a.txt".to_string()]);
+
+        unstage_paths_at(repo.path(), &["a.txt".to_string()]).expect("unstage a.txt");
+        assert!(staged_paths_at(repo.path()).unwrap().is_empty());
+
+        // The edit itself must survive — unstaging is an index operation only.
+        let diff = diff_split_at(repo.path(), Some("a.txt".to_string()), None).unwrap();
+        assert!(diff.unstaged.contains("one changed"));
+    }
+
+    #[test]
+    fn unstage_paths_works_before_the_first_commit() {
+        // No HEAD yet, so `git reset` has nothing to reset to; the `rm --cached`
+        // branch has to carry this case.
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).unwrap();
+        assert_eq!(staged_paths_at(repo.path()).unwrap(), vec!["a.txt".to_string()]);
+
+        unstage_paths_at(repo.path(), &["a.txt".to_string()]).expect("unstage before first commit");
+        assert!(staged_paths_at(repo.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn commit_staged_refuses_an_empty_commit() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        // Nothing staged.
+        let err = commit_staged_at(repo.path(), "should not land", false).unwrap_err();
+        assert!(err.contains("staged"));
+    }
+
+    #[test]
+    fn commit_staged_commits_only_what_was_staged() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.write("b.txt", "two\n");
+        repo.commit_all("initial");
+
+        repo.write("a.txt", "one changed\n");
+        repo.write("b.txt", "two changed\n");
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).unwrap();
+
+        commit_staged_at(repo.path(), "update a only", false).expect("commit");
+
+        // b.txt's edit must still be sitting there, unstaged and uncommitted.
+        assert!(staged_paths_at(repo.path()).unwrap().is_empty());
+        let diff = diff_split_at(repo.path(), Some("b.txt".to_string()), None).unwrap();
+        assert!(diff.unstaged.contains("two changed"));
+    }
+
+    #[test]
+    fn commit_staged_can_amend() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("first message");
+
+        repo.write("a.txt", "one changed\n");
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).unwrap();
+        commit_staged_at(repo.path(), "amended message", true).expect("amend");
+
+        let log = run_git(repo.path(), &["log", "--oneline", "-n", "5"], "log").unwrap();
+        assert_eq!(log.lines().count(), 1, "amend must not add a second commit");
+        assert!(log.contains("amended message"));
+    }
+
+    #[test]
+    fn amend_refuses_when_there_is_no_commit_yet() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        stage_paths_at(repo.path(), &["a.txt".to_string()]).unwrap();
+        let err = commit_staged_at(repo.path(), "msg", true).unwrap_err();
+        assert!(err.contains("no commit"));
+    }
+
+    #[test]
+    fn hunk_patch_round_trip_stages_and_unstages_a_real_hunk() {
+        // Exercises the Rust apply side against a patch shaped the way the
+        // frontend's `buildHunkPatch` produces it (see services/git/patch.ts),
+        // proving the two halves actually agree on the format.
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\ntwo\nthree\n");
+        repo.commit_all("initial");
+        repo.write("a.txt", "one\nTWO\nthree\n");
+
+        let patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n";
+
+        apply_patch_at(repo.path(), patch, false).expect("stage the hunk");
+        assert_eq!(staged_paths_at(repo.path()).unwrap(), vec!["a.txt".to_string()]);
+        let after_stage = diff_split_at(repo.path(), Some("a.txt".to_string()), None).unwrap();
+        assert!(after_stage.staged.contains("+TWO"));
+        assert!(after_stage.unstaged.is_empty());
+
+        apply_patch_at(repo.path(), patch, true).expect("unstage the hunk");
+        assert!(staged_paths_at(repo.path()).unwrap().is_empty());
+        let after_unstage = diff_split_at(repo.path(), Some("a.txt".to_string()), None).unwrap();
+        assert!(after_unstage.unstaged.contains("+TWO"));
+    }
+
+    #[test]
+    fn diff_split_synthesises_a_diff_for_an_untracked_file() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        repo.write("new.txt", "hello\nworld\n");
+
+        let diff = diff_split_at(repo.path(), Some("new.txt".to_string()), None).unwrap();
+        assert!(diff.untracked);
+        assert!(diff.staged.is_empty());
+        assert!(diff.unstaged.contains("+hello"));
+        assert!(diff.unstaged.contains("+world"));
+    }
+
+    #[test]
+    fn resolve_repo_confines_a_worktree_path_to_the_managed_area() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+
+        // A path elsewhere on disk — not this project's worktree area — must be
+        // rejected even though it happens to be a real git repo, otherwise
+        // `repo_path` becomes an arbitrary-repository write primitive.
+        let other = tempfile::tempdir().unwrap();
+        let status = git_base().args(["init", "-q"]).current_dir(other.path()).status().unwrap();
+        assert!(status.success());
+
+        let allowed = is_under(&crate::commands::clean_path_buf(other.path().to_path_buf()), &worktree_area(repo.path()));
+        assert!(!allowed, "a foreign repo must not resolve as this project's worktree");
+    }
+
+    // --- §13 worktree diff stat (Fleet Dashboard) ---
+
+    #[test]
+    fn worktree_diff_stat_covers_committed_and_uncommitted_work_together() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\ntwo\nthree\n");
+        repo.commit_all("initial");
+        let base = run_git(repo.path(), &["rev-parse", "HEAD"], "rev-parse").unwrap().trim().to_string();
+
+        // One committed change on the agent's branch...
+        repo.write("a.txt", "one\nTWO\nthree\n");
+        repo.commit_all("agent work");
+        // ...and one still sitting uncommitted, the way an in-progress turn does.
+        repo.write("b.txt", "brand new\n");
+
+        let stat = worktree_diff_stat_at(repo.path(), &base).unwrap();
+        let paths: Vec<&str> = stat.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"a.txt"), "committed change missing: {paths:?}");
+        assert!(paths.contains(&"b.txt"), "uncommitted/untracked change missing: {paths:?}");
+        assert!(stat.total_additions > 0);
+    }
+
+    #[test]
+    fn worktree_diff_stat_classifies_added_and_deleted_files() {
+        let repo = TestRepo::new();
+        repo.write("keep.txt", "unchanged\n");
+        repo.write("gone.txt", "will be deleted\n");
+        repo.commit_all("initial");
+        let base = run_git(repo.path(), &["rev-parse", "HEAD"], "rev-parse").unwrap().trim().to_string();
+
+        std::fs::remove_file(repo.path().join("gone.txt")).unwrap();
+        repo.write("fresh.txt", "tracked and new\n");
+        stage_paths_at(repo.path(), &["fresh.txt".to_string(), "gone.txt".to_string()]).unwrap();
+        commit_staged_at(repo.path(), "add and remove", false).unwrap();
+
+        let stat = worktree_diff_stat_at(repo.path(), &base).unwrap();
+        let fresh = stat.files.iter().find(|f| f.path == "fresh.txt").expect("fresh.txt present");
+        assert_eq!(fresh.status, "added");
+        let gone = stat.files.iter().find(|f| f.path == "gone.txt").expect("gone.txt present");
+        assert_eq!(gone.status, "deleted");
+        assert!(!stat.files.iter().any(|f| f.path == "keep.txt"), "unchanged file must not appear");
+    }
+
+    #[test]
+    fn worktree_diff_stat_is_empty_when_nothing_has_changed() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        let base = run_git(repo.path(), &["rev-parse", "HEAD"], "rev-parse").unwrap().trim().to_string();
+
+        let stat = worktree_diff_stat_at(repo.path(), &base).unwrap();
+        assert!(stat.files.is_empty());
+        assert_eq!(stat.total_additions, 0);
+        assert_eq!(stat.total_deletions, 0);
     }
 }

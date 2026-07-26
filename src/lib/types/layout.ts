@@ -1,8 +1,10 @@
 export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settings';
 
-export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env';
+export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet';
 
-export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'review' | 'problems';
+// 'review' was removed 2026-07-26: Code Review is a full center panel now, not a
+// drawer tab. A two-column diff is unreadable at drawer width.
+export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'problems';
 
 export interface LayoutState {
   sidebarVisible: boolean;
@@ -16,6 +18,7 @@ export interface LayoutState {
   reviewVisible: boolean;
   httpVisible: boolean;
   tasksVisible: boolean;
+  fleetVisible: boolean;
   orchestratorVisible: boolean;
   dbVisible: boolean;
   containersVisible: boolean;

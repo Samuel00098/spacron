@@ -31,6 +31,7 @@ import {
 } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
+import { addCursorAbove, addCursorBelow } from '$lib/services/editor/multi-cursor';
 
 // Language support
 import { javascript } from '@codemirror/lang-javascript';
@@ -63,6 +64,7 @@ import {
   wordWrap,
   minimap,
   vimMode,
+  columnSelection,
   enableLsp,
 } from '$lib/stores/settings';
 import { vim } from '@replit/codemirror-vim';
@@ -195,6 +197,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
   const wordWrapValue = useStore(wordWrap);
   const minimapValue = useStore(minimap);
   const vimModeValue = useStore(vimMode);
+  const columnSelectionValue = useStore(columnSelection);
   const enableLspValue = useStore(enableLsp);
   const jumpToLineValue = useStore(jumpToLine);
   const activeProjectValue = useStore(activeProject);
@@ -205,6 +208,9 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
   const tabSizeCompartmentRef = useRef<Compartment | null>(null);
   const wordWrapCompartmentRef = useRef<Compartment | null>(null);
   const vimModeCompartmentRef = useRef<Compartment | null>(null);
+  // Box selection lives in a compartment so the toggle takes effect on the open
+  // file rather than only on the next one you open.
+  const columnSelectionCompartmentRef = useRef<Compartment | null>(null);
   // LSP extension is loaded asynchronously (server must spawn first), so it lives
   // in its own compartment that starts empty and gets reconfigured once ready.
   const lspCompartmentRef = useRef<Compartment | null>(null);
@@ -218,6 +224,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
     const tabSizeCompartment = tabSizeCompartmentRef.current!;
     const wordWrapCompartment = wordWrapCompartmentRef.current!;
     const vimModeCompartment = vimModeCompartmentRef.current!;
+    const columnSelectionCompartment = columnSelectionCompartmentRef.current!;
     const lspCompartment = lspCompartmentRef.current!;
 
     return EditorState.create({
@@ -236,8 +243,6 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
         bracketMatching(),
         closeBrackets(),
         autocompletion(),
-        rectangularSelection(),
-        crosshairCursor(),
         highlightActiveLine(),
         highlightSelectionMatches(),
         getLanguageExtension(language),
@@ -249,9 +254,17 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
         tabSizeCompartment.of(EditorState.tabSize.of(tabSizeValue)),
         wordWrapCompartment.of(wordWrapValue ? EditorView.lineWrapping : []),
         vimModeCompartment.of(vimModeValue ? vim() : []),
+        columnSelectionCompartment.of(
+          columnSelectionValue ? [rectangularSelection(), crosshairCursor()] : [],
+        ),
         lspCompartment.of([]),
         keymap.of([
           ...closeBracketsKeymap,
+          // Cursor stacking, the one part of multi-cursor CodeMirror has no
+          // built-in command for. Declared before `defaultKeymap` so these win
+          // the binding; `Mod-d` occurrence-select comes from `searchKeymap`.
+          { key: 'Ctrl-Alt-ArrowUp', mac: 'Cmd-Alt-ArrowUp', run: addCursorAbove, preventDefault: true },
+          { key: 'Ctrl-Alt-ArrowDown', mac: 'Cmd-Alt-ArrowDown', run: addCursorBelow, preventDefault: true },
           ...defaultKeymap,
           ...searchKeymap,
           ...historyKeymap,
@@ -335,6 +348,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
     tabSizeCompartmentRef.current = new Compartment();
     wordWrapCompartmentRef.current = new Compartment();
     vimModeCompartmentRef.current = new Compartment();
+    columnSelectionCompartmentRef.current = new Compartment();
     lspCompartmentRef.current = new Compartment();
 
     const view = new EditorView({
@@ -383,10 +397,13 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
           tabSizeCompartmentRef.current!.reconfigure(EditorState.tabSize.of(tabSizeValue)),
           wordWrapCompartmentRef.current!.reconfigure(wordWrapValue ? EditorView.lineWrapping : []),
           vimModeCompartmentRef.current!.reconfigure(vimModeValue ? vim() : []),
+          columnSelectionCompartmentRef.current!.reconfigure(
+            columnSelectionValue ? [rectangularSelection(), crosshairCursor()] : [],
+          ),
         ]
       });
     }
-  }, [tabSizeValue, wordWrapValue, vimModeValue]);
+  }, [tabSizeValue, wordWrapValue, vimModeValue, columnSelectionValue]);
 
   // Jump to specific line when requested by search or other triggers
   useEffect(() => {

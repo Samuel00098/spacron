@@ -530,6 +530,53 @@
   color: var(--text-secondary);
 }
 
+/* Bulk counterpart to the per-file +/− button. Sits before the select-all
+   counter so the head row reads "act on everything, then here's the tally". */
+.source-control .sc-stage-all {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 0 9px;
+  align-self: stretch;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--sidebar-bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.source-control .sc-stage-all:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.source-control .sc-stage-all:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.source-control .sc-stage-all.staged {
+  color: var(--success, #4ade80);
+}
+
+.source-control .sc-stage-all-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .source-control .sc-select-all {
   display: flex;
   align-items: center;
@@ -665,6 +712,89 @@
 .source-control .status-badge.conflicted {
   background: color-mix(in srgb, var(--warning) 18%, transparent);
   color: var(--warning);
+}
+
+.source-control .sc-file-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.source-control .sc-file-caret {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+  color: var(--text-muted);
+}
+
+.source-control .sc-file-caret.expanded {
+  transform: rotate(90deg);
+}
+
+.source-control .sc-file-item.staged {
+  border-left: 2px solid var(--success, #4ade80);
+}
+
+.source-control .sc-file-stage-toggle {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.source-control .sc-file-stage-toggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent-color, var(--border));
+}
+
+.source-control .sc-file-stage-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.source-control .sc-file-item.staged .sc-file-stage-toggle {
+  color: var(--success, #4ade80);
+}
+
+.source-control .sc-file-expanded-diff {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.source-control .sc-file-diff-side + .sc-file-diff-side {
+  border-top: 1px dashed var(--border);
+}
+
+.source-control .sc-file-diff-side-label {
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.source-control .sc-amend-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .source-control .sc-commit-section {
@@ -1122,6 +1252,24 @@
 
   .source-control .commit-info {
     padding-left: 6px;
+  }
+
+  /* Head row runs out of width first: keep the +/− glyph, drop its label. */
+  .source-control .sc-stage-all span:not(.sc-stage-all-glyph) {
+    display: none;
+  }
+
+  .source-control .sc-stage-all {
+    padding: 0 7px;
+  }
+
+  .source-control .sc-section-header {
+    padding-left: 8px;
+    padding-right: 4px;
+  }
+
+  .source-control .sc-select-all {
+    padding: 0 8px;
   }
 }
 

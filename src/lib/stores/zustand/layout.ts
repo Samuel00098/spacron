@@ -5,8 +5,10 @@ import { requestRoomControl } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
-const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env']);
-const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'review', 'problems']);
+const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env', 'fleet']);
+// No 'review': a persisted 'review' tab from an older build fails this check and
+// falls back, which is exactly the migration we want.
+const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'problems']);
 
 export function sanitiseActiveView(v: unknown, fallback: ActiveView = 'terminal'): ActiveView {
   return VALID_ACTIVE_VIEWS.has(v as ActiveView) ? (v as ActiveView) : fallback;
@@ -30,6 +32,7 @@ const defaultLayout: LayoutState = {
   reviewVisible: false,
   httpVisible: false,
   tasksVisible: false,
+  fleetVisible: false,
   orchestratorVisible: false,
   dbVisible: false,
   containersVisible: false,
@@ -103,6 +106,7 @@ interface LayoutActions {
   toggleReviewVisible: () => void;
   toggleHttpVisible: () => void;
   toggleTasksVisible: () => void;
+  toggleFleetVisible: () => void;
   toggleDbVisible: () => void;
   toggleContainersVisible: () => void;
   toggleToolboxVisible: () => void;
@@ -143,6 +147,7 @@ const AUX_VIEW_FLAGS = {
   review: 'reviewVisible',
   http: 'httpVisible',
   tasks: 'tasksVisible',
+  fleet: 'fleetVisible',
   db: 'dbVisible',
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
@@ -262,6 +267,11 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         persistLayout(next);
         return next;
       }
+      if (view === 'fleet') {
+        const next: LayoutState = { ...l, activeView: 'fleet' as const, lastAuxView: 'fleet' as const, fleetVisible: true };
+        persistLayout(next);
+        return next;
+      }
       if (view === 'db') {
         const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
         persistLayout(next);
@@ -360,6 +370,16 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       const next: LayoutState = l.tasksVisible
         ? { ...l, tasksVisible: false, activeView: 'terminal' as const }
         : { ...l, tasksVisible: true, lastAuxView: 'tasks' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'tasks' as const };
+      persistLayout(next);
+      return next;
+    });
+  },
+
+  toggleFleetVisible: () => {
+    set((l) => {
+      const next: LayoutState = l.fleetVisible
+        ? { ...l, fleetVisible: false, activeView: 'terminal' as const }
+        : { ...l, fleetVisible: true, lastAuxView: 'fleet' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'fleet' as const };
       persistLayout(next);
       return next;
     });

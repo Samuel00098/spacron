@@ -102,6 +102,7 @@ export function togglePreviewVisible() { withTransition(() => { useLayoutStore.g
 export function toggleReviewVisible() { withTransition(() => { useLayoutStore.getState().toggleReviewVisible(); }); }
 export function toggleHttpVisible() { withTransition(() => { useLayoutStore.getState().toggleHttpVisible(); }); }
 export function toggleTasksVisible() { withTransition(() => { useLayoutStore.getState().toggleTasksVisible(); }); }
+export function toggleFleetVisible() { withTransition(() => { useLayoutStore.getState().toggleFleetVisible(); }); }
 export function toggleDbVisible() { withTransition(() => { useLayoutStore.getState().toggleDbVisible(); }); }
 export function toggleContainersVisible() { withTransition(() => { useLayoutStore.getState().toggleContainersVisible(); }); }
 export function toggleToolboxVisible() { withTransition(() => { useLayoutStore.getState().toggleToolboxVisible(); }); }

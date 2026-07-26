@@ -8,7 +8,6 @@ import { useStore } from '$lib/react/useStore';
 import { get } from '$lib/stores/storeCompat';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import FileExplorer from '$lib/components/explorer/FileExplorer.tsx';
-import ReviewSidebarPanel from '$lib/components/review/ReviewSidebarPanel.tsx';
 import ProblemsPanel from '$lib/components/problems/ProblemsPanelLazy.tsx';
 import SearchPanel from '$lib/components/explorer/SearchPanel.tsx';
 import SourceControl from '$lib/components/explorer/SourceControl.tsx';
@@ -45,6 +44,7 @@ import {
   toggleReviewVisible,
   toggleHttpVisible,
   toggleTasksVisible,
+  toggleFleetVisible,
   toggleDbVisible,
   toggleContainersVisible,
   toggleToolboxVisible,
@@ -94,6 +94,7 @@ type AuxPanelId =
   | 'review'
   | 'http'
   | 'tasks'
+  | 'fleet'
   | 'db'
   | 'containers'
   | 'toolbox'
@@ -121,6 +122,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   review: 'Review',
   http: 'HTTP',
   tasks: 'Tasks',
+  fleet: 'Fleet',
   db: 'Database',
   containers: 'Containers',
   toolbox: 'Toolbox',
@@ -149,6 +151,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ReturnType<typeof useLayou
   review: 'reviewVisible',
   http: 'httpVisible',
   tasks: 'tasksVisible',
+  fleet: 'fleetVisible',
   db: 'dbVisible',
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
@@ -159,6 +162,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ReturnType<typeof useLayou
 
 
 const EditorPanel = lazy(() => import('$lib/components/editor/EditorPanel.tsx'));
+const FleetDashboard = lazy(() => import('$lib/components/orchestrator/FleetDashboard.tsx'));
 const EnvManager = lazy(() => import('$lib/components/shared/EnvManager.tsx'));
 
 function Icon({ children }: { children: React.ReactNode }) {
@@ -197,7 +201,7 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets', 'review'] as const;
+const LEFT_DRAWER_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
   files: { title: 'Files', icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon> },
@@ -205,8 +209,8 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
   problems: { title: 'Problems', icon: <Icon><circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16.5" x2="12.01" y2="16.5" /></Icon> },
-
-  review: { title: 'Code Review', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon> },
+  // No `review` here — Code Review is a center room, reachable from the room
+  // dock. Source Control's inline HunkDiffView covers the drawer-sized case.
 };
 
 // The RIGHT drawer hosts the layout-backed tools (RIGHT_DRAWER_TOOLS: Toolbox /
@@ -272,6 +276,13 @@ function PanelHost({ id }: { id: AuxPanelId }) {
   if (id === 'review') return <ReviewPanel />;
   if (id === 'toolbox') return <ToolboxPanel />;
   if (id === 'tasks') return <TasksPanel />;
+  if (id === 'fleet') {
+    return (
+      <Suspense fallback={null}>
+        <FleetDashboard />
+      </Suspense>
+    );
+  }
   if (id === 'preview') return <PreviewPanel />;
   if (id === 'youtube') return <YouTubePanel />;
   if (id === 'env') {
@@ -291,7 +302,6 @@ function SidebarContent({ tab }: { tab: SidebarTab }) {
   if (tab === 'snapshots') return <SnapshotsPanel />;
   if (tab === 'snippets') return <TerminalSnippetsPanel />;
 
-  if (tab === 'review') return <ReviewSidebarPanel />;
   if (tab === 'problems') return <ProblemsPanel />;
   return <FileExplorer />;
 }
@@ -423,6 +433,12 @@ export default function AppShell() {
   const [roomOrder, setRoomOrder] = useState<RoomId[]>(['workspace', 'terminal']);
   const [secondaryRoom, setSecondaryRoom] = useState<RoomId | null>(null);
   const lastActiveRoomRef = useRef<RoomId | null>(null);
+  // The room the user last actually touched — a click or a focus anywhere inside
+  // its pane, not just a title-bar "focus this room" press. In Split this is what
+  // "the terminal I'm working in" means, and it is the pane a tab click must
+  // never evict. `focusedRoom` alone cannot answer this: typing into the right
+  // pane never moves it, so it would still be pointing at the left one.
+  const lastInteractedRoomRef = useRef<RoomId | null>(null);
 
   const sidebarResizeRef = useRef({ startX: 0, startWidth: 0 });
   const leftPanelResizeRef = useRef({ startX: 0, startWidth: 0 });
@@ -508,6 +524,7 @@ export default function AppShell() {
         { id: 'preview' as const, visible: layoutState.previewVisible },
         { id: 'review' as const, visible: layoutState.reviewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
+        { id: 'fleet' as const, visible: layoutState.fleetVisible },
         // Right utility drawer: http/db/containers/toolbox/env + orchestrator.
         // Left drawer: the nav tabs. YouTube: free-floating pop-up. None of
         // those are rooms in the ambient grid.
@@ -960,6 +977,9 @@ export default function AppShell() {
         case 'goToTasks':
           toggleTasksVisible();
           break;
+        case 'goToFleet':
+          toggleFleetVisible();
+          break;
         case 'goToDb':
           toggleDbVisible();
           break;
@@ -1063,7 +1083,6 @@ export default function AppShell() {
     layoutState.sidebarVisible && (LEFT_DRAWER_TOOLS as readonly string[]).includes(layoutState.sidebarTab)
       ? (layoutState.sidebarTab as LeftDrawerTool)
       : null;
-  // If the stored sidebarTab is 'review', silently reset it so the drawer doesn't show a stale tab
   const leftDrawerTools = LEFT_DRAWER_TOOLS.filter((t) => t !== 'snapshots' || showSnapshotsTab);
 
   function selectLeftTool(tool: LeftDrawerTool) {
@@ -1234,7 +1253,9 @@ export default function AppShell() {
       });
 
       if (open) {
-        setFocusedRoom(id);
+        // Same Split rule as a tab click: opening a panel must not evict the
+        // pane you are working in.
+        if (claimSplitSlot(id)) setFocusedRoom(id);
       } else if (focusedRoom === id) {
         setFocusedRoom(nextVisibleRoom(id));
       }
@@ -1261,10 +1282,41 @@ export default function AppShell() {
         next.delete(id);
         return next;
       });
-      setFocusedRoom(id);
       if (id === 'terminal') setTerminalRoomOpen(true);
       if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
+      if (claimSplitSlot(id)) setFocusedRoom(id);
     });
+  }
+
+  /**
+   * Split-mode guard for every "bring this room on stage" path.
+   *
+   * The pane the user is actually working in keeps its slot; the incoming room
+   * takes the other one. Returns whether the caller should still take room
+   * focus — `false` means the working pane stayed primary on purpose.
+   *
+   * Why this is needed: `secondaryRoom` used to be set only by the switcher's
+   * Left/Right buttons, so in normal use it was null and `splitRoom` fell back
+   * to `sideRooms[0]` — a *derived* value that moves the moment the primary
+   * changes. Bringing a third room on stage therefore replaced both panes at
+   * once, and the terminal you were typing in disappeared. Pinning the survivor
+   * explicitly is what stops that drift.
+   *
+   * A no-op outside Split, and for a room that is already on stage.
+   */
+  function claimSplitSlot(id: RoomId): boolean {
+    if (ambientLayout !== 'gallery') return true;
+    if (!activeRoom || id === activeRoom || id === splitRoom) return true;
+    if (lastInteractedRoomRef.current === activeRoom && splitRoom) {
+      // Working on the left → the incoming room takes the right slot, and the
+      // left pane keeps both its position and room focus.
+      setSecondaryRoom(id);
+      return false;
+    }
+    // Working on the right (or nothing touched yet) → pin that pane so the
+    // fallback can't drift, and give the incoming room the left slot.
+    setSecondaryRoom(splitRoom);
+    return true;
   }
 
   function showRoomInPrimary(id: RoomId) {
@@ -1405,6 +1457,17 @@ export default function AppShell() {
       icon: <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>,
     },
     {
+      // Code Review had no launcher here while it was a left-drawer tab — the
+      // tab was the way in. When the tab was removed (it became this center
+      // room) the only entry point left was the Ctrl+Shift+R shortcut, so the
+      // panel existed with no visible way to open it.
+      id: 'review',
+      title: 'Code Review',
+      active: layoutState.reviewVisible,
+      onClick: () => togglePanelRoom('review'),
+      icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon>,
+    },
+    {
       id: 'http',
       title: 'HTTP Client',
       active: layoutState.httpVisible,
@@ -1417,6 +1480,13 @@ export default function AppShell() {
       active: layoutState.tasksVisible,
       onClick: () => togglePanelRoom('tasks'),
       icon: <Icon><rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="5" height="8" rx="1" /></Icon>,
+    },
+    {
+      id: 'fleet',
+      title: 'Agent Fleet',
+      active: layoutState.fleetVisible,
+      onClick: () => togglePanelRoom('fleet'),
+      icon: <Icon><rect x="3" y="4" width="7" height="7" rx="1.5" /><rect x="14" y="4" width="7" height="7" rx="1.5" /><rect x="3" y="15" width="7" height="7" rx="1.5" /><rect x="14" y="15" width="7" height="7" rx="1.5" /></Icon>,
     },
     {
       id: 'db',
@@ -1715,6 +1785,12 @@ export default function AppShell() {
         className={`room-panel bento-card${featured ? ' featured active-glow' : ''}`}
         data-room-id={id}
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
+        // Capture phase, and a ref rather than state: this fires on every click
+        // and focus inside a pane (xterm included), so it must not re-render the
+        // room subtree — remounting a live TerminalPane is the bug documented in
+        // `.spacron/memory/terminal-pane-lifetime.md`.
+        onMouseDownCapture={() => { lastInteractedRoomRef.current = id; }}
+        onFocusCapture={() => { lastInteractedRoomRef.current = id; }}
       >
         <header className="room-header">
           <button

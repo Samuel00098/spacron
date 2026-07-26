@@ -52,6 +52,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
+    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -164,6 +165,7 @@ function createSettingsState() {
     wordWrap: persistentValue('wordWrap', true),
     minimap: persistentValue('minimap', false),
     vimMode: persistentValue('vimMode', false),
+    columnSelection: persistentValue('columnSelection', true),
     enableLsp: persistentValue('enableLsp', true),
     showHidden: persistentValue('showHidden', false),
     notificationsEnabled: persistentValue('notificationsEnabled', true),
@@ -199,7 +201,8 @@ function createSettingsState() {
     terminalCursorStyle: persistentValue<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar'),
     terminalScrollback: persistentValue('terminalScrollback', 5000),
     terminalFontSize: persistentValue('terminalFontSize', 14),
-    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
+    // See the note on `terminalRenderer` in stores/settings.ts for why DOM.
+    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'dom'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
   };
 }
@@ -225,6 +228,7 @@ const defaults: SettingsValues = {
   wordWrap: true,
   minimap: false,
   vimMode: false,
+  columnSelection: true,
   enableLsp: true,
   showHidden: false,
   notificationsEnabled: true,
@@ -262,6 +266,7 @@ const defaults: SettingsValues = {
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
+    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -297,7 +302,7 @@ const defaults: SettingsValues = {
   terminalCursorStyle: 'bar',
   terminalScrollback: 5000,
   terminalFontSize: 14,
-  terminalRenderer: 'canvas',
+  terminalRenderer: 'dom',
   showSnapshotsTab: false,
 };
 
@@ -325,6 +330,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       wordWrap: 'wordWrap',
       minimap: 'minimap',
       vimMode: 'vimMode',
+      columnSelection: 'columnSelection',
       enableLsp: 'enableLsp',
       aiGhostTextEnabled: 'aiGhostTextEnabled',
       aiCompletionProvider: 'aiCompletionProvider',

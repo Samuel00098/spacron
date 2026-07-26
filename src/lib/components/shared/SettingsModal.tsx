@@ -17,6 +17,7 @@ import {
   backgroundImageEnabled,
   backgroundImageOpacity,
   closeBehavior,
+  columnSelection,
   currentAiModel,
   currentVoiceAiModel,
   currentVoiceConversationAiModel,
@@ -79,6 +80,7 @@ import {
   type VoiceConversationEngine,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
+import { ADD_CURSOR_GESTURE, COLUMN_SELECT_GESTURE } from '$lib/services/editor/multi-cursor';
 import { openChangelogPage } from '$lib/services/changelog';
 import { resetAllApplicationState } from '$lib/stores/workspace';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
@@ -701,6 +703,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentWordWrap = useStore(wordWrap);
   const currentMinimap = useStore(minimap);
   const currentVimMode = useStore(vimMode);
+  const currentColumnSelection = useStore(columnSelection);
   const currentEnableLsp = useStore(enableLsp);
   const currentShowHidden = useStore(showHidden);
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
@@ -1422,6 +1425,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow title="Vim mode">
                     <Toggle label="Toggle Vim mode" checked={currentVimMode} onChange={vimMode.set} />
+                  </SettingRow>
+                  <SettingRow
+                    title="Column selection"
+                    detail={`Box-select with ${COLUMN_SELECT_GESTURE}, and stack cursors with ${ADD_CURSOR_GESTURE}`}
+                  >
+                    <Toggle label="Toggle column selection" checked={currentColumnSelection} onChange={columnSelection.set} />
                   </SettingRow>
                 </Section>
 

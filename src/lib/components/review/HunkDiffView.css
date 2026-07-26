@@ -1,0 +1,162 @@
+/* Hunk-staging diff. Colours follow ReviewPanel.css so the two diff
+   surfaces read as the same thing rendered at different sizes. */
+
+.hdv-root {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.hdv-message {
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.hdv-error {
+  color: var(--error, #f87171);
+}
+
+.hdv-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.hdv-add {
+  color: var(--success, #4ade80);
+}
+
+.hdv-del {
+  color: var(--error, #f87171);
+}
+
+.hdv-note {
+  color: var(--text-muted);
+  font-family: inherit;
+}
+
+/* ─── Hunk ───────────────────────────────────────── */
+.hdv-hunk + .hdv-hunk {
+  margin-top: 6px;
+}
+
+.hdv-hunk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.hdv-hunk-range {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hdv-hunk-stats {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.hdv-hunk-action {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hdv-hunk-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent-color, var(--border));
+}
+
+.hdv-hunk-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ─── Lines ──────────────────────────────────────── */
+.hdv-lines {
+  overflow-x: auto;
+}
+
+.hdv-line {
+  display: flex;
+  align-items: flex-start;
+  white-space: pre;
+  border-left: 3px solid transparent;
+}
+
+.hdv-line[role='button'] {
+  cursor: pointer;
+}
+
+.hdv-line[role='button']:hover {
+  filter: brightness(1.25);
+}
+
+.hdv-add {
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.hdv-line.hdv-add {
+  border-left-color: var(--success, #4ade80);
+}
+
+.hdv-line.hdv-del {
+  background: rgba(248, 113, 113, 0.08);
+  border-left-color: var(--error, #f87171);
+}
+
+/* A ticked line is what "Stage selection" will take, so it has to be legible at
+   a glance against both the green and the red row backgrounds. */
+.hdv-line.selected {
+  background: var(--accent-soft, rgba(96, 165, 250, 0.22));
+  border-left-color: var(--accent-color, #60a5fa);
+}
+
+.hdv-gutter {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 0 4px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 10px;
+  user-select: none;
+}
+
+.hdv-marker {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.hdv-text {
+  flex: 1 1 auto;
+  padding-right: 10px;
+}

@@ -95,6 +95,15 @@ export const tabSize = persistentWritable('tabSize', 2);
 export const wordWrap = persistentWritable('wordWrap', true);
 export const minimap = persistentWritable('minimap', false);
 export const vimMode = persistentWritable('vimMode', false);
+/**
+ * Column (box) selection via Alt+Shift+drag, plus the crosshair cursor that
+ * signals it. On by default — the gesture is what every editor does, and its
+ * absence reads as the editor being broken rather than minimal. The toggle
+ * exists because the crosshair cursor and the Alt-drag capture are visible even
+ * to people who never box-select, and Alt-drag collides with some window
+ * managers' move-window binding on Linux.
+ */
+export const columnSelection = persistentWritable('columnSelection', true);
 // Language-server-backed autocomplete, diagnostics and hover. Requires the
 // relevant language server (rust-analyzer, typescript-language-server, …) on PATH.
 export const enableLsp = persistentWritable('enableLsp', true);
@@ -1001,6 +1010,7 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
   { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
+  { id: 'goToFleet',      label: 'Go to Agent Fleet',  category: 'View' },
   { id: 'goToDb',         label: 'Go to Database Explorer', category: 'View' },
   { id: 'goToContainers', label: 'Go to Containers',   category: 'View' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  category: 'View' },
@@ -1040,6 +1050,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
   { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
+  { id: 'goToFleet',      label: 'Go to Agent Fleet',  keys: 'Ctrl+Shift+G' },
   { id: 'goToDb',         label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
   { id: 'goToContainers', label: 'Go to Containers',   keys: 'Ctrl+Shift+C' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  keys: 'Ctrl+Shift+X' },
@@ -1179,7 +1190,14 @@ export const terminalShell = persistentWritable<string>('terminalShell', ''); //
 export const terminalCursorStyle = persistentWritable<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar');
 export const terminalScrollback = persistentWritable('terminalScrollback', 5000);
 export const terminalFontSize = persistentWritable('terminalFontSize', 14);
-export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas');
+// DOM is the default. It is the only renderer that composites the terminal's
+// transparent background correctly: canvas and webgl erase the previous frame by
+// painting the background over it, and with alpha 0 there is nothing to paint,
+// so stale glyphs survive as ghosting. DOM has no glyph atlas and no frame-clear
+// step — each cell is a real element — so it cannot exhibit that. It also has no
+// per-page context limit, which matters because panes stay mounted (see
+// `.spacron/memory/terminal-pane-lifetime.md`).
+export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'dom');
 
 export function updateSetting(key: string, value: unknown) {
   switch (key) {
@@ -1189,6 +1207,7 @@ export function updateSetting(key: string, value: unknown) {
     case 'wordWrap':         wordWrap.set(value as boolean); break;
     case 'minimap':          minimap.set(value as boolean); break;
     case 'vimMode':          vimMode.set(value as boolean); break;
+    case 'columnSelection':  columnSelection.set(value as boolean); break;
     case 'enableLsp':        enableLsp.set(value as boolean); break;
     case 'aiGhostTextEnabled': aiGhostTextEnabled.set(value as boolean); break;
     case 'aiCompletionProvider': aiCompletionProvider.set(value as AiProviderId); break;
@@ -1232,6 +1251,7 @@ export function resetSettingsToDefault() {
   wordWrap.set(true);
   minimap.set(false);
   vimMode.set(false);
+  columnSelection.set(true);
   enableLsp.set(true);
   showHidden.set(false);
   showSnapshotsTab.set(false);
@@ -1278,6 +1298,6 @@ export function resetSettingsToDefault() {
   terminalCursorStyle.set('bar');
   terminalScrollback.set(5000);
   terminalFontSize.set(14);
-  terminalRenderer.set('canvas');
+  terminalRenderer.set('dom');
 }
 

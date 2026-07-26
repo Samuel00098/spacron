@@ -123,6 +123,28 @@
   font-weight: 600;
 }
 
+/* A dead language server is a fault, not a neutral "nothing here" state. */
+.pp-empty-error strong {
+  color: var(--color-error, #e5534b);
+}
+
+.pp-empty-action {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pp-empty-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+}
+
 /* ─── File group ─────────────────────────────────── */
 .pp-file-head {
   display: flex;

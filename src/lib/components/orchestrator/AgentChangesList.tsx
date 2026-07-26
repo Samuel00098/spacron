@@ -53,10 +53,14 @@ export default function AgentChangesList() {
     <section className="agent-changes" aria-label="Agent changes">
       <header className="ac-head">
         <span className="ac-title">Agent changes</span>
+        {/* This section lives inside Source Control, directly above file rows
+            whose +/- buttons mean `git add`. Calling this button "Stage" too
+            made two different operations share one word in one panel. It
+            copies a worktree into your working tree; it is not `git add`. */}
         <span className="ac-sub">
           {autoStage === false
-            ? 'Auto-staging is off — stage to review and test'
-            : 'Waiting to reach your working tree'}
+            ? 'Auto-copy is off — bring work in to run and review it'
+            : 'Not in your working tree yet'}
         </span>
       </header>
 
@@ -77,7 +81,7 @@ export default function AgentChangesList() {
                   <span className="ac-conflict">
                     Conflicts with your edits
                     {row.conflictedFiles.length > 0 && ` · ${row.conflictedFiles.length} file${row.conflictedFiles.length === 1 ? '' : 's'}`}
-                    {' — resolve in Source Control, then stage again'}
+                    {' — resolve the conflicts below, then try again'}
                   </span>
                 ) : (
                   <span className="ac-count">
@@ -93,10 +97,10 @@ export default function AgentChangesList() {
                 title={
                   row.conflicted
                     ? 'Retry after resolving the conflicting files'
-                    : "Copy this agent's changes into your working tree so you can run and review them"
+                    : "Copy this agent's changes into your working tree so you can run and review them. This is not `git add` — nothing is committed, and the agent's branch is kept."
                 }
               >
-                {isBusy ? 'Staging…' : row.conflicted ? 'Retry' : 'Stage'}
+                {isBusy ? 'Bringing in…' : row.conflicted ? 'Retry' : 'Bring in'}
               </button>
             </li>
           );

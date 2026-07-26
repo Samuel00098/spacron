@@ -21,6 +21,7 @@ import {
   type DiagnosticSeverity,
   type SeverityCounts,
 } from '$lib/stores/diagnostics';
+import { lspStatus, installServer, type LspStatusEntry } from '$lib/services/lsp/client';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import './ProblemsPanel.css';
 
@@ -72,10 +73,37 @@ function SeverityIcon({ severity }: { severity: DiagnosticSeverity }) {
   );
 }
 
+/**
+ * The worst thing the LSP layer is currently reporting for this project, or null
+ * when everything it tried is fine.
+ *
+ * An empty problem list has two very different meanings — "analysed, nothing
+ * wrong" and "no language server ever started" — and the panel used to render
+ * both as the reassuring one. This picks the entry worth showing so the empty
+ * state can tell the truth.
+ */
+function worstStatus(
+  status: Map<string, LspStatusEntry>,
+  root: string | null,
+): LspStatusEntry | null {
+  if (!root) return null;
+  const prefix = `${root}::`;
+  const mine = [...status.entries()]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, entry]) => entry);
+  return (
+    mine.find((e) => e.state === 'error') ??
+    mine.find((e) => e.state === 'missing') ??
+    mine.find((e) => e.state === 'starting') ??
+    null
+  );
+}
+
 export default function ProblemsPanel() {
   const byFile = useStore(diagnosticsByFile);
   const project = useStore(activeProject);
   const lspEnabled = useStore(enableLsp);
+  const status = useStore(lspStatus);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [muted, setMuted] = useState<Partial<Record<DiagnosticSeverity, boolean>>>({});
@@ -84,6 +112,7 @@ export default function ProblemsPanel() {
   const root = project?.root_path ?? null;
 
   const allGroups = useMemo(() => groupForProject(byFile, root), [byFile, root]);
+  const health = useMemo(() => worstStatus(status, root), [status, root]);
 
   /** Totals BEFORE filtering, so the header chips still show what exists. */
   const totals = useMemo<SeverityCounts>(() => {
@@ -165,6 +194,25 @@ export default function ProblemsPanel() {
           <div className="pp-empty">
             <strong>Language server is off.</strong>
             <span>Enable it in Settings &gt; General to collect diagnostics.</span>
+          </div>
+        ) : allGroups.length === 0 && health?.state === 'error' ? (
+          <div className="pp-empty pp-empty-error">
+            <strong>The {health.language} language server isn&rsquo;t running.</strong>
+            <span>{health.detail}</span>
+            <span>Until it starts, this list stays empty whatever the code says.</span>
+          </div>
+        ) : allGroups.length === 0 && health?.state === 'missing' ? (
+          <div className="pp-empty">
+            <strong>No {health.language} language server installed.</strong>
+            <span>{health.detail}</span>
+            <button className="pp-empty-action" onClick={() => void installServer(health.language)}>
+              Install it
+            </button>
+          </div>
+        ) : allGroups.length === 0 && health?.state === 'starting' ? (
+          <div className="pp-empty">
+            <strong>Starting the {health.language} language server&hellip;</strong>
+            <span>Diagnostics appear once it finishes indexing.</span>
           </div>
         ) : allGroups.length === 0 ? (
           <div className="pp-empty">

@@ -1,30 +1,97 @@
 # Dev Tools Roadmap
 
-Thirteen feature proposals scoped for a developer who wants Spacron to cover the
-remaining daily workflow gaps. Each is independent; implement in any order.
-
 Items 1–6 were the original set. Items 7–13 came out of a dogfooding pass on
 2026-07-26 (driving the real app through a normal working session), so each of
 them names the specific code that falls short today rather than describing a
 feature in the abstract.
 
+**Reprioritised 2026-07-26.** The original framing — "thirteen independent
+proposals, implement in any order" — was wrong, and the list is no longer read
+that way. See [The plan](#the-plan) for what is actually being built. The
+implementation sketches below are kept in full, including for the dropped items,
+because they are useful reference if a decision is ever revisited. The
+**Status** line under each heading is the source of truth, not the section's
+presence in this file.
+
+---
+
+## The plan
+
+### Why the list was cut
+
+The thirteen proposals were, with two exceptions, measured against VS Code.
+That is a race a solo developer on a one-time-fee product cannot win, and
+winning it would not matter — nobody pays for a worse VS Code. The list also
+contradicted the product's own pitch (`README.md`: *lightweight, terminal-first,
+lean, sub-second startup*) by proposing thirteen more panels on an app that
+already has fifteen component directories. The cost of a panel is not the five
+days to build it; it is owning it forever.
+
+What Spacron has that nothing else does is the agent fleet: several coding
+agents running at once in isolated git worktrees. §13 says this out loud —
+*"the rest of this roadmap is catching up to other editors"* — and then sits at
+position 13. Today the app can **create** a fleet but gives no way to **judge**
+what it produced, so the differentiator is half-built: the hard, novel part
+(worktree isolation and reconciliation) is done and the part the user actually
+touches is missing.
+
+So: five items, ~35 days, ordered so that each one rests on something already
+trustworthy.
+
+### The five
+
+| Order | Item | Est. | Why this, why now |
+|---|---|---|---|
+| 1 | [LSP transport: fix or delete](#0a-lsp-transport-fix-or-delete) | ~3 d | Credibility. A settings toggle that does nothing is worse than no toggle, and it strands the Problems panel shipped the same day. |
+| 2 | [Deterministic turn signals](#0b-deterministic-turn-signals) | ~7 d | Trust before surface. A dashboard built on turn state that false-completes will lie to you. |
+| 3 | [§7 Hunk-level staging](#7-hunk-level-staging-and-diff-first-source-control) | ~12 d | Agent safety (see below), and §13 needs its diff viewer to take an arbitrary repo path. |
+| 4 | [§13 Agent Fleet Dashboard](#13-agent-fleet-dashboard) | ~8 d | The moat. Now it has a foundation under it. |
+| 5 | Cheap fills: [§10](#10-script-runner), [§3](#3-multi-cursor--column-editing), [§12](#12-http-client-completion) | 5 / 3 / 6 d | Small, self-contained, each closes a visible gap. §12 is finish-or-cut. |
+
+### Three corrections to the original document
+
+**§7 buries a correctness bug inside a feature request.** Its closing note
+treats `git add -A` as a curation nicety — "it also picks up files you never
+touched." In an app whose entire premise is *several agents editing one shared
+working tree concurrently*, blanket staging sweeps another agent's in-flight
+work into your commit. That is a data-integrity problem specific to what Spacron
+is, and it is the strongest argument on the whole list. It should lead §7, not
+footnote it.
+
+**The LSP blocker is not a scheduling item.** §9 files it as a prerequisite for
+symbol search. It is a shipped-and-broken feature in a paid product: the toggle
+exists, no server ever spawns, and every failure path in `services/lsp/client.ts`
+returns `null` silently so nothing surfaces. It is also now load-bearing for the
+Problems panel. Fix it or pull the toggle.
+
+**This roadmap and `premium-experience-roadmap.md` point in different directions
+and never cite each other.** That document's Phase 1 — agent turn state is
+screen-scraped from a TUI with an English regex and a 90-second idle fallback
+that false-completes and drops the real answer — outranks anything on this list,
+because it is the reliability of the differentiator. It is pulled in here as
+item 2 so the two plans stop competing.
+
 ---
 
 ## Table of Contents
 
-1. [Container Shell Access](#1-container-shell-access)
-2. [Interactive Rebase Visualizer](#2-interactive-rebase-visualizer)
-3. [Multi-Cursor / Column Editing](#3-multi-cursor--column-editing)
-4. [Port Forwarding / Tunnel UI](#4-port-forwarding--tunnel-ui)
-5. [Test Results Panel](#5-test-results-panel)
-6. [Extension / Dynamic Tool Registration](#6-extension--dynamic-tool-registration)
-7. [Hunk-Level Staging and Diff-First Source Control](#7-hunk-level-staging-and-diff-first-source-control)
-8. [Blame and File History](#8-blame-and-file-history)
-9. [Symbol Search and Go-to-Definition](#9-symbol-search-and-go-to-definition)
-10. [Script Runner](#10-script-runner)
-11. [Multi-Engine Database Support](#11-multi-engine-database-support)
-12. [HTTP Client Completion](#12-http-client-completion)
-13. [Agent Fleet Dashboard](#13-agent-fleet-dashboard)
+**Building** — [0a. LSP transport](#0a-lsp-transport-fix-or-delete) ·
+[0b. Turn signals](#0b-deterministic-turn-signals) ·
+[7. Hunk-level staging](#7-hunk-level-staging-and-diff-first-source-control) ·
+[13. Agent Fleet Dashboard](#13-agent-fleet-dashboard) ·
+[10. Script Runner](#10-script-runner) ·
+[3. Multi-cursor](#3-multi-cursor--column-editing) ·
+[12. HTTP Client Completion](#12-http-client-completion)
+
+**Deferred** — [8. Blame and File History](#8-blame-and-file-history) ·
+[9. Symbol Search and Go-to-Definition](#9-symbol-search-and-go-to-definition)
+
+**Dropped** — [1. Container Shell Access](#1-container-shell-access) ·
+[2. Interactive Rebase Visualizer](#2-interactive-rebase-visualizer) ·
+[4. Port Forwarding / Tunnel UI](#4-port-forwarding--tunnel-ui) ·
+[5. Test Results Panel](#5-test-results-panel) ·
+[6. Extension / Dynamic Tool Registration](#6-extension--dynamic-tool-registration) ·
+[11. Multi-Engine Database Support](#11-multi-engine-database-support)
 
 ---
 
@@ -36,12 +103,114 @@ already streamed `textDocument/publishDiagnostics`, but
 problem was only visible while that exact file was open. `stores/diagnostics.ts`
 now taps the notification stream via `client.attachPlugin` on the shared client,
 and `components/problems/ProblemsPanel.tsx` lists them grouped by file as a
-left-drawer tab. Don't re-propose it — but see the blocker in
-[§9](#9-symbol-search-and-go-to-definition), which the panel shares.
+left-drawer tab. Don't re-propose it.
+
+**It is currently worth very little**, because the language server it reads from
+never spawns — see [§0a](#0a-lsp-transport-fix-or-delete), which is item 1 of the
+plan precisely because this panel depends on it.
+
+---
+
+## 0a. LSP transport: fix or delete
+
+**Status: BUILDING — item 1 of 5.** Not a feature. Added to this document
+2026-07-26 because it was previously filed only as a blocker inside §9, which
+undersold it.
+
+**Problem:** The LSP integration is inert. Verified 2026-07-26 with
+`rust-analyzer` installed, `enableLsp` true, a `.rs` file open in CodeMirror and
+a project root set: **no language-server process ever spawns, and the editor
+shows no lint markers either.** The settings toggle is present and does nothing.
+Since the Problems panel shipped on top of this stream the same day, it is now
+load-bearing for two features.
+
+**Scope:** ~3 days, most of it diagnosis rather than code.
+
+### What is already known
+
+- `lsp_check_server` reports rust-analyzer `available: true`
+  (typescript-language-server is not installed on the dev machine — test with
+  rust-analyzer).
+- `lsp_start` binds the bridge port successfully; a second listening port is
+  observable on the app process alongside the MCP one.
+- `LspServer::spawn` happens **per WebSocket connection**, inside the bridge's WS
+  handler (`lsp/bridge.rs`), and the connection token is **single-use with a
+  short TTL**. So if the frontend's `WebSocketTransport` never connects, no
+  server is ever launched and the token quietly expires. This is the most likely
+  shape of the bug.
+- Calling `createLspExtension(path, 'rust', root)` by hand **does** return a
+  handle — but only when `root` is exactly `activeProject.root_path`. A malformed
+  root returns `null`, silently.
+
+### Two things to fix
+
+1. **The transport connection.** Start at the `WebSocketTransport` construction
+   in `getOrCreateClient` and the `ws://127.0.0.1:<port>/?token=…` URL built by
+   `resolveLspConnection` (`services/lsp/client.ts`). Confirm whether the socket
+   is opened at all, and whether it beats the token TTL.
+2. **The silent failure.** Every failure path in `services/lsp/client.ts` returns
+   `null` without surfacing anything, which is why this stayed invisible through
+   several releases. A failed connection must raise a visible error — a toast, or
+   a state on the Problems panel's empty view — not a `null`.
+
+### The delete branch
+
+If the transport cannot be made reliable in roughly this budget, remove the
+`enableLsp` toggle and the inline lint markers, and re-scope the Problems panel
+onto task output (`tsc` / `cargo` / `eslint`), which the panel's own notes
+already identify as the route to project-wide coverage. Shipping a dead switch
+in a paid product is the one outcome that is not acceptable.
+
+### Dependencies
+
+None. Unblocks [§9](#9-symbol-search-and-go-to-definition) and restores the value
+of the shipped Problems panel.
+
+---
+
+## 0b. Deterministic turn signals
+
+**Status: BUILDING — item 2 of 5.** Pulled in from
+`docs/premium-experience-roadmap.md` Phase 1, which is the authoritative
+description; this entry exists so the two roadmaps stop competing for the same
+weeks. **Do not fork the detail here — edit that document.**
+
+**Problem:** `agent-turn-watch.ts` + `agent-signals.ts` decide "finished" and
+"blocked" by screen-scraping the agent's TUI: a terminal bell, an English regex
+over the output tail, and a 90-second idle fallback. It is brittle per-CLI and
+per-version. A missed phrase leaves an agent stuck until the idle timeout
+**false-completes it and releases the lease, losing the real answer**; a quiet
+compile looks like completion.
+
+**Scope:** ~1 week.
+
+### Why it comes before the Fleet Dashboard
+
+[§13](#13-agent-fleet-dashboard) renders live per-agent status — working /
+awaiting input / finished — straight from these signals. Building the dashboard
+first means building a display that confidently shows the wrong state, which is
+worse than no dashboard: it converts an intermittent backend guess into a
+front-and-centre product claim.
+
+**Approach** (summary only — see the premium roadmap): get the signal *from* the
+agent instead of its screen. For Claude Code, inject a `Stop` hook that prints a
+unique sentinel on turn end and a `Notification` hook for "waiting for input",
+configured via the session's settings/env at lease time. The existing
+BEL/regex/idle path stays as the fallback for CLIs that cannot emit signals. As
+a side effect the watch loop becomes event-driven rather than a 400 ms poll.
+
+### Dependencies
+
+None new.
 
 ---
 
 ## 1. Container Shell Access
+
+**Status: DROPPED (2026-07-26).** A whole subsystem to own forever, and no part
+of it moves a buying decision. The existing panel already sends Docker commands
+to a terminal, and Spacron is terminal-first — `docker exec -it` typed into a
+pane is not the friction this spends a week removing.
 
 **Problem:** The Containers panel (`ContainersPanel.tsx`) lists Docker actions as
 pre-baked shell commands sent to a terminal session. There is no way to open an
@@ -93,6 +262,11 @@ panel) and the existing PTY infrastructure (`pty-bridge.ts`,
 ---
 
 ## 2. Interactive Rebase Visualizer
+
+**Status: DROPPED (2026-07-26).** Self-refuting. Spacron is a terminal-first app
+with a first-class PTY grid, so `git rebase -i` already works well, today, in the
+product. Ten days to rebuild it worse — and a half-working rebase UI on real git
+history is a data-loss surface, not a papercut.
 
 **Problem:** The Source Control panel shows a text-based `git log --graph` but
 has no interactive rebase UI. Developers performing squash, reword, reorder, or
@@ -151,6 +325,12 @@ No new libraries. The `git` binary is already required by the app.
 
 ## 3. Multi-Cursor / Column Editing
 
+**Status: BUILDING — item 5 of 5 (cheap fill).** Roughly an afternoon, and its
+absence reads as the editor being broken rather than minimal. Note that
+`rectangularSelection()` and `crosshairCursor()` are **already** in the extension
+list in `CodeEditor.tsx`, so verify what is actually missing before writing code
+— this may be a settings toggle and a shortcut-list entry, not a feature.
+
 **Problem:** CodeMirror 6 supports multiple selections natively, but Spacron
 does not provide a UI gesture for column (box) selection — the `Alt+Shift+drag`
 pattern every developer expects.
@@ -201,6 +381,11 @@ The settings shortcut panel should show the platform-appropriate modifier:
 ---
 
 ## 4. Port Forwarding / Tunnel UI
+
+**Status: DROPPED (2026-07-26).** Gated behind "remote workspace connected", so
+it serves a subset of a feature that is itself a subset of the user base, at the
+cost of a permanent panel plus child-process lifecycle management. Revisit only
+if remote workspaces turn out to be a main path rather than a side one.
 
 **Problem:** The remote workspace feature connects to a remote box via WebSocket
 and reuses the PTY core, but there is no UI to manage SSH port forwards or
@@ -266,6 +451,13 @@ consume a tunnel's local port the same way it consumes the dev server's port.
 ---
 
 ## 5. Test Results Panel
+
+**Status: DROPPED (2026-07-26).** Ten days, and the multi-runner ambition
+(vitest / jest / mocha / ava / tape, with a TAP fallback) is an open-ended
+parsing commitment that breaks whenever a runner changes its reporter. The
+[script runner](#10-script-runner) covers the actual need — one click to run
+`npm test` into a labelled pane with an exit-code badge — for half the cost and
+none of the parsing.
 
 **Problem:** The app ships with vitest and 352 tests, but there is no GUI to
 run tests or see results. A developer must alt-tab to a terminal, run
@@ -342,6 +534,13 @@ No new npm packages. `npx vitest` is already available via the project's
 ---
 
 ## 6. Extension / Dynamic Tool Registration
+
+**Status: DROPPED (2026-07-26).** The clearest no on the list. Fifteen days of
+core layout refactor with zero user-visible benefit, building a third-party
+plugin API for a **closed-source product that has no third parties** — an
+audience of one. The boilerplate it removes is real but is paid once per panel,
+and the plan above adds at most three more panels. Revisit only if Spacron ever
+opens up or ships an extension marketplace.
 
 **Problem:** The right utility drawer's tool set (`RIGHT_DRAWER_TOOLS`) and the
 left drawer's sidebar tabs are hardcoded in `layout.ts` and
@@ -451,9 +650,18 @@ for state, and the existing layout store for visibility flags.
 
 ## 7. Hunk-Level Staging and Diff-First Source Control
 
-**Problem:** Two things make committing harder than it should be.
+**Status: BUILDING — item 3 of 5.**
 
-Committing is all-or-nothing. `SourceControl.tsx` stages with `git add -A` and
+**Problem:** Three things, and the first one is a bug rather than a papercut.
+
+**Blanket staging is unsafe in this app specifically.** `SourceControl.tsx`
+stages with `git add -A`. Spacron's whole premise is several agents editing one
+shared working tree at the same time, so `-A` sweeps another agent's in-flight
+edits — and any file the user was mid-way through — into your commit. In a
+single-user editor this is untidy; here it is a data-integrity problem, and it is
+the strongest reason to do this work. Explicit path staging fixes it.
+
+Committing is also all-or-nothing. `SourceControl.tsx` stages with `git add -A` and
 then commits, so there is no way to commit part of your work — you either take
 every changed file or none. Anyone who curates commits has to drop to a terminal.
 
@@ -517,12 +725,22 @@ None — the `git` binary is already required.
 
 ### Note
 
-`git add -A` also currently picks up files you never touched. Moving to explicit
-path staging fixes that as a side effect.
+The `git add -A` hazard described at the top of this section is the priority
+outcome, not a side effect — if the work has to be cut short, land
+`git_stage_paths` + `git_commit_staged` and the staged/unstaged split first, and
+leave per-hunk controls for a follow-up. Note also that the diff viewer must take
+a **repo path** rather than assuming the active project, because
+[§13](#13-agent-fleet-dashboard) points it at agent worktrees.
 
 ---
 
 ## 8. Blame and File History
+
+**Status: DEFERRED (2026-07-26).** The best-value item that still did not make
+the cut, and the first thing to pick up when the five are done. Cheap (4 days),
+low risk, no new dependencies — but zero differentiation: every editor has a
+blame gutter, and nobody chooses Spacron for one. Deferred on opportunity cost
+alone, not on merit. The sketch below is ready to execute as written.
 
 **Problem:** There is no way to answer "who changed this line and why" without
 leaving the app. The commit graph shows project history, but nothing connects a
@@ -575,6 +793,17 @@ is mostly a gutter renderer.
 ---
 
 ## 9. Symbol Search and Go-to-Definition
+
+**Status: DEFERRED (2026-07-26).** Revisit after
+[§0a](#0a-lsp-transport-fix-or-delete) resolves. If the transport is fixed, much
+of this is nearly free — `codemirror-languageserver` already exports
+`jumpToDefinition`, `jumpToDefinitionKeymap` and `renameSymbol`, and adding the
+keymap gets F12 and rename almost for nothing, which may be worth doing
+opportunistically inside §0a. If the transport is deleted instead, only the
+ripgrep fallback survives and this section should be rewritten around it.
+
+The blocker write-up below has moved to [§0a](#0a-lsp-transport-fix-or-delete);
+it is kept here because §9 is where it was found.
 
 **Problem:** Navigation is text-only. The title-bar search
 (`commands/search.rs`) greps the project, which is fine for finding a string but
@@ -652,6 +881,13 @@ None new.
 
 ## 10. Script Runner
 
+**Status: BUILDING — item 5 of 5 (cheap fill).** Five days, builds only on
+primitives that already exist (PTY sessions, session roles, `onSessionExit`,
+dev-server port detection), and absorbs the useful half of the dropped
+[§5](#5-test-results-panel). **Ship npm-only discovery first** — that covers most
+projects and avoids adding the `toml` crate, per this section's own dependency
+note.
+
 **Problem:** Running a project's own scripts is manual. The Shell Snippets panel
 holds commands you typed in yourself; nothing reads `package.json` scripts or
 `Cargo.toml` targets, so `npm run dev` / `npm test` / `cargo build` get retyped
@@ -711,6 +947,15 @@ entirely and covers most projects.
 ---
 
 ## 11. Multi-Engine Database Support
+
+**Status: DROPPED (2026-07-26).** Ten days to become a worse TablePlus, plus
+`sqlx` or two engine drivers dragged into a build story whose selling point is
+*lean, no Electron, sub-second startup* — this section already flags the
+compile-time cost against cold build time, and that trade lands badly here.
+
+**Carve-out worth doing anyway:** replace the two `alert()` calls at
+`DbExplorerPanel.tsx:164-165` with toasts. `window.alert` blocks the entire
+WebView2. That is a ten-minute fix and needs none of the rest of this section.
 
 **Problem:** The Database panel is **SQLite-only**. `commands/db.rs` uses
 `rusqlite` directly — `db_list_tables` reads `sqlite_master` and
@@ -779,6 +1024,17 @@ worth weighing against the current cold build time.
 
 ## 12. HTTP Client Completion
 
+**Status: BUILDING — item 5 of 5 (cheap fill), as finish-or-cut.** A half-built
+panel reads worse in a paid product than an absent one, and `activeTab` already
+declares a `'params'` state that `REQ_TABS` never renders — shipped dead code.
+Take the two highest-value items only: **the query-params tab** (fills in the
+dead state) and **cURL import/export** (how API examples actually arrive).
+Request history and the environment switcher are explicitly out of scope for this
+pass — history in particular carries the credential-leak risk noted under
+Security below, and is not worth that risk for a fill item.
+
+If even that is not worth doing, cut the panel instead of leaving it partial.
+
 **Problem:** The HTTP client works but is missing the parts that make a REST
 client usable day to day.
 
@@ -833,6 +1089,16 @@ it is not worth the surface.
 ---
 
 ## 13. Agent Fleet Dashboard
+
+**Status: BUILDING — item 4 of 5. The reason the rest of the list was cut.**
+This is the only proposal here with no equivalent in another editor, and it
+completes a differentiator that is currently half-built: the app can create a
+fleet of agents in isolated worktrees but gives no way to judge what they
+produced. Sequenced fourth, not first, because it depends on
+[§7](#7-hunk-level-staging-and-diff-first-source-control)'s diff viewer accepting
+an arbitrary repo path, and on [§0b](#0b-deterministic-turn-signals) for the live
+status it renders — a dashboard fed by screen-scraped turn state displays a guess
+as a fact.
 
 **Problem:** Spacron's differentiator is running several coding agents at once,
 each in an isolated git worktree under `.spacron/worktrees/<branch>` — but there
@@ -902,35 +1168,48 @@ None.
 
 ## Effort Summary
 
-| # | Feature | Est. Days | Risk | Dependencies |
-|---|---|---|---|---|
-| 1 | Container Shell Access | 5 | Low | Existing PTY + Docker |
-| 2 | Interactive Rebase Visualizer | 10 | Medium | Git binary |
-| 3 | Multi-Cursor / Column Editing | 3 | Low | Built-in CM package |
-| 4 | Port Forwarding / Tunnel UI | 7 | Low | SSH binary |
-| 5 | Test Results Panel | 10 | Medium | Vitest/npx |
-| 6 | Extension / Dynamic Tool Registration | 15 | High | Core layout refactor |
-| 7 | Hunk-Level Staging + Diff-First Source Control | 12 | Medium | Git binary |
-| 8 | Blame and File History | 4 | Low | Git binary |
-| 9 | Symbol Search and Go-to-Definition | 5 | Medium | **Blocked: LSP activation** |
-| 10 | Script Runner | 5 | Low | Existing PTY |
-| 11 | Multi-Engine Database Support | 10 | Medium | sqlx / postgres + mysql crates |
-| 12 | HTTP Client Completion | 6 | Low | None |
-| 13 | Agent Fleet Dashboard | 8 | Medium | Depends on #7's diff viewer |
+### Committed — build these, in this order
 
-**Total:** ~100 days (rough order of magnitude, solo developer).
+| Order | # | Item | Est. Days | Risk | Dependencies |
+|---|---|---|---|---|---|
+| 1 | 0a | LSP transport: fix or delete | 3 | Medium | None (diagnosis-heavy) |
+| 2 | 0b | Deterministic turn signals | 7 | Medium | See premium roadmap Phase 1 |
+| 3 | 7 | Hunk-Level Staging + Diff-First Source Control | 12 | Medium | Git binary |
+| 4 | 13 | Agent Fleet Dashboard | 8 | Medium | #7's diff viewer; #0b's signals |
+| 5 | 10 | Script Runner (npm-only first) | 5 | Low | Existing PTY |
+| 5 | 3 | Multi-Cursor / Column Editing | 3 | Low | Built-in CM package |
+| 5 | 12 | HTTP Client Completion (params + cURL only) | 6 | Low | None |
 
-### Suggested order
+**Committed total:** ~44 days, of which the first four items (~30 days) are the
+spine. The three fills at order 5 are interchangeable and droppable.
 
-1. **Fix the LSP transport** (not a feature — a bug, but it gates #9 and decides
-   whether the shipped Problems panel is worth anything).
-2. **#8 Blame** and **#12 HTTP completion** — small, self-contained, immediately
-   useful.
-3. **#7 Hunk staging** — the biggest workflow win, and #13 depends on its diff
-   viewer taking an arbitrary repo path.
-4. **#10 Script runner**, then **#13 Fleet dashboard**.
-5. **#11 Multi-engine DB** and **#9 symbol search** once their prerequisites
-   land.
-6. **#6 Extension registration** last — it is a core refactor, and doing it after
-   the panels above exist means the API is designed against seven real consumers
-   instead of guessed ones.
+### Deferred
+
+| # | Item | Est. Days | Revisit when |
+|---|---|---|---|
+| 8 | Blame and File History | 4 | The five are done — this is next up. |
+| 9 | Symbol Search and Go-to-Definition | 5 | #0a resolves; scope depends on fix-vs-delete. |
+
+### Dropped
+
+| # | Item | Was | Why |
+|---|---|---|---|
+| 1 | Container Shell Access | 5 | Subsystem to own forever; terminal-first app already covers it. |
+| 2 | Interactive Rebase Visualizer | 10 | `git rebase -i` already works in the PTY grid. |
+| 4 | Port Forwarding / Tunnel UI | 7 | Serves a subset of a subset. |
+| 5 | Test Results Panel | 10 | Open-ended reporter parsing; #10 covers the real need. |
+| 6 | Extension / Dynamic Tool Registration | 15 | Plugin API for a closed-source product — audience of one. |
+| 11 | Multi-Engine Database Support | 10 | Worse TablePlus; drivers fight the lean-build story. |
+
+**Dropped total:** ~57 days reclaimed. Two carve-outs survive their sections and
+are worth doing whenever convenient: the `alert()` → toast fix in
+`DbExplorerPanel.tsx:164-165`, and the free `jumpToDefinition` keymap if #0a
+succeeds.
+
+### The principle behind the cut
+
+Prefer work that only Spacron can do. When two items look comparable, the
+tie-break is whether it deepens the agent fleet or narrows a gap with a free
+editor — the second kind is a treadmill, and the app's own pitch (lean,
+terminal-first, sub-second startup) argues against every additional panel.
+Anything re-added to this list should have to answer that question in writing.

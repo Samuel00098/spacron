@@ -26,6 +26,7 @@ import { createGithubRepo, githubTokenExists, saveGithubToken } from '$lib/servi
 import { useStore } from '$lib/react/useStore';
 import { useGitStatusCache, type GitStatusData as GitStatus, type GitLogEntry } from '$lib/stores/zustand/gitStatus';
 import { cleanupStaleWorktrees } from '$lib/stores/orchestrator';
+import HunkDiffView from '../review/HunkDiffView.tsx';
 import './SourceControl.css';
 
 type FileKind = 'modified' | 'added' | 'deleted' | 'untracked' | 'conflicted';
@@ -89,6 +90,13 @@ export default function SourceControl() {
 
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [knownFiles, setKnownFiles] = useState<Set<string>>(new Set());
+  // Paths the git INDEX actually holds something for — independent of the
+  // checkbox selection above, which only decides what the next Commit click
+  // will do. Populated from `workspace_git_staged_paths`, never inferred.
+  const [stagedPaths, setStagedPaths] = useState<Set<string>>(new Set());
+  const [expandedFile, setExpandedFile] = useState<string | null>(null);
+  const [stagingBusy, setStagingBusy] = useState<Set<string>>(new Set());
+  const [amendMode, setAmendMode] = useState(false);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [newBranchMode, setNewBranchMode] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
@@ -109,6 +117,7 @@ export default function SourceControl() {
   const commitMessageRef = useRef(commitMessage);
   const selectedFilesRef = useRef(selectedFiles);
   const knownFilesRef = useRef(knownFiles);
+  const stagedPathsRef = useRef(stagedPaths);
 
   projectRef.current = project;
   projectIdRef.current = projectId;
@@ -118,6 +127,7 @@ export default function SourceControl() {
   commitMessageRef.current = commitMessage;
   selectedFilesRef.current = selectedFiles;
   knownFilesRef.current = knownFiles;
+  stagedPathsRef.current = stagedPaths;
 
   const notAGitRepo = !!errorMsg && errorMsg.toLowerCase().includes('not a git repository');
   const needsPublish = notAGitRepo || (!!branches && branches.has_remote === false);
@@ -130,6 +140,11 @@ export default function SourceControl() {
     [allChangedFiles, selectedFiles],
   );
   const allSelected = allChangedFiles.length > 0 && selectedCount === allChangedFiles.length;
+  // Conflicted paths are deliberately absent from `allChangedFiles` — the
+  // per-file stage button refuses them too, because staging a file with conflict
+  // markers still in it marks the conflict resolved.
+  const allStaged = allChangedFiles.length > 0 && allChangedFiles.every((file) => stagedPaths.has(file));
+  const stageAllBusy = allChangedFiles.some((file) => stagingBusy.has(file));
   const aheadCount = branches?.ahead ?? 0;
   const behindCount = branches?.behind ?? 0;
   const isUnpublished = !!branches && branches.has_remote && branches.upstream === null;
@@ -180,6 +195,28 @@ export default function SourceControl() {
 
   function toggleAllFiles() {
     setSelectedFiles(allSelected ? new Set() : new Set(allChangedFiles));
+  }
+
+  /**
+   * One click to put every change in the index, and one to take it all back out.
+   *
+   * Still explicit-path staging — it expands to `git add -- <every listed path>`,
+   * never `git add -A`. The distinction matters here specifically: `-A` also
+   * sweeps up paths git found that this panel isn't showing, which in an app
+   * where several agents share one working tree means another agent's in-flight
+   * edits land in your commit. See `.spacron/memory/source-control-panel-layout.md`.
+   *
+   * Selection is kept in step so the Commit button agrees with what you just did.
+   */
+  function toggleStageAll() {
+    if (allChangedFiles.length === 0) return;
+    if (allStaged) {
+      setSelectedFiles(new Set());
+      void unstagePaths(allChangedFiles);
+    } else {
+      setSelectedFiles(new Set(allChangedFiles));
+      void stagePaths(allChangedFiles.filter((file) => !stagedPaths.has(file)));
+    }
   }
 
   async function openPublish() {
@@ -234,8 +271,65 @@ export default function SourceControl() {
     await Promise.all([
       fetchStatus(generation),
       fetchHistory(generation),
+      fetchStagedPaths(generation),
       id ? refreshBranches(id) : Promise.resolve(),
     ]);
+  }
+
+  async function fetchStagedPaths(generation: number) {
+    const id = projectIdRef.current;
+    if (!id) return;
+    try {
+      const paths = await invoke<string[]>('workspace_git_staged_paths', { projectId: id, repoPath: null });
+      if (generation !== refreshGenerationRef.current) return;
+      setStagedPaths(new Set(paths));
+    } catch (err) {
+      if (generation !== refreshGenerationRef.current) return;
+      console.error('Failed to get staged paths:', err);
+    }
+  }
+
+  /** Explicit-path staging only — this is what replaces `git add -A`. */
+  async function stagePaths(paths: string[]) {
+    const id = projectIdRef.current;
+    if (!id || paths.length === 0) return;
+    setStagingBusy((current) => new Set([...current, ...paths]));
+    try {
+      await invoke('workspace_git_stage_paths', { projectId: id, paths, repoPath: null });
+      const generation = refreshGenerationRef.current;
+      await Promise.all([fetchStatus(generation), fetchStagedPaths(generation)]);
+    } catch (err) {
+      showToast(String(err) || 'Failed to stage.', 'error');
+    } finally {
+      setStagingBusy((current) => {
+        const next = new Set(current);
+        for (const path of paths) next.delete(path);
+        return next;
+      });
+    }
+  }
+
+  async function unstagePaths(paths: string[]) {
+    const id = projectIdRef.current;
+    if (!id || paths.length === 0) return;
+    setStagingBusy((current) => new Set([...current, ...paths]));
+    try {
+      await invoke('workspace_git_unstage_paths', { projectId: id, paths, repoPath: null });
+      const generation = refreshGenerationRef.current;
+      await Promise.all([fetchStatus(generation), fetchStagedPaths(generation)]);
+    } catch (err) {
+      showToast(String(err) || 'Failed to unstage.', 'error');
+    } finally {
+      setStagingBusy((current) => {
+        const next = new Set(current);
+        for (const path of paths) next.delete(path);
+        return next;
+      });
+    }
+  }
+
+  function toggleExpanded(file: string) {
+    setExpandedFile((current) => (current === file ? null : file));
   }
 
   async function fetchStatus(generation: number) {
@@ -308,22 +402,51 @@ export default function SourceControl() {
     }
   }
 
+  /**
+   * Commit whatever is staged, after reconciling the index with the checkbox
+   * selection by explicit path — never a blanket `git add -A`. In this app several
+   * agents can be editing the same working tree at once, so a bare `-A` would sweep
+   * another agent's in-flight edits (or work the user hasn't gotten to) into this
+   * commit. See `.spacron/memory/dev-tools-roadmap-priorities.md`.
+   *
+   * A file already staged via the per-hunk diff view (partial or whole) is left
+   * alone when it's checked — only files with nothing staged yet get an explicit
+   * `git add`, so hunk-level choices already made are never clobbered by the
+   * bulk checkbox. Unchecking a staged file unstages it entirely, which is the
+   * one place the checkbox acts more bluntly than the hunk view.
+   */
   async function triggerGitCommit() {
     const id = projectIdRef.current;
     if (!id || !commitMessage.trim()) return;
-    if (allChangedFiles.length > 0 && selectedCount === 0) {
+    if (allChangedFiles.length > 0 && selectedCount === 0 && stagedPathsRef.current.size === 0) {
       showToast('Select at least one file to commit.', 'warning');
       return;
     }
 
-    const files = allSelected ? null : allChangedFiles.filter((file) => selectedFiles.has(file));
+    const wantStaged = allSelected ? new Set(allChangedFiles) : selectedFiles;
+    const alreadyStaged = stagedPathsRef.current;
+    const toStage = allChangedFiles.filter((f) => wantStaged.has(f) && !alreadyStaged.has(f));
+    const toUnstage = allChangedFiles.filter((f) => !wantStaged.has(f) && alreadyStaged.has(f));
+
     setIsCommitting(true);
-    showToast('Committing changes...', 'info');
+    showToast(amendMode ? 'Amending last commit...' : 'Committing changes...', 'info');
     try {
-      await invoke<string>('workspace_git_commit', { projectId: id, message: commitMessage.trim(), files });
-      showToast('Successfully committed changes!', 'success');
+      if (toStage.length > 0) {
+        await invoke('workspace_git_stage_paths', { projectId: id, paths: toStage, repoPath: null });
+      }
+      if (toUnstage.length > 0) {
+        await invoke('workspace_git_unstage_paths', { projectId: id, paths: toUnstage, repoPath: null });
+      }
+      await invoke<string>('workspace_git_commit_staged', {
+        projectId: id,
+        message: commitMessage.trim(),
+        amend: amendMode,
+        repoPath: null,
+      });
+      showToast(amendMode ? 'Amended the last commit!' : 'Successfully committed changes!', 'success');
       setCommitMessage('');
       commitMessageRef.current = '';
+      setAmendMode(false);
       await refreshAll();
       // Reclaim the worktrees of agents that are gone and fully staged; anything
       // still holding unstaged work is kept. Deliberately *after* refreshAll:
@@ -528,21 +651,85 @@ export default function SourceControl() {
 
   function renderFileRow(file: string, kind: FileKind, badge: string, openable: boolean) {
     const checked = selectedFiles.has(file);
+    const isStaged = stagedPaths.has(file);
+    const isBusy = stagingBusy.has(file);
+    const isExpanded = expandedFile === file;
+    const id = projectIdRef.current;
     return (
-      <div key={`${kind}:${file}`} className={`sc-file-item ${kind}${checked ? '' : ' unselected'}`}>
-        <input
-          type="checkbox"
-          className="sc-file-check"
-          checked={checked}
-          onChange={() => toggleFile(file)}
-          title={checked ? 'Exclude from commit' : 'Include in commit'}
-          aria-label={`Include ${file} in commit`}
-        />
-        <button className="sc-file-open" onClick={() => openable && void handleFileClick(file)} disabled={!openable} title={openable ? file : 'Deleted file cannot be opened'}>
-          <FileIcon name={file.split('/').pop() || ''} isDir={false} />
-          <span className="file-path">{file}</span>
-          <span className={`status-badge ${kind}`}>{badge}</span>
-        </button>
+      <div key={`${kind}:${file}`} className="sc-file-row">
+        <div className={`sc-file-item ${kind}${checked ? '' : ' unselected'}${isStaged ? ' staged' : ''}`}>
+          <input
+            type="checkbox"
+            className="sc-file-check"
+            checked={checked}
+            onChange={() => toggleFile(file)}
+            title={checked ? 'Exclude from commit' : 'Include in commit'}
+            aria-label={`Include ${file} in commit`}
+          />
+          {/* Clicking the row shows the diff in place — the diff is the thing you
+              came here to see, not a hop through a second panel. The file icon
+              on the left still opens the raw file for editing. */}
+          <button className="sc-file-open" onClick={() => toggleExpanded(file)} title={`${isExpanded ? 'Hide' : 'Show'} diff for ${file}`}>
+            <svg
+              className={`sc-file-caret${isExpanded ? ' expanded' : ''}`}
+              width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+            <FileIcon name={file.split('/').pop() || ''} isDir={false} />
+            <span className="file-path">{file}</span>
+            <span className={`status-badge ${kind}`}>{badge}</span>
+          </button>
+          {openable && (
+            <button className="sc-file-diff" onClick={() => void handleFileClick(file)} title={`Open ${file} in the editor`} aria-label={`Open ${file}`}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </button>
+          )}
+          <button
+            className="sc-file-stage-toggle"
+            disabled={isBusy || kind === 'conflicted'}
+            onClick={() => void (isStaged ? unstagePaths([file]) : stagePaths([file]))}
+            title={isStaged ? 'Unstage this file' : 'Stage this file'}
+          >
+            {isBusy ? <Spinner size={11} /> : isStaged ? '−' : '+'}
+          </button>
+        </div>
+        {isExpanded && id && (
+          <div className="sc-file-expanded-diff">
+            {/* Both sides, always — a file can be *partially* staged (some hunks
+                committed-to, some not), and that split is exactly what this view
+                exists to make visible instead of hiding behind a single flag. */}
+            {isStaged && (
+              <div className="sc-file-diff-side">
+                <div className="sc-file-diff-side-label">Staged for commit</div>
+                <HunkDiffView
+                  projectId={id}
+                  filePath={file}
+                  side="staged"
+                  onIndexChanged={() => {
+                    const generation = refreshGenerationRef.current;
+                    void Promise.all([fetchStatus(generation), fetchStagedPaths(generation)]);
+                  }}
+                />
+              </div>
+            )}
+            <div className="sc-file-diff-side">
+              {isStaged && <div className="sc-file-diff-side-label">Not staged yet</div>}
+              <HunkDiffView
+                projectId={id}
+                filePath={file}
+                side="unstaged"
+                onIndexChanged={() => {
+                  const generation = refreshGenerationRef.current;
+                  void Promise.all([fetchStatus(generation), fetchStagedPaths(generation)]);
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -748,13 +935,34 @@ export default function SourceControl() {
                   </button>
                 </div>
 
+                <label className="sc-amend-toggle" title="Add these changes to the last commit instead of creating a new one">
+                  <input
+                    type="checkbox"
+                    checked={amendMode}
+                    onChange={(event) => {
+                      const next = event.target.checked;
+                      setAmendMode(next);
+                      // Prefill so amending doesn't require retyping the message
+                      // you're keeping — still fully editable before it commits.
+                      if (next && !commitMessage.trim()) {
+                        const lastSubject = gitHistory?.find((entry) => entry.hash)?.subject;
+                        if (lastSubject) {
+                          setCommitMessage(lastSubject);
+                          commitMessageRef.current = lastSubject;
+                        }
+                      }
+                    }}
+                  />
+                  <span>Amend last commit</span>
+                </label>
+
                 <button
                   className="sc-action-btn commit-btn"
                   onClick={() => void triggerGitCommit()}
-                  disabled={isCommitting || !commitMessage.trim() || (totalChanges > 0 && selectedCount === 0)}
-                  title={totalChanges > 0 && selectedCount === 0 ? 'Select at least one file to commit' : 'Commit changes locally (Ctrl+Enter)'}
+                  disabled={isCommitting || !commitMessage.trim() || (totalChanges > 0 && selectedCount === 0 && stagedPaths.size === 0)}
+                  title={totalChanges > 0 && selectedCount === 0 && stagedPaths.size === 0 ? 'Select at least one file to commit' : amendMode ? 'Amend the last commit (Ctrl+Enter)' : 'Commit changes locally (Ctrl+Enter)'}
                 >
-                  {isCommitting ? <><Spinner /><span>Committing...</span></> : <span>Commit</span>}
+                  {isCommitting ? <><Spinner /><span>{amendMode ? 'Amending...' : 'Committing...'}</span></> : <span>{amendMode ? 'Amend' : 'Commit'}</span>}
                 </button>
 
                 <button
@@ -784,10 +992,28 @@ export default function SourceControl() {
                       <span className="sc-section-title">Changes ({totalChanges})</span>
                     </button>
                     {totalChanges > 0 && (
-                      <label className="sc-select-all" title="Select all / none">
-                        <input ref={selectAllRef} type="checkbox" checked={allSelected} onChange={toggleAllFiles} aria-label="Select all files for commit" />
-                        <span>{selectedCount}/{totalChanges}</span>
-                      </label>
+                      <>
+                        {allChangedFiles.length > 0 && (
+                          <button
+                            className={`sc-stage-all${allStaged ? ' staged' : ''}`}
+                            onClick={toggleStageAll}
+                            disabled={stageAllBusy}
+                            title={
+                              allStaged
+                                ? `Unstage all ${allChangedFiles.length} files`
+                                : `Select and stage all ${allChangedFiles.length} files at once`
+                            }
+                            aria-pressed={allStaged}
+                          >
+                            {stageAllBusy ? <Spinner size={11} /> : <span className="sc-stage-all-glyph">{allStaged ? '−' : '+'}</span>}
+                            <span>{allStaged ? 'Unstage all' : 'Stage all'}</span>
+                          </button>
+                        )}
+                        <label className="sc-select-all" title="Select all / none">
+                          <input ref={selectAllRef} type="checkbox" checked={allSelected} onChange={toggleAllFiles} aria-label="Select all files for commit" />
+                          <span>{selectedCount}/{totalChanges}</span>
+                        </label>
+                      </>
                     )}
                   </div>
 

@@ -7,6 +7,13 @@ import {
   setSessionRole,
 } from '$lib/stores/terminal';
 import { getAgentAdapter, type SendOptions } from '$lib/services/orchestrator/agent-adapter';
+import {
+  attachTurnSignals,
+  closeTurnSignalChannel,
+  discardPreparedTurnSignals,
+  prepareTurnSignals,
+} from '$lib/services/orchestrator/agent-hook-signals';
+import { onSessionExit } from '$lib/stores/terminal';
 
 export interface LeaseOrchestratorTerminalArgs {
   agentCommand: string;
@@ -53,10 +60,39 @@ export function activateOrchestratorTerminal(sessionId: number): void {
   setActiveSession(sessionId);
 }
 
+/**
+ * Release a session's sentinel channel once its process is gone, so the temp
+ * files don't accumulate across a long session of spawning agents. Registered
+ * per lease and self-unsubscribing.
+ */
+function closeSignalsOnExit(sessionId: number): void {
+  const stop = onSessionExit((info) => {
+    if (info.sessionId !== sessionId) return;
+    stop();
+    void closeTurnSignalChannel(sessionId);
+  });
+}
+
 export async function leaseOrchestratorTerminal(args: LeaseOrchestratorTerminalArgs): Promise<number | null> {
   const activate = args.activate ?? true;
-  const sessionId = await spawnAgentPreset(args.agentCommand, args.cwd, { activate, skipAutoBrief: true });
-  if (sessionId == null) return null;
+
+  // Install turn-signal hooks *before* the launch: the settings path has to be
+  // part of the command line. A null here just means this CLI can't emit
+  // sentinels (or the channel failed to open), and the watcher falls back to
+  // scanning output — so it is never a reason to abandon the spawn.
+  const prepared = await prepareTurnSignals(args.agentCommand);
+  const command = prepared?.command ?? args.agentCommand;
+
+  const sessionId = await spawnAgentPreset(command, args.cwd, { activate, skipAutoBrief: true });
+  if (sessionId == null) {
+    if (prepared) await discardPreparedTurnSignals(prepared);
+    return null;
+  }
+
+  if (prepared) {
+    attachTurnSignals(sessionId, prepared);
+    closeSignalsOnExit(sessionId);
+  }
 
   recordOrchestratorTerminalLease(sessionId, args.taskId, args.taskTitle, args.name);
   // Only the primary agent grabs focus; additional agents tile in silently.

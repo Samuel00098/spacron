@@ -165,6 +165,189 @@
   font-style: normal;
 }
 
+/* ─── Master-detail: file list + diff ─────────────── */
+.review-panel .rp-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-panel .rp-header-left,
+.review-panel .rp-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review-panel .rp-header-right { flex-shrink: 0; }
+.review-panel .rp-header-icon { flex-shrink: 0; color: var(--text-muted); }
+
+.review-panel .rp-panel-title {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.review-panel .rp-branch,
+.review-panel .rp-file-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.5);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.review-panel .rp-split {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.review-panel .rp-files {
+  flex: 0 0 var(--rp-files-w, 280px);
+  width: var(--rp-files-w, 280px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.25);
+}
+
+.review-panel .rp-files-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.review-panel .rp-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.review-panel .rp-file-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.review-panel .rp-file-row.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+}
+
+.review-panel .rp-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-panel .rp-file-stats,
+.review-panel .rp-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 10px;
+}
+
+.review-panel .rp-row-actions { opacity: 0; transition: opacity 0.12s; }
+.review-panel .rp-file-row:hover .rp-row-actions,
+.review-panel .rp-file-row.selected .rp-row-actions { opacity: 1; }
+
+.review-panel .rp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.review-panel .rp-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.review-panel .rp-discard-btn:hover { color: var(--error); }
+
+.review-panel .rp-status-badge {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.review-panel .rp-status-modified  { color: var(--accent); }
+.review-panel .rp-status-added     { color: var(--success); }
+.review-panel .rp-status-deleted   { color: var(--error); }
+.review-panel .rp-status-untracked { color: var(--text-muted); }
+
+.review-panel .rp-detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-panel .rp-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.review-panel .rp-detail-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--editor-font-family, monospace);
+}
+
+/* Below roughly a split-pane width the two columns stop making sense side by
+   side — the list goes on top and keeps its own bounded scroll. */
+@container review (max-width: 640px) {
+  .review-panel .rp-split { flex-direction: column; }
+  .review-panel .rp-files {
+    flex: 0 0 auto;
+    width: auto;
+    max-height: 34%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 .review-panel .review-body {
   flex: 1;
   display: flex;
@@ -318,9 +501,73 @@
   line-height: 1.5;
 }
 
+/* Split is content-sized and scrolls; it does not reflow.
+ *
+ * The old `min-width: 900px` + `table-layout: fixed` + `calc(50% - 40px)` code
+ * columns capped each side at half the pane while `.code-cell` kept
+ * `white-space: pre` and `overflow-x: visible` — so a long line rendered over
+ * the top of the other column. Auto layout lets each column take the width its
+ * longest line needs, and `.file-card-body` scrolls horizontally; `min-width:
+ * 100%` keeps a short diff filling the pane.
+ *
+ * NOTE the `.diff-table.split-diff` prefix on every override below. The shared
+ * `.review-panel .diff-table .code-cell` / `.ln` rules sit LATER in this file at
+ * equal specificity, so a plain `.split-diff .code-cell` selector loses the
+ * cascade and silently does nothing. The extra class wins outright rather than
+ * depending on rule order. */
 .review-panel .diff-table.split-diff {
-  min-width: 900px; /* Ensure Split view doesn't squeeze and instead overflows horizontally */
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
+}
+
+.review-panel .diff-table.split-diff .col-ln {
+  width: 40px;
+}
+
+/* No width on `.col-code` on purpose — auto layout sizes it to content. */
+
+.review-panel .diff-table.split-diff .ln {
+  min-width: 40px;
+  max-width: none;
+  white-space: nowrap;
+}
+
+/* ─── Wrap mode (the toolbar toggle) ──────────────────
+ *
+ * Opt-in alternative to scrolling: the table is pinned to the pane width and
+ * long lines fold inside their own cell. In split that keeps the two sides
+ * aligned for free — both cells share a <tr>, so a folded line just makes that
+ * row taller on both sides.
+ *
+ * `overflow: hidden` is the guard that matters: a cell holding a single
+ * unbreakable token wider than its column would otherwise go straight back to
+ * painting over its neighbour, which is the bug this file already fixed once.
+ *
+ * Four classes again, for the reason given above — the shared
+ * `.review-panel .diff-table .code-cell` rule sits later at three. */
+.review-panel .diff-table.wrap {
   table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+
+.review-panel .diff-table.wrap .code-cell {
+  white-space: pre-wrap;
+  /* `anywhere`, not `break-word`: minified lines and long paths offer no break
+     opportunity at all, and would still overflow. */
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+.review-panel .diff-table.split-diff.wrap .col-code {
+  width: calc(50% - 40px);
+}
+
+.review-panel .toolbar-btn.wrap-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .review-panel .diff-tr {

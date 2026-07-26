@@ -58,6 +58,61 @@ export type LspHandle = {
   dispose: () => void;
 };
 
+/**
+ * What the LSP layer is currently doing for one (root, language) pair.
+ *
+ * This exists because every failure used to be a `null` return plus a
+ * `console.error`, which is how a completely inert integration survived several
+ * releases: the Settings toggle was on, no server was running, and the app said
+ * nothing. Status is recorded on every path — including the ones that are not
+ * errors — so the Problems panel can always answer "is a language server
+ * actually running?" instead of implying the project is clean.
+ */
+export type LspState =
+  /** Language has no server configured, or the file has no project root. */
+  | 'unsupported'
+  /** Server binary isn't installed. `detail` carries the install hint. */
+  | 'missing'
+  /** Asked the backend for a server; socket not up yet. */
+  | 'starting'
+  /** Connected and initialised. */
+  | 'ready'
+  /** Tried and failed. `detail` carries why. */
+  | 'error';
+
+export type LspStatusEntry = {
+  language: string;
+  state: LspState;
+  detail?: string;
+};
+
+/** Keyed by `<root>::<serverLang>`, matching the diagnostics store's owner key. */
+export const lspStatus = writable<Map<string, LspStatusEntry>>(new Map());
+
+function setStatus(key: string, entry: LspStatusEntry) {
+  lspStatus.update((current) => {
+    const next = new Map(current);
+    next.set(key, entry);
+    return next;
+  });
+}
+
+function clearStatus(key: string) {
+  lspStatus.update((current) => {
+    if (!current.has(key)) return current;
+    const next = new Map(current);
+    next.delete(key);
+    return next;
+  });
+}
+
+/**
+ * How long to wait for the bridge WebSocket to open before calling it a failure.
+ * Comfortably under the backend's 30s single-use token TTL, so a timeout here
+ * still leaves room to report the problem before the token expires anyway.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
 const clients = new Map<string, ClientEntry>();
 const statusCache = new Map<string, ServerStatus>();
 /** Languages we've already warned the user about (missing server) this session. */
@@ -161,6 +216,57 @@ async function resolveLspConnection(
   };
 }
 
+/**
+ * Resolve once the bridge socket is actually open, or reject with why it isn't.
+ *
+ * `WebSocketTransport` dials in its constructor and exposes the raw socket, but
+ * never reports the outcome: on a refused connection it simply stays shut while
+ * `LanguageServerClient` sits on a promise that never settles. That is the exact
+ * shape of the bug this fixes — the backend spawns a server only when the socket
+ * connects, so a refused socket means no server, silently and forever.
+ */
+function waitForSocket(transport: WebSocketTransport, timeoutMs: number): Promise<void> {
+  const ws = (transport as unknown as { connection?: WebSocket }).connection;
+  if (!ws) {
+    return Promise.reject(new Error('LSP transport exposed no WebSocket to wait on'));
+  }
+  if (ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+    return Promise.reject(new Error('The language server bridge closed before it opened'));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.removeEventListener('open', onOpen);
+      ws.removeEventListener('error', onFail);
+      ws.removeEventListener('close', onFail);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    // A refused TCP connect fires `error` then `close`; either is a failure here.
+    const onFail = () => {
+      cleanup();
+      reject(new Error('Could not reach the language server bridge (connection refused)'));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      try {
+        ws.close();
+      } catch {
+        /* already gone */
+      }
+      reject(new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s connecting to the language server bridge`));
+    }, timeoutMs);
+
+    ws.addEventListener('open', onOpen);
+    ws.addEventListener('error', onFail);
+    ws.addEventListener('close', onFail);
+  });
+}
+
 async function getOrCreateClient(
   root: string,
   serverLang: string,
@@ -172,8 +278,25 @@ async function getOrCreateClient(
     return existing;
   }
 
+  setStatus(key, { language: serverLang, state: 'starting' });
+
   const { uri, rootUri } = await resolveLspConnection(root, serverLang);
   const transport = new WebSocketTransport(uri);
+
+  // Block until the socket is up. Until it is, the backend has not spawned
+  // anything — the bridge launches the server inside its WebSocket handler — so
+  // handing back a "working" handle now would be a lie.
+  try {
+    await waitForSocket(transport, CONNECT_TIMEOUT_MS);
+  } catch (err) {
+    try {
+      transport.close();
+    } catch {
+      /* nothing to close */
+    }
+    throw err;
+  }
+
   const rootName = root.split(/[\\/]/).filter(Boolean).pop() || 'workspace';
 
   const client = new LanguageServerClient({
@@ -189,11 +312,34 @@ async function getOrCreateClient(
       // reconnects with a fresh process. Its diagnostics go too: keeping them
       // would leave the Problems panel reporting stale problems from a server
       // that is no longer running (and no longer able to retract them).
-      clients.delete(key);
+      //
+      // `delete` returning false means `releaseClient` already unregistered this
+      // entry, i.e. we closed the socket on purpose because the last file shut.
+      // Only an unsolicited close is a failure worth reporting.
+      const wasActive = clients.delete(key);
       clearDiagnosticsForOwner(key);
+      if (wasActive) {
+        setStatus(key, {
+          language: serverLang,
+          state: 'error',
+          detail: 'The language server stopped. Reopen a file to restart it.',
+        });
+      } else {
+        clearStatus(key);
+      }
     },
-    onError: (err) => console.error(`LSP (${serverLang}) error:`, err),
-  });
+    onError: (err) => {
+      console.error(`LSP (${serverLang}) error:`, err);
+      setStatus(key, {
+        language: serverLang,
+        state: 'error',
+        detail: (err as Error)?.message ?? String(err),
+      });
+    },
+    // Fired once `initialize` round-trips, which is the only proof the server
+    // process is alive and talking rather than merely spawned.
+    onCapabilities: () => setStatus(key, { language: serverLang, state: 'ready' }),
+  } as ConstructorParameters<typeof LanguageServerClient>[0]);
 
   // Tap `publishDiagnostics` for the Problems panel.
   //
@@ -230,6 +376,10 @@ function releaseClient(root: string, serverLang: string) {
     clients.delete(key);
     // The server is going away, so nothing can retract its diagnostics later.
     clearDiagnosticsForOwner(key);
+    // Deliberate shutdown, so drop the status entry rather than marking it an
+    // error — `onClose` will fire next and would otherwise report a healthy
+    // teardown as a failure.
+    clearStatus(key);
     try {
       entry.client.close();
     } catch {
@@ -250,9 +400,22 @@ export async function createLspExtension(
 ): Promise<LspHandle | null> {
   if (!root || !SUPPORTED.has(language)) return null;
 
+  const serverLang = serverLanguage(language);
+  const key = `${root}::${serverLang}`;
+
   const status = await checkServer(language);
-  if (!status.supported) return null;
+  if (!status.supported) {
+    setStatus(key, { language: serverLang, state: 'unsupported' });
+    return null;
+  }
   if (!status.available) {
+    // Recorded as well as toasted: the toast fires once per session, but the
+    // Problems panel has to be able to explain an empty list at any point.
+    setStatus(key, {
+      language: serverLang,
+      state: 'missing',
+      detail: `${status.command} is not installed. Install it with: ${status.install_hint}`,
+    });
     if (!warned.has(language)) {
       warned.add(language);
       showToast(
@@ -266,15 +429,16 @@ export async function createLspExtension(
     return null;
   }
 
-  const serverLang = serverLanguage(language);
   let entry: ClientEntry;
   try {
     entry = await getOrCreateClient(root, serverLang);
   } catch (err: any) {
+    const detail = err?.message ?? String(err);
     console.error('Failed to start language server:', err);
+    setStatus(key, { language: serverLang, state: 'error', detail });
     if (!warned.has(`start:${language}`)) {
       warned.add(`start:${language}`);
-      showToast(`Could not start ${status.command}: ${err?.message ?? err}`, 'error');
+      showToast(`Could not start ${status.command}: ${detail}`, 'error', 10000);
     }
     return null;
   }
@@ -369,9 +533,11 @@ export async function installServer(language: string): Promise<void> {
 
   if (code === 0) {
     // The just-installed binary changes availability; drop cached "not found"
-    // results and let editors retry.
+    // results — including the per-language status the Problems panel reads — and
+    // let editors retry.
     statusCache.clear();
     warned.clear();
+    lspStatus.set(new Map());
     showToast(`${status.command} installed — autocomplete is now active.`, 'success');
     lspReload.update((n) => n + 1);
   } else {

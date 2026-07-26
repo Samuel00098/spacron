@@ -1,0 +1,359 @@
+/* Agent Fleet Dashboard. A center room, so it owns its own scroll. */
+
+.fleet-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.fleet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.fleet-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.fleet-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.fleet-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fleet-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Auto-fitting grid: one column on a narrow pane, more as the room grows. */
+.fleet-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+  padding: 12px;
+  align-content: start;
+}
+
+/* ─── Card ───────────────────────────────────────── */
+.fleet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.fleet-card.status-awaiting {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+.fleet-card.status-failed {
+  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+}
+
+.fc-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fc-brand {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.fc-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.fc-status {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.fc-status-working {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.fc-status-awaiting {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+
+.fc-status-finished {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success, #4ade80);
+}
+
+.fc-status-failed {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error, #f87171);
+}
+
+.fc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fc-branch {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-stat {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 5px;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.fc-stat-loading {
+  color: var(--text-muted);
+}
+
+.fc-add {
+  color: var(--success, #4ade80);
+}
+
+.fc-del {
+  color: var(--error, #f87171);
+}
+
+.fc-warning {
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* ─── Changed files ──────────────────────────────── */
+.fc-files-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fc-files-toggle:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.fc-caret {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+  color: var(--text-muted);
+}
+
+.fc-caret.expanded {
+  transform: rotate(90deg);
+}
+
+.fc-files {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.fc-file + .fc-file {
+  border-top: 1px solid var(--border);
+}
+
+.fc-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.fc-file-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.fc-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.fc-file-badge {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.fc-file-badge.added,
+.fc-file-badge.untracked {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--success, #4ade80);
+}
+
+.fc-file-badge.deleted {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error, #f87171);
+}
+
+.fc-file-stat {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--editor-font-family, monospace);
+  font-size: 10px;
+}
+
+.fc-file-diff {
+  border-top: 1px dashed var(--border);
+  background: var(--bg-primary);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ─── Actions ────────────────────────────────────── */
+.fc-actions,
+.fc-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fc-btn {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fc-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.fc-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fc-btn.primary {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--accent);
+}
+
+.fc-btn.danger {
+  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  color: var(--error, #f87171);
+}
+
+.fc-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border-color: var(--error, #f87171);
+  color: var(--error, #f87171);
+}
+
+/* A destructive action names the branch it will act on, inline, before it runs. */
+.fc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.fc-confirm-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.fc-confirm-text strong {
+  color: var(--text-primary);
+  font-family: var(--editor-font-family, monospace);
+}
