@@ -38,6 +38,42 @@ describe('buildStandingBriefBody', () => {
     expect(body).toContain('Execution');
     expect(body).not.toContain('YOUR TASK');
   });
+
+  it('describes a shared working tree by default', () => {
+    const body = buildStandingBriefBody();
+    expect(body).toContain('no per-agent isolation');
+  });
+
+  it('describes isolation — not a shared tree — for a worktree agent', () => {
+    const body = buildStandingBriefBody({ isolated: true });
+    // The shared-tree framing is factually wrong inside a worktree.
+    expect(body).not.toContain('no per-agent isolation');
+    expect(body).toContain('your own isolated git worktree');
+    expect(body).toContain('Git (your own worktree)');
+    expect(body).not.toContain('Git (shared tree)');
+  });
+
+  it('tells a worktree agent to commit, since staging reads its branch', () => {
+    const body = buildStandingBriefBody({ isolated: true });
+    expect(body).toContain('Commit your work as you go');
+    // Handing the work over stays the user's call, so these remain forbidden.
+    expect(body).toContain('merge into or push the base branch');
+    expect(body).toContain('reset --hard');
+  });
+
+  it('keeps the other four guardrails identical across both variants', () => {
+    const shared = buildStandingBriefBody().split('\n');
+    const isolated = buildStandingBriefBody({ isolated: true }).split('\n');
+    // Only the intro line and rule #2 differ; scope/injection/execution/memory
+    // have one source of truth.
+    const differing = shared.filter((line, i) => line !== isolated[i]);
+    expect(differing).toHaveLength(2);
+  });
+
+  it('points rule #5 at the shared memory dir it is given', () => {
+    const body = buildStandingBriefBody({ sharedMemoryDir: '/main/.spacron/memory/' });
+    expect(body).toContain('/main/.spacron/memory/auth-flow.md');
+  });
 });
 
 describe('upsertManagedBlock', () => {
@@ -118,6 +154,45 @@ describe('ensureAgentRulesFiles', () => {
   it('returns false and never writes when the root is empty', async () => {
     expect(await ensureAgentRulesFiles('')).toBe(false);
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('writes the isolated brief into a worktree, pointed at the main checkout memory', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') return '# existing\n';
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    await ensureAgentRulesFiles('/repo/.spacron/worktrees/agent-1');
+    const written = invokeMock.mock.calls
+      .filter((c) => c[0] === 'fs_write_file')
+      .map((c) => (c[1] as { content: string }).content);
+
+    expect(written.length).toBeGreaterThan(0);
+    for (const content of written) {
+      expect(content).toContain('your own isolated git worktree');
+      expect(content).not.toContain('no per-agent isolation');
+      // Notes must land in the main checkout, not the ephemeral worktree.
+      expect(content).toContain('/repo/.spacron/memory/');
+    }
+  });
+
+  it('keeps the shared-tree brief for the main checkout', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') return '# existing\n';
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    await ensureAgentRulesFiles('/repo');
+    const written = invokeMock.mock.calls
+      .filter((c) => c[0] === 'fs_write_file')
+      .map((c) => (c[1] as { content: string }).content);
+
+    expect(written.length).toBeGreaterThan(0);
+    for (const content of written) {
+      expect(content).toContain('no per-agent isolation');
+    }
   });
 
   it('trims a trailing slash from the root so paths are well-formed', async () => {

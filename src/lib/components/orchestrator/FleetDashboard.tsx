@@ -342,21 +342,26 @@ export default function FleetDashboard() {
 
           return (
             <article className={`fleet-card status-${row.status}`} key={row.key}>
+              {/* Identity and state in one two-line grid: the mark spans both
+                  rows, name/status on top, branch/diffstat beneath. The mark
+                  sits in a fixed tile because AgentBrandMark draws at 100% of
+                  whatever contains it — an unsized parent lets a fetched
+                  favicon render at its own intrinsic size. */}
               <header className="fc-head">
-                <AgentBrandMark
-                  command={row.agentPreset}
-                  name={row.agentName}
-                  className="fc-brand"
-                />
+                <span className="fc-brand-tile">
+                  <AgentBrandMark
+                    command={row.agentPreset}
+                    name={row.agentName}
+                    className="fc-brand"
+                  />
+                </span>
                 <span className="fc-name" title={row.task?.goal ?? row.agentName}>
                   {row.agentName}
                 </span>
                 <span className={`fc-status fc-status-${row.status}`}>
+                  <i className="fc-status-dot" aria-hidden="true" />
                   {STATUS_LABEL[row.status]}
                 </span>
-              </header>
-
-              <div className="fc-meta">
                 <span className="fc-branch" title={`${row.worktree.branch}\nForked from ${row.worktree.baseBranch}\n${row.worktree.path}`}>
                   {row.worktree.branch}
                 </span>
@@ -368,7 +373,7 @@ export default function FleetDashboard() {
                 ) : (
                   <span className="fc-stat fc-stat-loading">…</span>
                 )}
-              </div>
+              </header>
 
               {row.worktree.stageConflict && (
                 <div className="fc-warning">
@@ -476,47 +481,58 @@ export default function FleetDashboard() {
                   </div>
                 </div>
               ) : (
+                /* Split into two groups so the row can't wrap into an
+                   undifferentiated block of four equal buttons: the actions
+                   that move work lead, navigation and destruction sit apart
+                   and quiet. */
                 <div className="fc-actions">
-                  <button
-                    className="fc-btn"
-                    onClick={() => doStage(row)}
-                    disabled={isBusy}
-                    title="Copy this agent's changes into your working tree so you can run and review them. This is not `git add` — nothing is committed, and this worktree is kept."
-                  >
-                    Bring in
-                  </button>
-                  <button
-                    className="fc-btn primary"
-                    onClick={() => setConfirming({ key: row.key, action: 'merge' })}
-                    disabled={isBusy}
-                    title={`Merge ${row.worktree.branch} into ${row.worktree.baseBranch}`}
-                  >
-                    Merge into {row.worktree.baseBranch}
-                  </button>
-                  <button
-                    className="fc-btn danger"
-                    onClick={() => setConfirming({ key: row.key, action: 'discard' })}
-                    // Refusing while the pane is live is the safety rule, not a
-                    // convenience: killing an agent mid-write and deleting its
-                    // checkout cannot be undone.
-                    disabled={isBusy || row.live}
-                    title={
-                      row.live
-                        ? 'Close this agent first — discarding a worktree while it is still writing is unrecoverable'
-                        : `Delete the worktree and branch ${row.worktree.branch}`
-                    }
-                  >
-                    Discard
-                  </button>
-                  {row.sessionId !== null && (
+                  <div className="fc-actions-main">
                     <button
                       className="fc-btn"
-                      onClick={() => setActiveSession(row.sessionId!)}
-                      title="Focus this agent's terminal"
+                      onClick={() => doStage(row)}
+                      disabled={isBusy}
+                      title="Copy this agent's changes into your working tree so you can run and review them. This is not `git add` — nothing is committed, and this worktree is kept."
                     >
-                      Terminal
+                      Bring in
                     </button>
-                  )}
+                    <button
+                      className="fc-btn primary"
+                      onClick={() => setConfirming({ key: row.key, action: 'merge' })}
+                      disabled={isBusy}
+                      title={`Merge ${row.worktree.branch} into ${row.worktree.baseBranch}`}
+                    >
+                      Merge into{' '}
+                      {/* The base branch is arbitrary-length; clamp it here so a
+                          long name can't blow the button out of the row. */}
+                      <span className="fc-btn-branch">{row.worktree.baseBranch}</span>
+                    </button>
+                  </div>
+                  <div className="fc-actions-aside">
+                    {row.sessionId !== null && (
+                      <button
+                        className="fc-btn quiet"
+                        onClick={() => setActiveSession(row.sessionId!)}
+                        title="Focus this agent's terminal"
+                      >
+                        Terminal
+                      </button>
+                    )}
+                    <button
+                      className="fc-btn quiet danger"
+                      onClick={() => setConfirming({ key: row.key, action: 'discard' })}
+                      // Refusing while the pane is live is the safety rule, not a
+                      // convenience: killing an agent mid-write and deleting its
+                      // checkout cannot be undone.
+                      disabled={isBusy || row.live}
+                      title={
+                        row.live
+                          ? 'Close this agent first — discarding a worktree while it is still writing is unrecoverable'
+                          : `Delete the worktree and branch ${row.worktree.branch}`
+                      }
+                    >
+                      Discard
+                    </button>
+                  </div>
                 </div>
               )}
             </article>
