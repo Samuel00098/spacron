@@ -8,6 +8,7 @@ import {
   fallbackAgentBrand,
   type AgentBrand,
 } from './agentBrands';
+import { loadJson } from '$lib/utils/storage';
 
 /**
  * Agent logo resolution, one level up from `agentBrands`.
@@ -29,14 +30,45 @@ type FetchState =
   | { status: 'failed' }
   | { status: 'ok'; logo: AgentLogo };
 
+// Persisted key so fetched logos survive app restarts.
+const FETCHED_LOGOS_KEY = 'spacron_fetched_agent_logos';
+
 // Shared across every component that renders the same agent, so the header mark
 // and its minimized chip resolve together and a slug is fetched only once.
-const fetchedLogos = writable<Record<string, FetchState>>({});
+// Entries left in 'pending' from a crashed previous session are discarded —
+// they would never resolve and would block a fresh fetch forever.
+function cleanPersisted(raw: Record<string, FetchState>): Record<string, FetchState> {
+  const cleaned: Record<string, FetchState> = {};
+  for (const [key, state] of Object.entries(raw)) {
+    if (state.status === 'pending') continue; // stale — will be re-fetched
+    cleaned[key] = state;
+  }
+  return cleaned;
+}
+const fetchedLogos = writable<Record<string, FetchState>>(
+  cleanPersisted(loadJson<Record<string, FetchState>>(FETCHED_LOGOS_KEY, {})),
+);
+
+// Persist on every update so a cached logo survives restart.
+fetchedLogos.subscribe((val) => {
+  try {
+    localStorage.setItem(FETCHED_LOGOS_KEY, JSON.stringify(val));
+  } catch { /* quota exceeded or unavailable — safe to ignore */ }
+});
+
 const inFlight = new Set<string>();
 
 function slugFor(command: string, name: string): string {
-  const base = (command.trim() || name.trim()).toLowerCase();
-  return base.replace(/[^a-z0-9]/g, '');
+  const cmd = command.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const nm = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Both command and name contribute to the key so a rename or a different
+  // name that triggers a different NAME_HINTS / backend match won't
+  // cross-contaminate the cache. When the command alone is sufficient,
+  // the name part provides the same identity (the command token is already
+  // in the name or vice versa), so extra precision is harmless.
+  const cmdPart = cmd || '_';
+  const nmPart = nm ? `:${nm}` : '';
+  return `${cmdPart}${nmPart}`;
 }
 
 function webBrand(dataUri: string): AgentBrand {
