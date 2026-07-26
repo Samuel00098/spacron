@@ -1,7 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles } from './editor';
-import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
+import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession, claimStartupShell } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
@@ -765,7 +765,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
             const attachedId = pane.backendSessionId
               ? await attachTerminalSession(pane.backendSessionId, pane.cwd || rootPath, i, projectId, metadata)
               : null;
-            const id = attachedId ?? await createTerminalSession(pane.cwd || rootPath, i);
+            // `projectId` is REQUIRED here. Without it the session is created in
+            // whatever project is currently active, so restoring project B while
+            // project A is on screen put B's shells into A — the terminal then
+            // showed a path from a different project than the one you're in.
+            const id = attachedId ?? await createTerminalSession(pane.cwd || rootPath, i, projectId);
             if (id !== null) {
               spawnedIds.push(id);
               if (attachedId === null) {
@@ -782,7 +786,16 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           if (generation !== restoreProjectStateGeneration) return;
           // Fresh project — auto-create a terminal shell so the user doesn't
           // land on an empty "Open Shell" button.
-          createTerminalSession();
+          //
+          // Both arguments matter. With no cwd the backend falls back to whatever
+          // it considers the active project (or errors with "No project is open"
+          // on a cold start, leaving a shell-less pane that shows no path at all),
+          // and with no projectId the session lands in the active project instead
+          // of this one.
+          // Claim first: TerminalPanel's auto-open races this one.
+          if (claimStartupShell(projectId)) {
+            void createTerminalSession(rootPath, undefined, projectId);
+          }
         }
       }
     }

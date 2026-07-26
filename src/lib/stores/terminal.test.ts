@@ -74,6 +74,8 @@ import {
   spawnAgentPreset,
   relaunchRestoredAgentSession,
   waitForAgentReady,
+  isAgentSession,
+  updateSessionTitle,
 } from './terminal';
 import { openPty } from '$lib/services/pty-bridge';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
@@ -788,3 +790,83 @@ describe('restored agent sessions', () => {
   });
 });
 
+
+describe('shell / agent separation', () => {
+  const projectId = 'project-shell-agent-split';
+
+  beforeEach(() => {
+    setActiveTerminalProject(projectId);
+  });
+
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+  });
+
+  const titleOf = (id: number) => get(sessions).find((s) => s.id === id)?.title;
+
+  it('numbers shells consecutively, ignoring agents in between', async () => {
+    const first = await createTerminalSession(undefined, undefined, projectId);
+    expect(titleOf(first!)).toBe('Terminal 1');
+
+    // An agent spawned between two shells must not consume "Terminal 2".
+    const agent = await spawnAgentPreset('claude', undefined);
+    expect(agent).not.toBeNull();
+
+    const second = await createTerminalSession(undefined, undefined, projectId);
+    expect(titleOf(second!)).toBe('Terminal 2');
+  });
+
+  it('titles a spawned agent with its tool name, never "Terminal N"', async () => {
+    const agent = await spawnAgentPreset('claude', undefined);
+    expect(agent).not.toBeNull();
+    expect(titleOf(agent!)).toBe('Claude Code');
+    expect(titleOf(agent!)).not.toMatch(/^Terminal \d+$/);
+  });
+
+  it('retitles a shell that becomes an agent by typing the command', async () => {
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    expect(titleOf(sessionId!)).toBe('Terminal 1');
+
+    // This is the in-place conversion: the agent really is running in this PTY.
+    markSessionAgentPreset(sessionId!, 'claude');
+
+    expect(titleOf(sessionId!)).toBe('Claude Code');
+    expect(titleOf(sessionId!)).not.toBe('Terminal 1');
+  });
+
+  it('keeps a user-renamed pane title when it becomes an agent', async () => {
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    updateSessionTitle(sessionId!, 'my scratch shell');
+
+    markSessionAgentPreset(sessionId!, 'claude');
+
+    expect(titleOf(sessionId!)).toBe('my scratch shell');
+  });
+
+  it('marks converted sessions as agents so shell-only views exclude them', async () => {
+    const shell = await createTerminalSession(undefined, undefined, projectId);
+    const converted = await createTerminalSession(undefined, undefined, projectId);
+    markSessionAgentPreset(converted!, 'claude');
+
+    const all = get(sessions);
+    const shellsOnly = all.filter((s) => !isAgentSession(s));
+
+    expect(shellsOnly.map((s) => s.id)).toEqual([shell!]);
+    expect(isAgentSession(all.find((s) => s.id === converted!))).toBe(true);
+  });
+
+  it('frees the terminal number again once an agent reverts to a shell', async () => {
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    markSessionAgentPreset(sessionId!, 'claude');
+    expect(isAgentSession(get(sessions).find((s) => s.id === sessionId!))).toBe(true);
+
+    markSessionAgentPreset(sessionId!, null);
+    const reverted = get(sessions).find((s) => s.id === sessionId!);
+    expect(isAgentSession(reverted)).toBe(false);
+
+    // With the agent gone, the next shell is numbered against shells only.
+    const next = await createTerminalSession(undefined, undefined, projectId);
+    expect(titleOf(next!)).toBe('Terminal 2');
+  });
+});

@@ -5,6 +5,7 @@ import {
   activeSessionId,
   activateSessionInPane,
   assignToPane as assignToPaneOrig,
+  claimStartupShell,
   createTerminalSession as createTerminalSessionOrig,
   focusPane as focusPaneOrig,
   gridLayout,
@@ -29,6 +30,7 @@ import {
 } from '$lib/stores/terminal';
 import { activeProject, projects } from '$lib/stores/workspace';
 import { activeFile } from '$lib/stores/editor';
+import { resolveStartingCwd } from '$lib/utils/paths';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
 import { useStore } from '$lib/react/useStore';
@@ -212,13 +214,14 @@ export default function TerminalPanel({
     () => allSessions.filter((session) => !isAgentSession(session)),
     [allSessions],
   );
+  // Read inside the auto-open timer, which would otherwise close over the
+  // shell list as it was 80ms earlier — before the workspace restore had
+  // created its own startup shell.
+  const shellSessionsRef = useRef(shellSessions);
+  shellSessionsRef.current = shellSessions;
 
   function getStartingCwd(): string | undefined {
-    const active = fileRef.current;
-    const root = projectRef.current?.root_path;
-    if (!active) return root;
-    const lastIndex = Math.max(active.lastIndexOf('/'), active.lastIndexOf('\\'));
-    return lastIndex !== -1 ? active.slice(0, lastIndex) : root;
+    return resolveStartingCwd(fileRef.current, projectRef.current?.root_path);
   }
 
   function clampMinimums(values: number[], minValue = 10) {
@@ -720,16 +723,41 @@ export default function TerminalPanel({
     // targets the active project, so it would open a stray terminal there.
     if (!isActiveProject) return;
     if (autoOpenedShellRef.current) return;
+    // Wait until the project root is actually known. On a cold launch this effect
+    // used to fire 80ms after mount, before the workspace had finished restoring,
+    // so `getStartingCwd()` returned undefined — and `terminal_create` then
+    // rejected with "No project is open", leaving a mounted xterm with no PTY
+    // behind it. That is the blank first-launch terminal showing no path at all.
+    // Re-runs when `project` arrives, so the shell opens as soon as we can give
+    // it a correct cwd.
+    if (!project?.root_path) return;
     const id = window.setTimeout(() => {
       if (autoOpenedShellRef.current) return;
       if (assignmentsRef.current[0] != null) { autoOpenedShellRef.current = true; return; }
-      const hasUnassignedShell = shellSessions.some((s) => !assignmentsRef.current.includes(s.id));
+      // Any shell at all means this project already has one — the workspace
+      // restore creates a startup shell too, and both used to fire inside this
+      // 80ms window, leaving two terminals on every launch where one was wanted.
+      // Read through the ref so we see shells created since the effect ran.
+      if (shellSessionsRef.current.length > 0) return;
+      const hasUnassignedShell = shellSessionsRef.current.some((s) => !assignmentsRef.current.includes(s.id));
       if (hasUnassignedShell) return; // the attach effect will fill pane 0
+      // Synchronous claim — the workspace restore opens a startup shell too and
+      // the store-based checks above cannot see an in-flight async creation.
+      if (!claimStartupShell(project?.id ?? projectId)) return;
+      // The PROJECT ROOT, deliberately — not `getStartingCwd()`. That follows the
+      // active file's directory, which is right for a shell you open while
+      // working on a file but wrong for the one opened automatically at startup:
+      // `activeFile` is restored from persisted per-project state, so the first
+      // terminal of the session came up in whatever subdirectory you happened to
+      // have a file open in last time (e.g. `<project>/src-tauri`) instead of the
+      // project you just opened. A shell you ask for still follows the file.
+      const startingCwd = project?.root_path;
+      if (!startingCwd) return; // still not resolvable — try again on the next change
       autoOpenedShellRef.current = true;
-      void createTerminalSession(getStartingCwd(), 0);
+      void createTerminalSession(startingCwd, 0, projectId ?? undefined);
     }, 80);
     return () => window.clearTimeout(id);
-  }, [shellSessions, isActiveProject]);
+  }, [shellSessions, isActiveProject, project?.root_path]);
 
   // These are single global slots, so only the panel for the active project may
   // claim them — otherwise a parked panel would grow/close cells in the mosaic
@@ -966,7 +994,11 @@ export default function TerminalPanel({
                               </button>
                               
                               {(() => {
-                                const unassignedSessions = allSessions.filter((s) => !assignments.includes(s.id));
+                                // Shells only. Attaching an agent here pulled an
+                                // agent pane into the terminal grid, which is
+                                // exactly the separation we want to keep: agents
+                                // live in the agent stage, never in a terminal pane.
+                                const unassignedSessions = shellSessions.filter((s) => !assignments.includes(s.id));
                                 if (unassignedSessions.length === 0) return null;
                                 return (
                                   <div className="attach-dropdown-container">

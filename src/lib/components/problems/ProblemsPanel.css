@@ -1,0 +1,244 @@
+.pp-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+/* ─── Header ─────────────────────────────────────── */
+.pp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.pp-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pp-chips {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.pp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.pp-chip:hover {
+  background: var(--bg-hover);
+}
+
+/* Muted = this severity is filtered out of the list. */
+.pp-chip.muted {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.pp-icon-error { color: var(--error, #f87171); }
+.pp-icon-warning { color: var(--warning, #fbbf24); }
+.pp-icon-info { color: var(--info, #60a5fa); }
+.pp-icon-hint { color: var(--text-muted); }
+
+.pp-icon {
+  flex-shrink: 0;
+}
+
+/* ─── Filter ─────────────────────────────────────── */
+.pp-filter-row {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  flex-shrink: 0;
+}
+
+.pp-filter {
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.pp-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pp-filter::placeholder {
+  color: var(--text-muted);
+}
+
+/* ─── Body ───────────────────────────────────────── */
+/* min-height: 0 is load-bearing — without it the flex item refuses to shrink
+   below its content and the list overflows the panel instead of scrolling. */
+.pp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.pp-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pp-empty strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ─── File group ─────────────────────────────────── */
+.pp-file-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pp-file-head:hover {
+  background: var(--bg-hover);
+}
+
+.pp-caret {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+
+.pp-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.pp-file-name {
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pp-file-dir {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.pp-file-count {
+  flex-shrink: 0;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* ─── Diagnostic row ─────────────────────────────── */
+.pp-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pp-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px 4px 26px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pp-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pp-item .pp-icon {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* Wraps rather than truncating — a type error's full text is the useful part. */
+.pp-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pp-source,
+.pp-code {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--editor-font-family, monospace);
+  font-size: 10px;
+}
+
+.pp-code::before {
+  content: '(';
+}
+
+.pp-code::after {
+  content: ')';
+}
+
+.pp-pos {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--editor-font-family, monospace);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}

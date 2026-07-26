@@ -250,6 +250,36 @@ export function setTerminalProjectRoot(projectId: string, rootPath: string) {
   if (projectId && rootPath) terminalProjectRoots.set(projectId, rootPath);
 }
 
+// Two independent places open the "you just opened this project" shell: the
+// workspace restore (`restoreProjectState`) and TerminalPanel's auto-open
+// effect. `createTerminalSession` is async, so a guard that checks the sessions
+// store loses — both callers pass their check before either session registers,
+// and every launch ended up with two terminals instead of one. This claim is
+// synchronous, so exactly one caller wins.
+//
+// The claim is released on a timer rather than held forever: it only needs to
+// cover the startup race, and a permanent claim would stop the panel from
+// re-opening a shell later (e.g. you close every terminal, switch ambient mode
+// and come back to an empty grid).
+const STARTUP_SHELL_CLAIM_MS = 5000;
+const startupShellClaims = new Map<string, number>();
+
+/** True for the FIRST caller per project within the startup window. */
+export function claimStartupShell(projectId: string | null | undefined): boolean {
+  if (!projectId) return true;
+  const now = Date.now();
+  const claimedAt = startupShellClaims.get(projectId);
+  if (claimedAt !== undefined && now - claimedAt < STARTUP_SHELL_CLAIM_MS) return false;
+  startupShellClaims.set(projectId, now);
+  return true;
+}
+
+/** Drop the claim so a later auto-open can run (used when sessions are torn down). */
+export function releaseStartupShellClaim(projectId?: string | null) {
+  if (projectId) startupShellClaims.delete(projectId);
+  else startupShellClaims.clear();
+}
+
 function getProjectState(projectId: string, isDev = false): TerminalProjectState {
   const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   const existing = stateMap.get(projectId);
@@ -734,12 +764,21 @@ function registerPtySession(
   if (isDev) devSessionIds.add(pty.id);
 
   const existing = getProjectState(owningProjectId, isDev).sessions.find((session) => session.id === pty.id);
-  const sessionNum = getProjectState(owningProjectId, isDev).sessions.length + 1;
   const agentPreset = metadata.agentPreset ?? existing?.agentPreset ?? null;
+  // Shells and agents are numbered/named from DISJOINT pools. Counting agents
+  // toward `Terminal N` made the two bleed together: a spawned agent with no
+  // explicit title landed as "Terminal 1", and the user's first real shell then
+  // came up as "Terminal 2". Agents fall back to their tool's display name and
+  // never take a terminal number; shells count only other shells.
+  const shellCount = getProjectState(owningProjectId, isDev).sessions
+    .filter((session) => !isAgentSession(session)).length;
+  const fallbackTitle = agentPreset
+    ? getAgentDisplayName(agentPreset) ?? agentPreset
+    : `Terminal ${shellCount + 1}`;
   const info: TerminalSessionInfo = {
     id: pty.id,
     projectId: owningProjectId,
-    title: metadata.title?.trim() || existing?.title || `Terminal ${sessionNum}`,
+    title: metadata.title?.trim() || existing?.title || fallbackTitle,
     paneTitle: metadata.paneTitle ?? existing?.paneTitle ?? null,
     agentName: metadata.agentName ?? existing?.agentName ?? null,
     isRunning: true,
@@ -1466,7 +1505,17 @@ export function markSessionAgentPreset(id: number, agentPreset: string | null, b
         return { ...x, agentPreset: null, role: x.role === 'Agent' ? null : x.role, briefed: false };
       }
       const nextBriefed = briefed !== undefined ? briefed : false;
-      return { ...x, agentPreset, role: x.role ?? 'Agent', briefed: nextBriefed };
+      // Typing `claude` into a shell converts THAT session into an agent in
+      // place (the agent really is running in that PTY, so the pane has to
+      // follow it). Its title is still the shell's `Terminal N`, which then
+      // showed up as an agent named "Terminal 1" and left a hole in the shell
+      // numbering. Retitle to the tool's display name — but only when the title
+      // is still the untouched default, so a user-renamed pane keeps its name.
+      const isDefaultShellTitle = /^Terminal \d+$/.test(x.title ?? '');
+      const nextTitle = isDefaultShellTitle
+        ? getAgentDisplayName(agentPreset) ?? agentPreset
+        : x.title;
+      return { ...x, title: nextTitle, agentPreset, role: x.role ?? 'Agent', briefed: nextBriefed };
     }),
   }), isDev);
 
@@ -1845,6 +1894,7 @@ export async function killAllSessions() {
   exitCallbacks.clear();
   sessionOutputBuffers.clear();
   sessionOutputDecoders.clear();
+  releaseStartupShellClaim();
   sessionInputBuffers.clear();
   agentLaunchStartLengths.clear();
   terminalSessionProjects.clear();

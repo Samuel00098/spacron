@@ -9,6 +9,7 @@ import { get } from '$lib/stores/storeCompat';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import FileExplorer from '$lib/components/explorer/FileExplorer.tsx';
 import ReviewSidebarPanel from '$lib/components/review/ReviewSidebarPanel.tsx';
+import ProblemsPanel from '$lib/components/problems/ProblemsPanelLazy.tsx';
 import SearchPanel from '$lib/components/explorer/SearchPanel.tsx';
 import SourceControl from '$lib/components/explorer/SourceControl.tsx';
 import SnapshotsPanel from './SnapshotsPanel.tsx';
@@ -196,13 +197,14 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['files', 'git', 'snapshots', 'snippets', 'review'] as const;
+const LEFT_DRAWER_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets', 'review'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
   files: { title: 'Files', icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
+  problems: { title: 'Problems', icon: <Icon><circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16.5" x2="12.01" y2="16.5" /></Icon> },
 
   review: { title: 'Code Review', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon> },
 };
@@ -290,6 +292,7 @@ function SidebarContent({ tab }: { tab: SidebarTab }) {
   if (tab === 'snippets') return <TerminalSnippetsPanel />;
 
   if (tab === 'review') return <ReviewSidebarPanel />;
+  if (tab === 'problems') return <ProblemsPanel />;
   return <FileExplorer />;
 }
 

@@ -24,6 +24,7 @@ import type { Extension } from '@codemirror/state';
 import { showToast, dismissToast, toasts } from '$lib/stores/notification';
 import { get } from '$lib/stores/storeCompat';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
+import { clearDiagnosticsForOwner, publishDiagnostics } from '$lib/stores/diagnostics';
 import { backendInvoke } from '../backend';
 
 /** Spacron language ids (from `detectLanguage`) that we offer LSP for. */
@@ -185,11 +186,35 @@ async function getOrCreateClient(
     autoClose: false,
     onClose: () => {
       // Server died or socket dropped — drop the entry so the next file reopen
-      // reconnects with a fresh process.
+      // reconnects with a fresh process. Its diagnostics go too: keeping them
+      // would leave the Problems panel reporting stale problems from a server
+      // that is no longer running (and no longer able to retract them).
       clients.delete(key);
+      clearDiagnosticsForOwner(key);
     },
     onError: (err) => console.error(`LSP (${serverLang}) error:`, err),
   });
+
+  // Tap `publishDiagnostics` for the Problems panel.
+  //
+  // `attachPlugin` is the package's documented extension point: the client fans
+  // every notification out to `plugin.processNotification`. The real per-document
+  // plugin renders diagnostics as inline lint markers and keeps them to itself,
+  // so without this listener a problem is only visible while you are looking at
+  // that exact file. Attaching here (once per shared client) rather than per
+  // document means we see diagnostics for every file the server reports on.
+  //
+  // Safe to attach because the client is built with `autoClose: false` —
+  // `detachPlugin` would otherwise close the shared server.
+  const diagnosticsListener = {
+    processNotification: (notification: { method?: string; params?: any }) => {
+      if (notification?.method !== 'textDocument/publishDiagnostics') return;
+      const params = notification.params;
+      if (!params?.uri) return;
+      publishDiagnostics(key, params.uri, params.diagnostics ?? []);
+    },
+  };
+  client.attachPlugin(diagnosticsListener as never);
 
   const entry: ClientEntry = { client, transport, rootUri, refs: 1 };
   clients.set(key, entry);
@@ -203,6 +228,8 @@ function releaseClient(root: string, serverLang: string) {
   entry.refs -= 1;
   if (entry.refs <= 0) {
     clients.delete(key);
+    // The server is going away, so nothing can retract its diagnostics later.
+    clearDiagnosticsForOwner(key);
     try {
       entry.client.close();
     } catch {
