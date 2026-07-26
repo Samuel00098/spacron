@@ -359,6 +359,9 @@
   width: 100%;
   height: 100%;
   border-radius: 12px;
+  /* Stage Manager: participate in View Transitions so the browser can
+     morph between old → new stage with a custom shrink/expand animation. */
+  view-transition-name: spacron-stage;
   /* Lit top bevel + contact/ambient shadow pair lifts the stage off the desk. */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.09),
@@ -448,6 +451,131 @@
     0 22px 46px rgba(0, 0, 0, 0.42);
 }
 
+/* ── Pile effect: overlapping cards like a deck ─────────────────────────
+   When 2+ cards exist in the focus-mode room-cards-row, switch from a
+   spaced column to a tight pile where back cards peek out from behind
+   the front card — Apple Stage Manager-inspired depth cue.
+
+   Adaptive sizing: card height shrinks as more cards are added so the
+   sidebar stays compact without scrolling. The pile overlap (margin-top)
+   scales proportionally to keep ~30-35% of each back card visible. */
+
+/* Activate pile mode when there are 2+ cards: kill the gap, reserve
+   bottom padding so the piled cards don't clip at the scroll edge. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) {
+  gap: 0;
+  padding-bottom: 80px;
+}
+
+/* ── Adaptive card height: shrink as count increases ───────────────
+   Visible portion of back cards stays ~25-30% across all counts. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card {
+  min-height: 158px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(3)) .room-card {
+  min-height: 138px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) .room-card {
+  min-height: 120px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(5)) .room-card {
+  min-height: 105px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) .room-card {
+  min-height: 95px;
+}
+
+/* ── Adaptive pile overlap: scale margin-top with card height ──────
+   Back cards overlap less as they get shorter so ~25-30% of
+   each back card remains visible. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+2) {
+  margin-top: -118px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(3)) .room-card:nth-child(n+2) {
+  margin-top: -105px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) .room-card:nth-child(n+2) {
+  margin-top: -88px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(5)) .room-card:nth-child(n+2) {
+  margin-top: -76px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) .room-card:nth-child(n+2) {
+  margin-top: -68px;
+}
+
+/* ── Adaptive bottom padding: scale with card count ──────────────
+   Prevents excessive dead scroll space when cards are short. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) {
+  padding-bottom: 65px;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) {
+  padding-bottom: 50px;
+}
+
+/* All cards in pile mode: smooth transitions for hover/resize. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card {
+  transition:
+    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.24s ease,
+    color 0.16s ease,
+    box-shadow 0.24s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+/* Front card: full visibility, top of pile. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(1) {
+  z-index: 5;
+  position: relative;
+}
+
+/* Back cards: offset downward, dimmed, slightly scaled — each card
+   peeks out just enough to show its header (icon + kind label). */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+2) {
+  margin-top: -120px;
+  position: relative;
+  z-index: 4;
+  opacity: 0.85;
+  transform: scale(0.97);
+  transform-origin: center top;
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+3) {
+  z-index: 3;
+  opacity: 0.72;
+  transform: scale(0.94);
+}
+
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+4) {
+  z-index: 2;
+  opacity: 0.6;
+  transform: scale(0.91);
+}
+
+/* Hover: lift the hovered card out of the pile — it rises to the top
+   with a subtle upward drift and enhanced shadow for depth. */
+.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover {
+  z-index: 10;
+  opacity: 1;
+  transform: translateY(-8px) scale(1.02);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
+    0 8px 16px rgba(0, 0, 0, 0.3),
+    0 28px 56px rgba(0, 0, 0, 0.45);
+  border-color: var(--accent);
+}
+
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-header {
   display: flex;
   align-items: center;
@@ -481,6 +609,364 @@
   width: 100%;
   text-align: left;
 }
+
+/* ── Miniature live preview thumbnails ─────────────────────────────────
+   Each room card gets a scaled-down visual representation of its
+   actual content, rendered at full size then shrunk via CSS transform.
+   The container clips to a fixed viewport so only the top-left
+   portion is visible — mimicking a real window thumbnail. */
+.app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
+  width: 100%;
+  flex: 1;
+  min-height: 60px;
+  margin-top: 6px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  /* Frosted glass: let the parent card's backdrop-filter show through
+     while adding a light frost over the miniature content. */
+  backdrop-filter: blur(2px) saturate(120%);
+  -webkit-backdrop-filter: blur(2px) saturate(120%);
+}
+
+:root.light-theme .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* The inner container is rendered at full size (matching the real room)
+   then scaled down to fit the thumbnail viewport. transform-origin
+   top-left ensures the visible portion starts at the top-left corner. */
+.app-shell .rooms-table.ambient-focus .room-card .room-card-mini-inner {
+  width: 380px;
+  height: 280px;
+  transform: scale(0.55);
+  transform-origin: top left;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* ── Miniature terminal preview ──────────────────────────────────────── */
+.app-shell .mini-term {
+  width: 100%;
+  height: 100%;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-code, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  gap: 3px;
+  color: #a9b1d6;
+}
+
+.app-shell .mini-term .mini-prompt {
+  color: #7aa2f7;
+  font-weight: 700;
+}
+
+.app-shell .mini-term .mini-cmd {
+  color: #c0caf5;
+}
+
+.app-shell .mini-term .mini-output {
+  color: #565f89;
+}
+
+.app-shell .mini-term .mini-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  background: #c0caf5;
+  animation: mini-blink 1s step-end infinite;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+
+/* ── Light theme: miniature terminal ──────────────────────────────── */
+:root.light-theme .app-shell .mini-term {
+  background: #fafafa;
+  color: #383a42;
+}
+:root.light-theme .app-shell .mini-term .mini-prompt { color: #4078f2; }
+:root.light-theme .app-shell .mini-term .mini-cmd { color: #383a42; }
+:root.light-theme .app-shell .mini-term .mini-output { color: #a0a1a7; }
+:root.light-theme .app-shell .mini-term .mini-cursor { background: #383a42; }
+
+@keyframes mini-blink {
+  50% { opacity: 0; }
+}
+
+/* ── Miniature editor preview ────────────────────────────────────────── */
+.app-shell .mini-editor {
+  width: 100%;
+  height: 100%;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: row;
+  font-family: var(--font-code, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow: hidden;
+}
+
+.app-shell .mini-editor .mini-gutter {
+  width: 32px;
+  flex-shrink: 0;
+  background: #16161e;
+  padding: 8px 0;
+  text-align: right;
+  color: #3b4261;
+  user-select: none;
+}
+
+.app-shell .mini-editor .mini-gutter span {
+  display: block;
+  padding-right: 8px;
+}
+
+.app-shell .mini-editor .mini-code {
+  flex: 1;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.app-shell .mini-editor .mini-code .mini-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-shell .mini-editor .mini-code .mini-kw { color: #bb9af7; }
+.app-shell .mini-editor .mini-code .mini-fn { color: #7aa2f7; }
+.app-shell .mini-editor .mini-code .mini-str { color: #9ece6a; }
+.app-shell .mini-editor .mini-code .mini-cm { color: #565f89; }
+.app-shell .mini-editor .mini-code .mini-num { color: #ff9e64; }
+.app-shell .mini-editor .mini-code .mini-type { color: #2ac3de; }
+.app-shell .mini-editor .mini-code .mini-op { color: #89ddff; }
+.app-shell .mini-editor .mini-code .mini-var { color: #c0caf5; }
+.app-shell .mini-editor .mini-code .mini-plain { color: #a9b1d6; }
+
+/* ── Light theme: miniature editor ───────────────────────────────── */
+:root.light-theme .app-shell .mini-editor { background: #fafafa; }
+:root.light-theme .app-shell .mini-editor .mini-gutter { background: #f0f0f0; color: #c4c6c9; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-kw { color: #a626a4; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-fn { color: #4078f2; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-str { color: #50a14f; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-cm { color: #a0a1a7; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-num { color: #986801; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-type { color: #c18401; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-op { color: #4078f2; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-var { color: #383a42; }
+:root.light-theme .app-shell .mini-editor .mini-code .mini-plain { color: #383a42; }
+
+/* ── Miniature preview/browser frame ─────────────────────────────────── */
+.app-shell .mini-browser {
+  width: 100%;
+  height: 100%;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell .mini-browser .mini-browser-bar {
+  height: 22px;
+  background: #16161e;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 4px;
+  border-bottom: 1px solid #292e42;
+}
+
+.app-shell .mini-browser .mini-browser-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.app-shell .mini-browser .mini-browser-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ccc;
+}
+
+.app-shell .mini-browser .mini-browser-dots span:first-child { background: #ff5f57; }
+.app-shell .mini-browser .mini-browser-dots span:nth-child(2) { background: #ffbd2e; }
+.app-shell .mini-browser .mini-browser-dots span:last-child { background: #28ca41; }
+
+.app-shell .mini-browser .mini-browser-url {
+  flex: 1;
+  height: 14px;
+  background: #292e42;
+  border-radius: 3px;
+  border: 1px solid #3b4261;
+  margin: 0 4px;
+}
+
+.app-shell .mini-browser .mini-browser-content {
+  flex: 1;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-shell .mini-browser .mini-browser-content .mini-heading {
+  height: 8px;
+  width: 60%;
+  background: #c0caf5;
+  border-radius: 2px;
+}
+
+.app-shell .mini-browser .mini-browser-content .mini-para {
+  height: 5px;
+  width: 90%;
+  background: #292e42;
+  border-radius: 2px;
+}
+
+.app-shell .mini-browser .mini-browser-content .mini-para.short { width: 70%; }
+.app-shell .mini-browser .mini-browser-content .mini-block {
+  height: 30px;
+  width: 100%;
+  background: #292e42;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+/* ── Light theme: miniature browser ──────────────────────────────── */
+:root.light-theme .app-shell .mini-browser { background: #ffffff; }
+:root.light-theme .app-shell .mini-browser .mini-browser-bar { background: #f0f0f0; border-bottom-color: #ddd; }
+:root.light-theme .app-shell .mini-browser .mini-browser-url { background: #fff; border-color: #ccc; }
+:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-heading { background: #333; }
+:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-para { background: #ddd; }
+:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-block { background: #e8e8e8; }
+
+/* ── Miniature generic panel preview ─────────────────────────────────── */
+.app-shell .mini-panel {
+  width: 100%;
+  height: 100%;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell .mini-panel .mini-panel-header {
+  height: 24px;
+  background: #16161e;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-bottom: 1px solid #292e42;
+  gap: 6px;
+}
+
+.app-shell .mini-panel .mini-panel-header .mini-tab {
+  height: 10px;
+  border-radius: 2px;
+  background: #292e42;
+}
+
+.app-shell .mini-panel .mini-panel-header .mini-tab.active {
+  background: #7aa2f7;
+}
+
+.app-shell .mini-panel .mini-panel-body {
+  flex: 1;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.app-shell .mini-panel .mini-panel-body .mini-row {
+  height: 7px;
+  background: #292e42;
+  border-radius: 2px;
+}
+
+.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(2) { width: 85%; }
+.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(3) { width: 70%; }
+.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(4) { width: 92%; }
+.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(5) { width: 60%; }
+
+/* ── Light theme: miniature panel ────────────────────────────────── */
+:root.light-theme .app-shell .mini-panel { background: #fafafa; }
+:root.light-theme .app-shell .mini-panel .mini-panel-header { background: #f0f0f0; border-bottom-color: #e0e0e0; }
+:root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab { background: #e0e0e0; }
+:root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab.active { background: #4078f2; }
+:root.light-theme .app-shell .mini-panel .mini-panel-body .mini-row { background: #e8e8e8; }
+
+/* ── Miniature workspace/file-tree preview ───────────────────────────── */
+.app-shell .mini-workspace {
+  width: 100%;
+  height: 100%;
+  background: #1a1b26;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.app-shell .mini-workspace .mini-sidebar {
+  width: 35%;
+  background: #16161e;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.app-shell .mini-workspace .mini-sidebar .mini-tree-item {
+  height: 7px;
+  margin: 0 8px;
+  border-radius: 2px;
+  background: #292e42;
+}
+
+.app-shell .mini-workspace .mini-sidebar .mini-tree-item.folder {
+  background: #7aa2f7;
+  width: 60%;
+}
+
+.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file { width: 75%; }
+.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file:nth-child(3) { width: 55%; margin-left: 16px; }
+.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file:nth-child(4) { width: 65%; margin-left: 16px; }
+
+.app-shell .mini-workspace .mini-main {
+  flex: 1;
+  background: #1a1b26;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-shell .mini-workspace .mini-main .mini-line {
+  height: 6px;
+  background: #292e42;
+  border-radius: 2px;
+}
+
+.app-shell .mini-workspace .mini-main .mini-line:nth-child(2) { width: 80%; }
+.app-shell .mini-workspace .mini-main .mini-line:nth-child(3) { width: 65%; }
+.app-shell .mini-workspace .mini-main .mini-line:nth-child(4) { width: 90%; }
+.app-shell .mini-workspace .mini-main .mini-line:nth-child(5) { width: 45%; }
+
+/* ── Light theme: miniature workspace ────────────────────────────── */
+:root.light-theme .app-shell .mini-workspace { background: #fafafa; }
+:root.light-theme .app-shell .mini-workspace .mini-sidebar { background: #f0f0f0; }
+:root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item { background: #ddd; }
+:root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item.folder { background: #4078f2; }
+:root.light-theme .app-shell .mini-workspace .mini-main .mini-line { background: #e0e0e0; }
+
 
 .app-shell .rooms-table.ambient-development {
   grid-template-columns: minmax(0, 1fr) minmax(420px, 560px);
@@ -1890,6 +2376,51 @@
   animation: none;
   mix-blend-mode: normal;
 }
+
+/* ── Stage Manager transition ─────────────────────────────────────────
+   When switching stages in Focus mode, the outgoing stage shrinks and
+   slides toward the sidebar while the incoming stage expands from the
+   sidebar direction. The View Transitions API snapshots old/new states
+   and these rules customize the cross-fade into a spatial movement. */
+.app-shell ::view-transition-old(spacron-stage) {
+  animation: stage-shrink-out 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.app-shell ::view-transition-new(spacron-stage) {
+  animation: stage-expand-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Room card entrance: staggered slide-in ───────────────────────────
+   When the sidebar cards re-render after a stage switch, each card
+   slides in from the left with a slight delay — reinforcing the
+   spatial continuity of the Stage Manager metaphor. */
+/* Outgoing stage: shrinks down and slides right toward the sidebar. */
+@keyframes stage-shrink-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.88) translateX(24px);
+  }
+}
+
+/* Incoming stage: expands from a small, right-shifted state into full view. */
+@keyframes stage-expand-in {
+  from {
+    opacity: 0;
+    transform: scale(0.88) translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+}
+
+/* Individual card entrance animations are omitted to avoid overriding
+   the pile effect's opacity/transform values via animation fill mode.
+   The existing @starting-style on .room-stack handles the sidebar entrance. */
 
 .app-shell ::view-transition-old(root) {
   animation: spacron-view-old 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;

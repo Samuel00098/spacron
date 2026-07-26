@@ -1910,6 +1910,131 @@ export default function AppShell() {
     return null;
   }
 
+  // Simple heuristic: colour a code line for the miniature editor preview.
+  function miniHighlightLine(line: string) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*')) {
+      return <span className="mini-cm">{line.slice(0, 48)}</span>;
+    }
+    if (/^\s*(const|let|var|function|export|import|return|if|else|for|while|class|interface|type|enum|async|await|default|new|this)\b/.test(line)) {
+      return <span className="mini-kw">{line.slice(0, 48)}</span>;
+    }
+    if (/^\s*["'`]/.test(line)) {
+      return <span className="mini-str">{line.slice(0, 48)}</span>;
+    }
+    if (/^\s*\d/.test(line)) {
+      return <span className="mini-num">{line.slice(0, 48)}</span>;
+    }
+    return <span className="mini-plain">{line.slice(0, 48)}</span>;
+  }
+
+  function getMiniPreview(id: RoomId) {
+    // Agent rooms are terminal-based — use the terminal preview pattern.
+    if (isAgentRoomId(id)) {
+      const cmds = (history || []).slice(0, 4);
+      return (
+        <div className="mini-term">
+          {cmds.map((cmd, i) => (
+            <div key={i}>
+              <div><span className="mini-prompt">❯</span> <span className="mini-cmd">{cmd.slice(0, 36)}</span></div>
+              {i === cmds.length - 1 && <div className="mini-output">$ exit 0</div>}
+            </div>
+          ))}
+          {cmds.length === 0 && <div className="mini-output">Agent running…</div>}
+          <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
+        </div>
+      );
+    }
+    if (id === 'editor') {
+      const editorStore = useEditorStore.getState();
+      const fileEntry = activeFile ? editorStore.fileCache.get(activeFile) : null;
+      const lines = fileEntry?.kind === 'text' && fileEntry.content
+        ? fileEntry.content.split('\n').filter(l => l.trim().length > 0).slice(0, 12)
+        : ['// no active file'];
+      return (
+        <div className="mini-editor">
+          <div className="mini-gutter">
+            {lines.map((_, i) => <span key={i}>{i + 1}</span>)}
+          </div>
+          <div className="mini-code">
+            {lines.map((line, i) => (
+              <div key={i} className="mini-line">{miniHighlightLine(line)}</div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    if (id === 'terminal') {
+      const cmds = (history || []).slice(0, 4);
+      return (
+        <div className="mini-term">
+          {cmds.map((cmd, i) => (
+            <div key={i}>
+              <div><span className="mini-prompt">❯</span> <span className="mini-cmd">{cmd.slice(0, 36)}</span></div>
+              {i === cmds.length - 1 && <div className="mini-output">$ exit 0</div>}
+            </div>
+          ))}
+          {cmds.length === 0 && <div className="mini-output">Waiting for shell…</div>}
+          <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
+        </div>
+      );
+    }
+    if (id === 'preview') {
+      return (
+        <div className="mini-browser">
+          <div className="mini-browser-bar">
+            <div className="mini-browser-dots"><span /><span /><span /></div>
+            <div className="mini-browser-url" />
+          </div>
+          <div className="mini-browser-content">
+            <div className="mini-heading" />
+            <div className="mini-para" />
+            <div className="mini-para short" />
+            <div className="mini-block" />
+          </div>
+        </div>
+      );
+    }
+    if (id === 'workspace') {
+      return (
+        <div className="mini-workspace">
+          <div className="mini-sidebar">
+            <div className="mini-tree-item folder" />
+            <div className="mini-tree-item file" />
+            <div className="mini-tree-item file" />
+            <div className="mini-tree-item file" />
+            <div className="mini-tree-item folder" />
+            <div className="mini-tree-item file" />
+          </div>
+          <div className="mini-main">
+            <div className="mini-line" />
+            <div className="mini-line" />
+            <div className="mini-line" />
+            <div className="mini-line" />
+            <div className="mini-line" />
+          </div>
+        </div>
+      );
+    }
+    // Generic panel preview for http, db, containers, toolbox, review, tasks, etc.
+    return (
+      <div className="mini-panel">
+        <div className="mini-panel-header">
+          <div className="mini-tab active" style={{ width: 32 }} />
+          <div className="mini-tab" style={{ width: 24 }} />
+          <div className="mini-tab" style={{ width: 28 }} />
+        </div>
+        <div className="mini-panel-body">
+          <div className="mini-row" />
+          <div className="mini-row" />
+          <div className="mini-row" />
+          <div className="mini-row" />
+          <div className="mini-row" />
+        </div>
+      </div>
+    );
+  }
+
   function renderRoomCard(id: RoomId) {
     return (
       <button key={id} className="room-card bento-card" onClick={() => focusRoom(id)} title={`Open ${roomTitle(id)}`}>
@@ -1918,7 +2043,12 @@ export default function AppShell() {
           <span className="room-card-kind">{roomKind(id)}</span>
         </div>
         <span className="room-card-name">{roomTitle(id)}</span>
-        {getRoomPreview(id)}
+        {ambientLayout === 'focus' ? null : getRoomPreview(id)}
+        <div className="room-card-mini-preview">
+          <div className="room-card-mini-inner">
+            {getMiniPreview(id)}
+          </div>
+        </div>
       </button>
     );
   }
