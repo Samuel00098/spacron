@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
 import { copyTextToClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
+import { isTauriRuntime } from '$lib/utils/tauri';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -46,6 +48,7 @@ import {
 } from '$lib/stores/settings';
 import { activeTheme } from '$lib/stores/theme';
 import { setActiveView, showTerminal } from '$lib/stores/layout';
+import { requestRoomControl } from '$lib/stores/layoutControl';
 import { activeProject, projects } from '$lib/stores/workspace';
 import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
@@ -147,6 +150,7 @@ async function openUrlInPreview(rawUrl: string) {
   await ensureProxyRunning();
   currentUrl.set(parsed.toString());
   setActiveView('preview');
+  requestRoomControl('focus', 'preview');
 }
 
 export default function TerminalPane({
@@ -223,6 +227,7 @@ export default function TerminalPane({
   const [currentShellCwd, setCurrentShellCwd] = useState<string | null>(null);
 
   const [windowsBuild, setWindowsBuild] = useState<number | null>(cachedWindowsBuild);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // Only declare ConPTY to xterm on builds that still need its wrapping heuristic.
   //
@@ -756,6 +761,62 @@ export default function TerminalPane({
     }
   }, [windowsBuild]);
 
+  // In-app explorer file drag into this terminal pane. Dragging a file from the
+  // app's own FileExplorer (left sidebar) and dropping directly onto this pane
+  // writes its path as terminal input — the same as OS-level drops above.
+  const explorerDragPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    function handleDragStart(event: Event) {
+      const custom = event as CustomEvent<{ path?: string }>;
+      explorerDragPathRef.current = custom.detail?.path?.trim() || null;
+      setIsDragOver(false);
+    }
+    function handleDragMove() {
+      if (!explorerDragPathRef.current) return;
+      const c = containerRef.current;
+      if (!c) return;
+      const rect = c.getBoundingClientRect();
+      // Check the last known mouse position via the on-screen cursor
+      const els = document.elementsFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const over = els.some((el) => el === c || c.contains(el));
+      setIsDragOver(over);
+    }
+    function handleDragEnd(event: Event) {
+      const custom = event as CustomEvent<{ path?: string; clientX?: number; clientY?: number }>;
+      const endedPath = custom.detail?.path?.trim() || explorerDragPathRef.current;
+      const cx = custom.detail?.clientX;
+      const cy = custom.detail?.clientY;
+      let overPane = false;
+      const c = containerRef.current;
+      if (c && typeof cx === 'number' && typeof cy === 'number') {
+        const rect = c.getBoundingClientRect();
+        overPane = cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom;
+      }
+      // Drop into this pane only if NOT also over the floating prompt bar
+      let overBar = false;
+      const barEl = document.querySelector('#floating-prompt-bar');
+      if (barEl && typeof cx === 'number' && typeof cy === 'number') {
+        const barRect = barEl.getBoundingClientRect();
+        overBar = cx >= barRect.left && cx <= barRect.right && cy >= barRect.top && cy <= barRect.bottom;
+      }
+      if (endedPath && overPane && !overBar) {
+        const text = endedPath.replace(/\\/g, '/');
+        writeToSession(sessionId, text);
+      }
+      explorerDragPathRef.current = null;
+      setIsDragOver(false);
+    }
+    window.addEventListener('spacron-explorer-drag-start', handleDragStart);
+    window.addEventListener('spacron-explorer-drag-move', handleDragMove);
+    window.addEventListener('spacron-explorer-drag-end', handleDragEnd);
+    return () => {
+      window.removeEventListener('spacron-explorer-drag-start', handleDragStart);
+      window.removeEventListener('spacron-explorer-drag-move', handleDragMove);
+      window.removeEventListener('spacron-explorer-drag-end', handleDragEnd);
+      explorerDragPathRef.current = null;
+    };
+  }, [sessionId]);
+
   // Mount xterm once per session. Mirrors mount/unmount lifecycle:
   // create the Terminal, wire PTY callbacks, observers and listeners, then tear
   // everything down on unmount.
@@ -1073,8 +1134,56 @@ export default function TerminalPane({
       }
     });
 
+    // OS file drops into this terminal pane. When a user drags a file from the
+    // OS file manager onto this pane, write its path as terminal input — the
+    // running agent (Claude Code, Codex, etc.) receives it as pasted text.
+    // Registered once per mounted pane; the FloatingPromptBar handles drops on
+    // itself separately, so they never conflict.
+    let unlistenOsDrop: (() => void) | undefined;
+    if (isTauriRuntime()) {
+      getCurrentWindow().onDragDropEvent((event) => {
+        if (disposed) return;
+        if (event.payload.type !== 'drop') return;
+        const payload = event.payload as any;
+        const paths: string[] = payload.paths ?? [];
+        if (!paths.length) return;
+        const pos = payload.position as { x: number; y: number } | undefined;
+        if (!pos) return;
+
+        // Only handle drops within this pane's container
+        const c = containerRef.current;
+        if (!c) return;
+        const rect = c.getBoundingClientRect();
+        if (
+          pos.x < rect.left || pos.x > rect.right ||
+          pos.y < rect.top || pos.y > rect.bottom
+        ) return;
+
+        // Don't steal drops from the floating prompt bar
+        const barEl = document.querySelector('#floating-prompt-bar');
+        if (barEl) {
+          const barRect = barEl.getBoundingClientRect();
+          if (
+            pos.x >= barRect.left && pos.x <= barRect.right &&
+            pos.y >= barRect.top && pos.y <= barRect.bottom
+          ) return;
+        }
+
+        // Write each path as quoted text into the terminal
+        const text = paths
+          .map((p) => p.replace(/\\/g, '/'))
+          .map((p) => (p.includes(' ') ? `"${p}"` : p))
+          .join(' ');
+        writeToSession(sessionId, text);
+      }).then((u) => {
+        if (disposed) u();
+        else unlistenOsDrop = u;
+      });
+    }
+
     return () => {
       disposed = true;
+      unlistenOsDrop?.();
       if (executingTimeout) clearTimeout(executingTimeout);
       document.removeEventListener('pane-resize-end', onResizeEnd);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1213,6 +1322,7 @@ export default function TerminalPane({
     isActive && 'active',
     isDead && 'dead',
     isMaximized && 'maximized',
+    isDragOver && 'drag-over',
     sessionInfo?.agentPreset && 'agent-pane',
     sessionInfo?.agentPreset && `agent-${sessionInfo.agentPreset}`,
     sessionInfo?.isExecuting && 'agent-executing',

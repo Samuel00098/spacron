@@ -12,9 +12,22 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { homeDir } from '@tauri-apps/api/path';
-import { createTerminalSession, getSessionLabel } from './terminal';
+import {
+  createTerminalSession,
+  getSessionLabel,
+  getActiveTerminalProjectId,
+  setSessionWorktree,
+} from './terminal';
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
-import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
+import {
+  applyOrchestratorAgentName,
+  sendOrchestratorGoalWhenReady,
+} from '$lib/services/orchestrator/terminal-lease';
+import {
+  createTaskWorktree,
+  removeTaskWorktree,
+  type WorktreeInfo,
+} from '$lib/services/orchestrator/worktree-manager';
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
 // ---------------------------------------------------------------------------
@@ -44,15 +57,36 @@ export async function getMcpUrl(): Promise<string> {
   return serverUrl!;
 }
 
+/**
+ * Point the MCP server at the open project's main checkout.
+ *
+ * `delegate_task` blocks on a worker's report file under
+ * `<root>/.spacron/reports/`, and the Rust server has no way to learn that path
+ * on its own. Best-effort: a failure here disables delegation, not the app.
+ */
+export async function setMcpProjectRoot(root: string | null): Promise<void> {
+  try {
+    await invoke('mcp_set_project_root', { root });
+  } catch (e) {
+    console.error('Failed to set MCP project root:', e);
+  }
+}
+
 /** Register an agent with the MCP server so other agents can discover it. */
 export async function registerAgent(
   sessionId: number,
   name: string,
   preset: string,
   label: string,
+  /**
+   * The agent's isolated git branch, when it has one. Surfaced through
+   * `list_agents` so an orchestrating agent can review a worker's real change
+   * with `git diff` rather than scraping its terminal output.
+   */
+  branch?: string | null,
 ): Promise<void> {
   try {
-    await invoke('mcp_register_agent', { sessionId, name, preset, label });
+    await invoke('mcp_register_agent', { sessionId, name, preset, label, branch: branch ?? null });
   } catch (e) {
     console.error('Failed to register agent with MCP server:', e);
   }
@@ -75,6 +109,8 @@ export async function unregisterAgent(sessionId: number): Promise<void> {
 export interface SpawnRequest {
   preset: string;
   prompt: string;
+  /** Name the requesting agent asked for; empty means "assign one". */
+  name: string;
 }
 
 export interface SendToAgentRequest {
@@ -97,31 +133,67 @@ export function initMcpBridge(): void {
   initialized = true;
 
   listen<SpawnRequest>('mcp:spawn-agent', async (event) => {
-    const { preset, prompt } = event.payload;
+    const { preset, prompt, name: requestedName } = event.payload;
     console.log(`[mcp] Spawning agent: ${preset}${prompt ? ` (prompt: ${prompt})` : ''}`);
 
     try {
-      const sessionId = await createTerminalSession(undefined, undefined, undefined, {
+      // An agent-driven spawn is isolated by default. Without this every worker
+      // an orchestrator spawns edits the SAME working tree concurrently, and two
+      // workers touching one file silently clobber each other — the exact thing
+      // worktree isolation exists to prevent. There is no user in this path to
+      // ask (the placement dialog is interactive and this spawn arrives from a
+      // background process), and isolation is the safe default: the reconciler
+      // stages the branch back into the main checkout on its own.
+      const projectId = getActiveTerminalProjectId();
+      let worktree: WorktreeInfo | null = null;
+      if (projectId) {
+        worktree = await createTaskWorktree({
+          projectId,
+          // No OrchestratorTask backs an MCP spawn, so synthesize the id the
+          // branch name is derived from. `mcp_` keeps these identifiable on disk.
+          taskId: `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          label: preset,
+        });
+      }
+      // `createTaskWorktree` returns null for a non-git or empty repo. That is
+      // not fatal — the agent runs in the project root, exactly as before.
+
+      const sessionId = await createTerminalSession(worktree?.path, undefined, projectId ?? undefined, {
         agentPreset: preset,
       });
 
       if (sessionId === null) {
         console.error('[mcp] Failed to create terminal session for spawn');
+        if (worktree && projectId) {
+          // Don't strand an empty worktree for a session that never existed.
+          await removeTaskWorktree(projectId, worktree, true).catch(() => {});
+        }
         return;
       }
 
-      // Pick a unique assistant name and assign it
-      const name = pickAssistantName();
+      // Session-owned worktree: this is what makes the reconciler stage the
+      // agent's commits back into the main checkout, and what makes closing the
+      // pane reclaim the branch instead of orphaning it. Registering it is not
+      // bookkeeping — an unregistered worktree's work is never seen again.
+      if (worktree) setSessionWorktree(sessionId, worktree);
+
+      // Honour the requested name so the spawner can address this agent
+      // immediately; the server has already rejected a name that collides with a
+      // running agent. Falling back to a generated one keeps the old behaviour
+      // for callers that don't ask.
+      const name = requestedName?.trim() || pickAssistantName();
       applyOrchestratorAgentName(sessionId, name);
 
-      // Send the prompt if provided
       if (prompt) {
-        // Small delay to let the agent CLI initialize
-        setTimeout(() => {
-          invoke('terminal_write', { sessionId, data: prompt + '\n' }).catch((e) =>
-            console.error('[mcp] Failed to send prompt to spawned agent:', e),
-          );
-        }, 3000);
+        // Was a flat `setTimeout(…, 3000)`, which is a race the agent loses
+        // whenever the CLI takes longer than three seconds to boot — routine for
+        // Claude Code. The prompt then lands in a REPL that isn't listening and
+        // is mangled or dropped, and for an orchestrator's worker that prompt is
+        // what carries its whole task. `sendGoal` waits for actual readiness.
+        const delivered = await sendOrchestratorGoalWhenReady(sessionId, prompt);
+        if (!delivered) {
+          console.error(`[mcp] Prompt was not delivered to spawned agent '${name}' (${preset})`);
+        }
       }
     } catch (e) {
       console.error('[mcp] Failed to spawn agent:', e);

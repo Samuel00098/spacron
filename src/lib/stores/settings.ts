@@ -119,7 +119,7 @@ export const notificationsEnabled = persistentWritable('notificationsEnabled', t
 // Default for whether a spawned agent gets its own isolated worktree and branch.
 // The Isolated / Main repo toggle in the spawn modal overrides it per spawn; turn
 // this off to have every agent work directly in the project root instead.
-export const agentWorktrees = persistentWritable('agentWorktrees', true);
+export const agentWorktrees = persistentWritable('agentWorktrees', false);
 // Move each agent's changes into the main checkout on their own, so the app can be
 // run and tested against them without pressing anything. Off leaves the same work
 // visible in the Agent changes list with a Stage button per agent.
@@ -1266,7 +1266,7 @@ export function resetSettingsToDefault() {
   showHidden.set(false);
   showSnapshotsTab.set(false);
   notificationsEnabled.set(true);
-  agentWorktrees.set(true);
+  agentWorktrees.set(false);
   autoStageAgentChanges.set(true);
   closeBehavior.set('quit');
   aiProvider.set('openrouter');

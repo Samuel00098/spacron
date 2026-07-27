@@ -69,6 +69,12 @@ pub struct AgentEntry {
     pub name: String,
     pub preset: String,
     pub label: String,
+    /// The agent's isolated git branch, when it runs in a worktree. This is what
+    /// lets an orchestrating agent review a worker's actual change
+    /// (`git diff <base>..<branch>`) instead of scraping its terminal — the
+    /// report a worker writes says what it believes it did; the diff says what
+    /// it did. `None` when the agent runs directly in the main checkout.
+    pub branch: Option<String>,
 }
 
 /// A request to send a message to a specific agent, emitted by the
@@ -94,6 +100,12 @@ pub struct ReadOutputRequest {
 pub struct SpawnRequest {
     pub preset: String,
     pub prompt: String,
+    /// Name the caller asked for. Without this the frontend assigns a random
+    /// name and the requester has to call `list_agents` afterwards to discover
+    /// it — which cannot be done reliably while several spawns are in flight,
+    /// since nothing correlates a returned name with the task it was given.
+    /// Empty string means "assign one for me".
+    pub name: String,
 }
 
 /// Handle returned by [`McpServer::start`] for interacting with the server.
@@ -109,16 +121,26 @@ pub struct McpServerHandle {
     pub token: String,
     /// In-flight browser-tool requests awaiting frontend responses.
     pub pending_browser: PendingRequests,
+    /// Active project's main checkout, shared with the server. See `ServerState`.
+    pub project_root: Arc<Mutex<Option<String>>>,
 }
 
 impl McpServerHandle {
     /// Register an agent so MCP clients can discover and message it.
-    pub async fn register_agent(&self, session_id: u32, name: &str, preset: &str, label: &str) {
+    pub async fn register_agent(
+        &self,
+        session_id: u32,
+        name: &str,
+        preset: &str,
+        label: &str,
+        branch: Option<String>,
+    ) {
         let entry = AgentEntry {
             session_id,
             name: name.to_string(),
             preset: preset.to_string(),
             label: label.to_string(),
+            branch,
         };
         self.registry.lock().await.insert(name.to_string(), entry);
         let _ = self.notify_tx.send(());
@@ -176,6 +198,7 @@ pub fn start(
     let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(32);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let pending_browser: PendingRequests = Arc::new(DashMap::new());
+    let project_root: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     // Bearer-equivalent shared secret. Loopback binding alone does not isolate
     // us: on a multi-user machine another local account can reach 127.0.0.1 but
     // cannot read this user's agent config files, which is where the token lives.
@@ -194,6 +217,7 @@ pub fn start(
         spawn_fn,
         browser_emit_fn,
         pending_browser: pending_browser.clone(),
+        project_root: project_root.clone(),
     });
 
     // Background sweep: drop pending browser requests older than 30s.
@@ -243,6 +267,7 @@ pub fn start(
         port: actual_port,
         token,
         pending_browser,
+        project_root,
     };
 
     Ok((handle, actual_port))
@@ -266,6 +291,11 @@ struct ServerState {
     spawn_fn: SpawnFn,
     browser_emit_fn: BrowserEmitFn,
     pending_browser: PendingRequests,
+    /// Absolute path of the active project's main checkout, set by the frontend
+    /// on project open. `delegate_task` needs it to locate the reports directory
+    /// workers write their completion signal into — the server has no other way
+    /// to know where the project lives.
+    project_root: Arc<Mutex<Option<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +418,10 @@ fn tool_spawn_agent() -> serde_json::Value {
                 "prompt": {
                     "type": "string",
                     "description": "Optional. The initial prompt/task to give the new agent."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional. The name to give the new agent, so you can address it with send_to_agent without calling list_agents first. Must not match an agent that is already running. When omitted, a name is assigned for you."
                 }
             },
             "required": ["preset"]
@@ -552,12 +586,204 @@ fn tool_browser_close_window() -> serde_json::Value {
     })
 }
 
+/// How long a worker's report is waited for by default, and the ceiling a caller
+/// may ask for. Bounded because an MCP client times out its own requests: a tool
+/// that blocks for an hour is a hung session, not a patient one. On expiry the
+/// call returns `status: "working"` and a handle rather than an error, so the
+/// caller resumes with `check_task` instead of losing the worker.
+const DELEGATE_DEFAULT_WAIT_SECS: u64 = 120;
+const DELEGATE_MAX_WAIT_SECS: u64 = 600;
+
+fn clamp_wait(requested: Option<u64>) -> u64 {
+    requested
+        .unwrap_or(DELEGATE_DEFAULT_WAIT_SECS)
+        .clamp(1, DELEGATE_MAX_WAIT_SECS)
+}
+
+/// Where a worker signals completion: `<root>/.spacron/reports/<name>.md` for
+/// success, `.blocked.md` for "I need a decision". Two files rather than one
+/// with a status field, so the check stays a file-exists test with nothing to
+/// parse and no partially-written state to misread.
+fn report_paths(root: &str, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::path::Path::new(root).join(".spacron").join("reports");
+    (
+        dir.join(format!("{}.md", name)),
+        dir.join(format!("{}.blocked.md", name)),
+    )
+}
+
+/// Wait for a worker's report to appear, up to `wait_secs`.
+///
+/// Polls rather than watching the filesystem: the wait is bounded and coarse
+/// anyway, a poll has no platform-specific watcher setup, and a worker writing
+/// its report is a once-per-task event where two seconds of latency is
+/// irrelevant. Returns MCP tool content either way — a timeout is `working`,
+/// not an error, because the worker is still going and the caller must be able
+/// to resume rather than treat it as failed.
+async fn await_worker_report(
+    state: &ServerState,
+    root: &str,
+    name: &str,
+    wait_secs: u64,
+) -> serde_json::Value {
+    let (done_path, blocked_path) = report_paths(root, name);
+    let deadline = Instant::now() + Duration::from_secs(wait_secs);
+
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&done_path) {
+            return delegate_result("complete", name, branch_of(state, name).await, Some(text));
+        }
+        if let Ok(text) = std::fs::read_to_string(&blocked_path) {
+            return delegate_result("blocked", name, branch_of(state, name).await, Some(text));
+        }
+        // A worker that vanished without reporting would otherwise be waited on
+        // for the full timeout. It can only be absent from the registry after it
+        // has been registered, so this cannot fire during the launch window.
+        if !state.registry.lock().await.contains_key(name) && Instant::now() > deadline {
+            return delegate_result("gone", name, None, None);
+        }
+        if Instant::now() >= deadline {
+            return delegate_result("working", name, branch_of(state, name).await, None);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+async fn branch_of(state: &ServerState, name: &str) -> Option<String> {
+    state
+        .registry
+        .lock()
+        .await
+        .get(name)
+        .and_then(|e| e.branch.clone())
+}
+
+fn delegate_result(
+    status: &str,
+    name: &str,
+    branch: Option<String>,
+    report: Option<String>,
+) -> serde_json::Value {
+    let guidance = match status {
+        "complete" => format!(
+            "Worker '{}' finished. Review its actual change with `git diff <your-branch>..{}` — the report says what it believes it did.",
+            name,
+            branch.clone().unwrap_or_else(|| "<its-branch>".into())
+        ),
+        "blocked" => format!("Worker '{}' is blocked and has stopped. It needs a decision from you.", name),
+        "working" => format!(
+            "Worker '{}' is still working. Call check_task with handle '{}' to keep waiting.",
+            name, name
+        ),
+        _ => format!(
+            "Worker '{}' is no longer running and never reported. It may have failed at launch — check its pane.",
+            name
+        ),
+    };
+
+    let payload = serde_json::json!({
+        "status": status,
+        "handle": name,
+        "name": name,
+        "branch": branch,
+        "report": report,
+        "next": guidance,
+    });
+
+    serde_json::json!({ "content": [
+        { "type": "text", "text": serde_json::to_string_pretty(&payload).unwrap_or_default() }
+    ]})
+}
+
+fn tool_delegate_task() -> serde_json::Value {
+    serde_json::json!({
+        "name": "delegate_task",
+        "description": "Delegate a piece of work to a NEW agent and wait for its result. Prefer this over your own in-process sub-agents whenever the work WRITES CODE: the worker gets its own visible pane and its own git branch, so the user can watch it, steer it, and review its diff — none of which is possible for an in-process sub-agent. (For read-only research your own sub-agents are fine.) Returns the worker's report when it finishes, or status 'working' with a handle if it is still going — then call check_task with that handle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "preset": {
+                    "type": "string",
+                    "description": "Agent preset to run the work ('claude', 'codex', 'gemini', 'cursor', …)."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The task for the worker. Instructions for reporting back are appended automatically — do not write your own."
+                },
+                "files": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional. Files this worker owns. Keep these disjoint from other workers' files so their branches merge cleanly."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional. Name for the worker; must not match a running agent. Assigned for you when omitted."
+                },
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Optional. How long to wait before returning 'working' (default 120, max 600)."
+                }
+            },
+            "required": ["preset", "prompt"]
+        }
+    })
+}
+
+fn tool_bounce_task() -> serde_json::Value {
+    serde_json::json!({
+        "name": "bounce_task",
+        "description": "Send a worker back to fix its work, and wait for the new result. Use this instead of send_to_agent when you want another round from a worker you delegated to: it clears the previous report first, so what you get back is the redone work and not the old report again.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string",
+                    "description": "The handle delegate_task returned (the worker's name)."
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Specific, actionable fixes: the file, the problem, and what correct looks like. Not 'please improve this'."
+                },
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Optional. How long to wait before returning 'working' (default 120, max 600)."
+                }
+            },
+            "required": ["handle", "feedback"]
+        }
+    })
+}
+
+fn tool_check_task() -> serde_json::Value {
+    serde_json::json!({
+        "name": "check_task",
+        "description": "Resume waiting for a worker delegated with delegate_task that had not finished yet. Pass the handle delegate_task returned.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string",
+                    "description": "The handle returned by delegate_task (the worker's name)."
+                },
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "Optional. How long to wait before returning 'working' again (default 120, max 600)."
+                }
+            },
+            "required": ["handle"]
+        }
+    })
+}
+
 fn all_tools() -> Vec<serde_json::Value> {
     vec![
         tool_list_agents(),
         tool_send_to_agent(),
         tool_read_agent_output(),
         tool_spawn_agent(),
+        tool_delegate_task(),
+        tool_bounce_task(),
+        tool_check_task(),
         tool_browser_navigate(),
         tool_browser_screenshot(),
         tool_browser_get_page_info(),
@@ -737,6 +963,8 @@ async fn handle_tool_call(
                         "preset": e.preset,
                         "label": e.label,
                         "session_id": e.session_id,
+                        // Absent when the agent runs in the main checkout.
+                        "branch": e.branch,
                     })
                 })
                 .collect();
@@ -862,14 +1090,32 @@ async fn handle_tool_call(
                 .and_then(|a| a.get("prompt"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let name = args
+                .and_then(|a| a.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
 
             if preset.is_empty() {
                 return Json(JsonRpcResponse::error(id, -32602, "Missing required parameter 'preset'"));
             }
 
+            // Refuse a name already in the registry rather than letting the
+            // frontend silently rename it: `send_to_agent` resolves by name, so
+            // two agents answering to one name makes every later message
+            // ambiguous.
+            if !name.is_empty() && state.registry.lock().await.contains_key(name) {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    &format!("An agent named '{}' is already running — pick another name.", name),
+                ));
+            }
+
             let req = SpawnRequest {
                 preset: preset.to_string(),
                 prompt: prompt.to_string(),
+                name: name.to_string(),
             };
 
             let _ = state.spawn_tx.send(req.clone());
@@ -884,6 +1130,202 @@ async fn handle_tool_call(
                         if prompt.is_empty() { String::new() } else { format!(" with prompt: {}", prompt) }
                     )}
                 ]}),
+            ))
+        }
+
+        "delegate_task" => {
+            let args = params.get("arguments").and_then(|a| a.as_object());
+            let preset = args.and_then(|a| a.get("preset")).and_then(|v| v.as_str()).unwrap_or("");
+            let prompt = args.and_then(|a| a.get("prompt")).and_then(|v| v.as_str()).unwrap_or("");
+            let requested = args
+                .and_then(|a| a.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let files: Vec<String> = args
+                .and_then(|a| a.get("files"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let wait = clamp_wait(args.and_then(|a| a.get("wait_seconds")).and_then(|v| v.as_u64()));
+
+            if preset.is_empty() || prompt.is_empty() {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "delegate_task needs both 'preset' and 'prompt'.",
+                ));
+            }
+
+            let root = match state.project_root.lock().await.clone() {
+                Some(r) => r,
+                None => {
+                    return Json(JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        "No project is open, so there is nowhere to run a worker.",
+                    ))
+                }
+            };
+
+            // The worker's name is also its report filename and its handle, so it
+            // has to be unique across running agents — a collision would make two
+            // workers write over one report and make `send_to_agent` ambiguous.
+            let name = if requested.is_empty() {
+                format!("worker-{}", &uuid::Uuid::new_v4().simple().to_string()[..6])
+            } else {
+                requested
+            };
+            if state.registry.lock().await.contains_key(&name) {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    &format!("An agent named '{}' is already running — pick another name.", name),
+                ));
+            }
+
+            // Clear any report left by an earlier worker of the same name, so a
+            // stale file can't be mistaken for this run finishing instantly.
+            let (done_path, blocked_path) = report_paths(&root, &name);
+            let _ = std::fs::remove_file(&done_path);
+            let _ = std::fs::remove_file(&blocked_path);
+            if let Some(dir) = done_path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+
+            // The caller supplies the task; the reporting protocol is appended
+            // here so it can never be forgotten or written wrong. The paths are
+            // ABSOLUTE on purpose: the worker runs in its own git worktree, and a
+            // relative path would put the report inside that checkout where
+            // nobody is looking for it.
+            let ownership = if files.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nYou own these files and nothing else: {}. Do not edit anything outside that list — another agent owns it.",
+                    files.join(", ")
+                )
+            };
+            let full_prompt = format!(
+                "{prompt}{ownership}\n\nCommit your work on your branch as you go.\n\
+                 When you are FINISHED, write your summary to this exact absolute path:\n  {done}\n\
+                 Say what you changed, which files, and how you verified it. Writing that file is how you signal you are done — nothing else counts.\n\
+                 If you get stuck or need a decision, write what you need to this exact absolute path instead and stop:\n  {blocked}",
+                prompt = prompt,
+                ownership = ownership,
+                done = done_path.display(),
+                blocked = blocked_path.display(),
+            );
+
+            let req = SpawnRequest {
+                preset: preset.to_string(),
+                prompt: full_prompt,
+                name: name.clone(),
+            };
+            let _ = state.spawn_tx.send(req.clone());
+            (state.spawn_fn)(req);
+
+            Json(JsonRpcResponse::success(
+                id,
+                await_worker_report(&state, &root, &name, wait).await,
+            ))
+        }
+
+        "bounce_task" => {
+            let args = params.get("arguments").and_then(|a| a.as_object());
+            let handle = args
+                .and_then(|a| a.get("handle"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let feedback = args.and_then(|a| a.get("feedback")).and_then(|v| v.as_str()).unwrap_or("");
+            let wait = clamp_wait(args.and_then(|a| a.get("wait_seconds")).and_then(|v| v.as_u64()));
+
+            if handle.is_empty() || feedback.is_empty() {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "bounce_task needs both 'handle' and 'feedback'.",
+                ));
+            }
+            let root = match state.project_root.lock().await.clone() {
+                Some(r) => r,
+                None => return Json(JsonRpcResponse::error(id, -32000, "No project is open.")),
+            };
+            let session_id = state.registry.lock().await.get(&handle).map(|e| e.session_id);
+            let sid = match session_id {
+                Some(s) => s,
+                None => {
+                    return Json(JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        &format!("No running agent named '{}' — it may have exited.", handle),
+                    ))
+                }
+            };
+
+            // Delete the previous report BEFORE sending, not after: the worker
+            // may start writing the new one immediately, and deleting afterwards
+            // would race it away. Without this the next wait returns the stale
+            // report instantly and the loop "converges" without anything having
+            // been redone.
+            let (done_path, blocked_path) = report_paths(&root, &handle);
+            let _ = std::fs::remove_file(&done_path);
+            let _ = std::fs::remove_file(&blocked_path);
+
+            let message = format!(
+                "{feedback}\n\nWhen you have addressed this, write your summary again to:\n  {done}\nIf you cannot proceed, write why to:\n  {blocked}",
+                feedback = feedback,
+                done = done_path.display(),
+                blocked = blocked_path.display(),
+            );
+
+            if let Err(e) = (state.write_cb)(sid, &message) {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32000,
+                    &format!("Failed to write to '{}': {}", handle, e),
+                ));
+            }
+            let _ = state.send_tx.send(SendToAgentRequest {
+                target_name: handle.clone(),
+                message: message.clone(),
+                target_session_id: sid,
+            });
+
+            Json(JsonRpcResponse::success(
+                id,
+                await_worker_report(&state, &root, &handle, wait).await,
+            ))
+        }
+
+        "check_task" => {
+            let args = params.get("arguments").and_then(|a| a.as_object());
+            let handle = args
+                .and_then(|a| a.get("handle"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let wait = clamp_wait(args.and_then(|a| a.get("wait_seconds")).and_then(|v| v.as_u64()));
+
+            if handle.is_empty() {
+                return Json(JsonRpcResponse::error(id, -32602, "check_task needs a 'handle'."));
+            }
+            let root = match state.project_root.lock().await.clone() {
+                Some(r) => r,
+                None => return Json(JsonRpcResponse::error(id, -32000, "No project is open.")),
+            };
+
+            Json(JsonRpcResponse::success(
+                id,
+                await_worker_report(&state, &root, &handle, wait).await,
             ))
         }
 

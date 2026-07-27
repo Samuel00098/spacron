@@ -732,7 +732,7 @@ function buildSystemPrompt(
     'Each action is ONE of:',
     '- {"kind": "spawn", "agent": "<command id>", "prompt": "<full standalone prompt>" | null, "name": null, "role": null}',
     '    Launch a NEW agent. Omit/null "prompt" to just open it idle and ready. Leave "name" null — the app auto-assigns a name (e.g. "Trinity"). Only set "name" to echo a specific name the USER explicitly chose; never invent generic labels like "claude-1" or "agent 2".',
-    '    "role" (optional): when you divide ONE goal across a TEAM, tag each spawn with its role so it gets the right charter — "coordinator" (plans + sequences the sub-tasks), "builder" (implements one sub-task), "scout" (read-only recon, no edits), "reviewer" (gates each hand-off). Leave null for an ordinary single agent.',
+    '    "role" (optional): when you divide ONE goal across a TEAM, tag each spawn with its role so it gets the right charter — "coordinator" (plans + sequences the sub-tasks), "builder" (implements one sub-task), "scout" (read-only recon, no edits), "reviewer" (gates each hand-off), "orchestrator" (runs a whole team ITSELF: spawns its own workers, reviews their work, sends fixes back, and reports when done — use this when the user asks for agents to be run/managed for them, and spawn it ALONE, it recruits the rest). Leave null for an ordinary single agent.',
     '    "files" (optional): for a builder in a divided plan, the repo-relative files that sub-task will own. The app posts a claim so no two builders edit the same file at once — a spawn whose files overlap a live claim is held until released. Only set it when you know the files; otherwise omit.',
     '    "skipWorktree" (optional, boolean): set to true for admin/release tasks (tagging, pushing, changelogs, version bumps, deploy) so the agent runs directly in the project root instead of an isolated git worktree. Defaults to false — the app ALSO auto-detects it from the prompt content, so you typically do not need to set this explicitly.',
     '    "placement" (optional, "worktree" | "main" | null): set ONLY when the user says where that agent should run — "in a worktree" / "isolated" → "worktree"; "in the main repo" / "on the main branch" / "no worktree" → "main". Set it PER SPAWN: "open one in a worktree and another in the main repo" is two spawns with different values. Leave it null when they did not say — the app then asks them, so never guess.',
@@ -833,7 +833,7 @@ function str(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
 
-const VALID_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer'];
+const VALID_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer', 'orchestrator'];
 
 /** Snap a model-supplied role string to a known preset, or null. */
 function parseRole(raw: unknown): AgentRole | null {

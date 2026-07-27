@@ -5,6 +5,8 @@ import { playNudge } from '$lib/services/nudge';
 import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
+import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator-brief';
+import { setMcpProjectRoot } from './mcpBridge';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
@@ -325,6 +327,11 @@ function updateProjectState(
 export function setActiveTerminalProject(projectId: string | null) {
   activeTerminalProjectId = projectId;
   activeDevTerminalProjectId = projectId;
+  // Keep the MCP server pointed at the open project: `delegate_task` waits on a
+  // file under its `.spacron/reports/`, and the server has no other way to know
+  // where that is. Cleared with the project so a delegate call refuses rather
+  // than waiting on a stale path.
+  setMcpProjectRoot(projectId ? terminalProjectRoots.get(projectId) ?? null : null);
   if (!projectId) {
     setVisibleProjectState(createDefaultProjectState(), false);
     setVisibleProjectState(createDefaultProjectState(), true);
@@ -807,7 +814,7 @@ function registerPtySession(
 
   // Register with MCP server so other agents can discover this one
   if (info.agentPreset && info.agentName) {
-    registerAgent(info.id, info.agentName, info.agentPreset, getSessionLabel(info, [info])).catch((e) =>
+    registerAgent(info.id, info.agentName, info.agentPreset, getSessionLabel(info, [info]), info.worktree?.branch).catch((e) =>
       console.error('Failed to register agent with MCP server:', e),
     );
   }
@@ -1214,7 +1221,7 @@ export function setSessionAgentName(id: number, agentName: string | null) {
   if (agentName?.trim()) {
     const session = getProjectState(projectId, isDev).sessions.find((x) => x.id === id);
     if (session?.agentPreset) {
-      registerAgent(id, agentName, session.agentPreset, getSessionLabel(session, [session])).catch((e) =>
+      registerAgent(id, agentName, session.agentPreset, getSessionLabel(session, [session]), session.worktree?.branch).catch((e) =>
         console.error('Failed to register agent with MCP server:', e),
       );
     }
@@ -1590,6 +1597,17 @@ export function setSessionRole(id: number, role: string | null) {
   }), isDev);
 }
 
+/**
+ * The project an externally-triggered spawn should land in — used by the MCP
+ * bridge, which receives a spawn request from an agent process and has no
+ * project context of its own. Returns the normal ambient's active project; a
+ * spawn arriving with no project open has nowhere to go and must be refused
+ * rather than guessed at.
+ */
+export function getActiveTerminalProjectId(): string | null {
+  return activeTerminalProjectId;
+}
+
 export function setSessionWorktree(id: number, worktree: WorktreeInfo | null) {
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);
@@ -1855,12 +1873,17 @@ export async function spawnAgentPreset(
   if (sessionId === null || sessionId === undefined) return null;
 
   let rulesBriefed = false;
-  if (agentReadsRulesFile(command)) {
-    const root = cwd ?? resolveSessionRoot(sessionId);
-    if (root) {
-      try { rulesBriefed = await ensureAgentRulesFiles(root); }
+  const briefRoot = cwd ?? resolveSessionRoot(sessionId);
+  if (briefRoot) {
+    if (agentReadsRulesFile(command)) {
+      try { rulesBriefed = await ensureAgentRulesFiles(briefRoot); }
       catch (err) { console.error('Failed to ensure agent rules files:', err); }
     }
+    // Deliberately NOT gated on `agentReadsRulesFile`: the orchestrator protocol
+    // is delivered as a file any agent reads on demand (its one-line role brief
+    // points at it), so it must be present whatever preset was launched.
+    try { await ensureOrchestratorBrief(briefRoot); }
+    catch (err) { console.error('Failed to ensure orchestrator brief:', err); }
   }
   markSessionAgentPreset(sessionId, command, opts?.skipAutoBrief || rulesBriefed || undefined);
   const displayName = getAgentDisplayName(command) ?? command;

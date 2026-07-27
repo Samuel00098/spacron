@@ -582,7 +582,7 @@ function isReviewer(task: OrchestratorTask): boolean {
   return task.role === 'reviewer';
 }
 
-const AGENT_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer'];
+const AGENT_ROLES: readonly AgentRole[] = ['coordinator', 'builder', 'scout', 'reviewer', 'orchestrator'];
 
 /**
  * Narrow a terminal session's `role` to an orchestrator `AgentRole`.
@@ -1581,12 +1581,10 @@ export async function executeAppAction(
     case 'preview': {
       const url = action.url.trim();
       if (!url) return false;
-      // Ensure the background proxy is running so external URLs
-      // load reliably through the iframe, then navigate and reveal
-      // the preview panel so the user (or agent) sees the page.
       await ensureProxyRunning();
       navigatePreviewTab(url);
       setActiveView('preview');
+      requestRoomControl('focus', 'preview');
       return true;
     }
     case 'run': {

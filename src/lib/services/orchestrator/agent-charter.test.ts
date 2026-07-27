@@ -53,8 +53,13 @@ describe('buildAgentCharter', () => {
     const charter = buildAgentCharter('do the thing', { name: 'Echo' });
     expect(charter).not.toContain('═');
     expect(charter).not.toContain('▌');
-    // A handful of lines, not dozens — long decorated prompts truncate in Ink REPLs.
-    expect(charter.split('\n').length).toBeLessThanOrEqual(10);
+    // A handful of lines, not dozens — long decorated prompts truncate
+    // mid-paste in Ink REPLs. Raised 10 → 11 when the DELEGATING rule was added:
+    // it earns its own numbered line rather than being folded into EXECUTION,
+    // because agents were defaulting to their own sub-agent feature or shelling
+    // out to a CLI, which spawns agents the app can't see — and a buried rule
+    // does not change that. Do not raise this again without the same argument. in Ink REPLs.
+    expect(charter.split('\n').length).toBeLessThanOrEqual(11);
   });
 
   it('is deterministic for the same input', () => {

@@ -17,9 +17,10 @@ pub async fn mcp_register_agent(
     name: String,
     preset: String,
     label: String,
+    branch: Option<String>,
 ) -> Result<(), String> {
     handle
-        .register_agent(session_id, &name, &preset, &label)
+        .register_agent(session_id, &name, &preset, &label, branch)
         .await;
     Ok(())
 }
@@ -71,5 +72,20 @@ pub fn mcp_browser_respond(
             .to_string())
     };
     handle.resolve_browser_request(&request_id, result);
+    Ok(())
+}
+
+/// Tell the MCP server which project is open.
+///
+/// `delegate_task` waits on a file under the project's `.spacron/reports/`, and
+/// the server has no other way to learn where the project lives — the frontend
+/// owns that. Called on project open and on switch; passing `None` (no project)
+/// makes `delegate_task` refuse rather than guess.
+#[tauri::command]
+pub async fn mcp_set_project_root(
+    handle: State<'_, McpServerHandle>,
+    root: Option<String>,
+) -> Result<(), String> {
+    *handle.project_root.lock().await = root.filter(|r| !r.trim().is_empty());
     Ok(())
 }

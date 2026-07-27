@@ -545,6 +545,15 @@
   box-shadow: 0 0 10px color-mix(in srgb, var(--text-primary) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
+/* Drag-over highlight when files are dragged into this pane */
+.terminal-pane.drag-over {
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 14px color-mix(in srgb, var(--accent) 25%, transparent),
+    var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65));
+}
+
 /* Pulse animation when the agent is executing */
 @keyframes agentPulse {
   0% { opacity: 0.8; }

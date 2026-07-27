@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { activeProject, activeProjectId } from '$lib/stores/workspace';
 import { openFile } from '$lib/stores/editor';
 import { showToast } from '$lib/stores/notification';
@@ -184,6 +185,27 @@ export default function SourceControl() {
     }
   }, [projectId]);
 
+  useEffect(() => {
+    if (!project) return;
+    const root = project.root_path;
+    const unlisten = listen<string>('fs-change', (event) => {
+      if (event.payload === root) {
+        void refreshAll(true);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [project]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const interval = setInterval(() => {
+      void refreshAll(true);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [projectId]);
+
   function toggleFile(file: string) {
     setSelectedFiles((current) => {
       const next = new Set(current);
@@ -264,13 +286,13 @@ export default function SourceControl() {
     }
   }
 
-  async function refreshAll() {
+  async function refreshAll(silent = false) {
     const generation = ++refreshGenerationRef.current;
     setErrorMsg(null);
     const id = projectIdRef.current;
     await Promise.all([
-      fetchStatus(generation),
-      fetchHistory(generation),
+      fetchStatus(generation, silent),
+      fetchHistory(generation, silent),
       fetchStagedPaths(generation),
       id ? refreshBranches(id) : Promise.resolve(),
     ]);
@@ -332,12 +354,12 @@ export default function SourceControl() {
     setExpandedFile((current) => (current === file ? null : file));
   }
 
-  async function fetchStatus(generation: number) {
+  async function fetchStatus(generation: number, silent = false) {
     const id = projectIdRef.current;
     if (!id) return;
 
     const requestGeneration = ++statusRequestGenerationRef.current;
-    setIsFetchingStatus(true);
+    if (!silent) setIsFetchingStatus(true);
     try {
       const status = await invoke<GitStatus>('workspace_git_status', { projectId: id });
       if (generation !== refreshGenerationRef.current || requestGeneration !== statusRequestGenerationRef.current) return;
@@ -382,12 +404,12 @@ export default function SourceControl() {
     }
   }
 
-  async function fetchHistory(generation: number) {
+  async function fetchHistory(generation: number, silent = false) {
     const id = projectIdRef.current;
     if (!id) return;
 
     const requestGeneration = ++historyRequestGenerationRef.current;
-    setIsFetchingHistory(true);
+    if (!silent) setIsFetchingHistory(true);
     try {
       const history = await invoke<GitLogEntry[]>('workspace_git_log', { projectId: id });
       if (generation !== refreshGenerationRef.current || requestGeneration !== historyRequestGenerationRef.current) return;

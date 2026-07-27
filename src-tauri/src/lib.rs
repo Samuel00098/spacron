@@ -356,6 +356,7 @@ pub fn run() {
             commands::mcp::mcp_server_port,
             commands::mcp::mcp_server_url,
             commands::mcp::mcp_browser_respond,
+            commands::mcp::mcp_set_project_root,
             commands::browser_window::browser_create_window,
             commands::browser_window::browser_navigate_window,
             commands::browser_window::browser_close_window,
