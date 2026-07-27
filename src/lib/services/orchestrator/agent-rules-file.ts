@@ -22,17 +22,28 @@ import { backendInvoke } from '$lib/services/backend';
 import { getCustomAgents } from '$lib/stores/customAgents';
 
 // Agents that read a standing rules file at startup, keyed by every form the
-// codebase stores a preset in: the launch command (`agy`, `agent`) AND the
-// canonical detected name (`antigravity`, `cursor`). Membership decides whether
-// we deliver the brief via file (skip the REPL paste) or fall back to pasting.
+// codebase stores a preset in: the launch command (`agy`, `cursor-agent`) AND
+// the canonical detected name (`antigravity`, `cursor`). Membership decides
+// whether we deliver the brief via file (skip the REPL paste) or fall back to
+// pasting.
+//
+// Keep this in sync with `PRESET_AGENTS` in SettingsModal.tsx, whose "Rules
+// file" checkbox reports what this set decides. The two drifted once already:
+// Settings claimed Grok read a rules file while this set omitted it, so Grok
+// silently got the paste channel. `grok inspect` lists AGENTS.md/CLAUDE.md
+// under "Project Instructions", so it belongs here.
 const RULES_FILE_AGENTS = new Set([
   'claude',
   'codex',
   'cursor',
+  'cursor-agent',
+  // Legacy key: the Cursor preset launched the bare `agent` before it was
+  // renamed to `cursor-agent`. Sessions stored under the old id still match.
   'agent',
   'opencode',
   'antigravity',
   'agy',
+  'grok',
 ]);
 
 /** True when this agent reads CLAUDE.md / AGENTS.md natively at startup. */
@@ -45,6 +56,108 @@ export function agentReadsRulesFile(presetOrCommand: string | null | undefined):
   return getCustomAgents().some(
     (a) => a.readsRulesFile && a.command.trim().toLowerCase() === key
   );
+}
+
+// Tokens that wrap the real command, skipped when locating the executable.
+// Mirrors `COMMAND_LAUNCHER_PREFIXES` in `stores/terminal.ts` and
+// `LAUNCHER_PREFIXES` in the Rust probe.
+const LAUNCHER_PREFIXES = new Set(['npx', 'bunx', 'pnpx', 'sudo', 'command', 'exec', 'time', 'nice']);
+
+/**
+ * The bare executable name from a launch command: drops a leading PowerShell
+ * call operator, `FOO=bar` assignments, launcher prefixes, quotes, any directory
+ * part and a Windows extension. `npx opencode --foo` → `opencode`.
+ */
+export function agentExecutable(command: string | null | undefined): string {
+  if (!command) return '';
+  const tokens = command.trim().replace(/^&\s*/, '').split(/\s+/).filter(Boolean);
+  let program = '';
+  for (const token of tokens) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+    if (LAUNCHER_PREFIXES.has(token.toLowerCase())) continue;
+    program = token;
+    break;
+  }
+  if (!program) return '';
+  return (
+    program
+      .replace(/^["']|["']$/g, '')
+      .split(/[\\/]/)
+      .pop() ?? ''
+  )
+    .replace(/\.(exe|cmd|bat)$/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+/** What a detection run concluded, and on what basis. */
+export interface RulesFileDetection {
+  /** Suggested value for the "Rules file" checkbox. */
+  readsRulesFile: boolean;
+  /**
+   * `known`  — the executable is one Spacron ships a preset for.
+   * `probe`  — we ran `<exe> --help` and read the answer out of it.
+   * `unknown`— the probe could not run (binary missing, timed out, no backend).
+   */
+  source: 'known' | 'probe' | 'unknown';
+  executable: string;
+  /** The phrase that matched in the help text, when `source` is `probe`. */
+  evidence?: string;
+  /** Why the probe could not run, when `source` is `unknown`. */
+  error?: string;
+}
+
+/**
+ * Work out whether a launch command's CLI reads a rules file, so the add-agent
+ * form can pre-fill its checkbox instead of asking the user to know.
+ *
+ * Two tiers: the executable is checked against the CLIs we already ship presets
+ * for (instant, certain), and anything unrecognised is probed by running
+ * `<exe> --help` in the backend and scanning it — see `agent_probe.rs` for what
+ * that does and does not do.
+ *
+ * A failed probe returns `readsRulesFile: false` with `source: 'unknown'`. That
+ * is the safe direction: pasting the brief to an agent that would also have read
+ * it from a file is redundant, while skipping the paste for one that never reads
+ * the file loses the brief entirely.
+ */
+export async function detectRulesFileSupport(command: string): Promise<RulesFileDetection> {
+  const executable = agentExecutable(command);
+  if (!executable) {
+    return { readsRulesFile: false, source: 'unknown', executable: '', error: 'No launch command' };
+  }
+  if (RULES_FILE_AGENTS.has(executable)) {
+    return { readsRulesFile: true, source: 'known', executable };
+  }
+  try {
+    // Through the backend seam, not Tauri directly: with a remote workspace
+    // active the agent CLI lives on the remote box, so that is where the probe
+    // has to run. A backend without the command rejects, which lands in the
+    // catch below as "couldn't check".
+    const probe = await backendInvoke<{
+      executable: string;
+      readsRulesFile: boolean;
+      ran: boolean;
+      evidence: string | null;
+      error: string | null;
+    }>('agent_probe_rules_file', { command });
+    if (!probe.ran) {
+      return {
+        readsRulesFile: false,
+        source: 'unknown',
+        executable: probe.executable || executable,
+        error: probe.error ?? 'Could not run the command',
+      };
+    }
+    return {
+      readsRulesFile: probe.readsRulesFile,
+      source: 'probe',
+      executable: probe.executable || executable,
+      evidence: probe.evidence ?? undefined,
+    };
+  } catch (err) {
+    return { readsRulesFile: false, source: 'unknown', executable, error: String(err) };
+  }
 }
 
 // The rules files we write. CLAUDE.md is Claude Code's; AGENTS.md is the shared

@@ -51,6 +51,9 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
   pi: 'Pi',
+  'cursor-agent': 'Cursor',
+  // Legacy: the preset used to launch the bare `agent`. Sessions and stored
+  // tasks from before the rename still carry it.
   agent: 'Cursor',
   cursor: 'Cursor',
   hermes: 'Hermes Agent',

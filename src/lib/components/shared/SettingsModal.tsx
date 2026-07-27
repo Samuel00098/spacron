@@ -104,6 +104,10 @@ import { activeTheme, switchPresetTheme, saveTheme, importTheme, themeColorField
 import { presetThemes } from '$lib/stores/presetThemes';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
+import {
+  detectRulesFileSupport,
+  type RulesFileDetection,
+} from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import './SettingsModal.css';
 
@@ -489,6 +493,11 @@ interface PresetAgent {
   name: string;
   command: string;
   readsRulesFile: boolean;
+  /**
+   * Shown under the command when the command we launch isn't the obvious one,
+   * so nobody "corrects" it back to a shorter alias that another CLI also owns.
+   */
+  note?: string;
 }
 
 const PRESET_AGENTS: PresetAgent[] = [
@@ -497,7 +506,12 @@ const PRESET_AGENTS: PresetAgent[] = [
   { name: 'Antigravity', command: 'agy', readsRulesFile: true },
   { name: 'OpenCode', command: 'opencode', readsRulesFile: true },
   { name: 'Pi AI Agent', command: 'pi', readsRulesFile: false },
-  { name: 'Cursor', command: 'agent', readsRulesFile: true },
+  {
+    name: 'Cursor',
+    command: 'cursor-agent',
+    readsRulesFile: true,
+    note: 'Not the shorter “agent” alias — the Grok CLI installs an “agent” command too, and whichever comes first on your PATH wins.',
+  },
   { name: 'Grok CLI', command: 'grok', readsRulesFile: true },
 ];
 
@@ -643,6 +657,41 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [newAgentCommand, setNewAgentCommand] = useState('');
   const [newAgentReadsRules, setNewAgentReadsRules] = useState(true);
   const [agentFormError, setAgentFormError] = useState('');
+  // Result of asking the entered CLI whether it reads a rules file. `null` means
+  // nothing has been checked yet (empty field, or a check in flight).
+  const [rulesDetection, setRulesDetection] = useState<RulesFileDetection | null>(null);
+  const [rulesDetecting, setRulesDetecting] = useState(false);
+  // Set once the user clicks the checkbox themselves. Detection pre-fills the
+  // box, but it must never yank a deliberate choice back — the user knows their
+  // own CLI better than a byte scan does. A ref, not state: this is read when a
+  // probe resolves, and making it a dependency would re-probe (relaunching a
+  // process) every time the box is ticked.
+  const rulesTouched = useRef(false);
+
+  // Ask the entered CLI whether it reads a rules file, and pre-fill the
+  // checkbox with the answer. Debounced because it launches a process: we want
+  // one probe when typing settles, not one per keystroke. The generation guard
+  // drops results from a command the user has already edited past.
+  const rulesProbeGeneration = useRef(0);
+  useEffect(() => {
+    const command = newAgentCommand.trim();
+    const generation = ++rulesProbeGeneration.current;
+    if (!command) {
+      setRulesDetection(null);
+      setRulesDetecting(false);
+      return;
+    }
+    setRulesDetecting(true);
+    const timer = setTimeout(() => {
+      void detectRulesFileSupport(command).then((detection) => {
+        if (rulesProbeGeneration.current !== generation) return;
+        setRulesDetection(detection);
+        setRulesDetecting(false);
+        if (!rulesTouched.current) setNewAgentReadsRules(detection.readsRulesFile);
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [newAgentCommand]);
 
   const [customLabel, setCustomLabel] = useState('');
   const [customKeys, setCustomKeys] = useState('');
@@ -1222,6 +1271,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     setNewAgentName('');
     setNewAgentCommand('');
     setNewAgentReadsRules(true);
+    setRulesDetection(null);
+    rulesTouched.current = false;
     setAgentFormError('');
     showToast(`Added "${created.name}" — it's now in the spawn picker.`, 'success');
   }
@@ -2067,7 +2118,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       ariaLabel="Terminal cursor"
                     />
                   </SettingRow>
-                  <SettingRow title="Renderer" detail="WebGL is fastest (GPU); use DOM if the terminal glitches. WebGL uses an opaque background.">
+                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest but a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
                     <SelectField
                       value={renderer}
                       options={[
@@ -2142,6 +2193,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                             <span className="agent-badge">Built-in</span>
                           </div>
                           <code className="agent-cmd">{agent.command}</code>
+                          {agent.note && (
+                            <p className="agent-cmd-note">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="12" y1="16" x2="12" y2="12" />
+                                <line x1="12" y1="8" x2="12.01" y2="8" />
+                              </svg>
+                              <span>{agent.note}</span>
+                            </p>
+                          )}
                         </div>
                         <label className="agent-rules-toggle disabled" title="Reads a CLAUDE.md / AGENTS.md rules file at startup">
                           <input
@@ -2224,10 +2285,42 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <input
                         type="checkbox"
                         checked={newAgentReadsRules}
-                        onChange={(e) => setNewAgentReadsRules(e.target.checked)}
+                        onChange={(e) => {
+                          rulesTouched.current = true;
+                          setNewAgentReadsRules(e.target.checked);
+                        }}
                       />
                       <span>This CLI reads a <code>CLAUDE.md</code> / <code>AGENTS.md</code> rules file at startup</span>
                     </label>
+
+                    {/* What the check concluded, and on what basis — a pre-filled
+                        box with no stated reason is just a guess the user can't
+                        audit. */}
+                    {(rulesDetecting || rulesDetection) && (
+                      <p className={`agent-rules-detect${rulesDetecting ? ' checking' : ''}`}>
+                        {rulesDetecting ? (
+                          <>Checking <code>{newAgentCommand.trim().split(/\s+/)[0]}</code>…</>
+                        ) : rulesDetection?.source === 'known' ? (
+                          <>
+                            Detected: <code>{rulesDetection.executable}</code> is a CLI Spacron already
+                            knows reads these files, so the brief goes in the file.
+                          </>
+                        ) : rulesDetection?.source === 'probe' && rulesDetection.readsRulesFile ? (
+                          <>Detected: {rulesDetection.evidence}, so the brief goes in the file.</>
+                        ) : rulesDetection?.source === 'probe' ? (
+                          <>
+                            Checked <code>{rulesDetection.executable}</code>: nothing in its help or its
+                            program files names a rules file, so the brief will be pasted into its prompt
+                            instead. Tick the box if you know it reads one.
+                          </>
+                        ) : (
+                          <>
+                            Couldn&apos;t check ({rulesDetection?.error}) — left unticked, so the brief gets
+                            pasted. Tick the box if this CLI reads a rules file.
+                          </>
+                        )}
+                      </p>
+                    )}
 
                     {agentFormError && (
                       <p className="agent-error">{agentFormError}</p>

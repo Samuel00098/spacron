@@ -376,6 +376,21 @@ describe('unified agent briefing', () => {
   const projectId = 'project-terminal-briefing';
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+  /**
+   * Poll until `check` holds. `briefed` is only set at the very end of the send
+   * pipeline (echo wait → composer quiesce → submit-confirm retries), each stage
+   * on a real timer, so any fixed sleep is a bet on how loaded the machine is.
+   * That bet lost exactly once per parallel full-suite run.
+   */
+  const waitUntil = async (check: () => boolean, timeoutMs = 4000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await sleep(25);
+    }
+    return check();
+  };
+
   beforeEach(() => {
     setActiveTerminalProject(projectId);
   });
@@ -397,16 +412,15 @@ describe('unified agent briefing', () => {
     // Set preset without briefed flag — triggers auto-brief
     markSessionAgentPreset(sessionId!, 'claude');
 
-    // Wait for auto-brief async task to finish (timeout is short in test env)
-    await sleep(350);
+    // Wait for the auto-brief pipeline to actually finish. `briefed` flips last,
+    // after the charter has been written, so this also guarantees the write below.
+    const briefed = await waitUntil(() => get(sessions).find(s => s.id === sessionId)?.briefed === true);
+    expect(briefed).toBe(true);
 
     // Verify it sent the brief to the PTY
     expect(writeSpy).toHaveBeenCalled();
     const pastedText = writeSpy.mock.calls.find((call: unknown[]) => typeof call[0] === 'string' && call[0].includes('SORYQ AGENT BRIEF'));
     expect(pastedText).toBeDefined();
-
-    const session = get(sessions).find(s => s.id === sessionId);
-    expect(session?.briefed).toBe(true);
   });
 
   it('skips auto-briefing if skipAutoBrief is true', async () => {
@@ -438,20 +452,25 @@ describe('unified agent briefing', () => {
     const writeSpy = mockPty.write;
     writeSpy.mockClear();
 
+    const sawBrief = () =>
+      writeSpy.mock.calls.some((c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF'));
+    const isBriefed = () => get(sessions).find(s => s.id === sessionId)?.briefed === true;
+
+    // Phase one must be allowed to run to COMPLETION before the relaunch, not just
+    // until the charter appears on the wire. `briefed` flips at the end of the send
+    // pipeline; re-marking the preset while that pipeline is still in flight is
+    // swallowed by the in-flight send, and phase two then never fires.
     markSessionAgentPreset(sessionId!, 'claude');
-    await sleep(400);
-    expect(writeSpy.mock.calls.some((c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF'))).toBe(true);
+    expect(await waitUntil(isBriefed)).toBe(true);
+    expect(sawBrief()).toBe(true);
 
     // The agent exits and the user launches it again in the same pane — input
     // detection re-marks the preset, which must reset `briefed` and send the
     // charter to the new process too.
     writeSpy.mockClear();
     markSessionAgentPreset(sessionId!, 'claude');
-    await sleep(400);
-    expect(writeSpy.mock.calls.some((c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF'))).toBe(true);
-
-    const session = get(sessions).find(s => s.id === sessionId);
-    expect(session?.briefed).toBe(true);
+    expect(await waitUntil(sawBrief)).toBe(true);
+    expect(await waitUntil(isBriefed)).toBe(true);
   });
 
   it('briefs a plain spawnAgentPreset exactly once', async () => {
@@ -462,7 +481,11 @@ describe('unified agent briefing', () => {
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     const writeSpy = mockPty.write;
 
-    await sleep(350);
+    // Wait for the pipeline to actually finish rather than guessing at a delay,
+    // then assert the charter went out exactly once. Ordered this way the
+    // "exactly once" check still covers the full window, not just the first 350ms.
+    const briefed = await waitUntil(() => get(sessions).find(s => s.id === sessionId)?.briefed === true);
+    expect(briefed).toBe(true);
 
     // The spawn's own `claude\r` launch write must not re-trigger detection and
     // double-deliver the charter.
@@ -470,9 +493,6 @@ describe('unified agent briefing', () => {
       (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('SORYQ AGENT BRIEF')
     );
     expect(briefWrites).toHaveLength(1);
-
-    const session = get(sessions).find(s => s.id === sessionId);
-    expect(session?.briefed).toBe(true);
   });
 
   it('includes the assigned assistant name in the auto-brief charter', async () => {

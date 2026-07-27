@@ -16,7 +16,7 @@ import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
 import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
-import { agentWorktrees } from '$lib/stores/settings';
+import { requestAgentPlacement, expandSpawnPlan } from '$lib/stores/agentPlacement';
 
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
@@ -31,10 +31,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const isDev = layout.ambient === 'development';
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
-  // Seeded from the global default; the Isolated / Main repo toggle below still
-  // overrides it for this spawn only.
-  const worktreesByDefault = useStore(agentWorktrees);
-  const [skipWorktree, setSkipWorktree] = useState(worktreesByDefault === false);
 
   const spawnPresets = useMemo(() => {
     void $customAgents;
@@ -73,6 +69,24 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     const entries = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
     if (!entries.length) return;
 
+    // Always confirm the working directory before anything starts — a worktree
+    // agent's edits are invisible in the main checkout, which is easy to miss if
+    // the choice is only a toggle. Flattened to one entry per agent so a batch
+    // can be mixed (one in the main repo, the rest isolated). Dismissing keeps
+    // this modal open with the user's picks intact.
+    const plan = expandSpawnPlan(
+      entries.map(([cmd, count]) => ({
+        key: cmd,
+        label: spawnPresets.find((p) => p.command === cmd)?.name ?? cmd,
+        count,
+      }))
+    );
+    const placements = await requestAgentPlacement({
+      agents: plan.map((item) => item.label),
+      source: 'manual',
+    });
+    if (!placements) return;
+
     // Close the popup immediately so that the background spawning process
     // can run without modal overlays flickering on top of tab changes.
     onclose();
@@ -89,38 +103,40 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     const spawnedNames: string[] = [];
 
     try {
-      for (const [cmd, count] of entries) {
-        for (let i = 0; i < count; i++) {
-          const name = pickAssistantName(takenNames);
-          let worktree = projectId && !skipWorktree
-            ? await createTaskWorktree({
-                projectId,
-                taskId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                label: name,
-              })
-            : null;
+      // `plan` is already one entry per agent, index-aligned with `placements`,
+      // so each agent honours its OWN answer from the dialog.
+      for (const [index, { key: cmd }] of plan.entries()) {
+        const skipWorktree = placements[index] === 'main';
+        const name = pickAssistantName(takenNames);
+        let worktree = projectId && !skipWorktree
+          ? await createTaskWorktree({
+              projectId,
+              taskId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              label: name,
+            })
+          : null;
 
-          let id = await spawnAgentPreset(cmd, worktree?.path ?? cwd, { isDev });
-          if (id === null && worktree) {
-            if (projectId) void removeTaskWorktree(projectId, worktree, false);
-            worktree = null;
-            id = await spawnAgentPreset(cmd, cwd, { isDev });
-          }            if (id !== null) {
-            takenNames.push(name);
-            applyOrchestratorAgentName(id, name);
-            if (worktree) setSessionWorktree(id, worktree);
-            // Register with the orchestrator so this agent gets the same
-            // turn-end cue and readable-output treatment as a dispatched one.
-            // The typed-launch detector deliberately skips modal spawns, so
-            // without this they stay invisible to agent mode. Must come after
-            // applyOrchestratorAgentName so the task adopts the assigned name.
-            if (projectId) adoptSpawnedAgent(id, projectId);
-            spawnedNames.push(name);
-            lastId = id;
-            total++;
-          } else if (worktree && projectId) {
-            void removeTaskWorktree(projectId, worktree, false);
-          }
+        let id = await spawnAgentPreset(cmd, worktree?.path ?? cwd, { isDev });
+        if (id === null && worktree) {
+          if (projectId) void removeTaskWorktree(projectId, worktree, false);
+          worktree = null;
+          id = await spawnAgentPreset(cmd, cwd, { isDev });
+        }
+        if (id !== null) {
+          takenNames.push(name);
+          applyOrchestratorAgentName(id, name);
+          if (worktree) setSessionWorktree(id, worktree);
+          // Register with the orchestrator so this agent gets the same
+          // turn-end cue and readable-output treatment as a dispatched one.
+          // The typed-launch detector deliberately skips modal spawns, so
+          // without this they stay invisible to agent mode. Must come after
+          // applyOrchestratorAgentName so the task adopts the assigned name.
+          if (projectId) adoptSpawnedAgent(id, projectId);
+          spawnedNames.push(name);
+          lastId = id;
+          total++;
+        } else if (worktree && projectId) {
+          void removeTaskWorktree(projectId, worktree, false);
         }
       }
     } catch (err) {
@@ -149,7 +165,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, project, isDev, skipWorktree, onclose]);
+  }, [spawnCounts, spawnPresets, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && totalSpawnCount > 0) {
@@ -192,7 +208,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             </span>
             <div className="asm-title-text">
               <span className="asm-title">Spawn Agents</span>
-              <span className="asm-subtitle">Pick a coding CLI to launch in a fresh worktree</span>
+              <span className="asm-subtitle">Pick a coding CLI — you'll choose where it runs next</span>
             </div>
           </div>
           <button className="asm-close-btn" onClick={onclose} aria-label="Close dialog">
@@ -268,31 +284,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
         <footer className="asm-footer">
           <div className="asm-footer-left">
-            <div className="asm-mode-toggle" title="Isolated: agent works in a git worktree branch · Main repo: agent runs directly in the project root (needed for git tag/push)">
-              <button
-                className={`asm-mode-btn${!skipWorktree ? ' active' : ''}`}
-                onClick={() => setSkipWorktree(false)}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                </svg>
-                <span>Isolated</span>
-              </button>
-              <button
-                className={`asm-mode-btn${skipWorktree ? ' active' : ''}`}
-                onClick={() => setSkipWorktree(true)}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="2" y="3" width="20" height="14" rx="2" />
-                  <line x1="8" y1="21" x2="16" y2="21" />
-                  <line x1="12" y1="17" x2="12" y2="21" />
-                </svg>
-                <span>Main repo</span>
-              </button>
-            </div>
+            {/* Isolated vs main repo is no longer a toggle here — spawning opens
+                the placement dialog so the choice is always a deliberate one. */}
+            <span className="asm-hint">Next: choose isolated worktree or main repo</span>
           </div>
           <button
             className="asm-confirm-btn"

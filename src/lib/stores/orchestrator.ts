@@ -74,7 +74,7 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import {
   initWorktreeReconciler,
   reconcileNow,
@@ -83,6 +83,7 @@ import {
   type TrackedWorktree,
 } from '$lib/services/orchestrator/worktree-reconciler';
 import { autoStageAgentChanges } from '$lib/stores/settings';
+import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } from '$lib/stores/agentPlacement';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
@@ -127,6 +128,7 @@ import {
   setSessionExecuting,
   setSessionWorktree,
   setActiveSession,
+  getSessionOutputBuffer,
 } from '$lib/stores/terminal';
 
 export type {
@@ -363,6 +365,10 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
     ...liveAdopted,
   ]);
   if (needsFlush) await flush(project.id);
+
+  // Fire-and-forget: a best-effort sweep must never reject into the void and
+  // take down project load with an unhandled rejection.
+  void sweepOrphanWorktrees(project.id).catch(() => {});
 }
 
 async function flush(projectId: string): Promise<void> {
@@ -967,6 +973,48 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<number> 
     // alone; the Agent changes list is already showing it.
   }
   return attempted;
+}
+
+/**
+ * Remove worktrees that exist on disk but are no longer tracked by any task or
+ * session. Catches orphans left behind by app crashes, force-kills, or failed
+ * cleanup. Runs on project load and periodically via the prune timer.
+ */
+export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
+  const onDisk = await listWorktreesOnDisk(projectId);
+  if (onDisk.length === 0) return 0;
+
+  const known = new Set<string>();
+  for (const task of get(orchestratorTasks)) {
+    if (task.worktree && task.projectId === projectId) known.add(task.worktree.path);
+  }
+  for (const isDev of [false, true]) {
+    for (const session of getTerminalProjectState(projectId, isDev).sessions) {
+      if (session.worktree) known.add(session.worktree.path);
+    }
+  }
+
+  let removed = 0;
+  for (const dir of onDisk) {
+    if (known.has(dir)) continue;
+    try {
+      await backendInvoke('workspace_git_remove_worktree', {
+        projectId,
+        worktreePath: dir,
+        deleteBranch: false,
+        branch: null,
+      });
+      removed++;
+    } catch {
+      // Locked or in use — leave it for the next sweep.
+    }
+  }
+
+  await pruneWorktrees(projectId);
+  if (removed > 0) {
+    console.info(`Swept ${removed} orphan worktree(s) for project ${projectId}`);
+  }
+  return removed;
 }
 
 /** Whether the agent that owns this task still has a live terminal pane. */
@@ -1852,15 +1900,13 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
 }
 
 /**
- * Minimum gap between two turn-end cues for the same adopted session.
- *
- * The watcher re-arms after every turn, and an attention prompt left sitting in
- * the buffer tail can re-satisfy the blocked signal as soon as the agent prints
- * anything else. Without a floor that turns into a burst of chimes for what the
- * user experiences as one pause.
+ * Minimum buffer growth (chars) between two "finished" notifications for the
+ * same adopted session. Prevents a stale attention prompt or cursor-blink
+ * redraw sitting in the scan tail from re-triggering a notification for what
+ * the user experiences as one pause. "Blocked" outcomes always notify.
  */
-const ADOPTED_NUDGE_COOLDOWN_MS = 15_000;
-const lastAdoptedNudgeAt = new Map<number, number>();
+const ADOPTED_NUDGE_MIN_GROWTH = 200;
+const lastAdoptedNudgeLen = new Map<number, number>();
 
 /**
  * Give agents the user launched by hand the same turn-end cue as orchestrated
@@ -1889,10 +1935,20 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       const task = get(orchestratorTasks).find((t) => t.id === taskId);
       if (!task) return;
 
-      const last = lastAdoptedNudgeAt.get(sessionId) ?? 0;
-      if (Date.now() - last >= ADOPTED_NUDGE_COOLDOWN_MS) {
-        lastAdoptedNudgeAt.set(sessionId, Date.now());
+      const bufLen = getSessionOutputBuffer(sessionId).length;
+      const lastLen = lastAdoptedNudgeLen.get(sessionId);
+
+      if (outcome.kind === 'blocked') {
+        lastAdoptedNudgeLen.set(sessionId, bufLen);
         notifyAdoptedTurnEnd(task, outcome);
+      } else {
+        // Only re-notify "finished" when the buffer has grown meaningfully
+        // since the last cue — a cursor-blink redraw or stale tail re-trigger
+        // produces only a few chars and should not chime again.
+        if (lastLen == null || bufLen < lastLen || bufLen - lastLen >= ADOPTED_NUDGE_MIN_GROWTH) {
+          lastAdoptedNudgeLen.set(sessionId, bufLen);
+          notifyAdoptedTurnEnd(task, outcome);
+        }
       }
     }
   })();
@@ -2405,15 +2461,88 @@ export async function sendChatMessage(
 
   patchChat(projectId, assistantId, { text: result.reply, pending: false });
 
+  // ── Placement gate: isolated worktree or main repo? ────────────────────────
+  // Asked before ANY terminal is leased, on every dispatch that spawns. An agent
+  // working inside an isolated worktree leaves the main checkout untouched, so
+  // deciding this silently is how a user loses track of where the work went.
+  // The dialog answers PER AGENT — a three-agent plan can put one in the main
+  // repo and isolate the other two. Dismissing cancels the spawns only;
+  // send/name/close actions in the same plan still run.
+  const plannedSpawns = result.actions.filter(
+    (action): action is Extract<OrchestratorAction, { kind: 'spawn' }> => action.kind === 'spawn'
+  );
+  // A placement the user SAID ("open Claude Code in a worktree, another in the
+  // main repo") is the answer — asking again would be pure friction. Only the
+  // spawns they left unstated need the question.
+  const undecidedSpawns = plannedSpawns.filter((action) => !action.placement);
+  const agentLabel = (action: (typeof plannedSpawns)[number]) =>
+    action.name?.trim() || getAgentDisplayName(action.agent) || action.agent;
+
+  let askedPlacements: AgentPlacement[] | null = null;
+  let spawnsAllowed = true;
+
+  if (undecidedSpawns.length && opts?.voiceConversation) {
+    // Voice is hands-free: a modal nobody can click would strand the whole
+    // conversation. Ask out loud instead and spawn NOTHING this turn — the
+    // user's next utterance ("worktree") re-issues the plan with `placement`
+    // set (see the follow-up rule in the brain's system prompt). The entire
+    // dispatch is held, not just the unstated spawns, so answering can't
+    // double-spawn the ones that were already decided.
+    spawnsAllowed = false;
+    const who =
+      undecidedSpawns.length === 1
+        ? agentLabel(undecidedSpawns[0])
+        : `${undecidedSpawns.length} agents`;
+    patchChat(projectId, assistantId, {
+      text: `Where should ${who} run — an isolated worktree, or the main repo?`,
+    });
+  } else if (undecidedSpawns.length) {
+    // The admin/release heuristic no longer decides — it only pre-selects "Main
+    // repo" and explains why, since git tag/push can't work from a worktree.
+    const adminSpawn = undecidedSpawns.some(
+      (action) => action.skipWorktree === true || (!!action.prompt && ADMIN_KEYWORD_RE.test(action.prompt))
+    );
+    askedPlacements = await requestAgentPlacement({
+      agents: undecidedSpawns.map(agentLabel),
+      source: 'orchestrator',
+      suggested: adminSpawn ? 'main' : undefined,
+      suggestionReason: adminSpawn
+        ? 'This reads like a release or admin task (tagging, pushing, version bumps). Those need the main branch — git tag and push do not work from a worktree.'
+        : null,
+    });
+    if (!askedPlacements) {
+      spawnsAllowed = false;
+      patchChat(projectId, assistantId, {
+        text: `${result.reply}\n\n_Cancelled — no agent was started._`,
+      });
+      showToast('Spawn cancelled', 'info', 2500);
+    }
+  }
+
+  /**
+   * Where one spawn action runs: what the user stated, else what they answered
+   * in the dialog. Both lookups are keyed by action IDENTITY rather than a
+   * running counter — the loop below can `continue` past a spawn (a file-claim
+   * conflict), which would slide every later agent onto the wrong answer.
+   */
+  const placementFor = (action: OrchestratorAction): AgentPlacement => {
+    const spawn = action as (typeof plannedSpawns)[number];
+    if (spawn.placement) return spawn.placement;
+    return askedPlacements?.[undecidedSpawns.indexOf(spawn)] ?? defaultAgentPlacement();
+  };
+
   // ── Reconnaissance (started now, awaited after spawning) ──────────────────
   // Kick recon off immediately so its LLM calls (plan + craft) overlap with the
   // terminal spawn loop below. Previously recon ran strictly after every launch
   // had been awaited, so the two latencies stacked; now they run concurrently.
-  const reconCommand = result.actions
-    .flatMap((a) =>
-      a.kind === 'spawn' && (a.prompt ?? '').trim().length > 10 ? [a.prompt as string] : []
-    )
-    .join('; ');
+  // Nothing to reconnoitre for if the user just cancelled every spawn.
+  const reconCommand = spawnsAllowed
+    ? result.actions
+        .flatMap((a) =>
+          a.kind === 'spawn' && (a.prompt ?? '').trim().length > 10 ? [a.prompt as string] : []
+        )
+        .join('; ')
+    : '';
   let reconPromise: ReturnType<typeof reconnoiter> | null = null;
   if (reconCommand && rootPath) {
     patchChat(projectId, assistantId, { text: result.reply + '\n\n🔍 Analyzing codebase…' });
@@ -2470,7 +2599,7 @@ export async function sendChatMessage(
   const spawnEntries: SpawnEntry[] = [];
 
   for (const action of result.actions) {
-    if (action.kind !== 'spawn') continue;
+    if (action.kind !== 'spawn' || !spawnsAllowed) continue;
     // The brain sometimes labels a spawn generically ("claude-1") instead of
     // leaving it unnamed; treat those as unnamed so the agent still gets a
     // friendly human name the user can address ("ask Iris…").
@@ -2511,10 +2640,10 @@ export async function sendChatMessage(
     const isPrimary = spawnIndex === 0;
     spawnIndex++;
 
-    // Fallback admin keyword detection for heuristic-route spawns that bypass
-    // parseAction (which only runs for LLM-route actions). This ensures admin
-    // tasks still skip worktree isolation even without an AI provider configured.
-    const skipWorktree = action.skipWorktree ?? (!!action.prompt && ADMIN_KEYWORD_RE.test(action.prompt));
+    // The user answered the placement dialog above — per agent — and their
+    // answer wins over both the brain's `skipWorktree` flag and the
+    // admin-keyword heuristic, which only pre-selected what they were shown.
+    const skipWorktree = placementFor(action) === 'main';
     const task = createOrchestratorTask(
       projectId,
       action.prompt ?? '',
@@ -2825,7 +2954,22 @@ if (typeof window !== 'undefined') {
     onConflict: (work, message) => {
       showToast(`${work.agentName}: ${message}`, 'warning', 14000, true);
     },
+    // Auto-staging failed for a non-conflict reason — usually the user's own
+    // uncommitted edit to a file the agent touched, which blocks the patch until
+    // they commit or discard it. Reported once per run of failures, not per retry.
+    onError: (work, message) => {
+      showToast(`${work.agentName}: ${message}`, 'warning', 14000, true);
+    },
   });
+
+  // Periodic orphan sweep + prune: catches worktrees orphaned mid-session (e.g.
+  // a crashed agent whose pane-close cleanup never fired).
+  const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+  setInterval(() => {
+    for (const [projectId] of projectPaths) {
+      void sweepOrphanWorktrees(projectId).catch(() => {});
+    }
+  }, PRUNE_INTERVAL_MS);
 
   // A user typed an agent CLI into a terminal themselves — adopt it so agent
   // mode is aware of it and can read/drive it (see adoptDetectedAgent).
@@ -2842,7 +2986,7 @@ if (typeof window !== 'undefined') {
   onSessionExit(({ sessionId, projectId, code }) => {
     // The session is gone — tear down its agent adapter (clears any poll timers).
     disposeAgentAdapter(sessionId);
-    lastAdoptedNudgeAt.delete(sessionId);
+    lastAdoptedNudgeLen.delete(sessionId);
     const task = get(orchestratorTasks).find(
       (t) => t.status === 'in-progress' && t.assignedSessionId === sessionId
     );

@@ -371,3 +371,25 @@ export async function getWorktreeStatus(worktree: WorktreeInfo): Promise<Worktre
     return null;
   }
 }
+
+/** List worktree directories currently on disk in the project's managed area. */
+export async function listWorktreesOnDisk(projectId: string): Promise<string[]> {
+  try {
+    const dirs = await backendInvoke<string[]>('workspace_git_list_worktrees', { projectId });
+    // The backend returns Vec<String>, but an unregistered command (or a
+    // remote backend that hasn't caught up) resolves to undefined — guard so
+    // callers can always treat this as an array.
+    return Array.isArray(dirs) ? dirs : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Run `git worktree prune` to clean stale metadata. */
+export async function pruneWorktrees(projectId: string): Promise<void> {
+  try {
+    await backendInvoke('workspace_git_prune_worktrees', { projectId });
+  } catch {
+    // best-effort
+  }
+}

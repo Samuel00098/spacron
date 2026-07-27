@@ -1281,7 +1281,7 @@ pub fn workspace_git_remove_worktree(
 
     let _repo = lock_repo_write(root_path);
 
-    let _ = git_base()
+    let remove_out = git_base()
         .args(["worktree", "remove", "--force", &worktree_path])
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1291,6 +1291,13 @@ pub fn workspace_git_remove_worktree(
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output();
+
+    if let Ok(out) = remove_out {
+        if !out.status.success() && PathBuf::from(&worktree_path).exists() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!("git worktree remove failed: {stderr}"));
+        }
+    }
 
     if delete_branch.unwrap_or(false) {
         if let Some(b) = branch {
@@ -1304,6 +1311,61 @@ pub fn workspace_git_remove_worktree(
             }
         }
     }
+
+    Ok(())
+}
+
+/// List worktree directories currently on disk in the project's managed area.
+/// Used by the frontend to detect orphaned worktrees that outlived their sessions.
+#[tauri::command(async)]
+pub fn workspace_git_list_worktrees(
+    project_id: String,
+    state: State<AppState>,
+) -> Result<Vec<String>, String> {
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    let mut results = Vec::new();
+    let areas: Vec<PathBuf> = [Some(worktree_area(root_path)), legacy_worktree_area(root_path)]
+        .into_iter()
+        .flatten()
+        .collect();
+
+    for area in areas {
+        let Ok(entries) = std::fs::read_dir(&area) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// Run `git worktree prune` to clean stale metadata in `.git/worktrees/`.
+#[tauri::command(async)]
+pub fn workspace_git_prune_worktrees(
+    project_id: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    let _ = git_base()
+        .args(["worktree", "prune"])
+        .current_dir(root_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output();
 
     Ok(())
 }
@@ -1880,6 +1942,27 @@ pub fn workspace_git_stage_worktree(
             staged_files,
             up_to_date: false,
         })
+    } else if let Some(blocked) = index_mismatch_paths(&stderr) {
+        // `git apply --index` requires each patched path's working-tree copy to
+        // match the index, so the user's own *uncommitted* edit to a file the agent
+        // also touched aborts the whole patch — nothing is applied, not even the
+        // unrelated files. Same for an untracked file sitting where the agent
+        // created one. Neither is a merge conflict (no markers, no `U` entries), so
+        // it lands here, and neither clears on its own: the fix is the user's to
+        // make. Say which paths and what to do, rather than surfacing raw git.
+        Ok(StageWorktreeResult {
+            success: false,
+            message: format!(
+                "Your own uncommitted changes to {} block bringing in '{}'. Commit, stash or discard them in Source Control, then bring the agent's work in again — nothing was lost, it is still on the branch.",
+                blocked.join(", "),
+                branch
+            ),
+            conflicted: false,
+            conflicted_files,
+            staged_commit: head,
+            staged_files,
+            up_to_date: false,
+        })
     } else {
         Ok(StageWorktreeResult {
             success: false,
@@ -1896,6 +1979,28 @@ pub fn workspace_git_stage_worktree(
             up_to_date: false,
         })
     }
+}
+
+/// Paths `git apply --index` refused because the working tree disagrees with the
+/// index there. Returns `None` when the failure was something else.
+///
+/// git emits one line per path:
+///   `error: <path>: does not match index`     — user has an uncommitted edit
+///   `error: <path>: does not exist in index`  — untracked file in the way
+fn index_mismatch_paths(stderr: &str) -> Option<Vec<String>> {
+    let paths: Vec<String> = stderr
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("error: ")?;
+            let path = rest
+                .strip_suffix(": does not match index")
+                .or_else(|| rest.strip_suffix(": does not exist in index"))?;
+            (!path.is_empty()).then(|| path.to_string())
+        })
+        .collect();
+    let mut paths: Vec<String> = paths;
+    paths.dedup();
+    (!paths.is_empty()).then_some(paths)
 }
 
 #[tauri::command(async)]
@@ -3095,6 +3200,45 @@ mod tests {
         assert_eq!(parse_upstream_track(""), (0, 0));
         assert_eq!(parse_upstream_track("[gone]"), (0, 0));
         assert_eq!(parse_upstream_track("[ahead lots]"), (0, 0));
+    }
+
+    // --- stage failures that need the user, not a retry ---
+
+    #[test]
+    fn recognises_the_paths_git_apply_refused_over_the_index() {
+        // The user's own uncommitted edit to a file the agent also touched. git
+        // aborts the whole patch, with no markers and no `U` entries — so this is
+        // not a merge conflict, and retrying can never clear it.
+        let stderr = "error: src/app.css: does not match index\nFalling back to direct application...\n";
+        assert_eq!(
+            index_mismatch_paths(stderr),
+            Some(vec!["src/app.css".to_string()])
+        );
+
+        // An untracked file sitting where the agent created one.
+        let stderr = "error: notes.md: does not exist in index\nerror: notes.md: patch does not apply\n";
+        assert_eq!(
+            index_mismatch_paths(stderr),
+            Some(vec!["notes.md".to_string()])
+        );
+
+        // Several at once.
+        let stderr = "error: a.ts: does not match index\nerror: b.ts: does not match index\n";
+        assert_eq!(
+            index_mismatch_paths(stderr),
+            Some(vec!["a.ts".to_string(), "b.ts".to_string()])
+        );
+    }
+
+    #[test]
+    fn leaves_other_git_failures_to_the_generic_message() {
+        assert_eq!(index_mismatch_paths(""), None);
+        assert_eq!(index_mismatch_paths("error: corrupt patch at line 4\n"), None);
+        // A real conflict is handled on the branch above this one.
+        assert_eq!(
+            index_mismatch_paths("Applied patch to 'x.ts' with conflicts.\nU x.ts\n"),
+            None
+        );
     }
 
     // --- agent worktree area ---

@@ -1483,10 +1483,14 @@ export default function AppShell() {
     },
     {
       id: 'fleet',
-      title: 'Agent Fleet',
+      // Named for what the room shows — each agent's diff, ready to merge or
+      // discard — not for the fleet abstraction behind it. The old grid icon
+      // was also identical to the Fleet *layout* button further down the dock,
+      // so two unrelated buttons read as the same thing.
+      title: 'Agent Changes',
       active: layoutState.fleetVisible,
       onClick: () => togglePanelRoom('fleet'),
-      icon: <Icon><rect x="3" y="4" width="7" height="7" rx="1.5" /><rect x="14" y="4" width="7" height="7" rx="1.5" /><rect x="3" y="15" width="7" height="7" rx="1.5" /><rect x="14" y="15" width="7" height="7" rx="1.5" /></Icon>,
+      icon: <Icon><path d="M14 2H6.5A1.5 1.5 0 0 0 5 3.5v17A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5V7Z" /><path d="M14 2v5h5" /><path d="M12 11.5v4" /><path d="M10 13.5h4" /><path d="M10 18.5h4" /></Icon>,
     },
     {
       id: 'db',
@@ -1696,6 +1700,8 @@ export default function AppShell() {
         return <Icon><path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" /><path d="M4 12.5 12 17l8-4.5" /><path d="M4 17.5 12 22l8-4.5" /></Icon>;
     case 'toolbox':
       return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
+    case 'fleet':
+      return <Icon><path d="M14 2H6.5A1.5 1.5 0 0 0 5 3.5v17A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5V7Z" /><path d="M14 2v5h5" /><path d="M12 11.5v4" /><path d="M10 13.5h4" /><path d="M10 18.5h4" /></Icon>;
     default:
       return null;
     }

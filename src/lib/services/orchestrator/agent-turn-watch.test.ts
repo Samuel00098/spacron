@@ -19,10 +19,29 @@ describe('watchLeasedAgentTurn', () => {
   });
 
   it('finishes when the agent rings the bell after working', async () => {
-    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, minWorkChars: 20 });
     buf = 'working on the change...';
     await vi.advanceTimersByTimeAsync(10); // sees activity
     buf += ' done\x07';
+    await vi.advanceTimersByTimeAsync(10); // sees new bell
+    await expect(p).resolves.toEqual({ kind: 'finished' });
+  });
+
+  it('does not finish on a bell before the agent has done real work', async () => {
+    // Startup TUI noise: a few chars of banner + a bell must not look like a
+    // completed turn. The bell path requires grownTotal >= minWorkChars.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, minWorkChars: 200 });
+    buf = 'Welcome to Agent v1.0\x07'; // well under minWorkChars
+    await vi.advanceTimersByTimeAsync(10);
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+  });
+
+  it('finishes on a bell once the agent has produced enough output', async () => {
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf = 'streamed some real work '.repeat(25); // > default minWorkChars (500)
+    await vi.advanceTimersByTimeAsync(10); // sees activity
+    buf += ' all done\x07';
     await vi.advanceTimersByTimeAsync(10); // sees new bell
     await expect(p).resolves.toEqual({ kind: 'finished' });
   });

@@ -5117,7 +5117,7 @@ dependencies = [
 
 [[package]]
 name = "spacron"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -5132,6 +5132,7 @@ dependencies = [
  "ignore",
  "image",
  "keyring",
+ "memchr",
  "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

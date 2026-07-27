@@ -1,0 +1,405 @@
+/* Sits ABOVE the spawn modal (z 8000) — it is the confirm step layered on top. */
+.apm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 8200;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: apmFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.apm-card {
+  width: 470px;
+  max-width: calc(100 * var(--app-vw, 1vw) - 40px);
+  max-height: calc(88 * var(--app-vh, 1vh));
+  overflow-y: auto;
+  background: rgba(var(--bg-secondary-rgb), 1);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  animation: apmSlideUp 0.26s cubic-bezier(0.34, 1.28, 0.64, 1) forwards;
+}
+
+/* ---- Header ---- */
+.apm-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 18px 20px 12px;
+  min-width: 0;
+}
+
+.apm-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  color: var(--accent, #3b82f6);
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.12);
+}
+
+.apm-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.apm-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary, #e8e8e8);
+}
+
+.apm-subtitle {
+  font-size: 11.5px;
+  color: var(--text-muted, #808080);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Options ---- */
+.apm-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 16px 4px;
+}
+
+.apm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 13px;
+  text-align: left;
+  border-radius: 12px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--text-primary, #fff) 3%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.09));
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.apm-option:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+}
+
+.apm-option:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+}
+
+.apm-option.selected {
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.1);
+  border-color: rgba(var(--accent-rgb, 59, 130, 246), 0.4);
+}
+
+.apm-option-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  color: var(--text-secondary, #c0c0c0);
+  background: color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+}
+
+.apm-option.selected .apm-option-icon {
+  color: var(--accent, #3b82f6);
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.14);
+  border-color: rgba(var(--accent-rgb, 59, 130, 246), 0.24);
+}
+
+.apm-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.apm-option-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary, #e8e8e8);
+}
+
+.apm-option-tag {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1.5px 6px;
+  border-radius: 5px;
+  color: var(--accent, #3b82f6);
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.14);
+}
+
+.apm-option-detail {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted, #808080);
+}
+
+.apm-radio {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border, rgba(255, 255, 255, 0.2));
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.apm-option.selected .apm-radio {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: inset 0 0 0 3.5px var(--accent, #3b82f6);
+}
+
+/* ---- Multi-agent: per-row placement ---- */
+.apm-setall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 16px 10px;
+}
+
+.apm-setall-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted, #808080);
+  margin-right: 2px;
+}
+
+.apm-setall-btn {
+  padding: 3px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--text-secondary, #b0b0b0);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+
+.apm-setall-btn:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+}
+
+.apm-agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.apm-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 3%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.apm-agent-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--accent, #3b82f6);
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.12);
+}
+
+.apm-agent-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.apm-agent-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary, #e8e8e8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apm-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.apm-segment {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #808080);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+
+.apm-segment:hover {
+  color: var(--text-secondary, #c0c0c0);
+}
+
+.apm-segment.active {
+  color: var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 16%, transparent);
+}
+
+.apm-legend {
+  margin: 12px 16px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.apm-legend-item dt {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary, #b0b0b0);
+}
+
+.apm-legend-item dd {
+  margin: 1px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted, #808080);
+}
+
+.apm-reason {
+  margin: 8px 16px 0;
+  padding: 8px 11px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary, #b0b0b0);
+  background: color-mix(in srgb, var(--text-primary, #fff) 4%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+/* ---- Footer ---- */
+.apm-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.apm-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #808080);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.apm-hint kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 1.5px 5px;
+  border-radius: 5px;
+  color: var(--text-secondary, #b0b0b0);
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+
+.apm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.apm-cancel-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--text-secondary, #b0b0b0);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+
+.apm-cancel-btn:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+}
+
+.apm-confirm-btn {
+  padding: 8px 16px;
+  background: var(--accent, #3b82f6);
+  border: none;
+  border-radius: 8px;
+  color: var(--button-text, #ffffff);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s, transform 0.1s;
+}
+
+.apm-confirm-btn:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.apm-confirm-btn:active {
+  transform: scale(0.97);
+}
+
+@keyframes apmFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes apmSlideUp {
+  from { transform: translateY(12px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}

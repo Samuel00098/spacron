@@ -1,6 +1,6 @@
 [package]
 name = "spacron"
-version = "0.7.4"
+version = "0.7.5"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"
@@ -55,6 +55,10 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 ignore = "0.4"
 regex = "1"
+# SIMD substring search. Used by the agent rules-file probe, which scans agent
+# binaries (grok.exe is ~138 MB) for embedded rules-file names — a naive
+# byte-window scan made that take seconds. Already in the tree via `regex`.
+memchr = "2"
 # Native ONNX Runtime for offline Parakeet STT (runs in the app process instead
 # of the WebKit renderer's WASM heap, which OOM-kills the web process on Linux).
 #

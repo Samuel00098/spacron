@@ -317,7 +317,15 @@
   gap: 12px;
   position: relative;
   overflow: hidden;
-  contain: layout paint;
+  /* `contain: layout` only — NOT `paint`. Paint containment makes this element a
+     backdrop root, and it paints nothing, so every panel inside it had its
+     `backdrop-filter` sampling an empty transparent box: the blur silently did
+     nothing. Combined with the `background: transparent !important` for
+     Windows/macOS further down, that rendered the room panels *fully*
+     see-through rather than frosted. `overflow: hidden` above already does the
+     visual clipping paint containment was giving us.
+     See the backdrop-root gotcha in `.spacron/memory/glass-panel-recipe.md`. */
+  contain: layout;
   transition:
     grid-template-columns 0.32s cubic-bezier(0.22, 1, 0.36, 1),
     grid-template-rows 0.32s cubic-bezier(0.22, 1, 0.36, 1),
@@ -338,7 +346,7 @@
    rooms sit alongside as a vertical rail of raised cards — each card its own
    tile, no overlap. */
 .app-shell .rooms-table.ambient-focus {
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+  grid-template-columns: minmax(0, 1fr) minmax(390px, 490px);
   grid-template-rows: minmax(0, 1fr);
   gap: 16px;
 }
@@ -370,12 +378,49 @@
     0 34px 76px rgba(0, 0, 0, 0.5);
   border: 1px solid var(--border);
   overflow: clip;
-  /* https://issues.chromium.org/40863759 — backdrop-filter in a child
-     panel escapes border-radius + overflow:clip on NVIDIA dGPUs without
-     this containment + compositing triplet. */
-  isolation: isolate;
-  transform: translateZ(0);
-  contain: paint;
+  /* The stage is the frosted surface, not the panel inside it.
+     `.room-panel`'s own blur can never work here: this element is the panel's
+     nearest backdrop root (it has `view-transition-name`, which is a persistent
+     one), and it paints nothing — so the child sampled an empty box and the
+     glass read as fully see-through. Frosting the element that *owns* the
+     border-radius fixes that and is the more robust arrangement anyway: it also
+     retires the `isolation` + `translateZ` + `contain: paint` triplet that used
+     to sit here for https://issues.chromium.org/40863759, whose trigger was a
+     *child's* backdrop-filter escaping this radius. There is no such child now.
+     Keep `view-transition-name` — it is a backdrop root for descendants only,
+     never for this element's own blur (verified), so the Stage Manager
+     shrink/expand transition is unaffected. */
+}
+
+/* Canonical side-panel frost (see `.spacron/memory/glass-panel-recipe.md`): a
+   light translucent tint over a real blur of the wallpaper — "just blurred, like
+   the side panels", not a milky wash. Scoped exactly like the see-through rule
+   below: solid theme has its own opaque path, and WebKitGTK keeps the original
+   look where the tint lives on `.room-panel` instead. */
+:root:not(.solid-theme):not(.is-webkitgtk)
+  .app-shell .rooms-table.ambient-focus .focused-room {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, transparent 50%, rgba(255, 255, 255, 0.015) 100%),
+    color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+}
+
+:root.light-theme:not(.solid-theme):not(.is-webkitgtk)
+  .app-shell .rooms-table.ambient-focus .focused-room {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
+}
+
+/* The panel on the frosted stage carries no glass of its own: its blur would
+   sample the stage rather than the app, and stacking a second backdrop-filter
+   inside this radius is what the Chromium radius-bleed workaround above existed
+   to contain. One frosted surface per stage. */
+:root:not(.solid-theme):not(.is-webkitgtk)
+  .app-shell .rooms-table.ambient-focus .focused-room .room-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .app-shell .rooms-table.ambient-focus .room-stack {
@@ -410,7 +455,7 @@
 .app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
   width: 100%;
   height: auto;
-  min-height: 172px;
+  min-height: 260px;
   flex-shrink: 0;
   padding: 16px;
   display: flex;
@@ -491,7 +536,7 @@
    These three blocks are the ONLY place the ladder lives — each one
    matches a superset of the previous, so source order picks the last. */
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) {
-  --pile-card-h: 172px;
+  --pile-card-h: 260px;
   --pile-reveal: 66px;
   /* How far a hovered card lifts. The fan below subtracts it so the lift
      never opens a seam between the hovered card and the one under it. */
@@ -504,12 +549,12 @@
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) {
-  --pile-card-h: 158px;
+  --pile-card-h: 240px;
   --pile-reveal: 62px;
 }
 
 .app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) {
-  --pile-card-h: 146px;
+  --pile-card-h: 224px;
   --pile-reveal: 58px;
 }
 
@@ -675,9 +720,7 @@
   border: 1px solid rgba(255, 255, 255, 0.04);
   /* No backdrop-filter here: the .mini-* child paints an opaque background
      over the full box, so a blur behind it can never be seen — it was only
-     ever an extra compositing layer per card. (And this subtree sits inside
-     .focused-room's `contain: paint` backdrop root anyway, so it would
-     sample the card rather than the app.) */
+     ever an extra compositing layer per card. */
 }
 
 :root.light-theme .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {

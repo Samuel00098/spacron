@@ -1437,6 +1437,27 @@
   white-space: nowrap;
 }
 
+/* Why this preset launches a non-obvious command. Wraps (the row's other
+   children are fixed-width, and .agent-meta is the flexible one) rather than
+   truncating like .agent-cmd — a half-shown explanation explains nothing. */
+.agent-cmd-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 3px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
+.agent-cmd-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
 /* Custom checkbox rules for .agent-rules-toggle */
 .agent-rules-toggle {
   display: flex;
@@ -1679,6 +1700,29 @@
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--bg-active);
+}
+
+/* Outcome of the rules-file probe, under the checkbox it pre-filled. Muted:
+   it is a footnote explaining a box that is already in the right state, not a
+   warning the user has to act on. */
+.agent-rules-detect {
+  margin: -2px 0 0 23px; /* aligns with the checkbox label, not the checkbox */
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+.agent-rules-detect code {
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-active);
+}
+
+.agent-rules-detect.checking {
+  opacity: 0.7;
+  font-style: italic;
 }
 
 .agent-error {

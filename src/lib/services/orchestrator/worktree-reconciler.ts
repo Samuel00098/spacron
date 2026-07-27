@@ -72,6 +72,16 @@ const POLL_MS = 4000;
  */
 const QUIET_MS = 2500;
 
+/**
+ * Backoff after a stage that failed *without* conflicting. A conflict sets
+ * `stageConflict` and stops retrying outright, but a plain failure had no brake at
+ * all: the most common cause is the user holding an uncommitted edit to a file the
+ * agent also touched, which makes `git apply --index` refuse the whole patch and
+ * does not clear until the user acts. Without a brake that patch was retried on
+ * every 4s poll, indefinitely and silently.
+ */
+const FAILURE_BACKOFF_MS = [POLL_MS * 2, 15_000, 60_000, 300_000];
+
 type Providers = {
   /** Every worktree worth watching, from both the session- and task-owned paths. */
   list: () => TrackedWorktree[];
@@ -81,6 +91,11 @@ type Providers = {
   autoStage: () => boolean;
   onStaged?: (work: PendingWork, stagedFiles: number) => void;
   onConflict?: (work: PendingWork, message: string) => void;
+  /**
+   * A stage failed for a reason that isn't a conflict. Reported once per run of
+   * failures, not per retry — otherwise a blocked worktree would toast forever.
+   */
+  onError?: (work: PendingWork, message: string) => void;
 };
 
 let providers: Providers | null = null;
@@ -91,6 +106,8 @@ let running = false;
 const lastSeen = new Map<string, { head: string; dirty: number; at: number }>();
 /** Worktrees currently being staged, so a slow stage can't overlap the next tick. */
 const inFlight = new Set<string>();
+/** Non-conflict stage failures per worktree: how many in a row, and when to retry. */
+const failures = new Map<string, { count: number; retryAt: number }>();
 
 export function initWorktreeReconciler(p: Providers): void {
   providers = p;
@@ -104,6 +121,7 @@ export function stopWorktreeReconciler(): void {
   providers = null;
   lastSeen.clear();
   inFlight.clear();
+  failures.clear();
   pendingWorktreeWork.set({});
 }
 
@@ -114,6 +132,7 @@ export function stopWorktreeReconciler(): void {
 export function forgetWorktree(worktreePath: string): void {
   lastSeen.delete(worktreePath);
   inFlight.delete(worktreePath);
+  failures.delete(worktreePath);
   pendingWorktreeWork.update((all) => {
     if (!(worktreePath in all)) return all;
     const next = { ...all };
@@ -187,6 +206,12 @@ async function reconcileOne(entry: TrackedWorktree): Promise<void> {
   // Only stage once the worktree has stopped changing, so a snapshot never
   // captures a half-written file.
   const now = Date.now();
+
+  // A previous stage failed without conflicting. Hold off until the backoff
+  // elapses — but do retry, because some causes (a lost index.lock race) clear on
+  // their own, unlike a conflict.
+  const failed = failures.get(path);
+  if (failed && now < failed.retryAt) return;
   const prev = lastSeen.get(path);
   const changed = !prev || prev.head !== delta.head || prev.dirty !== delta.dirtyFiles;
   if (changed) {
@@ -222,12 +247,28 @@ async function reconcileOne(entry: TrackedWorktree): Promise<void> {
         [path]: { ...all[path], ...work, conflicted: true, conflictedFiles: result.conflictedFiles },
       }));
       p.onConflict?.(work, result.message);
+      return;
     }
+
+    // Failed for some other reason. Back off so the same patch isn't re-applied on
+    // every poll, and tell the user once — the commonest cause is their own
+    // uncommitted edit to a file the agent touched, which blocks the whole patch
+    // and needs them to act. Silence here left the work stuck with no signal.
+    recordFailure(path);
+    if (failures.get(path)?.count === 1) p.onError?.(work, result.message);
   } catch (err) {
+    recordFailure(path);
     console.warn('Worktree reconcile failed:', err);
   } finally {
     inFlight.delete(path);
   }
+}
+
+/** Note a non-conflict failure and schedule the next attempt further out. */
+function recordFailure(path: string): void {
+  const count = (failures.get(path)?.count ?? 0) + 1;
+  const step = FAILURE_BACKOFF_MS[Math.min(count - 1, FAILURE_BACKOFF_MS.length - 1)];
+  failures.set(path, { count, retryAt: Date.now() + step });
 }
 
 /**
@@ -242,6 +283,10 @@ export async function stageWorktreeNow(
   const p = providers;
   const path = worktree.path;
   if (inFlight.has(path)) return { ok: false, message: 'Already staging…', conflicted: false };
+  // An explicit press means "try now" — drop any auto-stage backoff so the user
+  // isn't waiting out a timer they can't see, and so a fixed blocker takes effect
+  // immediately.
+  failures.delete(path);
   inFlight.add(path);
   try {
     const result = await stageWorktreeChanges(projectId, worktree);

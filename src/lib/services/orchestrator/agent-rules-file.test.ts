@@ -4,16 +4,106 @@ const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 import {
+  agentExecutable,
   agentReadsRulesFile,
   buildManagedBlock,
   buildStandingBriefBody,
+  detectRulesFileSupport,
   ensureAgentRulesFiles,
   upsertManagedBlock,
 } from './agent-rules-file';
 
+describe('agentExecutable', () => {
+  it('takes the program and drops the user arguments', () => {
+    expect(agentExecutable('aider --no-auto-commits')).toBe('aider');
+  });
+
+  it('skips env assignments and launcher prefixes', () => {
+    expect(agentExecutable('FOO=bar codex')).toBe('codex');
+    expect(agentExecutable('npx opencode --foo')).toBe('opencode');
+  });
+
+  it('strips quotes, paths and windows extensions, and lowercases', () => {
+    expect(agentExecutable('"C:\\Users\\me\\.grok\\bin\\Grok.exe" --resume')).toBe('grok');
+    expect(agentExecutable('/usr/local/bin/cursor-agent')).toBe('cursor-agent');
+  });
+
+  it('is empty for empty input', () => {
+    expect(agentExecutable('')).toBe('');
+    expect(agentExecutable(null)).toBe('');
+  });
+});
+
+describe('detectRulesFileSupport', () => {
+  it('recognises a known CLI without running anything', async () => {
+    const detection = await detectRulesFileSupport('claude --model opus');
+    expect(detection).toMatchObject({ readsRulesFile: true, source: 'known', executable: 'claude' });
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a probe hit with the phrase that matched', async () => {
+    invokeMock.mockResolvedValueOnce({
+      executable: 'mytool',
+      readsRulesFile: true,
+      ran: true,
+      evidence: 'agents.md',
+      error: null,
+    });
+    const detection = await detectRulesFileSupport('mytool --chat');
+    expect(detection).toMatchObject({
+      readsRulesFile: true,
+      source: 'probe',
+      evidence: 'agents.md',
+    });
+  });
+
+  it('leaves the box unticked when the probe finds nothing', async () => {
+    invokeMock.mockResolvedValueOnce({
+      executable: 'mytool',
+      readsRulesFile: false,
+      ran: true,
+      evidence: null,
+      error: null,
+    });
+    await expect(detectRulesFileSupport('mytool')).resolves.toMatchObject({
+      readsRulesFile: false,
+      source: 'probe',
+    });
+  });
+
+  it('distinguishes "could not check" from "does not read rules files"', async () => {
+    invokeMock.mockResolvedValueOnce({
+      executable: 'ghost',
+      readsRulesFile: false,
+      ran: false,
+      evidence: null,
+      error: '`ghost` was not found on your PATH',
+    });
+    const detection = await detectRulesFileSupport('ghost');
+    expect(detection.source).toBe('unknown');
+    expect(detection.readsRulesFile).toBe(false);
+    expect(detection.error).toContain('not found');
+  });
+
+  it('never throws when the backend rejects', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('no such command'));
+    await expect(detectRulesFileSupport('mytool')).resolves.toMatchObject({ source: 'unknown' });
+  });
+});
+
 describe('agentReadsRulesFile', () => {
   it('matches the agents that load a native rules file, by command and canonical name', () => {
-    for (const id of ['claude', 'codex', 'cursor', 'agent', 'opencode', 'antigravity', 'agy']) {
+    for (const id of [
+      'claude',
+      'codex',
+      'cursor',
+      'cursor-agent',
+      'agent',
+      'opencode',
+      'antigravity',
+      'agy',
+      'grok',
+    ]) {
       expect(agentReadsRulesFile(id)).toBe(true);
     }
   });

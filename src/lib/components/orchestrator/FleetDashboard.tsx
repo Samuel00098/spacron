@@ -309,7 +309,7 @@ export default function FleetDashboard() {
   }
 
   if (!project) {
-    return <div className="fleet-empty">Open a project to see its agent fleet.</div>;
+    return <div className="fleet-empty">Open a project to see what its agents changed.</div>;
   }
 
   if (rows.length === 0) {
@@ -327,7 +327,7 @@ export default function FleetDashboard() {
   return (
     <div className="fleet-root">
       <header className="fleet-head">
-        <span className="fleet-title">AGENT FLEET</span>
+        <span className="fleet-title">AGENT CHANGES</span>
         <span className="fleet-count">
           {rows.length} worktree{rows.length === 1 ? '' : 's'}
         </span>

@@ -28,7 +28,11 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   { name: 'Antigravity', command: 'agy', isPreset: true, isAgent: true },
   { name: 'OpenCode', command: 'opencode', isPreset: true, isAgent: true },
   { name: 'Pi AI Agent', command: 'pi', isPreset: true, isAgent: true },
-  { name: 'Cursor', command: 'agent', isPreset: true, isAgent: true },
+  // `cursor-agent`, not the bare `agent` Cursor also installs: other CLIs ship
+  // their own `agent` shim (the Grok CLI drops one in `~/.grok/bin`), and
+  // whichever lands earlier on PATH wins — which silently launched Grok from
+  // the Cursor tile. `cursor-agent` is unambiguous.
+  { name: 'Cursor', command: 'cursor-agent', isPreset: true, isAgent: true },
   { name: 'Hermes Agent', command: 'hermes', isPreset: true, isAgent: true },
   { name: 'Grok CLI', command: 'grok', isPreset: true, isAgent: true },
   { name: 'Dev Server', command: 'npm run dev', isPreset: true },

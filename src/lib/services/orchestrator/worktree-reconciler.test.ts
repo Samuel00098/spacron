@@ -212,6 +212,66 @@ describe('the staged baseline', () => {
     expect(row.conflictedFiles).toEqual(['src/app.ts']);
   });
 
+  it('backs off after a non-conflict failure instead of retrying every poll', async () => {
+    // `git apply --index` refuses the whole patch when the user holds an
+    // uncommitted edit to a file the agent also touched — no markers, no `U`
+    // entries, so it arrives as conflicted:false and the conflict pause never
+    // engaged. It was retried on every 4s poll, forever and silently.
+    getWorktreeDelta.mockResolvedValue(delta());
+    stageWorktreeChanges.mockResolvedValue({
+      success: false,
+      message: 'Your own uncommitted changes to src/app.css block bringing in ...',
+      conflicted: false, conflictedFiles: [], stagedCommit: TIP, stagedFiles: 0, upToDate: false,
+    });
+    const onError = vi.fn();
+    persist = vi.fn<PersistFn>();
+    initWorktreeReconciler({ list: () => list, persist, autoStage: () => true, onError });
+
+    await settleAndReconcile();
+    expect(stageWorktreeChanges).toHaveBeenCalledTimes(1);
+    // Reported to the user — the old behaviour said nothing at all.
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][1]).toContain('src/app.css');
+
+    // Immediately after, and one poll later, the same patch must not be re-applied.
+    await reconcileNow();
+    elapse(4000); // one poll interval
+    await reconcileNow();
+    expect(stageWorktreeChanges).toHaveBeenCalledTimes(1);
+
+    // Past the backoff it tries again — some causes do clear on their own — but
+    // without re-toasting, so a blocked worktree can't spam.
+    elapse(30_000);
+    await reconcileNow();
+    expect(stageWorktreeChanges).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Work is still outstanding and the baseline never moved.
+    expect(persist).not.toHaveBeenCalled();
+    expect(get(pendingWorktreeWork)[worktree().path]).toBeTruthy();
+  });
+
+  it('lets an explicit Bring in bypass the backoff', async () => {
+    getWorktreeDelta.mockResolvedValue(delta());
+    stageWorktreeChanges.mockResolvedValue({
+      success: false, message: 'blocked', conflicted: false, conflictedFiles: [],
+      stagedCommit: TIP, stagedFiles: 0, upToDate: false,
+    });
+    start();
+
+    await settleAndReconcile();
+    expect(stageWorktreeChanges).toHaveBeenCalledTimes(1);
+
+    // The user fixes the blocker and presses the button — no invisible timer.
+    stageWorktreeChanges.mockResolvedValue({
+      success: true, message: 'Staged 2 file(s)', conflicted: false, conflictedFiles: [],
+      stagedCommit: TIP, stagedFiles: 2, upToDate: false,
+    });
+    const result = await stageWorktreeNow('p1', worktree());
+    expect(result.ok).toBe(true);
+    expect(stageWorktreeChanges).toHaveBeenCalledTimes(2);
+  });
+
   it('clears a row and records the tip when git reports nothing outstanding', async () => {
     getWorktreeDelta.mockResolvedValue(delta({ upToDate: true, committedFiles: 0, pendingFiles: 0 }));
     start();

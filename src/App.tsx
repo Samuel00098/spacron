@@ -8,6 +8,7 @@ import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
 import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
+import AgentPlacementModal from '$lib/components/shared/AgentPlacementModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
@@ -200,6 +201,10 @@ export default function App() {
       {isQuickCaptureOpen && <QuickCaptureModal onclose={closeQuickCapture} />}
 
       {isAgentSpawnOpen && <AgentSpawnModal onclose={closeAgentSpawn} />}
+
+      {/* Layers over the spawn modal — every spawn path (manual or orchestrator)
+          routes its "worktree or main repo?" question through this one host. */}
+      <AgentPlacementModal />
 
       {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
       {isNewFolderPromptOpen && <NewFolderModal />}

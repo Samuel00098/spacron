@@ -20,6 +20,20 @@ const focusPromptBar = vi.hoisted(() => vi.fn());
 const summarizeTerminalTask = vi.hoisted(() => vi.fn((text: string) => text));
 const waitForAgentReady = vi.hoisted(() => vi.fn(async (): Promise<void> => {}));
 const getPresetRuns = vi.hoisted(() => vi.fn(() => []));
+// Every dispatch that spawns now waits on the placement dialog ("isolated
+// worktree or main repo?"), which answers ONE placement per agent. Tests answer
+// it synchronously; a test that wants other answers overrides the impl.
+type MockPlacementArgs = { agents: string[] };
+const requestAgentPlacement = vi.hoisted(() =>
+  vi.fn(
+    async (args: MockPlacementArgs): Promise<Array<'worktree' | 'main'> | null> =>
+      args.agents.map(() => 'worktree' as const)
+  )
+);
+const answerPlacementWith = (...answers: Array<'worktree' | 'main'>) =>
+  requestAgentPlacement.mockImplementation(async (args: MockPlacementArgs) =>
+    args.agents.map((_agent, i) => answers[i] ?? answers[answers.length - 1])
+  );
 const detectAgentAccess = vi.hoisted(() =>
   vi.fn(
     async (): Promise<{ ready: boolean; via: string; providerId: string | null; message: string }> => ({
@@ -108,6 +122,7 @@ vi.mock('$lib/stores/editor', () => ({ openFile, closeFile, jumpToLine }));
 vi.mock('$lib/stores/preview', () => ({ navigatePreviewTab, ensureProxyRunning }));
 vi.mock('$lib/services/orchestrator/app-context', () => ({ getAppContextSnapshot, NAVIGABLE_VIEWS }));
 vi.mock('$lib/stores/runs', () => ({ getPresetRuns }));
+vi.mock('$lib/stores/agentPlacement', () => ({ requestAgentPlacement }));
 vi.mock('$lib/stores/terminal', () => ({
   sessions,
   onSessionExit,
@@ -165,6 +180,8 @@ function resetMocks() {
   waitForAgentReady.mockResolvedValue(undefined);
   getPresetRuns.mockReset();
   getPresetRuns.mockReturnValue([]);
+  requestAgentPlacement.mockReset();
+  answerPlacementWith('worktree');
   detectAgentAccess.mockReset();
   detectAgentAccess.mockResolvedValue({
     ready: true,
@@ -669,6 +686,246 @@ describe('orchestrator chat actions', () => {
     expect(sendAgentPromptDirect).not.toHaveBeenCalled();
   });
 
+  it('asks where to run before spawning, and spawns nothing when dismissed', async () => {
+    requestAgentPlacement.mockResolvedValue(null);
+
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module');
+
+    expect(requestAgentPlacement).toHaveBeenCalledTimes(1);
+    expect(requestAgentPlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'orchestrator', agents: ['claude'] })
+    );
+    // Dismissing the dialog must leave no terminal and no orphaned task behind.
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(get(orchestratorTasks)).toHaveLength(0);
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1].text).toContain('Cancelled');
+  });
+
+  it('honours a "main repo" answer over the admin-keyword heuristic', async () => {
+    // The prompt has no admin keywords, so the heuristic would have isolated it —
+    // the user's answer is what decides.
+    answerPlacementWith('main');
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'refactor the auth module');
+
+    expect(get(orchestratorTasks)[0].skipWorktree).toBe(true);
+  });
+
+  it('pre-selects the main repo for release work but still asks', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'git tag v1.2.0 and push it', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'cut the release');
+
+    expect(requestAgentPlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ suggested: 'main', suggestionReason: expect.any(String) })
+    );
+    // Answered 'worktree' by the default mock — the user overrules the hint.
+    expect(get(orchestratorTasks)[0].skipWorktree).toBe(false);
+  });
+
+  it('asks once for a multi-agent plan, listing every agent by name', async () => {
+    answerPlacementWith('main');
+    spawnAgentPreset.mockReset();
+    spawnAgentPreset.mockResolvedValueOnce(42).mockResolvedValueOnce(43);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening two agents.',
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Backend' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Frontend' },
+      ],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open two claude agents');
+
+    expect(requestAgentPlacement).toHaveBeenCalledTimes(1);
+    expect(requestAgentPlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: ['Backend', 'Frontend'] })
+    );
+    expect(get(orchestratorTasks).every((t) => t.skipWorktree === true)).toBe(true);
+  });
+
+  it('places each agent independently — main repo for one, worktrees for the rest', async () => {
+    answerPlacementWith('main', 'worktree', 'worktree');
+    spawnAgentPreset.mockReset();
+    spawnAgentPreset.mockResolvedValueOnce(42).mockResolvedValueOnce(43).mockResolvedValueOnce(44);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening three agents.',
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Release' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Backend' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Frontend' },
+      ],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open three claude agents');
+
+    const byName = Object.fromEntries(get(orchestratorTasks).map((t) => [t.name, t.skipWorktree]));
+    expect(byName).toEqual({ Release: true, Backend: false, Frontend: false });
+  });
+
+  it('keeps answers aligned when a spawn is held back by a file claim', async () => {
+    // The first agent claims src/a.ts; the second wants it too and is held, so it
+    // never spawns. The third must still get ITS answer ('main'), not the held
+    // agent's — a running counter would slide it onto the wrong one.
+    answerPlacementWith('worktree', 'worktree', 'main');
+    spawnAgentPreset.mockReset();
+    spawnAgentPreset.mockResolvedValueOnce(42).mockResolvedValueOnce(43);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening three agents.',
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: 'edit a', name: 'First', files: ['src/a.ts'] },
+        { kind: 'spawn', agent: 'claude', prompt: 'edit a too', name: 'Second', files: ['src/a.ts'] },
+        { kind: 'spawn', agent: 'claude', prompt: 'ship it', name: 'Third' },
+      ],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open three claude agents');
+
+    const byName = Object.fromEntries(get(orchestratorTasks).map((t) => [t.name, t.skipWorktree]));
+    expect(byName.Second).toBeUndefined();
+    expect(byName).toEqual({ First: false, Third: true });
+  });
+
+  it('skips the dialog entirely when the user said where to run it', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: null, name: null, placement: 'main' }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open claude code in the main repo');
+
+    expect(requestAgentPlacement).not.toHaveBeenCalled();
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)[0].skipWorktree).toBe(true);
+  });
+
+  it('asks only about the agents whose placement was NOT stated', async () => {
+    // "open one in a worktree and another in the main repo, plus a third" — two
+    // are already decided, so the dialog must only cover the leftover.
+    answerPlacementWith('main');
+    spawnAgentPreset.mockReset();
+    spawnAgentPreset.mockResolvedValueOnce(42).mockResolvedValueOnce(43).mockResolvedValueOnce(44);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening three agents.',
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Iso', placement: 'worktree' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Direct', placement: 'main' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Unsaid', placement: null },
+      ],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open three agents');
+
+    expect(requestAgentPlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: ['Unsaid'] })
+    );
+    const byName = Object.fromEntries(get(orchestratorTasks).map((t) => [t.name, t.skipWorktree]));
+    expect(byName).toEqual({ Iso: false, Direct: true, Unsaid: true });
+  });
+
+  it('asks out loud in voice mode instead of opening a dialog nobody can click', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Launching Iris.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: null, name: 'Iris' }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open a claude agent', { voiceConversation: true });
+
+    // No modal, and nothing spawned — the question is the whole turn.
+    expect(requestAgentPlacement).not.toHaveBeenCalled();
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(get(orchestratorTasks)).toHaveLength(0);
+
+    const transcript = get(chatMessages)['project-1'];
+    const spoken = transcript[transcript.length - 1];
+    expect(spoken).toMatchObject({ role: 'assistant', pending: false });
+    expect(spoken.text).toContain('Iris');
+    expect(spoken.text).toContain('worktree');
+    expect(spoken.text).toContain('main repo');
+  });
+
+  it('spawns straight away in voice mode once the placement was spoken', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Starting Iris in an isolated worktree.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: null, name: 'Iris', placement: 'worktree' }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open a claude agent in a worktree', {
+      voiceConversation: true,
+    });
+
+    expect(requestAgentPlacement).not.toHaveBeenCalled();
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)[0].skipWorktree).toBe(false);
+  });
+
+  it('holds nothing in state when it asks for a placement in voice mode', async () => {
+    // The confirmation gate that once lived here was removed as unfixable: on
+    // the realtime path the user's literal "yes" never arrives, so held actions
+    // could never be released. This question must NOT reintroduce that — it
+    // stores nothing, and the next turn re-plans from scratch.
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Launching Iris.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: null, name: 'Iris' }],
+      viaLLM: true,
+    });
+    await sendChatMessage('project-1', '/repo', 'open a claude agent', { voiceConversation: true });
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+
+    // A follow-up carrying the placement spawns on its own, with no reference to
+    // the previous turn — nothing was queued waiting for an affirmation.
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Starting Iris in an isolated worktree.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: null, name: 'Iris', placement: 'worktree' }],
+      viaLLM: true,
+    });
+    await sendChatMessage('project-1', '/repo', 'worktree', { voiceConversation: true });
+
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)).toHaveLength(1);
+    expect(get(orchestratorTasks)[0].skipWorktree).toBe(false);
+  });
+
+  it('names the count, not every agent, when several placements are unstated in voice mode', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening two agents.',
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Iris' },
+        { kind: 'spawn', agent: 'claude', prompt: null, name: 'Nova' },
+      ],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'open two claude agents', { voiceConversation: true });
+
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1].text).toContain('2 agents');
+  });
+
   it('spawns a named agent persistent (no auto-send)', async () => {
     routeOrchestratorRequest.mockResolvedValue({
       reply: 'Opening Backend.',
@@ -685,9 +942,15 @@ describe('orchestrator chat actions', () => {
   });
 
   it('executes voice-mode spawns on the same turn, with no confirmation hold', async () => {
+    // `placement` is stated so this test isolates the property it was written
+    // for — no PERMISSION hold ("want me to go ahead?"). An unstated placement
+    // is a missing required input, not a permission request, and is asked for
+    // separately (see the voice tests above).
     routeOrchestratorRequest.mockResolvedValue({
       reply: 'Handing this to Claude.',
-      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null, placement: 'worktree' },
+      ],
       viaLLM: true,
     });
 
@@ -703,7 +966,9 @@ describe('orchestrator chat actions', () => {
   it('rewrites a permission-question reply into a declarative one when actions execute', async () => {
     routeOrchestratorRequest.mockResolvedValue({
       reply: "I'll launch Claude to refactor the auth module, want me to go ahead?",
-      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null }],
+      actions: [
+        { kind: 'spawn', agent: 'claude', prompt: 'refactor the auth module', name: null, placement: 'worktree' },
+      ],
       viaLLM: true,
     });
 

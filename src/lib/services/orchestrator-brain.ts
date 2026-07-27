@@ -24,6 +24,14 @@ export interface AgentChoice {
  * the fleet of coding agents, and APP actions (navigate/open-file/…) drive the
  * application UI itself so the orchestrator works as a full in-app assistant.
  */
+/**
+ * Where the user SAID an agent should run. `null`/absent means they didn't say,
+ * so the app has to ask. Structurally identical to `AgentPlacement` in
+ * `$lib/stores/agentPlacement` — declared here so the brain stays free of store
+ * imports.
+ */
+export type SpawnPlacement = 'worktree' | 'main';
+
 export type OrchestratorAction =
   /**
    * Launch a new agent. Omit `prompt` to open it idle/ready; `name` labels it.
@@ -31,7 +39,7 @@ export type OrchestratorAction =
    * spawn is part of a divided plan. Set `skipWorktree` to true for admin/
    * release tasks (tagging, pushing, changelogs) that need the main branch.
    */
-  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; skipWorktree?: boolean }
+  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; skipWorktree?: boolean; placement?: SpawnPlacement | null }
   /** Push a new prompt to an already-running agent, addressed by its name. */
   | { kind: 'send'; target: string; prompt: string }
   /** Give a running agent a name (or rename it). */
@@ -431,14 +439,16 @@ function navigationRoute(text: string, agents: AgentChoice[]): RouteResult | nul
 // Spoken synonyms for command ids that aren't an obvious word. The command id
 // itself and the preset name are matched generically (below); these cover the
 // gap where the id is opaque ("agy" → "antigravity") or differs from how people
-// say it. The Cursor command is the bare word "agent", which is too generic to
-// match on its own, so it's reached only via "cursor".
+// say it. Cursor ships as "cursor-agent"; the bare "agent" is kept for sessions
+// created before the rename, and is too generic to match on its own, so it is
+// reached only via "cursor".
 const AGENT_ALIASES: Record<string, string[]> = {
   codex: ['codex'],
   claude: ['claude'],
   agy: ['agy', 'antigravity'],
   opencode: ['opencode', 'open code'],
   pi: ['pi'],
+  'cursor-agent': ['cursor'],
   agent: ['cursor'],
   aider: ['aider'],
   grok: ['grok'],
@@ -725,6 +735,8 @@ function buildSystemPrompt(
     '    "role" (optional): when you divide ONE goal across a TEAM, tag each spawn with its role so it gets the right charter — "coordinator" (plans + sequences the sub-tasks), "builder" (implements one sub-task), "scout" (read-only recon, no edits), "reviewer" (gates each hand-off). Leave null for an ordinary single agent.',
     '    "files" (optional): for a builder in a divided plan, the repo-relative files that sub-task will own. The app posts a claim so no two builders edit the same file at once — a spawn whose files overlap a live claim is held until released. Only set it when you know the files; otherwise omit.',
     '    "skipWorktree" (optional, boolean): set to true for admin/release tasks (tagging, pushing, changelogs, version bumps, deploy) so the agent runs directly in the project root instead of an isolated git worktree. Defaults to false — the app ALSO auto-detects it from the prompt content, so you typically do not need to set this explicitly.',
+    '    "placement" (optional, "worktree" | "main" | null): set ONLY when the user says where that agent should run — "in a worktree" / "isolated" → "worktree"; "in the main repo" / "on the main branch" / "no worktree" → "main". Set it PER SPAWN: "open one in a worktree and another in the main repo" is two spawns with different values. Leave it null when they did not say — the app then asks them, so never guess.',
+    '    If your PREVIOUS reply asked the user where an agent should run and their latest message answers with a place ("worktree", "main repo"), re-issue the spawn they originally asked for with that "placement" set. Do not ask again.',
     '- {"kind": "send", "target": "<running agent name>", "prompt": "<full standalone prompt>"}',
     '    Give a new task to an agent that is ALREADY running. Use this instead of spawning when the user refers to an existing agent.',
     '- {"kind": "name", "target": "<running agent name or unnamed reference>", "name": "<new name>"}',
@@ -869,6 +881,109 @@ export const ADMIN_KEYWORD_RE = new RegExp(
   'i',
 );
 
+/**
+ * "…in the main repo", "…without a worktree" — the user naming the main
+ * checkout as the place to run. Listed first because several of these mention
+ * "worktree" negatively ("no worktree"), and `detectStatedPlacement` strips
+ * every match before it looks for a positive worktree phrase.
+ */
+const MAIN_REPO_PHRASE_RE = new RegExp(
+  [
+    // A preposition is required here for the same reason as the worktree
+    // patterns below: bare "main repo" fires on ordinary task text like "fix the
+    // main repo button label". A bare answer is handled by STANDALONE_MAIN_RE.
+    /\b(in|into|inside|on)\s+(the\s+)?(main|primary|actual|real|same)\s+(repo|repository|checkout|working\s+tree)\b/,
+    // NO "in/on the main branch" pattern here, deliberately. A branch is where a
+    // bug LIVES as often as it is where an agent should run — "fix the failing
+    // test on the main branch" is task text, and matching it silently spawned an
+    // unisolated agent without ever showing the placement dialog. Since a wrong
+    // 'main' is the damaging direction (the agent edits the user's real working
+    // tree unasked) and a miss only costs one click, the ambiguous phrasing falls
+    // through to the dialog. A bare "main branch" reply is still an answer, and
+    // STANDALONE_MAIN_RE handles that.
+    /\b(in|into|inside)\s+(the\s+)?project\s+root\b/,
+    /\bdirectly\s+in\s+the\s+(repo|repository|project)\b/,
+    /\b(no|without|outside)\s+(a\s+|an\s+)?(isolated\s+)?work[\s-]?trees?\b/,
+    /\bnot\s+in\s+(a\s+|an\s+)?work[\s-]?trees?\b/,
+  ].map((r) => r.source).join('|'),
+  'gi',
+);
+
+/**
+ * "…in a worktree", "…in its own worktree", "isolate them".
+ *
+ * Every pattern requires a PREPOSITION in front of the noun. Matching a bare
+ * "worktree" would fire on ordinary task text — "remove the worktree cleanup
+ * code" — and silently skip the placement dialog for a request that never
+ * mentioned placement at all.
+ *
+ * A bare "in isolation" is NOT here for the same reason: "refactor the parser so
+ * it can be tested in isolation" is a description of the work, not of where to
+ * run it, and matching it skipped the dialog outright. The imperative "isolate
+ * it / them" stays, because an instruction to isolate has no second reading.
+ * A one-word "isolation" reply is covered by STANDALONE_WORKTREE_RE.
+ */
+const WORKTREE_PHRASE_RE = new RegExp(
+  [
+    /\b(in|into|inside|on|using|with)\s+(its\s+own\s+|their\s+own\s+|a\s+|an\s+|the\s+)?(new\s+|separate\s+|isolated\s+|fresh\s+)?work[\s-]?trees?\b/,
+    /\bisolate\s+(it|them|that|those|each|the\s+agents?)\b/,
+  ].map((r) => r.source).join('|'),
+  'i',
+);
+
+/**
+ * A bare answer to "worktree or main repo?" — the voice follow-up turn. Covers
+ * "isolation" / "isolated" as a whole reply, which is why WORKTREE_PHRASE_RE can
+ * afford to drop the ambiguous mid-sentence "in isolation".
+ */
+const STANDALONE_WORKTREE_RE = /^\s*(in\s+)?(an?\s+|the\s+)?(new\s+|separate\s+|isolated\s+)?(work[\s-]?trees?|isolation|isolated)\b[\s.!]*$/i;
+const STANDALONE_MAIN_RE = /^\s*(in\s+)?(the\s+)?(main|primary)\s*(repo(sitory)?|branch|checkout)?\b[\s.!]*$/i;
+
+/**
+ * Read an explicit placement out of what the user actually said. Returns `null`
+ * when they didn't say — the caller must then ask — and ALSO when they named
+ * both places in one breath ("one in a worktree, another in the main repo"),
+ * because that is a per-agent decision only the LLM can split.
+ */
+export function detectStatedPlacement(text: string): SpawnPlacement | null {
+  const trimmed = (text ?? '').trim();
+  if (!trimmed) return null;
+  if (STANDALONE_WORKTREE_RE.test(trimmed)) return 'worktree';
+  if (STANDALONE_MAIN_RE.test(trimmed)) return 'main';
+
+  const withoutMain = trimmed.replace(MAIN_REPO_PHRASE_RE, ' ');
+  const saysMain = withoutMain !== trimmed;
+  const saysWorktree = WORKTREE_PHRASE_RE.test(withoutMain);
+  if (saysMain && saysWorktree) return null;
+  if (saysMain) return 'main';
+  if (saysWorktree) return 'worktree';
+  return null;
+}
+
+function parsePlacement(raw: unknown): SpawnPlacement | null {
+  const value = str(raw).toLowerCase();
+  if (value === 'worktree' || value === 'isolated') return 'worktree';
+  if (value === 'main' || value === 'main-repo' || value === 'root') return 'main';
+  return null;
+}
+
+/**
+ * Fill in `placement` for spawns the model left unset, from a placement the user
+ * stated for the whole request ("open two agents in the main repo"). Only
+ * applied when the message names ONE place — a mixed request stays per-action,
+ * where the model's own `placement` is the only thing that can split it.
+ */
+export function withStatedPlacement(result: RouteResult, message: string): RouteResult {
+  const stated = detectStatedPlacement(message);
+  if (!stated || !result.actions.some((a) => a.kind === 'spawn' && !a.placement)) return result;
+  return {
+    ...result,
+    actions: result.actions.map((action) =>
+      action.kind === 'spawn' && !action.placement ? { ...action, placement: stated } : action
+    ),
+  };
+}
+
 function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -886,7 +1001,11 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     const skipWorktree =
       obj.skipWorktree === true ||
       (!!prompt && ADMIN_KEYWORD_RE.test(prompt));
-    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files, skipWorktree };
+    // `placement` is what the USER stated, so it's authoritative and skips the
+    // placement dialog. It is deliberately NOT inferred from `prompt`: the task
+    // text can mention a worktree without being about placement at all.
+    const placement = parsePlacement(obj.placement);
+    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files, skipWorktree, placement };
   }
   if (kind === 'send') {
     const target = str(obj.target);
@@ -1093,7 +1212,10 @@ export async function routeOrchestratorRequest(
           baseUrl: baseUrl || undefined,
         });
         const result = parseRouteJson(raw, agents);
-        if (result) return result;
+        // A placement the user stated for the whole request backfills any spawn
+        // the model left unset, so "open two agents in the main repo" is honoured
+        // even when the model forgets the field.
+        if (result) return withStatedPlacement(result, trimmed);
       } catch (error) {
         const msg = String(error ?? '');
         // No key / command missing (older binary) → stop trying the LLM.
@@ -1105,5 +1227,8 @@ export async function routeOrchestratorRequest(
     }
   }
 
-  return heuristicRoute(message, agents, ctx);
+  // The heuristic route has no model to set `placement`, so the stated-placement
+  // pass is the ONLY way "open an agent in the main repo" is honoured without an
+  // AI provider configured.
+  return withStatedPlacement(heuristicRoute(message, agents, ctx), trimmed);
 }

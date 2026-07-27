@@ -1010,7 +1010,7 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
   { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
-  { id: 'goToFleet',      label: 'Go to Agent Fleet',  category: 'View' },
+  { id: 'goToFleet',      label: 'Go to Agent Changes', category: 'View' },
   { id: 'goToDb',         label: 'Go to Database Explorer', category: 'View' },
   { id: 'goToContainers', label: 'Go to Containers',   category: 'View' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  category: 'View' },
@@ -1050,7 +1050,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
   { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
-  { id: 'goToFleet',      label: 'Go to Agent Fleet',  keys: 'Ctrl+Shift+G' },
+  { id: 'goToFleet',      label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
   { id: 'goToDb',         label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
   { id: 'goToContainers', label: 'Go to Containers',   keys: 'Ctrl+Shift+C' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  keys: 'Ctrl+Shift+X' },
@@ -1190,14 +1190,24 @@ export const terminalShell = persistentWritable<string>('terminalShell', ''); //
 export const terminalCursorStyle = persistentWritable<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar');
 export const terminalScrollback = persistentWritable('terminalScrollback', 5000);
 export const terminalFontSize = persistentWritable('terminalFontSize', 14);
-// DOM is the default. It is the only renderer that composites the terminal's
-// transparent background correctly: canvas and webgl erase the previous frame by
-// painting the background over it, and with alpha 0 there is nothing to paint,
-// so stale glyphs survive as ghosting. DOM has no glyph atlas and no frame-clear
-// step — each cell is a real element — so it cannot exhibit that. It also has no
-// per-page context limit, which matters because panes stay mounted (see
-// `.spacron/memory/terminal-pane-lifetime.md`).
-export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'dom');
+// Canvas is the default — this line is the single source of truth for that; the
+// zustand mirror in `stores/zustand/settings.ts` just repeats it.
+//
+// An earlier comment here claimed canvas and webgl ghost against our alpha-0
+// background, on the theory that they clear a frame by painting the background
+// over it and so erase nothing when it is fully transparent. That was measured
+// and is not true at xterm 5.5.0 / addon-canvas 0.7.0 / addon-webgl 0.18.0: both
+// renderers clear transparent cells to bare wallpaper, and both survive heavy
+// streaming output, alt-screen enter/exit and a DPR-2 resize without residue.
+// Transparency does not require the DOM renderer.
+//
+// Canvas rather than webgl because of a limit that IS real: a page gets 16 WebGL
+// contexts in Chromium and the oldest are silently evicted past that. Panes never
+// unmount while their session lives (`.spacron/memory/terminal-pane-lifetime.md`),
+// so a busy workspace exceeds 16 and would start killing its longest-running
+// agents' contexts. Canvas has no such ceiling. WebGL stays user-selectable and
+// falls back via `onContextLoss`; DOM stays available as the no-GPU escape hatch.
+export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas');
 
 export function updateSetting(key: string, value: unknown) {
   switch (key) {
@@ -1298,6 +1308,6 @@ export function resetSettingsToDefault() {
   terminalCursorStyle.set('bar');
   terminalScrollback.set(5000);
   terminalFontSize.set(14);
-  terminalRenderer.set('dom');
+  terminalRenderer.set('canvas');
 }
 

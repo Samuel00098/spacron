@@ -51,14 +51,21 @@ export function useGlobalTooltips() {
 
       activeElement = target;
 
-      // Extract content
-      let content = target.getAttribute('data-tooltip');
-      if (!content) {
-        content = target.getAttribute('title') || '';
-        if (content) {
-          target.setAttribute('data-tooltip', content);
-          target.removeAttribute('title'); // Prevent native tooltip
-        }
+      // Extract content. A live `title` always wins over the cached copy:
+      // `data-tooltip` is only a stash of the title we stripped to suppress the
+      // native tooltip, and React re-applies `title` whenever the prop changes.
+      // Reading the cache first froze a button's text at whatever it said on the
+      // very first hover — dock buttons whose label depends on state (Focus /
+      // Split / Fleet swap to "Back to split" when active) never updated, and a
+      // renamed room kept its old name until a full reload.
+      const liveTitle = target.getAttribute('title');
+      let content: string;
+      if (liveTitle) {
+        content = liveTitle;
+        target.setAttribute('data-tooltip', liveTitle);
+        target.removeAttribute('title'); // Prevent native tooltip
+      } else {
+        content = target.getAttribute('data-tooltip') || '';
       }
 
       if (!content || !tooltipEl) return;

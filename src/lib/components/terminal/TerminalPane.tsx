@@ -74,6 +74,11 @@ const MIN_COLS = 10;
 const MIN_ROWS = 3;
 const isWindowsHost = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
+// ConPTY gained correct line-wrapping at Windows build 21376. At or above it, xterm's
+// `windowsPty` wrapping heuristic is unnecessary — and measurably harmful, see the
+// note on `windowsPty` below.
+const CONPTY_NATIVE_WRAP_BUILD = 21376;
+
 let cachedWindowsBuild: number | null = null;
 let hasCheckedPowerShell7 = false;
 
@@ -219,11 +224,29 @@ export default function TerminalPane({
 
   const [windowsBuild, setWindowsBuild] = useState<number | null>(cachedWindowsBuild);
 
+  // Only declare ConPTY to xterm on builds that still need its wrapping heuristic.
+  //
+  // Setting `windowsPty` makes xterm stamp an explicit wrapped/not-wrapped state on
+  // every line as it arrives. Ordinary short output is stamped NOT wrapped, which
+  // disables reflow for it — so when a pane shrinks, those lines are pushed into
+  // scrollback permanently, and when it grows back xterm cannot pull them down
+  // again. The new rows stay blank. Measured on a 46-row pane, one 46->40->46
+  // cycle: baseY 15 -> 21 and trailing blank rows 1 -> 7. Six dead rows (~99px)
+  // that never fill, and every transient shrink during a layout settle spends more.
+  // That is the empty band at the bottom of a pane. Without the option the same
+  // cycle is a no-op: baseY 15 -> 15, blank rows 1 -> 1.
+  //
+  // What it buys in return, on a modern build: nothing measurable. Wrapped-line
+  // rejoin on widen behaves identically with and without it (isWrapped flags match;
+  // a 100-char line rejoins into one row either way), because ConPTY has emitted
+  // proper wrap information natively since build 21376.
   const windowsPty = useMemo(() => {
     if (!isWindowsHost) return undefined;
+    const buildNumber = windowsBuild ?? 22000;
+    if (buildNumber >= CONPTY_NATIVE_WRAP_BUILD) return undefined;
     return {
       backend: 'conpty' as const,
-      buildNumber: windowsBuild ?? 22000,
+      buildNumber,
     };
   }, [windowsBuild]);
 
@@ -890,11 +913,20 @@ export default function TerminalPane({
 
       term.open(container);
       applyTerminalRenderer();
-      // Re-apply the surface and nudge a repaint whenever the shell enters/leaves a
-      // full-screen TUI (alternate screen buffer). The background stays transparent
-      // glass in every buffer now — TUIs paint their own opaque surface on top — but
-      // re-touching it on the transition keeps the renderer repainting cleanly.
-      term.buffer.onBufferChange(() => applyRendererBackground());
+      // Nudge a repaint whenever the shell enters/leaves a full-screen TUI
+      // (alternate screen buffer).
+      //
+      // This used to call applyRendererBackground(), which assigns term.options.theme.
+      // The background is identical in both buffers — it only varies with light/dark —
+      // so the assignment changed nothing, but xterm treats any theme write as a theme
+      // change and refreshes the renderer, which on canvas/webgl means discarding the
+      // glyph atlas on every screen switch. A plain refresh gets the same repaint
+      // without throwing away cached glyphs; the theme effect below owns the surface.
+      //
+      // Note this must stay a *client-side* repaint: forceReattachRepaint() would also
+      // redraw, but it does so by round-tripping a real PTY resize, which would fire
+      // SIGWINCH at the shell on every TUI enter/exit.
+      term.buffer.onBufferChange(() => term.refresh(0, term.rows - 1));
       container.addEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.addEventListener('mouseup', handleTerminalLinkMouseUp, true);
       container.addEventListener('mouseup', handleTerminalCopyOnSelect);

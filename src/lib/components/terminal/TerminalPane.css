@@ -304,13 +304,21 @@
   z-index: 3;
 }
 
-.terminal-pane .xterm-container .xterm {
-  height: 100%;
-  width: 100%;
-}
-
+/* Do NOT force height/width to 100% here.
+   xterm sizes `.xterm` and `.xterm-screen` to exactly the rendered character grid
+   (rows x cellHeight, cols x cellWidth), and FitAddon floors those counts, so the
+   container is almost always a little larger than the grid. Stretching the boxes to
+   100% does not create more rows — it just inflates the element past the last drawn
+   row, leaving a dead band that the glass rim (::after, inset 0) then draws its
+   border around. Measured at a 900x600 pane: `.xterm` 554px vs `.xterm-screen`
+   544px, i.e. a 10px strip below the last row that looked like unexplained padding
+   inside the pane. Letting both boxes keep their natural size makes the rim hug the
+   actual text grid; the few leftover pixels stay outside as transparent container
+   padding, where they are invisible. */
+.terminal-pane .xterm-container .xterm,
 .terminal-pane .xterm-container .xterm-screen {
-  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .terminal-pane .xterm-container .xterm-viewport {

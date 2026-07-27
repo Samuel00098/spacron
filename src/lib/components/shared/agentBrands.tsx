@@ -111,6 +111,7 @@ const BRANDS: Record<string, AgentBrand> = {
   claude: { color: '#D97757', mark: logo(CLAUDE) },
   codex: { color: MONO, mark: logo(OPENAI) },
   agy: { color: MONO, mark: antigravityMark },
+  'cursor-agent': { color: MONO, mark: logo(CURSOR) },
   agent: { color: MONO, mark: logo(CURSOR) },
   grok: { color: MONO, mark: logo(GROK) },
   opencode: { color: MONO, mark: logo(OPENCODE) },

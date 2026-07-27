@@ -1,3 +1,4 @@
+pub mod agent_probe;
 pub mod agent_signals;
 pub mod app_flags;
 pub mod audio;

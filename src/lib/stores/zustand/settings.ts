@@ -52,7 +52,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -139,14 +139,18 @@ function migrateLegacySettings() {
     persistValue('voiceConversationTtsModelByProvider', { ...ttsModelMap, google: 'gemini-2.5-flash-preview-tts' });
   }
 
-  // WebGL (the former default) has unreliable font-glyph atlas invalidation,
-  // especially on WebKitGTK/Linux — characters render with stale or wrong fonts
-  // after any font-family change, and GPU context loss leaves a blank canvas.
-  // Canvas is simpler and more reliable on all platforms. New users get canvas;
-  // existing users are migrated once from whatever they had before the flag.
+  // Move webgl users to canvas once. WebGL has unreliable font-glyph atlas
+  // invalidation after a font-family change, and — the reason this migration
+  // exists — a page only gets 16 WebGL contexts before the oldest are evicted,
+  // which a workspace full of never-unmounting panes will exceed.
+  //
+  // Deliberately does NOT touch a stored 'dom'. The previous version of this
+  // migration swept dom → canvas as well, which silently overrode a choice the
+  // user had made explicitly in Settings; DOM is the escape hatch for anyone
+  // whose machine renders GPU text badly, so it has to stick. Users who never
+  // chose anything have no stored key and simply take the canvas default.
   if (!localStorage.getItem('forge_terminalRendererMigrated')) {
-    if (localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('dom') ||
-        localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('webgl')) {
+    if (localStorage.getItem('forge_setting_terminalRenderer') === JSON.stringify('webgl')) {
       persistValue('terminalRenderer', 'canvas');
     }
     localStorage.setItem('forge_terminalRendererMigrated', '1');
@@ -201,8 +205,8 @@ function createSettingsState() {
     terminalCursorStyle: persistentValue<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar'),
     terminalScrollback: persistentValue('terminalScrollback', 5000),
     terminalFontSize: persistentValue('terminalFontSize', 14),
-    // See the note on `terminalRenderer` in stores/settings.ts for why DOM.
-    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'dom'),
+    // See the note on `terminalRenderer` in stores/settings.ts for why canvas.
+    terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
   };
 }
@@ -266,7 +270,7 @@ const defaults: SettingsValues = {
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -302,7 +306,7 @@ const defaults: SettingsValues = {
   terminalCursorStyle: 'bar',
   terminalScrollback: 5000,
   terminalFontSize: 14,
-  terminalRenderer: 'dom',
+  terminalRenderer: 'canvas',
   showSnapshotsTab: false,
 };
 

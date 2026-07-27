@@ -799,6 +799,24 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         }
       }
     }
+    // Load this project's orchestrator state LAST, once its terminal sessions
+    // are back. Order matters twice over: the loader reconciles persisted tasks
+    // against live sessions (running it early resets every in-progress task to
+    // todo), and it then sweeps worktrees that no task or session claims — so a
+    // restored agent whose session isn't in the store yet would look orphaned
+    // and have its worktree deleted out from under it.
+    //
+    // This is also the ONLY writer of the orchestrator's projectId → root_path
+    // map, which its background flush and periodic worktree sweep both iterate.
+    // Nothing else may call it, or those go quiet.
+    if (generation !== restoreProjectStateGeneration) return;
+    try {
+      const { loadProjectOrchestratorTasks } = await import('./orchestrator');
+      await loadProjectOrchestratorTasks({ id: projectId, root_path: rootPath });
+    } catch (e) {
+      console.error('Failed to load orchestrator state for project:', e);
+    }
+
     // Always show terminal focused with editor alongside
     terminalRoomOpen.set(true);
     layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));

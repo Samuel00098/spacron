@@ -143,7 +143,7 @@ export async function watchLeasedAgentTurn(
       // in-flight `Notification` sentinel would report a blocked agent as
       // finished. Only the long idle backstop below stays armed.
       if (!signalled) {
-        if (sawActivity && rangNewBell) {
+        if (sawActivity && grownTotal >= minWorkChars && rangNewBell) {
           return containsAttentionRequest(tail)
             ? { kind: 'blocked', reason: attentionReason(tail) }
             : { kind: 'finished' };

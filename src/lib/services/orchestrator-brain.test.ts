@@ -39,7 +39,12 @@ vi.mock('$lib/stores/settings', () => ({
   getProviderBaseUrl,
 }));
 
-import { routeOrchestratorRequest, resolveAgentCommand, ADMIN_KEYWORD_RE } from './orchestrator-brain';
+import {
+  routeOrchestratorRequest,
+  resolveAgentCommand,
+  ADMIN_KEYWORD_RE,
+  detectStatedPlacement,
+} from './orchestrator-brain';
 
 const ALL_AGENTS = [
   { command: 'codex', name: 'Codex CLI' },
@@ -513,7 +518,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('have codex do x', ALL_AGENTS);
     expect(result.viaLLM).toBe(true);
-    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false }]);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false, placement: null }]);
   });
 
   it('carries a valid team role through a spawn action', async () => {
@@ -523,7 +528,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('build a login system, plan first', ALL_AGENTS);
     expect(result.actions).toEqual([
-      { kind: 'spawn', agent: 'claude', prompt: 'plan it', name: null, role: 'coordinator', files: null, skipWorktree: false },
+      { kind: 'spawn', agent: 'claude', prompt: 'plan it', name: null, role: 'coordinator', files: null, skipWorktree: false, placement: null },
     ]);
   });
 
@@ -533,7 +538,7 @@ describe('routeOrchestratorRequest', () => {
     );
 
     const result = await routeOrchestratorRequest('have claude do x', ALL_AGENTS);
-    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'claude', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false }]);
+    expect(result.actions).toEqual([{ kind: 'spawn', agent: 'claude', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false, placement: null }]);
   });
 
   it('carries a builder file claim through a spawn action', async () => {
@@ -543,7 +548,7 @@ describe('routeOrchestratorRequest', () => {
 
     const result = await routeOrchestratorRequest('build the login form', ALL_AGENTS);
     expect(result.actions).toEqual([
-      { kind: 'spawn', agent: 'claude', prompt: 'build the form', name: null, role: 'builder', files: ['src/Login.tsx', 'src/api.ts'], skipWorktree: false },
+      { kind: 'spawn', agent: 'claude', prompt: 'build the form', name: null, role: 'builder', files: ['src/Login.tsx', 'src/api.ts'], skipWorktree: false, placement: null },
     ]);
   });
 
@@ -591,5 +596,122 @@ describe('ADMIN_KEYWORD_RE', () => {
   ];
   it.each(RELEASE_ADMIN)('bypasses isolation for: %s', (prompt) => {
     expect(ADMIN_KEYWORD_RE.test(prompt)).toBe(true);
+  });
+});
+
+describe('detectStatedPlacement', () => {
+  it.each([
+    ['open claude code in a worktree', 'worktree'],
+    ['spawn an agent in its own worktree', 'worktree'],
+    ['launch two agents in separate worktrees', 'worktree'],
+    ['open a claude agent and isolate it', 'worktree'],
+    ['open claude code in the main repo', 'main'],
+    ['spawn an agent in the main repository', 'main'],
+    ['open an agent, no worktree', 'main'],
+    ['start claude without a worktree', 'main'],
+    ['open an agent directly in the repo', 'main'],
+    ['open an agent in the project root', 'main'],
+  ] as const)('reads "%s" as %s', (text, expected) => {
+    expect(detectStatedPlacement(text)).toBe(expected);
+  });
+
+  it.each([
+    // Nothing about placement at all.
+    'refactor the auth module',
+    'open a claude agent',
+    // Naming BOTH places is a per-agent decision the model has to split — a
+    // single message-level answer would silently place one of them wrong.
+    'open one claude code in a worktree and another in the main repo',
+    // Ordinary task text that merely contains the words. Matching these would
+    // skip the placement dialog for a request that never mentioned placement.
+    'remove the worktree cleanup code',
+    'delete the stale worktrees',
+    'merge this into the main branch',
+    'fix the main repo button label',
+    // A branch is where a bug lives at least as often as it is where an agent
+    // should run, so "on the main branch" is no longer read as a placement — it
+    // used to be, and it silently spawned an unisolated agent on task text like
+    // the next line. One extra click beats editing the real working tree unasked.
+    'fix the failing test on the main branch',
+    'open an agent on the main branch',
+    // Same trap in the other direction: "in isolation" is usually describing the
+    // work, not where to run it. The imperative "isolate it" above still counts.
+    'refactor the parser so it can be tested in isolation',
+    'make sure these tests pass in isolation',
+    'run this one in isolation',
+  ])('returns null for "%s"', (text) => {
+    expect(detectStatedPlacement(text)).toBeNull();
+  });
+
+  it.each([
+    ['worktree', 'worktree'],
+    ['a worktree', 'worktree'],
+    ['isolated worktree', 'worktree'],
+    // Whole-message replies still resolve, which is what keeps the voice
+    // follow-up working after the mid-sentence forms above were tightened.
+    ['isolation', 'worktree'],
+    ['isolated', 'worktree'],
+    ['main repo', 'main'],
+    ['the main repo.', 'main'],
+    ['main', 'main'],
+    ['main branch', 'main'],
+  ] as const)('reads the bare answer "%s" as %s', (text, expected) => {
+    // The voice follow-up turn: the user answers "worktree" and nothing else.
+    expect(detectStatedPlacement(text)).toBe(expected);
+  });
+});
+
+describe('stated placement on spawn actions', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    isProviderApiKeyConfiguredLocal.mockReturnValue(true);
+  });
+
+  it('carries an explicit per-spawn placement from the model', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[' +
+        '{"kind":"spawn","agent":"claude","prompt":null,"name":null,"placement":"worktree"},' +
+        '{"kind":"spawn","agent":"claude","prompt":null,"name":null,"placement":"main"}]}'
+    );
+
+    const result = await routeOrchestratorRequest(
+      'open one claude code in a worktree and another in the main repo',
+      ALL_AGENTS
+    );
+    expect(result.actions.map((a) => (a.kind === 'spawn' ? a.placement : null))).toEqual([
+      'worktree',
+      'main',
+    ]);
+  });
+
+  it('backfills a placement the user stated once when the model omits it', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[' +
+        '{"kind":"spawn","agent":"claude","prompt":null,"name":null},' +
+        '{"kind":"spawn","agent":"claude","prompt":null,"name":null}]}'
+    );
+
+    const result = await routeOrchestratorRequest('open two agents in the main repo', ALL_AGENTS);
+    expect(result.actions.map((a) => (a.kind === 'spawn' ? a.placement : null))).toEqual([
+      'main',
+      'main',
+    ]);
+  });
+
+  it('leaves placement null when the user said nothing about it', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[{"kind":"spawn","agent":"claude","prompt":"do x","name":null}]}'
+    );
+
+    const result = await routeOrchestratorRequest('have claude do x', ALL_AGENTS);
+    expect(result.actions[0]).toMatchObject({ kind: 'spawn', placement: null });
+  });
+
+  it('honours a stated placement on the heuristic route (no AI provider)', async () => {
+    isProviderApiKeyConfiguredLocal.mockReturnValue(false);
+
+    const result = await routeOrchestratorRequest('open a claude agent in the main repo', ALL_AGENTS);
+    expect(result.viaLLM).toBe(false);
+    expect(result.actions[0]).toMatchObject({ kind: 'spawn', placement: 'main' });
   });
 });

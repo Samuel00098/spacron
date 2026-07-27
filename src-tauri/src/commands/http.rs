@@ -60,6 +60,27 @@ pub(crate) fn resolved_host_is_blocked(host: &str) -> bool {
     }
 }
 
+/// Redirect policy shared by every outbound client in this module: cap at 10
+/// hops AND re-check the host on every hop — literal and DNS-aware — so a
+/// redirect can't smuggle the request to a blocked link-local or cloud-metadata
+/// address, even via a hostname that resolves there.
+fn guarded_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("too many redirects");
+        }
+        if attempt
+            .url()
+            .host_str()
+            .map(|h| host_is_blocked(h) || resolved_host_is_blocked(h))
+            .unwrap_or(false)
+        {
+            return attempt.error("redirect to a blocked link-local or metadata address");
+        }
+        attempt.follow()
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct HttpResponsePayload {
     status: u16,
@@ -110,27 +131,9 @@ pub async fn http_send_request(
         }
     }
 
-    // Cap redirects at 10 hops AND re-check the host on every hop — literal and
-    // DNS-aware — so a redirect can't smuggle the request to a blocked metadata
-    // address, even via a hostname that resolves there.
-    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= 10 {
-            return attempt.error("too many redirects");
-        }
-        if attempt
-            .url()
-            .host_str()
-            .map(|h| host_is_blocked(h) || resolved_host_is_blocked(h))
-            .unwrap_or(false)
-        {
-            return attempt.error("redirect to a blocked link-local or metadata address");
-        }
-        attempt.follow()
-    });
-
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .redirect(redirect_policy)
+        .redirect(guarded_redirect_policy())
         .build()
         .map_err(|err| format!("Failed to create HTTP client: {err}"))?;
 
@@ -296,6 +299,23 @@ async fn icon_manifest(client: &reqwest::Client) -> Result<&'static IconCatalogu
         .await
 }
 
+/// True for a catalogue-supplied icon filename stem that is safe to splice into
+/// the CDN URL: bare alphanumerics, hyphens and underscores only.
+///
+/// Everything `variant_files` and `match_icon` work with comes from the fetched
+/// `metadata.json`, not from us. Unlike the user-derived slugs (which already go
+/// through [`normalize_slug`]), those strings are otherwise unconstrained, so a
+/// compromised or simply malformed catalogue could introduce a `/`, a `..` or a
+/// scheme and steer the fetch off its intended path on the CDN. Nothing legitimate
+/// in the catalogue needs anything outside this charset.
+fn icon_file_stem_is_safe(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem.len() <= 128
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Lowercase, alphanumerics only — so "Open-Code", "open_code" and "opencode" all
 /// compare equal, matching dashboard-icons' hyphenated filenames slug-for-slug.
 fn normalize_slug(s: &str) -> String {
@@ -357,6 +377,11 @@ fn match_icon<'a>(catalogue: &'a IconCatalogue, queries: &[String]) -> Option<&'
 
     let mut best: Option<(&str, i32)> = None;
     for (id, meta) in catalogue {
+        // Ids come from the fetched catalogue and end up spliced into the CDN
+        // URL, so an unsafe one is never a candidate in the first place.
+        if !icon_file_stem_is_safe(id) {
+            continue;
+        }
         let mut icon_score = score_term(id, &norm_queries);
         for alias in &meta.aliases {
             if let Some(s) = score_term(alias, &norm_queries) {
@@ -530,12 +555,16 @@ async fn fetch_lobehub_logo(
 /// they always resolve to a real file.
 fn variant_files(catalogue: &IconCatalogue, id: &str) -> (String, String) {
     let colors = catalogue.get(id).and_then(|m| m.colors.as_ref());
-    let light = colors
-        .and_then(|c| c.light.clone())
-        .unwrap_or_else(|| id.to_string());
-    let dark = colors
-        .and_then(|c| c.dark.clone())
-        .unwrap_or_else(|| id.to_string());
+    // A declared variant is used only when it is a safe filename stem; anything
+    // else falls back to the (already validated) base id rather than reaching a
+    // path we didn't intend.
+    let pick = |declared: Option<String>| -> String {
+        declared
+            .filter(|s| icon_file_stem_is_safe(s))
+            .unwrap_or_else(|| id.to_string())
+    };
+    let light = pick(colors.and_then(|c| c.light.clone()));
+    let dark = pick(colors.and_then(|c| c.dark.clone()));
     (format!("{light}.svg"), format!("{dark}.svg"))
 }
 
@@ -575,8 +604,14 @@ pub async fn fetch_agent_logo(command: String, name: String) -> Result<AgentLogo
     let tool = first.rsplit(['/', '\\']).next().unwrap_or(first);
     let queries = vec![tool.to_string(), name.clone()];
 
+    // Same redirect guard as the general HTTP client. The hosts here are fixed,
+    // trusted CDNs and no credentials are attached, but a redirect off one of
+    // them is the one way this path could be steered at a link-local or
+    // cloud-metadata address — so it gets checked on every hop like everything
+    // else that leaves the app.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .redirect(guarded_redirect_policy())
         .build()
         .map_err(|err| format!("Failed to create HTTP client: {err}"))?;
 
@@ -621,8 +656,8 @@ pub async fn fetch_agent_logo(command: String, name: String) -> Result<AgentLogo
 #[cfg(test)]
 mod tests {
     use super::{
-        host_is_blocked, logo_slug_candidates, match_icon, resolved_host_is_blocked,
-        variant_files, IconCatalogue, IconColors, IconMeta,
+        host_is_blocked, icon_file_stem_is_safe, logo_slug_candidates, match_icon,
+        resolved_host_is_blocked, variant_files, IconCatalogue, IconColors, IconMeta,
     };
 
     fn meta(aliases: &[&str], light: Option<&str>, dark: Option<&str>) -> IconMeta {
@@ -686,6 +721,39 @@ mod tests {
         assert_eq!(matched(&cat, "Aider", "aider"), None);
         // Too-short queries are ignored.
         assert_eq!(matched(&cat, "", "x"), None);
+    }
+
+    #[test]
+    fn unsafe_catalogue_names_never_reach_the_url() {
+        // Only bare alphanumerics, '-' and '_' are usable as a filename stem.
+        assert!(icon_file_stem_is_safe("claude-ai-light"));
+        assert!(icon_file_stem_is_safe("github_copilot"));
+        // Traversal, absolute paths, schemes and separators are all rejected.
+        assert!(!icon_file_stem_is_safe(".."));
+        assert!(!icon_file_stem_is_safe("../../other-repo/evil"));
+        assert!(!icon_file_stem_is_safe("a/b"));
+        assert!(!icon_file_stem_is_safe("https://evil.test/x"));
+        assert!(!icon_file_stem_is_safe("icon.svg"));
+        assert!(!icon_file_stem_is_safe(""));
+        assert!(!icon_file_stem_is_safe(&"a".repeat(129)));
+
+        // A hostile `colors` entry falls back to the base id instead of
+        // traversing off the catalogue's path on the CDN.
+        let mut cat = catalogue();
+        cat.insert(
+            "tampered".to_string(),
+            meta(&[], Some("../../../../evil"), Some("also/evil")),
+        );
+        assert_eq!(
+            variant_files(&cat, "tampered"),
+            ("tampered.svg".to_string(), "tampered.svg".to_string())
+        );
+
+        // An unsafe id is not even a match candidate, so it can never become the
+        // fallback either.
+        let mut cat = catalogue();
+        cat.insert("../../evil".to_string(), meta(&["aider"], None, None));
+        assert_eq!(matched(&cat, "Aider", "aider"), None);
     }
 
     #[test]
