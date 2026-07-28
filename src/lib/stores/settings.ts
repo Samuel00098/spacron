@@ -130,6 +130,16 @@ export const agentWorktrees = persistentWritable('agentWorktrees', true);
 // run and tested against them without pressing anything. Off leaves the same work
 // visible in the Agent changes list with a Stage button per agent.
 export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges', true);
+// Give agents a real browser (Microsoft's Playwright MCP server) alongside
+// Spacron's own tools, so an agent can open what it just built, read the page and
+// fix what's wrong instead of guessing from the dev-server log.
+//
+// Defaults OFF, and the default matters: turning it on adds a `playwright` entry
+// to agent config files — including the *global* ones for Codex and droid — and
+// the server itself is `npx @playwright/mcp@latest`, which needs Node on PATH and
+// downloads a browser on first run. None of that should happen to a user who
+// never asked for it, so this is opt-in rather than opt-out.
+export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 
 // Window
 export type CloseBehavior = 'quit' | 'minimize';

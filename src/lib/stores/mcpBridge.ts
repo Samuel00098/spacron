@@ -33,6 +33,7 @@ import {
 } from '$lib/services/orchestrator/worktree-manager';
 import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
+import { agentBrowserTools } from './settings';
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
 // ---------------------------------------------------------------------------
@@ -394,6 +395,84 @@ export async function buildMcpServerConfig(): Promise<Record<string, unknown>> {
 }
 
 // ---------------------------------------------------------------------------
+// Playwright MCP — the agent's browser
+// ---------------------------------------------------------------------------
+
+/**
+ * Microsoft's Playwright MCP server (`@playwright/mcp`), launched on demand
+ * through npx and written into the same agent configs as `spacron-mcp`.
+ *
+ * This is what lets an agent open the page it just built, read it, and fix what
+ * is wrong. Spacron does not implement any of it — Playwright already solves
+ * browser automation properly (auto-waiting, the accessibility tree rather than
+ * screenshots, console and network access), and a hand-rolled version would be a
+ * worse copy that we would then own.
+ *
+ * Both flags are load-bearing:
+ *
+ * `-y` — without it, the first launch on a machine that hasn't cached the
+ * package makes npx ask "Ok to proceed?", and a stdio MCP server has nobody to
+ * answer that prompt. It hangs at startup and the agent just sees a server that
+ * never becomes ready.
+ *
+ * `--isolated` — Playwright MCP defaults to a *persistent* browser profile, and
+ * upstream is explicit that one profile can only be used by one browser instance
+ * at a time. Spacron's whole model is several agents running at once, so the
+ * default would mean the first agent's browser takes the profile lock and every
+ * other agent's Playwright fails to start. Isolated sessions keep nothing on
+ * disk, which is also the right default for "open the thing I just built and
+ * look at it" — a clean browser each run, no stale login state.
+ */
+const PLAYWRIGHT_COMMAND = 'npx';
+const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest', '--isolated'];
+
+/**
+ * Our key for it, in every config file.
+ *
+ * Deliberately *not* the bare `playwright` that the upstream docs use. These
+ * writers merge into files the user also edits by hand, and the setting can be
+ * turned off — which has to remove the entry again, or a toggle that only ever
+ * adds would leave dead servers behind forever. Owning a distinctly-named key
+ * means the removal can never delete a `playwright` server the user configured
+ * themselves.
+ */
+const BROWSER_SERVER_KEY = 'spacron-playwright';
+
+/** The `{ command, args }` shape every CLI here uses except opencode. */
+const PLAYWRIGHT_STDIO_ENTRY = { command: PLAYWRIGHT_COMMAND, args: PLAYWRIGHT_ARGS };
+
+/**
+ * opencode takes the executable and its arguments as one flat array under
+ * `type: "local"`, and wants `enabled` set explicitly — the same divergence its
+ * remote entries already have.
+ */
+const PLAYWRIGHT_OPENCODE_ENTRY = {
+  type: 'local',
+  command: [PLAYWRIGHT_COMMAND, ...PLAYWRIGHT_ARGS],
+  enabled: true,
+};
+
+/** Whether the user has opted into giving agents a browser. Off by default. */
+function wantsBrowserTools(): boolean {
+  try {
+    return get(agentBrowserTools) === true;
+  } catch {
+    // Store not initialised (tests, non-browser contexts). Treat as off: adding
+    // a browser nobody asked for is worse than omitting one they did.
+    return false;
+  }
+}
+
+/**
+ * The browser entry to merge, or `null` meaning "remove any we wrote before".
+ * Every config writer passes this through so the toggle works in both
+ * directions on the next project open or agent launch.
+ */
+function browserEntry<T>(entry: T): T | null {
+  return wantsBrowserTools() ? entry : null;
+}
+
+// ---------------------------------------------------------------------------
 // Per-preset config injection
 // ---------------------------------------------------------------------------
 
@@ -509,15 +588,15 @@ export async function mcpLaunchFlags(
     if (!url) return '';
 
     const configPath = `${projectRoot.replace(/[\\/]+$/, '')}/.spacron/mcp/claude.json`;
+    // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`
+    // is treated as streamable HTTP, which it does not serve.
+    const mcpServers: Record<string, unknown> = { 'spacron-mcp': { type: 'sse', url } };
+    // This file is rewritten on every launch, so an omitted entry is already a
+    // removed one — no delete branch needed here, unlike the merging writers.
+    if (wantsBrowserTools()) mcpServers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
     await invoke('fs_write_file', {
       path: configPath,
-      // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`
-      // is treated as streamable HTTP, which it does not serve.
-      content: JSON.stringify(
-        { mcpServers: { 'spacron-mcp': { type: 'sse', url } } },
-        null,
-        2,
-      ),
+      content: JSON.stringify({ mcpServers }, null, 2),
     });
     return ` --mcp-config "${configPath}"`;
   } catch (e) {
@@ -640,6 +719,8 @@ async function injectProjectMcpJson(
 
     const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     mcpServers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
+    if (wantsBrowserTools()) mcpServers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    else delete mcpServers[BROWSER_SERVER_KEY];
     config['mcpServers'] = mcpServers;
 
     await invoke('fs_write_file', {
@@ -652,18 +733,21 @@ async function injectProjectMcpJson(
 }
 
 /**
- * Merge `{ [section]: { 'spacron-mcp': entry } }` into a JSON config file,
- * preserving whatever else is in it.
+ * Merge server entries into a JSON config file's `[section]` object, preserving
+ * whatever else is in it.
  *
  * Every CLI here keeps its servers under one top-level object and differs only
  * in the key name and the shape of the entry, so the read-merge-write dance is
  * written once. Best-effort by contract: callers treat a failure as "this agent
  * launches without Spacron tools", never as a launch error.
+ *
+ * A `null` value removes that key instead of writing it — how a server the user
+ * has switched off gets cleaned out of configs we previously wrote.
  */
 async function mergeJsonMcpConfig(
   configPath: string,
   section: string,
-  entry: Record<string, unknown>,
+  entries: Record<string, unknown | null>,
   label: string,
 ): Promise<void> {
   try {
@@ -676,7 +760,10 @@ async function mergeJsonMcpConfig(
     }
 
     const servers = (config[section] as Record<string, unknown>) ?? {};
-    servers['spacron-mcp'] = entry;
+    for (const [name, entry] of Object.entries(entries)) {
+      if (entry === null) delete servers[name];
+      else servers[name] = entry;
+    }
     config[section] = servers;
 
     await invoke('fs_write_file', {
@@ -701,7 +788,10 @@ async function injectCursorConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/.cursor/mcp.json`,
     'mcpServers',
-    { type: 'http', url: httpUrl },
+    {
+      'spacron-mcp': { type: 'http', url: httpUrl },
+      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
+    },
     'Cursor',
   );
 }
@@ -721,7 +811,10 @@ async function injectGeminiConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/.gemini/settings.json`,
     'mcpServers',
-    { type: 'http', url: httpUrl },
+    {
+      'spacron-mcp': { type: 'http', url: httpUrl },
+      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
+    },
     'Gemini CLI',
   );
 }
@@ -740,7 +833,10 @@ async function injectOpencodeConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/opencode.json`,
     'mcp',
-    { type: 'remote', url: httpUrl, enabled: true },
+    {
+      'spacron-mcp': { type: 'remote', url: httpUrl, enabled: true },
+      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_OPENCODE_ENTRY),
+    },
     'opencode',
   );
 }
@@ -765,6 +861,8 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
 
     const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     servers['spacron-mcp'] = { type: 'http', url: httpUrl, disabled: false };
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    else delete servers[BROWSER_SERVER_KEY];
     config['mcpServers'] = servers;
 
     await invoke('mcp_write_global_agent_config', {
@@ -791,10 +889,20 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
   try {
     let content = await invoke<string>('mcp_read_global_agent_config', { agent: 'codex' });
 
-    // Drop any previous block: the header plus its keys, up to the next table.
+    // Drop any previous blocks: each header plus its keys, up to the next table.
+    // Both are rewritten from scratch every time, which is also how the browser
+    // server disappears again when the user turns it off.
     content = content.replace(/\[mcp_servers\.spacron-mcp\][^[]*/g, '');
+    content = content.replace(/\[mcp_servers\.spacron-playwright\][^[]*/g, '');
 
     content = `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n`;
+
+    if (wantsBrowserTools()) {
+      // TOML wants the argv split into `command` + `args`, unlike opencode's
+      // single array. Values are literals we control, so no escaping is needed.
+      const args = PLAYWRIGHT_ARGS.map((a) => `"${a}"`).join(', ');
+      content += `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n`;
+    }
 
     await invoke('mcp_write_global_agent_config', {
       agent: 'codex',

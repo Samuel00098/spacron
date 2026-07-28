@@ -539,71 +539,6 @@ ytmusic-app-layout {
 }
 </style>"#;
 
-const MCP_FLAG: &str = "spacron-mcp-bridge";
-const MCP_SNIPPET: &str = r#"<script data-spacron-mcp-bridge>
-(() => {
-    if (window.__spacronMcpBridge) return;
-    window.__spacronMcpBridge = true;
-    window.addEventListener('message', (e) => {
-        if (e.source !== window.parent) return;
-        const d = e.data;
-        if (!d || typeof d.type !== 'string' || !d.type.startsWith('forge-mcp:')) return;
-        const requestId = d.requestId;
-        const respond = (result) => {
-            parent.postMessage({ type: 'forge-mcp:response', requestId, result }, '*');
-        };
-        try {
-            if (d.type === 'forge-mcp:page-info') {
-                respond({ title: document.title, readyState: document.readyState, url: location.href });
-            } else if (d.type === 'forge-mcp:query') {
-                const selector = d.selector || 'body';
-                const format = d.format || 'text';
-                const limit = d.limit || 10;
-                const els = document.querySelectorAll(selector);
-                const results = Array.from(els).slice(0, limit).map(el => ({
-                    tag: el.tagName.toLowerCase(),
-                    text: format === 'html' ? undefined : (el.innerText || '').slice(0, 2000),
-                    html: format === 'html' ? (el.outerHTML || '').slice(0, 5000) : undefined,
-                }));
-                respond({ count: results.length, elements: results });
-            } else if (d.type === 'forge-mcp:interact') {
-                const el = document.querySelector(d.selector);
-                if (!el) { respond({ success: false, error: 'Element not found: ' + d.selector }); return; }
-                if (d.action === 'click') {
-                    el.click();
-                    respond({ success: true, action: 'click', selector: d.selector });
-                } else if (d.action === 'type') {
-                    el.focus();
-                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value'
-                    )?.set || Object.getOwnPropertyDescriptor(
-                        window.HTMLTextAreaElement.prototype, 'value'
-                    )?.set;
-                    if (nativeInputValueSetter) {
-                        nativeInputValueSetter.call(el, d.text || '');
-                    } else {
-                        el.value = d.text || '';
-                    }
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    if (d.submit) {
-                        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-                        el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
-                        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-                        const form = el.closest('form');
-                        if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-                    }
-                    respond({ success: true, action: 'type', selector: d.selector });
-                } else {
-                    respond({ success: false, error: 'Unknown action: ' + d.action });
-                }
-            }
-        } catch (err) {
-            respond({ success: false, error: String(err) });
-        }
-    });
-})();
-</script>"#;
 
 #[derive(Clone)]
 pub struct ProxyState {
@@ -2724,9 +2659,6 @@ async fn build_preview_response(
         // The scroll-position bridge is harmless and useful everywhere, so inject
         // it into both local dev and external pages.
         let injected = inject_scroll_script(&injected);
-        // The MCP bridge lets agents query the DOM and interact with the page
-        // via postMessage. Injected into all proxied HTML pages.
-        let injected = inject_mcp_snippet(&injected);
         // The navigation rewriter keeps in-page links/forms on the proxy origin so
         // clicked results (e.g. DuckDuckGo) actually load instead of escaping the
         // proxy and being blocked by the destination's X-Frame-Options, and it
@@ -2966,30 +2898,6 @@ fn inject_scroll_script(html: &str) -> String {
     }
 
     format!("{}{}", html, SCROLL_SNIPPET)
-}
-
-fn inject_mcp_snippet(html: &str) -> String {
-    if html.contains(MCP_FLAG) {
-        return html.to_string();
-    }
-
-    if let Some(index) = html.rfind("</body>") {
-        let mut output = String::with_capacity(html.len() + MCP_SNIPPET.len() + 8);
-        output.push_str(&html[..index]);
-        output.push_str(MCP_SNIPPET);
-        output.push_str(&html[index..]);
-        return output;
-    }
-
-    if let Some(index) = html.rfind("</head>") {
-        let mut output = String::with_capacity(html.len() + MCP_SNIPPET.len() + 8);
-        output.push_str(&html[..index]);
-        output.push_str(MCP_SNIPPET);
-        output.push_str(&html[index..]);
-        return output;
-    }
-
-    format!("{}{}", html, MCP_SNIPPET)
 }
 
 /// Parse `/proxy-ws/{ws|wss}/{host}{path}` (+ query) into the real socket URL.

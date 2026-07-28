@@ -218,9 +218,9 @@ when it doesn't. Since any preset can be a worker, the orchestrator must be told
 levels of trust, and an orchestrator that can't tell will review half-written work from
 exactly the agents whose signals are weakest.
 
-The Rust server already has the deferred-response plumbing: `pending_browser:
-PendingRequests` + `resolve_browser_request` hold a `oneshot` sender per in-flight request
-while the frontend works. `wait_for_agent` is the same shape with a different resolver.
+The Rust server already has the deferred-response plumbing: `pending_sends: PendingSends`
++ `resolve_send_request` hold a `oneshot` sender per in-flight request while the frontend
+works. `wait_for_agent` is the same shape with a different resolver.
 
 ### 3. `list_agents` doesn't say what agents are doing
 

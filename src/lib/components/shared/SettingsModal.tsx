@@ -8,6 +8,7 @@ import {
   aiCompletionModelByProvider,
   aiCompletionProvider,
   aiGhostTextEnabled,
+  agentBrowserTools,
   agentWorktrees,
   aiProvider,
   aiProviders,
@@ -759,6 +760,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentNotifications = useStore(notificationsEnabled);
   const currentAgentWorktrees = useStore(agentWorktrees);
   const currentAutoStage = useStore(autoStageAgentChanges);
+  const currentAgentBrowserTools = useStore(agentBrowserTools);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
   const currentFormatOnSave = useStore(formatOnSave);
@@ -2168,6 +2170,26 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       label="Toggle automatic staging of agent changes"
                       checked={currentAutoStage}
                       onChange={autoStageAgentChanges.set}
+                    />
+                  </SettingRow>
+                </Section>
+
+                <Section title="Browser">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Give agents a real browser so they can open what they just built, read the page
+                    and fix what's wrong — instead of guessing from the dev-server log. Spacron adds
+                    Microsoft's Playwright MCP server to each agent's config alongside its own tools.
+                    Each agent drives its own Chromium window, separate from the preview panel here —
+                    that stays yours.
+                  </p>
+                  <SettingRow
+                    title="Let agents use a browser"
+                    detail="Runs `npx @playwright/mcp@latest --isolated` per agent, so it needs Node on your PATH and downloads a browser the first time. Sessions are isolated because agents run concurrently and a shared browser profile can only be held by one of them. Adds a spacron-playwright entry to agent config files — including the global ones for Codex and droid — and removes it again when you turn this off."
+                  >
+                    <Toggle
+                      label="Toggle agent browser tools"
+                      checked={currentAgentBrowserTools}
+                      onChange={agentBrowserTools.set}
                     />
                   </SettingRow>
                 </Section>

@@ -1,4 +1,3 @@
-mod browser_window;
 mod commands;
 mod error;
 mod lsp;
@@ -173,20 +172,6 @@ pub fn run() {
                 })
             };
 
-            let browser_emit_fn: mcp::BrowserEmitFn = {
-                let ah = app_handle.clone();
-                Arc::new(move |request_id, tool, args| {
-                    let _ = ah.emit(
-                        "mcp:browser-request",
-                        serde_json::json!({
-                            "request_id": request_id,
-                            "tool": tool,
-                            "args": args,
-                        }),
-                    );
-                })
-            };
-
             // Every tool that puts text into an agent goes through here rather
             // than writing to the PTY: the agent CLIs are TUIs, and text only
             // lands if it is pasted into the composer and submitted with Enter
@@ -207,13 +192,7 @@ pub fn run() {
                 })
             };
 
-            match mcp::start(
-                0,
-                read_cb,
-                spawn_fn,
-                browser_emit_fn,
-                deliver_emit_fn,
-            ) {
+            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn) {
                 Ok((handle, port)) => {
                     app.manage(mcp::McpServer(Some(handle)));
                     eprintln!("MCP server started on port {}", port);
@@ -380,16 +359,10 @@ pub fn run() {
             commands::mcp::mcp_server_http_url,
             commands::mcp::mcp_read_global_agent_config,
             commands::mcp::mcp_write_global_agent_config,
-            commands::mcp::mcp_browser_respond,
             commands::mcp::mcp_set_project_root,
             commands::mcp::mcp_set_agent_presets,
             commands::mcp::mcp_set_assistant_names,
             commands::mcp::mcp_deliver_respond,
-            commands::browser_window::browser_create_window,
-            commands::browser_window::browser_navigate_window,
-            commands::browser_window::browser_close_window,
-            commands::browser_window::browser_screenshot_window,
-            commands::browser_window::browser_window_is_open,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

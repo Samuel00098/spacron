@@ -43,7 +43,10 @@ async function mockBackend(opts: { url?: string | undefined; writeFails?: boolea
  * the real split, where global configs cannot go through `fs_write_file`
  * because it rejects any path outside an open project.
  */
-async function mockModule(existingFiles: Record<string, string> = {}) {
+async function mockModule(
+  existingFiles: Record<string, string> = {},
+  opts: { browserTools?: boolean } = {},
+) {
   invokeMock.mockImplementation(async (cmd: string, args?: Record<string, string>) => {
     if (cmd === 'mcp_server_url') return URL;
     if (cmd === 'mcp_server_http_url') return HTTP_URL;
@@ -58,6 +61,11 @@ async function mockModule(existingFiles: Record<string, string> = {}) {
     return undefined;
   });
   vi.resetModules();
+  // Imported after the reset so it is the same module instance `mcpBridge` will
+  // read. Under `environment: 'node'` there is no window, so `persistentWritable`
+  // hands back a plain in-memory store — no zustand or app-flag round trip.
+  const { agentBrowserTools } = await import('./settings');
+  agentBrowserTools.set(opts.browserTools === true);
   return await import('./mcpBridge');
 }
 
@@ -270,6 +278,121 @@ describe('injectMcpConfigForAgent', () => {
 
     // A missing config costs the agent its tools; it must not stop the launch.
     await expect(injectMcpConfigForAgent('codex', 'C:/work/repo')).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The Playwright MCP server is what gives an agent a browser to check its own
+ * work in. It is opt-in because switching it on edits the user's *global* Codex
+ * and droid configs and pulls a browser download on first run.
+ */
+describe('agent browser tools (Playwright MCP)', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it('adds nothing anywhere while the setting is off', async () => {
+    const { injectMcpConfigForAgent } = await mockModule();
+    for (const preset of ['claude', 'codex', 'gemini', 'opencode', 'droid', 'cursor']) {
+      await injectMcpConfigForAgent(preset, 'C:/work/repo');
+    }
+
+    const everythingWritten = invokeMock.mock.calls
+      .filter(([cmd]) => cmd === 'fs_write_file' || cmd === 'mcp_write_global_agent_config')
+      .map(([, args]) => args.content as string)
+      .join('\n');
+    expect(everythingWritten).not.toContain('playwright');
+  });
+
+  it('gives Claude Code the stdio entry when switched on', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true });
+    await injectMcpConfigForAgent('claude', 'C:/work/repo');
+
+    const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
+    expect(config.mcpServers['spacron-playwright']).toEqual({
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest', '--isolated'],
+    });
+    // The Spacron server is still there — this is an addition, not a swap.
+    expect(config.mcpServers['spacron-mcp']).toEqual({ type: 'sse', url: URL });
+  });
+
+  it("passes npx -y, or the server hangs on a prompt nobody can answer", async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true });
+    await injectMcpConfigForAgent('claude', 'C:/work/repo');
+
+    const { args } = JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers[
+      'spacron-playwright'
+    ];
+    expect(args[0]).toBe('-y');
+  });
+
+  it('gives opencode its flat command array, not command + args', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true });
+    await injectMcpConfigForAgent('opencode', 'C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-playwright']).toEqual({
+      type: 'local',
+      command: ['npx', '-y', '@playwright/mcp@latest', '--isolated'],
+      enabled: true,
+    });
+  });
+
+  it('gives Codex a TOML table with command and args split apart', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true });
+    await injectMcpConfigForAgent('codex', 'C:/work/repo');
+
+    const toml = writtenGlobal('codex')!;
+    expect(toml).toContain('[mcp_servers.spacron-playwright]');
+    expect(toml).toContain('command = "npx"');
+    expect(toml).toContain('args = ["-y", "@playwright/mcp@latest", "--isolated"]');
+    expect(toml).toContain('[mcp_servers.spacron-mcp]');
+  });
+
+  it('removes the entry again when the setting is turned back off', async () => {
+    // The regression that matters: a toggle that only ever adds would leave a
+    // dead server in every config the user ever opened a project with.
+    const stale = JSON.stringify({
+      mcpServers: {
+        'spacron-mcp': { type: 'sse', url: URL },
+        'spacron-playwright': { command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+      },
+    });
+    const { injectMcpConfigForAgent } = await mockModule({ 'C:/work/repo/.mcp.json': stale });
+    await injectMcpConfigForAgent('claude', 'C:/work/repo');
+
+    const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
+    expect(config.mcpServers['spacron-playwright']).toBeUndefined();
+    expect(config.mcpServers['spacron-mcp']).toBeDefined();
+  });
+
+  it("leaves a playwright server the user configured themselves alone", async () => {
+    // Why the key is `spacron-playwright` and not the bare `playwright` upstream
+    // documents: the off-switch deletes by key, and it must never delete theirs.
+    const theirs = JSON.stringify({
+      mcpServers: { playwright: { command: 'node', args: ['./my-own-playwright.js'] } },
+    });
+    const { injectMcpConfigForAgent } = await mockModule({ 'C:/work/repo/.mcp.json': theirs });
+    await injectMcpConfigForAgent('claude', 'C:/work/repo');
+
+    const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
+    expect(config.mcpServers.playwright).toEqual({
+      command: 'node',
+      args: ['./my-own-playwright.js'],
+    });
+  });
+
+  it('removes a stale Codex table without disturbing the rest of the file', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({
+      codex:
+        'model = "o3"\n\n[mcp_servers.spacron-playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@latest"]\n\n[projects.foo]\ntrust_level = "trusted"\n',
+    });
+    await injectMcpConfigForAgent('codex', 'C:/work/repo');
+
+    const toml = writtenGlobal('codex')!;
+    expect(toml).not.toContain('spacron-playwright');
+    expect(toml).toContain('model = "o3"');
+    expect(toml).toContain('[projects.foo]');
   });
 });
 

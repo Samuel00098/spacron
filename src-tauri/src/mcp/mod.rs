@@ -44,27 +44,15 @@ pub type ReadFn = Arc<dyn Fn(u32) -> Vec<u8> + Send + Sync>;
 /// Callback for forwarding a spawn-agent request to the frontend.
 pub type SpawnFn = Arc<dyn Fn(SpawnRequest) + Send + Sync>;
 
-/// Callback for emitting a browser-tool request to the frontend via Tauri event.
-/// Arguments: (request_id, tool_name, args_json).
-pub type BrowserEmitFn = Arc<dyn Fn(&str, &str, serde_json::Value) + Send + Sync>;
-
 /// Callback for asking the frontend to deliver a prompt into an agent's TUI.
 /// Arguments: (request_id, session_id, message).
 pub type DeliverEmitFn = Arc<dyn Fn(&str, u32, &str) + Send + Sync>;
 
-/// A pending browser-tool request awaiting a response from the frontend.
-pub struct PendingBrowserRequest {
-    pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
-    pub created_at: Instant,
-}
-
 /// A pending prompt delivery awaiting the frontend's verdict.
 ///
-/// Separate from [`PendingBrowserRequest`] because the timescales are nothing
-/// alike: a browser call answers in milliseconds and is swept at 30s, while a
-/// delivery may legitimately sit for half a minute waiting for a booting CLI to
-/// reach its prompt. Sharing the map would have the sweeper cancel deliveries
-/// mid-flight.
+/// A delivery may legitimately sit for half a minute waiting for a booting CLI
+/// to reach its prompt, so the sweeper gives it its own long ceiling
+/// ([`DELIVER_SWEEP_AFTER`]) rather than a request-response timeout.
 pub struct PendingSend {
     pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
     pub created_at: Instant,
@@ -93,9 +81,6 @@ impl Drop for SseSessionGuard {
         self.sessions.remove(&self.id);
     }
 }
-
-/// Shared map of in-flight browser requests, keyed by request ID.
-pub type PendingRequests = Arc<DashMap<String, PendingBrowserRequest>>;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -197,8 +182,6 @@ pub struct McpServerHandle {
     /// Shared secret agents must include as `?token=…` when connecting. Handed
     /// to the frontend so it can write the full URL into each agent's MCP config.
     pub token: String,
-    /// In-flight browser-tool requests awaiting frontend responses.
-    pub pending_browser: PendingRequests,
     /// In-flight prompt deliveries awaiting frontend responses.
     pub pending_sends: PendingSends,
     /// Active project's main checkout, shared with the server. See `ServerState`.
@@ -254,17 +237,6 @@ impl McpServerHandle {
         let _ = self.notify_tx.send(());
     }
 
-    /// Resolve a pending browser-tool request with a result from the frontend.
-    pub fn resolve_browser_request(
-        &self,
-        request_id: &str,
-        result: Result<serde_json::Value, String>,
-    ) {
-        if let Some((_, pending)) = self.pending_browser.remove(request_id) {
-            let _ = pending.tx.send(result);
-        }
-    }
-
     /// Resolve a pending prompt delivery with the frontend's verdict.
     pub fn resolve_send_request(
         &self,
@@ -318,7 +290,6 @@ fn load_or_create_token() -> String {
 ///   one if it is taken; otherwise bind exactly that port or fail.
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
-/// - `browser_emit_fn`: callback to emit a browser-tool request to the frontend.
 /// - `deliver_emit_fn`: callback to have the frontend type a prompt into an agent.
 ///
 /// There is deliberately no "write to a PTY" callback. Every tool that puts text
@@ -334,7 +305,6 @@ pub fn start(
     port: u16,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
-    browser_emit_fn: BrowserEmitFn,
     deliver_emit_fn: DeliverEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
     // Bind now, synchronously, and *keep* the socket. This used to probe with a
@@ -353,7 +323,6 @@ pub fn start(
     let (read_tx, _) = broadcast::channel::<ReadOutputRequest>(32);
     let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(32);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let pending_browser: PendingRequests = Arc::new(DashMap::new());
     let pending_sends: PendingSends = Arc::new(DashMap::new());
     let project_root: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let agent_presets: Arc<Mutex<Vec<AgentPreset>>> = Arc::new(Mutex::new(Vec::new()));
@@ -375,9 +344,7 @@ pub fn start(
         token: token.clone(),
         read_cb,
         spawn_fn,
-        browser_emit_fn,
         deliver_emit_fn,
-        pending_browser: pending_browser.clone(),
         pending_sends: pending_sends.clone(),
         project_root: project_root.clone(),
         agent_presets: agent_presets.clone(),
@@ -386,16 +353,14 @@ pub fn start(
         sse_sessions,
     });
 
-    // Background sweep: drop pending browser requests older than 30s, and
-    // deliveries older than their own (much longer) ceiling — a delivery waits on
-    // a CLI reaching its prompt, which a browser call never does.
-    let sweep_map = pending_browser.clone();
+    // Background sweep: drop deliveries whose caller is long gone, so a frontend
+    // that never answers cannot leak senders. The ceiling is generous — a
+    // delivery waits on a CLI reaching its prompt.
     let sweep_sends = pending_sends.clone();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            sweep_map.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(30));
             sweep_sends.retain(|_, v| v.created_at.elapsed() < DELIVER_SWEEP_AFTER);
         }
     });
@@ -461,7 +426,6 @@ pub fn start(
         _shutdown_tx: shutdown_tx,
         port: actual_port,
         token,
-        pending_browser,
         pending_sends,
         project_root,
         agent_presets,
@@ -487,11 +451,9 @@ struct ServerState {
     token: String,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
-    browser_emit_fn: BrowserEmitFn,
     /// Asks the frontend to type a prompt into an agent's TUI. See
     /// [`deliver_to_session`] for why this cannot be a direct PTY write.
     deliver_emit_fn: DeliverEmitFn,
-    pending_browser: PendingRequests,
     pending_sends: PendingSends,
     /// Absolute path of the active project's main checkout, set by the frontend
     /// on project open. `delegate_task` needs it to locate the reports directory
@@ -1006,163 +968,6 @@ fn tool_spawn_agent(presets: &[AgentPreset]) -> serde_json::Value {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Browser tool definitions
-// ---------------------------------------------------------------------------
-
-fn tool_browser_navigate() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_navigate",
-        "description": "Navigate the browser preview to a URL. Use mode='window' for sites that block iframe embedding (Google, GitHub, etc.), or mode='system' to just hand a URL to the user's own browser.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to navigate to."
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["iframe", "window", "system", "auto"],
-                    "description": "iframe: use the preview panel — the only mode with full control (browser_read_dom, browser_click, browser_type all need the bridge the proxy injects into embedded pages). window: open a standalone in-app browser window, which renders sites that refuse embedding; browser_screenshot and browser_close_window work on it, but DOM reads and clicks do not. system: open in the user's default OS browser — nothing is embedded, so no other browser tool can act on that page; use it only to hand a link to the user. auto (default): try iframe first, fall back to a standalone window if the page refuses embedding."
-                }
-            },
-            "required": ["url"]
-        }
-    })
-}
-
-fn tool_browser_screenshot() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_screenshot",
-        "description": "Capture a screenshot of the current browser preview as a base64-encoded PNG image.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "Optional CSS selector to screenshot a specific element. If omitted, captures the full viewport."
-                }
-            },
-            "required": []
-        }
-    })
-}
-
-fn tool_browser_get_page_info() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_get_page_info",
-        "description": "Get the current URL, page title, and document readyState of the browser preview.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    })
-}
-
-fn tool_browser_read_dom() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_read_dom",
-        "description": "Read the text content or HTML of elements matching a CSS selector in the browser preview.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to match elements. Defaults to 'body'."
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["text", "html"],
-                    "description": "Return innerText or outerHTML. Defaults to 'text'."
-                },
-                "limit": {
-                    "type": "number",
-                    "description": "Max number of elements to return. Defaults to 10."
-                }
-            },
-            "required": []
-        }
-    })
-}
-
-fn tool_browser_console_logs() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_console_logs",
-        "description": "Read captured console output (log, warn, error) from the browser preview page.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "level": {
-                    "type": "string",
-                    "enum": ["all", "error", "warn"],
-                    "description": "Filter by log level. Defaults to 'all'."
-                },
-                "limit": {
-                    "type": "number",
-                    "description": "Max number of entries to return. Defaults to 50."
-                }
-            },
-            "required": []
-        }
-    })
-}
-
-fn tool_browser_click() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_click",
-        "description": "Click an element in the browser preview matching a CSS selector.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector of the element to click."
-                }
-            },
-            "required": ["selector"]
-        }
-    })
-}
-
-fn tool_browser_type() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_type",
-        "description": "Type text into an input or textarea element in the browser preview.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector of the input element."
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Text to type into the element."
-                },
-                "submit": {
-                    "type": "boolean",
-                    "description": "Press Enter after typing. Defaults to false."
-                }
-            },
-            "required": ["selector", "text"]
-        }
-    })
-}
-
-fn tool_browser_close_window() -> serde_json::Value {
-    serde_json::json!({
-        "name": "browser_close_window",
-        "description": "Close the standalone browser window (Tier 2) if one is open.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    })
-}
-
 /// How long a worker's report is waited for by default, and the ceiling a caller
 /// may ask for. Bounded because an MCP client times out its own requests: a tool
 /// that blocks for an hour is a hung session, not a patient one. On expiry the
@@ -1407,14 +1212,6 @@ fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
         tool_delegate_task(presets),
         tool_bounce_task(),
         tool_check_task(),
-        tool_browser_navigate(),
-        tool_browser_screenshot(),
-        tool_browser_get_page_info(),
-        tool_browser_read_dom(),
-        tool_browser_console_logs(),
-        tool_browser_click(),
-        tool_browser_type(),
-        tool_browser_close_window(),
     ]
 }
 
@@ -2130,54 +1927,6 @@ async fn handle_tool_call(
             ))
         }
 
-        // ── Browser tools — dispatched to the frontend via request-response bridge ──
-        t if t.starts_with("browser_") => {
-            let args = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let (tx, rx) = oneshot::channel();
-
-            state.pending_browser.insert(
-                request_id.clone(),
-                PendingBrowserRequest {
-                    tx,
-                    created_at: Instant::now(),
-                },
-            );
-
-            (state.browser_emit_fn)(&request_id, tool_name, args);
-
-            match tokio::time::timeout(Duration::from_secs(15), rx).await {
-                Ok(Ok(Ok(result))) => {
-                    let text = match &result {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => serde_json::to_string_pretty(other).unwrap_or_default(),
-                    };
-                    Json(JsonRpcResponse::success(
-                        id,
-                        serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
-                    ))
-                }
-                Ok(Ok(Err(err))) => {
-                    Json(JsonRpcResponse::error(id, -32000, err))
-                }
-                Ok(Err(_)) => {
-                    Json(JsonRpcResponse::error(id, -32000, "Browser request was cancelled."))
-                }
-                Err(_) => {
-                    state.pending_browser.remove(&request_id);
-                    Json(JsonRpcResponse::error(
-                        id,
-                        -32000,
-                        "Browser tool timed out waiting for a response (15s). The preview may not be open.",
-                    ))
-                }
-            }
-        }
-
         _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: '{}'", tool_name))),
     }
 }
@@ -2465,9 +2214,7 @@ mod tests {
             token: token.to_string(),
             read_cb: Arc::new(|_| Vec::new()),
             spawn_fn: Arc::new(|_| {}),
-            browser_emit_fn: Arc::new(|_, _, _| {}),
             deliver_emit_fn: Arc::new(|_, _, _| {}),
-            pending_browser: Arc::new(DashMap::new()),
             pending_sends: Arc::new(DashMap::new()),
             project_root: Arc::new(Mutex::new(None)),
             agent_presets: Arc::new(Mutex::new(Vec::new())),
@@ -2795,7 +2542,6 @@ mod tests {
             0,
             Arc::new(|_| b"agent output".to_vec()),
             Arc::new(|_| {}),
-            Arc::new(|_, _, _| {}),
             Arc::new(move |request_id, session_id, message| {
                 recorder
                     .lock()

@@ -123,27 +123,6 @@ pub fn mcp_server_http_url(handle: State<'_, McpServer>) -> Result<String, Strin
     ))
 }
 
-/// Resolve a pending browser-tool request with a result from the frontend.
-/// Called by the MCP browser bridge after executing a browser tool.
-#[tauri::command]
-pub fn mcp_browser_respond(
-    handle: State<'_, McpServer>,
-    request_id: String,
-    success: bool,
-    data: serde_json::Value,
-) -> Result<(), String> {
-    let result = if success {
-        Ok(data)
-    } else {
-        Err(data
-            .as_str()
-            .unwrap_or("Unknown browser tool error")
-            .to_string())
-    };
-    handle.get()?.resolve_browser_request(&request_id, result);
-    Ok(())
-}
-
 /// Report the outcome of a prompt delivery back to the waiting MCP tool call.
 ///
 /// `send_to_agent` and `bounce_task` hand the message to the frontend rather than
