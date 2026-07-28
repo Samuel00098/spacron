@@ -119,7 +119,13 @@ export const notificationsEnabled = persistentWritable('notificationsEnabled', t
 // Default for whether a spawned agent gets its own isolated worktree and branch.
 // The Isolated / Main repo toggle in the spawn modal overrides it per spawn; turn
 // this off to have every agent work directly in the project root instead.
-export const agentWorktrees = persistentWritable('agentWorktrees', false);
+//
+// Defaults ON, and should stay that way: without it two agents run concurrently
+// in one working tree and silently clobber each other's edits — the failure
+// worktrees exist to prevent (docs/agent-loops.md, gap 1). The MCP spawn path
+// isolates unconditionally for the same reason, so turning this off leaves the
+// two spawn routes behaving oppositely.
+export const agentWorktrees = persistentWritable('agentWorktrees', true);
 // Move each agent's changes into the main checkout on their own, so the app can be
 // run and tested against them without pressing anything. Off leaves the same work
 // visible in the Agent changes list with a Stage button per agent.
@@ -1266,7 +1272,7 @@ export function resetSettingsToDefault() {
   showHidden.set(false);
   showSnapshotsTab.set(false);
   notificationsEnabled.set(true);
-  agentWorktrees.set(false);
+  agentWorktrees.set(true);
   autoStageAgentChanges.set(true);
   closeBehavior.set('quit');
   aiProvider.set('openrouter');

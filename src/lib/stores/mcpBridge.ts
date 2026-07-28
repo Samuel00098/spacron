@@ -11,16 +11,19 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { get } from './storeCompat';
 import {
-  createTerminalSession,
   getSessionLabel,
   getActiveTerminalProjectId,
+  sessions,
   setSessionWorktree,
+  spawnAgentPreset,
 } from './terminal';
 import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
-import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
+import { ASSISTANT_NAMES, pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import {
   applyOrchestratorAgentName,
+  sendOrchestratorFollowUpWhenReady,
   sendOrchestratorGoalWhenReady,
 } from '$lib/services/orchestrator/terminal-lease';
 import {
@@ -28,6 +31,8 @@ import {
   removeTaskWorktree,
   type WorktreeInfo,
 } from '$lib/services/orchestrator/worktree-manager';
+import { getAgentRoster } from './runs';
+import { customAgents, removedPresetAgents } from './customAgents';
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
 // ---------------------------------------------------------------------------
@@ -90,6 +95,49 @@ export async function setMcpProjectRoot(root: string | null): Promise<void> {
   }
 }
 
+/**
+ * Tell the MCP server which agents this install can launch.
+ *
+ * `spawn_agent` and `delegate_task` name the available agents in their tool
+ * schemas, so without this a delegating agent works from whatever list happened
+ * to be written into the Rust source — which is how a real preset like `pi` ends
+ * up looking unavailable, and how a user's custom agents stay invisible. The
+ * server also uses the roster to resolve a display name ("Pi AI Agent") to its
+ * launch command.
+ *
+ * Best-effort: a failure leaves the server with an empty roster, which it treats
+ * as "not reported yet" and stays permissive about, rather than blocking spawns.
+ */
+export async function setMcpAgentPresets(
+  presets: { command: string; name: string }[],
+): Promise<void> {
+  try {
+    await invoke('mcp_set_agent_presets', { presets });
+  } catch (e) {
+    console.error('Failed to publish the agent roster to the MCP server:', e);
+  }
+}
+
+/**
+ * Publish the app's assistant-name pool to the MCP server.
+ *
+ * The server assigns a delegated worker's name before the spawn ever reaches the
+ * frontend — for `delegate_task` the name is the handle returned to the caller
+ * and the path the worker writes its report to, so it cannot be changed after
+ * the fact. Pushing the list keeps `agent-names.ts` the single source of truth
+ * instead of Rust carrying a second copy that drifts.
+ *
+ * Best-effort: a failure leaves the server naming workers `worker-a1b2c3`, which
+ * is ugly but not broken.
+ */
+export async function setMcpAssistantNames(names: string[]): Promise<void> {
+  try {
+    await invoke('mcp_set_assistant_names', { names });
+  } catch (e) {
+    console.error('Failed to publish assistant names to the MCP server:', e);
+  }
+}
+
 /** Register an agent with the MCP server so other agents can discover it. */
 export async function registerAgent(
   sessionId: number,
@@ -143,12 +191,83 @@ export interface ReadOutputRequest {
 }
 
 /**
+ * A request from the MCP server to type a message into a running agent, raised
+ * by `send_to_agent` and `bounce_task`. The server blocks on the answer.
+ */
+export interface DeliverPromptRequest {
+  request_id: string;
+  session_id: number;
+  message: string;
+}
+
+/**
+ * Deliver an MCP message into a running agent's TUI and tell the server whether
+ * it landed.
+ *
+ * The server used to write these straight to the PTY. That fails in the way the
+ * user sees: no Enter is ever sent, so the text sits in the composer unsubmitted,
+ * and because it is not a bracketed paste, every newline in the message (a
+ * `bounce_task` message always has several) is read as a submit — so a fragment
+ * goes and the rest scatters. `sendOrchestratorFollowUpWhenReady` is the path
+ * that fixed exactly this for the floating bar: it waits for the agent to be at
+ * its prompt, pastes, waits for the composer to settle, then submits and
+ * confirms the agent actually started, retrying if it did not.
+ */
+async function deliverMcpPrompt(payload: DeliverPromptRequest): Promise<void> {
+  const { request_id, session_id, message } = payload;
+  let delivered = false;
+  let error: string | null = null;
+
+  try {
+    delivered = await sendOrchestratorFollowUpWhenReady(session_id, message);
+    if (!delivered) {
+      // The distinction matters to the caller: a dead pane is permanent, a
+      // rejected send is worth retrying.
+      const alive = get(sessions).some((s) => s.id === session_id && s.isRunning);
+      error = alive
+        ? 'The agent did not accept the message — its CLI may be busy or not at a prompt.'
+        : 'That agent is no longer running.';
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+
+  try {
+    await invoke('mcp_deliver_respond', {
+      requestId: request_id,
+      success: delivered,
+      error,
+    });
+  } catch (e) {
+    // Losing the reply just means the caller waits out its timeout instead of
+    // getting a clean answer — worth logging, never worth throwing.
+    console.error('[mcp] Failed to report prompt delivery result:', e);
+  }
+}
+
+/**
  * Initialize the MCP bridge: start listening for spawn-agent events.
  * Call this once during app startup.
  */
 export function initMcpBridge(): void {
   if (initialized) return;
   initialized = true;
+
+  // Keep the server's agent roster live. Both stores fire immediately on
+  // subscribe, so this doubles as the initial push, and again on every add,
+  // edit, or removal — a custom agent the user creates mid-session is
+  // delegatable without an app restart.
+  const publishRoster = () => {
+    setMcpAgentPresets(getAgentRoster());
+  };
+  customAgents.subscribe(publishRoster);
+  removedPresetAgents.subscribe(publishRoster);
+
+  // The server names delegated workers itself (a worker's name is the handle it
+  // returns, so it cannot wait for the frontend), and it draws from this list so
+  // those names match the ones the app gives agents the user spawns. Fixed at
+  // build time, so one push at startup is all it needs.
+  void setMcpAssistantNames(ASSISTANT_NAMES);
 
   listen<SpawnRequest>('mcp:spawn-agent', async (event) => {
     const { preset, prompt, name: requestedName } = event.payload;
@@ -176,19 +295,31 @@ export function initMcpBridge(): void {
       // `createTaskWorktree` returns null for a non-git or empty repo. That is
       // not fatal — the agent runs in the project root, exactly as before.
 
-      // `assignPane: false` — an agent gets its own room, so it must not also
-      // take a slot in the user's terminal mosaic. Two xterms on one session id
-      // is not renderable (a session has a single data callback), so that cell
-      // degrades to a dead "<name> is open in its own room / Free this pane"
-      // placeholder. `spawnAgentPreset` has always passed this; the MCP path
-      // did not, so every delegated worker stranded a pane.
-      const sessionId = await createTerminalSession(worktree?.path, undefined, projectId ?? undefined, {
-        agentPreset: preset,
-        assignPane: false,
+      // `spawnAgentPreset`, not `createTerminalSession`: the latter opens a bare
+      // shell and only *records* `agentPreset` as metadata — it never types the
+      // launch command. This path used it, so a delegated worker was a plain
+      // shell wearing an agent's name and title, and the task prompt was
+      // delivered to `$` instead of to a CLI. `spawnAgentPreset` is the sequence
+      // the app's own picker uses: rules-file brief, title, `--mcp-config`
+      // flags, then the command.
+      //
+      // `activate: false` keeps the user's focus where it is — this spawn is not
+      // something they asked for at this moment. `assignPane: false` is implicit
+      // in there: an agent gets its own room, and two xterms on one session id
+      // is not renderable, so a claimed mosaic cell degrades to a dead
+      // "<name> is open in its own room / Free this pane" placeholder.
+      const sessionId = await spawnAgentPreset(preset, worktree?.path, {
+        activate: false,
+        projectId: projectId ?? undefined,
+        // Registered before the CLI starts: this is what makes the reconciler
+        // stage the agent's commits back into the main checkout, and what makes
+        // closing the pane reclaim the branch instead of orphaning it. An
+        // unregistered worktree's work is never seen again.
+        onSessionCreated: worktree ? (id) => setSessionWorktree(id, worktree!) : undefined,
       });
 
       if (sessionId === null) {
-        console.error('[mcp] Failed to create terminal session for spawn');
+        console.error('[mcp] Failed to launch agent session for spawn');
         if (worktree && projectId) {
           // Don't strand an empty worktree for a session that never existed.
           await removeTaskWorktree(projectId, worktree, true).catch(() => {});
@@ -196,17 +327,19 @@ export function initMcpBridge(): void {
         return;
       }
 
-      // Session-owned worktree: this is what makes the reconciler stage the
-      // agent's commits back into the main checkout, and what makes closing the
-      // pane reclaim the branch instead of orphaning it. Registering it is not
-      // bookkeeping — an unregistered worktree's work is never seen again.
-      if (worktree) setSessionWorktree(sessionId, worktree);
-
-      // Honour the requested name so the spawner can address this agent
-      // immediately; the server has already rejected a name that collides with a
-      // running agent. Falling back to a generated one keeps the old behaviour
-      // for callers that don't ask.
-      const name = requestedName?.trim() || pickAssistantName();
+      // The server has already settled the name: it rejected collisions and
+      // swapped any generic label for one from the app's pool, and for a
+      // delegated worker that name is the handle its spawner holds and the file
+      // it reports to. Renaming it here would break both, so it is applied
+      // as given.
+      //
+      // The fallback covers only a spawn that arrived with no name at all —
+      // possible when the pool has not been pushed yet — and excludes the names
+      // in use so it cannot mint a duplicate.
+      const takenNames = get(sessions)
+        .filter((s) => s.isRunning && s.agentName)
+        .map((s) => s.agentName as string);
+      const name = requestedName?.trim() || pickAssistantName(takenNames);
       applyOrchestratorAgentName(sessionId, name);
 
       if (prompt) {
@@ -225,6 +358,15 @@ export function initMcpBridge(): void {
     }
   }).catch((e) => {
     console.error('[mcp] Failed to listen for spawn-agent events:', e);
+  });
+
+  // `send_to_agent` and `bounce_task` block on this handler's verdict, so it must
+  // always answer — `deliverMcpPrompt` swallows its own failures into a reply
+  // rather than rejecting.
+  listen<DeliverPromptRequest>('mcp:deliver-prompt', (event) => {
+    void deliverMcpPrompt(event.payload);
+  }).catch((e) => {
+    console.error('[mcp] Failed to listen for deliver-prompt events:', e);
   });
 
   console.log('[mcp] Bridge initialized, listening for spawn-agent events');
@@ -383,6 +525,10 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
     const sseUrl = await getMcpUrl();
     const httpUrl = await getMcpHttpUrl();
 
+    // Before writing anything: every file below carries `?token=`, and they land
+    // inside the user's repo. See `ensureMcpConfigsIgnored`.
+    await ensureMcpConfigsIgnored(projectRoot);
+
     await Promise.allSettled([
       injectProjectMcpJson(projectRoot, sseUrl),
       injectGeminiConfig(projectRoot, httpUrl),
@@ -393,6 +539,68 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
     ]);
   } catch (e) {
     console.warn('[mcp] Could not write agent MCP configs on project open:', e);
+  }
+}
+
+/**
+ * Project-relative paths this module writes that contain the MCP token.
+ *
+ * `.spacron/` covers the Claude Code config written by `mcpLaunchFlags` and the
+ * worker report files, both of which are app state rather than project content.
+ */
+const TOKEN_BEARING_PATHS = [
+  '.mcp.json',
+  '.gemini/settings.json',
+  '.cursor/mcp.json',
+  'opencode.json',
+  '.spacron/',
+];
+
+/**
+ * Keep the token-bearing configs out of the user's git history.
+ *
+ * These files hold `http://127.0.0.1:<port>/mcp?token=<secret>`, and that token
+ * is now persistent and on a fixed port — so a copy that escapes stays valid
+ * indefinitely, and it grants process spawning and PTY-write access to whoever
+ * holds it. Spacron writes these files into the user's own repo, whose
+ * `.gitignore` it does not control, while the standing brief actively tells
+ * agents to commit as they go. Without this an agent running `git add -A`
+ * publishes the token.
+ *
+ * Written to `.git/info/exclude` rather than `.gitignore`: the effect is the
+ * same, but `.gitignore` is project content the user may have committed and
+ * would then show up as a spurious diff in every repo Spacron opens.
+ *
+ * Best-effort and idempotent — a non-git directory simply has no `.git/info`,
+ * and a failure costs tidiness, not function.
+ */
+export async function ensureMcpConfigsIgnored(projectRoot: string): Promise<void> {
+  const root = projectRoot?.replace(/[\\/]+$/, '');
+  if (!root) return;
+  const excludePath = `${root}/.git/info/exclude`;
+
+  try {
+    let current = '';
+    try {
+      current = await invoke<string>('fs_read_file', { path: excludePath });
+    } catch {
+      // No exclude file (or no .git at all) — a fresh one is still valid.
+    }
+
+    const present = new Set(current.split('\n').map((line) => line.trim()));
+    const missing = TOKEN_BEARING_PATHS.filter((p) => !present.has(p));
+    if (!missing.length) return;
+
+    const header = '# Spacron: local MCP configs — these carry the MCP server token.';
+    const body = current.includes(header) ? missing.join('\n') : [header, ...missing].join('\n');
+    const separator = current.length && !current.endsWith('\n') ? '\n' : '';
+
+    await invoke('fs_write_file', {
+      path: excludePath,
+      content: `${current}${separator}${body}\n`,
+    });
+  } catch (e) {
+    console.warn('[mcp] Could not add MCP configs to .git/info/exclude:', e);
   }
 }
 

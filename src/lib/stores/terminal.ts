@@ -1865,10 +1865,40 @@ export function registerMosaicClose(fn: ((paneIndex: number) => void) | null, is
   }
 }
 
+/**
+ * Create a pane and actually launch an agent CLI in it.
+ *
+ * This is the ONE launch sequence — brief files, display title, MCP launch
+ * flags, detection suppression, and the typed command. Anything that wants an
+ * agent running must come through here: `createTerminalSession` on its own opens
+ * a bare shell with `agentPreset` recorded as metadata and never starts the CLI,
+ * which looks like a launched agent in every list and pane header while the
+ * prompt goes to a shell prompt that has no idea what to do with it.
+ *
+ * `command` is the launch command, so a user's custom agent (`aider --no-x`)
+ * works exactly like a built-in preset.
+ */
 export async function spawnAgentPreset(
   command: string,
   cwd?: string,
-  opts?: { activate?: boolean; skipAutoBrief?: boolean; isDev?: boolean }
+  opts?: {
+    activate?: boolean;
+    skipAutoBrief?: boolean;
+    isDev?: boolean;
+    /**
+     * Project the pane belongs to. Needed by callers outside the active-project
+     * flow (an MCP spawn arrives from a background process); omitted, the
+     * session resolves the active project as before.
+     */
+    projectId?: string;
+    /**
+     * Run against the new session before the CLI is launched. Used to attach a
+     * worktree, which has to be registered while the pane is still empty — the
+     * reconciler stages that branch back, and a late registration races the
+     * agent's first commit.
+     */
+    onSessionCreated?: (sessionId: number) => void;
+  }
 ): Promise<number | null> {
   const activate = opts?.activate ?? true;
   const isDev = opts?.isDev ?? false;
@@ -1880,8 +1910,10 @@ export async function spawnAgentPreset(
       }
     : null;
 
-  const sessionId = await createTerminalSession(cwd, undefined, undefined, { assignPane: false, agentPreset: command, isDev });
+  const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, { assignPane: false, agentPreset: command, isDev });
   if (sessionId === null || sessionId === undefined) return null;
+
+  opts?.onSessionCreated?.(sessionId);
 
   let rulesBriefed = false;
   const briefRoot = cwd ?? resolveSessionRoot(sessionId);

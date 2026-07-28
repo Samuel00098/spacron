@@ -1898,13 +1898,35 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
 }
 
 /**
- * Minimum buffer growth (chars) between two "finished" notifications for the
- * same adopted session. Prevents a stale attention prompt or cursor-blink
- * redraw sitting in the scan tail from re-triggering a notification for what
- * the user experiences as one pause. "Blocked" outcomes always notify.
+ * Minimum buffer growth (chars) between two turn-end notifications for the same
+ * adopted session. A cursor-blink redraw or a re-matched prompt produces only a
+ * few chars and should not chime again for what the user experiences as one
+ * pause.
  */
 const ADOPTED_NUDGE_MIN_GROWTH = 200;
-const lastAdoptedNudgeLen = new Map<number, number>();
+/**
+ * Floor between two cues for the same session, regardless of growth. The
+ * watcher re-arms the instant it resolves, so anything that can re-match inside
+ * one poll interval would otherwise chime at 400ms intervals. A real turn end
+ * never lands within this window of the previous one.
+ */
+const ADOPTED_NUDGE_MIN_INTERVAL_MS = 2000;
+const lastAdoptedNudge = new Map<number, { len: number; at: number }>();
+
+/**
+ * Whether an adopted session's turn end is distinct enough from the last one to
+ * be worth a cue. Applies to blocked as well as finished: "blocked" used to be
+ * exempt on the grounds that it always matters, but that made it the one path
+ * with no dedupe at all — and the chime, unlike the toast, has no duplicate
+ * suppression of its own, so the user heard a cue with nothing to show for it.
+ */
+function shouldNudgeAdopted(sessionId: number, bufLen: number): boolean {
+  const last = lastAdoptedNudge.get(sessionId);
+  if (!last) return true;
+  if (Date.now() - last.at < ADOPTED_NUDGE_MIN_INTERVAL_MS) return false;
+  // A shrink means the capped buffer slid, not that output was withdrawn.
+  return bufLen < last.len || bufLen - last.len >= ADOPTED_NUDGE_MIN_GROWTH;
+}
 
 /**
  * Give agents the user launched by hand the same turn-end cue as orchestrated
@@ -1934,19 +1956,9 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       if (!task) return;
 
       const bufLen = getSessionOutputBuffer(sessionId).length;
-      const lastLen = lastAdoptedNudgeLen.get(sessionId);
-
-      if (outcome.kind === 'blocked') {
-        lastAdoptedNudgeLen.set(sessionId, bufLen);
+      if (shouldNudgeAdopted(sessionId, bufLen)) {
+        lastAdoptedNudge.set(sessionId, { len: bufLen, at: Date.now() });
         notifyAdoptedTurnEnd(task, outcome);
-      } else {
-        // Only re-notify "finished" when the buffer has grown meaningfully
-        // since the last cue — a cursor-blink redraw or stale tail re-trigger
-        // produces only a few chars and should not chime again.
-        if (lastLen == null || bufLen < lastLen || bufLen - lastLen >= ADOPTED_NUDGE_MIN_GROWTH) {
-          lastAdoptedNudgeLen.set(sessionId, bufLen);
-          notifyAdoptedTurnEnd(task, outcome);
-        }
       }
     }
   })();
@@ -2984,7 +2996,7 @@ if (typeof window !== 'undefined') {
   onSessionExit(({ sessionId, projectId, code }) => {
     // The session is gone — tear down its agent adapter (clears any poll timers).
     disposeAgentAdapter(sessionId);
-    lastAdoptedNudgeLen.delete(sessionId);
+    lastAdoptedNudge.delete(sessionId);
     const task = get(orchestratorTasks).find(
       (t) => t.status === 'in-progress' && t.assignedSessionId === sessionId
     );

@@ -38,6 +38,26 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   { name: 'Dev Server', command: 'npm run dev', isPreset: true },
 ];
 
+/**
+ * Every coding agent this install can launch, as `{ command, name }`.
+ *
+ * Project-independent, unlike `getPresetRuns`, and excludes non-agent presets
+ * like "Dev Server". This is the roster handed to the MCP server so a delegating
+ * agent can discover what is really available — including the user's own custom
+ * agents — instead of guessing from a hardcoded list.
+ */
+export function getAgentRoster(): { command: string; name: string }[] {
+  const removed = getRemovedPresetAgents();
+  const builtins = AI_AGENT_PRESETS.filter(
+    (preset) => preset.isAgent && !removed.includes(preset.command)
+  ).map((preset) => ({ command: preset.command, name: preset.name }));
+  const custom = getCustomAgents().map((agent) => ({
+    command: agent.command,
+    name: agent.name,
+  }));
+  return [...builtins, ...custom];
+}
+
 export function getPresetRuns(projectId: string): QuickRun[] {
   if (!projectId) return [];
   const removed = getRemovedPresetAgents();

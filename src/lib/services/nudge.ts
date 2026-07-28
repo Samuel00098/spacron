@@ -75,10 +75,29 @@ function scheduleNote(context: AudioContext, freq: number, startAt: number): voi
 }
 
 /**
+ * Two cues this close together are one event heard twice, not two events.
+ *
+ * A single completion can reach here from more than one path: the turn watcher
+ * resolves `finished`, and a beat later the CLI process exits and `handlePtyExit`
+ * cues the same ending again. The toast layer drops the duplicate (it suppresses
+ * an identical message already on screen), so the chime was the only part of the
+ * cue that doubled — which is exactly what makes the notification feel unreliable
+ * rather than merely chatty.
+ */
+const REPEAT_WINDOW_MS = 1200;
+let lastKind: NudgeKind | null = null;
+let lastPlayedAt = 0;
+
+/**
  * Play the chime for `kind`. Never throws and never rejects — an audio failure
  * must not take down the completion pipeline that calls it.
  */
 export function playNudge(kind: NudgeKind): void {
+  const now = Date.now();
+  if (kind === lastKind && now - lastPlayedAt < REPEAT_WINDOW_MS) return;
+  lastKind = kind;
+  lastPlayedAt = now;
+
   const context = getContext();
   if (!context) return;
   // Autoplay policy can leave the context suspended until the first gesture.

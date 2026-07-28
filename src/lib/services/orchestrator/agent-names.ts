@@ -2,7 +2,12 @@
 // spawned agent, we give it one of these so it's easy to refer to
 // ("ask Trinity to run the tests") and shows a distinctive badge on its pane.
 
-const ASSISTANT_NAMES = [
+// Exported because the MCP server needs the same pool: a worker spawned through
+// `delegate_task` is named in Rust (the name is its handle and its report
+// filename, so it has to be decided before the spawn is forwarded), and it must
+// come from this list — not a second one that drifts. `setMcpAssistantNames`
+// pushes it at startup.
+export const ASSISTANT_NAMES = [
   'Neo', 'Trinity', 'Morpheus', 'Cypher', 'Switch', 'Apoc', 'Mouse', 'Tank', 'Dozer', 'Oracle',
   'Niobe', 'Ghost', 'Seraph', 'Link', 'Zee', 'Sati', 'Persephone', 'Bane', 'Lock', 'Roland',
   'Cas', 'Choi', 'Kid', 'Hamann', 'Rama', 'Ballard', 'Keymaker', 'Trainman', 'Spoon', 'Architect',

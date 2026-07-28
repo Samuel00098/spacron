@@ -1,8 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const invokeMock = vi.hoisted(() => vi.fn());
+// Typed with the real `listen` signature so a test can capture the handler and
+// fire an event at it, not just assert that something subscribed.
+const listenMock = vi.hoisted(() =>
+  vi.fn(
+    async (_event: string, _handler: (e: { payload: unknown }) => void): Promise<() => void> =>
+      () => {},
+  ),
+);
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: vi.fn(async () => 'C:/Users/test') }));
 
 const URL = 'http://127.0.0.1:51234/sse?token=abc123';
@@ -262,5 +270,284 @@ describe('injectMcpConfigForAgent', () => {
 
     // A missing config costs the agent its tools; it must not stop the launch.
     await expect(injectMcpConfigForAgent('codex', 'C:/work/repo')).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Every file these writers touch inside the project carries `?token=`, and the
+ * token is persistent on a fixed port — so one that reaches a commit stays a
+ * working credential for process spawning and PTY writes. The standing brief
+ * tells agents to commit as they go, so this is the guard that stops it.
+ */
+describe('ensureMcpConfigsIgnored', () => {
+  const EXCLUDE = 'C:/work/repo/.git/info/exclude';
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it('excludes every config that carries the token', async () => {
+    const { ensureMcpConfigsIgnored } = await mockModule();
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    const content = written(EXCLUDE)!;
+    for (const path of ['.mcp.json', '.gemini/settings.json', '.cursor/mcp.json', 'opencode.json', '.spacron/']) {
+      expect(content).toContain(path);
+    }
+  });
+
+  it('runs before any config is written, so nothing is ever briefly trackable', async () => {
+    const { ensureMcpConfigs } = await mockModule();
+    await ensureMcpConfigs('C:/work/repo');
+
+    const paths = invokeMock.mock.calls
+      .filter(([cmd]) => cmd === 'fs_write_file')
+      .map(([, args]) => args.path as string);
+    expect(paths[0]).toBe(EXCLUDE);
+    expect(paths).toContain('C:/work/repo/.mcp.json');
+  });
+
+  it('keeps entries the user already had', async () => {
+    const { ensureMcpConfigsIgnored } = await mockModule({
+      [EXCLUDE]: '# my own rules\nbuild/\n*.local\n',
+    });
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    const content = written(EXCLUDE)!;
+    expect(content).toContain('build/');
+    expect(content).toContain('*.local');
+    expect(content).toContain('.mcp.json');
+  });
+
+  it('adds a missing separator when the file has no trailing newline', async () => {
+    const { ensureMcpConfigsIgnored } = await mockModule({ [EXCLUDE]: 'build/' });
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    expect(written(EXCLUDE)).toMatch(/^build\/\n/);
+  });
+
+  it('writes nothing when every entry is already present', async () => {
+    // Project open calls this every time; it must not churn the file.
+    const { ensureMcpConfigsIgnored } = await mockModule({
+      [EXCLUDE]: '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.spacron/\n',
+    });
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    expect(written(EXCLUDE)).toBeUndefined();
+  });
+
+  it('never throws when there is no git directory to write into', async () => {
+    const { ensureMcpConfigsIgnored } = await mockModule();
+    invokeMock.mockImplementation(async () => {
+      throw new Error('Access denied: path is outside any open project');
+    });
+
+    await expect(ensureMcpConfigsIgnored('C:/work/repo')).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The roster is what makes delegation open-ended: the MCP tool schemas name
+ * these agents, so anything missing here is invisible to a delegating agent no
+ * matter how well the user configured it.
+ */
+describe('agent roster', () => {
+  /**
+   * One module epoch for the whole graph, so `runs`, `customAgents` and
+   * `mcpBridge` share the same store instances — importing them across separate
+   * `resetModules()` calls would hand back stores that don't see each other.
+   */
+  async function loadRoster() {
+    vi.resetModules();
+    invokeMock.mockImplementation(async () => undefined);
+    const customAgents = await import('./customAgents');
+    const runs = await import('./runs');
+    const bridge = await import('./mcpBridge');
+    // No localStorage under the node environment, so state persists in-module;
+    // reset it explicitly rather than relying on a fresh backing store.
+    customAgents.customAgents.set([]);
+    customAgents.removedPresetAgents.set([]);
+    return { ...customAgents, ...runs, ...bridge };
+  }
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  /** The preset list from the last `mcp_set_agent_presets` call. */
+  function lastRoster(): { command: string; name: string }[] | undefined {
+    const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'mcp_set_agent_presets');
+    if (calls.length === 0) return undefined;
+    return calls[calls.length - 1][1].presets;
+  }
+
+  it('includes every built-in agent preset, not a hand-written subset', async () => {
+    const { getAgentRoster } = await loadRoster();
+    const commands = getAgentRoster().map((a) => a.command);
+
+    // `pi` is the one that started this: it ships in the app but the MCP tool
+    // description used to list a different, stale set, so a delegating agent
+    // had no way to know it was there.
+    expect(commands).toContain('pi');
+    expect(commands).toContain('claude');
+    expect(commands).toContain('codex');
+    expect(commands).toContain('opencode');
+    expect(commands).toContain('cursor-agent');
+    // Non-agent presets are runs, not agents, and must not be delegatable.
+    expect(commands).not.toContain('npm run dev');
+  });
+
+  it('carries display names so a caller can pass either form', async () => {
+    const { getAgentRoster } = await loadRoster();
+    expect(getAgentRoster()).toContainEqual({ command: 'pi', name: 'Pi AI Agent' });
+  });
+
+  it('includes custom agents the user added', async () => {
+    const { addCustomAgent, getAgentRoster } = await loadRoster();
+
+    addCustomAgent({ name: 'Aider', command: 'aider --no-auto-commits' });
+    expect(getAgentRoster()).toContainEqual({
+      command: 'aider --no-auto-commits',
+      name: 'Aider',
+    });
+  });
+
+  it('drops built-ins the user removed', async () => {
+    const { removePresetAgent, getAgentRoster } = await loadRoster();
+
+    removePresetAgent('grok');
+    expect(getAgentRoster().map((a) => a.command)).not.toContain('grok');
+  });
+
+  it('publishes the roster to the server and republishes when it changes', async () => {
+    const { initMcpBridge, addCustomAgent } = await loadRoster();
+
+    initMcpBridge();
+    // Subscribing pushes immediately, so the server is never left guessing.
+    expect(lastRoster()?.map((a) => a.command)).toContain('pi');
+
+    addCustomAgent({ name: 'Aider', command: 'aider' });
+    expect(lastRoster()).toContainEqual({ command: 'aider', name: 'Aider' });
+  });
+
+  it('swallows a failed publish — an empty roster is permissive, not fatal', async () => {
+    const { setMcpAgentPresets } = await mockModule();
+    invokeMock.mockImplementation(async () => {
+      throw new Error('no such command');
+    });
+    await expect(setMcpAgentPresets([{ command: 'claude', name: 'Claude Code' }])).resolves
+      .toBeUndefined();
+  });
+
+  /**
+   * A delegated worker is named by the server, before the spawn reaches the
+   * frontend — the name is the handle `delegate_task` returns and the file the
+   * worker reports to, so it cannot be assigned afterwards. Without this push the
+   * server has no pool and falls back to `worker-a1b2c3`, which is the generic
+   * naming this exists to stop.
+   */
+  it('publishes the app\'s assistant names so delegated workers get real ones', async () => {
+    const { initMcpBridge } = await loadRoster();
+    const { ASSISTANT_NAMES } = await import('$lib/services/orchestrator/agent-names');
+
+    initMcpBridge();
+
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'mcp_set_assistant_names');
+    expect(call).toBeDefined();
+    expect(call![1].names).toEqual(ASSISTANT_NAMES);
+    expect(call![1].names).toContain('Trinity');
+  });
+
+  it('swallows a failed name publish — the server has a fallback', async () => {
+    const { setMcpAssistantNames } = await mockModule();
+    invokeMock.mockImplementation(async () => {
+      throw new Error('no such command');
+    });
+    await expect(setMcpAssistantNames(['Trinity'])).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * `send_to_agent` and `bounce_task` used to write the message straight to the
+ * PTY: no Enter, so it sat in the composer, and no bracketed paste, so every
+ * newline submitted a fragment. The server now asks the frontend to type it and
+ * blocks on the answer — which makes answering, correctly and always, this
+ * handler's whole job.
+ */
+describe('MCP prompt delivery', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    listenMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('$lib/services/orchestrator/terminal-lease');
+  });
+
+  /** Boot the bridge with a stubbed sender and hand back the event handler. */
+  async function loadDelivery(send: (id: number, message: string) => Promise<boolean>) {
+    vi.resetModules();
+    const handlers = new Map<string, (e: { payload: unknown }) => void>();
+    listenMock.mockImplementation(async (name: string, cb: (e: { payload: unknown }) => void) => {
+      handlers.set(name, cb);
+      return () => {};
+    });
+    invokeMock.mockImplementation(async () => undefined);
+
+    const sendSpy = vi.fn(send);
+    vi.doMock('$lib/services/orchestrator/terminal-lease', () => ({
+      applyOrchestratorAgentName: vi.fn(),
+      sendOrchestratorGoalWhenReady: vi.fn(async () => true),
+      sendOrchestratorFollowUpWhenReady: sendSpy,
+    }));
+
+    const bridge = await import('./mcpBridge');
+    bridge.initMcpBridge();
+    await vi.waitFor(() => expect(handlers.has('mcp:deliver-prompt')).toBe(true));
+    return { fire: handlers.get('mcp:deliver-prompt')!, sendSpy };
+  }
+
+  /** The arguments of the last `mcp_deliver_respond` call. */
+  function lastVerdict(): { requestId: string; success: boolean; error: string | null } | undefined {
+    const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'mcp_deliver_respond');
+    return calls.length ? calls[calls.length - 1][1] : undefined;
+  }
+
+  it('types the message through the same path that fixed the floating bar', async () => {
+    const { fire, sendSpy } = await loadDelivery(async () => true);
+
+    fire({ payload: { request_id: 'r1', session_id: 7, message: 'line one\nline two' } });
+    await vi.waitFor(() => expect(lastVerdict()).toBeDefined());
+
+    // Handed over whole — the delivery path brackets and submits it. Splitting
+    // it here, or appending a bare newline, is what scattered these messages.
+    expect(sendSpy).toHaveBeenCalledWith(7, 'line one\nline two');
+    expect(lastVerdict()).toEqual({ requestId: 'r1', success: true, error: null });
+  });
+
+  it('reports a refused send as a failure instead of claiming it landed', async () => {
+    const { fire } = await loadDelivery(async () => false);
+
+    fire({ payload: { request_id: 'r2', session_id: 7, message: 'status?' } });
+    await vi.waitFor(() => expect(lastVerdict()).toBeDefined());
+
+    const verdict = lastVerdict()!;
+    expect(verdict.success).toBe(false);
+    expect(verdict.error).toBeTruthy();
+  });
+
+  it('always answers, even when the send throws', async () => {
+    // The server blocks on this reply. Letting an exception escape would strand
+    // the caller for the full delivery timeout with no explanation.
+    const { fire } = await loadDelivery(async () => {
+      throw new Error('pty exploded');
+    });
+
+    fire({ payload: { request_id: 'r3', session_id: 7, message: 'status?' } });
+    await vi.waitFor(() => expect(lastVerdict()).toBeDefined());
+
+    const verdict = lastVerdict()!;
+    expect(verdict.success).toBe(false);
+    expect(verdict.error).toContain('pty exploded');
   });
 });

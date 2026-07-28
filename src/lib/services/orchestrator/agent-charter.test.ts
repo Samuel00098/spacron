@@ -58,7 +58,7 @@ describe('buildAgentCharter', () => {
     // it earns its own numbered line rather than being folded into EXECUTION,
     // because agents were defaulting to their own sub-agent feature or shelling
     // out to a CLI, which spawns agents the app can't see — and a buried rule
-    // does not change that. Do not raise this again without the same argument. in Ink REPLs.
+    // does not change that. Do not raise this again without the same argument.
     expect(charter.split('\n').length).toBeLessThanOrEqual(11);
   });
 

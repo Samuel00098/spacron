@@ -55,6 +55,49 @@ describe('watchLeasedAgentTurn', () => {
     if (outcome.kind === 'blocked') expect(outcome.reason.toLowerCase()).toContain('do you want to');
   });
 
+  it('ignores an attention prompt that was already on screen when it armed', async () => {
+    // Agents habitually close a turn with a question ("Would you like me to…"),
+    // and it stays in the buffer afterwards. The next watch must not re-report
+    // that as a fresh block — on the re-arming adopted-agent watcher this fired
+    // a chime every poll interval for a prompt nobody was being shown.
+    buf = 'All set. Would you like me to run the tests?';
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf += ' '; // a cursor redraw: activity, but no new prompt
+    await vi.advanceTimersByTimeAsync(50);
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+  });
+
+  it('blocks on an attention prompt printed during this turn', async () => {
+    // The other half of the rule above: a prompt the agent prints *after* the
+    // watch armed still blocks immediately.
+    buf = 'previous turn output';
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf += ' Deleting the table. Do you want to continue? [y/n]';
+    await vi.advanceTimersByTimeAsync(10);
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+  });
+
+  it('does not finish on a bell that only appeared because the buffer slid', async () => {
+    // The session buffer is capped and drops output from the front. Re-counting
+    // bells from that moving cut point used to invent one whenever the cut
+    // landed inside an OSC sequence, promoting its terminator to a real ring.
+    const head = 'boot\x1b]0;agent title\x07'; // OSC terminator at index 20
+    buf = head + 'streamed some real work '.repeat(40);
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf += 'more work '.repeat(60);
+    await vi.advanceTimersByTimeAsync(10); // plenty of growth, no bell
+    // The cap slices the head off mid-OSC, so the buffer now *starts* with the
+    // sequence's tail and its terminator reads as a standalone BEL.
+    buf = buf.slice(10);
+    expect(buf.indexOf('\x07')).toBeGreaterThanOrEqual(0);
+    expect(buf.slice(0, buf.indexOf('\x07'))).not.toContain('\x1b');
+    await vi.advanceTimersByTimeAsync(30);
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+  });
+
   it('finishes via quiescence when output stops growing', async () => {
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
     buf = 'streamed some real work '.repeat(20); // well past minWorkChars

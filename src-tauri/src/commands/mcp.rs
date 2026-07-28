@@ -5,7 +5,7 @@
 //! that MCP tools like `send_to_agent` can resolve human-readable names
 //! ("Iris", "Trinity") to PTY session IDs.
 
-use crate::mcp::McpServerHandle;
+use crate::mcp::{AgentPreset, McpServerHandle};
 use std::path::PathBuf;
 use tauri::State;
 
@@ -141,6 +141,29 @@ pub fn mcp_browser_respond(
     Ok(())
 }
 
+/// Report the outcome of a prompt delivery back to the waiting MCP tool call.
+///
+/// `send_to_agent` and `bounce_task` hand the message to the frontend rather than
+/// writing it to the PTY, because getting text into an agent's TUI means pasting,
+/// waiting for the composer to settle, and pressing Enter with confirmation —
+/// none of which Rust can observe. They block until this comes back, so a
+/// delivery that silently failed is reported as a failure instead of a success.
+#[tauri::command]
+pub fn mcp_deliver_respond(
+    handle: State<'_, McpServerHandle>,
+    request_id: String,
+    success: bool,
+    error: Option<String>,
+) -> Result<(), String> {
+    let result = if success {
+        Ok(serde_json::Value::Bool(true))
+    } else {
+        Err(error.unwrap_or_else(|| "The agent did not accept the message.".to_string()))
+    };
+    handle.resolve_send_request(&request_id, result);
+    Ok(())
+}
+
 /// Tell the MCP server which project is open.
 ///
 /// `delegate_task` waits on a file under the project's `.spacron/reports/`, and
@@ -153,5 +176,59 @@ pub async fn mcp_set_project_root(
     root: Option<String>,
 ) -> Result<(), String> {
     *handle.project_root.lock().await = root.filter(|r| !r.trim().is_empty());
+    Ok(())
+}
+
+/// Tell the MCP server which agents this install can launch.
+///
+/// The roster is the frontend's: built-in presets minus the ones the user
+/// removed, plus every custom agent they added. The server needs it so
+/// `spawn_agent` and `delegate_task` can advertise the real set in their tool
+/// schemas and resolve a display name to a launch command — otherwise a
+/// delegating agent is guessing from a list baked in at compile time, and the
+/// user's own agents are invisible to it.
+///
+/// Pushed on startup and again whenever the roster changes; the notify ping
+/// makes connected clients re-read `tools/list`.
+#[tauri::command]
+pub async fn mcp_set_agent_presets(
+    handle: State<'_, McpServerHandle>,
+    presets: Vec<AgentPreset>,
+) -> Result<(), String> {
+    let cleaned: Vec<AgentPreset> = presets
+        .into_iter()
+        .filter(|p| !p.command.trim().is_empty())
+        .map(|p| AgentPreset {
+            command: p.command.trim().to_string(),
+            name: p.name.trim().to_string(),
+        })
+        .collect();
+    *handle.agent_presets.lock().await = cleaned;
+    handle.notify_tools_changed();
+    Ok(())
+}
+
+/// Tell the MCP server which assistant names this app uses ("Trinity", "Iris", …).
+///
+/// The list lives in `src/lib/services/orchestrator/agent-names.ts` and is pushed
+/// here rather than duplicated in Rust, so the pane badge of an agent the user
+/// spawned and the pane badge of one an orchestrator delegated to are drawn from
+/// one list. The server needs it because `delegate_task` decides a worker's name
+/// before the spawn reaches the frontend — the name is the caller's handle and
+/// the worker's report filename, so it cannot be assigned afterwards.
+///
+/// An empty list leaves the server on its uuid fallback, which is what the
+/// startup window before the first push looks like.
+#[tauri::command]
+pub async fn mcp_set_assistant_names(
+    handle: State<'_, McpServerHandle>,
+    names: Vec<String>,
+) -> Result<(), String> {
+    let cleaned: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    *handle.assistant_names.lock().await = cleaned;
     Ok(())
 }

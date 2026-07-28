@@ -1,5 +1,10 @@
 import { getSessionOutputBuffer } from '$lib/stores/terminal';
-import { attentionReason, containsAttentionRequest, countBell } from './agent-signals';
+import {
+  attentionReason,
+  containsAttentionRequest,
+  countBellStream,
+  createBellScanState,
+} from './agent-signals';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 
 /** Outcome of watching one agent turn on a leased terminal. */
@@ -19,7 +24,10 @@ export interface WatchLeasedAgentOptions {
    * for agents that go quiet; bell/attention signals fire immediately.
    */
   idleMs?: number;
-  /** Bytes of the buffer tail to scan for attention prompts. */
+  /**
+   * Bytes of *this turn's* output to keep for attention-prompt scanning. Only
+   * output produced after the watch armed is ever scanned — see `recent` below.
+   */
   tailChars?: number;
   /**
    * Minimum total new output (chars) before the idle fallback may finish a turn.
@@ -76,10 +84,24 @@ export async function watchLeasedAgentTurn(
   const minWorkChars = opts.minWorkChars ?? 500;
 
   let lastLen = getSessionOutputBuffer(sessionId).length;
-  let lastBell = countBell(getSessionOutputBuffer(sessionId));
   let lastGrowthAt = Date.now();
   let sawActivity = false;
   let grownTotal = 0;
+
+  // Escape state for the incremental bell scanner, threaded across polls.
+  const bellState = createBellScanState();
+  /**
+   * The tail of the output produced *since this watch armed* — never the tail of
+   * the whole session buffer.
+   *
+   * That distinction is the whole point. Agents habitually close a turn with a
+   * question ("Would you like me to also run the tests?"), and that text sits in
+   * the buffer tail long after the turn it belongs to ended. Scanning the shared
+   * buffer meant the next watch matched it again on the very first byte of new
+   * output — reporting `blocked` for a prompt the agent was not showing, over
+   * and over on the re-arming adopted-agent watcher.
+   */
+  let recent = '';
 
   // A sentinel arriving mid-sleep wakes the loop immediately rather than waiting
   // out the remaining poll interval — the signal is exact, so there is nothing
@@ -119,22 +141,27 @@ export async function watchLeasedAgentTurn(
 
       const buf = getSessionOutputBuffer(sessionId);
       const len = buf.length;
-      const bell = countBell(buf);
+      let rangNewBell = false;
 
       if (len > lastLen) {
+        const added = buf.slice(lastLen);
         sawActivity = true;
-        grownTotal += len - lastLen;
+        grownTotal += added.length;
         lastGrowthAt = Date.now();
+        rangNewBell = countBellStream(added, bellState) > 0;
+        recent = (recent + added).slice(-tailChars);
       } else if (len < lastLen) {
         // Buffer was capped/sliced — treat as fresh activity so we don't stall.
+        // There is no trustworthy delta to scan for bells here (the window slid
+        // by an unknown amount), and guessing one manufactures rings, so this
+        // poll counts none and the escape scanner restarts from a clean state.
         grownTotal += len;
         lastGrowthAt = Date.now();
+        bellState.inOsc = false;
+        bellState.escPending = false;
+        recent = buf.slice(-tailChars);
       }
       lastLen = len;
-
-      const tail = buf.slice(-tailChars);
-      const rangNewBell = bell > lastBell;
-      lastBell = bell;
 
       // With a sentinel channel open the screen heuristics are not a second
       // opinion — they are the thing being replaced, and running them in
@@ -144,13 +171,13 @@ export async function watchLeasedAgentTurn(
       // finished. Only the long idle backstop below stays armed.
       if (!signalled) {
         if (sawActivity && grownTotal >= minWorkChars && rangNewBell) {
-          return containsAttentionRequest(tail)
-            ? { kind: 'blocked', reason: attentionReason(tail) }
+          return containsAttentionRequest(recent)
+            ? { kind: 'blocked', reason: attentionReason(recent) }
             : { kind: 'finished' };
         }
 
-        if (sawActivity && containsAttentionRequest(tail)) {
-          return { kind: 'blocked', reason: attentionReason(tail) };
+        if (sawActivity && containsAttentionRequest(recent)) {
+          return { kind: 'blocked', reason: attentionReason(recent) };
         }
       }
 

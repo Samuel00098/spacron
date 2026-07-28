@@ -121,6 +121,12 @@ Pass the sub-task as \`prompt\` and that worker's file set as \`files\`. **Do no
 reporting instructions into the prompt** — they are appended for you, with the right
 absolute paths. Each worker gets its own pane and its own git branch.
 
+**Leave \`name\` out.** Workers are named for you, from the same set the app uses, so the
+user sees "Trinity" and "Morpheus" on the panes rather than \`claude-1\` and \`claude-2\` —
+a generic label you pass is replaced by one of those anyway. Pass a name only when it
+carries meaning for the user ("Reviewer"). Either way, address a worker by the \`handle\`
+the result gives you, not by the name you asked for.
+
 The call waits and comes back with one of:
 
 - \`complete\` — \`report\` holds the worker's summary, \`branch\` its branch. Ready to review.

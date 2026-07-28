@@ -890,3 +890,59 @@ describe('shell / agent separation', () => {
     expect(titleOf(next!)).toBe('Terminal 2');
   });
 });
+
+describe('MCP project root propagation', () => {
+  /** The root the last `mcp_set_project_root` invoke carried, or undefined. */
+  function lastPushedRoot(): string | null | undefined {
+    const roots = invokeMock.mock.calls
+      .filter((c: unknown[]) => c[0] === 'mcp_set_project_root')
+      .map((c: unknown[]) => (c[1] as { root: string | null }).root);
+    return roots.length === 0 ? undefined : roots[roots.length - 1];
+  }
+
+  beforeEach(() => {
+    invokeMock.mockClear();
+  });
+
+  afterEach(() => {
+    setActiveTerminalProject(null);
+  });
+
+  it('pushes the root when the project is activated before it is registered', () => {
+    // The real open order: every caller activates first and registers the root a
+    // line later. Without the push from `setTerminalProjectRoot`, the server was
+    // left holding null and refused every delegate_task with "No project is
+    // open" — for a project that was very much open.
+    const projectId = 'project-mcp-root-activate-first';
+    setActiveTerminalProject(projectId);
+    expect(lastPushedRoot()).toBeNull();
+
+    setTerminalProjectRoot(projectId, '/repo-mcp-root');
+    expect(lastPushedRoot()).toBe('/repo-mcp-root');
+  });
+
+  it('pushes the root when it is registered before the project is activated', () => {
+    const projectId = 'project-mcp-root-register-first';
+    setTerminalProjectRoot(projectId, '/repo-mcp-early');
+    setActiveTerminalProject(projectId);
+    expect(lastPushedRoot()).toBe('/repo-mcp-early');
+  });
+
+  it('ignores a root registered for a project that is not the active one', () => {
+    // A background project's root must not retarget the server, or a worker
+    // delegated from the visible project would run in the wrong checkout.
+    const active = 'project-mcp-root-active';
+    setActiveTerminalProject(active);
+    setTerminalProjectRoot(active, '/repo-active');
+    setTerminalProjectRoot('project-mcp-root-other', '/repo-other');
+    expect(lastPushedRoot()).toBe('/repo-active');
+  });
+
+  it('clears the root when the last project closes', () => {
+    const projectId = 'project-mcp-root-closing';
+    setActiveTerminalProject(projectId);
+    setTerminalProjectRoot(projectId, '/repo-closing');
+    setActiveTerminalProject(null);
+    expect(lastPushedRoot()).toBeNull();
+  });
+});

@@ -153,14 +153,6 @@ pub fn run() {
             let app_handle = app.handle().clone();
             app.manage(app_state);
 
-            let write_cb: mcp::WriteFn = {
-                let pm = pty_manager.clone();
-                Arc::new(move |session_id, data| match pm.get(session_id) {
-                    Some(session) => session.write(data),
-                    None => Err(format!("Session {} not found", session_id)),
-                })
-            };
-
             let read_cb: mcp::ReadFn = {
                 let pm = pty_manager.clone();
                 Arc::new(move |session_id| match pm.get(session_id) {
@@ -172,13 +164,12 @@ pub fn run() {
             let spawn_fn: mcp::SpawnFn = {
                 let ah = app_handle.clone();
                 Arc::new(move |req| {
-                    let _ = ah.emit(
-                        "mcp:spawn-agent",
-                        serde_json::json!({
-                            "preset": req.preset,
-                            "prompt": req.prompt,
-                        }),
-                    );
+                    // Emit the struct itself rather than re-listing its fields:
+                    // a hand-copied list silently drops anything added later,
+                    // which is exactly how `name` went missing — the frontend
+                    // then generated a random name and `delegate_task` had no
+                    // way to address the worker it had just dispatched.
+                    let _ = ah.emit("mcp:spawn-agent", &req);
                 })
             };
 
@@ -196,7 +187,33 @@ pub fn run() {
                 })
             };
 
-            match mcp::start(0, write_cb, read_cb, spawn_fn, browser_emit_fn) {
+            // Every tool that puts text into an agent goes through here rather
+            // than writing to the PTY: the agent CLIs are TUIs, and text only
+            // lands if it is pasted into the composer and submitted with Enter
+            // once the composer has settled. The frontend owns that sequence
+            // (`deliverPromptRaw`), so a raw write is not a shortcut to it — it
+            // is a message that sits in the composer and is never sent.
+            let deliver_emit_fn: mcp::DeliverEmitFn = {
+                let ah = app_handle.clone();
+                Arc::new(move |request_id, session_id, message| {
+                    let _ = ah.emit(
+                        "mcp:deliver-prompt",
+                        serde_json::json!({
+                            "request_id": request_id,
+                            "session_id": session_id,
+                            "message": message,
+                        }),
+                    );
+                })
+            };
+
+            match mcp::start(
+                0,
+                read_cb,
+                spawn_fn,
+                browser_emit_fn,
+                deliver_emit_fn,
+            ) {
                 Ok((handle, port)) => {
                     app.manage(handle);
                     eprintln!("MCP server started on port {}", port);
@@ -360,6 +377,9 @@ pub fn run() {
             commands::mcp::mcp_write_global_agent_config,
             commands::mcp::mcp_browser_respond,
             commands::mcp::mcp_set_project_root,
+            commands::mcp::mcp_set_agent_presets,
+            commands::mcp::mcp_set_assistant_names,
+            commands::mcp::mcp_deliver_respond,
             commands::browser_window::browser_create_window,
             commands::browser_window::browser_navigate_window,
             commands::browser_window::browser_close_window,

@@ -38,9 +38,6 @@ use std::{
 };
 use tokio::sync::{broadcast, mpsc, Mutex, oneshot};
 
-/// Callback for writing data into a PTY session by session id.
-pub type WriteFn = Arc<dyn Fn(u32, &str) -> Result<(), String> + Send + Sync>;
-
 /// Callback for reading output from a PTY session by session id.
 pub type ReadFn = Arc<dyn Fn(u32) -> Vec<u8> + Send + Sync>;
 
@@ -51,11 +48,30 @@ pub type SpawnFn = Arc<dyn Fn(SpawnRequest) + Send + Sync>;
 /// Arguments: (request_id, tool_name, args_json).
 pub type BrowserEmitFn = Arc<dyn Fn(&str, &str, serde_json::Value) + Send + Sync>;
 
+/// Callback for asking the frontend to deliver a prompt into an agent's TUI.
+/// Arguments: (request_id, session_id, message).
+pub type DeliverEmitFn = Arc<dyn Fn(&str, u32, &str) + Send + Sync>;
+
 /// A pending browser-tool request awaiting a response from the frontend.
 pub struct PendingBrowserRequest {
     pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
     pub created_at: Instant,
 }
+
+/// A pending prompt delivery awaiting the frontend's verdict.
+///
+/// Separate from [`PendingBrowserRequest`] because the timescales are nothing
+/// alike: a browser call answers in milliseconds and is swept at 30s, while a
+/// delivery may legitimately sit for half a minute waiting for a booting CLI to
+/// reach its prompt. Sharing the map would have the sweeper cancel deliveries
+/// mid-flight.
+pub struct PendingSend {
+    pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
+    pub created_at: Instant,
+}
+
+/// Shared map of in-flight prompt deliveries, keyed by request ID.
+pub type PendingSends = Arc<DashMap<String, PendingSend>>;
 
 /// Outbound message channel for one SSE-connected client, keyed by session id.
 ///
@@ -118,6 +134,23 @@ pub struct ReadOutputRequest {
     pub target_session_id: u32,
 }
 
+/// One agent the user can actually launch: a built-in preset the app ships, or
+/// a custom agent they added themselves. Pushed from the frontend, which owns
+/// the roster (built-ins minus the ones the user removed, plus their own).
+///
+/// The server keeps this only to *describe* and *resolve* what a caller asked
+/// for. It never decides what may run — an unrecognised name still launches when
+/// the roster is empty, because an empty roster means "not told yet", not "no
+/// agents exist".
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentPreset {
+    /// The launch command typed into the shell — the canonical id. e.g. `pi`,
+    /// `cursor-agent`, `aider --no-auto-commits`.
+    pub command: String,
+    /// Human label shown in the app's picker, e.g. "Pi AI Agent".
+    pub name: String,
+}
+
 /// A request to spawn a new agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpawnRequest {
@@ -144,8 +177,16 @@ pub struct McpServerHandle {
     pub token: String,
     /// In-flight browser-tool requests awaiting frontend responses.
     pub pending_browser: PendingRequests,
+    /// In-flight prompt deliveries awaiting frontend responses.
+    pub pending_sends: PendingSends,
     /// Active project's main checkout, shared with the server. See `ServerState`.
     pub project_root: Arc<Mutex<Option<String>>>,
+    /// Launchable agents, shared with the server. See `ServerState`.
+    pub agent_presets: Arc<Mutex<Vec<AgentPreset>>>,
+    /// The app's assistant-name pool, shared with the server. See `ServerState`.
+    pub assistant_names: Arc<Mutex<Vec<String>>>,
+    /// Names handed out but not yet registered. See `ServerState`.
+    reserved_names: Arc<Mutex<Vec<NameReservation>>>,
 }
 
 impl McpServerHandle {
@@ -166,6 +207,12 @@ impl McpServerHandle {
             branch,
         };
         self.registry.lock().await.insert(name.to_string(), entry);
+        // The name is in the registry now, so the reservation that kept a
+        // concurrent spawn off it has done its job.
+        self.reserved_names
+            .lock()
+            .await
+            .retain(|r| !r.name.eq_ignore_ascii_case(name));
         let _ = self.notify_tx.send(());
     }
 
@@ -176,6 +223,15 @@ impl McpServerHandle {
         let _ = self.notify_tx.send(());
     }
 
+    /// Ping connected clients to re-read `tools/list`.
+    ///
+    /// The agent roster is baked into the `spawn_agent` / `delegate_task`
+    /// schemas, so an agent that connected before the user added a custom agent
+    /// would otherwise never see it.
+    pub fn notify_tools_changed(&self) {
+        let _ = self.notify_tx.send(());
+    }
+
     /// Resolve a pending browser-tool request with a result from the frontend.
     pub fn resolve_browser_request(
         &self,
@@ -183,6 +239,17 @@ impl McpServerHandle {
         result: Result<serde_json::Value, String>,
     ) {
         if let Some((_, pending)) = self.pending_browser.remove(request_id) {
+            let _ = pending.tx.send(result);
+        }
+    }
+
+    /// Resolve a pending prompt delivery with the frontend's verdict.
+    pub fn resolve_send_request(
+        &self,
+        request_id: &str,
+        result: Result<serde_json::Value, String>,
+    ) {
+        if let Some((_, pending)) = self.pending_sends.remove(request_id) {
             let _ = pending.tx.send(result);
         }
     }
@@ -227,20 +294,24 @@ fn load_or_create_token() -> String {
 ///
 /// - `port`: `0` = try the default port (51379), fall back to random if taken;
 ///   otherwise bind exactly.
-/// - `write_cb`: callback to write data into a PTY session.
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
 /// - `browser_emit_fn`: callback to emit a browser-tool request to the frontend.
+/// - `deliver_emit_fn`: callback to have the frontend type a prompt into an agent.
+///
+/// There is deliberately no "write to a PTY" callback. Every tool that puts text
+/// into an agent goes through `deliver_emit_fn`, because a raw write lands in a
+/// TUI's composer unsubmitted — see [`deliver_to_session`].
 ///
 /// The token is persisted to the user's config directory so it survives app
 /// restarts. This means `.mcp.json` and `opencode.json` can be written once
 /// and never need updating.
 pub fn start(
     port: u16,
-    write_cb: WriteFn,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
     browser_emit_fn: BrowserEmitFn,
+    deliver_emit_fn: DeliverEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
     let actual_port = if port == 0 {
         // Try the default port first so external config files can be static.
@@ -262,7 +333,11 @@ pub fn start(
     let (spawn_tx, _) = broadcast::channel::<SpawnRequest>(32);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let pending_browser: PendingRequests = Arc::new(DashMap::new());
+    let pending_sends: PendingSends = Arc::new(DashMap::new());
     let project_root: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let agent_presets: Arc<Mutex<Vec<AgentPreset>>> = Arc::new(Mutex::new(Vec::new()));
+    let assistant_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let reserved_names: Arc<Mutex<Vec<NameReservation>>> = Arc::new(Mutex::new(Vec::new()));
     let sse_sessions: SseSessions = Arc::new(DashMap::new());
     // Persistent bearer-equivalent shared secret, loaded from the user's config
     // dir on every start so that external config files (.mcp.json, opencode.json)
@@ -277,22 +352,30 @@ pub fn start(
         spawn_tx,
         port: actual_port,
         token: token.clone(),
-        write_cb,
         read_cb,
         spawn_fn,
         browser_emit_fn,
+        deliver_emit_fn,
         pending_browser: pending_browser.clone(),
+        pending_sends: pending_sends.clone(),
         project_root: project_root.clone(),
+        agent_presets: agent_presets.clone(),
+        assistant_names: assistant_names.clone(),
+        reserved_names: reserved_names.clone(),
         sse_sessions,
     });
 
-    // Background sweep: drop pending browser requests older than 30s.
+    // Background sweep: drop pending browser requests older than 30s, and
+    // deliveries older than their own (much longer) ceiling — a delivery waits on
+    // a CLI reaching its prompt, which a browser call never does.
     let sweep_map = pending_browser.clone();
+    let sweep_sends = pending_sends.clone();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
             sweep_map.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(30));
+            sweep_sends.retain(|_, v| v.created_at.elapsed() < DELIVER_SWEEP_AFTER);
         }
     });
 
@@ -354,7 +437,11 @@ pub fn start(
         port: actual_port,
         token,
         pending_browser,
+        pending_sends,
         project_root,
+        agent_presets,
+        assistant_names,
+        reserved_names,
     };
 
     Ok((handle, actual_port))
@@ -373,16 +460,35 @@ struct ServerState {
     port: u16,
     /// Shared secret every request must present as `?token=…`. See [`authorize`].
     token: String,
-    write_cb: WriteFn,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
     browser_emit_fn: BrowserEmitFn,
+    /// Asks the frontend to type a prompt into an agent's TUI. See
+    /// [`deliver_to_session`] for why this cannot be a direct PTY write.
+    deliver_emit_fn: DeliverEmitFn,
     pending_browser: PendingRequests,
+    pending_sends: PendingSends,
     /// Absolute path of the active project's main checkout, set by the frontend
     /// on project open. `delegate_task` needs it to locate the reports directory
     /// workers write their completion signal into — the server has no other way
     /// to know where the project lives.
     project_root: Arc<Mutex<Option<String>>>,
+    /// Every agent the user can launch right now — built-in presets they have
+    /// not removed, plus the custom agents they added. Pushed by the frontend on
+    /// startup and whenever the roster changes, so `spawn_agent` and
+    /// `delegate_task` advertise what this install actually has rather than a
+    /// list baked in at compile time.
+    agent_presets: Arc<Mutex<Vec<AgentPreset>>>,
+    /// The app's own pool of assistant names ("Trinity", "Morpheus", …), pushed
+    /// by the frontend from `agent-names.ts` so there is one list, not two. Used
+    /// to name a worker whose spawner left it unnamed or labelled it generically.
+    /// Empty means the frontend has not reported yet.
+    assistant_names: Arc<Mutex<Vec<String>>>,
+    /// Names already handed to a spawn that the frontend has not registered yet.
+    /// Registration is asynchronous, so without this two `delegate_task` calls a
+    /// few milliseconds apart both see the same pool free and pick one name —
+    /// which then collides in the registry and makes `send_to_agent` ambiguous.
+    reserved_names: Arc<Mutex<Vec<NameReservation>>>,
     /// Live SSE clients, so `POST /message` can deliver a JSON-RPC response to
     /// the stream the requesting client is listening on. See [`SseSessions`].
     sse_sessions: SseSessions,
@@ -459,7 +565,7 @@ fn tool_list_agents() -> serde_json::Value {
 fn tool_send_to_agent() -> serde_json::Value {
     serde_json::json!({
         "name": "send_to_agent",
-        "description": "Send a message to a running agent by name. The text is written directly into the target agent's terminal as if you typed it. Use list_agents first to find available agents.",
+        "description": "Send a message to a running agent by name. The text is typed into that agent's prompt and submitted for you, and this call waits until it has actually landed — so an error here means the agent did not receive it, not that it was merely slow. Multi-line messages are fine. Use list_agents first to find available agents.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -494,16 +600,372 @@ fn tool_read_agent_output() -> serde_json::Value {
     })
 }
 
-fn tool_spawn_agent() -> serde_json::Value {
+// ---------------------------------------------------------------------------
+// Agent roster — what this install can actually launch
+// ---------------------------------------------------------------------------
+
+/// Human-readable list of launchable agents for a tool description, e.g.
+/// `'claude' (Claude Code), 'pi' (Pi AI Agent)`.
+///
+/// Returns `None` when the frontend has not pushed a roster yet, which is a
+/// different thing from "there are no agents": callers get generic guidance and
+/// [`resolve_preset`] stays permissive rather than rejecting valid names.
+fn describe_presets(presets: &[AgentPreset]) -> Option<String> {
+    if presets.is_empty() {
+        return None;
+    }
+    Some(
+        presets
+            .iter()
+            .map(|p| {
+                if p.name.is_empty() || p.name == p.command {
+                    format!("'{}'", p.command)
+                } else {
+                    format!("'{}' ({})", p.command, p.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+/// Sentence for the `preset` parameter, naming the agents this install has.
+fn preset_param_description(presets: &[AgentPreset]) -> String {
+    match describe_presets(presets) {
+        Some(list) => format!(
+            "Which agent to run. Available in this workspace right now: {}. \
+             Pass the command (the quoted value) or the display name — both resolve. \
+             The list includes any custom agents the user added, so prefer a name from \
+             it over one you assume exists.",
+            list
+        ),
+        None => "Which agent to run — the launch command of a Spacron agent preset or \
+                 custom agent, e.g. 'claude' or 'codex'. The workspace has not reported \
+                 its roster yet; call list_agents to see what is already running."
+            .to_string(),
+    }
+}
+
+/// Resolve whatever the caller passed to a launch command.
+///
+/// Accepts the command or the display name, case-insensitively, so an agent can
+/// say either `pi` or `Pi AI Agent`. An unknown value is an error *only* when we
+/// have a roster to check against — with no roster the input passes through, so
+/// a race at startup cannot make a perfectly valid agent unlaunchable.
+fn resolve_preset(input: &str, presets: &[AgentPreset]) -> Result<String, String> {
+    let wanted = input.trim();
+    if wanted.is_empty() {
+        return Err("Missing required parameter 'preset'.".to_string());
+    }
+    if presets.is_empty() {
+        return Ok(wanted.to_string());
+    }
+
+    let lowered = wanted.to_lowercase();
+    if let Some(hit) = presets
+        .iter()
+        .find(|p| p.command.to_lowercase() == lowered)
+        .or_else(|| presets.iter().find(|p| p.name.to_lowercase() == lowered))
+    {
+        return Ok(hit.command.clone());
+    }
+
+    Err(format!(
+        "'{}' is not an agent in this workspace. Available: {}.",
+        wanted,
+        describe_presets(presets).unwrap_or_default()
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Prompt delivery
+//
+// Getting text into a running agent is not a PTY write. These CLIs are TUIs with
+// their own composer, and typing into one means: wait until it is actually at its
+// prompt, send the body as a bracketed paste (so embedded newlines stay in the
+// composer instead of submitting a fragment per line), wait for the paste to echo
+// and the composer to stop redrawing, then press Enter and confirm the agent
+// really started — retrying if it didn't.
+//
+// The frontend already does all of that in `deliverPromptRaw`, and it is what
+// made the floating bar reliable. `send_to_agent` and `bounce_task` used to skip
+// all of it and write the raw message straight to the PTY, with no Enter at all —
+// so the message sat in the composer unsent, and any newline in it (every
+// `bounce_task` message has several) submitted a fragment early and scattered the
+// rest. That is why a delegated worker sometimes just sat there.
+//
+// So delivery is a request to the frontend, with a verdict coming back.
+// ---------------------------------------------------------------------------
+
+/// How long to wait for the frontend's delivery verdict.
+///
+/// Sized from what delivery actually does: up to 30s for a cold CLI to reach its
+/// prompt, then ~15s of paste-echo, composer-settle and up to three confirmed
+/// Enter attempts. 90s leaves headroom without hanging the caller forever.
+const DELIVER_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// When the sweeper reclaims a delivery nothing ever answered. Must exceed
+/// [`DELIVER_TIMEOUT`] or the sweep would cancel calls that are still waiting.
+const DELIVER_SWEEP_AFTER: Duration = Duration::from_secs(120);
+
+/// Ask the frontend to type `message` into `session_id`'s agent, and wait for it
+/// to say whether the agent actually took it.
+///
+/// `Err` means the message did not land — the caller must report that rather than
+/// claim it was sent, because an orchestrator that believes a bounce was
+/// delivered will sit and wait for work nobody was asked to do.
+async fn deliver_to_session(
+    state: &ServerState,
+    session_id: u32,
+    target: &str,
+    message: &str,
+) -> Result<(), String> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    state.pending_sends.insert(
+        request_id.clone(),
+        PendingSend {
+            tx,
+            created_at: Instant::now(),
+        },
+    );
+
+    (state.deliver_emit_fn)(&request_id, session_id, message);
+
+    match tokio::time::timeout(DELIVER_TIMEOUT, rx).await {
+        Ok(Ok(Ok(_))) => Ok(()),
+        Ok(Ok(Err(err))) => Err(err),
+        Ok(Err(_)) => Err(format!(
+            "Delivery to '{}' was cancelled before it completed.",
+            target
+        )),
+        Err(_) => {
+            state.pending_sends.remove(&request_id);
+            Err(format!(
+                "Timed out waiting for '{}' to accept the message. Its CLI may still be starting, or its pane may be gone — check it with read_agent_output.",
+                target
+            ))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worker naming
+//
+// A spawned worker's name is what the user sees on its pane and what the
+// spawner addresses it by, so it has to be a name — "Trinity", not "worker-3".
+// Left to the model, it is usually neither: weaker orchestrators label workers
+// after the CLI they run ("claude-1") or after nothing at all ("agent 2"), and
+// an unnamed `delegate_task` used to get a uuid stub. Both are resolved here,
+// against the same pool the app itself uses.
+//
+// This is decided server-side, not in the frontend, because for `delegate_task`
+// the name is also the handle returned to the caller and the filename the worker
+// writes its report to — renaming it after the fact would break both.
+// ---------------------------------------------------------------------------
+
+/// A name handed to a spawn that has not reached the registry yet.
+struct NameReservation {
+    name: String,
+    at: Instant,
+}
+
+/// How long a handed-out name stays reserved before it can be picked again.
+/// Long enough to cover a slow CLI launch; short enough that a spawn which died
+/// before registering does not retire a name for the rest of the session.
+const NAME_RESERVATION_TTL: Duration = Duration::from_secs(180);
+
+/// Bland words a model reaches for when it labels a worker instead of naming it.
+/// Mirrors `GENERIC_NAME_WORDS` in `src/lib/services/orchestrator/agent-names.ts`.
+const GENERIC_NAME_WORDS: &[&str] = &["agent", "assistant", "bot", "ai", "coder", "worker", "task"];
+
+/// Longest accepted agent name. Names become filenames and pane labels; nothing
+/// legitimate comes close.
+const MAX_AGENT_NAME_LEN: usize = 64;
+
+/// Win32 reserved device names. Still special-cased with an extension, so
+/// `CON.md` opens the console rather than a file — a read of it can block.
+const RESERVED_DEVICE_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// True when `name` is safe to use as a single path component.
+///
+/// An agent name is not only a label. [`report_paths`] joins it into
+/// `<root>/.spacron/reports/<name>.md`, which `delegate_task` **deletes** and
+/// `check_task` **reads back to the caller** — so a name containing `..`, a
+/// separator or a drive letter steers those operations anywhere on the disk.
+///
+/// "The caller already holds the token" is not a defence here. The caller is an
+/// LLM, and [`delegate_result`] feeds a worker's own report text straight back
+/// into it, so untrusted content reaches the thing choosing these names.
+///
+/// The allowlist is deliberately stricter than rejecting `..` and separators: it
+/// also rules out NUL, the trailing dots and spaces Windows silently strips, and
+/// anything non-ASCII that could normalise into a separator.
+///
+/// Interior spaces *are* allowed, because the app's own numbered fallback
+/// produces them ("Trinity 2", see `pickAssistantName`) and these names are
+/// shown to the user on the pane. A space cannot traverse; a leading or trailing
+/// one can be silently dropped by the filesystem, so those are refused. `.` is
+/// banned outright, which is what makes `..` unreachable.
+fn is_safe_agent_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > MAX_AGENT_NAME_LEN {
+        return false;
+    }
+    if name.starts_with(' ') || name.ends_with(' ') {
+        return false;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ')
+    {
+        return false;
+    }
+    !RESERVED_DEVICE_NAMES.contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// True when `name` is a throwaway machine label rather than a name the user
+/// would choose — "claude-1", "Claude Code 2", "agent", "bot_3".
+///
+/// Port of `isGenericAgentName` in `agent-names.ts`, with one deliberate
+/// difference: it tests the label against *every* preset in the roster, not just
+/// the one being launched. "codex" is a bad name for a worker whichever CLI it
+/// turns out to be running.
+fn is_generic_agent_name(name: &str, presets: &[AgentPreset]) -> bool {
+    let normalized = name.trim().to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    // Drop a trailing index ("claude-1", "agent 2", "bot_3") to get the base.
+    let base = normalized
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end_matches([' ', '_', '-'])
+        .trim();
+    if base.is_empty() {
+        return true; // the name was just a number
+    }
+
+    if GENERIC_NAME_WORDS.contains(&base) {
+        return true;
+    }
+
+    presets.iter().any(|p| {
+        p.command.trim().eq_ignore_ascii_case(base) || p.name.trim().eq_ignore_ascii_case(base)
+    })
+}
+
+/// Pick the name a spawn will actually run under.
+///
+/// Honours a name the caller chose when it is a real one — a worker deliberately
+/// called "Reviewer" keeps that. A generic label or no label at all draws from
+/// the app's pool instead. Returns `Err` only for a genuine collision, so the
+/// caller learns that rather than silently getting a second "Trinity".
+///
+/// The returned name is reserved; the frontend releases it by registering the
+/// agent under it (see [`McpServerHandle::register_agent`]).
+async fn assign_agent_name(state: &ServerState, requested: &str) -> Result<String, String> {
+    let presets = state.agent_presets.lock().await.clone();
+    // Snapshot the registry and drop the lock before taking `reserved_names`, so
+    // this never holds both at once — `register_agent` takes them in the other
+    // order.
+    let registered: Vec<String> = {
+        let registry = state.registry.lock().await;
+        registry.keys().map(|k| k.to_lowercase()).collect()
+    };
+    let pool = state.assistant_names.lock().await.clone();
+
+    let mut reserved = state.reserved_names.lock().await;
+    reserved.retain(|r| r.at.elapsed() < NAME_RESERVATION_TTL);
+
+    let taken: Vec<String> = registered
+        .into_iter()
+        .chain(reserved.iter().map(|r| r.name.to_lowercase()))
+        .collect();
+    let is_taken = |candidate: &str| {
+        let lowered = candidate.to_lowercase();
+        taken.iter().any(|t| *t == lowered)
+    };
+
+    let wanted = requested.trim();
+    if !wanted.is_empty() && !is_generic_agent_name(wanted, &presets) {
+        // Checked here as well as in `report_paths`, so a bad name is refused
+        // before a pane is opened under it rather than after. A registry key is
+        // also what `bounce_task` later feeds to `report_paths`.
+        if !is_safe_agent_name(wanted) {
+            return Err(format!(
+                "'{wanted}' is not a usable agent name — use letters, digits, '-' or '_' only (max {MAX_AGENT_NAME_LEN} characters)."
+            ));
+        }
+        if is_taken(wanted) {
+            return Err(format!(
+                "An agent named '{}' is already running — pick another name.",
+                wanted
+            ));
+        }
+        reserved.push(NameReservation {
+            name: wanted.to_string(),
+            at: Instant::now(),
+        });
+        return Ok(wanted.to_string());
+    }
+
+    // The pool arrives from the frontend, so it is filtered rather than trusted:
+    // an assigned name ends up in `report_paths` exactly like a requested one.
+    let free: Vec<&String> = pool
+        .iter()
+        .filter(|n| is_safe_agent_name(n) && !is_taken(n))
+        .collect();
+    let assigned = if !free.is_empty() {
+        // Rotate the starting point so a fleet isn't always Neo, Trinity, …
+        // in the same order. `rand` is not a dependency and does not need to be
+        // for this.
+        let offset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as usize)
+            .unwrap_or(0);
+        free[offset % free.len()].clone()
+    } else if let Some(base) = pool.iter().find(|n| is_safe_agent_name(n)) {
+        // Every name is in use — number one of them, as the app does.
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{} {}", base, suffix);
+            if !is_taken(&candidate) {
+                break candidate;
+            }
+            suffix += 1;
+        }
+    } else {
+        // The frontend has not pushed the pool yet (startup window). A stub name
+        // beats refusing to spawn.
+        format!(
+            "worker-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..6]
+        )
+    };
+
+    reserved.push(NameReservation {
+        name: assigned.clone(),
+        at: Instant::now(),
+    });
+    Ok(assigned)
+}
+
+fn tool_spawn_agent(presets: &[AgentPreset]) -> serde_json::Value {
     serde_json::json!({
         "name": "spawn_agent",
-        "description": "Launch a new AI coding agent (claude, codex, gemini, cursor, etc.) with an optional prompt. The new agent appears in its own terminal pane.",
+        "description": format!(
+            "Launch a new AI coding agent with an optional prompt. The new agent appears in its own terminal pane. Agents available in this workspace: {}.",
+            describe_presets(presets).unwrap_or_else(|| "not reported yet — pass any preset command the user has configured".to_string())
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "preset": {
                     "type": "string",
-                    "description": "Agent preset name ('claude', 'codex', 'gemini', 'cursor', etc.)."
+                    "description": preset_param_description(presets)
                 },
                 "prompt": {
                     "type": "string",
@@ -511,7 +973,7 @@ fn tool_spawn_agent() -> serde_json::Value {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Optional. The name to give the new agent, so you can address it with send_to_agent without calling list_agents first. Must not match an agent that is already running. When omitted, a name is assigned for you."
+                    "description": "Optional. The name to give the new agent, so you can address it with send_to_agent without calling list_agents first. Must not match an agent that is already running. Omit it unless the name means something to the user — a real name is assigned for you, and a generic label like 'agent-1' or 'claude-2' is replaced by one. The reply tells you the name that was used."
                 }
             },
             "required": ["preset"]
@@ -681,8 +1143,25 @@ fn tool_browser_close_window() -> serde_json::Value {
 /// that blocks for an hour is a hung session, not a patient one. On expiry the
 /// call returns `status: "working"` and a handle rather than an error, so the
 /// caller resumes with `check_task` instead of losing the worker.
-const DELEGATE_DEFAULT_WAIT_SECS: u64 = 120;
+///
+/// The default is short **because of the Streamable HTTP transport**. That path
+/// (`POST /mcp`) answers in the response body, so the request stays open for the
+/// whole wait — and Codex, Gemini CLI, droid, opencode and Cursor all use it,
+/// with Codex supporting nothing else. Most of them abandon a request well
+/// before a minute, so a longer default would make `delegate_task` fail for
+/// every non-Claude preset. 25s clears the common 30s client timeout with room
+/// to spare; a caller that knows its own client can ask for more via
+/// `wait_seconds`.
+///
+/// The SSE transport does not share this constraint (`POST /message` returns
+/// `202` immediately and answers on the stream), but one default has to serve
+/// both, and the safe one is the short one.
+const DELEGATE_DEFAULT_WAIT_SECS: u64 = 25;
 const DELEGATE_MAX_WAIT_SECS: u64 = 600;
+
+/// How long a spawn is given to reach the registry before a silent one is called
+/// `gone` rather than `working`. See the deadline arm of [`await_worker_report`].
+const LAUNCH_GRACE: Duration = Duration::from_secs(45);
 
 fn clamp_wait(requested: Option<u64>) -> u64 {
     requested
@@ -694,12 +1173,22 @@ fn clamp_wait(requested: Option<u64>) -> u64 {
 /// success, `.blocked.md` for "I need a decision". Two files rather than one
 /// with a status field, so the check stays a file-exists test with nothing to
 /// parse and no partially-written state to misread.
-fn report_paths(root: &str, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+///
+/// Fallible on purpose. `name` reaches here from tool arguments, and these paths
+/// are deleted and read — so this is the one place that must not be reachable
+/// with an unvalidated name. Returning `Result` makes every call site handle it
+/// rather than relying on each of them to remember to pre-check.
+fn report_paths(root: &str, name: &str) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    if !is_safe_agent_name(name) {
+        return Err(format!(
+            "'{name}' is not a usable agent name — use letters, digits, '-' or '_' only (max {MAX_AGENT_NAME_LEN} characters)."
+        ));
+    }
     let dir = std::path::Path::new(root).join(".spacron").join("reports");
-    (
+    Ok((
         dir.join(format!("{}.md", name)),
         dir.join(format!("{}.blocked.md", name)),
-    )
+    ))
 }
 
 /// Wait for a worker's report to appear, up to `wait_secs`.
@@ -712,28 +1201,47 @@ fn report_paths(root: &str, name: &str) -> (std::path::PathBuf, std::path::PathB
 /// to resume rather than treat it as failed.
 async fn await_worker_report(
     state: &ServerState,
-    root: &str,
+    paths: &(std::path::PathBuf, std::path::PathBuf),
     name: &str,
     wait_secs: u64,
 ) -> serde_json::Value {
-    let (done_path, blocked_path) = report_paths(root, name);
-    let deadline = Instant::now() + Duration::from_secs(wait_secs);
+    let (done_path, blocked_path) = paths;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(wait_secs);
+
+    // A worker that dies without reporting should be called `gone` as soon as we
+    // can tell, not at the end of the wait. Telling requires knowing it reached
+    // the registry first — before that, "absent" just means the CLI is still
+    // booting. So the early exit arms only once the agent has actually been seen.
+    let mut was_registered = false;
 
     loop {
-        if let Ok(text) = std::fs::read_to_string(&done_path) {
+        if let Ok(text) = std::fs::read_to_string(done_path) {
             return delegate_result("complete", name, branch_of(state, name).await, Some(text));
         }
-        if let Ok(text) = std::fs::read_to_string(&blocked_path) {
+        if let Ok(text) = std::fs::read_to_string(blocked_path) {
             return delegate_result("blocked", name, branch_of(state, name).await, Some(text));
         }
-        // A worker that vanished without reporting would otherwise be waited on
-        // for the full timeout. It can only be absent from the registry after it
-        // has been registered, so this cannot fire during the launch window.
-        if !state.registry.lock().await.contains_key(name) && Instant::now() > deadline {
+
+        let registered = state.registry.lock().await.contains_key(name);
+        if registered {
+            was_registered = true;
+        } else if was_registered {
+            // Seen, then gone, with no report: it exited mid-task.
             return delegate_result("gone", name, None, None);
         }
+
         if Instant::now() >= deadline {
-            return delegate_result("working", name, branch_of(state, name).await, None);
+            // Never reached the registry. That usually means the launch failed —
+            // but it also looks exactly like a CLI that is simply slow to boot,
+            // and calling a live worker `gone` is the costlier mistake: the
+            // orchestrator abandons it and spawns a replacement alongside it. So
+            // this only becomes a verdict once the wait was long enough that a
+            // boot would have finished; a shorter wait returns the recoverable
+            // `working` and lets `check_task` decide.
+            let never_came_up = !was_registered && started.elapsed() >= LAUNCH_GRACE;
+            let status = if never_came_up { "gone" } else { "working" };
+            return delegate_result(status, name, branch_of(state, name).await, None);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -785,7 +1293,7 @@ fn delegate_result(
     ]})
 }
 
-fn tool_delegate_task() -> serde_json::Value {
+fn tool_delegate_task(presets: &[AgentPreset]) -> serde_json::Value {
     serde_json::json!({
         "name": "delegate_task",
         "description": "Delegate a piece of work to a NEW agent and wait for its result. Prefer this over your own in-process sub-agents whenever the work WRITES CODE: the worker gets its own visible pane and its own git branch, so the user can watch it, steer it, and review its diff — none of which is possible for an in-process sub-agent. (For read-only research your own sub-agents are fine.) Returns the worker's report when it finishes, or status 'working' with a handle if it is still going — then call check_task with that handle.",
@@ -794,7 +1302,7 @@ fn tool_delegate_task() -> serde_json::Value {
             "properties": {
                 "preset": {
                     "type": "string",
-                    "description": "Agent preset to run the work ('claude', 'codex', 'gemini', 'cursor', …)."
+                    "description": preset_param_description(presets)
                 },
                 "prompt": {
                     "type": "string",
@@ -807,11 +1315,11 @@ fn tool_delegate_task() -> serde_json::Value {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Optional. Name for the worker; must not match a running agent. Assigned for you when omitted."
+                    "description": "Optional. Name for the worker; must not match a running agent. Omit it unless the name means something to the user — a real name is assigned for you, and a generic label like 'worker-1' or 'claude-2' is replaced by one. Always use the 'handle' from the result to address the worker, not the name you asked for."
                 },
                 "wait_seconds": {
                     "type": "number",
-                    "description": "Optional. How long to wait before returning 'working' (default 120, max 600)."
+                    "description": "Optional. How long to wait before returning 'working' (default 25, max 600)."
                 }
             },
             "required": ["preset", "prompt"]
@@ -836,7 +1344,7 @@ fn tool_bounce_task() -> serde_json::Value {
                 },
                 "wait_seconds": {
                     "type": "number",
-                    "description": "Optional. How long to wait before returning 'working' (default 120, max 600)."
+                    "description": "Optional. How long to wait before returning 'working' (default 25, max 600)."
                 }
             },
             "required": ["handle", "feedback"]
@@ -857,7 +1365,7 @@ fn tool_check_task() -> serde_json::Value {
                 },
                 "wait_seconds": {
                     "type": "number",
-                    "description": "Optional. How long to wait before returning 'working' again (default 120, max 600)."
+                    "description": "Optional. How long to wait before returning 'working' again (default 25, max 600)."
                 }
             },
             "required": ["handle"]
@@ -865,13 +1373,13 @@ fn tool_check_task() -> serde_json::Value {
     })
 }
 
-fn all_tools() -> Vec<serde_json::Value> {
+fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
     vec![
         tool_list_agents(),
         tool_send_to_agent(),
         tool_read_agent_output(),
-        tool_spawn_agent(),
-        tool_delegate_task(),
+        tool_spawn_agent(presets),
+        tool_delegate_task(presets),
         tool_bounce_task(),
         tool_check_task(),
         tool_browser_navigate(),
@@ -1159,9 +1667,14 @@ async fn dispatch_message(
 
         // ── Tools ────────────────────────────────────────────────────────
         "tools/list" => {
+            // Read the roster per request, not once at startup: the user can add
+            // or remove an agent at any time, and the frontend fires
+            // `notifications/tools/list_changed` so connected clients come back
+            // here for the updated list.
+            let presets = state.agent_presets.lock().await.clone();
             Json(JsonRpcResponse::success(
                 id,
-                serde_json::json!({ "tools": all_tools() }),
+                serde_json::json!({ "tools": all_tools(&presets) }),
             ))
         }
 
@@ -1244,8 +1757,10 @@ async fn handle_tool_call(
 
             match session_id {
                 Some(sid) => {
-                    // Write directly to the target PTY session
-                    match (state.write_cb)(sid, message) {
+                    // Typed into the agent's composer and submitted, not written
+                    // raw to the PTY — see `deliver_to_session`. The success
+                    // message is only accurate because this waits for the verdict.
+                    match deliver_to_session(&state, sid, target_name, message).await {
                         Ok(_) => {
                             let _ = state.send_tx.send(SendToAgentRequest {
                                 target_name: target_name.to_string(),
@@ -1254,14 +1769,10 @@ async fn handle_tool_call(
                             });
                             Json(JsonRpcResponse::success(
                                 id,
-                                serde_json::json!({ "content": [{ "type": "text", "text": format!("Message sent to '{}'.", target_name) }] }),
+                                serde_json::json!({ "content": [{ "type": "text", "text": format!("Message delivered to '{}' and submitted.", target_name) }] }),
                             ))
                         }
-                        Err(e) => Json(JsonRpcResponse::error(
-                            id,
-                            -32000,
-                            format!("Failed to write to '{}': {}", target_name, e),
-                        )),
+                        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
                     }
                 }
                 None => Json(JsonRpcResponse::error(
@@ -1336,38 +1847,44 @@ async fn handle_tool_call(
                 .unwrap_or("")
                 .trim();
 
-            if preset.is_empty() {
-                return Json(JsonRpcResponse::error(id, -32602, "Missing required parameter 'preset'"));
-            }
+            // Normalise to a launch command, accepting either the command or the
+            // display name. Rejecting an unknown name here beats typing it into a
+            // shell and leaving the user with a pane full of "command not found".
+            let presets = state.agent_presets.lock().await.clone();
+            let preset = match resolve_preset(preset, &presets) {
+                Ok(p) => p,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, msg)),
+            };
 
-            // Refuse a name already in the registry rather than letting the
-            // frontend silently rename it: `send_to_agent` resolves by name, so
-            // two agents answering to one name makes every later message
-            // ambiguous.
-            if !name.is_empty() && state.registry.lock().await.contains_key(name) {
-                return Json(JsonRpcResponse::error(
-                    id,
-                    -32602,
-                    &format!("An agent named '{}' is already running — pick another name.", name),
-                ));
-            }
+            // Settle the name here, not in the frontend. A collision is refused
+            // rather than silently renamed — `send_to_agent` resolves by name, so
+            // two agents answering to one makes every later message ambiguous —
+            // and a generic label is replaced by a real name from the app's pool.
+            let name = match assign_agent_name(&state, name).await {
+                Ok(n) => n,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
 
             let req = SpawnRequest {
                 preset: preset.to_string(),
                 prompt: prompt.to_string(),
-                name: name.to_string(),
+                name: name.clone(),
             };
 
             let _ = state.spawn_tx.send(req.clone());
             (state.spawn_fn)(req);
 
+            // Name the agent in the reply: the caller may have asked for one and
+            // been given another, and it needs the real one for `send_to_agent`.
             Json(JsonRpcResponse::success(
                 id,
                 serde_json::json!({ "content": [
                     { "type": "text", "text": format!(
-                        "Spawning '{}'{}... It will appear in a new terminal.",
+                        "Spawning '{}' as '{}'{}... It will appear in a new terminal. Address it as '{}'.",
                         preset,
-                        if prompt.is_empty() { String::new() } else { format!(" with prompt: {}", prompt) }
+                        name,
+                        if prompt.is_empty() { String::new() } else { format!(" with prompt: {}", prompt) },
+                        name
                     )}
                 ]}),
             ))
@@ -1402,6 +1919,13 @@ async fn handle_tool_call(
                 ));
             }
 
+            // Same normalisation as `spawn_agent` — see the note there.
+            let presets = state.agent_presets.lock().await.clone();
+            let preset = match resolve_preset(preset, &presets) {
+                Ok(p) => p,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, msg)),
+            };
+
             let root = match state.project_root.lock().await.clone() {
                 Some(r) => r,
                 None => {
@@ -1416,24 +1940,23 @@ async fn handle_tool_call(
             // The worker's name is also its report filename and its handle, so it
             // has to be unique across running agents — a collision would make two
             // workers write over one report and make `send_to_agent` ambiguous.
-            let name = if requested.is_empty() {
-                format!("worker-{}", &uuid::Uuid::new_v4().simple().to_string()[..6])
-            } else {
-                requested
+            // It is also what the user sees on the pane, which is why an unnamed
+            // or generically-labelled worker gets a real name from the app's pool
+            // rather than the uuid stub this used to invent.
+            let name = match assign_agent_name(&state, &requested).await {
+                Ok(n) => n,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
             };
-            if state.registry.lock().await.contains_key(&name) {
-                return Json(JsonRpcResponse::error(
-                    id,
-                    -32602,
-                    &format!("An agent named '{}' is already running — pick another name.", name),
-                ));
-            }
 
             // Clear any report left by an earlier worker of the same name, so a
             // stale file can't be mistaken for this run finishing instantly.
-            let (done_path, blocked_path) = report_paths(&root, &name);
-            let _ = std::fs::remove_file(&done_path);
-            let _ = std::fs::remove_file(&blocked_path);
+            let paths = match report_paths(&root, &name) {
+                Ok(p) => p,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
+            let (done_path, blocked_path) = &paths;
+            let _ = std::fs::remove_file(done_path);
+            let _ = std::fs::remove_file(blocked_path);
             if let Some(dir) = done_path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
@@ -1472,7 +1995,7 @@ async fn handle_tool_call(
 
             Json(JsonRpcResponse::success(
                 id,
-                await_worker_report(&state, &root, &name, wait).await,
+                await_worker_report(&state, &paths, &name, wait).await,
             ))
         }
 
@@ -1515,9 +2038,13 @@ async fn handle_tool_call(
             // would race it away. Without this the next wait returns the stale
             // report instantly and the loop "converges" without anything having
             // been redone.
-            let (done_path, blocked_path) = report_paths(&root, &handle);
-            let _ = std::fs::remove_file(&done_path);
-            let _ = std::fs::remove_file(&blocked_path);
+            let paths = match report_paths(&root, &handle) {
+                Ok(p) => p,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
+            let (done_path, blocked_path) = &paths;
+            let _ = std::fs::remove_file(done_path);
+            let _ = std::fs::remove_file(blocked_path);
 
             let message = format!(
                 "{feedback}\n\nWhen you have addressed this, write your summary again to:\n  {done}\nIf you cannot proceed, write why to:\n  {blocked}",
@@ -1526,12 +2053,13 @@ async fn handle_tool_call(
                 blocked = blocked_path.display(),
             );
 
-            if let Err(e) = (state.write_cb)(sid, &message) {
-                return Json(JsonRpcResponse::error(
-                    id,
-                    -32000,
-                    &format!("Failed to write to '{}': {}", handle, e),
-                ));
+            // Must be a real delivery, not a PTY write: a bounce message is always
+            // multi-line (feedback plus the two report paths), and raw newlines
+            // submit it a fragment at a time. If it does not land, say so — the
+            // wait below would otherwise sit out its whole timeout on a worker
+            // that was never actually asked for anything.
+            if let Err(e) = deliver_to_session(&state, sid, &handle, &message).await {
+                return Json(JsonRpcResponse::error(id, -32000, &e));
             }
             let _ = state.send_tx.send(SendToAgentRequest {
                 target_name: handle.clone(),
@@ -1541,7 +2069,7 @@ async fn handle_tool_call(
 
             Json(JsonRpcResponse::success(
                 id,
-                await_worker_report(&state, &root, &handle, wait).await,
+                await_worker_report(&state, &paths, &handle, wait).await,
             ))
         }
 
@@ -1562,10 +2090,18 @@ async fn handle_tool_call(
                 Some(r) => r,
                 None => return Json(JsonRpcResponse::error(id, -32000, "No project is open.")),
             };
+            // Unlike `bounce_task` this never looks the handle up in the
+            // registry, so `report_paths` is the only thing standing between a
+            // caller-supplied handle and a file read whose contents come back in
+            // the response.
+            let paths = match report_paths(&root, &handle) {
+                Ok(p) => p,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
 
             Json(JsonRpcResponse::success(
                 id,
-                await_worker_report(&state, &root, &handle, wait).await,
+                await_worker_report(&state, &paths, &handle, wait).await,
             ))
         }
 
@@ -1760,6 +2296,107 @@ impl axum::serve::Listener for NoDelayListener {
 mod tests {
     use super::*;
 
+    fn preset(command: &str, name: &str) -> AgentPreset {
+        AgentPreset {
+            command: command.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    /// The roster a typical install reports: built-ins plus one custom agent.
+    fn roster() -> Vec<AgentPreset> {
+        vec![
+            preset("claude", "Claude Code"),
+            preset("pi", "Pi AI Agent"),
+            preset("aider --no-auto-commits", "Aider"),
+        ]
+    }
+
+    #[test]
+    fn resolves_a_preset_by_its_launch_command() {
+        assert_eq!(resolve_preset("pi", &roster()).unwrap(), "pi");
+        assert_eq!(
+            resolve_preset("aider --no-auto-commits", &roster()).unwrap(),
+            "aider --no-auto-commits"
+        );
+    }
+
+    #[test]
+    fn resolves_a_preset_by_its_display_name() {
+        // An agent reading the tool description sees "'pi' (Pi AI Agent)" and may
+        // reasonably send either half. Both must land on the launch command,
+        // because that is what gets typed into the shell.
+        assert_eq!(resolve_preset("Pi AI Agent", &roster()).unwrap(), "pi");
+        assert_eq!(resolve_preset("Aider", &roster()).unwrap(), "aider --no-auto-commits");
+    }
+
+    #[test]
+    fn preset_resolution_ignores_case_and_padding() {
+        assert_eq!(resolve_preset("  CLAUDE  ", &roster()).unwrap(), "claude");
+        assert_eq!(resolve_preset("claude code", &roster()).unwrap(), "claude");
+    }
+
+    #[test]
+    fn a_custom_agent_is_as_launchable_as_a_builtin() {
+        // The whole point of the roster: the user's own agents are not a second
+        // class of thing an orchestrator has to know about out of band.
+        let presets = vec![preset("my-agent --flag", "My Agent")];
+        assert_eq!(resolve_preset("My Agent", &presets).unwrap(), "my-agent --flag");
+    }
+
+    #[test]
+    fn an_unknown_preset_is_rejected_with_the_real_list() {
+        let err = resolve_preset("gpt5", &roster()).unwrap_err();
+        assert!(err.contains("gpt5"), "should name what was asked for: {err}");
+        // Listing the alternatives is the difference between a caller that can
+        // retry correctly and one that guesses again.
+        assert!(err.contains("'pi' (Pi AI Agent)"), "should list what is available: {err}");
+    }
+
+    #[test]
+    fn an_empty_roster_stays_permissive() {
+        // No roster means the frontend has not reported yet — not that there are
+        // no agents. Rejecting here would make a valid preset unlaunchable
+        // during the startup window.
+        assert_eq!(resolve_preset("pi", &[]).unwrap(), "pi");
+        assert_eq!(resolve_preset("anything-at-all", &[]).unwrap(), "anything-at-all");
+    }
+
+    #[test]
+    fn an_empty_preset_is_still_rejected() {
+        assert!(resolve_preset("", &roster()).is_err());
+        assert!(resolve_preset("   ", &[]).is_err());
+    }
+
+    #[test]
+    fn the_spawn_tools_advertise_the_live_roster() {
+        let tools = all_tools(&roster());
+        for name in ["spawn_agent", "delegate_task"] {
+            let tool = tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap_or_else(|| panic!("{name} missing from tools/list"));
+            let described = tool["inputSchema"]["properties"]["preset"]["description"]
+                .as_str()
+                .unwrap();
+            assert!(described.contains("'pi' (Pi AI Agent)"), "{name}: {described}");
+            assert!(described.contains("Aider"), "{name}: {described}");
+        }
+    }
+
+    #[test]
+    fn the_spawn_tools_stay_usable_with_no_roster_reported() {
+        let tools = all_tools(&[]);
+        let tool = tools.iter().find(|t| t["name"] == "delegate_task").unwrap();
+        let described = tool["inputSchema"]["properties"]["preset"]["description"]
+            .as_str()
+            .unwrap();
+        // No stale hardcoded roster masquerading as the truth, and no empty
+        // enum that would make every value invalid.
+        assert!(described.contains("not reported"), "{described}");
+        assert!(tool["inputSchema"]["properties"]["preset"]["enum"].is_null());
+    }
+
     fn state_with_token(token: &str) -> ServerState {
         let (notify_tx, _) = broadcast::channel::<()>(1);
         let (send_tx, _) = broadcast::channel::<SendToAgentRequest>(1);
@@ -1773,14 +2410,40 @@ mod tests {
             spawn_tx,
             port: 1234,
             token: token.to_string(),
-            write_cb: Arc::new(|_, _| Ok(())),
             read_cb: Arc::new(|_| Vec::new()),
             spawn_fn: Arc::new(|_| {}),
             browser_emit_fn: Arc::new(|_, _, _| {}),
+            deliver_emit_fn: Arc::new(|_, _, _| {}),
             pending_browser: Arc::new(DashMap::new()),
+            pending_sends: Arc::new(DashMap::new()),
             project_root: Arc::new(Mutex::new(None)),
+            agent_presets: Arc::new(Mutex::new(Vec::new())),
+            assistant_names: Arc::new(Mutex::new(Vec::new())),
+            reserved_names: Arc::new(Mutex::new(Vec::new())),
             sse_sessions: Arc::new(DashMap::new()),
         }
+    }
+
+    /// A state carrying the roster and a small name pool, as a running app has.
+    async fn state_with_names(names: &[&str]) -> ServerState {
+        let state = state_with_token("t");
+        *state.agent_presets.lock().await = roster();
+        *state.assistant_names.lock().await =
+            names.iter().map(|n| n.to_string()).collect();
+        state
+    }
+
+    async fn register(state: &ServerState, name: &str) {
+        state.registry.lock().await.insert(
+            name.to_string(),
+            AgentEntry {
+                session_id: 1,
+                name: name.to_string(),
+                preset: "claude".to_string(),
+                label: name.to_string(),
+                branch: None,
+            },
+        );
     }
 
     fn q(token: Option<&str>) -> AuthQuery {
@@ -1788,6 +2451,171 @@ mod tests {
             token: token.map(String::from),
             session_id: None,
         }
+    }
+
+    // --- worker naming ------------------------------------------------------
+
+    #[test]
+    fn a_cli_flavoured_label_is_generic() {
+        // The shapes an orchestrator's brain actually emits.
+        for label in ["claude", "claude-1", "Claude Code 2", "claude_3", "Aider"] {
+            assert!(is_generic_agent_name(label, &roster()), "{label}");
+        }
+    }
+
+    #[test]
+    fn a_bland_word_is_generic() {
+        for label in ["agent", "Agent 1", "assistant", "bot-3", "worker", "worker-2", "  ", "7"] {
+            assert!(is_generic_agent_name(label, &roster()), "{label}");
+        }
+    }
+
+    #[test]
+    fn a_real_name_is_not_generic() {
+        // Both an app name and a name the orchestrator chose deliberately — a
+        // worker the user has been told to expect as "Reviewer" must stay one.
+        for label in ["Trinity", "Neo 2", "Reviewer", "Frontend", "claude-reviewer"] {
+            assert!(!is_generic_agent_name(label, &roster()), "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unnamed_spawn_gets_a_name_from_the_apps_pool() {
+        let state = state_with_names(&["Trinity"]).await;
+        assert_eq!(assign_agent_name(&state, "").await.unwrap(), "Trinity");
+    }
+
+    #[tokio::test]
+    async fn a_generic_label_is_replaced_by_a_real_name() {
+        // The bug this exists for: the orchestrator labels its workers
+        // "claude-1", "claude-2" and the user sees a fleet of identical stubs.
+        let state = state_with_names(&["Trinity"]).await;
+        assert_eq!(assign_agent_name(&state, "claude-1").await.unwrap(), "Trinity");
+    }
+
+    #[tokio::test]
+    async fn a_deliberate_name_is_kept() {
+        let state = state_with_names(&["Trinity"]).await;
+        assert_eq!(assign_agent_name(&state, "Reviewer").await.unwrap(), "Reviewer");
+    }
+
+    #[tokio::test]
+    async fn a_name_already_running_is_refused() {
+        let state = state_with_names(&["Trinity"]).await;
+        register(&state, "Reviewer").await;
+        let err = assign_agent_name(&state, "Reviewer").await.unwrap_err();
+        assert!(err.contains("already running"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn two_spawns_in_flight_cannot_take_the_same_name() {
+        // Neither has been registered by the frontend yet, so the registry is
+        // still empty when the second call picks — the reservation is the only
+        // thing keeping them apart.
+        let state = state_with_names(&["Trinity", "Morpheus"]).await;
+        let first = assign_agent_name(&state, "").await.unwrap();
+        let second = assign_agent_name(&state, "").await.unwrap();
+        assert_ne!(first, second);
+        assert!(state.registry.lock().await.is_empty());
+    }
+
+    // --- agent names as path components ------------------------------------
+    //
+    // A name is joined into `<root>/.spacron/reports/<name>.md`, which
+    // `delegate_task` deletes and `check_task` reads back to its caller. These
+    // guard that boundary: the caller is an LLM whose context carries a worker's
+    // own report text, so an injected name is a realistic input, not a
+    // hypothetical one.
+
+    #[test]
+    fn ordinary_agent_names_are_accepted() {
+        for name in ["Trinity", "Trinity 2", "worker-3", "scout_a", "Neo"] {
+            assert!(is_safe_agent_name(name), "should accept {name:?}");
+        }
+    }
+
+    #[test]
+    fn names_that_could_escape_the_reports_directory_are_refused() {
+        for name in [
+            "../secrets",
+            "..",
+            "a/b",
+            "a\\b",
+            "C:/Windows/Temp/x",
+            "report.md",
+            "trailing ",
+            " leading",
+            "nul\0byte",
+            "",
+        ] {
+            assert!(!is_safe_agent_name(name), "should refuse {name:?}");
+        }
+        // Longer than the cap.
+        assert!(!is_safe_agent_name(&"a".repeat(MAX_AGENT_NAME_LEN + 1)));
+        // Win32 device names open the console even inside a directory.
+        for name in ["CON", "nul", "Com1", "LPT9"] {
+            assert!(!is_safe_agent_name(name), "should refuse device name {name:?}");
+        }
+    }
+
+    #[test]
+    fn report_paths_refuses_a_traversing_name() {
+        assert!(report_paths("/tmp/project", "../../../../etc/hosts").is_err());
+        assert!(report_paths("/tmp/project", "Trinity").is_ok());
+    }
+
+    #[test]
+    fn report_paths_stay_inside_the_reports_directory() {
+        let (done, blocked) = report_paths("/tmp/project", "Trinity 2").unwrap();
+        let dir = std::path::Path::new("/tmp/project").join(".spacron").join("reports");
+        assert_eq!(done.parent().unwrap(), dir);
+        assert_eq!(blocked.parent().unwrap(), dir);
+        assert_eq!(done.file_name().unwrap(), "Trinity 2.md");
+        assert_eq!(blocked.file_name().unwrap(), "Trinity 2.blocked.md");
+    }
+
+    #[tokio::test]
+    async fn a_traversing_name_is_refused_at_assignment() {
+        let state = state_with_names(&["Trinity"]).await;
+        let err = assign_agent_name(&state, "../../evil").await.unwrap_err();
+        assert!(err.contains("not a usable agent name"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn every_assigned_name_is_path_safe() {
+        // Covers the generated paths too: the numbered fallback and the
+        // no-pool stub both end up as filenames.
+        let state = state_with_names(&["Trinity"]).await;
+        let first = assign_agent_name(&state, "").await.unwrap();
+        register(&state, &first).await;
+        let second = assign_agent_name(&state, "").await.unwrap();
+        let stub = assign_agent_name(&state_with_names(&[]).await, "").await.unwrap();
+        for name in [first, second, stub] {
+            assert!(is_safe_agent_name(&name), "assigned an unusable name: {name:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_assigned_name_is_reserved_until_registration() {
+        let state = state_with_names(&["Trinity"]).await;
+        assign_agent_name(&state, "").await.unwrap();
+        assert_eq!(state.reserved_names.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_pool_that_is_fully_taken_numbers_a_name() {
+        let state = state_with_names(&["Trinity"]).await;
+        register(&state, "Trinity").await;
+        assert_eq!(assign_agent_name(&state, "").await.unwrap(), "Trinity 2");
+    }
+
+    #[tokio::test]
+    async fn no_pool_yet_still_spawns() {
+        // Startup window: the frontend has not pushed the names. A stub beats
+        // refusing to launch the worker.
+        let state = state_with_names(&[]).await;
+        let name = assign_agent_name(&state, "").await.unwrap();
+        assert!(name.starts_with("worker-"), "{name}");
     }
 
     // --- tail_from_char_boundary -------------------------------------------
@@ -1895,18 +2723,57 @@ mod tests {
     // wiring (routing, extractor order, auth rejection) that testing `authorize`
     // in isolation cannot.
 
-    /// Boot a real server and return `(base_url, token, handle)`.
-    fn boot() -> (String, String, McpServerHandle) {
+    /// What the stand-in frontend was asked to type: `(session_id, message)`.
+    type SeenDeliveries = Arc<std::sync::Mutex<Vec<(u32, String)>>>;
+
+    /// Boot a real server behind a stand-in frontend, and record what it is asked
+    /// to deliver.
+    ///
+    /// `accept` decides the frontend's verdict. Something has to answer: sends now
+    /// block until the frontend reports whether the agent actually took the
+    /// message, so a server booted without a frontend would sit out the full
+    /// delivery timeout on every send.
+    fn boot_with_frontend(accept: bool) -> (String, String, McpServerHandle, SeenDeliveries) {
+        let seen: SeenDeliveries = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let recorder = seen.clone();
+
         let (handle, port) = start(
             0,
-            Arc::new(|_, _| Ok(())),
             Arc::new(|_| b"agent output".to_vec()),
             Arc::new(|_| {}),
             Arc::new(|_, _, _| {}),
+            Arc::new(move |request_id, session_id, message| {
+                recorder
+                    .lock()
+                    .unwrap()
+                    .push((session_id, message.to_string()));
+                let _ = tx.send(request_id.to_string());
+            }),
         )
         .expect("server should start");
+
+        let pending = handle.pending_sends.clone();
+        tokio::spawn(async move {
+            while let Some(id) = rx.recv().await {
+                if let Some((_, p)) = pending.remove(&id) {
+                    let _ = p.tx.send(if accept {
+                        Ok(serde_json::Value::Bool(true))
+                    } else {
+                        Err("The agent did not accept the message.".to_string())
+                    });
+                }
+            }
+        });
+
         let token = handle.token.clone();
-        (format!("http://127.0.0.1:{port}"), token, handle)
+        (format!("http://127.0.0.1:{port}"), token, handle, seen)
+    }
+
+    /// Boot a real server and return `(base_url, token, handle)`.
+    fn boot() -> (String, String, McpServerHandle) {
+        let (base, token, handle, _) = boot_with_frontend(true);
+        (base, token, handle)
     }
 
     async fn wait_until_listening(base: &str, token: &str) {
@@ -2152,6 +3019,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_task_refuses_a_handle_that_climbs_out_of_the_project() {
+        // The end-to-end version of `report_paths_refuses_a_traversing_name`.
+        // `check_task` never consults the registry, so before validation this
+        // read any `.md` file on the machine and returned it to the caller.
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        *handle.project_root.lock().await = Some("/tmp/project".to_string());
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/mcp?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "check_task",
+                    "arguments": { "handle": "../../../../../../etc/hosts", "wait_seconds": 1 }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("not a usable agent name"),
+            "traversing handle was not refused: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_valid_token_reaches_the_tools() {
         let (base, token, handle) = boot();
         wait_until_listening(&base, &token).await;
@@ -2199,6 +3098,107 @@ mod tests {
         assert!(body.get("error").is_none(), "unexpected error: {body}");
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Trinity"));
+    }
+
+    /// The bug: this used to be a raw PTY write with no Enter and no bracketed
+    /// paste, so the message sat unsubmitted in the agent's composer. It has to
+    /// reach the frontend, which owns the paste-and-submit sequence.
+    #[tokio::test]
+    async fn send_to_agent_hands_the_message_to_the_frontend_to_type() {
+        let (base, token, handle, seen) = boot_with_frontend(true);
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Trinity", "opencode", "Agent 2", None).await;
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "send_to_agent",
+                    "arguments": { "name": "Trinity", "message": "line one\nline two" }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        assert!(body.get("error").is_none(), "unexpected error: {body}");
+        let deliveries = seen.lock().unwrap().clone();
+        assert_eq!(deliveries.len(), 1, "expected exactly one delivery");
+        assert_eq!(deliveries[0].0, 7, "must target the registered session");
+        // Handed over intact — the frontend brackets and submits it; splitting or
+        // pre-terminating it here is what scattered multi-line messages.
+        assert_eq!(deliveries[0].1, "line one\nline two");
+    }
+
+    /// A send the agent never took must read as a failure. Reporting success
+    /// leaves an orchestrator waiting on work nobody was asked to do.
+    #[tokio::test]
+    async fn a_send_the_agent_refuses_is_reported_as_an_error() {
+        let (base, token, handle, _) = boot_with_frontend(false);
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Trinity", "opencode", "Agent 2", None).await;
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "send_to_agent",
+                    "arguments": { "name": "Trinity", "message": "status?" }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        assert!(body.get("error").is_some(), "should not claim success: {body}");
+        assert!(body["result"].is_null());
+    }
+
+    /// A bounce carries feedback plus two report paths, so it is always
+    /// multi-line — the exact shape a raw write scattered.
+    #[tokio::test]
+    async fn bounce_task_delivers_its_whole_message_in_one_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+
+        let (base, token, handle, seen) = boot_with_frontend(true);
+        wait_until_listening(&base, &token).await;
+        *handle.project_root.lock().await = Some(root);
+        handle.register_agent(7, "Trinity", "opencode", "Agent 2", None).await;
+
+        let _: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/message?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "bounce_task",
+                    "arguments": {
+                        "handle": "Trinity",
+                        "feedback": "Fix the null check in parse().",
+                        "wait_seconds": 1
+                    }
+                }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let deliveries = seen.lock().unwrap().clone();
+        assert_eq!(deliveries.len(), 1, "the bounce must go as one delivery");
+        let message = &deliveries[0].1;
+        assert!(message.contains("Fix the null check"), "{message}");
+        assert!(message.contains("write your summary again"), "{message}");
     }
 
     #[tokio::test]
