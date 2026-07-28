@@ -449,10 +449,9 @@ export async function toggleNode(node: FileNode) {
     selectedPath.set(node.entry.path);
     const { openFile } = await import('./editor');
     openFile(node.entry.path);
-    // Collapse the left file-explorer drawer so the opened file gets the room.
-    // The left nav rail stays, so the explorer is one click away to reopen.
-    const { setSidebarVisible } = await import('./layout');
-    setSidebarVisible(false);
+    // The explorer drawer deliberately stays open: opening a file is usually one
+    // of several, and auto-collapsing forced a reopen click every single time.
+    // Closing the drawer is the user's call (rail toggle / close button).
     return;
   }
 
