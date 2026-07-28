@@ -11,7 +11,7 @@ import { getCustomAgents } from '$lib/stores/customAgents';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
 import { activeTheme } from '$lib/stores/theme';
-import { registerAgent, unregisterAgent } from './mcpBridge';
+import { mcpLaunchFlags, registerAgent, unregisterAgent } from './mcpBridge';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -252,7 +252,15 @@ const devTerminalProjectStates = new Map<string, TerminalProjectState>();
 
 /** Record a project's working-tree root for rules-file brief resolution. */
 export function setTerminalProjectRoot(projectId: string, rootPath: string) {
-  if (projectId && rootPath) terminalProjectRoots.set(projectId, rootPath);
+  if (!projectId || !rootPath) return;
+  terminalProjectRoots.set(projectId, rootPath);
+  // Every open path activates the project BEFORE registering its root (see
+  // `setActiveProject` and `restoreProjectState`), so the activation's lookup
+  // misses and pushes `null` to the MCP server — which then refuses every
+  // `delegate_task` with "No project is open" for the rest of the session.
+  // Pushing from here too makes the pair order-independent rather than relying
+  // on three call sites staying in the right sequence.
+  if (projectId === activeTerminalProjectId) setMcpProjectRoot(rootPath);
 }
 
 // Two independent places open the "you just opened this project" shell: the
@@ -897,17 +905,13 @@ export async function createTerminalSession(
         // every cross-agent tool.
         const mcpUrl = await getMcpUrl();
 
-        // Claude Code: env var injection
-        env['CLAUDE_CODE__MCP__SERVERS'] = JSON.stringify({
-          'spacron-mcp': { url: mcpUrl },
-        });
-
-        // Aider: env var injection (format: JSON string)
-        env['AIDER_MCP_SERVERS'] = JSON.stringify({
-          'spacron-mcp': { url: mcpUrl },
-        });
-
-        // Generic fallback for any CLI that looks for a simple env var
+        // Generic fallback for any CLI that looks for a simple env var. This is
+        // the *only* env var worth setting: no shipping agent CLI discovers MCP
+        // servers from the environment. `CLAUDE_CODE__MCP__SERVERS` and
+        // `AIDER_MCP_SERVERS` used to be set here and were read by nothing —
+        // agents booted with zero Spacron tools and reported no error. Claude
+        // Code is now handled by `mcpLaunchFlags`; do not re-add an env var for
+        // an agent without first confirming the CLI actually reads it.
         env['SPACRON_MCP_URL'] = mcpUrl;
 
         // Config-file-based agents (Cursor, Codex CLI) — fire-and-forget
@@ -1273,11 +1277,16 @@ export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessi
   }), isDev);
 }
 
-export function relaunchRestoredAgentSession(
+/**
+ * Async because the MCP config has to be rewritten before the CLI starts: the
+ * server binds a fresh random port and token on every app launch, so the file a
+ * previous run left behind points at nothing.
+ */
+export async function relaunchRestoredAgentSession(
   id: number,
   agentPreset: string,
   metadata: RestoredSessionMetadata = {}
-): boolean {
+): Promise<boolean> {
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);
   if (!projectId || !agentPreset.trim()) return false;
@@ -1290,10 +1299,12 @@ export function relaunchRestoredAgentSession(
     role: metadata.role ?? 'Agent',
   });
 
+  const mcpFlags = await mcpLaunchFlags(agentPreset, resolveSessionRoot(id) ?? undefined);
+
   agentLaunchStartLengths.set(id, getSessionOutputBuffer(id).length);
   suppressAgentDetection.add(id);
   try {
-    writeToSession(id, `${agentPreset}\r`);
+    writeToSession(id, `${agentPreset}${mcpFlags}\r`);
   } finally {
     suppressAgentDetection.delete(id);
   }
@@ -1888,10 +1899,14 @@ export async function spawnAgentPreset(
   markSessionAgentPreset(sessionId, command, opts?.skipAutoBrief || rulesBriefed || undefined);
   const displayName = getAgentDisplayName(command) ?? command;
   updateSessionTitle(sessionId, displayName);
+  // Appended to the typed command, not the environment: Claude Code discovers
+  // the Spacron MCP server only from `--mcp-config`. Empty for every other preset.
+  const mcpFlags = await mcpLaunchFlags(command, briefRoot ?? undefined);
+
   agentLaunchStartLengths.set(sessionId, getSessionOutputBuffer(sessionId).length);
   suppressAgentDetection.add(sessionId);
   try {
-    writeToSession(sessionId, command + '\r');
+    writeToSession(sessionId, command + mcpFlags + '\r');
   } finally {
     suppressAgentDetection.delete(sessionId);
   }

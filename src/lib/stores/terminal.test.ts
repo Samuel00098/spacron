@@ -611,7 +611,7 @@ describe('worktree metadata across restore', () => {
 
     // Cold start: the pane comes back from localStorage, and its worktree rides
     // along on the restore metadata rather than being dropped.
-    relaunchRestoredAgentSession(sessionId!, 'claude', {
+    await relaunchRestoredAgentSession(sessionId!, 'claude', {
       agentName: 'Neo',
       role: 'Agent',
       worktree,
@@ -789,7 +789,7 @@ describe('restored agent sessions', () => {
     const writeSpy = mockPty.write;
     writeSpy.mockClear();
 
-    const relaunched = relaunchRestoredAgentSession(sessionId!, 'claude', {
+    const relaunched = await relaunchRestoredAgentSession(sessionId!, 'claude', {
       agentName: 'Iris',
       taskSummary: 'Continue the saved workspace session',
     });

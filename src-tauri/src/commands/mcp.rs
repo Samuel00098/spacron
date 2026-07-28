@@ -6,7 +6,59 @@
 //! ("Iris", "Trinity") to PTY session IDs.
 
 use crate::mcp::McpServerHandle;
+use std::path::PathBuf;
 use tauri::State;
+
+/// Absolute path of an agent CLI's *global* MCP config.
+///
+/// Codex and droid have no project-scoped MCP config — these files are the only
+/// place they look — so the frontend cannot write them through `fs_write_file`,
+/// which refuses any path outside an open project. That guard is right for
+/// editor writes and wrong here, so these two paths get their own commands.
+///
+/// The allowlist is the whole security story: the caller picks an agent by name
+/// and contributes no part of the path, so this cannot be steered into writing
+/// somewhere else. Resolving `~` in Rust also avoids a trap on the JS side —
+/// Tauri v2's `homeDir()` returns no trailing separator, so the obvious
+/// `${home}.codex/...` silently produces `C:\Users\samue.codex\...`.
+fn global_agent_config_path(agent: &str) -> Result<PathBuf, String> {
+    let relative = match agent {
+        "codex" => ".codex/config.toml",
+        "droid" => ".factory/mcp.json",
+        other => return Err(format!("No global MCP config path is known for '{other}'")),
+    };
+    dirs::home_dir()
+        .map(|home| home.join(relative))
+        .ok_or_else(|| "Could not resolve the user's home directory".to_string())
+}
+
+/// Read an agent's global MCP config, or `""` when it doesn't exist yet.
+///
+/// Returning empty rather than erroring keeps the caller's merge logic to one
+/// path: parse-or-start-fresh, whether or not the user has the CLI installed.
+#[tauri::command]
+pub fn mcp_read_global_agent_config(agent: String) -> Result<String, String> {
+    let path = global_agent_config_path(&agent)?;
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Could not read {}: {e}", path.display())),
+    }
+}
+
+/// Write an agent's global MCP config, creating the parent directory if needed.
+#[tauri::command]
+pub fn mcp_write_global_agent_config(agent: String, content: String) -> Result<(), String> {
+    if content.len() > 1024 * 1024 {
+        return Err("Refusing to write an implausibly large MCP config".to_string());
+    }
+    let path = global_agent_config_path(&agent)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&path, content).map_err(|e| format!("Could not write {}: {e}", path.display()))
+}
 
 /// Register a running agent with the MCP server so other agents can discover
 /// and message it by name.
@@ -50,6 +102,20 @@ pub fn mcp_server_port(handle: State<'_, McpServerHandle>) -> Result<u16, String
 pub fn mcp_server_url(handle: State<'_, McpServerHandle>) -> Result<String, String> {
     Ok(format!(
         "http://127.0.0.1:{}/sse?token={}",
+        handle.port, handle.token
+    ))
+}
+
+/// The full authenticated **Streamable HTTP** URL.
+///
+/// Not interchangeable with [`mcp_server_url`]: Codex CLI supports only this
+/// transport, and several others (Gemini CLI, droid, opencode, Cursor) prefer
+/// it. Handing one of them the `/sse` URL under an `http` transport type, or
+/// vice versa, produces a connection failure that surfaces as an auth prompt.
+#[tauri::command]
+pub fn mcp_server_http_url(handle: State<'_, McpServerHandle>) -> Result<String, String> {
+    Ok(format!(
+        "http://127.0.0.1:{}/mcp?token={}",
         handle.port, handle.token
     ))
 }

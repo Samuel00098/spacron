@@ -562,6 +562,10 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
     // rules file (CLAUDE.md / AGENTS.md) instead of falling back to the paste.
     setTerminalProjectRoot(projectId, rootPath);
 
+    // Write each CLI's MCP config immediately so any MCP-capable agent opened in
+    // this project (even manually typed) discovers the Spacron MCP server.
+    import('./mcpBridge').then(({ ensureMcpConfigs }) => ensureMcpConfigs(rootPath)).catch(() => {});
+
     const cached = projectStateCache.get(projectId);
     if (cached) {
       if (generation !== restoreProjectStateGeneration) return;
@@ -755,7 +759,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
                 const roomId = await createTerminalSession(pane.cwd || rootPath, undefined, projectId, { assignPane: false, agentPreset: pane.agentPreset });
                 if (roomId !== null) {
                   spawnedIds.push(roomId);
-                  relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata);
+                  await relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata);
                 }
               }
               continue;

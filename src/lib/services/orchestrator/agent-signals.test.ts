@@ -7,6 +7,20 @@ describe('countBell', () => {
     expect(countBell('done\x07')).toBe(1);
     expect(countBell('\x07a\x07b\x07')).toBe(3);
   });
+
+  it('ignores BEL used as OSC string terminator', () => {
+    // OSC sequences: ESC ] number ; string BEL — common for setting titles etc.
+    expect(countBell('\x1b]0;My Title\x07')).toBe(0);
+    expect(countBell('\x1b]10;?\x07')).toBe(0);
+    // Multiple OSC sequences
+    expect(countBell('\x1b]0;first\x07\x1b]0;second\x07')).toBe(0);
+    // Normal BEL mixed with OSC-terminated BEL
+    expect(countBell('done\x07\x1b]0;idle\x07')).toBe(1);
+    // OSC terminated by ESC \ instead of BEL
+    expect(countBell('\x1b]0;title\x1b\\')).toBe(0);
+    // Real BEL after an OSC sequence
+    expect(countBell('\x1b]0;title\x07payload\x07')).toBe(1);
+  });
 });
 
 describe('containsAttentionRequest', () => {

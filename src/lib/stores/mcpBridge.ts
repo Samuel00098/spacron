@@ -11,13 +11,13 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { homeDir } from '@tauri-apps/api/path';
 import {
   createTerminalSession,
   getSessionLabel,
   getActiveTerminalProjectId,
   setSessionWorktree,
 } from './terminal';
+import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import {
   applyOrchestratorAgentName,
@@ -34,6 +34,7 @@ import {
 
 let serverPort: number | null = null;
 let serverUrl: string | null = null;
+let serverHttpUrl: string | null = null;
 let initialized = false;
 
 /** Get the port the MCP server is listening on. */
@@ -55,6 +56,23 @@ export async function getMcpUrl(): Promise<string> {
     serverUrl = (await invoke('mcp_server_url')) as string;
   }
   return serverUrl!;
+}
+
+/**
+ * The authenticated **Streamable HTTP** URL (`/mcp`), for the CLIs that speak
+ * that transport rather than SSE.
+ *
+ * The two are not interchangeable. Codex supports *only* streamable HTTP — its
+ * `mcp add` takes `--url` documented as "URL for a streamable HTTP MCP server"
+ * and has no SSE option — while Claude Code is configured here for SSE. Giving a
+ * CLI the wrong one produces a failed connection that most of them report as an
+ * authentication problem, which sends you looking in entirely the wrong place.
+ */
+export async function getMcpHttpUrl(): Promise<string> {
+  if (serverHttpUrl === null) {
+    serverHttpUrl = (await invoke('mcp_server_http_url')) as string;
+  }
+  return serverHttpUrl!;
 }
 
 /**
@@ -158,8 +176,15 @@ export function initMcpBridge(): void {
       // `createTaskWorktree` returns null for a non-git or empty repo. That is
       // not fatal — the agent runs in the project root, exactly as before.
 
+      // `assignPane: false` — an agent gets its own room, so it must not also
+      // take a slot in the user's terminal mosaic. Two xterms on one session id
+      // is not renderable (a session has a single data callback), so that cell
+      // degrades to a dead "<name> is open in its own room / Free this pane"
+      // placeholder. `spawnAgentPreset` has always passed this; the MCP path
+      // did not, so every delegated worker stranded a pane.
       const sessionId = await createTerminalSession(worktree?.path, undefined, projectId ?? undefined, {
         agentPreset: preset,
+        assignPane: false,
       });
 
       if (sessionId === null) {
@@ -231,34 +256,213 @@ export async function buildMcpServerConfig(): Promise<Record<string, unknown>> {
 // ---------------------------------------------------------------------------
 
 /**
- * Inject MCP server configuration for the given agent preset before it
- * launches. Different agents discover MCP servers through different files:
+ * Inject MCP server configuration before an agent launches.
  *
- *   - Claude Code: env var `CLAUDE_CODE__MCP__SERVERS` (set in createTerminalSession)
- *   - Codex CLI:   `~/.codex/config.toml`  (TOML `[mcp_servers]` table)
- *   - Cursor:      `.cursor/mcp.json` in the project root (JSON `mcpServers`)
- *   - Aider:       env var or `--mcp-servers` flag
+ * There is no universal file. `.mcp.json` is a Claude Code convention that the
+ * other CLIs do not read, so writing only that (as this used to) left every
+ * non-Claude agent with zero Spacron tools and no error to explain why. Each CLI
+ * gets the file it actually reads, in the transport it actually supports —
+ * verified against the shipping binaries, not assumed:
  *
- * Call this *before* spawning the agent's PTY so the config is in place
- * when the agent starts.
+ * | CLI         | File                        | Transport        |
+ * |-------------|-----------------------------|------------------|
+ * | Claude Code | `.mcp.json` + `--mcp-config`| SSE              |
+ * | Codex       | `~/.codex/config.toml`      | streamable HTTP  |
+ * | Gemini CLI  | `.gemini/settings.json`     | streamable HTTP  |
+ * | opencode    | `opencode.json`             | remote (HTTP)    |
+ * | droid       | `~/.factory/mcp.json`       | streamable HTTP  |
+ * | Cursor      | `.cursor/mcp.json`          | streamable HTTP  |
+ *
+ * Codex and droid have no project-scoped MCP config, so their entries are
+ * global. That is safe only because the server's port and token are now stable
+ * across restarts (see `load_or_create_token` in `src-tauri/src/mcp/mod.rs`) —
+ * before that, a global entry went stale the moment the app was restarted.
+ *
+ * Call this *before* spawning the agent's PTY so the config is in place when the
+ * agent starts. Every writer is best-effort: a missing config costs the agent
+ * its cross-agent tools, but must never stop it launching.
  */
 export async function injectMcpConfigForAgent(
   preset: string,
   projectRoot?: string,
 ): Promise<void> {
-  const mcpUrl = await getMcpUrl();
+  const sseUrl = await getMcpUrl();
+  const httpUrl = await getMcpHttpUrl();
 
-  switch (preset) {
-    case 'cursor':
-      await injectCursorConfig(projectRoot, mcpUrl);
-      break;
+  // Claude Code's own file. Harmless for the others, which ignore it.
+  await injectProjectMcpJson(projectRoot, sseUrl);
+
+  switch (agentExecutable(preset)) {
     case 'codex':
-      await injectCodexConfig(mcpUrl);
+      await injectCodexConfig(httpUrl);
       break;
-    // Claude Code uses env var (handled in createTerminalSession)
-    // Aider uses env var (handled in createTerminalSession via AIDER_MCP_SERVERS)
+    case 'gemini':
+      await injectGeminiConfig(projectRoot, httpUrl);
+      break;
+    case 'opencode':
+      await injectOpencodeConfig(projectRoot, httpUrl);
+      break;
+    case 'droid':
+      await injectDroidConfig(httpUrl);
+      break;
+    case 'cursor':
+    case 'cursor-agent':
+    case 'agent':
+      await injectCursorConfig(projectRoot, httpUrl);
+      break;
     default:
       break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Launch-flag injection — for agents that discover MCP servers from an argument
+// rather than a config file they already read.
+// ---------------------------------------------------------------------------
+
+/** Presets whose executable is Claude Code and accepts `--mcp-config`. */
+const CLAUDE_EXECUTABLES = new Set(['claude']);
+
+/**
+ * Extra arguments to append to an agent's launch command so it discovers the
+ * Spacron MCP server, or `''` when the preset needs none.
+ *
+ * Claude Code reads MCP servers from `.mcp.json`, `~/.claude.json`, or
+ * `--mcp-config` — and from no environment variable at all. We use the flag
+ * because it is the only one of the three that is per-session, needs no user
+ * approval prompt, and leaves neither the user's global config nor the shared
+ * working tree holding a stale port after the app restarts.
+ *
+ * The config is written to a file rather than passed as inline JSON so the
+ * `?token=` does not land in terminal scrollback or the process list.
+ *
+ * Returns `''` on any failure: an agent with no cross-agent tools is worse than
+ * one with them, but far better than one that fails to launch.
+ */
+export async function mcpLaunchFlags(
+  preset: string,
+  projectRoot?: string,
+): Promise<string> {
+  if (!CLAUDE_EXECUTABLES.has(agentExecutable(preset))) return '';
+  if (!projectRoot) return '';
+
+  try {
+    // No URL means the MCP server never came up. Writing a config pointing at
+    // nothing would leave the agent retrying a dead endpoint on every tool call.
+    const url = await getMcpUrl();
+    if (!url) return '';
+
+    const configPath = `${projectRoot.replace(/[\\/]+$/, '')}/.spacron/mcp/claude.json`;
+    await invoke('fs_write_file', {
+      path: configPath,
+      // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`
+      // is treated as streamable HTTP, which it does not serve.
+      content: JSON.stringify(
+        { mcpServers: { 'spacron-mcp': { type: 'sse', url } } },
+        null,
+        2,
+      ),
+    });
+    return ` --mcp-config "${configPath}"`;
+  } catch (e) {
+    console.warn('[mcp] Could not write Claude MCP config; agent launches without Spacron tools:', e);
+    return '';
+  }
+}
+
+/**
+ * Write every supported CLI's MCP config for this project.
+ *
+ * Called on project open so the configs are in place even when the user types
+ * `codex` or `gemini` into a terminal by hand rather than going through
+ * Spacron's spawn path — that route never calls `injectMcpConfigForAgent`, so
+ * without this those agents start with no cross-agent tools. Best-effort.
+ */
+export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
+  try {
+    const sseUrl = await getMcpUrl();
+    const httpUrl = await getMcpHttpUrl();
+
+    await Promise.allSettled([
+      injectProjectMcpJson(projectRoot, sseUrl),
+      injectGeminiConfig(projectRoot, httpUrl),
+      injectOpencodeConfig(projectRoot, httpUrl),
+      injectCursorConfig(projectRoot, httpUrl),
+      injectCodexConfig(httpUrl),
+      injectDroidConfig(httpUrl),
+    ]);
+  } catch (e) {
+    console.warn('[mcp] Could not write agent MCP configs on project open:', e);
+  }
+}
+
+/**
+ * Write/merge the Spacron MCP server into `.mcp.json` at the project root.
+ * This is the universal discovery file read by any MCP-capable agent CLI.
+ */
+async function injectProjectMcpJson(
+  projectRoot: string | undefined,
+  mcpUrl: string,
+): Promise<void> {
+  if (!projectRoot) return;
+  const configPath = `${projectRoot}/.mcp.json`;
+
+  try {
+    let config: Record<string, unknown> = {};
+    try {
+      const existing = await invoke<string>('fs_read_file', { path: configPath });
+      config = JSON.parse(existing);
+    } catch {
+      // File doesn't exist or isn't valid JSON — start fresh
+    }
+
+    const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
+    mcpServers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
+    config['mcpServers'] = mcpServers;
+
+    await invoke('fs_write_file', {
+      path: configPath,
+      content: JSON.stringify(config, null, 2) + '\n',
+    });
+  } catch (e) {
+    console.warn('[mcp] Failed to write .mcp.json:', e);
+  }
+}
+
+/**
+ * Merge `{ [section]: { 'spacron-mcp': entry } }` into a JSON config file,
+ * preserving whatever else is in it.
+ *
+ * Every CLI here keeps its servers under one top-level object and differs only
+ * in the key name and the shape of the entry, so the read-merge-write dance is
+ * written once. Best-effort by contract: callers treat a failure as "this agent
+ * launches without Spacron tools", never as a launch error.
+ */
+async function mergeJsonMcpConfig(
+  configPath: string,
+  section: string,
+  entry: Record<string, unknown>,
+  label: string,
+): Promise<void> {
+  try {
+    let config: Record<string, unknown> = {};
+    try {
+      const existing = await invoke<string>('fs_read_file', { path: configPath });
+      config = JSON.parse(existing);
+    } catch {
+      // File doesn't exist or isn't valid JSON — start fresh
+    }
+
+    const servers = (config[section] as Record<string, unknown>) ?? {};
+    servers['spacron-mcp'] = entry;
+    config[section] = servers;
+
+    await invoke('fs_write_file', {
+      path: configPath,
+      content: JSON.stringify(config, null, 2) + '\n',
+    });
+  } catch (e) {
+    console.warn(`[mcp] Failed to write ${label} config:`, e);
   }
 }
 
@@ -269,63 +473,112 @@ export async function injectMcpConfigForAgent(
  */
 async function injectCursorConfig(
   projectRoot: string | undefined,
-  mcpUrl: string,
+  httpUrl: string,
 ): Promise<void> {
   if (!projectRoot) return;
-  const configPath = `${projectRoot}/.cursor/mcp.json`;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.cursor/mcp.json`,
+    'mcpServers',
+    { type: 'http', url: httpUrl },
+    'Cursor',
+  );
+}
 
+/**
+ * Gemini CLI — project-scoped `.gemini/settings.json`.
+ *
+ * Shape taken from what `gemini mcp add -s project -t http` actually writes:
+ * `url` plus `type: "http"`. It is *not* the `httpUrl` key the older docs
+ * describe.
+ */
+async function injectGeminiConfig(
+  projectRoot: string | undefined,
+  httpUrl: string,
+): Promise<void> {
+  if (!projectRoot) return;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.gemini/settings.json`,
+    'mcpServers',
+    { type: 'http', url: httpUrl },
+    'Gemini CLI',
+  );
+}
+
+/**
+ * opencode — project-level `opencode.json`.
+ *
+ * opencode calls its section `mcp` (not `mcpServers`) and names the remote
+ * transport `"remote"`; `enabled` must be set explicitly.
+ */
+async function injectOpencodeConfig(
+  projectRoot: string | undefined,
+  httpUrl: string,
+): Promise<void> {
+  if (!projectRoot) return;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/opencode.json`,
+    'mcp',
+    { type: 'remote', url: httpUrl, enabled: true },
+    'opencode',
+  );
+}
+
+/**
+ * droid (Factory) — global `~/.factory/mcp.json`. droid has no project-scoped
+ * MCP config, so this is the only place it will look.
+ *
+ * Goes through the dedicated Rust commands rather than `fs_write_file`, which
+ * rejects everything outside an open project. See `global_agent_config_path`.
+ */
+async function injectDroidConfig(httpUrl: string): Promise<void> {
   try {
+    const existing = await invoke<string>('mcp_read_global_agent_config', { agent: 'droid' });
+
     let config: Record<string, unknown> = {};
     try {
-      const existing = await invoke<string>('fs_read_file', { path: configPath });
-      config = JSON.parse(existing);
+      config = existing.trim() ? JSON.parse(existing) : {};
     } catch {
-      // File doesn't exist or isn't valid JSON — start fresh
-      config = {};
+      // Not valid JSON — start fresh rather than lose the agent's tools.
     }
 
-    const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-    mcpServers['spacron-mcp'] = { url: mcpUrl };
-    config['mcpServers'] = mcpServers;
+    const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
+    servers['spacron-mcp'] = { type: 'http', url: httpUrl, disabled: false };
+    config['mcpServers'] = servers;
 
-    await invoke('fs_write_file', {
-      path: configPath,
-      content: JSON.stringify(config, null, 2),
+    await invoke('mcp_write_global_agent_config', {
+      agent: 'droid',
+      content: JSON.stringify(config, null, 2) + '\n',
     });
   } catch (e) {
-    console.warn('[mcp] Failed to inject Cursor config:', e);
+    console.warn('[mcp] Failed to write droid config:', e);
   }
 }
 
 /**
- * Write/merge MCP server into `~/.codex/config.toml`.
- * Appends a `[mcp_servers.spacron-mcp]` table with the SSE URL.
+ * Codex CLI — global `~/.codex/config.toml`, the only place it reads MCP
+ * servers from.
+ *
+ * Codex speaks streamable HTTP only, and its entry is a bare `url` key under a
+ * `[mcp_servers.<name>]` table — the exact output of `codex mcp add --url`.
+ *
+ * The file is hand-edited by users and holds unrelated tables (`[projects.…]`,
+ * model settings), so this replaces just our own table and appends if absent.
+ * Appending a table header at EOF is always valid TOML, whatever precedes it.
  */
-async function injectCodexConfig(mcpUrl: string): Promise<void> {
+async function injectCodexConfig(httpUrl: string): Promise<void> {
   try {
-    const home = await homeDir();
-    const configPath = `${home}.codex/config.toml`;
+    let content = await invoke<string>('mcp_read_global_agent_config', { agent: 'codex' });
 
-    let content = '';
-    try {
-      content = await invoke<string>('fs_read_file', { path: configPath });
-    } catch {
-      // File doesn't exist — start empty
-    }
+    // Drop any previous block: the header plus its keys, up to the next table.
+    content = content.replace(/\[mcp_servers\.spacron-mcp\][^[]*/g, '');
 
-    // Remove any existing [mcp_servers.spacron-mcp] block so we replace it
-    content = content.replace(
-      /\[mcp_servers\.spacron-mcp\][^\[]*/g,
-      '',
-    );
+    content = `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n`;
 
-    content += `\n[mcp_servers.spacron-mcp]\nurl = "${mcpUrl}"\n`;
-
-    await invoke('fs_write_file', {
-      path: configPath,
-      content: content.trim() + '\n',
+    await invoke('mcp_write_global_agent_config', {
+      agent: 'codex',
+      content: content.trimStart(),
     });
   } catch (e) {
-    console.warn('[mcp] Failed to inject Codex config:', e);
+    console.warn('[mcp] Failed to write Codex config:', e);
   }
 }

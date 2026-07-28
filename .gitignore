@@ -37,7 +37,12 @@ code-editor-report-*.md
 devdock-ui-check.png
 spacron-current.png
 
-# AI / IDE tool local configs — machine-specific, never commit
+# AI / IDE tool local configs — machine-specific, never commit.
+# The MCP ones are generated per-machine and carry the local server token.
+.mcp.json
+.gemini/
+.cursor/mcp.json
+opencode.json
 .claude/
 .kilo/
 .antigravitycli/

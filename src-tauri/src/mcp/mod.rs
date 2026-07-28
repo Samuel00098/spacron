@@ -30,11 +30,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     convert::Infallible,
+    fs,
     net::SocketAddr,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{broadcast, Mutex, oneshot};
+use tokio::sync::{broadcast, mpsc, Mutex, oneshot};
 
 /// Callback for writing data into a PTY session by session id.
 pub type WriteFn = Arc<dyn Fn(u32, &str) -> Result<(), String> + Send + Sync>;
@@ -53,6 +55,27 @@ pub type BrowserEmitFn = Arc<dyn Fn(&str, &str, serde_json::Value) + Send + Sync
 pub struct PendingBrowserRequest {
     pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
     pub created_at: Instant,
+}
+
+/// Outbound message channel for one SSE-connected client, keyed by session id.
+///
+/// The HTTP+SSE transport is asymmetric: requests arrive on `POST /message`, but
+/// every response has to travel back down the client's `GET /sse` stream. This
+/// map is what connects the two halves — without it a POST handler has no way to
+/// reach the stream the client is actually listening on.
+type SseSessions = Arc<DashMap<String, mpsc::UnboundedSender<serde_json::Value>>>;
+
+/// Removes an SSE session from the registry when its stream is dropped, so a
+/// disconnected client doesn't leave a sender behind that nothing ever reads.
+struct SseSessionGuard {
+    sessions: SseSessions,
+    id: String,
+}
+
+impl Drop for SseSessionGuard {
+    fn drop(&mut self) {
+        self.sessions.remove(&self.id);
+    }
 }
 
 /// Shared map of in-flight browser requests, keyed by request ID.
@@ -169,14 +192,49 @@ impl McpServerHandle {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
+/// Default port for the MCP server.
+const DEFAULT_MCP_PORT: u16 = 51379;
+
+/// Sub-path under the user's config dir where the persistent MCP token lives.
+fn mcp_token_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("spacron")
+        .join("mcp-token")
+}
+
+/// Load a previously-stored token, or generate + persist one.
+fn load_or_create_token() -> String {
+    let path = mcp_token_path();
+    // Try to read an existing token first.
+    if let Ok(t) = fs::read_to_string(&path) {
+        let trimmed = t.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Create the directory and write a new token.
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let _ = fs::write(&path, &token);
+    token
+}
+
 /// Start the MCP HTTP+SSE server. Returns a [`McpServerHandle`] for
 /// interacting with it.
 ///
-/// - `port`: `0` = pick a random free port; otherwise bind exactly.
+/// - `port`: `0` = try the default port (51379), fall back to random if taken;
+///   otherwise bind exactly.
 /// - `write_cb`: callback to write data into a PTY session.
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
 /// - `browser_emit_fn`: callback to emit a browser-tool request to the frontend.
+///
+/// The token is persisted to the user's config directory so it survives app
+/// restarts. This means `.mcp.json` and `opencode.json` can be written once
+/// and never need updating.
 pub fn start(
     port: u16,
     write_cb: WriteFn,
@@ -185,7 +243,13 @@ pub fn start(
     browser_emit_fn: BrowserEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
     let actual_port = if port == 0 {
-        get_free_port().ok_or_else(|| "Could not find a free port for the MCP server".to_string())?
+        // Try the default port first so external config files can be static.
+        // Only fall back to random if the default is taken.
+        match std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], DEFAULT_MCP_PORT))) {
+            Ok(_) => DEFAULT_MCP_PORT,
+            Err(_) => get_free_port()
+                .ok_or_else(|| "Could not find a free port for the MCP server".to_string())?,
+        }
     } else {
         port
     };
@@ -199,10 +263,11 @@ pub fn start(
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let pending_browser: PendingRequests = Arc::new(DashMap::new());
     let project_root: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    // Bearer-equivalent shared secret. Loopback binding alone does not isolate
-    // us: on a multi-user machine another local account can reach 127.0.0.1 but
-    // cannot read this user's agent config files, which is where the token lives.
-    let token = uuid::Uuid::new_v4().simple().to_string();
+    let sse_sessions: SseSessions = Arc::new(DashMap::new());
+    // Persistent bearer-equivalent shared secret, loaded from the user's config
+    // dir on every start so that external config files (.mcp.json, opencode.json)
+    // can be written once and survive app restarts.
+    let token = load_or_create_token();
 
     let server_state = Arc::new(ServerState {
         registry: registry.clone(),
@@ -218,6 +283,7 @@ pub fn start(
         browser_emit_fn,
         pending_browser: pending_browser.clone(),
         project_root: project_root.clone(),
+        sse_sessions,
     });
 
     // Background sweep: drop pending browser requests older than 30s.
@@ -231,8 +297,29 @@ pub fn start(
     });
 
     let app = Router::new()
-        .route("/sse", get(sse_handler))
+        // Root and OAuth-discovery endpoints.
+        //
+        // MCP clients (opencode, Claude Code, Cursor) that implement the spec
+        // check these before connecting to the SSE endpoint. If they are missing
+        // (404) the MCP SDK treats the 404 *body* as if it were an OAuth error
+        // response and fails with "Invalid OAuth error response: SyntaxError".
+        // Returning 200 with no auth metadata tells the client "OAuth is not
+        // available — proceed without it".
+        .route("/", get(root_handler).post(streamable_handler))
+        .route("/.well-known/oauth-authorization-server", get(oauth_handler))
+        .route("/sse", get(sse_handler).post(streamable_handler))
         .route("/message", post(message_handler))
+        // Streamable HTTP transport. Codex CLI speaks *only* this — its
+        // `mcp add --url` is documented as "URL for a streamable HTTP MCP
+        // server" with no SSE option — and Gemini CLI, droid, opencode and
+        // Cursor all support it too. Giving it its own path keeps the two
+        // transports from having to share response semantics.
+        .route(
+            "/mcp",
+            post(streamable_handler)
+                .get(streamable_no_stream)
+                .delete(streamable_no_stream),
+        )
         .with_state(server_state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], actual_port));
@@ -296,6 +383,9 @@ struct ServerState {
     /// workers write their completion signal into — the server has no other way
     /// to know where the project lives.
     project_root: Arc<Mutex<Option<String>>>,
+    /// Live SSE clients, so `POST /message` can deliver a JSON-RPC response to
+    /// the stream the requesting client is listening on. See [`SseSessions`].
+    sse_sessions: SseSessions,
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +886,43 @@ fn all_tools() -> Vec<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
+// OAuth-discovery handlers
+// ---------------------------------------------------------------------------
+
+/// Root — alive probe. MCP clients that attempt OAuth discovery often start
+/// with the server's origin (stripping the `/sse` path) to check whether the
+/// server exists and whether it returns any auth-related headers. A 200 here
+/// stops the client from interpreting a 404 as an OAuth error.
+async fn root_handler() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "server": "spacron-mcp"
+    }))
+}
+
+/// `/.well-known/oauth-authorization-server` (RFC 8414).
+///
+/// Spacron does not use OAuth — it authenticates via a pre-shared `?token=`
+/// query parameter or `Authorization: Bearer` header.
+///
+/// The MCP SDK validates the well-known response against a strict Zod schema
+/// (`issuer`, `authorization_endpoint`, `token_endpoint`,
+/// `response_types_supported` are all required). Returning `200` with `{}`
+/// makes the SDK try to validate and fail. Returning `404` (no body) caused
+/// the original "JSON Parse error: Unexpected EOF". What the SDK needs is a
+/// `404` with a parseable JSON body — it treats non-200 as "no OAuth" and the
+/// JSON body keeps the parser from crashing.
+async fn oauth_handler() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": "not_found",
+            "error_description": "OAuth is not supported by the Spacron MCP server. Use the ?token= query parameter or Authorization: Bearer header instead."
+        })),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // SSE endpoint – the main MCP transport channel
 // ---------------------------------------------------------------------------
 
@@ -811,14 +938,28 @@ async fn sse_handler(
     }
 
     let rx = state.notify_tx.subscribe();
+
+    // Per-connection mailbox. `POST /message` finds this sender by `sessionId`
+    // and pushes the JSON-RPC response into it; the stream below drains it.
+    let session_id = uuid::Uuid::new_v4().simple().to_string();
+    let (msg_tx, msg_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+    state.sse_sessions.insert(session_id.clone(), msg_tx);
+
     // The client POSTs wherever this endpoint event points, so carrying the token
-    // here means /message stays authenticated with no client-side config.
+    // here means /message stays authenticated with no client-side config. The
+    // `sessionId` is what lets the POST handler route the reply back to *this*
+    // stream rather than answering in the POST body, which no SSE client reads.
     let endpoint_url = format!(
-        "http://127.0.0.1:{}/message?token={}",
-        state.port, state.token
+        "http://127.0.0.1:{}/message?sessionId={}&token={}",
+        state.port, session_id, state.token
     );
 
-    Sse::new(sse_event_stream(endpoint_url, rx))
+    let guard = SseSessionGuard {
+        sessions: state.sse_sessions.clone(),
+        id: session_id,
+    };
+
+    Sse::new(sse_event_stream(endpoint_url, rx, msg_rx, guard))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
         .into_response()
 }
@@ -827,6 +968,8 @@ async fn sse_handler(
 fn sse_event_stream(
     endpoint_url: String,
     rx: broadcast::Receiver<()>,
+    msg_rx: mpsc::UnboundedReceiver<serde_json::Value>,
+    guard: SseSessionGuard,
 ) -> impl Stream<Item = SseEvent> + Send + 'static {
     // ── Initial events: endpoint notification + tool-list-changed ─────
     let init = vec![
@@ -841,15 +984,28 @@ fn sse_event_stream(
         )),
     ];
 
-    // ── Loop: registry-change pings + keepalive heartbeats ────────────
+    // ── Loop: JSON-RPC responses + registry-change pings + keepalives ─
     let tail = stream::unfold(
-        (rx, tokio::time::interval(Duration::from_secs(15))),
-        |(mut rx, mut tick)| async move {
+        (rx, msg_rx, tokio::time::interval(Duration::from_secs(15)), guard),
+        |(mut rx, mut msg_rx, mut tick, guard)| async move {
+            // `guard` is threaded through the fold state purely so it lives
+            // exactly as long as the stream: when the client disconnects and
+            // this future is dropped, its `Drop` unregisters the session.
+            //
             // No `loop` here: `unfold` is the loop — it calls this closure again
             // for each item, and every arm below returns. Wrapping it in one made
             // `cargo clippy` fail outright on `never_loop` (a deny-by-default
             // lint), which is why clippy was red on this crate.
             tokio::select! {
+                // Responses to the client's own requests. This arm is the whole
+                // point of the SSE transport — a client that POSTs `initialize`
+                // blocks here until its answer arrives, and times out without it.
+                Some(msg) = msg_rx.recv() => {
+                    Some((
+                        Ok(Event::default().event("message").data(msg.to_string())),
+                        (rx, msg_rx, tick, guard),
+                    ))
+                }
                 _ = rx.recv() => {
                     let notif = serde_json::json!({
                         "jsonrpc": "2.0",
@@ -858,13 +1014,13 @@ fn sse_event_stream(
                     });
                     Some((
                         Ok(Event::default().event("message").data(notif.to_string())),
-                        (rx, tick),
+                        (rx, msg_rx, tick, guard),
                     ))
                 }
                 _ = tick.tick() => {
                     Some((
                         Ok(Event::default().event("heartbeat").data("")),
-                        (rx, tick),
+                        (rx, msg_rx, tick, guard),
                     ))
                 }
                 else => None,
@@ -879,6 +1035,62 @@ fn sse_event_stream(
 // POST /message – JSON-RPC endpoint
 // ---------------------------------------------------------------------------
 
+/// Streamable HTTP handler (POST /).
+///
+/// Modern MCP clients (opencode, Claude Code, Cursor via MCP SDK 0.6+) try
+/// Streamable HTTP before falling back to SSE. If the server returns anything
+/// other than 200 (e.g. the 405 we would get from a GET-only route), the MCP
+/// SDK treats the response as an OAuth error and fails.
+///
+/// Accepting JSON-RPC POSTs on the root path lets Streamable HTTP clients
+/// connect without a fallback, while SSE clients still use GET /sse.
+async fn streamable_handler(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Query(query): Query<AuthQuery>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Response {
+    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
+        return rejection;
+    }
+
+    // A notification carries no `id` and must not be answered. Streamable HTTP
+    // says to acknowledge it with `202 Accepted` and an empty body; replying
+    // with a JSON-RPC object (which this used to do, `id` set to null) is a
+    // protocol error the stricter clients reject outright.
+    if req.id.is_none() {
+        let _ = dispatch_message(state, req).await;
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    dispatch_message(state, req).await.into_response()
+}
+
+/// `GET`/`DELETE` on the Streamable HTTP endpoint.
+///
+/// Spacron delivers no server-initiated messages on this transport (agents poll
+/// via tool calls; the push channel is SSE). The spec's prescribed answer for a
+/// server that doesn't offer the optional stream is `405`, and clients treat it
+/// as "no stream available" and carry on. Anything else — notably a `200` with a
+/// JSON body — reads as a malformed stream and fails the connection.
+async fn streamable_no_stream() -> impl IntoResponse {
+    StatusCode::METHOD_NOT_ALLOWED
+}
+
+/// `POST /message` — the request half of the HTTP+SSE transport.
+///
+/// An SSE client is *not* reading this response body: it is blocked on the
+/// `GET /sse` stream waiting for a message whose `id` matches its request. So
+/// when the caller identifies itself with the `sessionId` we handed out in the
+/// `endpoint` event, the reply is pushed onto that stream and this returns a
+/// bare `202 Accepted`. Answering in the body instead is what made every SSE
+/// client hang through `initialize` and report a 30s connection timeout.
+///
+/// Dispatch runs on a spawned task so a slow tool (`delegate_task` blocks until
+/// a worker reports) cannot hold the POST open or stall the client's next call.
+///
+/// Callers with no `sessionId` are answered in the body, which keeps plain
+/// request/response probes and Streamable HTTP clients working.
 async fn message_handler(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -888,7 +1100,35 @@ async fn message_handler(
     if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
         return rejection;
     }
-    dispatch_message(state, req).await.into_response()
+
+    let sse_tx = query
+        .session_id
+        .as_ref()
+        .and_then(|sid| state.sse_sessions.get(sid).map(|e| e.value().clone()));
+
+    let Some(tx) = sse_tx else {
+        return dispatch_message(state, req).await.into_response();
+    };
+
+    // A JSON-RPC notification (no `id`) must not be answered at all — a client
+    // that receives a response it never asked for treats it as a protocol error.
+    let is_notification = req.id.is_none();
+
+    tokio::spawn(async move {
+        let Json(resp) = dispatch_message(state, req).await;
+        if is_notification {
+            return;
+        }
+        match serde_json::to_value(&resp) {
+            Ok(v) => {
+                // Send failure just means the client disconnected mid-call.
+                let _ = tx.send(v);
+            }
+            Err(e) => eprintln!("MCP: could not serialize JSON-RPC response: {e}"),
+        }
+    });
+
+    StatusCode::ACCEPTED.into_response()
 }
 
 async fn dispatch_message(
@@ -1419,6 +1659,13 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Extract the bearer token from an `Authorization: Bearer <tok>` header.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let val = headers.get(header::AUTHORIZATION)?;
+    let val = val.to_str().ok()?;
+    val.strip_prefix("Bearer ")
+}
+
 /// Gate every request on two independent checks.
 ///
 /// 1. **No `Origin` header.** MCP CLI clients (Claude Code, Codex, Cursor) never
@@ -1426,12 +1673,11 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 ///    what stops a DNS-rebinding attack, where a hostile page re-resolves its
 ///    own domain to 127.0.0.1 and becomes same-origin with us. The JSON
 ///    content-type requirement alone does not cover that case.
-/// 2. **Matching `?token=`.** Defends against a local process that can reach the
-///    port but cannot read this user's agent config files — e.g. another account
-///    on a shared machine. The token rides in the query string rather than a
-///    header because the SSE transport gives MCP clients no way to set headers
-///    from a bare URL, and this listener is loopback-only, so there is no proxy
-///    or CDN log for the URL to leak into.
+/// 2. **Matching `?token=` or `Authorization: Bearer`.** Defends against a local
+///    process that can reach the port but cannot read this user's agent config
+///    files — e.g. another account on a shared machine. The token rides in the
+///    query string for SSE (which has no way to set custom headers), and in the
+///    standard `Authorization` header for Streamable HTTP clients.
 ///
 /// Returns `Some(response)` when the request must be refused, `None` when it may
 /// proceed.
@@ -1450,7 +1696,11 @@ fn reject_unauthorized(
         );
     }
 
-    let presented = query.token.as_deref().unwrap_or("");
+    let presented = query
+        .token
+        .as_deref()
+        .or_else(|| bearer_token(headers))
+        .unwrap_or("");
     if !ct_eq(presented.as_bytes(), state.token.as_bytes()) {
         return Some((StatusCode::UNAUTHORIZED, "invalid or missing token").into_response());
     }
@@ -1458,10 +1708,13 @@ fn reject_unauthorized(
     None
 }
 
-/// The `?token=…` every route requires.
+/// The `?token=…` every route requires, plus the `?sessionId=…` that
+/// `POST /message` uses to find the SSE stream awaiting the reply.
 #[derive(Deserialize, Default)]
 struct AuthQuery {
     token: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
 }
 
 fn get_free_port() -> Option<u16> {
@@ -1525,12 +1778,15 @@ mod tests {
             spawn_fn: Arc::new(|_| {}),
             browser_emit_fn: Arc::new(|_, _, _| {}),
             pending_browser: Arc::new(DashMap::new()),
+            project_root: Arc::new(Mutex::new(None)),
+            sse_sessions: Arc::new(DashMap::new()),
         }
     }
 
     fn q(token: Option<&str>) -> AuthQuery {
         AuthQuery {
             token: token.map(String::from),
+            session_id: None,
         }
     }
 
@@ -1670,11 +1926,236 @@ mod tests {
         panic!("MCP server never came up");
     }
 
+    /// Read an in-flight SSE response until `needle` shows up, or give up.
+    /// Returns everything read so far either way, so a failing assertion can
+    /// show what the stream actually delivered.
+    async fn read_sse_until(resp: &mut reqwest::Response, needle: &str) -> String {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut buf = String::new();
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(bytes)) => {
+                        buf.push_str(&String::from_utf8_lossy(&bytes));
+                        if buf.contains(needle) {
+                            return buf;
+                        }
+                    }
+                    // Stream ended or broke; hand back what we have.
+                    _ => return buf,
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("SSE stream never produced {needle:?}"))
+    }
+
+    /// Open an SSE stream and return it plus the POST endpoint it advertises.
+    async fn open_sse(base: &str, token: &str) -> (reqwest::Response, String) {
+        let mut resp = reqwest::Client::new()
+            .get(format!("{base}/sse?token={token}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        let raw = read_sse_until(&mut resp, "event: endpoint").await;
+        let endpoint = raw
+            .lines()
+            .find(|l| l.starts_with("data: http"))
+            .map(|l| l.trim_start_matches("data: ").trim().to_string())
+            .unwrap_or_else(|| panic!("no endpoint event in stream: {raw:?}"));
+
+        (resp, endpoint)
+    }
+
+    #[tokio::test]
+    async fn an_sse_client_gets_its_response_on_the_stream_not_in_the_post_body() {
+        // The regression this guards: responses used to be returned in the POST
+        // body only. An SSE client never reads that body — it blocks on the
+        // stream waiting for a matching `id` — so every client hung through
+        // `initialize` and reported "connection timed out after 30000ms".
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let (mut stream, endpoint) = open_sse(&base, &token).await;
+        assert!(
+            endpoint.contains("sessionId="),
+            "endpoint must identify the stream so the reply can be routed: {endpoint}"
+        );
+
+        let status = reqwest::Client::new()
+            .post(&endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2024-11-05", "capabilities": {} }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+
+        // Accepted, not answered: the answer belongs on the stream.
+        assert_eq!(status, reqwest::StatusCode::ACCEPTED);
+
+        let raw = read_sse_until(&mut stream, "\"id\":1").await;
+        assert!(
+            raw.contains("spacron-mcp"),
+            "initialize result never arrived on the stream: {raw:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_sse_client_gets_tool_results_on_the_stream() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Iris", "claude", "Agent 1", None).await;
+
+        let (mut stream, endpoint) = open_sse(&base, &token).await;
+
+        reqwest::Client::new()
+            .post(&endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": { "name": "list_agents" }
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        let raw = read_sse_until(&mut stream, "\"id\":9").await;
+        assert!(raw.contains("Iris"), "tool result never reached the stream: {raw:?}");
+    }
+
+    #[tokio::test]
+    async fn a_notification_is_accepted_without_a_reply() {
+        // A JSON-RPC notification carries no `id`, so answering it at all is a
+        // protocol violation — clients treat an unsolicited response as an error.
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let (mut stream, endpoint) = open_sse(&base, &token).await;
+
+        let client = reqwest::Client::new();
+        let status = client
+            .post(&endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "method": "notifications/initialized"
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, reqwest::StatusCode::ACCEPTED);
+
+        // Follow it with a real request. Once *its* reply lands, anything the
+        // notification wrongly produced would already be in the buffer ahead of
+        // it — an `id: null` response is exactly what the old code emitted.
+        client
+            .post(&endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/list"
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        let raw = read_sse_until(&mut stream, "\"id\":5").await;
+        assert!(
+            !raw.contains("\"id\":null"),
+            "server answered a notification: {raw:?}"
+        );
+    }
+
+    // --- streamable HTTP transport (`/mcp`) ---------------------------------
+    //
+    // Codex CLI speaks only this transport, so these cover the path that makes
+    // it — and Gemini CLI, droid, opencode — able to connect at all.
+
+    #[tokio::test]
+    async fn the_streamable_endpoint_answers_in_the_body() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.register_agent(7, "Iris", "claude", "Agent 1", None).await;
+
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/mcp?token={token}"))
+            .header("Accept", "application/json, text/event-stream")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "list_agents" }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Iris"), "expected the registered agent, got: {text}");
+    }
+
+    #[tokio::test]
+    async fn the_streamable_endpoint_acknowledges_notifications_without_answering() {
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let resp = reqwest::Client::new()
+            .post(format!("{base}/mcp?token={token}"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "method": "notifications/initialized"
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+        assert!(
+            resp.text().await.unwrap().is_empty(),
+            "a notification must not be answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_streamable_endpoint_declines_the_optional_get_stream() {
+        // 405 is the spec's "this server offers no server-initiated stream".
+        // A 200 with a JSON body here reads as a malformed SSE stream instead
+        // and takes the whole connection down with it.
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let status = reqwest::Client::new()
+            .get(format!("{base}/mcp?token={token}"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap()
+            .status();
+
+        assert_eq!(status, reqwest::StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn the_streamable_endpoint_is_gated_too() {
+        let (base, token, _handle) = boot();
+        wait_until_listening(&base, &token).await;
+
+        let status = reqwest::Client::new()
+            .post(format!("{base}/mcp"))
+            .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+            .send()
+            .await
+            .unwrap()
+            .status();
+
+        assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED);
+    }
+
     #[tokio::test]
     async fn a_valid_token_reaches_the_tools() {
         let (base, token, handle) = boot();
         wait_until_listening(&base, &token).await;
-        handle.register_agent(7, "Iris", "claude", "Agent 1").await;
+        handle.register_agent(7, "Iris", "claude", "Agent 1", None).await;
 
         let body: serde_json::Value = reqwest::Client::new()
             .post(format!("{base}/message?token={token}"))
@@ -1697,7 +2178,7 @@ mod tests {
     async fn send_to_agent_still_works_end_to_end() {
         let (base, token, handle) = boot();
         wait_until_listening(&base, &token).await;
-        handle.register_agent(7, "Trinity", "codex", "Agent 2").await;
+        handle.register_agent(7, "Trinity", "codex", "Agent 2", None).await;
 
         let body: serde_json::Value = reqwest::Client::new()
             .post(format!("{base}/message?token={token}"))
