@@ -453,6 +453,20 @@ export async function injectMcpConfigForAgent(
       await injectCursorConfig(projectRoot, httpUrl);
       break;
     default:
+      // No known config surface for this executable — the normal path for a
+      // user-added custom agent whose CLI isn't one of the six above. It
+      // launches fine and simply has no Spacron tools, so it cannot see or
+      // message the other agents.
+      //
+      // Say so out loud. Silent-no-tools is the exact failure this module has
+      // already shipped twice via env vars that nothing read (see the
+      // `SPACRON_MCP_URL` comment in `stores/terminal.ts`), and it is
+      // indistinguishable from an agent that simply chose not to use them.
+      console.warn(
+        `[mcp] No MCP config surface known for "${agentExecutable(preset) || preset}" — ` +
+          `it launches without Spacron tools (no list_agents / send_to_agent / delegate_task). ` +
+          `Supported: claude, codex, gemini, opencode, droid, cursor.`,
+      );
       break;
   }
 }

@@ -215,11 +215,16 @@ pub fn run() {
                 deliver_emit_fn,
             ) {
                 Ok((handle, port)) => {
-                    app.manage(handle);
+                    app.manage(mcp::McpServer(Some(handle)));
                     eprintln!("MCP server started on port {}", port);
                 }
                 Err(e) => {
                     eprintln!("Failed to start MCP server: {}", e);
+                    // Manage the empty wrapper anyway: the `mcp_*` commands must
+                    // still have state to extract, or the frontend's first call
+                    // fails as unmanaged state instead of as "server not
+                    // running". See `mcp::McpServer`.
+                    app.manage(mcp::McpServer(None));
                 }
             }
 

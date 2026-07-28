@@ -164,7 +164,29 @@ pub struct SpawnRequest {
     pub name: String,
 }
 
-/// Handle returned by [`McpServer::start`] for interacting with the server.
+/// Always-managed wrapper around the server handle.
+///
+/// [`start`] can fail — loopback unbindable, or an explicitly requested port
+/// already taken — and then there is no handle to hand to `app.manage`. Managing
+/// nothing leaves every `mcp_*` command extracting state that was never
+/// registered, which Tauri resolves inside the command handler rather than as a
+/// `Result` the caller can act on. Managing this wrapper unconditionally turns
+/// "the server never came up" into an ordinary error string on every call, which
+/// the frontend already handles as "this agent launches without Spacron tools".
+pub struct McpServer(pub Option<McpServerHandle>);
+
+impl McpServer {
+    /// The live handle, or an error explaining that there isn't one.
+    pub fn get(&self) -> Result<&McpServerHandle, String> {
+        self.0.as_ref().ok_or_else(|| {
+            "The Spacron MCP server is not running, so agents cannot discover or \
+             message each other. Check the startup log for the bind failure."
+                .to_string()
+        })
+    }
+}
+
+/// Handle returned by [`start`] for interacting with the server.
 pub struct McpServerHandle {
     /// The agent registry (name → AgentEntry), shared with the MCP server.
     pub registry: Arc<Mutex<HashMap<String, AgentEntry>>>,
@@ -292,8 +314,8 @@ fn load_or_create_token() -> String {
 /// Start the MCP HTTP+SSE server. Returns a [`McpServerHandle`] for
 /// interacting with it.
 ///
-/// - `port`: `0` = try the default port (51379), fall back to random if taken;
-///   otherwise bind exactly.
+/// - `port`: `0` = prefer the default port (51379), fall back to an OS-assigned
+///   one if it is taken; otherwise bind exactly that port or fail.
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
 /// - `browser_emit_fn`: callback to emit a browser-tool request to the frontend.
@@ -304,8 +326,10 @@ fn load_or_create_token() -> String {
 /// TUI's composer unsubmitted — see [`deliver_to_session`].
 ///
 /// The token is persisted to the user's config directory so it survives app
-/// restarts. This means `.mcp.json` and `opencode.json` can be written once
-/// and never need updating.
+/// restarts. The port is stable too *while* [`DEFAULT_MCP_PORT`] is free, but it
+/// is not guaranteed — a second instance, or any process holding 51379, moves us
+/// elsewhere. So config files must still be rewritten from `mcp_server_url()` on
+/// every agent launch rather than written once and trusted.
 pub fn start(
     port: u16,
     read_cb: ReadFn,
@@ -313,17 +337,14 @@ pub fn start(
     browser_emit_fn: BrowserEmitFn,
     deliver_emit_fn: DeliverEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
-    let actual_port = if port == 0 {
-        // Try the default port first so external config files can be static.
-        // Only fall back to random if the default is taken.
-        match std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], DEFAULT_MCP_PORT))) {
-            Ok(_) => DEFAULT_MCP_PORT,
-            Err(_) => get_free_port()
-                .ok_or_else(|| "Could not find a free port for the MCP server".to_string())?,
-        }
-    } else {
-        port
-    };
+    // Bind now, synchronously, and *keep* the socket. This used to probe with a
+    // throwaway listener, drop it, and rebind for real inside the spawned task
+    // below — which left two holes. Another process could take the port in
+    // between; and because the real bind happened after `start` had already
+    // returned `Ok`, losing that race published a URL for a server that was
+    // never listening. Every agent then got a config pointing at a dead
+    // endpoint, reported nothing, and simply had no Spacron tools.
+    let (std_listener, actual_port) = bind_listener(port)?;
 
     let registry: Arc<Mutex<HashMap<String, AgentEntry>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -405,13 +426,17 @@ pub fn start(
         )
         .with_state(server_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], actual_port));
-
     tauri::async_runtime::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(addr).await {
+        // The port is already ours; this only hands the socket to tokio's
+        // reactor, so a failure here is not a bind race and cannot be one.
+        if let Err(e) = std_listener.set_nonblocking(true) {
+            eprintln!("Failed to set the MCP listener non-blocking: {}", e);
+            return;
+        }
+        let listener = match tokio::net::TcpListener::from_std(std_listener) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("Failed to bind MCP server: {}", e);
+                eprintln!("Failed to hand the MCP listener to tokio: {}", e);
                 return;
             }
         };
@@ -2253,11 +2278,39 @@ struct AuthQuery {
     session_id: Option<String>,
 }
 
-fn get_free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
+/// Bind the server's listener, returning it together with the port it holds.
+///
+/// `port == 0` prefers [`DEFAULT_MCP_PORT`] so agent config files point at a
+/// stable address across restarts, and falls back to an OS-assigned port when it
+/// is taken — by an unrelated process, or by a second Spacron (a dev build
+/// running alongside the installed app).
+///
+/// The listener is returned rather than dropped on purpose: whoever advertises a
+/// port must be holding it. Probing and rebinding later is what let the
+/// advertised port and the listening port disagree.
+fn bind_listener(port: u16) -> Result<(std::net::TcpListener, u16), String> {
+    let candidates: &[u16] = if port == 0 {
+        &[DEFAULT_MCP_PORT, 0]
+    } else {
+        // An explicitly requested port has no fallback: silently landing
+        // somewhere else would be worse than failing.
+        &[port]
+    };
+
+    let mut last_err = "no candidate ports".to_string();
+    for &candidate in candidates {
+        match std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], candidate))) {
+            Ok(listener) => {
+                let bound = listener
+                    .local_addr()
+                    .map_err(|e| format!("Bound the MCP server but could not read its port: {e}"))?
+                    .port();
+                return Ok((listener, bound));
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    Err(format!("Could not bind the MCP server: {last_err}"))
 }
 
 /// Wraps a TcpListener so every accepted connection has TCP_NODELAY set.

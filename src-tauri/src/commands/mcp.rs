@@ -5,7 +5,7 @@
 //! that MCP tools like `send_to_agent` can resolve human-readable names
 //! ("Iris", "Trinity") to PTY session IDs.
 
-use crate::mcp::{AgentPreset, McpServerHandle};
+use crate::mcp::{AgentPreset, McpServer};
 use std::path::PathBuf;
 use tauri::State;
 
@@ -64,7 +64,7 @@ pub fn mcp_write_global_agent_config(agent: String, content: String) -> Result<(
 /// and message it by name.
 #[tauri::command]
 pub async fn mcp_register_agent(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     session_id: u32,
     name: String,
     preset: String,
@@ -72,6 +72,7 @@ pub async fn mcp_register_agent(
     branch: Option<String>,
 ) -> Result<(), String> {
     handle
+        .get()?
         .register_agent(session_id, &name, &preset, &label, branch)
         .await;
     Ok(())
@@ -80,18 +81,18 @@ pub async fn mcp_register_agent(
 /// Unregister an agent by session id (called when the agent's terminal exits).
 #[tauri::command]
 pub async fn mcp_unregister_agent(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     session_id: u32,
 ) -> Result<(), String> {
-    handle.unregister_agent(session_id).await;
+    handle.get()?.unregister_agent(session_id).await;
     Ok(())
 }
 
 /// Get the port the MCP server is listening on, so the frontend can write
 /// MCP config files for launched agents.
 #[tauri::command]
-pub fn mcp_server_port(handle: State<'_, McpServerHandle>) -> Result<u16, String> {
-    Ok(handle.port)
+pub fn mcp_server_port(handle: State<'_, McpServer>) -> Result<u16, String> {
+    Ok(handle.get()?.port)
 }
 
 /// The full authenticated SSE URL to write into an agent's MCP config.
@@ -99,7 +100,8 @@ pub fn mcp_server_port(handle: State<'_, McpServerHandle>) -> Result<u16, String
 /// Returned whole rather than as port + token so callers can't assemble it
 /// wrongly and silently produce a config that fails to authenticate.
 #[tauri::command]
-pub fn mcp_server_url(handle: State<'_, McpServerHandle>) -> Result<String, String> {
+pub fn mcp_server_url(handle: State<'_, McpServer>) -> Result<String, String> {
+    let handle = handle.get()?;
     Ok(format!(
         "http://127.0.0.1:{}/sse?token={}",
         handle.port, handle.token
@@ -113,7 +115,8 @@ pub fn mcp_server_url(handle: State<'_, McpServerHandle>) -> Result<String, Stri
 /// it. Handing one of them the `/sse` URL under an `http` transport type, or
 /// vice versa, produces a connection failure that surfaces as an auth prompt.
 #[tauri::command]
-pub fn mcp_server_http_url(handle: State<'_, McpServerHandle>) -> Result<String, String> {
+pub fn mcp_server_http_url(handle: State<'_, McpServer>) -> Result<String, String> {
+    let handle = handle.get()?;
     Ok(format!(
         "http://127.0.0.1:{}/mcp?token={}",
         handle.port, handle.token
@@ -124,7 +127,7 @@ pub fn mcp_server_http_url(handle: State<'_, McpServerHandle>) -> Result<String,
 /// Called by the MCP browser bridge after executing a browser tool.
 #[tauri::command]
 pub fn mcp_browser_respond(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     request_id: String,
     success: bool,
     data: serde_json::Value,
@@ -137,7 +140,7 @@ pub fn mcp_browser_respond(
             .unwrap_or("Unknown browser tool error")
             .to_string())
     };
-    handle.resolve_browser_request(&request_id, result);
+    handle.get()?.resolve_browser_request(&request_id, result);
     Ok(())
 }
 
@@ -150,7 +153,7 @@ pub fn mcp_browser_respond(
 /// delivery that silently failed is reported as a failure instead of a success.
 #[tauri::command]
 pub fn mcp_deliver_respond(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     request_id: String,
     success: bool,
     error: Option<String>,
@@ -160,7 +163,7 @@ pub fn mcp_deliver_respond(
     } else {
         Err(error.unwrap_or_else(|| "The agent did not accept the message.".to_string()))
     };
-    handle.resolve_send_request(&request_id, result);
+    handle.get()?.resolve_send_request(&request_id, result);
     Ok(())
 }
 
@@ -172,10 +175,10 @@ pub fn mcp_deliver_respond(
 /// makes `delegate_task` refuse rather than guess.
 #[tauri::command]
 pub async fn mcp_set_project_root(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     root: Option<String>,
 ) -> Result<(), String> {
-    *handle.project_root.lock().await = root.filter(|r| !r.trim().is_empty());
+    *handle.get()?.project_root.lock().await = root.filter(|r| !r.trim().is_empty());
     Ok(())
 }
 
@@ -192,7 +195,7 @@ pub async fn mcp_set_project_root(
 /// makes connected clients re-read `tools/list`.
 #[tauri::command]
 pub async fn mcp_set_agent_presets(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     presets: Vec<AgentPreset>,
 ) -> Result<(), String> {
     let cleaned: Vec<AgentPreset> = presets
@@ -203,6 +206,7 @@ pub async fn mcp_set_agent_presets(
             name: p.name.trim().to_string(),
         })
         .collect();
+    let handle = handle.get()?;
     *handle.agent_presets.lock().await = cleaned;
     handle.notify_tools_changed();
     Ok(())
@@ -221,7 +225,7 @@ pub async fn mcp_set_agent_presets(
 /// startup window before the first push looks like.
 #[tauri::command]
 pub async fn mcp_set_assistant_names(
-    handle: State<'_, McpServerHandle>,
+    handle: State<'_, McpServer>,
     names: Vec<String>,
 ) -> Result<(), String> {
     let cleaned: Vec<String> = names
@@ -229,6 +233,6 @@ pub async fn mcp_set_assistant_names(
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    *handle.assistant_names.lock().await = cleaned;
+    *handle.get()?.assistant_names.lock().await = cleaned;
     Ok(())
 }
