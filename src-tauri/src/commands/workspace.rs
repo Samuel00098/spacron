@@ -2922,6 +2922,10 @@ pub struct WorktreeDiffStat {
     pub files: Vec<WorktreeFileStat>,
     pub total_additions: i32,
     pub total_deletions: i32,
+    /// The ref these numbers were measured against, echoed back because the
+    /// caller may not have known it: a main-repo agent has no fork point, so it
+    /// asks for HEAD and needs the resolved sha to open the same diff per file.
+    pub base_commit: String,
 }
 
 fn worktree_diff_stat_at(root: &std::path::Path, base_ref: &str) -> Result<WorktreeDiffStat, String> {
@@ -3001,24 +3005,61 @@ fn worktree_diff_stat_at(root: &std::path::Path, base_ref: &str) -> Result<Workt
         files,
         total_additions,
         total_deletions,
+        base_commit: base_ref.to_string(),
     })
 }
 
-/// `+N / -M` and a changed-file list for one agent worktree, measured against
-/// the commit it branched from — the Fleet Dashboard's per-agent card.
+/// Git's fixed empty-tree object. Diffing against it in a repo with no commits
+/// yet is what makes "everything here is new" expressible as a normal diff, and
+/// it is 40 hex characters so it survives `is_valid_commit_ish` downstream.
+const EMPTY_TREE_OID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// Settle what a diff stat is measured against.
+///
+/// A requested base is validated exactly as before. `None` means the caller has
+/// no fork point to name — the main-repo case — so it resolves to HEAD, or to
+/// the empty tree in a repo with no commits yet.
+fn resolve_diff_base(
+    root: &std::path::Path,
+    requested: Option<String>,
+) -> Result<String, String> {
+    match requested.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        Some(commit) => {
+            if !is_valid_commit_ish(&commit) {
+                return Err("Invalid base commit".to_string());
+            }
+            Ok(commit)
+        }
+        None => Ok(git_capture(root, &["rev-parse", "HEAD"])
+            .filter(|sha| is_valid_commit_ish(sha))
+            .unwrap_or_else(|| EMPTY_TREE_OID.to_string())),
+    }
+}
+
+/// `+N / -M` and a changed-file list for one agent, measured against the commit
+/// it branched from — the Fleet Dashboard's per-agent card.
+///
+/// Both arguments are optional, and for the same reason: an agent running in
+/// the **main repo** has neither a checkout nor a fork point of its own. It
+/// edits the one you are sitting in, so `worktree_path` omitted means the
+/// project root and `base_commit` omitted means HEAD — the uncommitted work in
+/// the tree, which is the only honest answer for that placement.
+///
+/// Omitting the path is not the same as passing the root: `resolve_repo`
+/// canonicalises what it is given, and the caller's copy of the root need not
+/// canonicalise back to the stored one (symlinks, or a differently-cased drive
+/// letter on Windows). `None` uses the stored root directly and cannot miss.
 #[tauri::command(async)]
 pub fn workspace_git_worktree_diff_stat(
     project_id: String,
-    worktree_path: String,
-    base_commit: String,
+    worktree_path: Option<String>,
+    base_commit: Option<String>,
     state: State<AppState>,
 ) -> Result<WorktreeDiffStat, String> {
     check_git_available()?;
-    if !is_valid_commit_ish(&base_commit) {
-        return Err("Invalid base commit".to_string());
-    }
-    let root = resolve_repo(&project_id, Some(worktree_path.as_str()), &state)?;
-    worktree_diff_stat_at(&root, &base_commit)
+    let root = resolve_repo(&project_id, worktree_path.as_deref(), &state)?;
+    let base = resolve_diff_base(&root, base_commit)?;
+    worktree_diff_stat_at(&root, &base)
 }
 
 fn staged_paths_at(root: &std::path::Path) -> Result<Vec<String>, String> {
@@ -3740,5 +3781,55 @@ mod tests {
         assert!(stat.files.is_empty());
         assert_eq!(stat.total_additions, 0);
         assert_eq!(stat.total_deletions, 0);
+    }
+
+    // --- main-repo agents: no fork point, so the base is HEAD ---
+
+    #[test]
+    fn diff_base_defaults_to_head_when_no_fork_point_is_given() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        let head = run_git(repo.path(), &["rev-parse", "HEAD"], "rev-parse").unwrap().trim().to_string();
+
+        assert_eq!(resolve_diff_base(repo.path(), None).unwrap(), head);
+        assert_eq!(resolve_diff_base(repo.path(), Some("  ".to_string())).unwrap(), head);
+    }
+
+    #[test]
+    fn diff_base_falls_back_to_the_empty_tree_before_the_first_commit() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\ntwo\n");
+
+        let base = resolve_diff_base(repo.path(), None).unwrap();
+        assert_eq!(base, EMPTY_TREE_OID);
+        // The point of the fallback: an unborn HEAD still produces a usable
+        // diff rather than a hard error on the card.
+        let stat = worktree_diff_stat_at(repo.path(), &base).unwrap();
+        assert!(stat.files.iter().any(|f| f.path == "a.txt"), "new file missing: {:?}", stat.files);
+    }
+
+    #[test]
+    fn diff_base_still_rejects_a_bogus_commit_ish() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+
+        // Anything non-hex would otherwise reach a git argv.
+        assert!(resolve_diff_base(repo.path(), Some("--upload-pack=evil".to_string())).is_err());
+        assert!(resolve_diff_base(repo.path(), Some("HEAD".to_string())).is_err());
+    }
+
+    #[test]
+    fn diff_stat_reports_the_base_it_measured_against() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        let head = run_git(repo.path(), &["rev-parse", "HEAD"], "rev-parse").unwrap().trim().to_string();
+
+        // The Fleet card reuses this to open the same diff per file, so an echo
+        // that disagreed with the numbers would show a different change set.
+        let stat = worktree_diff_stat_at(repo.path(), &head).unwrap();
+        assert_eq!(stat.base_commit, head);
     }
 }

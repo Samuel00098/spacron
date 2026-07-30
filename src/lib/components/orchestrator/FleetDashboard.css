@@ -210,10 +210,38 @@
 
 .fc-branch {
   grid-area: branch;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
   font-family: var(--editor-font-family, monospace);
   font-size: 10.5px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A main-repo card says where it is rather than naming a branch, because the
+   branch it is on is *yours* — reading it as the agent's own would suggest
+   there is something to merge back from. The tag carries that distinction, so
+   it has to survive the branch line's ellipsis. */
+.fc-placement {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-family, inherit);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.fc-branch-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -246,6 +274,17 @@
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   color: var(--warning);
   font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Quieter than .fc-warning: nothing is wrong, the reader just needs to know
+   whose changes these are before trusting the number above them. */
+.fc-note {
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10.5px;
   line-height: 1.45;
 }
 
@@ -382,6 +421,20 @@
   align-items: center;
   gap: 5px;
   min-width: 0;
+}
+
+/* A main-repo card has no left-hand group, and `space-between` on a single
+   child pushes it to the right edge — leaving its only actions marooned under
+   an empty half. Align them where the missing group would have started. */
+.fleet-card.placement-main .fc-actions {
+  justify-content: flex-start;
+}
+
+.fleet-card.placement-main .fc-actions-aside .fc-btn.quiet {
+  padding: 4px 9px;
+  border-color: var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
 }
 
 .fc-confirm-actions {
