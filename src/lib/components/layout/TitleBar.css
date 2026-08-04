@@ -23,6 +23,12 @@
   z-index: 100000; /* Sit on top of all overlays so titlebar controls are always accessible and not covered/darkened */
 }
 
+/* No faux-frost on Linux — see the matching note in AppShell.css. The bar used to
+   carry a `::before` that repainted and blurred a copy of the wallpaper to stand in
+   for the dead `backdrop-filter`; it was removed on request because it looked like
+   its own effect rather than the Windows/macOS frosted glass. The bar falls back to
+   the flat `--titlebar-bg` tint set for `.is-webkitgtk` in global.css. */
+
 /* Solid theme opts out of glass entirely — no wallpaper to frost. */
 :root.solid-theme .titlebar {
   backdrop-filter: none;

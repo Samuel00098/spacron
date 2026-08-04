@@ -17,8 +17,8 @@ export function createPresetTheme(
 }
 
 export const presetThemes: Theme[] = [
-  // ── SOLACE WORKSPACE (Light Office) ─────────────────────────
-  createPresetTheme('solace-workspace', 'Solace Sky Workspace', 'light',
+  // ── SOLACE WORKSPACE (Light Airplane Window / Clouds) ───────
+  createPresetTheme('solace-workspace', 'Above the Clouds', 'light',
     {
       'bg-primary': '#f8fafc',
       'bg-secondary': '#f1f5f9',
@@ -79,7 +79,7 @@ export const presetThemes: Theme[] = [
       'tag': '#dc2626',
       'attribute': '#16a34a',
     },
-    '/backgrounds/light-office.webp',
+    '/backgrounds/light-cloud-window.webp',
     75,
     0
   ),
@@ -285,8 +285,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── MIDNIGHT GLOW (Dark Workspace) ──────────────────────────
-  createPresetTheme('midnight-glow', 'Cosmic Bridge Console', 'dark',
+  // ── MIDNIGHT GLOW (Dark Aurora) ─────────────────────────────
+  createPresetTheme('midnight-glow', 'Aurora Borealis', 'dark',
     {
       'bg-primary': '#0b0f17',
       'bg-secondary': '#070a10',
@@ -347,13 +347,13 @@ export const presetThemes: Theme[] = [
       'tag': '#f87171',
       'attribute': '#34d399',
     },
-    '/backgrounds/dark-workspace.webp',
+    '/backgrounds/dark-aurora.webp',
     75,
     0
   ),
 
-  // ── VOLCANIC OBSIDIAN (Dark Obsidian Beach) ─────────────────
-  createPresetTheme('volcanic-obsidian', 'Icelandic Black Sand', 'dark',
+  // ── VOLCANIC OBSIDIAN (Dark Storm over Black Sand) ──────────
+  createPresetTheme('volcanic-obsidian', 'Black Sand Storm', 'dark',
     {
       'bg-primary': '#0c1015',
       'bg-secondary': '#07090d',
@@ -419,8 +419,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── MISTY HIGHLANDS (Dark Forest) ───────────────────────────
-  createPresetTheme('misty-highlands', 'Mystical Neon Woods', 'dark',
+  // ── MISTY HIGHLANDS (Dark Aurora-lit Forest) ────────────────
+  createPresetTheme('misty-highlands', 'Bioluminescent Woods', 'dark',
     {
       'bg-primary': '#0a0f0d',
       'bg-secondary': '#060a08',
@@ -553,8 +553,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── BOTANICAL GREENHOUSE (Light Greenhouse) ──────────────────
-  createPresetTheme('botanical-greenhouse', 'Solarpunk Greenhouse', 'light',
+  // ── BOTANICAL GREENHOUSE (Light Rainy Greenhouse) ────────────
+  createPresetTheme('botanical-greenhouse', 'Rainy Greenhouse', 'light',
     {
       'bg-primary': '#f3f7f4',
       'bg-secondary': '#e6eee9',
@@ -620,8 +620,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── DESERT OASIS (Light Adobe Courtyard) ─────────────────────
-  createPresetTheme('desert-oasis', 'Canyon Desert Oasis', 'light',
+  // ── DESERT OASIS (Light Canyon Vista) ────────────────────────
+  createPresetTheme('desert-oasis', 'Canyon Overlook', 'light',
     {
       'bg-primary': '#faf6f0',
       'bg-secondary': '#f2ebe0',
@@ -821,8 +821,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── CYBER SERVER (Dark Server Room) ──────────────────────────
-  createPresetTheme('cyber-server', 'Cyber-Organic Core', 'dark',
+  // ── CYBER SERVER (Dark Neon Bokeh) ───────────────────────────
+  createPresetTheme('cyber-server', 'Neon Bokeh', 'dark',
     {
       'bg-primary': '#05070c',
       'bg-secondary': '#020306',
@@ -883,7 +883,7 @@ export const presetThemes: Theme[] = [
       'tag': '#f43f5e',
       'attribute': '#10b981',
     },
-    '/backgrounds/dark-server-room.webp',
+    '/backgrounds/dark-bokeh-lights.webp',
     75,
     0
   ),
@@ -955,8 +955,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── ABYSSAL DEPTHS (Dark Ocean) ──────────────────────────────
-  createPresetTheme('abyssal-depths', 'Moonlit Coastal Cliff', 'dark',
+  // ── ABYSSAL DEPTHS (Dark Moonlit Sea) ────────────────────────
+  createPresetTheme('abyssal-depths', 'Moonlit Sea', 'dark',
     {
       'bg-primary': '#050c12',
       'bg-secondary': '#02060a',
@@ -1023,7 +1023,7 @@ export const presetThemes: Theme[] = [
   ),
 
   // ── COSMIC NEBULA (Dark Space) ───────────────────────────────
-  createPresetTheme('cosmic-nebula', 'Cosmic Stargazing', 'dark',
+  createPresetTheme('cosmic-nebula', 'Cosmic Nebula', 'dark',
     {
       'bg-primary': '#0a0813',
       'bg-secondary': '#05040a',
@@ -1223,8 +1223,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── SAKURA PARK (Light Sakura Path) ──────────────────────────
-  createPresetTheme('sakura-park', 'Sakura River Path', 'light',
+  // ── SAKURA PARK (Light Sakura Blossoms) ──────────────────────
+  createPresetTheme('sakura-park', 'Sakura Blossoms', 'light',
     {
       'bg-primary': '#fffafa',
       'bg-secondary': '#fff0f2',
@@ -1424,8 +1424,8 @@ export const presetThemes: Theme[] = [
     0
   ),
 
-  // ── BALCONY VIEW (Light Balcony View) ─────────────────────────
-  createPresetTheme('balcony-view', 'Mediterranean Balcony Morning', 'light',
+  // ── BALCONY VIEW (Light Coastal Terrace at Dawn) ──────────────
+  createPresetTheme('balcony-view', 'Coastal Dawn Terrace', 'light',
     {
       'bg-primary': '#f0f9ff',
       'bg-secondary': '#e0f2fe',

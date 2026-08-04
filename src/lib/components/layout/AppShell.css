@@ -1410,6 +1410,13 @@
   -webkit-backdrop-filter: blur(18px) saturate(130%) !important;
 }
 
+/* No faux-frost on Linux. `backdrop-filter` is a silent no-op on WebKitGTK, and
+   an earlier attempt to fake it — a `::before` that repainted the wallpaper with
+   `background-attachment: fixed` and blurred that copy with a plain `filter` —
+   was removed on request: it reads as its own distinct effect rather than as the
+   frosted glass Windows and macOS produce, which is worse than having none.
+   Linux gets a flat tint instead (see the `.is-webkitgtk` block in global.css). */
+
 .app-shell .room-panel.featured {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   box-shadow:
@@ -2933,6 +2940,18 @@ html.is-webkitgtk .app-shell .composer-strip {
   transform: none !important;
   view-transition-name: none !important;
   will-change: auto !important;
+}
+
+/* …but never on the Home screen. The rule above pins opacity, and the WebKitGTK
+   repaint workaround writes an inline `visibility: visible`; because visibility
+   is inherited, that inline value would override the `visibility: hidden` the
+   `.home-hidden` workspace layer relies on, leaving the dock and prompt bar
+   floating over the welcome screen. An author `!important` beats a
+   non-important inline style, so this reasserts the hide unconditionally. */
+.app-shell .workspace-layer.home-hidden .room-dock,
+.app-shell .workspace-layer.home-hidden .composer-strip {
+  visibility: hidden !important;
+  opacity: 0 !important;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

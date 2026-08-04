@@ -112,8 +112,6 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["bloc
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cairo-rs = { version = "0.18.5", features = ["png"] }
-gtk = "0.18"
-gdk = "0.18"
 # v2_38 gates the media settings used in lib.rs (enable-webrtc & co.); wry
 # already builds webkit2gtk with v2_40, so this adds no new requirement.
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }

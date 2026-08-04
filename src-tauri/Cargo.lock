@@ -5129,8 +5129,6 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "futures-util",
- "gdk",
- "gtk",
  "ignore",
  "image",
  "keyring",

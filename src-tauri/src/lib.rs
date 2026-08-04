@@ -76,16 +76,18 @@ pub fn run() {
 
             #[cfg(target_os = "linux")]
             {
-                // Ensure GTK uses an RGBA visual for window transparency & compositor blur
-                if let Ok(gtk_win) = window.gtk_window() {
-                    use gtk::prelude::*;
-                    if let Some(screen) = gdk::Screen::default() {
-                        if let Some(visual) = screen.rgba_visual() {
-                            gtk_win.set_visual(Some(&visual));
-                        }
-                    }
-                    gtk_win.set_app_paintable(true);
-                }
+                // Give the window an opaque backing. macOS fills the transparent
+                // window with an NSVisualEffectView and Windows with acrylic/mica,
+                // so on those platforms the app's translucent surfaces resolve to
+                // frosted glass. Linux has no equivalent: `window-vibrancy` has no
+                // Linux backend, and there is no cross-desktop blur-behind protocol
+                // to stand in for one (KWin exposes `org_kde_kwin_blur`; Mutter and
+                // cosmic-comp expose nothing). Left transparent, the glass stack
+                // shows the raw unblurred desktop instead. `html.is-webkitgtk` in
+                // global.css keeps the root opaque in the active theme's colour once
+                // the page is up; this covers the frames before that, so launching
+                // never flashes the desktop through the window.
+                let _ = window.set_background_color(Some(tauri::window::Color(24, 24, 30, 255)));
 
                 // WebKitGTK ships with media capture disabled and silently
                 // refuses any permission request nobody answers, so on Linux
