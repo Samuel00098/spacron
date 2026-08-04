@@ -5,3 +5,4 @@
 - Works with multiple AI agents/tools in their workflow and delegates specific tasks to them; requests comprehensive, self-contained prompts that can be handed off to other agents without additional context ("a full-on prompt that I can give to other agents"). Confidence: 0.75
 - Drawn to urban/cityscape imagery (e.g., Chicago-style skylines, cityscapes) as visual aesthetics for tools and application backgrounds. Confidence: 0.7
 - Prefers 2K resolution (2560×1440) for generated image assets to ensure sharpness on larger screens. Confidence: 0.8
+- Prefers WebP format over PNG for image assets. Confidence: 0.8
