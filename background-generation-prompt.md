@@ -1,6 +1,6 @@
 # Spacron IDE Background Image Generation
 
-You are generating 32 background wallpaper images for Spacron, a cross-platform developer workspace (code editor + terminal + AI agent orchestrator). These images sit behind a frosted-glass UI overlay at 75% opacity, so they must be atmospheric and even-toned — never busy, sharp, or high-contrast.
+You are generating 22 background wallpaper images for Spacron, a cross-platform developer workspace (code editor + terminal + AI agent orchestrator). These images sit behind a frosted-glass UI overlay at 75% opacity, so they must be atmospheric and even-toned — never busy, sharp, or high-contrast.
 
 ## Technical Specifications
 
@@ -14,7 +14,7 @@ You are generating 32 background wallpaper images for Spacron, a cross-platform 
 
 ---
 
-## LIGHT MODE IMAGES (16 total)
+## LIGHT MODE IMAGES (11 total)
 
 ### 1. `light-office.webp`
 **Theme name:** Solace Sky Workspace
@@ -24,65 +24,45 @@ You are generating 32 background wallpaper images for Spacron, a cross-platform 
 **Theme name:** Architectural Curves
 **Prompt:** Interior of a sweeping modern architectural space inspired by Santiago Calatrava — flowing white concrete curves, ribbed vaults, and organic structural forms. Soft natural daylight filtering through high skylights, casting gentle gradients and soft shadows across the white and light grey surfaces. No people, no furniture, no objects — pure architectural form and diffused light. Clean, sculptural, minimal. Photorealistic, 2560×1440.
 
-### 3. `light-desk.webp`
-**Theme name:** Lo-Fi Desk Workspace
-**Prompt:** Close-up of a warm, honey-toned wooden desk surface with soft morning sunlight streaming across it from the left. Shallow depth of field — the wood grain texture is the main subject, rich and detailed in the centre, falling into warm bokeh at the edges. A blurred ceramic coffee cup with faint steam visible in the far corner, completely out of focus. Warm, intimate, quiet morning mood. No other objects visible. Photorealistic, macro lens feel, 2560×1440.
+### 3. `light-greenhouse.webp`
+**Theme name:** Solarpunk Greenhouse
+**Prompt:** View from inside a glass greenhouse looking outward through rain-streaked glass panels. Lush tropical foliage is visible through the wet glass but heavily diffused into a soft green wash — no individual leaves or plants are in focus. The glass surface with its water droplets and condensation is the foreground subject. Soft, even overcast daylight. Fresh, green, tranquil. Photorealistic with artistic blur, 2560×1440.
 
-### 4. `light-beach.webp`
-**Theme name:** Amalfi Coastline
-**Prompt:** Distant view of a Mediterranean coastal cliff at golden hour, shot from the water with a telephoto lens. Soft atmospheric haze dissolves the cliff face, pastel-coloured buildings, and terraced gardens into a painterly wash of warm peach, terracotta, pale yellow, and soft blue. No sharp detail anywhere — the entire scene is dreamy and impressionistic, like a watercolour painting rendered photographically. Warm, romantic, distant. 2560×1440.
+### 4. `light-desert.webp`
+**Theme name:** Canyon Desert Oasis
+**Prompt:** Wide telephoto shot of layered desert canyon walls at sunrise, compressing the geological strata into horizontal bands of warm terracotta, ochre, pale sandstone, and dusty rose. Soft atmospheric haze between each layer creates depth separation. Shot from a great distance — no foreground rocks, vegetation, or objects. Just pure, abstracted geological colour bands stretching across the frame. Warm, ancient, serene. Photorealistic, 2560×1440.
 
-### 5. `light-scandi.webp`
-**Theme name:** Fjord Cabin Shore
-**Prompt:** Calm Norwegian fjord at dawn, viewed from the end of a weathered wooden dock extending into still water. Perfect mirror reflections of layered mountain ridges that recede into soft, rolling fog. Cool blue-grey colour palette throughout. Even overcast lighting with no direct sun. No foreground objects closer than the water's edge — the dock is only visible as a subtle wooden texture at the very bottom of frame. Still, Nordic, contemplative. Photorealistic, 2560×1440.
+### 5. `light-meadows.webp`
+**Theme name:** Alpine Meadow
+**Prompt:** Elevated view looking across a rolling alpine meadow toward distant snow-capped mountain peaks. Soft overcast light bathes the scene in muted sage greens and pale blues. Wildflowers are present but completely out of focus — just soft impressions of colour (lavender, yellow, white) scattered through the grass. The scene opens up toward a hazy mountain horizon that dissolves into cloud. Fresh, expansive, and quiet. Photorealistic, 2560×1440.
 
 ### 6. `light-library.webp`
 **Theme name:** Grand Library
 **Prompt:** Atmospheric interior of a grand classical library, but captured in soft focus throughout. Warm amber light streams through tall arched windows, creating visible dust-mote sunbeams. Towering bookshelves are suggested as warm, blurred vertical forms — no individual books or text are readable. Rich wood and brass tones glow softly. The mood is warm, scholarly, and hushed — like entering a cathedral of knowledge. Painterly, dreamlike quality. 2560×1440.
 
-### 7. `light-greenhouse.webp`
-**Theme name:** Solarpunk Greenhouse
-**Prompt:** View from inside a glass greenhouse looking outward through rain-streaked glass panels. Lush tropical foliage is visible through the wet glass but heavily diffused into a soft green wash — no individual leaves or plants are in focus. The glass surface with its water droplets and condensation is the foreground subject. Soft, even overcast daylight. Fresh, green, tranquil. Photorealistic with artistic blur, 2560×1440.
+### 7. `light-cloud-atrium.webp`
+**Theme name:** Cloud Atrium
+**Prompt:** Circular glass atrium flooded with pale morning haze, with soft white marble walkways, translucent railings, and blurred greenery below. Diffused daylight washes through the roof so evenly that the entire space feels weightless and cloudlike. No people, no signage, no hard reflections — just gentle architecture, soft plant forms, and air. Bright, serene, and spacious. Photorealistic, 2560×1440.
 
-### 8. `light-desert.webp`
-**Theme name:** Canyon Desert Oasis
-**Prompt:** Wide telephoto shot of layered desert canyon walls at sunrise, compressing the geological strata into horizontal bands of warm terracotta, ochre, pale sandstone, and dusty rose. Soft atmospheric haze between each layer creates depth separation. Shot from a great distance — no foreground rocks, vegetation, or objects. Just pure, abstracted geological colour bands stretching across the frame. Warm, ancient, serene. Photorealistic, 2560×1440.
+### 8. `light-salt-marsh-dawn.webp`
+**Theme name:** Salt Marsh Dawn
+**Prompt:** Mirror-still tidal marsh at sunrise, seen from a low elevated vantage point. Thin ribbons of water weave through soft reeds and shallow pools, reflecting a pastel sky in pale peach, silver, and muted blue. The horizon is hazy and low-contrast, and all plant detail is softened by mist. Quiet, expansive, and balanced. Photorealistic, 2560×1440.
 
-### 9. `light-meadows.webp`
-**Theme name:** Alpine Meadow
-**Prompt:** Elevated view looking across a rolling alpine meadow toward distant snow-capped mountain peaks. Soft overcast light bathes the scene in muted sage greens and pale blues. Wildflowers are present but completely out of focus — just soft impressions of colour (lavender, yellow, white) scattered through the grass. The scene opens up toward a hazy mountain horizon that dissolves into cloud. Fresh, expansive, and quiet. Photorealistic, 2560×1440.
+### 9. `light-paper-studio.webp`
+**Theme name:** Paper Studio
+**Prompt:** Minimal studio interior with translucent paper screens, pale wood flooring, and a diffuse wash of morning light. The screens create layered, semi-opaque planes that blur the room into soft whites, creams, and light honey tones. Nothing is sharp or cluttered — only calm geometry, paper texture, and evenly spread light. Clean, contemplative, and refined. Photorealistic, 2560×1440.
 
-### 10. `light-zen-garden.webp`
-**Theme name:** Kyoto Zen Garden
-**Prompt:** Overhead aerial view looking straight down at a Japanese zen rock garden (karesansui). Perfectly raked white-grey gravel forms rhythmic, parallel wave patterns around carefully placed smooth stones. The meditative repetition of the rake lines is the visual focus. Soft, shadowless overcast light illuminates the scene evenly from above. Warm grey-beige colour palette. Minimal, precise, calming. Photorealistic, 2560×1440.
+### 10. `light-stone-cloister.webp`
+**Theme name:** Stone Cloister
+**Prompt:** Quiet cloister courtyard framed by pale limestone arches and a central garden of moss and trimmed gravel. Soft overcast daylight removes harsh contrast, letting the architecture read as gentle curves and warm stone tones. No people, no ornament, no dramatic shadow — only repeating arches, still air, and a sense of pause. Minimal, monastic, and restful. Photorealistic, 2560×1440.
 
-### 11. `light-cafe.webp`
-**Theme name:** Parisian Cafe Patio
-**Prompt:** Soft-focus impressionistic view of a Parisian cobblestone courtyard in warm late-afternoon light. The curved backs of wrought-iron bistro chairs and a round marble-topped table are visible in the mid-ground but heavily blurred into painterly shapes. Climbing ivy on a warm honey-coloured stone wall fills the background. Everything is soft, warm, and nostalgic — like a Renoir painting rendered photographically. Warm amber and green tones. 2560×1440.
-
-### 12. `light-sakura.webp`
-**Theme name:** Sakura River Path
-**Prompt:** Looking upward through a canopy of cherry blossom branches in full bloom. Soft pink and white petals fill the upper frame against a pale, luminous sky. Shot with shallow depth of field so individual blossoms dissolve into soft clouds of pink and white colour. A few petals drift gently downward through the frame. Dreamy, light, airy, and ephemeral. The lower portion of the frame fades to soft, blurred pink-white bokeh. Photorealistic, 2560×1440.
-
-### 13. `light-autumn-path.webp`
-**Theme name:** Autumn Forest Path
-**Prompt:** A straight forest path receding into soft golden autumn fog. Tall trees line both sides but are softened by the mist into warm amber and gold columns fading into the distance. A carpet of fallen leaves covers the ground but is rendered out of focus — just a warm golden-brown texture. Even, warm, diffused light with no harsh shadows or sunbeams. The fog creates a soft vanishing point. Peaceful, seasonal, contemplative. Photorealistic, 2560×1440.
-
-### 14. `light-balcony-morning.webp`
-**Theme name:** Mediterranean Balcony Morning
-**Prompt:** View from a Mediterranean stone balcony looking out over a calm, glassy sea at dawn. A weathered terracotta balustrade edge is visible in soft focus at the very bottom of frame. Beyond it, open turquoise-blue water stretches to a hazy horizon under a pale pink and gold sky. A few distant coastal hills are barely visible as faint silhouettes. Clean, open, and breezy. Morning light is soft and warm. Photorealistic, 2560×1440.
-
-### 15. `light-attic-study.webp`
-**Theme name:** Attic Study Sanctuary
-**Prompt:** Warm attic space with a large skylight letting in soft, diffused daylight that fills the room with gentle, even illumination. Exposed wooden roof beams cross the upper frame in warm honey-brown tones. Bookshelves and a reading chair are suggested in the background but remain heavily blurred — only their warm shapes and colours register. The mood is intimate, quiet, and scholarly. Amber, cream, and warm wood tones throughout. Photorealistic, 2560×1440.
-
-### 16. `light-lakefront-cabin.webp`
-**Theme name:** Sunny Lakeside Cabin
-**Prompt:** Calm lake at sunrise, viewed from the shoreline looking across still water. A perfect mirror reflection of the distant pine treeline and pale sky doubles the scene on the water surface. A thin veil of morning mist hovers just above the water. Cool blue-grey tones in the water transition to a pale warm gold in the sky. No dock, no cabin, no boats — just the peaceful expanse of water and the soft treeline on the horizon. Photorealistic, 2560×1440.
+### 11. `light-rooftop-garden.webp`
+**Theme name:** Rooftop Garden
+**Prompt:** Elevated rooftop garden with white planters, soft green foliage, and a hazy city skyline beyond. The skyline is intentionally indistinct, dissolving into warm daylight and atmospheric blur while the plants remain soft and rounded rather than detailed. The whole scene should feel bright but muted, like a city breathing quietly above the streets. Fresh, airy, and modern. Photorealistic, 2560×1440.
 
 ---
 
-## DARK MODE IMAGES (16 total)
+## DARK MODE IMAGES (11 total)
 
 ### 1. `dark-street.webp`
 **Theme name:** Tokyo Neon Street
@@ -104,49 +84,29 @@ You are generating 32 background wallpaper images for Spacron, a cross-platform 
 **Theme name:** Cyber-Organic Core
 **Prompt:** Abstract extreme close-up of server rack LED status lights in a dark data centre corridor, shot with very shallow depth of field. The tiny teal, amber, and white indicator lights are completely defocused into soft bokeh circles of varying sizes, floating in deep darkness like digital fireflies. No readable hardware, cables, or text — just a rhythmic field of gentle light points on a near-black background. Tech-noir, minimal, and hypnotic. Photorealistic, 2560×1440.
 
-### 6. `dark-fireplace.webp`
-**Theme name:** Cozy Fireplace Cabin
-**Prompt:** Warm cabin interior at night, lit by a fireplace that is *out of frame to the left* — only its warm glow is visible, washing across a rough-hewn wooden wall and the curved edge of a worn leather armchair in the right portion of the frame. Deep amber, cognac, and dark brown tones. Very dark in the corners and upper areas (near-black). The firelight creates soft, organic, flickering gradients on the wood grain. Intimate, quiet, and warm. No flames visible — only the ambient glow. Photorealistic, 2560×1440.
-
-### 7. `dark-ocean.webp`
+### 6. `dark-ocean.webp`
 **Theme name:** Moonlit Coastal Cliff
 **Prompt:** Dark ocean viewed from a high cliff edge at night under a full moon. Moonlight creates a broad, soft silver-white reflection path across the dark, gently rippling water surface, stretching from the mid-frame to the distant horizon. The cliff itself is just a dark, featureless silhouette at the very bottom of the frame. The distant horizon is barely visible where dark sea meets dark sky. Deep navy, charcoal, and silver palette. Vast, contemplative, and quiet. Photorealistic, 2560×1440.
 
-### 8. `dark-nebula.webp`
-**Theme name:** Cosmic Stargazing
-**Prompt:** Deep space nebula — a soft, painterly wash of dark purple, deep indigo, and faint dusty rose spreading across a black void like cosmic ink. A scattering of bright star points, but no hard-edged objects: no silhouettes, no planets, no spacecraft, no people. Just smooth, organic gas cloud forms dissolving gradually into darkness at the edges. The nebula occupies the centre and fades to pure black at the frame edges. Muted, awe-inspiring, and abstract. Digital art, painterly quality, 2560×1440.
+### 7. `dark-midnight-observatory.webp`
+**Theme name:** Midnight Observatory
+**Prompt:** A domed observatory at night seen as a soft silhouette against a faint starfield and a barely glowing horizon. The dome, railings, and surrounding structure remain subdued and blurred so the scene feels quiet rather than technical. Deep navy, slate, and muted silver tones with tiny points of starlight scattered sparsely across the sky. Calm, scientific, and contemplative. Photorealistic, 2560×1440.
 
-### 9. `dark-rainy-window.webp`
-**Theme name:** Rainy City Skyline
-**Prompt:** View through a rain-streaked window at night. The city lights beyond are *completely* defocused into warm amber, soft gold, and cool blue bokeh circles of varying sizes, scattered organically across a dark background. The only sharp elements are the rain droplets and streaks on the glass surface itself, catching faint reflections of the bokeh behind them. Meditative, melancholy, warm. The dark upper portion of the frame has fewer lights, fading to near-black. Photorealistic, 2560×1440.
+### 8. `dark-foggy-harbor.webp`
+**Theme name:** Foggy Harbor
+**Prompt:** Dark harbor water at night with a few distant lamps and mast lights dissolving into dense coastal fog. The reflections are stretched into soft vertical smears, and the boats and piers are reduced to barely-there silhouettes. Black water, cool grey mist, and faint amber glows dominate. Quiet, wet, and atmospheric. Photorealistic, 2560×1440.
 
-### 10. `dark-industrial-loft.webp`
-**Theme name:** Industrial Loft Twilight
-**Prompt:** Raw, textured concrete wall of an industrial loft space at twilight. A single warm tungsten light source from above and to the right (out of frame) washes across the rough surface, revealing its texture — pores, imperfections, and subtle colour variations in warm grey. One exposed steel pipe or duct runs along the upper edge of the frame, softly out of focus. Deep warm greys and amber tones. Architectural, minimal, raw, and moody. No furniture, no objects, just wall and light. Photorealistic, 2560×1440.
+### 9. `dark-empty-subway.webp`
+**Theme name:** Empty Subway
+**Prompt:** An empty underground subway platform or tunnel at night, lit by a small number of soft amber ceiling lights that repeat into the distance. Wet concrete floors pick up blurred reflections, while the tunnel recedes into a velvety darkness with no signs, ads, or people. Industrial but hushed, with long gradients of brown, charcoal, and warm gold. Photorealistic, 2560×1440.
 
-### 11. `dark-volcanic-cave.webp`
-**Theme name:** Basalt Lava Cave
-**Prompt:** Interior of a basalt lava tube cave looking toward a distant, dim opening. The cave walls are dark, textured volcanic rock with subtle columnar jointing patterns. A faint, warm orange-red glow emanates from deep within the cave or from a distant lava source — not visible molten lava, just a subtle warm ambient light that gently tints the lower portions of the dark rock. The upper areas and edges are near-black. Deep blacks, charcoal, and dark ember tones. Atmospheric, primal, and quiet. Photorealistic, 2560×1440.
+### 10. `dark-candle-alcove.webp`
+**Theme name:** Candle Alcove
+**Prompt:** A near-black alcove with a concealed candle glow filtered through frosted glass or a translucent partition. The light should feel hidden rather than obvious, creating soft amber gradients on surrounding stone or plaster surfaces. No flame detail, no objects in focus, only a calm pocket of warmth in deep darkness. Intimate, minimal, and soft. Photorealistic, 2560×1440.
 
-### 12. `dark-cyber-rooftop.webp`
-**Theme name:** Cyber Neon Rooftop
-**Prompt:** High aerial view looking down at a rain-soaked cyberpunk city at night from far above. The buildings are far below and reduced to a soft, muted grid of neon light — pink, teal, and purple — on a dark base, like a glowing circuit board. No individual buildings, signs, or vehicles are distinguishable. Heavy low cloud and rain haze diffuses everything further. The city glow occupies the lower two-thirds; the upper third is dark sky merging into blackness. Photorealistic/digital art, 2560×1440.
-
-### 13. `dark-tokyo-skyline.webp`
-**Theme name:** Tokyo Skyline Night
-**Prompt:** Tokyo skyline at blue hour (civil twilight, not full night), shot from across Tokyo Bay at a distance of 3+ miles. The city buildings are small and merged into a soft, warm silhouette along the horizon, with thousands of tiny warm window lights glowing like distant embers. The twilight sky transitions from deep steel blue at the top to a faint warm orange-pink at the horizon. Heavy atmospheric haze softens all building detail into a unified glow. Tokyo Tower is a faint, small red suggestion in the haze — not a sharp landmark. Photorealistic, 2560×1440.
-
-### 14. `dark-chicago-skyline.webp`
-**Theme name:** Chicago Skyline Night
-**Prompt:** Chicago skyline reflected in the calm surface of Lake Michigan at blue hour, shot from far offshore on the water. The city is a soft, warm band of golden-white lights along the horizon, with the mirror reflection doubling the glow on the dark water surface below. Heavy atmospheric haze dissolves all building detail into a unified warm shimmer. The sky transitions from deep blue at the top to a faint warm amber at the horizon. The composition is symmetrical: sky above, city glow in the middle, reflection below. Photorealistic, 2560×1440.
-
-### 15. `dark-hongkong-skyline.webp`
-**Theme name:** Hong Kong Night Harbour
-**Prompt:** Hong Kong Victoria Harbour at night, viewed from high on Victoria Peak through light rolling fog. The harbour lights, building glow, and neon below are diffused by the mist into a soft, jewel-toned wash of cyan, magenta, and warm gold scattered across dark water. No individual buildings, signs, or boats are readable — just the abstract, organic pattern of a glowing harbour dissolving into fog. The upper portion is dark hillside silhouette fading to black. Photorealistic, 2560×1440.
-
-### 16. `dark-sydney-skyline.webp`
-**Theme name:** Sydney Harbour Lights
-**Prompt:** Sydney Harbour at civil twilight, shot from the north shore looking south across calm water. The Opera House sails and Harbour Bridge are distant, soft silhouettes against a deep blue-to-indigo twilight sky. Harbour lights reflect on the still water as soft, elongated golden streaks. Atmospheric haze softens all detail. The landmarks are gentle suggestions, not sharp postcard elements — the mood is quiet, painterly, and contemplative. Deep blue, indigo, and warm gold palette. Photorealistic, 2560×1440.
+### 11. `dark-snowy-pine-ridge.webp`
+**Theme name:** Snowy Pine Ridge
+**Prompt:** A dark pine ridge at night or late twilight with light snowfall drifting through a blue-black sky. The trees form a soft serrated silhouette, while the snow catches just enough moonlight to create a subtle silver veil across the scene. Deep greens, charcoal, and cold blue tones, with low contrast and a quiet winter stillness. Photorealistic, 2560×1440.
 
 ---
 
@@ -165,4 +125,4 @@ Before delivering each image, verify:
 
 ## File Output
 
-Save each image as `[filename].webp` in a `backgrounds/` directory. Use the exact filenames from the headings above (e.g., `light-office.webp`, `dark-street.webp`, etc.).
+Save each image as `[filename].webp` in `static/backgrounds/`. Use the exact filenames from the headings above (e.g., `light-office.webp`, `dark-street.webp`, etc.).
