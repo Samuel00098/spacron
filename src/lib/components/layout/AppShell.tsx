@@ -827,14 +827,22 @@ export default function AppShell() {
     });
   }, [ambientLayout, focusedRoom, openRooms]);
 
-  // When the editor panel becomes visible or the active file changes, focus
-  // the editor room so it appears in the primary position. This handles both
-  // the initial open and subsequent file clicks while the editor is already
-  // visible (where editorVisible stays true but activeFile changes).
+  // Backstop for the paths that make the editor visible without going through
+  // `setActiveView('editor')` (a restored project layout, `toggleEditorVisible`).
+  // The common "open this file" route now asks the room system directly, from
+  // `setActiveView` — see the note there.
+  //
+  // Must be `focusRoom`, not a bare `setFocusedRoom`: a minimized editor is not
+  // in `visibleRooms`, so `activeRoom` falls straight back to `visibleRooms[0]`
+  // and the assignment is inert — while leaving `focusedRoom` pinned to a room
+  // that never reaches the stage, which wedges every later attempt too.
+  // `focusRoom` un-minimizes first, and routes through `claimSplitSlot` so this
+  // cannot evict the pane being worked in (`.spacron/memory/split-room-slots.md`).
   useEffect(() => {
     if (layoutState.editorVisible && activeFile) {
-      setFocusedRoom('editor');
+      focusRoom('editor');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutState.editorVisible, activeFile]);
 
   useEffect(() => {
@@ -960,8 +968,9 @@ export default function AppShell() {
           setFocusedRoom('terminal');
           break;
         case 'goToEditor':
+          // setActiveView already asks the room system to focus the editor —
+          // a bare setFocusedRoom on top of it would skip claimSplitSlot.
           setActiveView('editor');
-          setFocusedRoom('editor');
           break;
         case 'goToPreview':
           setActiveView('preview');

@@ -1,0 +1,41 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { get } from '$lib/stores/storeCompat';
+import { layoutControlCommand } from '$lib/stores/layoutControl';
+import { useLayoutStore } from './layout';
+
+// The editor is a room, not just a visibility flag. Flipping `editorVisible`
+// leaves it wherever it was — off stage, or minimized — so revealing the editor
+// has to ask the room system to bring it forward as well. AppShell answers the
+// command with `focusRoom`, which un-minimizes and honours the Split slot rule.
+describe('setActiveView room focus', () => {
+  beforeEach(() => {
+    layoutControlCommand.set(null);
+    useLayoutStore.setState({ editorVisible: false, activeView: 'terminal' });
+  });
+
+  it('asks the room system to focus the editor when the editor view is shown', () => {
+    useLayoutStore.getState().setActiveView('editor');
+
+    expect(useLayoutStore.getState().editorVisible).toBe(true);
+    expect(get(layoutControlCommand)).toMatchObject({ type: 'room', op: 'focus', room: 'editor' });
+  });
+
+  it('re-fires with a fresh nonce when the editor is already the active view', () => {
+    // Re-opening the file that is already on screen changes no layout state at
+    // all. Without a new nonce the request is swallowed and the editor stays
+    // off stage — which was the original bug.
+    useLayoutStore.getState().setActiveView('editor');
+    const first = get(layoutControlCommand);
+
+    useLayoutStore.getState().setActiveView('editor');
+    const second = get(layoutControlCommand);
+
+    expect(first?.nonce).toBeGreaterThan(0);
+    expect(second?.nonce).toBeGreaterThan(first!.nonce);
+  });
+
+  it('does not touch room focus for non-editor views', () => {
+    useLayoutStore.getState().setActiveView('tasks');
+    expect(get(layoutControlCommand)).toBeNull();
+  });
+});

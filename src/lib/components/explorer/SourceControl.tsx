@@ -34,6 +34,20 @@ type FileKind = 'modified' | 'added' | 'deleted' | 'untracked' | 'conflicted';
 
 const graphColors = ['#22d3ee', '#a78bfa', '#fb7185', '#34d399', '#fbbf24', '#60a5fa', '#f472b6'];
 
+/**
+ * How long the commit box is left alone after you touch it.
+ *
+ * `fetchStatus` auto-suggests a message whenever the box is empty, and it runs
+ * on a 15s tick *and* on every `fs-change` for the project root — which in an
+ * app where several agents share one working tree fires more or less
+ * continuously. Clearing the suggestion to write your own therefore raced the
+ * next refresh, which refilled it under the cursor before you had typed a word.
+ *
+ * Touching the box opens this window: no auto-suggestion lands while it is
+ * open, and each further keystroke pushes it out again.
+ */
+const COMMIT_MESSAGE_GRACE_MS = 120_000;
+
 function getGraphColor(idx: number) {
   return graphColors[idx % graphColors.length];
 }
@@ -116,6 +130,12 @@ export default function SourceControl() {
   const providerRef = useRef(provider);
   const modelRef = useRef(model);
   const commitMessageRef = useRef(commitMessage);
+  // Grace window state (see COMMIT_MESSAGE_GRACE_MS). `until` is 0 when no
+  // window is open; `restore` holds the message to put back if the window
+  // lapses on an empty box.
+  const commitGraceUntilRef = useRef(0);
+  const commitGraceRestoreRef = useRef('');
+  const commitGraceTimerRef = useRef<number | null>(null);
   const selectedFilesRef = useRef(selectedFiles);
   const knownFilesRef = useRef(knownFiles);
   const stagedPathsRef = useRef(stagedPaths);
@@ -176,6 +196,7 @@ export default function SourceControl() {
       setDeleteConfirmBranch(null);
       setBranchError(null);
       setCommitMessage('');
+      clearCommitGrace();
       setSelectedFiles(new Set());
       setKnownFiles(new Set());
       void refreshAll();
@@ -205,6 +226,48 @@ export default function SourceControl() {
     }, 15000);
     return () => clearInterval(interval);
   }, [projectId]);
+
+  useEffect(() => () => clearCommitGrace(), []);
+
+  /** Tear the window down without restoring anything. */
+  function clearCommitGrace() {
+    if (commitGraceTimerRef.current !== null) {
+      window.clearTimeout(commitGraceTimerRef.current);
+      commitGraceTimerRef.current = null;
+    }
+    commitGraceUntilRef.current = 0;
+    commitGraceRestoreRef.current = '';
+  }
+
+  /**
+   * Claim the commit box for the user for the next two minutes.
+   *
+   * Called whenever they touch it — focus or keystroke. The first touch of a
+   * fresh window records whatever was in the box (the auto-suggestion they are
+   * about to clear); later keystrokes only extend the window, so a half-typed
+   * draft never displaces the thing we'd restore. When the window lapses on a
+   * still-empty box the remembered message goes back in and the user is
+   * nudged, which also re-arms the normal auto-suggestion.
+   */
+  function armCommitGrace(current: string) {
+    const windowOpen = Date.now() < commitGraceUntilRef.current;
+    if (!windowOpen && current.trim()) commitGraceRestoreRef.current = current;
+
+    commitGraceUntilRef.current = Date.now() + COMMIT_MESSAGE_GRACE_MS;
+    if (commitGraceTimerRef.current !== null) window.clearTimeout(commitGraceTimerRef.current);
+    commitGraceTimerRef.current = window.setTimeout(() => {
+      commitGraceTimerRef.current = null;
+      commitGraceUntilRef.current = 0;
+      // They wrote something — leave it be; the auto-fill skips a non-empty box.
+      if (commitMessageRef.current.trim()) return;
+      const restored = commitGraceRestoreRef.current;
+      commitGraceRestoreRef.current = '';
+      if (!restored) return;
+      setCommitMessage(restored);
+      commitMessageRef.current = restored;
+      showToast('No commit message typed — put the previous one back.', 'info');
+    }, COMMIT_MESSAGE_GRACE_MS);
+  }
 
   function toggleFile(file: string) {
     setSelectedFiles((current) => {
@@ -376,7 +439,10 @@ export default function SourceControl() {
       setKnownFiles(nextKnown);
       knownFilesRef.current = nextKnown;
 
-      if (!commitMessageRef.current.trim()) {
+      // Never type over the user. An empty box is only fair game once the grace
+      // window they opened by touching it has lapsed (COMMIT_MESSAGE_GRACE_MS).
+      const commitBoxIsTheirs = Date.now() < commitGraceUntilRef.current;
+      if (!commitBoxIsTheirs && !commitMessageRef.current.trim()) {
         const filenames = files.map((filePath) => {
           const parts = filePath.split(/[/\\]/);
           return parts[parts.length - 1];
@@ -468,6 +534,9 @@ export default function SourceControl() {
       showToast(amendMode ? 'Amended the last commit!' : 'Successfully committed changes!', 'success');
       setCommitMessage('');
       commitMessageRef.current = '';
+      // The box is empty because the message just shipped — a fresh suggestion
+      // for the next commit is wanted, and there is nothing to restore.
+      clearCommitGrace();
       setAmendMode(false);
       await refreshAll();
       // Reclaim the worktrees of agents that are gone and fully staged; anything
@@ -943,7 +1012,13 @@ export default function SourceControl() {
                     className="sc-commit-input"
                     placeholder="Commit message (Ctrl+Enter to commit)..."
                     value={commitMessage}
-                    onChange={(event) => setCommitMessage(event.target.value)}
+                    onFocus={() => armCommitGrace(commitMessageRef.current)}
+                    onChange={(event) => {
+                      // Arm off the OUTGOING value, so clearing the box is what
+                      // gets remembered for the restore.
+                      armCommitGrace(commitMessageRef.current);
+                      setCommitMessage(event.target.value);
+                    }}
                     onKeyDown={handleInputKeyDown}
                     rows={5}
                   />

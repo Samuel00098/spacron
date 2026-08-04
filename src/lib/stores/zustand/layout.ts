@@ -308,6 +308,20 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       persistLayout(next);
       return next;
     });
+
+    // The editor is a ROOM, not just a visibility flag. Setting `editorVisible`
+    // puts it in the room list but leaves it wherever it was — off stage, or
+    // minimized — so "open this file" while another room is focused changed
+    // nothing on screen. The view transition still played, which is the flash
+    // with no navigation. Ask the room system to bring it on stage instead,
+    // exactly as `revealPreview` does for the preview room.
+    //
+    // Going through the command bus matters twice over: `focusRoom` un-minimizes
+    // the room and honours the Split slot rule (see
+    // `.spacron/memory/split-room-slots.md`), which a bare `setFocusedRoom`
+    // does not; and the command carries a nonce, so re-opening the file that is
+    // already active re-fires rather than being swallowed as a no-op.
+    if (view === 'editor') requestRoomControl('focus', 'editor');
   },
 
   showTerminal: () => {
