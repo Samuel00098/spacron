@@ -76,6 +76,17 @@ pub fn run() {
 
             #[cfg(target_os = "linux")]
             {
+                // Ensure GTK uses an RGBA visual for window transparency & compositor blur
+                if let Ok(gtk_win) = window.gtk_window() {
+                    use gtk::prelude::*;
+                    if let Some(screen) = gdk::Screen::default() {
+                        if let Some(visual) = screen.rgba_visual() {
+                            gtk_win.set_visual(Some(&visual));
+                        }
+                    }
+                    gtk_win.set_app_paintable(true);
+                }
+
                 // WebKitGTK ships with media capture disabled and silently
                 // refuses any permission request nobody answers, so on Linux
                 // getUserMedia failed even after the user accepted the app's

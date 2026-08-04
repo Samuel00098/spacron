@@ -18,7 +18,7 @@
         "width": 1200,
         "height": 800,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "shadow": false,
         "minWidth": 960,
         "minHeight": 640
