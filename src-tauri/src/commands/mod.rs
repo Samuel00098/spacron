@@ -8,6 +8,7 @@ pub mod deps;
 pub mod env_vars;
 pub mod file_system;
 pub mod fs_watch;
+pub mod git_clone;
 pub mod github;
 pub mod http;
 pub mod lsp;

@@ -472,10 +472,23 @@ export default function AppShell() {
   // repaint (a display flush) to re-composite a stale layer, which a plain opacity
   // fix can't do. Runs on mount and on every ambient-layout change (opening an agent
   // that promotes the Development layout was a reported trigger). No-op off Linux.
+  //
+  // Skipped while Home is open, and any inline `visibility` we already wrote is
+  // cleared: `visibility` is inherited, so a child that sets itself back to
+  // `visible` overrides the `visibility: hidden` that `.home-hidden` puts on the
+  // workspace layer — which is exactly how the dock and prompt bar used to float
+  // on top of the welcome screen (Linux only; Windows/macOS never run this).
   useEffect(() => {
     if (!workspaceId || !isWebkitGtk()) return;
     const el = overlaysRef.current;
     if (!el) return;
+
+    if (homeOpen) {
+      el.querySelectorAll<HTMLElement>('.room-dock, .composer-strip').forEach((node) => {
+        node.style.visibility = '';
+      });
+      return;
+    }
 
     const forceVisible = () => {
       el.querySelectorAll<HTMLElement>('.room-dock, .composer-strip').forEach((node) => {
@@ -502,7 +515,7 @@ export default function AppShell() {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [workspaceId, ambientLayout]);
+  }, [workspaceId, ambientLayout, homeOpen]);
   const allTerminalSessions = useStore(terminalSessions);
   // Sessions across EVERY project, not just the active one — the stage mounts
   // background projects' agent panes from this so switching projects hides them

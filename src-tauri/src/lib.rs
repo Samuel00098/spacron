@@ -76,6 +76,19 @@ pub fn run() {
 
             #[cfg(target_os = "linux")]
             {
+                // Give the window an opaque backing. macOS fills the transparent
+                // window with an NSVisualEffectView and Windows with acrylic/mica,
+                // so on those platforms the app's translucent surfaces resolve to
+                // frosted glass. Linux has no equivalent: `window-vibrancy` has no
+                // Linux backend, and there is no cross-desktop blur-behind protocol
+                // to stand in for one (KWin exposes `org_kde_kwin_blur`; Mutter and
+                // cosmic-comp expose nothing). Left transparent, the glass stack
+                // shows the raw unblurred desktop instead. `html.is-webkitgtk` in
+                // global.css keeps the root opaque in the active theme's colour once
+                // the page is up; this covers the frames before that, so launching
+                // never flashes the desktop through the window.
+                let _ = window.set_background_color(Some(tauri::window::Color(24, 24, 30, 255)));
+
                 // WebKitGTK ships with media capture disabled and silently
                 // refuses any permission request nobody answers, so on Linux
                 // getUserMedia failed even after the user accepted the app's
@@ -249,6 +262,7 @@ pub fn run() {
             commands::notification::notification_show,
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
+            commands::git_clone::workspace_clone_repo,
             commands::workspace::workspace_get_active,
             commands::workspace::workspace_set_active,
             commands::workspace::workspace_list_projects,

@@ -16,9 +16,9 @@ You are generating 22 background wallpaper images for Spacron, a cross-platform 
 
 ## LIGHT MODE IMAGES (11 total)
 
-### 1. `light-office.webp`
-**Theme name:** Solace Sky Workspace
-**Prompt:** Aerial view looking across a vast sea of soft cumulus clouds from above, as if viewed from a high-altitude aircraft window on a calm morning. Warm white and pale gold cloud tops rolling gently across the entire frame. Diffused, even daylight with no harsh shadows or direct sun. The clouds fill the frame edge to edge with no visible ground or horizon. Serene, expansive, and minimal. Photorealistic, soft focus, 2560×1440.
+### 1. `light-cloud-window.webp`
+**Theme name:** Above the Clouds
+**Prompt:** View through an aircraft cabin window onto a vast sea of soft cumulus clouds at sunrise. The rounded window frame sits softly out of focus around the edges of the frame; beyond it, warm white and pale gold cloud tops roll gently to a hazy horizon. Diffused, even daylight with no harsh shadows or direct sun. No people, no cabin interior detail, no readable markings. Serene, expansive, and minimal. Photorealistic, soft focus, 2560×1440.
 
 ### 2. `light-architecture.webp`
 **Theme name:** Architectural Curves
@@ -33,11 +33,11 @@ You are generating 22 background wallpaper images for Spacron, a cross-platform 
 **Prompt:** Atmospheric interior of a grand classical library, but captured in soft focus throughout. Warm amber light streams through tall arched windows, creating visible dust-mote sunbeams. Towering bookshelves are suggested as warm, blurred vertical forms — no individual books or text are readable. Rich wood and brass tones glow softly. No people — the room is empty and hushed. The mood is warm, scholarly, and serene — like entering a cathedral of knowledge. Painterly, dreamlike quality. 2560×1440.
 
 ### 5. `light-greenhouse.webp`
-**Theme name:** Solarpunk Greenhouse
+**Theme name:** Rainy Greenhouse
 **Prompt:** View from inside a glass greenhouse looking outward through rain-streaked glass panels. Lush tropical foliage is visible through the wet glass but heavily diffused into a soft green wash — no individual leaves or plants are in focus. The glass surface with its water droplets and condensation is the foreground subject. Soft, even overcast daylight. Fresh, green, tranquil. Photorealistic with artistic blur, 2560×1440.
 
 ### 6. `light-desert.webp`
-**Theme name:** Canyon Desert Oasis
+**Theme name:** Canyon Overlook
 **Prompt:** Wide telephoto shot of layered desert canyon walls at sunrise, compressing the geological strata into horizontal bands of warm terracotta, ochre, pale sandstone, and dusty rose. Soft atmospheric haze between each layer creates depth separation. Shot from a great distance — no foreground rocks, vegetation, or objects. Just pure, abstracted geological colour bands stretching across the frame. Warm, ancient, serene. Photorealistic, 2560×1440.
 
 ### 7. `light-meadows.webp`
@@ -49,7 +49,7 @@ You are generating 22 background wallpaper images for Spacron, a cross-platform 
 **Prompt:** Overhead view of a Japanese karesansui rock garden — raked light grey gravel with soft concentric patterns flowing around a small cluster of dark stones. Framed by dark wood and bordered by muted moss. Soft, overcast daylight keeps the scene low-contrast and evenly lit. No people, no ornaments, no text — only calm geometry, gravel texture, and still air. Minimal, meditative, and restful. Photorealistic, 2560×1440.
 
 ### 9. `light-sakura.webp`
-**Theme name:** Sakura River Path
+**Theme name:** Sakura Blossoms
 **Prompt:** Soft-focus view of cherry blossom branches in full bloom against a bright, overcast sky. Pale pink blossoms form gentle, blurred masses along the top and edges of the frame, with a few petals drifting through the air. The background is a wash of white and pale blue — no ground, no people, no buildings. Diffused light, high but even luminance, low contrast. Delicate, airy, and serene. Photorealistic, soft focus, 2560×1440.
 
 ### 10. `light-autumn-path.webp`
@@ -57,7 +57,7 @@ You are generating 22 background wallpaper images for Spacron, a cross-platform 
 **Prompt:** Serene forest path in autumn with a warm golden-orange palette. Soft, diffused light filters through the trees creating a hazy, atmospheric glow. Tall tree trunks form gentle vertical lines on either side, while the path recedes into a bright, misty distance. Fallen leaves carpet the ground in soft washes of amber — nothing is sharp or in focus. No people, no signs. Calm, warm, and contemplative. Photorealistic, 2560×1440.
 
 ### 11. `light-balcony-morning.webp`
-**Theme name:** Mediterranean Balcony Morning
+**Theme name:** Coastal Dawn Terrace
 **Prompt:** Serene coastal scene at soft morning light — calm sea reflecting a pastel sky of pale pink, gold, and blue, with a hazy coastline dissolving into warm mist on the horizon. The immediate foreground is a blurred, out-of-focus stone wall corner adding gentle depth. No people, no boats, no readable details — everything soft and diffused. Bright but muted, low contrast, peaceful. Photorealistic, 2560×1440.
 
 ---
@@ -86,27 +86,27 @@ Beyond landscapes, these subjects are reliable for calm, even backgrounds behind
 ## DARK MODE IMAGES (11 total)
 
 ### 1. `dark-street.webp`
-**Theme name:** Rain-Soaked Bokeh Alley
+**Theme name:** Tokyo Neon Street
 **Prompt:** A narrow city alley at night in heavy rain, shot from a great distance with a telephoto lens so everything is heavily compressed and defocused. Neon signs in pink, purple, and cyan are completely out of focus — reduced to soft, floating colour orbs and halos with NO readable characters, glyphs, or letterforms. Rain-slicked pavement reflects the blurred lights as soft vertical streaks. No people, no vehicles, no sharp edges — just a warm, glowing, rain-soaked urban atmosphere dissolving into darkness at the edges. Photorealistic, shallow depth of field, 2560×1440.
 
-### 2. `dark-workspace.webp`
-**Theme name:** Quiet Cosmos
-**Prompt:** Deep space viewed from orbit — a vast, dark starfield with a faint, subtle blue-white nebula wash drifting across the centre. NO spacecraft interior, NO console, NO keyboard, NO screens, NO HUD, NO text of any kind. At least 70% of the frame is near-black, with only subtle colour wisps and a scattering of soft, dim star points. Contemplative, vast, and quiet. Photorealistic/sci-fi concept art, 2560×1440.
+### 2. `dark-aurora.webp`
+**Theme name:** Aurora Borealis
+**Prompt:** A wide arctic night sky with a broad aurora band in muted green and violet sweeping across the upper frame, above a dark, low snow horizon. The starfield is sparse and dim — small, soft points with no bright stars and no dense clusters. The aurora is a gentle, even gradient rather than a dramatic, high-contrast curtain. At least 60% of the frame is near-black. No people, no structures, no text. Vast, calm, and contemplative. Photorealistic, 2560×1440.
 
 ### 3. `dark-obsidian.webp`
-**Theme name:** Icelandic Black Sand
+**Theme name:** Black Sand Storm
 **Prompt:** Wide panoramic shot of an Icelandic black sand beach at twilight, completely calm and still. The sea is mirror-flat, with soft silver-white moonlight tracing the gentle wave lines along the wet volcanic sand. A heavy, moody overcast sky merges with the horizon in a seamless dark grey gradient. One or two distant basalt sea stacks are barely visible as dark silhouettes through the coastal mist. No crashing waves, no foam, no turbulence — pure stillness. Desaturated, powerful, and open. Cool grey-blue and charcoal palette. Photorealistic, 2560×1440.
 
 ### 4. `dark-forest.webp`
-**Theme name:** Mystical Neon Woods
+**Theme name:** Bioluminescent Woods
 **Prompt:** Dark forest at night with a faint, ethereal green-blue bioluminescent fog drifting between ancient tree trunks. The trees are soft, dark silhouettes — tall, vertical, and spaced apart. The fog is the only light source, providing gentle, diffused illumination that fades with distance and stays low in brightness — no bright glowing spots, no visible mushrooms or fireflies. No individual leaves, branches, or undergrowth are in focus. Deep greens, teals, and blacks dominate. Fantasy-like, tranquil, and otherworldly. Photorealistic with subtle digital art enhancement, 2560×1440.
 
-### 5. `dark-server-room.webp`
-**Theme name:** Cyber-Organic Core
+### 5. `dark-bokeh-lights.webp`
+**Theme name:** Neon Bokeh
 **Prompt:** Abstract extreme close-up of tiny server LED status lights in a dark data centre, shot with very shallow depth of field. The teal, amber, and white indicator lights are completely defocused into soft bokeh circles of varying sizes, floating in deep darkness like digital fireflies. NO readable hardware, cables, text, people, or structures — just a rhythmic field of gentle, dim light points on a near-black background. Tech-noir, minimal, and hypnotic. Photorealistic, 2560×1440.
 
 ### 6. `dark-ocean.webp`
-**Theme name:** Mirror Moon Path
+**Theme name:** Moonlit Sea
 **Prompt:** Dark, glassy ocean viewed at night under a full moon. The sea is completely calm and mirror-still — moonlight creates a broad, soft silver-white reflection path across the flat, gently rippling water, stretching from the mid-frame to the distant horizon. No cliff in the frame — just water, moon path, and sky, so the scene stays abstract and even. No crashing waves, no foam, no turbulence. The distant horizon is barely visible where dark sea meets dark sky. Deep navy, charcoal, and silver palette. Vast, contemplative, and quiet. Photorealistic, 2560×1440.
 
 ### 7. `dark-fireplace.webp`
@@ -114,8 +114,8 @@ Beyond landscapes, these subjects are reliable for calm, even backgrounds behind
 **Prompt:** Warm interior of a rustic cabin at night, softly lit by a crackling fireplace. Dark wooden log walls, a stone hearth, and a few blurred furnishings are suggested as soft, low-contrast forms — no sharp foreground objects, no readable detail. The fire glows gently, casting warm amber light that fades into deep shadow at the edges of the frame. A snowy window is a soft dark-blue shape on the right. No people, no text. Intimate, cozy, and calm. Photorealistic, painterly softness, 2560×1440.
 
 ### 8. `dark-nebula.webp`
-**Theme name:** Midnight Aurora
-**Prompt:** A vast, dark night sky with a single, very subtle, low-saturation aurora band in muted teal and violet. The starfield is SPARSE and DIM — small, soft points of light scattered sparsely, with NO bright stars, NO dense star clusters, and no sharp points. The aurora is a gentle, even colour gradient rather than dramatic swirling curtains. At least 60% of the frame is near-black. Quiet, vast, and contemplative — like looking into a very dark, calm sky. Photorealistic/sci-fi concept art, 2560×1440.
+**Theme name:** Cosmic Nebula
+**Prompt:** Deep space — a sparse, dark starfield with a single soft blue-white nebula cloud drifting near the centre of the frame. The nebula is a gentle, low-saturation wash rather than a bright, high-contrast structure. Stars are small, dim, and scattered sparsely, with NO bright points and NO dense clusters. At least 60% of the frame is near-black. Quiet, vast, and contemplative — like looking into a very dark, calm sky. Photorealistic/sci-fi concept art, 2560×1440.
 
 ### 9. `dark-rainy-window.webp`
 **Theme name:** Rainy City Skyline
@@ -126,7 +126,7 @@ Beyond landscapes, these subjects are reliable for calm, even backgrounds behind
 **Prompt:** A moody industrial loft interior at twilight, viewed from a distance and kept soft and low-contrast. Exposed brick and dark timber beams are suggested as warm, blurred masses. A large window shows a city skyline dissolving into dusk — cool blue outside, warm amber inside. No people, no readable signs, no sharp foreground furniture or objects — just atmosphere, architecture, and the warm/cool contrast of the light. Cozy, hushed, and cinematic but calm. Photorealistic, painterly softness, 2560×1440.
 
 ### 11. `dark-volcanic-cave.webp`
-**Theme name:** Basalt Shadows
+**Theme name:** Basalt Lava Cave
 **Prompt:** A dark volcanic basalt cave interior, calm and still. Tall columnar basalt formations recede into deep shadow as soft, barely-visible silhouettes — NO bright lava, NO glowing streams, NO sharp foreground rocks. Only a faint, distant warm ember glow deep inside the cave provides a subtle amber gradient, kept very low in brightness. The frame is at least 70% near-black, with soft charcoal and brown-grey tones. No people, no text, no harsh edges. Intimate, mysterious, and restful. Photorealistic, 2560×1440.
 
 ---
@@ -147,4 +147,4 @@ Before delivering each image, verify:
 
 ## File Output
 
-Save each image as `[filename].webp` in `static/backgrounds/`. Use the exact filenames from the headings above (e.g., `light-office.webp`, `dark-street.webp`, etc.).
+Save each image as `[filename].webp` in `static/backgrounds/`. Use the exact filenames from the headings above (e.g., `light-cloud-window.webp`, `dark-street.webp`, etc.). These filenames are referenced by `backgroundImage` in `src/lib/stores/presetThemes.ts` — rename one there too if you change it here.

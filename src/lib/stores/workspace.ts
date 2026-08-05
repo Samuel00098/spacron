@@ -69,6 +69,7 @@ activeProject.subscribe(($activeProject) => {
 
 export const newWorkspacePromptOpen = syncWritable<boolean>('newWorkspacePromptOpen', false);
 export const newFolderPromptOpen = syncWritable<boolean>('newFolderPromptOpen', false);
+export const cloneRepoPromptOpen = syncWritable<boolean>('cloneRepoPromptOpen', false);
 export const isProjectHUDOpen = syncWritable<boolean>('isProjectHUDOpen', false);
 
 export function toggleProjectHUD() {
@@ -1129,6 +1130,52 @@ export async function createProjectFolder(parentDir: string, name: string): Prom
   const project = await invoke<Project>('workspace_create_project', { parent: parentDir, name });
   await attachProjectToActiveWorkspace(project, project.root_path);
   return project;
+}
+
+/** A parsed line of `git clone --progress` output, forwarded from the backend. */
+export interface CloneProgress {
+  id: string;
+  phase: string;
+  percent: number | null;
+}
+
+/** Clone `url` into a new folder under `parentDir` and open it as the active
+ *  project — the "bring an existing repo here" flow, sitting alongside
+ *  `createProjectFolder` (start fresh) and `addFolderToWorkspace` (open existing).
+ *
+ *  A clone takes long enough that the caller needs to show progress, so the
+ *  backend streams `clone-progress` events tagged with a per-call id; pass
+ *  `onProgress` to receive them. `name` defaults to the repo name in the URL. */
+export async function cloneRepository(
+  url: string,
+  parentDir: string,
+  name?: string,
+  onProgress?: (progress: CloneProgress) => void,
+): Promise<Project> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const progressId = `clone-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  let unlisten: (() => void) | undefined;
+  if (onProgress) {
+    const { listen } = await import('@tauri-apps/api/event');
+    unlisten = await listen<CloneProgress>('clone-progress', (event) => {
+      // One listener per clone, but the event is app-wide — ignore other clones'.
+      if (event.payload?.id === progressId) onProgress(event.payload);
+    });
+  }
+
+  try {
+    const project = await invoke<Project>('workspace_clone_repo', {
+      url,
+      parent: parentDir,
+      name: name && name.trim() ? name.trim() : null,
+      progressId,
+    });
+    await attachProjectToActiveWorkspace(project, project.root_path);
+    return project;
+  } finally {
+    unlisten?.();
+  }
 }
 
 export function closeProject(projectId: string) {

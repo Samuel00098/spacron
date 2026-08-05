@@ -1,0 +1,426 @@
+/* CloneRepoModal — the dialog behind "Clone Repository".
+   Deliberately mirrors NewFolderModal.css (same dimensions, tokens, and motion)
+   so the two launchpad dialogs read as one family, with its own `cr-` prefix and
+   the progress bar the clone flow needs. Uses the app's theme variables so it
+   tracks light/dark and custom themes; local fallbacks keep it correct on themes
+   that don't define every token. */
+
+.cr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050; /* above the Project HUD (10000) */
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+  padding-top: calc(15 * var(--app-vh, 1vh));
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  animation: cr-fade 0.14s ease;
+}
+
+@keyframes cr-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cr-modal {
+  /* Force an opaque surface (via the RGB token) so the dialog is solid even on
+     glass/translucent themes where --bg-primary carries alpha. */
+  --cr-surface: rgb(var(--bg-primary-rgb, 24, 24, 30));
+  --cr-elevated: color-mix(in srgb, var(--text-primary, #fff) 4%, var(--cr-surface));
+  --cr-border: var(--border, rgba(255, 255, 255, 0.1));
+  --cr-border-strong: color-mix(in srgb, var(--text-primary, #fff) 16%, transparent);
+  --cr-ring: color-mix(in srgb, var(--accent, #6ea8fe) 32%, transparent);
+
+  position: relative;
+  width: 500px;
+  max-width: 100%;
+  border: 1px solid var(--cr-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent, #6ea8fe) 10%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, var(--cr-elevated) 0%, var(--cr-surface) 100%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 32px 70px -18px rgba(0, 0, 0, 0.6),
+    0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: cr-pop 0.24s cubic-bezier(0.34, 1.28, 0.64, 1);
+}
+
+@keyframes cr-pop {
+  from { transform: translateY(-10px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0) scale(1);        opacity: 1; }
+}
+
+.cr-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted, #8a8a99);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.cr-close:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+  border-color: var(--cr-border);
+}
+
+.cr-close:disabled { opacity: 0.4; cursor: default; }
+
+.cr-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+/* Header */
+.cr-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 26px 18px;
+}
+
+.cr-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  color: var(--accent, #6ea8fe);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent, #6ea8fe) 22%, transparent), color-mix(in srgb, var(--accent, #6ea8fe) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--accent, #6ea8fe) 35%, transparent);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
+}
+
+.cr-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cr-title {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary, #fff);
+}
+
+.cr-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-muted, #8a8a99);
+}
+
+/* Body */
+.cr-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 26px 22px;
+}
+
+.cr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.cr-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-optional {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-muted, #8a8a99);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cr-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--text-primary, #fff) 3%, var(--cr-surface));
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  caret-color: var(--accent, #6ea8fe);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.cr-input::placeholder {
+  color: var(--text-muted, #8a8a99);
+  opacity: 0.7;
+}
+
+.cr-input:focus {
+  border-color: var(--accent, #6ea8fe);
+  box-shadow: 0 0 0 3px var(--cr-ring);
+  background: var(--cr-surface);
+}
+
+.cr-input:disabled { opacity: 0.55; cursor: default; }
+
+/* Location selector — a button styled like a field */
+.cr-location {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 42px;
+  padding: 0 12px 0 14px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px dashed var(--cr-border-strong);
+  background: color-mix(in srgb, var(--text-primary, #fff) 2%, var(--cr-surface));
+  color: var(--text-secondary, #c4c4d0);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.cr-location:hover:not(:disabled) {
+  border-color: var(--accent, #6ea8fe);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 6%, var(--cr-surface));
+}
+
+.cr-location:disabled { opacity: 0.55; cursor: default; }
+
+.cr-location:focus-visible {
+  outline: none;
+  border-color: var(--accent, #6ea8fe);
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+.cr-location svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.cr-location-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-location.is-empty .cr-location-text {
+  color: var(--text-muted, #8a8a99);
+}
+
+.cr-location-cta {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #6ea8fe);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent);
+}
+
+/* Preview line: "Cloning into <b>name</b> in <b>place</b>" */
+.cr-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 5%, transparent);
+  font-size: 12px;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-preview svg { flex-shrink: 0; color: var(--accent, #6ea8fe); opacity: 0.9; }
+.cr-preview b { color: var(--text-primary, #fff); font-weight: 600; }
+.cr-preview .cr-preview-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Progress — git's own phases, streamed while the clone runs */
+.cr-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: -4px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 5%, transparent);
+}
+
+.cr-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-progress-phase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-progress-pct {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.cr-progress-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 10%, transparent);
+  overflow: hidden;
+}
+
+.cr-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent, #6ea8fe);
+  transition: width 0.2s ease;
+}
+
+/* Before git reports a percentage (resolving the remote, counting objects) the
+   bar slides instead of sitting at zero, so the dialog never looks stalled. */
+.cr-progress-track.indeterminate .cr-progress-fill {
+  width: 35%;
+  animation: cr-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes cr-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.cr-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--error, #ef4444) 45%, transparent);
+  background: color-mix(in srgb, var(--error, #ef4444) 12%, transparent);
+  color: var(--error, #ef4444);
+  font-size: 12px;
+}
+
+.cr-error svg { flex-shrink: 0; }
+
+/* Footer */
+.cr-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 26px 22px;
+  border-top: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--text-primary, #fff) 2%, transparent);
+}
+
+.cr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease, transform 0.1s ease, opacity 0.14s ease;
+}
+
+.cr-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+.cr-btn.ghost {
+  background: transparent;
+  color: var(--text-secondary, #c4c4d0);
+  border: 1px solid var(--cr-border);
+}
+
+.cr-btn.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+}
+
+.cr-btn.primary {
+  background: var(--accent, #6ea8fe);
+  color: var(--accent-contrast, #0b0b12);
+  border: 1px solid color-mix(in srgb, #000 12%, var(--accent, #6ea8fe));
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent, #6ea8fe) 70%, transparent);
+}
+
+.cr-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.cr-btn.primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.cr-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-backdrop,
+  .cr-modal { animation: none; }
+  .cr-progress-track.indeterminate .cr-progress-fill { animation: none; width: 100%; opacity: 0.5; }
+  .cr-btn.primary:hover:not(:disabled) { transform: none; }
+}

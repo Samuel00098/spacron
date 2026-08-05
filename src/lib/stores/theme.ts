@@ -330,14 +330,25 @@ export function applyThemeToCSS(theme: Theme | null) {
     root.style.setProperty('--user-bg-opacity', (opacity / 100).toFixed(3));
     root.style.setProperty('--user-bg-blur', `${blur}px`);
 
-    // Force 50% frost transparency when a theme has a built-in background image
-    // so the background wallpaper is clearly visible through the glass UI.
+    // A theme with a built-in wallpaper bumps frost to 50 when the transparency
+    // setting is 0, so the wallpaper reads through the panels instead of the
+    // panels sitting solid on top of it.
+    //
+    // This applies on every platform, Linux included — but what the bump buys
+    // differs. On Windows (WebView2) and macOS (WKWebView) `backdrop-filter`
+    // works, so it produces real frosted glass. On WebKitGTK `backdrop-filter` is
+    // a silent no-op (measured with an onscreen probe — see
+    // `.spacron/memory/platform-glass-transparency.md`), so there the same bump
+    // produces plain translucency: the wallpaper shows through the panel tint
+    // unblurred. That is the intended Linux look. Frosted glass cannot be had
+    // there, and solid-coloured panels read worse than an honest see-through tint.
+    //
+    // Linux used to be excluded here, from when `--bg-primary` was alpha 0.15 and
+    // the bump left only a ~12% tint over a sharp wallpaper — illegible. The
+    // `.is-webkitgtk` block in global.css now raises those alphas to 0.88–0.94, so
+    // the bump lands at ~0.69 fill (~31% wallpaper) and text stays readable.
     const trans = get(interfaceTransparency);
-    if (trans === 0) {
-      applyInterfaceFrost(50);
-    } else {
-      applyInterfaceFrost(trans);
-    }
+    applyInterfaceFrost(trans === 0 ? 50 : trans);
   } else {
     // Revert to global settings-controlled background image if settings active
     const settingsActive = get(backgroundImageEnabled) && hasBackgroundImage();

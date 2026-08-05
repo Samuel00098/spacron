@@ -66,7 +66,7 @@ export function toggleCommandPalette() {
   });
 }
 
-import { newWorkspacePromptOpen, newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
+import { newWorkspacePromptOpen, newFolderPromptOpen, cloneRepoPromptOpen, openProject, openProjectByPath } from './workspace';
 import { knowledgeGraphOpen } from '$lib/services/orchestrator/knowledge';
 import { saveActiveFile, formatActiveFile } from './editor';
 import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager } from './layout';
@@ -103,6 +103,12 @@ export function initDefaultCommands() {
       name: 'New Folder...',
       category: 'Workspace',
       action: () => newFolderPromptOpen.set(true),
+    },
+    {
+      id: 'workspace.clone_repo',
+      name: 'Clone Repository...',
+      category: 'Workspace',
+      action: () => cloneRepoPromptOpen.set(true),
     },
     {
       id: 'sidebar.toggle',

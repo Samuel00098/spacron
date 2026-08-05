@@ -75,6 +75,58 @@
   --input-bg:      rgba(255, 255, 255, 0.20) !important;
 }
 
+/* ── Linux (WebKitGTK) panel legibility ────────────────────────────────────
+   Every glass surface in the app is painted as a very low-alpha tint and leans on
+   `backdrop-filter: blur(...)` to turn the wallpaper behind it into a soft wash —
+   that blur, not the tint, is what keeps text readable on Windows (WebView2) and
+   macOS (WKWebView). WebKitGTK does not deliver that blur reliably, so on Linux
+   the identical markup renders as a sharp wallpaper barely veiled by a ~12% tint
+   and panel contents become hard to read. The 12% is not a guess: panels fill with
+   `color-mix(var(--bg-primary) calc(var(--frost-chrome) * 100%), transparent)`,
+   which is 0.15 x ~0.78 once a themed wallpaper forces frost to 50.
+
+   So rebuild the legibility out of tint instead of blur: raise the base alphas
+   high enough to read against any wallpaper. `--frost-base` is left alone — it
+   drives the full-window wash (`body::after`), not the panels, so the wallpaper
+   still reads brightly in the gaps between panels.
+
+   The frost multipliers are deliberately NOT pinned here. Pinning them to 1 made
+   the fill alpha exact, but it also made the Settings transparency slider a no-op
+   on Linux; leaving them alone means the raised alphas scale with the slider the
+   way they do on the other platforms. Applies with or without a wallpaper: this
+   flat tint is the whole Linux story now that the faux-frost is gone. At
+   transparency 0 `.solid-theme` takes over and the panels go fully opaque, which
+   is the default. */
+:root:not(.solid-theme).is-webkitgtk {
+  --bg-primary:      rgba(var(--bg-primary-rgb), 0.88) !important;
+  --bg-secondary:    rgba(var(--bg-secondary-rgb), 0.90) !important;
+  --bg-tertiary:     rgba(var(--bg-tertiary-rgb), 0.92) !important;
+  --editor-bg:       rgba(var(--bg-primary-rgb), 0.88) !important;
+  --panel-bg:        rgba(var(--bg-primary-rgb), 0.88) !important;
+  --sidebar-bg:      rgba(var(--bg-secondary-rgb), 0.90) !important;
+  --terminal-bg:     rgba(var(--bg-secondary-rgb), 0.90) !important;
+  --titlebar-bg:     rgba(var(--bg-secondary-rgb), 0.90) !important;
+  --tab-active-bg:   rgba(var(--bg-primary-rgb), 0.88) !important;
+  --tab-inactive-bg: rgba(var(--bg-secondary-rgb), 0.78) !important;
+  --input-bg:        rgba(var(--bg-primary-rgb), 0.92) !important;
+}
+
+/* Same treatment for light themes, which start from their own literal tints
+   (see the block above) rather than from `--bg-*-rgb`. */
+:root:not(.solid-theme).light-theme.is-webkitgtk {
+  --bg-primary:      rgba(248, 248, 252, 0.90) !important;
+  --bg-secondary:    rgba(240, 240, 246, 0.92) !important;
+  --bg-tertiary:     rgba(232, 232, 240, 0.94) !important;
+  --editor-bg:       rgba(248, 248, 252, 0.90) !important;
+  --panel-bg:        rgba(248, 248, 252, 0.90) !important;
+  --sidebar-bg:      rgba(240, 240, 246, 0.92) !important;
+  --terminal-bg:     rgba(240, 240, 246, 0.92) !important;
+  --titlebar-bg:     rgba(240, 240, 246, 0.92) !important;
+  --tab-active-bg:   rgba(248, 248, 252, 0.90) !important;
+  --tab-inactive-bg: rgba(240, 240, 246, 0.80) !important;
+  --input-bg:        rgba(255, 255, 255, 0.94) !important;
+}
+
 /* Role & Semantic colors — darker/higher-contrast variants for readability on light backgrounds */
 :root.light-theme,
 html.bg-palette-light {
@@ -345,6 +397,22 @@ html {
   width: 100%;
   overflow: hidden;
   background-color: var(--bg-primary);
+}
+
+/* Linux (WebKitGTK) has nothing to fill a transparent window with. macOS gets an
+   NSVisualEffectView (`apply_vibrancy`) and Windows gets acrylic/mica behind the
+   webview, so their translucent surfaces resolve to frosted glass; `window-vibrancy`
+   ships no Linux backend, and there is no cross-desktop blur-behind protocol to
+   stand in for one (KWin has `org_kde_kwin_blur`, but Mutter and cosmic-comp expose
+   nothing). A translucent root there just reveals the raw, unblurred desktop — the
+   "see-through panel" look. Pin the root to the active theme's own base colour,
+   fully opaque, so the wallpaper, scrims and backdrop-filter panels stacked above it
+   composite against the app instead of the desktop, matching macOS and Windows.
+   `--bg-primary` itself can't be reused: it is force-overridden to a low-alpha value
+   for the glass stack (see the `:not(.solid-theme)` block above), so the opaque
+   colour is rebuilt from the theme's `--bg-primary-rgb` triple. */
+html.is-webkitgtk {
+  background-color: rgb(var(--bg-primary-rgb, 24, 24, 30)) !important;
 }
 
 /* User background image — painted on a fixed, full-window layer behind

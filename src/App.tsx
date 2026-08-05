@@ -12,6 +12,7 @@ import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import AgentPlacementModal from '$lib/components/shared/AgentPlacementModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
+import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
@@ -28,6 +29,7 @@ import {
 import {
   newWorkspacePromptOpen,
   newFolderPromptOpen,
+  cloneRepoPromptOpen,
   initializeWorkspaces,
   saveProjectState,
   activeProjectId,
@@ -84,6 +86,7 @@ export default function App() {
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
   const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
+  const isCloneRepoPromptOpen = useStore(cloneRepoPromptOpen);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
   const shell = useStore(shellMode);
 
@@ -214,6 +217,7 @@ export default function App() {
 
       {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
       {isNewFolderPromptOpen && <NewFolderModal />}
+      {isCloneRepoPromptOpen && <CloneRepoModal />}
 
       {!hasCompletedOnboarding && (
         <Suspense fallback={null}>
