@@ -11,6 +11,7 @@ interface WorkspaceState {
   isProjectSwitching: boolean;
   newWorkspacePromptOpen: boolean;
   newFolderPromptOpen: boolean;
+  cloneRepoPromptOpen: boolean;
   isProjectHUDOpen: boolean;
   __set: (key: string, value: unknown) => void;
 }
@@ -38,6 +39,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   isProjectSwitching: false,
   newWorkspacePromptOpen: false,
   newFolderPromptOpen: false,
+  cloneRepoPromptOpen: false,
   isProjectHUDOpen: false,
 
   __set: (key, value) => {

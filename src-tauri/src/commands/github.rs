@@ -72,6 +72,16 @@ fn read_token() -> Result<String, String> {
     }
 }
 
+/// The `AUTHORIZATION: basic …` header value for the saved token, or None when no
+/// token is stored. Callers pass this to git as `http.<host>.extraheader` so the
+/// credential stays out of the URL, `.git/config`, and the process listing — see
+/// `push_with_token` for the same pattern on push.
+pub(crate) fn github_auth_header() -> Option<String> {
+    let token = read_token().ok()?;
+    let cred = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
+    Some(format!("AUTHORIZATION: basic {cred}"))
+}
+
 /// GitHub repository names allow letters, digits, '-', '_', and '.'.
 fn validate_repo_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > 100 {

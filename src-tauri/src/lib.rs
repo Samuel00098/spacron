@@ -262,6 +262,7 @@ pub fn run() {
             commands::notification::notification_show,
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
+            commands::git_clone::workspace_clone_repo,
             commands::workspace::workspace_get_active,
             commands::workspace::workspace_set_active,
             commands::workspace::workspace_list_projects,
