@@ -1,6 +1,8 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import { getAppFlag, setAppFlag } from '$lib/services/app-flags';
-import { useSettingsStore } from './zustand/settings';
+import { useSettingsStore, type ShellMode, type UiDensity } from './zustand/settings';
+
+export type { ShellMode, UiDensity };
 
 function persistentWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   if (typeof window === 'undefined') {
@@ -144,6 +146,21 @@ export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 // Window
 export type CloseBehavior = 'quit' | 'minimize';
 export const closeBehavior = persistentWritable<CloseBehavior>('closeBehavior', 'quit');
+
+/**
+ * Which shell renders the workspace — the one-column stream, or the tiled
+ * ambient room grid. The stream is the default; the grid stays reachable
+ * because some things only exist there (several live terminals at once, the
+ * gallery/vibe presets), and a default change should not delete capability.
+ */
+export const shellMode = persistentWritable<ShellMode>('shellMode', 'stream');
+
+/**
+ * How much detail the stream shows. `simple` hides branch names, token/time
+ * counters and the developer tool surfaces; `pro` reveals them in place. One
+ * layout at two depths, never two layouts.
+ */
+export const uiDensity = persistentWritable<UiDensity>('uiDensity', 'simple');
 
 // ── AI providers & models ──
 // Voice refinement and AI commit messages route through one of several

@@ -2,6 +2,7 @@ import { useEffect, lazy, Suspense } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import AppShell from '$lib/components/layout/AppShell.tsx';
+import StreamShell from '$lib/components/stream/StreamShell.tsx';
 import BackgroundMedia from '$lib/components/shared/BackgroundMedia.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
@@ -46,6 +47,7 @@ import {
   interfaceTransparency,
   backgroundImageBlur,
   closeBehavior,
+  shellMode,
 } from '$lib/stores/settings';
 import {
   initBackground,
@@ -83,6 +85,7 @@ export default function App() {
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
   const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
+  const shell = useStore(shellMode);
 
   useEffect(() => {
     if (isTauriRuntime()) {
@@ -187,7 +190,10 @@ export default function App() {
   return (
     <>
       <BackgroundMedia />
-      <AppShell />
+      {/* One shell at a time, never both. The two mount the same terminal
+          sessions, and a session attached to two live xterms renders into
+          neither correctly. */}
+      {shell === 'stream' ? <StreamShell /> : <AppShell />}
 
       <CommandPalette />
       <FloatingSearch />

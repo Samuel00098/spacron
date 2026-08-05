@@ -1,0 +1,537 @@
+/*
+ * The stream shell.
+ *
+ * Written against the app's theme tokens (`--bg-*`, `--text-*`, `--accent`)
+ * rather than the mockup's fixed cream-and-sage palette, so the layout inherits
+ * whatever theme is loaded instead of being a second, competing one. The mockup
+ * supplied the *structure* — one 820px column, three bands, a pinned composer —
+ * which is the part that was actually being designed.
+ */
+
+.stream-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.stream-welcome {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The UI zoom setting lives on `zoom-content`'s `zoom`, and the ambient shell's
+   copy of these rules is scoped to `.app-shell`. Repeated rather than widened in
+   AppShell.css so this shell's layout stays in this shell's files. */
+.stream-shell .zoom-wrapper {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.stream-shell .zoom-content {
+  --zoom-factor: calc(var(--ui-zoom-percent, 100) / 100);
+  zoom: var(--zoom-factor);
+  /* Re-derive the zoom-corrected viewport units (see #app in global.css) so
+     descendants also divide out the user zoom level applied here. */
+  --app-vw: calc(1vw / (var(--ui-scale, 1) * var(--zoom-factor)));
+  --app-vh: calc(1vh / (var(--ui-scale, 1) * var(--zoom-factor)));
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+
+.stream-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+}
+
+.st-spacer { flex: 1; }
+
+.st-project {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 10px 5px 6px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-project:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.st-project-sq {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.st-omni {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 9px;
+  width: 260px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-omni:hover { color: var(--text-secondary); border-color: var(--accent); }
+.st-omni span { flex: 1; text-align: left; }
+.st-omni kbd,
+.stsheet-close kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.st-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.st-seg button {
+  padding: 5px 11px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-seg button:hover { color: var(--text-primary); }
+.st-seg button.on {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.st-icon {
+  width: 31px;
+  height: 31px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-icon:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* ── The column ──────────────────────────────────────────────────────────── */
+
+.stream-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 20px 8px;
+}
+
+.stream-wrap {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.st-band {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.st-bandhead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 0 2px;
+}
+.st-bandhead h2 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.st-bandsub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.st-bandtoggle {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.st-bandtoggle:hover { color: var(--text-primary); }
+
+/* Own class rather than a shared `.dot`: the band markers sit in a flex row of
+   baseline-aligned text and need `align-self: center`, which a generic dot
+   elsewhere in the app would not want. */
+.st-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  align-self: center;
+  flex: none;
+}
+.st-dot.attn {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.st-dot.run { background: var(--warning); }
+.st-dot.done { background: var(--success); opacity: 0.65; }
+
+/* ── First run ───────────────────────────────────────────────────────────── */
+
+.st-firstrun {
+  padding: 48px 4px 8px;
+  text-align: center;
+}
+.st-firstrun h1 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+.st-firstrun p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 46ch;
+  margin: 0 auto 18px;
+}
+.st-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.st-examples button {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-examples button:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+/* ── Band 1: a decision ──────────────────────────────────────────────────── */
+
+.st-review {
+  border: 1px solid var(--accent-light);
+  border-radius: 16px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.st-rh {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px 15px 10px;
+}
+
+/* AgentBrandMark draws at 100% of its container, so an unsized parent lets a
+   fetched favicon render at its own intrinsic size. */
+.st-av {
+  width: 29px;
+  height: 29px;
+  border-radius: 9px;
+  background: var(--bg-tertiary);
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 6px;
+}
+.st-av.small { width: 26px; height: 26px; padding: 5px; }
+
+/* AppShell's `.agent-brand-mark` sizing rule is scoped to `.app-shell`, so a
+   mark mounted anywhere else renders at its intrinsic size — which for a
+   fetched favicon is whatever the site shipped, and for the letter glyph is
+   nothing at all. Stated locally, as FleetDashboard's card already does. */
+.st-av .agent-brand-mark,
+.stsheet-mark .agent-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.st-av .agent-brand-mark > svg,
+.st-av .agent-brand-mark > img,
+.stsheet-mark .agent-brand-mark > svg,
+.stsheet-mark .agent-brand-mark > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.st-who { flex: 1; min-width: 0; }
+.st-ttl {
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.st-agent { color: var(--accent); }
+.st-say {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 3px 0 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.st-when {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex: none;
+  padding-top: 3px;
+}
+
+.st-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 0 15px 11px;
+}
+.st-fact {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  padding: 3px 8px;
+}
+.st-fact.warn { color: var(--warning); }
+.st-fact .add { color: var(--success); font-family: var(--font-mono); }
+.st-fact .del { color: var(--error); font-family: var(--font-mono); }
+
+.st-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 15px 15px;
+}
+.st-sendback .st-actions,
+.st-confirm .st-actions { padding: 8px 0 0; }
+
+.st-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  border-radius: 9px;
+  padding: 8px 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.st-btn:disabled { opacity: 0.5; cursor: default; }
+.st-btn.go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-secondary);
+  font-weight: 700;
+}
+.st-btn.go:hover:not(:disabled) {
+  filter: brightness(1.09);
+  background: var(--accent);
+  color: var(--bg-secondary);
+}
+.st-btn.ghost { border-color: transparent; color: var(--text-muted); }
+.st-btn.ghost:hover:not(:disabled) { border-color: transparent; }
+.st-btn.tail { margin-left: auto; }
+
+.st-confirm { padding: 0 15px 15px; }
+.st-confirm p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.st-sendback { padding: 0 15px 15px; }
+.st-sendback textarea {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-light);
+  border-radius: 11px;
+  padding: 11px 13px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 66px;
+  outline: none;
+}
+.st-sendback textarea:focus { border-color: var(--accent); }
+.st-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+/* ── Band 2: working now ─────────────────────────────────────────────────── */
+
+.st-run {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: 0.13s;
+}
+.st-run:hover { border-color: var(--accent); background: var(--bg-hover); }
+
+.st-runmid { flex: 1; min-width: 0; }
+.st-runname {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.st-runname em {
+  font-style: normal;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.st-runnow {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-runnow i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex: none;
+  animation: st-breathe 2.2s ease-in-out infinite;
+}
+
+@keyframes st-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st-runnow i { animation: none; opacity: 0.8; }
+}
+
+.st-runbranch {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.st-stop {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 3px 9px;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+  transition: 0.13s;
+}
+.st-stop:hover { color: var(--error); border-color: var(--error); }
+
+/* ── Band 3: done today ──────────────────────────────────────────────────── */
+
+.st-done {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.st-done:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.st-done b { color: var(--text-secondary); font-weight: 600; }
+.st-donetext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-tick { color: var(--success); opacity: 0.8; }
+.st-tick.failed { color: var(--error); }
+
+/* ── Composer ────────────────────────────────────────────────────────────── */
+
+.stream-compose {
+  flex: none;
+  padding: 12px 20px 15px;
+  border-top: 1px solid var(--border-subtle);
+}
+/* The composer's wrap holds one child, so the column gap would add dead space
+   under the bar. */
+.stream-compose .stream-wrap { gap: 0; }

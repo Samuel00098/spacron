@@ -1,0 +1,202 @@
+/* The slide-over.
+ *
+ * Positioned against `.stream-shell .zoom-wrapper` (the shell's only positioned
+ * ancestor) rather than the viewport, so it starts below the title bar instead
+ * of covering the window controls — and so it scales with the UI zoom applied
+ * on `.zoom-content` above it.
+ */
+
+.stsheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.stsheet-scrim.open { opacity: 1; pointer-events: auto; }
+
+.stsheet {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(760px, 72%);
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.45);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(102%);
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.stsheet.open { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stsheet { transition: none; }
+  .stsheet-scrim { transition: none; }
+}
+
+.stsheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+}
+.stsheet-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 5px;
+}
+.stsheet-title {
+  font-size: 14px;
+  font-weight: 650;
+  min-width: 0;
+}
+.stsheet-title small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stsheet-close {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 9px;
+  cursor: pointer;
+  flex: none;
+  transition: 0.13s;
+}
+.stsheet-close:hover { color: var(--text-primary); border-color: var(--accent); }
+
+.stsheet-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+}
+.stsheet-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.stsheet-tabs button:hover:not(:disabled) { color: var(--text-secondary); }
+.stsheet-tabs button:disabled { opacity: 0.4; cursor: default; }
+.stsheet-tabs button.on {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+.stsheet-tabcount {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.stsheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The embedded panels manage their own scrolling and expect to fill their box. */
+.stsheet-panel,
+.stsheet-terminal {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stsheet-changes { padding: 14px; }
+
+.stsheet-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.stsheet-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 22px 14px;
+  text-align: center;
+}
+
+.stsheet-file + .stsheet-file { margin-top: 6px; }
+
+.stsheet-file-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 11px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.stsheet-file-row:hover { color: var(--text-primary); border-color: var(--accent); }
+.stsheet-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.stsheet-file-stat {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  flex: none;
+}
+.stsheet-file-stat .add { color: var(--success); }
+.stsheet-file-stat .del { color: var(--error); }
+
+.stsheet-file-diff {
+  margin: 4px 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  overflow: hidden;
+}

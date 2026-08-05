@@ -37,136 +37,35 @@
  * unrecoverable. Discard goes through `reclaimWorktree`, which stages anything
  * outstanding and re-asks git before removing anything.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
+import { setActiveSession } from '$lib/stores/terminal';
+import { stageAgentWorktree } from '$lib/stores/orchestrator';
+import { mergeTaskWorktree, reclaimWorktree } from '$lib/services/orchestrator/worktree-manager';
 import {
-  sessions,
-  devSessions,
-  allProjectSessions,
-  setActiveSession,
-  getAgentDisplayName,
-  isAgentSession,
-} from '$lib/stores/terminal';
-import { orchestratorTasks, stageAgentWorktree } from '$lib/stores/orchestrator';
-import {
-  mergeTaskWorktree,
-  reclaimWorktree,
-  type WorktreeInfo,
-} from '$lib/services/orchestrator/worktree-manager';
-import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
+  useFleetRows,
+  useFleetStats,
+  statKey,
+  FLEET_POLL_MS,
+  FLEET_STATUS_LABEL,
+  type FleetRow,
+} from './useFleetRows';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import './FleetDashboard.css';
 
-/** How often the per-card diff stat is refreshed. Three cheap git reads each. */
-const POLL_MS = 5000;
-
-type FleetStatus = 'working' | 'awaiting' | 'finished' | 'failed' | 'exited';
-
-/** Where the agent is doing its work — decides which actions the card offers. */
-type FleetPlacement = 'worktree' | 'main';
-
-interface FleetRow {
-  /**
-   * Stable identity. A worktree path for an isolated agent (the natural key —
-   * it outlives the pane); the session id for a main-repo one, which has no
-   * checkout of its own to be named by.
-   */
-  key: string;
-  projectId: string;
-  agentName: string;
-  agentPreset: string | null;
-  placement: FleetPlacement;
-  /** Set only when `placement === 'worktree'`. */
-  worktree: WorktreeInfo | null;
-  /**
-   * The repo the card's numbers are read from. `null` means the project root —
-   * left to the backend rather than spelled out, so the path never has to
-   * survive a round trip through `canonicalize` to be recognised as the root.
-   */
-  repoPath: string | null;
-  /** Fork point to measure against; `null` means HEAD — the main-repo case. */
-  baseCommit: string | null;
-  /** True while the owning agent's pane is still alive. */
-  live: boolean;
-  sessionId: number | null;
-  task: OrchestratorTask | null;
-  status: FleetStatus;
-}
-
-interface FileStat {
-  path: string;
-  additions: number;
-  deletions: number;
-  status: string;
-}
-
-interface DiffStat {
-  files: FileStat[];
-  total_additions: number;
-  total_deletions: number;
-  /**
-   * What the backend actually measured against. Echoed back because a main-repo
-   * row asks for "HEAD" without knowing the sha, and the per-file diff has to
-   * open against the *same* base or it would show a different change set.
-   */
-  base_commit: string;
-}
-
-/**
- * Cards sharing a repo and a base share one git read. Every main-repo agent in
- * a project resolves to the same pair, so a fleet of five would otherwise poll
- * the same diff five times every {@link POLL_MS}.
- */
-function statKey(row: Pick<FleetRow, 'repoPath' | 'baseCommit'>): string {
-  return `${row.repoPath ?? '<root>'}@${row.baseCommit ?? 'HEAD'}`;
-}
-
-const STATUS_LABEL: Record<FleetStatus, string> = {
-  working: 'Working',
-  awaiting: 'Awaiting input',
-  finished: 'Finished',
-  failed: 'Failed',
-  exited: 'Exited',
-};
-
-/**
- * Derive a card's status.
- *
- * Reads the orchestrator task where there is one — its `blocked`/`complete`
- * states come from the turn watcher, which since §0b is driven by a sentinel
- * the agent emits rather than a guess about its screen. A dashboard fed by
- * screen-scraped turn state would be presenting a guess as a fact, which is
- * why this item was sequenced after that one.
- */
-function statusFor(task: OrchestratorTask | null, live: boolean): FleetStatus {
-  if (task) {
-    if (task.status === 'blocked') return 'awaiting';
-    if (task.status === 'complete') return 'finished';
-    if (task.status === 'failed' || task.status === 'cancelled') return 'failed';
-    if (task.status === 'in-progress') return live ? 'working' : 'exited';
-  }
-  return live ? 'working' : 'exited';
-}
-
 export default function FleetDashboard() {
   const project = useStore(activeProject);
   const projectId = project?.id ?? null;
-  const tasks = useStore(orchestratorTasks);
-  // All three session stores, per the lookup gotcha in
-  // `.spacron/memory/agent-worktrees.md`: `sessions` is the active project's
-  // non-dev panes only, `devSessions` never reaches `allProjectSessions`, and
-  // an agent spawned into the Development ambient lives solely in the latter.
-  // Reading one store alone silently drops whole agents from the fleet.
-  const activeSessions = useStore(sessions);
-  const devProjectSessions = useStore(devSessions);
-  const crossProjectSessions = useStore(allProjectSessions);
+  // Rows and their diff stats are derived in `useFleetRows` so this panel and
+  // the stream shell can never disagree about who is in the fleet.
+  const rows = useFleetRows();
+  const { stats, refresh: refreshStats } = useFleetStats(rows);
 
-  const [stats, setStats] = useState<Record<string, DiffStat>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [openFileKey, setOpenFileKey] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -175,135 +74,6 @@ export default function FleetDashboard() {
   /** The checkout's own branch, for labelling main-repo cards. */
   const [mainBranch, setMainBranch] = useState<string | null>(null);
 
-  const rows = useMemo<FleetRow[]>(() => {
-    if (!projectId) return [];
-    const byKey = new Map<string, FleetRow>();
-
-    const allSessions = [...activeSessions, ...devProjectSessions, ...crossProjectSessions];
-    for (const session of allSessions) {
-      if (session.projectId !== projectId) continue;
-      // Only agent panes. `sessions` also holds the user's own shells, and a
-      // main-repo row is no longer distinguished by carrying a worktree, so
-      // without this every terminal in the project would join the fleet.
-      if (!isAgentSession(session)) continue;
-      // Keyed by worktree where there is one — it outlives the pane, so an
-      // isolated agent keeps its identity across a restart — and by session id
-      // otherwise, since a main-repo agent has no checkout to be named by.
-      const key = session.worktree ? session.worktree.path : `session:${session.id}`;
-      // A session already recorded is the same pane seen through another store.
-      // Keep the first, but never let a later copy downgrade `live`.
-      const existing = byKey.get(key);
-      if (existing) {
-        existing.live = existing.live || session.isRunning === true;
-        continue;
-      }
-      const task = tasks.find(
-        (t) => t.assignedSessionId === session.id || t.lastSessionId === session.id,
-      ) ?? null;
-      const live = session.isRunning === true;
-      byKey.set(key, {
-        key,
-        projectId,
-        agentName:
-          session.agentName?.trim() || getAgentDisplayName(session.agentPreset) || 'Agent',
-        agentPreset: session.agentPreset ?? null,
-        placement: session.worktree ? 'worktree' : 'main',
-        worktree: session.worktree ?? null,
-        // A main-repo agent edits the checkout itself, measured against HEAD —
-        // both left null so the backend supplies the project's own root and
-        // current commit.
-        repoPath: session.worktree?.path ?? null,
-        baseCommit: session.worktree?.baseCommit ?? null,
-        live,
-        sessionId: session.id,
-        task,
-        status: statusFor(task, live),
-      });
-    }
-
-    // Task-owned worktrees (orchestrator-dispatched agents). A session-owned
-    // entry already carries live status, so don't overwrite it.
-    //
-    // Only worktree-owning tasks are added here. A `skipWorktree` task whose
-    // pane is still around already came through the loop above; once that pane
-    // is gone there is nothing left that is specific to it — no branch, no
-    // checkout, and a diff that is just the project's, which Source Control
-    // already shows. A card for it would be a second name on someone else's
-    // changes.
-    for (const task of tasks) {
-      if (!task.worktree || task.projectId !== projectId) continue;
-      if (byKey.has(task.worktree.path)) continue;
-      const sessionId = task.assignedSessionId ?? task.lastSessionId ?? null;
-      const live =
-        sessionId !== null && allSessions.some((s) => s.id === sessionId && s.isRunning);
-      byKey.set(task.worktree.path, {
-        key: task.worktree.path,
-        projectId,
-        agentName: task.name?.trim() || getAgentDisplayName(task.agentPreset) || 'Agent',
-        agentPreset: task.agentPreset ?? null,
-        placement: 'worktree',
-        worktree: task.worktree,
-        repoPath: task.worktree.path,
-        baseCommit: task.worktree.baseCommit,
-        live,
-        sessionId,
-        task,
-        status: statusFor(task, live),
-      });
-    }
-
-    // Isolated agents lead: theirs are the cards holding a decision (merge or
-    // discard), while a main-repo card is only ever review.
-    return [...byKey.values()].sort((a, b) => {
-      if (a.placement !== b.placement) return a.placement === 'worktree' ? -1 : 1;
-      return a.agentName.localeCompare(b.agentName);
-    });
-  }, [projectId, tasks, activeSessions, devProjectSessions, crossProjectSessions]);
-
-  const refreshStats = useCallback(
-    async (list: FleetRow[]) => {
-      const next: Record<string, DiffStat> = {};
-      // One read per distinct repo+base, not per card.
-      const targets = new Map<string, FleetRow>();
-      for (const row of list) {
-        if (!targets.has(statKey(row))) targets.set(statKey(row), row);
-      }
-      await Promise.all(
-        [...targets].map(async ([key, row]) => {
-          try {
-            next[key] = await invoke<DiffStat>('workspace_git_worktree_diff_stat', {
-              projectId: row.projectId,
-              worktreePath: row.repoPath,
-              // Null asks the backend to resolve HEAD, which is the only base a
-              // main-repo agent has — it never forked from anything.
-              baseCommit: row.baseCommit,
-            });
-          } catch {
-            // A worktree removed underneath us, or git unavailable. Leave it out
-            // rather than blanking every other card's numbers.
-          }
-        }),
-      );
-      setStats((current) => ({ ...current, ...next }));
-    },
-    [],
-  );
-
-  // Poll while the panel is open. `rows` is stable between renders unless the
-  // fleet actually changes, so this restarts only when it does.
-  useEffect(() => {
-    if (rows.length === 0) return;
-    let cancelled = false;
-    const tick = () => {
-      if (!cancelled) void refreshStats(rows);
-    };
-    tick();
-    const timer = setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [rows, refreshStats]);
 
   // Main-repo cards name the branch the agent is actually sitting on, which is
   // the checkout's — and it moves under them if you check something else out.
@@ -325,7 +95,7 @@ export default function FleetDashboard() {
       }
     };
     void read();
-    const timer = setInterval(read, POLL_MS);
+    const timer = setInterval(read, FLEET_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -492,7 +262,7 @@ export default function FleetDashboard() {
                 </span>
                 <span className={`fc-status fc-status-${row.status}`}>
                   <i className="fc-status-dot" aria-hidden="true" />
-                  {STATUS_LABEL[row.status]}
+                  {FLEET_STATUS_LABEL[row.status]}
                 </span>
                 {worktree ? (
                   <span

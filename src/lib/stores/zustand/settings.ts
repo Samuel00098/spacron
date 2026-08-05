@@ -12,6 +12,8 @@ export type AiProviderId =
   | 'ollama'
   | 'lmstudio';
 export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'ollama' | 'lmstudio' | 'local';
+export type ShellMode = 'stream' | 'ambient';
+export type UiDensity = 'simple' | 'pro';
 export interface KeyboardShortcut {
   id: string;
   label: string;
@@ -208,6 +210,15 @@ function createSettingsState() {
     // See the note on `terminalRenderer` in stores/settings.ts for why canvas.
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
+    // Which shell renders the workspace. `stream` is the one-column view sorted
+    // by what needs a human; `ambient` is the tiled room grid, kept reachable so
+    // nothing that only exists as a room (live terminals side by side, the
+    // gallery/vibe presets) becomes unreachable by switching the default.
+    shellMode: persistentValue<ShellMode>('shellMode', 'stream'),
+    // How much the stream shows. `simple` hides branch names, counters and the
+    // developer tools; `pro` reveals them in place, same layout. Not a second
+    // design — one layout at two depths.
+    uiDensity: persistentValue<UiDensity>('uiDensity', 'simple'),
   };
 }
 
@@ -308,6 +319,8 @@ const defaults: SettingsValues = {
   terminalFontSize: 14,
   terminalRenderer: 'canvas',
   showSnapshotsTab: false,
+  shellMode: 'stream',
+  uiDensity: 'simple',
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({

@@ -73,6 +73,7 @@ import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTa
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
+import { shellMode } from './settings';
 
 export function initDefaultCommands() {
   const defaultCmds: any[] = [
@@ -109,6 +110,21 @@ export function initDefaultCommands() {
       category: 'View',
       shortcut: 'Ctrl+B',
       action: () => toggleSidebar(),
+    },
+    // Registered from the palette, not only from a button in one shell: the
+    // room layout has no control of its own for coming back, and a switch you
+    // can take but not undo is a trap.
+    {
+      id: 'shell.stream',
+      name: 'Use the stream layout',
+      category: 'View',
+      action: () => shellMode.set('stream'),
+    },
+    {
+      id: 'shell.ambient',
+      name: 'Use the room layout',
+      category: 'View',
+      action: () => shellMode.set('ambient'),
     },
     {
       id: 'search.project',
