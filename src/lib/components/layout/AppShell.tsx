@@ -1488,11 +1488,24 @@ export default function AppShell() {
   }
 
   function focusRoom(id: RoomId) {
-    // A freshly spawned agent lands here, which is why opening an agent panel
-    // while in Split used to ghost: it takes a new slot, every existing pane
-    // shrinks to make room, and the view transition painted the previous tiling
-    // over the result while the terminals were still fitted to their old boxes.
-    const run = willRetileSplit(id) ? withStageRetile : withRoomTransition;
+    // In Split, never a view transition — for either of the two things this can
+    // do there:
+    //
+    //   • it takes a new slot, and every existing pane shrinks to make room. A
+    //     freshly spawned agent lands here, which is why opening an agent panel
+    //     used to ghost — the transition painted the previous tiling over the
+    //     result while the terminals were still fitted to their old boxes.
+    //   • the room is already tiled, and *nothing on the stage moves at all*.
+    //     Every pane is on screen either way; the only thing that changes is
+    //     which pill in the rail reads "primary". Snapshotting the whole
+    //     document and cross-fading it against a near-identical copy for that
+    //     is what made clicking a pane's pill flash — the frosted surfaces and
+    //     the live terminals do not survive the round trip cleanly, so a change
+    //     the user cannot see arrives as a flash they can.
+    //
+    // Focus mode is the only place where this genuinely swaps what the stage
+    // shows, so it is the only place that still transitions.
+    const run = ambientLayout === 'gallery' ? withStageRetile : withRoomTransition;
     run(() => {
       setMinimizedRooms((current) => {
         const next = new Set(current);
@@ -2103,7 +2116,14 @@ export default function AppShell() {
           <button
             className={`room-title${agentSession ? ' has-brand' : ''}`}
             onClick={() => focusRoom(id)}
-            title={`Focus ${title}`}
+            // Same click as the rail's pill, so the same vocabulary: in Split it
+            // hands this pane the primary role rather than "focusing" a room
+            // that is already fully on screen.
+            title={
+              ambientLayout === 'gallery'
+                ? `Make ${title} the primary pane`
+                : `Focus ${title}`
+            }
           >
             {agentSession && (
               <AgentBrandMark
@@ -2556,7 +2576,18 @@ export default function AppShell() {
                   type="button"
                   className="split-switch-summary"
                   onClick={() => (onStage ? focusRoom(room) : addRoomToSplit(room))}
-                  title={onStage ? `Focus ${roomTitle(room)}` : `Add ${roomTitle(room)} to the split`}
+                  // "Focus X" was the wrong promise in Split: every pane is
+                  // already on screen, so nothing appears to happen and the word
+                  // collides with Focus *mode*. What the click actually does is
+                  // hand this pane the primary role, and the tooltip is the only
+                  // place there is room to say what that role is worth.
+                  title={
+                    !onStage
+                      ? `Add ${roomTitle(room)} to the split`
+                      : isPrimary
+                        ? `${roomTitle(room)} is the primary pane — the one Focus mode opens and the dock highlights`
+                        : `Make ${roomTitle(room)} the primary pane — the one Focus mode opens and the dock highlights`
+                  }
                 >
                   <span className="split-switch-slot" aria-hidden="true">
                     {onStage ? slot + 1 : ''}
@@ -2565,7 +2596,7 @@ export default function AppShell() {
                   <span className="split-switch-copy">
                     <span className="split-switch-name">{roomTitle(room)}</span>
                     <span className="split-switch-role">
-                      {onStage ? (isPrimary ? `Pane ${slot + 1} · focused` : `Pane ${slot + 1}`) : roomKind(room)}
+                      {onStage ? (isPrimary ? `Pane ${slot + 1} · primary` : `Pane ${slot + 1}`) : roomKind(room)}
                     </span>
                   </span>
                 </button>
