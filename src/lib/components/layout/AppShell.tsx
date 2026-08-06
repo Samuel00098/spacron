@@ -375,7 +375,10 @@ export default function AppShell() {
 
   function withTransition(action: () => void) {
     const startViewTransition = (document as Document & {
-      startViewTransition?: (callback: () => void) => { finished?: Promise<unknown> };
+      startViewTransition?: (callback: () => void) => {
+        finished?: Promise<unknown>;
+        updateCallbackDone?: Promise<unknown>;
+      };
     }).startViewTransition;
 
     if (
@@ -397,6 +400,12 @@ export default function AppShell() {
         setTimeout(() => {
           (window as any).__spacron_transitioning = false;
         }, 1000);
+        // Resolves once the DOM update callback above has actually run. Callers
+        // that need to measure the NEW layout must wait for this: the callback is
+        // invoked asynchronously (the browser snapshots the old frame first), so
+        // anything scheduled straight after `startViewTransition` returns still
+        // sees the OLD DOM.
+        return transition.updateCallbackDone ?? Promise.resolve();
       } catch (e) {
         (window as any).__spacron_transitioning = false;
         action();
@@ -404,6 +413,7 @@ export default function AppShell() {
     } else {
       action();
     }
+    return Promise.resolve();
   }
 
   // Tell terminal panes to refit once a room focus / layout transition has
@@ -420,7 +430,32 @@ export default function AppShell() {
   }
 
   function withRoomTransition(action: () => void) {
-    withTransition(action);
+    // Wait for the view transition's update callback before measuring. Firing
+    // `notifyPanesResized` synchronously here raced the DOM update and the double
+    // rAF regularly landed on the OLD layout, so the panes refit to the size they
+    // were leaving and then held stale, wrongly-fitted pixels until something
+    // else happened to resize them.
+    void withTransition(action).then(notifyPanesResized);
+  }
+
+  /**
+   * Retiling the Split stage — adding, removing or reordering a pane.
+   *
+   * Deliberately does NOT use the View Transition API, unlike `withRoomTransition`.
+   * A retile changes every pane's cell at once, and a view transition freezes a
+   * bitmap of the OLD tiling and stretches it into each NEW cell while it
+   * cross-fades. That stretched ghost of the previous arrangement, sitting over
+   * panels that have already moved, is the "residue of the panels" — it is the
+   * same failure `switchAmbientLayout` documents below and already avoids for
+   * mode switches; the per-pane paths just never got the same treatment.
+   *
+   * Update straight away instead and refit the terminals once the new grid is
+   * laid out. Note this intentionally does not raise `.layout-switching`: that
+   * would replay the panel entrance and block input for 360 ms every time you
+   * nudge a pane, which is its own kind of "not working".
+   */
+  function withStageRetile(action: () => void) {
+    action();
     notifyPanesResized();
   }
 
@@ -1392,7 +1427,10 @@ export default function AppShell() {
   }
 
   function setPanelRoomOpen(id: AuxPanelId, open: boolean) {
-    withRoomTransition(() => {
+    // Same rule as `focusRoom`: opening a panel that takes a new Split slot
+    // re-tiles the stage, so it must not go through a view transition.
+    const run = open && willRetileSplit(id) ? withStageRetile : withRoomTransition;
+    run(() => {
       const key = PANEL_VISIBILITY_KEYS[id];
       persistLayoutPatch({
         [key]: open,
@@ -1430,8 +1468,32 @@ export default function AppShell() {
     return openRooms.find((room) => room !== excluding && !minimized.has(room)) ?? null;
   }
 
+  /**
+   * Whether bringing `id` on stage will re-tile Split — i.e. it is about to take
+   * a new slot rather than just take focus. Mirrors `claimSplitSlot`'s own guard;
+   * keep the two in step.
+   *
+   * This is the difference between a change that moves every pane's box and one
+   * that moves nothing, and it decides which wrapper a caller uses. A retile must
+   * skip the View Transition API (see `withStageRetile`) — that is the case where
+   * a frozen bitmap of the old tiling gets stretched over the new one.
+   */
+  function willRetileSplit(id: RoomId): boolean {
+    return (
+      ambientLayout === 'gallery' &&
+      Boolean(activeRoom) &&
+      id !== activeRoom &&
+      !splitRooms.includes(id)
+    );
+  }
+
   function focusRoom(id: RoomId) {
-    withRoomTransition(() => {
+    // A freshly spawned agent lands here, which is why opening an agent panel
+    // while in Split used to ghost: it takes a new slot, every existing pane
+    // shrinks to make room, and the view transition painted the previous tiling
+    // over the result while the terminals were still fitted to their old boxes.
+    const run = willRetileSplit(id) ? withStageRetile : withRoomTransition;
+    run(() => {
       setMinimizedRooms((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -1481,7 +1543,7 @@ export default function AppShell() {
   // Bring a room on stage without disturbing what is already there — the
   // switcher's "show this too" path. Outside Split it behaves as a plain focus.
   function addRoomToSplit(id: RoomId) {
-    withRoomTransition(() => {
+    withStageRetile(() => {
       setMinimizedRooms((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -1506,7 +1568,7 @@ export default function AppShell() {
   // `splitRooms` doesn't just splice it straight back in at the front.
   function removeRoomFromSplit(id: RoomId) {
     if (splitRooms.length <= 1) return;
-    withRoomTransition(() => {
+    withStageRetile(() => {
       const remaining = splitRooms.filter((room) => room !== id);
       setSplitSlots(remaining);
       if (id === activeRoom) setFocusedRoom(remaining[0] ?? null);
@@ -1533,7 +1595,7 @@ export default function AppShell() {
     preFleetLayoutRef.current = null;
     // Falls back to `[]` — the unarranged sentinel — when there is nothing to
     // restore (a reload, or the stage happening to already be the agent set).
-    withRoomTransition(() => setSplitSlots(prev?.slots ?? []));
+    withStageRetile(() => setSplitSlots(prev?.slots ?? []));
     if (prev && prev.ambient !== ambientLayout) {
       // Changing mode is enough on its own: switchAmbientLayout restores that
       // mode's own saved focus, which is exactly the room it was showing.
@@ -1549,7 +1611,7 @@ export default function AppShell() {
   function addNextRoomToSplit() {
     const next = visibleRooms.find((room) => !splitRooms.includes(room));
     if (!next || splitRooms.length >= SPLIT_MAX_PANES) {
-      withRoomTransition(() => setSplitSlots([]));
+      withStageRetile(() => setSplitSlots([]));
       return;
     }
     addRoomToSplit(next);
@@ -1560,7 +1622,7 @@ export default function AppShell() {
     const from = splitRooms.indexOf(id);
     const to = from + dir;
     if (from < 0 || to < 0 || to >= splitRooms.length) return;
-    withRoomTransition(() => {
+    withStageRetile(() => {
       const next = [...splitRooms];
       [next[from], next[to]] = [next[to], next[from]];
       setSplitSlots(next);
@@ -2441,11 +2503,32 @@ export default function AppShell() {
         setAmbientLayout(nextLayout);
       });
 
+      // Refit and repaint the terminals NOW, not when the settle window closes.
+      // This is what "residue of the panels" actually was, and it is not a CSS
+      // problem: the panes snap to their new geometry on this frame (grid track
+      // counts change, so nothing about the box is interpolable — see the note
+      // on `.rooms-table`'s transition in AppShell.css), but each xterm only
+      // re-measures via its debounced ResizeObserver and only flushes its glyph
+      // atlas on `pane-resize-end`. That event used to fire solely from
+      // `finishLayoutSwitch`, 360 ms later, so for ~400 ms every pane painted
+      // stale, wrongly-sized pixels from the PREVIOUS layout into its new box —
+      // literal leftovers of the old panels. Worse, the debounced fit landed
+      // first and, per the atlas note in TerminalPane's `onResizeEnd`, re-rendered
+      // straight from the stale atlas, so the garbling was actively redrawn.
+      //
+      // `notifyPanesResized` already double-rAFs, so this measures after the
+      // browser has laid the new grid out. Safe to run during the entrance: only
+      // `opacity` animates, never geometry, so the box read here is final.
+      notifyPanesResized();
+
       if (prefersReducedMotion) {
         setLayoutSwitching(false);
         return;
       }
 
+      // Still fired again at the end of the settle window — that pass catches
+      // anything that resolved late (a scrollbar appearing, fonts, a pane the
+      // first fit raced). It is now a backstop, not the only fit.
       layoutSwitchTimerRef.current = window.setTimeout(finishLayoutSwitch, 360);
     });
   }
