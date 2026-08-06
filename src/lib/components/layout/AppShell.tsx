@@ -61,6 +61,7 @@ import {
 } from '$lib/stores/layout';
 import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
 import { toggleCommandPalette } from '$lib/stores/commandpalette';
+import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy, createPreviewBrowserTab, ensureProxyRunning } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
@@ -136,14 +137,22 @@ function isAgentRoomId(id: RoomId): id is AgentRoomId {
   return id.startsWith('agent:');
 }
 
-// How many rooms Split will put on stage at once. Past this the panes are too
-// small to read a streaming agent in, which is the whole point of the view —
-// extra rooms stay open and reachable from the switcher, just not tiled.
-const SPLIT_MAX_PANES = 6;
+// How many rooms Split will tile at once. Extra rooms stay open and reachable
+// from the switcher, just not on stage. 12 rather than a smaller number because
+// Split absorbed the Fleet grid, which had no cap — it wrapped and scrolled —
+// so a hard ceiling here would be a regression for anyone running ten agents.
+const SPLIT_MAX_PANES = 12;
 
-// Column count for a given pane count. Up to three rooms sit in a single row
-// (the familiar side-by-side); beyond that the grid wraps into rows so panes
-// keep a readable width instead of becoming slivers.
+// Up to this many panes are tiled to *fit* the viewport: exact column counts, no
+// scrolling, every pane on screen. Past it the grid switches to a wrapping
+// min-width track and scrolls vertically (what Fleet did), because forcing a
+// dozen panes into one screen leaves each too short to read. The two regimes are
+// different jobs — working in a few panes, versus watching many.
+const SPLIT_FIT_PANES = 6;
+
+// Column count for a given pane count, used only in the fit regime. Up to three
+// rooms sit in a single row (the familiar side-by-side); beyond that the grid
+// wraps into rows so panes keep a readable width instead of becoming slivers.
 function splitColumns(count: number): number {
   if (count <= 1) return 1;
   if (count <= 3) return count;
@@ -736,6 +745,19 @@ export default function AppShell() {
     return withActive.slice(0, SPLIT_MAX_PANES);
   }, [activeRoom, sideRooms, splitSlots, visibleRooms]);
 
+  // Whether the Split stage is currently exactly "every running agent" — what
+  // the old Fleet layout showed. Drives the dock button's lit state now that
+  // Fleet is an arrangement rather than a mode of its own.
+  const fleetArrangementActive = useMemo(() => {
+    if (ambientLayout !== 'gallery') return false;
+    const agents = visibleRooms.filter(isAgentRoomId);
+    return (
+      agents.length > 0 &&
+      agents.length === splitRooms.length &&
+      splitRooms.every(isAgentRoomId)
+    );
+  }, [ambientLayout, splitRooms, visibleRooms]);
+
   // WebKitGTK (Linux) leaves stale compositor pixels — a "ghost" of the closed
   // room — behind when a room/panel closes and the grid re-tiles to fill the gap.
   // When a room is actually removed, force a genuine repaint of the rooms container
@@ -1163,10 +1185,9 @@ export default function AppShell() {
           launchPromptBarVoiceMode();
           break;
         case 'cycleAmbientLayout': {
-          // Cycle through the three reachable arrangements: Focus → Split → Fleet.
-          const cycle: AmbientLayout[] = ['focus', 'gallery', 'vibe'];
-          const idx = cycle.indexOf(ambientLayout);
-          switchAmbientLayout(cycle[(idx + 1) % cycle.length] ?? 'focus');
+          // Two reachable arrangements now that Fleet is an action rather than a
+          // mode: Focus ↔ Split.
+          switchAmbientLayout(ambientLayout === 'focus' ? 'gallery' : 'focus');
           break;
         }
       }
@@ -1532,8 +1553,13 @@ export default function AppShell() {
     });
   }
 
+  // Promote a room out of the tiled stage and into Focus, where it fills the
+  // screen on its own. Seeds Focus's saved state before switching so the room
+  // lands focused and un-minimized; the Split arrangement is untouched, so the
+  // Split dock button brings the exact same tiling back.
   function focusRoomMode(id: RoomId) {
     if (id === 'terminal') setTerminalRoomOpen(true);
+    if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
     const focusSaved = perLayoutState.current['focus'];
     const minimized = new Set(focusSaved.minimized);
     minimized.delete(id);
@@ -1988,6 +2014,23 @@ export default function AppShell() {
             <span className="room-name">{title}</span>
           </button>
           <div className="room-actions">
+            {/* Split only — in Focus the room already fills the stage, so the
+                button would be a no-op sitting in every header. */}
+            {ambientLayout === 'gallery' && (
+              <button
+                className="room-action"
+                onClick={() => focusRoomMode(id)}
+                title={`Focus ${title} — fill the stage`}
+                aria-label={`Focus ${title} — fill the stage`}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              </button>
+            )}
             <button className="room-action" onClick={() => minimizeRoom(id)} title="Minimize" aria-label={`Minimize ${title}`}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <path d="M5 12h14" />
@@ -2289,31 +2332,57 @@ export default function AppShell() {
   }
 
   function switchAmbientLayout(requested: AmbientLayout) {
-    // One-window shell: only `focus` (the single terminal/agent screen), `vibe`
-    // (the optional Fleet grid) and `gallery` (the Split view — two rooms side by
-    // side) are reachable. Any request for development/preview collapses to
-    // focus. The right-drawer tools no longer request a layout at all — the
-    // drawer is a side panel that works in every layout, so opening Toolbox/
-    // HTTP/DB/Containers/Env can't pull you out of Split or Fleet. `gallery` is
-    // only ever requested by an explicit user action (the Split toggle / cycle
-    // shortcut), so entering the Split view always stays intentional.
-    const nextLayout: AmbientLayout =
-      requested === 'vibe' ? 'vibe' : requested === 'gallery' ? 'gallery' : 'focus';
-    if (nextLayout === ambientLayout) return;
+    // One-window shell: only `focus` (the single terminal/agent screen) and
+    // `gallery` (the Split view) are real modes. Any request for
+    // development/preview collapses to focus. The right-drawer tools no longer
+    // request a layout at all — the drawer is a side panel that works in every
+    // layout, so opening Toolbox/HTTP/DB/Containers/Env can't pull you out of
+    // Split. `gallery` is only ever requested by an explicit user action (the
+    // Split toggle / cycle shortcut), so entering it always stays intentional.
+    //
+    // `vibe` (Fleet) is no longer a mode. Its only differences from Split were
+    // that membership was automatic and the grid wrapped — Split now does both,
+    // so Fleet resolves to "Split, tiled with every running agent". It stays
+    // accepted here because persisted workspace layouts and orchestrator
+    // `ambient` commands still send it.
+    const fleetRequested = requested === 'vibe';
+    const nextLayout: AmbientLayout = requested === 'gallery' || fleetRequested ? 'gallery' : 'focus';
+
+    // Agents to tile for a Fleet request. Read from `openRooms` (not
+    // `visibleRooms`) and un-minimized below: asking for every agent means every
+    // agent, including ones minimized earlier.
+    const fleetAgents = fleetRequested
+      ? openRooms.filter(isAgentRoomId).slice(0, SPLIT_MAX_PANES)
+      : [];
+    if (fleetRequested && fleetAgents.length === 0) {
+      showToast('No agents running', 'info');
+      return;
+    }
+    // A Fleet request re-tiles the stage even when already in Split, so it must
+    // not early-return on an unchanged mode the way a plain toggle does.
+    if (nextLayout === ambientLayout && !fleetRequested) return;
 
     // Save current mode's state before switching
     perLayoutState.current[ambientLayout] = { focused: focusedRoom, minimized: minimizedRooms };
 
-    // Fleet (vibe) shows running agents; keep the terminal session open behind it
-    // so returning to the workspace lands you back on a live terminal.
-    if (nextLayout === 'vibe') {
+    // Fleet keeps the terminal session open behind it so returning to the
+    // workspace lands you back on a live terminal.
+    if (fleetRequested) {
       setTerminalRoomOpen(true);
     }
 
     // Restore target mode's own minimize/focus state (independent per layout)
     const saved = perLayoutState.current[nextLayout];
-    setFocusedRoom(saved.focused);
-    setMinimizedRooms(saved.minimized);
+    if (fleetAgents.length > 0) {
+      const minimized = new Set(saved.minimized);
+      fleetAgents.forEach((room) => minimized.delete(room));
+      setMinimizedRooms(minimized);
+      setFocusedRoom(fleetAgents[0]);
+      setSplitSlots(fleetAgents);
+    } else {
+      setFocusedRoom(saved.focused);
+      setMinimizedRooms(saved.minimized);
+    }
 
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (layoutSwitchTimerRef.current !== null) window.clearTimeout(layoutSwitchTimerRef.current);
@@ -2488,16 +2557,14 @@ export default function AppShell() {
 
     // VS Code-style persistence: every open terminal/agent keeps its xterm
     // mounted at all times. Focus LAYERS them (only the active one visible);
-    // Split (gallery) re-flows the SAME live panes into two side-by-side columns;
-    // Fleet (vibe) re-flows them into a grid. All three modes render the identical
-    // keyed `.stage-layers` container + `.stage-pane` children, so switching
-    // between them only swaps CSS classes and each pane's `order` — React never
-    // unmounts an xterm, so the PTY view is never disposed/rebuilt (no lost
-    // scrollback, no corrupted WebGL atlas) and the panes just resize into place
-    // (their ResizeObserver refits the terminal). Non-terminal rooms
-    // (editor/preview/…) are mounted as their own keyed pane; `isVibe`/`isSplit`
-    // decide which panes are visible and how they lay out.
-    const isVibe = ambientLayout === 'vibe';
+    // Split (gallery) re-flows the SAME live panes into a tiled grid. Both modes
+    // render the identical keyed `.stage-layers` container + `.stage-pane`
+    // children, so switching between them only swaps CSS classes and each pane's
+    // `order` — React never unmounts an xterm, so the PTY view is never
+    // disposed/rebuilt (no lost scrollback, no corrupted WebGL atlas) and the
+    // panes just resize into place (their ResizeObserver refits the terminal).
+    // Non-terminal rooms (editor/preview/…) are mounted as their own keyed pane;
+    // `isSplit` decides which panes are visible and how they lay out.
     const isSplit = ambientLayout === 'gallery';
     // What gets MOUNTED, which is deliberately wider than what gets shown:
     //   • `openRooms`, not `visibleRooms` — a minimized room is still open, so it
@@ -2518,34 +2585,23 @@ export default function AppShell() {
         (a, b) => getAgentRoomSessionId(a) - getAgentRoomSessionId(b),
       ),
     ];
-    const visibleStageRooms = visibleRooms.filter(isPersistentRoomId);
-    const hasAgents = visibleStageRooms.some(isAgentRoomId);
-
     // Which rooms occupy the stage right now:
     //   focus → the active room only
-    //   split → primary (active) + secondary (split), side by side
-    //   vibe  → every running agent
-    const stageRooms: RoomId[] = isVibe
-      ? visibleStageRooms.filter(isAgentRoomId)
-      : isSplit
-        ? splitRooms
-        : activeRoom
-          ? [activeRoom]
-          : [];
+    //   split → the arranged slot list, tiled
+    const stageRooms: RoomId[] = isSplit ? splitRooms : activeRoom ? [activeRoom] : [];
     const stageRoomSet = new Set(stageRooms);
     // Non-terminal rooms that must be mounted as their own pane (editor/preview/…).
     const nonPersistentStageRooms = stageRooms.filter((room) => !isPersistentRoomId(room));
 
-    // Empty states (Fleet with no agents / no active room) must NOT short-circuit
-    // past the stage: returning a bare placeholder here unmounts every mounted
-    // pane, so flipping to Fleet with only a personal terminal open would dispose
-    // that terminal. `stageRooms` is already empty in both cases, so the stage
-    // renders with every pane hidden — the message just layers on top of it.
-    const emptyStageMessage = isVibe && !hasAgents
-      ? 'Open an agent to see it here'
-      : (!isVibe && !activeRoom ? '' : null);
+    // The no-active-room empty state must NOT short-circuit past the stage:
+    // returning a bare placeholder here unmounts every mounted pane, which would
+    // dispose live terminals. `stageRooms` is already empty in that case, so the
+    // stage renders with every pane hidden and the message layers on top of it.
+    const emptyStageMessage = activeRoom ? null : '';
 
-    const stageModifier = isVibe ? ' vibe-grid' : isSplit ? ' split-grid' : '';
+    const stageModifier = isSplit
+      ? ` split-grid${stageRooms.length > SPLIT_FIT_PANES ? ' split-scroll' : ''}`
+      : '';
     // In Split, lay panes out in slot order regardless of DOM order — the
     // persistent stage mounts shells before agents, which has nothing to do with
     // where the user arranged them.
@@ -2560,12 +2616,12 @@ export default function AppShell() {
           aria-label={emptyStageMessage ? 'No agents running' : undefined}
         >
           {emptyStageMessage !== null && (
-            <p className="vibe-empty-msg stage-empty-msg">{emptyStageMessage}</p>
+            <p className="stage-empty-msg">{emptyStageMessage}</p>
           )}
           {persistentStageRooms.map((room) => {
-            // Focus: only the active pane is visible. Split: the primary+secondary
-            // panes. Fleet: every agent pane. Off-stage terminals stay mounted but
-            // hidden (visibility, not unmount) so returning is instant and clean.
+            // Focus: only the active pane is visible. Split: every arranged pane.
+            // Off-stage terminals stay mounted but hidden (visibility, not
+            // unmount) so returning is instant and clean.
             const hidden = !stageRoomSet.has(room);
             return (
               <div
@@ -2585,7 +2641,7 @@ export default function AppShell() {
         </div>
         {isSplit
           ? visibleRooms.length > 0 && renderSplitSwitcher()
-          : !isVibe && stackedRooms.length > 0 && (
+          : stackedRooms.length > 0 && (
               <aside className="room-stack" aria-label="Open rooms">
                 <div className="room-cards-row">
                   {stackedRooms.map((room) => renderRoomCard(room))}
@@ -2681,9 +2737,14 @@ export default function AppShell() {
                   <ActivityButton
                     item={{
                       id: 'fleet',
-                      title: ambientLayout === 'vibe' ? 'Back to split' : 'Fleet — all agents',
-                      active: ambientLayout === 'vibe',
-                      onClick: () => switchAmbientLayout(ambientLayout === 'vibe' ? 'gallery' : 'vibe'),
+                      // No longer a layout toggle — Fleet is an action that
+                      // tiles every running agent into Split. `active` reflects
+                      // "the stage is exactly the agent set", so it lights up
+                      // while that arrangement holds and drops as soon as you
+                      // add or remove a pane.
+                      title: 'Tile all agents',
+                      active: fleetArrangementActive,
+                      onClick: () => switchAmbientLayout('vibe'),
                       icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
                     }}
                   />
