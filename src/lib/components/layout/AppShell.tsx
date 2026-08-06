@@ -745,6 +745,16 @@ export default function AppShell() {
     return withActive.slice(0, SPLIT_MAX_PANES);
   }, [activeRoom, sideRooms, splitSlots, visibleRooms]);
 
+  // What the stage looked like before "Tile all agents" took it over, so a
+  // second press puts it back instead of stranding the user in a tiling they
+  // never arranged. A ref, not state: nothing renders from it, and writing it
+  // on the way into the arrangement must not re-render the room subtree.
+  const preFleetLayoutRef = useRef<{
+    ambient: AmbientLayout;
+    slots: RoomId[];
+    focused: RoomId | null;
+  } | null>(null);
+
   // Whether the Split stage is currently exactly "every running agent" — what
   // the old Fleet layout showed. Drives the dock button's lit state now that
   // Fleet is an arrangement rather than a mode of its own.
@@ -1501,6 +1511,36 @@ export default function AppShell() {
       setSplitSlots(remaining);
       if (id === activeRoom) setFocusedRoom(remaining[0] ?? null);
     });
+  }
+
+  /**
+   * Dock button: gather every running agent onto the stage, and put things back
+   * on the second press.
+   *
+   * Only the button toggles. `switchAmbientLayout('vibe')` stays one-way,
+   * because the orchestrator and restored workspace layouts also send it — a
+   * command meaning "show me all agents" must not mean "hide them" on the next
+   * call.
+   */
+  function toggleFleetArrangement() {
+    if (!fleetArrangementActive) {
+      preFleetLayoutRef.current = { ambient: ambientLayout, slots: splitSlots, focused: focusedRoom };
+      switchAmbientLayout('vibe');
+      return;
+    }
+
+    const prev = preFleetLayoutRef.current;
+    preFleetLayoutRef.current = null;
+    // Falls back to `[]` — the unarranged sentinel — when there is nothing to
+    // restore (a reload, or the stage happening to already be the agent set).
+    withRoomTransition(() => setSplitSlots(prev?.slots ?? []));
+    if (prev && prev.ambient !== ambientLayout) {
+      // Changing mode is enough on its own: switchAmbientLayout restores that
+      // mode's own saved focus, which is exactly the room it was showing.
+      switchAmbientLayout(prev.ambient);
+    } else if (prev?.focused) {
+      setFocusedRoom(prev.focused);
+    }
   }
 
   // Dock button: tile one more of the open rooms. Cycles back to the two-pane
@@ -2737,14 +2777,16 @@ export default function AppShell() {
                   <ActivityButton
                     item={{
                       id: 'fleet',
-                      // No longer a layout toggle — Fleet is an action that
-                      // tiles every running agent into Split. `active` reflects
-                      // "the stage is exactly the agent set", so it lights up
-                      // while that arrangement holds and drops as soon as you
-                      // add or remove a pane.
-                      title: 'Tile all agents',
+                      // Toggles the agent arrangement on and off. `active`
+                      // reflects "the stage is exactly the agent set", so it
+                      // lights up while that arrangement holds and drops as
+                      // soon as you add or remove a pane by hand — at which
+                      // point the next press gathers the agents again.
+                      title: fleetArrangementActive
+                        ? 'Untile agents — back to your layout'
+                        : 'Tile all agents',
                       active: fleetArrangementActive,
-                      onClick: () => switchAmbientLayout('vibe'),
+                      onClick: () => toggleFleetArrangement(),
                       icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
                     }}
                   />
