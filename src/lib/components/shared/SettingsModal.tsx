@@ -111,6 +111,7 @@ import {
   type RulesFileDetection,
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
+import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import './SettingsModal.css';
 
 import { useLayoutStore } from '$lib/stores/zustand/layout';
@@ -745,6 +746,20 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentActiveTheme = useStore(activeTheme);
   const bgPresent = useStore(backgroundImagePresent);
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const github = useGithubSignIn();
+  const [githubCopied, setGithubCopied] = useState(false);
+
+  async function copyGithubCode() {
+    if (!github.device) return;
+    try {
+      await navigator.clipboard.writeText(github.device.user_code);
+      setGithubCopied(true);
+      window.setTimeout(() => setGithubCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable — the code is still visible on screen.
+    }
+  }
 
   // Focus trap + Escape + register the modal so app-wide shortcuts stand down.
   useModalFocus(panelRef, onclose);
@@ -1432,6 +1447,118 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         <span className="option-desc">{opt.desc}</span>
                       </button>
                     ))}
+                  </div>
+                </Section>
+
+                <Section title="GitHub">
+                  <div className="settings-github">
+                    {github.identity ? (
+                      <>
+                        <div className="settings-github-status">
+                          <span className="settings-github-login">
+                            Signed in as {github.identity.login}
+                          </span>
+                          <small>
+                            {github.identity.source === 'oauth'
+                              ? 'via GitHub OAuth'
+                              : github.identity.source === 'gh-cli'
+                                ? 'via GitHub CLI'
+                                : 'with a personal access token'}
+                          </small>
+                          {github.identity.scopes.length > 0 && (
+                            <div className="settings-github-scopes">
+                              {github.identity.scopes.map((s) => (
+                                <span key={s} className="settings-github-scope">
+                                  {s}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="settings-danger"
+                          onClick={() => void github.signOut()}
+                        >
+                          Sign out
+                        </button>
+                      </>
+                    ) : github.signingIn ? (
+                      github.device ? (
+                        <div className="settings-github-signin">
+                          <div className="settings-github-device-row">
+                            <code className="settings-github-device-code">
+                              {github.device.user_code}
+                            </code>
+                            <button
+                              type="button"
+                              className="settings-secondary"
+                              onClick={() => void copyGithubCode()}
+                            >
+                              {githubCopied ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <div className="settings-github-device-waiting">
+                            <span className="settings-github-spinner" aria-hidden="true" />
+                            <span>Waiting for approval in your browser…</span>
+                            <button
+                              type="button"
+                              className="settings-link-button"
+                              onClick={() => void github.openInBrowser(github.device!.verification_uri)}
+                            >
+                              Open github.com/login/device
+                            </button>
+                          </div>
+                          <button type="button" className="settings-secondary" onClick={github.cancel}>
+                            Cancel sign-in
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="settings-github-signin">
+                          <div className="settings-github-device-waiting">
+                            <span className="settings-github-spinner" aria-hidden="true" />
+                            <span>Signing in with your GitHub CLI…</span>
+                          </div>
+                          <button type="button" className="settings-secondary" onClick={github.cancel}>
+                            Cancel sign-in
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      <>
+                        <div className="settings-github-status">
+                          <span className="settings-github-login">Not signed in</span>
+                          <small>Private clones and publishes need a GitHub sign-in.</small>
+                        </div>
+                        <div className="settings-github-actions">
+                          {github.options?.oauth_available && (
+                            <button
+                              type="button"
+                              className="settings-primary"
+                              onClick={() => void github.start()}
+                            >
+                              Sign in with GitHub
+                            </button>
+                          )}
+                          {github.options?.gh_cli_available && (
+                            <button
+                              type="button"
+                              className="settings-secondary"
+                              onClick={() => void github.importGhCli()}
+                            >
+                              Use my GitHub CLI sign-in
+                            </button>
+                          )}
+                          {!github.options?.oauth_available &&
+                            !github.options?.gh_cli_available && (
+                              <small className="settings-github-note">
+                                OAuth sign-in isn't configured for this build — paste a personal
+                                access token in the Clone dialog instead.
+                              </small>
+                            )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </Section>
               </>

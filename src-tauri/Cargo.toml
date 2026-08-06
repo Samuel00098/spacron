@@ -37,7 +37,7 @@ notify = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 portable-pty = "0.8"
 axum = { version = "0.8.9", features = ["ws"] }
-reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli", "cookies", "multipart"] }
+reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli", "cookies", "multipart", "form", "query"] }
 # Same cookie stack reqwest's own `Jar` is built on — used to implement the
 # preview proxy's disk-persisted cookie jar (default features keep `serde_json`
 # for save_json/load_json).
