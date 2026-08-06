@@ -206,11 +206,26 @@ export interface MergeWorktreeResult {
   success: boolean;
   message: string;
   conflicted: boolean;
+  /**
+   * The branch held nothing the checkout didn't already have, so nothing moved.
+   * `success` is still true — git did what it was asked — which is why this has
+   * to be separate: reporting it as "Merged X into Y" announces work that never
+   * happened.
+   */
+  alreadyUpToDate: boolean;
+  /**
+   * Branch tip that was merged. Persist as `lastStagedCommit` so the reconciler
+   * stops counting just-merged work as outstanding and re-staging it.
+   */
+  mergedCommit: string;
 }
 
 /**
  * Fully merge a worktree branch into the main checkout (creates a merge commit)
  * and optionally clean up. Returns the merge result with success/conflict info.
+ *
+ * The backend snapshots the worktree's uncommitted edits onto its branch first,
+ * for the same reason staging does: `git merge` sees only commits.
  */
 export async function mergeTaskWorktree(
   projectId: string,
@@ -221,6 +236,8 @@ export async function mergeTaskWorktree(
     success: boolean;
     message: string;
     conflicted: boolean;
+    already_up_to_date?: boolean;
+    merged_commit?: string;
   }>('workspace_git_merge_worktree', {
     projectId,
     worktreePath: worktree.path,
@@ -232,6 +249,8 @@ export async function mergeTaskWorktree(
     success: raw.success,
     message: raw.message,
     conflicted: raw.conflicted,
+    alreadyUpToDate: raw.already_up_to_date === true,
+    mergedCommit: raw.merged_commit ?? '',
   };
 }
 

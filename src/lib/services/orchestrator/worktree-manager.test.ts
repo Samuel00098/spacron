@@ -7,6 +7,7 @@ import {
   reclaimWorktree,
   stageBaseline,
   deriveTaskBranch,
+  mergeTaskWorktree,
   sweepAgentBranches,
   type WorktreeInfo,
 } from './worktree-manager';
@@ -161,6 +162,57 @@ describe('reclaimWorktree', () => {
 
     expect(outcome).toEqual({ removed: true, staged: 4 });
     expect(sinceCommits).toEqual([BASE, TIP]);
+  });
+});
+
+describe('mergeTaskWorktree', () => {
+  it('separates "nothing moved" from a real merge', async () => {
+    // `success` alone can't carry this: git succeeds either way. Callers used to
+    // read success as "merged" and announced a merge on the one press that did
+    // nothing at all.
+    backend({
+      workspace_git_merge_worktree: {
+        success: true,
+        message: "Nothing to merge — 'spacron/alex-1' holds nothing your checkout doesn't already have.",
+        conflicted: false,
+        already_up_to_date: true,
+        merged_commit: TIP,
+      },
+    });
+
+    const result = await mergeTaskWorktree('p1', worktree(), false);
+
+    expect(result).toMatchObject({ success: true, alreadyUpToDate: true, mergedCommit: TIP });
+  });
+
+  it('returns the merged tip so the reconciler stops calling merged work outstanding', async () => {
+    backend({
+      workspace_git_merge_worktree: {
+        success: true,
+        message: "Branch 'spacron/alex-1' merged successfully.",
+        conflicted: false,
+        already_up_to_date: false,
+        merged_commit: TIP,
+      },
+    });
+
+    const result = await mergeTaskWorktree('p1', worktree(), false);
+
+    expect(result.alreadyUpToDate).toBe(false);
+    expect(result.mergedCommit).toBe(TIP);
+  });
+
+  it('treats an older backend that omits the new fields as a real merge', async () => {
+    // The remote backend can be a version behind. Absent fields must not make a
+    // genuine merge look like a no-op.
+    backend({
+      workspace_git_merge_worktree: { success: true, message: 'merged', conflicted: false },
+    });
+
+    const result = await mergeTaskWorktree('p1', worktree(), false);
+
+    expect(result.alreadyUpToDate).toBe(false);
+    expect(result.mergedCommit).toBe('');
   });
 });
 

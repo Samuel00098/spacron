@@ -880,6 +880,17 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(!no_commit);
 
+    // Snapshot before merging — `git merge` only sees commits, so an agent that
+    // hasn't committed would otherwise be merged as nothing and then, on the
+    // delete_after paths, have its checkout removed. Mirrors `snapshot_worktree`
+    // in commands/workspace.rs.
+    if cleaned.join(".git").exists() {
+        snapshot_worktree_remote(&cleaned);
+    }
+
+    // Tip after the snapshot: what the merge actually takes.
+    let merged_commit = git_capture(workspace, &["rev-parse", branch]).unwrap_or_default();
+
     // Run git merge from the main workspace root.
     let mut cmd_args: Vec<&str> = vec!["merge", "--no-ff"];
     if no_commit {
@@ -920,8 +931,16 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
                 .output();
         }
 
-        let msg = if stderr.contains("Already up to date") {
-            "Already up to date — no new changes to merge.".to_string()
+        // Both streams: git prints "Already up to date." to stdout, so the old
+        // stderr-only check never matched and a no-op merge was announced as one
+        // that did something.
+        let already_up_to_date = stdout.contains("Already up to date")
+            || stdout.contains("Already up-to-date")
+            || stderr.contains("Already up to date")
+            || stderr.contains("Already up-to-date");
+
+        let msg = if already_up_to_date {
+            format!("Nothing to merge — '{branch}' holds nothing your checkout doesn't already have.")
         } else if no_commit && delete_after {
             format!("Changes from '{branch}' staged for review in Source Control — worktree and branch removed.")
         } else if no_commit {
@@ -936,6 +955,8 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
             "success": true,
             "message": msg,
             "conflicted": false,
+            "already_up_to_date": already_up_to_date,
+            "merged_commit": merged_commit,
         }))
     } else {
         let has_conflicts = stderr.contains("conflict") || stdout.contains("CONFLICT");
@@ -951,8 +972,42 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
                 format!("Merge failed:\n{}{}", err_out, std_out)
             },
             "conflicted": has_conflicts,
+            "already_up_to_date": false,
+            "merged_commit": merged_commit,
         }))
     }
+}
+
+/// Commit an agent's uncommitted work onto its own branch so a commit-range
+/// operation can see it. Mirrors `snapshot_worktree` in commands/workspace.rs.
+fn snapshot_worktree_remote(worktree: &Path) {
+    let dirty = git_capture(worktree, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .any(|l| !l.trim().is_empty());
+    if !dirty {
+        return;
+    }
+    let _ = git_ok(worktree, &["add", "-A"]);
+    let mut commit: Vec<String> = Vec::new();
+    if git_capture(worktree, &["config", "user.email"]).is_none() {
+        commit.extend([
+            "-c".into(),
+            "user.name=Spacron".into(),
+            "-c".into(),
+            "user.email=agent@spacron.local".into(),
+        ]);
+    }
+    // --no-verify: automated snapshot on a throwaway branch, not a commit the
+    // user authored.
+    commit.extend([
+        "commit".into(),
+        "--no-verify".into(),
+        "-m".into(),
+        "spacron: snapshot uncommitted agent work".into(),
+    ]);
+    let refs: Vec<&str> = commit.iter().map(|s| s.as_str()).collect();
+    let _ = git_ok(worktree, &refs);
 }
 
 /// Branch-name validation for the remote control path. Mirrors the rules in

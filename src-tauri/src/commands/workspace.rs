@@ -1707,6 +1707,69 @@ fn sweep_agent_branches_at(
     })
 }
 
+/// Commit whatever an agent left uncommitted onto its own branch, so a
+/// commit-range operation can see it. Returns true if a snapshot was taken.
+///
+/// Getting work *out* of a worktree — bringing it in and merging it — is always a
+/// commit-range operation, and an agent that hasn't committed has work no range
+/// can see. Staging has always snapshotted first; merging did not, so "Merge into
+/// main" on an agent mid-task merged nothing, still reported success, and on the
+/// `delete_after` paths went on to delete the checkout the work was sitting in.
+///
+/// `--no-verify` is deliberate: this fires many times a session on a throwaway
+/// branch and is not a commit the user authored. Their hooks run on the commit
+/// they write themselves in Source Control.
+fn snapshot_worktree(worktree: &Path) -> bool {
+    let dirty = git_capture(worktree, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .any(|l| !l.trim().is_empty());
+    if !dirty {
+        return false;
+    }
+
+    let _ = git_base()
+        .args(["add", "-A"])
+        .current_dir(worktree)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output();
+
+    // A repo with no configured identity would fail to commit; supply one only in
+    // that case so a real identity is never overridden.
+    let mut commit: Vec<String> = Vec::new();
+    if git_capture(worktree, &["config", "user.email"]).is_none() {
+        commit.extend([
+            "-c".into(),
+            "user.name=Spacron".into(),
+            "-c".into(),
+            "user.email=agent@spacron.local".into(),
+        ]);
+    }
+    commit.extend([
+        "commit".into(),
+        "--no-verify".into(),
+        "-m".into(),
+        "spacron: snapshot uncommitted agent work".into(),
+    ]);
+    let _ = git_base()
+        .args(&commit)
+        .current_dir(worktree)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output();
+    true
+}
+
+/// True when git reported the merge as a no-op.
+///
+/// Checked on **both** streams: git writes "Already up to date." to *stdout*, and
+/// the original check looked only at stderr — so the one case that must not be
+/// announced as a merge was the one case that never matched. The hyphenated form
+/// is what git < 2.20 printed.
+fn merge_was_noop(stdout: &str, stderr: &str) -> bool {
+    let hit = |s: &str| s.contains("Already up to date") || s.contains("Already up-to-date");
+    hit(stdout) || hit(stderr)
+}
+
 /// Merge a worktree branch into the main checkout, then optionally clean up.
 /// Runs `git merge` from the main project root (not the worktree), returns
 /// success or a conflict/error message.
@@ -1719,6 +1782,13 @@ pub struct MergeWorktreeResult {
     pub success: bool,
     pub message: String,
     pub conflicted: bool,
+    /// True when the branch held nothing the checkout didn't already have. The
+    /// caller must not report this as "merged" — nothing happened.
+    pub already_up_to_date: bool,
+    /// Branch tip that was merged (after the snapshot). The caller persists it as
+    /// `lastStagedCommit` so the reconciler doesn't treat just-merged work as
+    /// still outstanding and stage it all over again.
+    pub merged_commit: String,
 }
 
 #[tauri::command(async)]
@@ -1757,7 +1827,19 @@ pub fn workspace_git_merge_worktree(
 
     let no_commit = no_commit.unwrap_or(false);
 
+    // Snapshot before merging. `git merge` only ever sees commits, so without this
+    // an agent that hasn't committed has its work merged silently as nothing —
+    // and the `delete_after` callers then remove the checkout still holding it.
+    // Guarded on the checkout still being there: merging a branch whose worktree
+    // has already gone is legitimate, and used to work.
+    if cleaned.join(".git").exists() {
+        snapshot_worktree(&cleaned);
+    }
+
     let _repo = lock_repo_write(root_path);
+
+    // Read the tip after the snapshot — that is what the merge will actually take.
+    let merged_commit = git_capture(root_path, &["rev-parse", &branch]).unwrap_or_default();
 
     // Ensure we're on the base branch (the main checkout, not the worktree).
     // The merge happens from the main project root against the worktree branch.
@@ -1785,6 +1867,8 @@ pub fn workspace_git_merge_worktree(
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if output.status.success() {
+        let already_up_to_date = merge_was_noop(&stdout, &stderr);
+
         // Optionally clean up the worktree.
         // When `no_commit` is true, only clean up if explicitly requested (default off).
         let do_cleanup = if no_commit { delete_after.unwrap_or(false) } else { delete_after.unwrap_or(true) };
@@ -1807,8 +1891,8 @@ pub fn workspace_git_merge_worktree(
                 .output();
         }
 
-        let msg = if stderr.contains("Already up to date") {
-            "Already up to date — no new changes to merge.".to_string()
+        let msg = if already_up_to_date {
+            format!("Nothing to merge — '{}' holds nothing your checkout doesn't already have.", branch)
         } else if no_commit {
             format!("Changes from '{}' staged for review in Source Control — worktree kept for reference.", branch)
         } else if delete_after.unwrap_or(true) {
@@ -1821,6 +1905,8 @@ pub fn workspace_git_merge_worktree(
             success: true,
             message: msg,
             conflicted: false,
+            already_up_to_date,
+            merged_commit,
         })
     } else {
         // Merge failed — check for conflicts
@@ -1834,6 +1920,8 @@ pub fn workspace_git_merge_worktree(
                     sanitize_git_error(&stdout)
                 ),
                 conflicted: true,
+                already_up_to_date: false,
+                merged_commit,
             })
         } else {
             Ok(MergeWorktreeResult {
@@ -1844,6 +1932,8 @@ pub fn workspace_git_merge_worktree(
                     sanitize_git_error(&stdout)
                 ),
                 conflicted: false,
+                already_up_to_date: false,
+                merged_commit,
             })
         }
     }
@@ -2121,47 +2211,10 @@ pub fn workspace_git_stage_worktree(
         return Err("Not a git worktree.".to_string());
     }
 
-    // 1. Snapshot uncommitted work onto the agent's own branch.
+    // 1. Snapshot uncommitted work onto the agent's own branch. Shared with the
+    //    merge path, which needs it for exactly the same reason.
     if snapshot.unwrap_or(true) {
-        let dirty = git_capture(&cleaned, &["status", "--porcelain"])
-            .unwrap_or_default()
-            .lines()
-            .any(|l| !l.trim().is_empty());
-        if dirty {
-            let _ = git_base()
-                .args(["add", "-A"])
-                .current_dir(&cleaned)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output();
-
-            // A repo with no configured identity would fail to commit; supply one
-            // only in that case so a real identity is never overridden.
-            let mut commit: Vec<String> = Vec::new();
-            if git_capture(&cleaned, &["config", "user.email"]).is_none() {
-                commit.extend([
-                    "-c".into(),
-                    "user.name=Spacron".into(),
-                    "-c".into(),
-                    "user.email=agent@spacron.local".into(),
-                ]);
-            }
-            // `--no-verify`: this is an automated snapshot on a throwaway branch that
-            // can fire many times per session, not a commit the user authored. Running
-            // their pre-commit hooks on each one would be both slow and surprising.
-            // The commit the user actually keeps is written in Source Control, where
-            // hooks run normally.
-            commit.extend([
-                "commit".into(),
-                "--no-verify".into(),
-                "-m".into(),
-                "spacron: snapshot uncommitted agent work".into(),
-            ]);
-            let _ = git_base()
-                .args(&commit)
-                .current_dir(&cleaned)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output();
-        }
+        snapshot_worktree(&cleaned);
     }
 
     let head = git_capture(&cleaned, &["rev-parse", "HEAD"])

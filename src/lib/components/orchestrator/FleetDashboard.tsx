@@ -50,7 +50,7 @@ import {
   getAgentDisplayName,
   isAgentSession,
 } from '$lib/stores/terminal';
-import { orchestratorTasks, stageAgentWorktree } from '$lib/stores/orchestrator';
+import { orchestratorTasks, stageAgentWorktree, markWorktreeMerged } from '$lib/stores/orchestrator';
 import {
   mergeTaskWorktree,
   reclaimWorktree,
@@ -357,7 +357,20 @@ export default function FleetDashboard() {
             14000,
             true,
           );
+        } else if (result.alreadyUpToDate) {
+          // git succeeded but moved nothing. Claiming a merge here was the one
+          // notification guaranteed to be false: it fired precisely when the
+          // press had no effect.
+          showToast(
+            `Nothing to merge — ${worktree.branch} holds nothing ${worktree.baseBranch} doesn't already have.`,
+            'info',
+            6000,
+          );
         } else if (result.success) {
+          // Tell the reconciler the work has landed. Without this it still sees
+          // the whole merged range as outstanding, stages it back in seconds
+          // later, and announces it as newly arrived.
+          markWorktreeMerged(row.projectId, worktree, result.mergedCommit);
           showToast(
             `Merged ${worktree.branch} into ${worktree.baseBranch}.`,
             'success',

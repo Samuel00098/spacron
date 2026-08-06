@@ -301,6 +301,33 @@ describe('stageWorktreeNow', () => {
     });
   });
 
+  it('says nothing moved when there was nothing to bring in', async () => {
+    // A press with nothing outstanding still succeeds, and the caller used to
+    // show it as a green "changes are in Source Control" — announcing an arrival
+    // that never happened. `upToDate` is what lets it say so honestly.
+    stageWorktreeChanges.mockResolvedValue({
+      success: true, message: 'Already up to date — nothing new to stage.',
+      conflicted: false, conflictedFiles: [], stagedCommit: TIP, stagedFiles: 0, upToDate: true,
+    });
+    start();
+
+    const result = await stageWorktreeNow('p1', worktree());
+
+    expect(result).toMatchObject({ ok: true, upToDate: true });
+  });
+
+  it('does not mark a real stage as up to date', async () => {
+    stageWorktreeChanges.mockResolvedValue({
+      success: true, message: 'Staged 3 file(s)', conflicted: false, conflictedFiles: [],
+      stagedCommit: TIP, stagedFiles: 3, upToDate: false,
+    });
+    start();
+
+    const result = await stageWorktreeNow('p1', worktree());
+
+    expect(result).toMatchObject({ ok: true, upToDate: false });
+  });
+
   it('reports a conflict without advancing the baseline', async () => {
     stageWorktreeChanges.mockResolvedValue({
       success: false, message: 'overlaps your edits', conflicted: true,

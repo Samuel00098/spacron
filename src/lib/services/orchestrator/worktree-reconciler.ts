@@ -279,10 +279,12 @@ function recordFailure(path: string): void {
 export async function stageWorktreeNow(
   projectId: string,
   worktree: WorktreeInfo,
-): Promise<{ ok: boolean; message: string; conflicted: boolean }> {
+): Promise<{ ok: boolean; message: string; conflicted: boolean; upToDate: boolean }> {
   const p = providers;
   const path = worktree.path;
-  if (inFlight.has(path)) return { ok: false, message: 'Already staging…', conflicted: false };
+  if (inFlight.has(path)) {
+    return { ok: false, message: 'Already bringing it in…', conflicted: false, upToDate: false };
+  }
   // An explicit press means "try now" — drop any auto-stage backoff so the user
   // isn't waiting out a timer they can't see, and so a fixed blocker takes effect
   // immediately.
@@ -294,15 +296,24 @@ export async function stageWorktreeNow(
       p?.persist(projectId, path, { lastStagedCommit: result.stagedCommit, stageConflict: false });
       lastSeen.delete(path);
       forgetWorktree(path);
-      return { ok: true, message: result.message, conflicted: false };
+      // `upToDate` is carried through rather than folded into success: git did
+      // what it was asked, but nothing moved, and the caller must not announce
+      // files arriving in Source Control that were already there.
+      return { ok: true, message: result.message, conflicted: false, upToDate: result.upToDate };
     }
     if (result.conflicted) p?.persist(projectId, path, { stageConflict: true });
-    return { ok: false, message: result.message, conflicted: result.conflicted };
+    return {
+      ok: false,
+      message: result.message,
+      conflicted: result.conflicted,
+      upToDate: false,
+    };
   } catch (err) {
     return {
       ok: false,
       message: err instanceof Error ? err.message : String(err),
       conflicted: false,
+      upToDate: false,
     };
   } finally {
     inFlight.delete(path);

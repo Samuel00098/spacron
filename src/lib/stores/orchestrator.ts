@@ -738,9 +738,19 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
       // The merge removed the worktree and branch; drop the now-dangling ref.
       forgetWorktree(worktree.path);
       patchTask(handoff.taskId, (t) => ({ ...t, worktree: null }));
-      logTaskActivity(task.id, 'info', `Auto-merged branch ${worktree.branch} after approval`);
-      logTaskActivity(handoff.taskId, 'info', `Branch ${worktree.branch} merged after approval`);
-      showToast(`Approved & merged — ${handoff.from}'s branch merged into main`, 'success', 8000, true);
+      const what = result.alreadyUpToDate
+        ? `Branch ${worktree.branch} held nothing new — approved, worktree cleaned up`
+        : `Auto-merged branch ${worktree.branch} after approval`;
+      logTaskActivity(task.id, 'info', what);
+      logTaskActivity(handoff.taskId, 'info', what);
+      showToast(
+        result.alreadyUpToDate
+          ? `Approved — ${handoff.from}'s branch held nothing to merge`
+          : `Approved & merged — ${handoff.from}'s branch merged into main`,
+        result.alreadyUpToDate ? 'info' : 'success',
+        8000,
+        !result.alreadyUpToDate,
+      );
     } else if (result.conflicted) {
       showToast(`Merge conflict on approval — ${result.message}`, 'warning', 10000, true);
     } else {
@@ -906,11 +916,17 @@ export async function mergeAndApproveMailboxCard(
       try {
         const result = await mergeTaskWorktree(projectId, worktree, true);
         if (result.success) {
-          merged = true;
+          merged = !result.alreadyUpToDate;
           // The merge removed the worktree and branch; drop the dangling ref.
           forgetWorktree(worktree.path);
           patchTask(card.taskId, (t) => ({ ...t, worktree: null }));
-          showToast(`Merged branch '${worktree.branch}' into main`, 'success', 4000);
+          showToast(
+            result.alreadyUpToDate
+              ? `Branch '${worktree.branch}' held nothing to merge`
+              : `Merged branch '${worktree.branch}' into main`,
+            result.alreadyUpToDate ? 'info' : 'success',
+            4000,
+          );
         } else if (result.conflicted) {
           showToast(`Merge conflict — resolve then approve: ${result.message}`, 'warning', 10000);
           return; // Don't approve if there's a conflict
@@ -3019,17 +3035,43 @@ function sessionIsRunning(projectId: string, sessionId: number): boolean {
   );
 }
 
-/** Stage one agent's outstanding work on demand — the "Stage" button's entry point. */
+/** Bring one agent's outstanding work into the checkout on demand — the "Bring in" button. */
 export async function stageAgentWorktree(projectId: string, worktree: WorktreeInfo): Promise<void> {
   const result = await stageWorktreeNow(projectId, worktree);
-  if (result.ok) {
+  if (result.ok && result.upToDate) {
+    // Nothing moved. A green "success" here read as "your changes have arrived"
+    // when in fact the press did nothing, so say so plainly and quietly instead.
+    showToast(`Nothing new to bring in — ${worktree.branch} is already in your working tree.`, 'info', 4000);
+  } else if (result.ok) {
     showToast(result.message, 'success', 6000);
   } else if (result.conflicted) {
     showToast(result.message, 'warning', 12000);
   } else {
-    showToast(`Couldn't stage changes: ${result.message}`, 'error', 8000);
+    showToast(`Couldn't bring the changes in: ${result.message}`, 'error', 8000);
   }
   void reconcileNow();
+}
+
+/**
+ * Record that a worktree's branch has been merged into the checkout.
+ *
+ * Merging leaves `lastStagedCommit` untouched, so the reconciler still sees the
+ * whole merged range as outstanding, auto-stages it straight back in, and toasts
+ * "N file changes are in Source Control" seconds after a merge the user already
+ * completed. Advancing the marker to the merged tip is what makes the reconciler
+ * agree that the work has landed.
+ */
+export function markWorktreeMerged(
+  projectId: string,
+  worktree: WorktreeInfo,
+  mergedCommit: string,
+): void {
+  if (!mergedCommit.trim()) return;
+  persistWorktreePatch(projectId, worktree.path, {
+    lastStagedCommit: mergedCommit,
+    stageConflict: false,
+  });
+  forgetWorktree(worktree.path);
 }
 
 if (typeof window !== 'undefined') {
