@@ -48,8 +48,8 @@
 }
 
 @keyframes nf-pop {
-  from { transform: translateY(-10px) scale(0.98); opacity: 0; }
-  to   { transform: translateY(0) scale(1);        opacity: 1; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .nf-close {
@@ -310,11 +310,16 @@
   color: var(--text-primary, #fff);
 }
 
+/* --button-bg/--button-text are a matched pair in every theme (a fill deep
+   enough to carry white text in both light and dark). --accent on its own is
+   not: it flips from deep to luminous across modes, so a fixed text color fails
+   one of them — and --accent-contrast, which this used to pair with, was never
+   defined by any theme, so the label fell back to near-black on the accent. */
 .nf-btn.primary {
-  background: var(--accent, #6ea8fe);
-  color: var(--accent-contrast, #0b0b12);
-  border: 1px solid color-mix(in srgb, #000 12%, var(--accent, #6ea8fe));
-  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent, #6ea8fe) 70%, transparent);
+  background: var(--button-bg, #4f46e5);
+  color: var(--button-text, #ffffff);
+  border: 1px solid color-mix(in srgb, #000 12%, var(--button-bg, #4f46e5));
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--button-bg, #4f46e5) 70%, transparent);
 }
 
 .nf-btn.primary:hover:not(:disabled) {

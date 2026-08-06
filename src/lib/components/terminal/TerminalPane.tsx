@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
@@ -153,7 +153,7 @@ async function openUrlInPreview(rawUrl: string) {
   requestRoomControl('focus', 'preview');
 }
 
-export default function TerminalPane({
+function TerminalPane({
   sessionId,
   paneIndex,
   isActive,
@@ -1420,3 +1420,9 @@ export default function TerminalPane({
     </div>
   );
 }
+
+// Memoized so a shell re-render for an unrelated reason (a toast, a layout flag
+// the pane doesn't read) doesn't re-render the live xterm. The pane already
+// subscribes to its own stores with narrow selectors, so it re-renders only for
+// its own data changes plus actual prop changes (sessionId, isActive, callbacks).
+export default memo(TerminalPane);

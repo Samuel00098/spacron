@@ -3,14 +3,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { useStore } from '$lib/react/useStore';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import './QuickCaptureModal.css';
 
 export default function QuickCaptureModal({ onclose }: { onclose: () => void }) {
   const project = useStore(activeProject);
 
   const inputEl = useRef<HTMLInputElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const [value, setValue] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useModalFocus(backdropRef);
 
   useEffect(() => {
     inputEl.current?.focus();
@@ -83,6 +87,7 @@ export default function QuickCaptureModal({ onclose }: { onclose: () => void }) 
       aria-modal="true"
       aria-label="Quick Capture"
       tabIndex={-1}
+      ref={backdropRef}
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
     >

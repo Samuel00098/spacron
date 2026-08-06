@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useStore } from '$lib/react/useStore';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import {
   agentPlacementRequest,
   resolveAgentPlacement,
@@ -66,6 +67,11 @@ export default function AgentPlacementModal() {
   const request = useStore(agentPlacementRequest);
   const [choices, setChoices] = useState<AgentPlacement[]>([]);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+
+  // Register as a modal too: it layers over AgentSpawnModal, and while it is up
+  // the app's shortcuts must stand down (the card owns Enter/Escape/arrows).
+  useModalFocus(backdropRef);
 
   // Reseed (and refocus) whenever a new request reaches the head of the queue.
   useEffect(() => {
@@ -119,6 +125,7 @@ export default function AgentPlacementModal() {
       role="dialog"
       aria-modal="true"
       aria-label="Choose where the agent runs"
+      ref={backdropRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) cancel();
       }}

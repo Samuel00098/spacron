@@ -1,5 +1,5 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { backendInvoke } from '$lib/services/backend';
+import { readProjectState, writeProjectState } from '$lib/services/project-state';
 import type { ActivityEvent } from '$lib/services/orchestrator/activity-log';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 
@@ -16,10 +16,6 @@ const MAX_MEMORY_ENTRIES = 40;
 const STALE_MEMORY_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const orchestratorMemory = writable<Record<string, OrchestratorMemoryEntry[]>>({});
-
-function memoryPath(rootPath: string): string {
-  return `${rootPath}/.spacron/orchestrator-memory.json`;
-}
 
 function compactText(raw: string, maxChars: number): string {
   const text = raw.replace(/\s+/g, ' ').trim();
@@ -107,8 +103,8 @@ export function mergeMemoryEntry(
 export async function loadProjectMemory(projectId: string, rootPath: string): Promise<void> {
   let entries: OrchestratorMemoryEntry[] = [];
   try {
-    const raw = await backendInvoke<string>('fs_read_file', { path: memoryPath(rootPath) });
-    const parsed = JSON.parse(raw);
+    const raw = await readProjectState(projectId, rootPath, 'orchestrator-memory.json');
+    const parsed = JSON.parse(raw ?? '');
     if (Array.isArray(parsed)) {
       entries = parsed
         .filter((entry): entry is OrchestratorMemoryEntry =>
@@ -128,14 +124,9 @@ export async function loadProjectMemory(projectId: string, rootPath: string): Pr
   orchestratorMemory.update((all) => ({ ...all, [projectId]: entries }));
 }
 
-export async function flushProjectMemory(projectId: string, rootPath: string): Promise<void> {
+export async function flushProjectMemory(projectId: string, _rootPath?: string): Promise<void> {
   const entries = get(orchestratorMemory)[projectId] ?? [];
-  try {
-    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await backendInvoke('fs_write_file', { path: memoryPath(rootPath), content: JSON.stringify(entries, null, 2) });
-  } catch (err) {
-    console.error('Failed to save orchestrator memory:', err);
-  }
+  await writeProjectState(projectId, 'orchestrator-memory.json', JSON.stringify(entries, null, 2));
 }
 
 export async function rememberTask(projectId: string, rootPath: string | null | undefined, task: OrchestratorTask): Promise<void> {

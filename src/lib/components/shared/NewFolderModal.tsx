@@ -1,3 +1,4 @@
+import { useModalFocus } from '$lib/react/useModalFocus';
 import { useEffect, useRef, useState } from 'react';
 import { newFolderPromptOpen, createProjectFolder } from '$lib/stores/workspace';
 import './NewFolderModal.css';
@@ -29,6 +30,9 @@ export default function NewFolderModal() {
   const [error, setError] = useState<string | null>(null);
   const inputEl = useRef<HTMLInputElement | null>(null);
   const submitted = useRef(false);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+
+  useModalFocus(backdropRef);
 
   useEffect(() => {
     inputEl.current?.focus();
@@ -106,6 +110,7 @@ export default function NewFolderModal() {
       aria-modal="true"
       aria-label="Create a new folder"
       tabIndex={-1}
+      ref={backdropRef}
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
     >

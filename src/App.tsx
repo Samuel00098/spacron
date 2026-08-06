@@ -11,6 +11,7 @@ import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import AgentPlacementModal from '$lib/components/shared/AgentPlacementModal.tsx';
 import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
+import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
@@ -27,6 +28,7 @@ import {
 import {
   newWorkspacePromptOpen,
   newFolderPromptOpen,
+  cloneRepoPromptOpen,
   initializeWorkspaces,
   saveProjectState,
   activeProjectId,
@@ -57,8 +59,16 @@ import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
 import { initMcpBridge } from '$lib/stores/mcpBridge';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { isModalOpen } from '$lib/react/useModalFocus';
 
 const ZOOM_LEVELS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
+
+/**
+ * How long quitting will wait for agent worktrees to be reclaimed before
+ * closing anyway. Generous enough for a few `git apply` round-trips, short
+ * enough that quit never feels stuck; the next project load sweeps the rest.
+ */
+const EXIT_RECLAIM_BUDGET_MS = 4_000;
 
 const OnboardingWalkthrough = lazy(() => import('$lib/components/workspace/OnboardingWalkthrough.tsx'));
 
@@ -82,6 +92,7 @@ export default function App() {
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
   const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
   const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
+  const isCloneRepoPromptOpen = useStore(cloneRepoPromptOpen);
   const hasCompletedOnboarding = useStore(onboardingCompleted);
 
   useEffect(() => {
@@ -131,6 +142,29 @@ export default function App() {
           if (get(closeBehavior) === 'minimize') {
             event.preventDefault();
             await win.minimize();
+            return;
+          }
+
+          // Reclaim agent worktrees so quitting doesn't leave checkouts behind
+          // in `.spacron/worktrees/`. Each one is staged onto its branch first,
+          // and anything git says still holds work is kept — see
+          // `reclaimProjectWorktrees`.
+          //
+          // Bounded, because quit must not hang on a slow or locked git repo.
+          // Whatever this run doesn't finish is swept on the next project load,
+          // so being cut off is safe rather than lossy.
+          if (projectId) {
+            event.preventDefault();
+            try {
+              const { reclaimProjectWorktrees } = await import('$lib/stores/orchestrator');
+              await Promise.race([
+                reclaimProjectWorktrees(projectId),
+                new Promise((resolve) => setTimeout(resolve, EXIT_RECLAIM_BUDGET_MS)),
+              ]);
+            } catch (e) {
+              console.error('Worktree reclaim on exit failed:', e);
+            }
+            await win.destroy();
           }
         })
         .then((unlisten) => {
@@ -155,6 +189,7 @@ export default function App() {
     });
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (isModalOpen()) return;
       const zoomInShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'zoomIn');
       const zoomOutShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'zoomOut');
       const resetZoomShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'resetZoom');
@@ -208,6 +243,7 @@ export default function App() {
 
       {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
       {isNewFolderPromptOpen && <NewFolderModal />}
+      {isCloneRepoPromptOpen && <CloneRepoModal />}
 
       {!hasCompletedOnboarding && (
         <Suspense fallback={null}>

@@ -245,6 +245,108 @@ describe('createVoiceInputSession', () => {
     vi.useRealTimers();
   });
 
+  /**
+   * Turn-taking feel. The VAD used to end a turn after 500 ms of quiet, which is
+   * shorter than the beat people leave mid-sentence while composing a thought —
+   * so half a sentence went to the orchestrator and the rest became the next
+   * turn. These pin the timings that fixed it.
+   */
+  it('holds through a mid-sentence pause instead of cutting the speaker off', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('spawn an agent that reviews the diff');
+
+    const onEnd = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const processor = audioProcessors[0];
+
+    // A full sentence, so the turn is past the short-utterance grace window.
+    feedSpeech(processor, 30);
+    await vi.advanceTimersByTimeAsync(1600);
+
+    // ...then a 600 ms thinking pause — longer than the old 500 ms cutoff.
+    feedSilence(processor);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    // Speaking again clears the silence timer and the turn continues.
+    feedSpeech(processor, 5);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    // A real end-of-turn pause does finalize it.
+    feedSilence(processor);
+    await vi.advanceTimersByTimeAsync(1200);
+    await Promise.resolve();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('gives a barely-started utterance a longer grace than a full one', async () => {
+    // A one-word opener ("so…", "okay…") is rarely the whole turn, so the
+    // endpoint waits longer before finalizing than it would mid-paragraph.
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('okay');
+
+    const onEnd = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const processor = audioProcessors[0];
+
+    feedSpeech(processor);
+    feedSilence(processor);
+
+    // Past the normal 800 ms endpoint, but inside the short-utterance grace.
+    await vi.advanceTimersByTimeAsync(900);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500);
+    await Promise.resolve();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('does not chop a long dictated brief mid-word at the soft cap', async () => {
+    // The old hard 15 s ceiling cut detailed multi-agent instructions off
+    // mid-sentence. Past the soft cap the turn now ends on the next real pause.
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a very long brief');
+
+    const onEnd = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const processor = audioProcessors[0];
+
+    // Speak continuously well past the old 15 s cap.
+    for (let i = 0; i < 60; i += 1) {
+      feedSpeech(processor, 5);
+      await vi.advanceTimersByTimeAsync(400);
+    }
+    expect(onEnd).not.toHaveBeenCalled();
+
+    // Stopping ends it normally.
+    feedSilence(processor);
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
   it('routes model transcription through OpenRouter when selected', async () => {
     vi.useFakeTimers();
     voiceInputProvider.set('openrouter');
@@ -409,6 +511,93 @@ describe('createVoiceInputSession', () => {
     await Promise.resolve();
     expect(ctx.close).toHaveBeenCalled();
     expect(trackStop).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  /**
+   * Pre-roll. Between turns the capture graph stays warm but stops feeding the
+   * VAD, so anything said in the gap before the mic re-arms used to be dropped
+   * outright — the reason replies that started the instant the assistant
+   * finished lost their first word.
+   */
+  it('keeps audio spoken between turns and prepends it to the next one', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    session.setConversationMode(true);
+
+    const lastWavByteLength = () => {
+      const call = invoke.mock.calls.filter(([cmd]) => cmd === 'ai_transcribe_audio').at(-1);
+      return (call![1] as { audioBytes: number[] }).audioBytes.length;
+    };
+
+    // --- Turn 1: no pre-roll exists yet; 3 speech buffers is the baseline. ---
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    const baseline = lastWavByteLength();
+
+    // --- Between turns: the graph is parked, but the user starts talking. ---
+    feedSpeech(audioProcessors[0], 4);
+
+    // --- Turn 2: the same 3 in-turn buffers, now seeded with that pre-roll. ---
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    // 4 extra buffers × 4 samples × 2 bytes = 32 bytes of recovered speech.
+    expect(lastWavByteLength()).toBe(baseline + 32);
+
+    vi.useRealTimers();
+  });
+
+  it('does not drag the assistant’s own echo into the next turn as pre-roll', async () => {
+    // Pre-roll must not accumulate while the assistant is talking — that audio
+    // is the reply leaking back through the mic, not the user.
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    session.setConversationMode(true);
+
+    const lastWavByteLength = () => {
+      const call = invoke.mock.calls.filter(([cmd]) => cmd === 'ai_transcribe_audio').at(-1);
+      return (call![1] as { audioBytes: number[] }).audioBytes.length;
+    };
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    const baseline = lastWavByteLength();
+
+    // Assistant reply playing: loud buffers arriving now are its own echo.
+    session.setPlaybackActive(true);
+    feedSpeech(audioProcessors[0], 8);
+    session.setPlaybackActive(false);
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    expect(lastWavByteLength()).toBe(baseline);
 
     vi.useRealTimers();
   });

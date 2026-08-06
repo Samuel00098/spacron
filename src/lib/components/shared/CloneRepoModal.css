@@ -1,0 +1,440 @@
+/* CloneRepoModal — the dialog behind "Clone from GitHub" on the home screen.
+   Deliberately the same shape and spacing as NewFolderModal: both take a name
+   and a location and produce a project, so they should feel like one dialog
+   wearing two hats. Uses theme variables throughout, with local fallbacks so it
+   stays correct on themes that don't define every token. */
+
+.cr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050; /* above the Project HUD (10000) */
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+  padding-top: calc(15 * var(--app-vh, 1vh));
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  animation: cr-fade 0.14s ease;
+}
+
+@keyframes cr-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cr-modal {
+  /* Force an opaque surface (via the RGB token) so the dialog is solid even on
+     glass/translucent themes where --bg-primary carries alpha. */
+  --cr-surface: rgb(var(--bg-primary-rgb, 24, 24, 30));
+  --cr-elevated: color-mix(in srgb, var(--text-primary, #fff) 4%, var(--cr-surface));
+  --cr-border: var(--border, rgba(255, 255, 255, 0.1));
+  --cr-border-strong: color-mix(in srgb, var(--text-primary, #fff) 16%, transparent);
+  --cr-ring: color-mix(in srgb, var(--accent, #6ea8fe) 32%, transparent);
+
+  position: relative;
+  width: 520px;
+  max-width: 100%;
+  border: 1px solid var(--cr-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent, #6ea8fe) 10%, transparent) 0%, transparent 60%),
+    linear-gradient(180deg, var(--cr-elevated) 0%, var(--cr-surface) 100%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 32px 70px -18px rgba(0, 0, 0, 0.6),
+    0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: cr-pop 0.24s var(--ease-out);
+}
+
+@keyframes cr-pop {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cr-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted, #8a8a99);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.cr-close:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+  border-color: var(--cr-border);
+}
+
+.cr-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+/* Header */
+.cr-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 26px 18px;
+}
+
+.cr-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  color: var(--accent, #6ea8fe);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent, #6ea8fe) 22%, transparent), color-mix(in srgb, var(--accent, #6ea8fe) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--accent, #6ea8fe) 35%, transparent);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
+}
+
+.cr-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cr-title {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary, #fff);
+}
+
+.cr-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-muted, #8a8a99);
+}
+
+/* Body */
+.cr-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 26px 22px;
+}
+
+.cr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.cr-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--text-primary, #fff) 3%, var(--cr-surface));
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  caret-color: var(--accent, #6ea8fe);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.cr-input::placeholder {
+  color: var(--text-muted, #8a8a99);
+  opacity: 0.7;
+}
+
+.cr-input:focus {
+  border-color: var(--accent, #6ea8fe);
+  box-shadow: 0 0 0 3px var(--cr-ring);
+  background: var(--cr-surface);
+}
+
+.cr-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Location selector — a button styled like a field */
+.cr-location {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 42px;
+  padding: 0 12px 0 14px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px dashed var(--cr-border-strong);
+  background: color-mix(in srgb, var(--text-primary, #fff) 2%, var(--cr-surface));
+  color: var(--text-secondary, #c4c4d0);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.cr-location:hover:not(:disabled) {
+  border-color: var(--accent, #6ea8fe);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 6%, var(--cr-surface));
+}
+
+.cr-location:focus-visible {
+  outline: none;
+  border-color: var(--accent, #6ea8fe);
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+.cr-location:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cr-location svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.cr-location-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-location.is-empty .cr-location-text {
+  color: var(--text-muted, #8a8a99);
+}
+
+.cr-location-cta {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #6ea8fe);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent);
+}
+
+/* Preview line: "Cloning into <b>folder</b>" */
+.cr-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 5%, transparent);
+  font-size: 12px;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-preview svg { flex-shrink: 0; color: var(--accent, #6ea8fe); opacity: 0.9; }
+.cr-preview b { color: var(--text-primary, #fff); font-weight: 600; }
+.cr-preview .cr-preview-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cr-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--error, #ef4444) 45%, transparent);
+  background: color-mix(in srgb, var(--error, #ef4444) 12%, transparent);
+  color: var(--error, #ef4444);
+  font-size: 12px;
+}
+
+.cr-error svg { flex-shrink: 0; }
+
+/* Hint — subtle info banner below the URL field */
+.cr-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #6ea8fe) 25%, transparent);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 6%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary, #c4c4d0);
+}
+
+.cr-hint svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent, #6ea8fe);
+  opacity: 0.85;
+}
+
+.cr-hint-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent, #6ea8fe);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent, #6ea8fe) 40%, transparent);
+  text-underline-offset: 2px;
+  transition: color var(--dur-fast) var(--ease-out), text-decoration-color var(--dur-fast) var(--ease-out);
+}
+
+.cr-hint-link:hover {
+  color: var(--text-primary, #fff);
+  text-decoration-color: var(--accent, #6ea8fe);
+}
+
+/* Success variant */
+.cr-hint--success {
+  border-color: color-mix(in srgb, var(--success, #22c55e) 30%, transparent);
+  background: color-mix(in srgb, var(--success, #22c55e) 8%, transparent);
+}
+
+.cr-hint--success svg {
+  color: var(--success, #22c55e);
+}
+
+/* Token section — wraps hint + inline token input */
+.cr-token-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cr-token-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.cr-token-input {
+  flex: 1;
+  height: 38px;
+  font-size: 13px;
+}
+
+.cr-token-save {
+  flex-shrink: 0;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
+/* Footer */
+.cr-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 26px 22px;
+  border-top: 1px solid var(--cr-border);
+  background: color-mix(in srgb, var(--text-primary, #fff) 2%, transparent);
+}
+
+.cr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.cr-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--cr-ring);
+}
+
+.cr-btn.ghost {
+  background: transparent;
+  color: var(--text-secondary, #c4c4d0);
+  border: 1px solid var(--cr-border);
+}
+
+.cr-btn.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  color: var(--text-primary, #fff);
+}
+
+/* --button-bg/--button-text are a matched pair in every theme (a fill deep
+   enough to carry white text in both light and dark). --accent on its own is
+   not: it flips from deep to luminous across modes, so a fixed text color
+   fails one of them. */
+.cr-btn.primary {
+  background: var(--button-bg, #4f46e5);
+  color: var(--button-text, #ffffff);
+  border: 1px solid color-mix(in srgb, #000 12%, var(--button-bg, #4f46e5));
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--button-bg, #4f46e5) 70%, transparent);
+}
+
+.cr-btn.primary:hover:not(:disabled) {
+  background: var(--button-hover-bg, #4338ca);
+}
+
+.cr-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* A quiet spinner for the clone itself, which is the one genuinely slow step. */
+.cr-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--button-text, #fff) 35%, transparent);
+  border-top-color: var(--button-text, #fff);
+  animation: cr-spin 0.7s linear infinite;
+}
+
+@keyframes cr-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-backdrop,
+  .cr-modal { animation: none; }
+  .cr-spinner { animation-duration: 2s; }
+}

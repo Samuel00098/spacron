@@ -15,6 +15,9 @@ vi.mock('@tauri-apps/api/path', () => ({ homeDir: vi.fn(async () => 'C:/Users/te
 
 const URL = 'http://127.0.0.1:51234/sse?token=abc123';
 const HTTP_URL = 'http://127.0.0.1:51234/mcp?token=abc123';
+// The launch config now lives in the app config dir, not in the project — it
+// has no project-specific content and used to put the server token in the tree.
+const LAUNCH_CONFIG_PATH = 'C:/Users/dev/AppData/Roaming/spacron/mcp/claude.json';
 
 /**
  * Mirrors the real command surface: only `mcp_server_url` and the file write.
@@ -25,9 +28,9 @@ async function mockBackend(opts: { url?: string | undefined; writeFails?: boolea
   invokeMock.mockImplementation(async (cmd: string) => {
     if (cmd === 'mcp_server_url') return 'url' in opts ? opts.url : URL;
     if (cmd === 'mcp_server_http_url') return HTTP_URL;
-    if (cmd === 'fs_write_file') {
-      if (opts.writeFails) throw new Error('Access denied: path is outside any open project');
-      return undefined;
+    if (cmd === 'mcp_write_launch_config') {
+      if (opts.writeFails) throw new Error('Could not write config');
+      return LAUNCH_CONFIG_PATH;
     }
     return undefined;
   });
@@ -94,16 +97,27 @@ describe('mcpLaunchFlags', () => {
     const mcpLaunchFlags = await mockBackend();
     const flags = await mcpLaunchFlags('claude', 'C:/work/repo');
 
-    expect(flags).toBe(' --mcp-config "C:/work/repo/.spacron/mcp/claude.json"');
+    expect(flags).toBe(` --mcp-config "${LAUNCH_CONFIG_PATH}"`);
 
-    const write = invokeMock.mock.calls.find(([cmd]) => cmd === 'fs_write_file');
+    const write = invokeMock.mock.calls.find(([cmd]) => cmd === 'mcp_write_launch_config');
     expect(write).toBeDefined();
-    expect(write![1].path).toBe('C:/work/repo/.spacron/mcp/claude.json');
     // `type: 'sse'` is load-bearing — a bare url is read as streamable HTTP,
     // which the Rust server does not serve.
     expect(JSON.parse(write![1].content)).toEqual({
       mcpServers: { 'spacron-mcp': { type: 'sse', url: URL } },
     });
+  });
+
+  it('writes the token-bearing config outside the project', async () => {
+    const mcpLaunchFlags = await mockBackend();
+    await mcpLaunchFlags('claude', 'C:/work/repo');
+    // Regression guard: this file carries `?token=`, which grants process
+    // spawning and PTY-write access. It must never be written into the user's
+    // working tree, where an agent committing as it goes could publish it.
+    const projectWrites = invokeMock.mock.calls.filter(
+      ([cmd, args]) => cmd === 'fs_write_file' && String(args?.path ?? '').includes('C:/work/repo'),
+    );
+    expect(projectWrites).toEqual([]);
   });
 
   it('keeps the token out of the command line', async () => {
@@ -123,7 +137,7 @@ describe('mcpLaunchFlags', () => {
     for (const preset of ['codex', 'cursor', 'opencode', 'grok', '']) {
       expect(await mcpLaunchFlags(preset, 'C:/work/repo')).toBe('');
     }
-    expect(invokeMock).not.toHaveBeenCalledWith('fs_write_file', expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith('mcp_write_launch_config', expect.anything());
   });
 
   it('adds nothing when there is no project root to write into', async () => {
@@ -134,7 +148,7 @@ describe('mcpLaunchFlags', () => {
   it('adds nothing when the MCP server has no URL', async () => {
     const mcpLaunchFlags = await mockBackend({ url: undefined });
     expect(await mcpLaunchFlags('claude', 'C:/work/repo')).toBe('');
-    expect(invokeMock).not.toHaveBeenCalledWith('fs_write_file', expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith('mcp_write_launch_config', expect.anything());
   });
 
   it('falls back to a plain launch when the config cannot be written', async () => {
@@ -143,10 +157,10 @@ describe('mcpLaunchFlags', () => {
     expect(await mcpLaunchFlags('claude', 'C:/work/repo')).toBe('');
   });
 
-  it('strips a trailing slash so the path has no double separator', async () => {
+  it('returns the same config path however the project root is spelled', async () => {
     const mcpLaunchFlags = await mockBackend();
     expect(await mcpLaunchFlags('claude', 'C:/work/repo/')).toBe(
-      ' --mcp-config "C:/work/repo/.spacron/mcp/claude.json"',
+      ` --mcp-config "${LAUNCH_CONFIG_PATH}"`,
     );
   });
 });
@@ -428,6 +442,19 @@ describe('ensureMcpConfigsIgnored', () => {
       .map(([, args]) => args.path as string);
     expect(paths[0]).toBe(EXCLUDE);
     expect(paths).toContain('C:/work/repo/.mcp.json');
+  });
+
+  it('deletes the legacy in-project Claude config on project open', async () => {
+    // Moving the config to the app config dir only stops NEW copies appearing.
+    // Every project that ever launched a Claude agent still holds the old file,
+    // and it carries a live `?token=` granting process spawning and PTY-write —
+    // so opening the project has to clean it up, or the exposure never ends.
+    const { ensureMcpConfigs } = await mockModule();
+    await ensureMcpConfigs('C:/work/repo');
+
+    expect(invokeMock).toHaveBeenCalledWith('fs_delete', {
+      path: 'C:/work/repo/.spacron/mcp/claude.json',
+    });
   });
 
   it('keeps entries the user already had', async () => {

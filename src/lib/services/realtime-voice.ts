@@ -232,6 +232,8 @@ export async function startRealtimeVoiceSession(options: {
     if (ended) return;
     ended = true;
     if (activeAnnouncer === announce) activeAnnouncer = null;
+    // Stop any xAI audio that's still playing.
+    stopPlayback();
     transportClose?.();
     mic?.getTracks().forEach((track) => track.stop());
     mic = null;
@@ -451,7 +453,7 @@ export async function startRealtimeVoiceSession(options: {
       pc.onconnectionstatechange = () => {
         const s = pc?.connectionState;
         if ((s === 'failed' || s === 'disconnected' || s === 'closed') && !ended) {
-          if (s === 'failed') callbacks.onError?.('Voice connection lost.');
+          if (s === 'failed') callbacks.onError?.('Voice connection lost. Check your network and try again.');
           teardown(true);
         }
       };
@@ -516,7 +518,7 @@ export async function startRealtimeVoiceSession(options: {
       socket.onerror = null;
       socket.onclose = () => {
         if (!ended) {
-          callbacks.onError?.('Voice connection lost.');
+          callbacks.onError?.('Grok voice connection lost. Check your network and try again.');
           teardown(true);
         }
       };

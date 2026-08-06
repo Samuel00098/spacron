@@ -1,11 +1,5 @@
 import { create } from 'zustand';
 
-export interface ThemeColorField {
-  key: string;
-  label: string;
-  category: 'colors' | 'syntax';
-}
-
 interface ThemeState {
   activeTheme: any | null;
   availableThemes: any[];

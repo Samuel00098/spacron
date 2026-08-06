@@ -148,7 +148,7 @@ vi.mock('$lib/stores/terminal', () => ({
   setSessionExecuting,
 }));
 
-import { trackedWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
+import { trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
@@ -293,7 +293,7 @@ describe('orchestrator terminal leasing', () => {
 
   it('clears stale persisted lease fields for non-in-progress tasks on load', async () => {
     invoke.mockImplementation(async (command: string) => {
-      if (command === 'fs_read_file') {
+      if (command === 'project_state_read') {
         return JSON.stringify([
           {
             id: 'task-1',
@@ -324,10 +324,11 @@ describe('orchestrator terminal leasing', () => {
       }),
     ]);
 
-    const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
+    const writeCall = invoke.mock.calls.find(([command]) => command === 'project_state_write');
     expect(writeCall).toBeDefined();
-    const [, writeArgs] = writeCall as [string, { path: string; content: string }];
-    expect(writeArgs.path).toBe('/repo/.spacron/orchestrator.json');
+    const [, writeArgs] = writeCall as [string, { projectId: string; key: string; content: string }];
+    expect(writeArgs.projectId).toBe('project-1');
+    expect(writeArgs.key).toBe('orchestrator.json');
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-1',
       projectId: 'project-1',
@@ -340,7 +341,7 @@ describe('orchestrator terminal leasing', () => {
 
   it('flushes normalized persisted fields on load', async () => {
     invoke.mockImplementation(async (command: string) => {
-      if (command === 'fs_read_file') {
+      if (command === 'project_state_read') {
         return JSON.stringify([
           {
             id: 'task-2',
@@ -357,9 +358,9 @@ describe('orchestrator terminal leasing', () => {
 
     await loadProjectOrchestratorTasks({ id: 'project-1', root_path: '/repo' });
 
-    const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
+    const writeCall = invoke.mock.calls.find(([command]) => command === 'project_state_write');
     expect(writeCall).toBeDefined();
-    const [, writeArgs] = writeCall as [string, { path: string; content: string }];
+    const [, writeArgs] = writeCall as [string, { projectId: string; key: string; content: string }];
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-2',
       projectId: 'project-1',
@@ -371,7 +372,7 @@ describe('orchestrator terminal leasing', () => {
 
   it('resets an in-progress task when the live session is owned by another task', async () => {
     invoke.mockImplementation(async (command: string) => {
-      if (command === 'fs_read_file') {
+      if (command === 'project_state_read') {
         return JSON.stringify([
           {
             id: 'task-3',
@@ -402,9 +403,9 @@ describe('orchestrator terminal leasing', () => {
       })
     );
 
-    const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
+    const writeCall = invoke.mock.calls.find(([command]) => command === 'project_state_write');
     expect(writeCall).toBeDefined();
-    const [, writeArgs] = writeCall as [string, { path: string; content: string }];
+    const [, writeArgs] = writeCall as [string, { projectId: string; key: string; content: string }];
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-3',
       projectId: 'project-1',
@@ -417,7 +418,7 @@ describe('orchestrator terminal leasing', () => {
 
   it('reclaims a loaded todo task from a live owned session', async () => {
     invoke.mockImplementation(async (command: string) => {
-      if (command === 'fs_read_file') {
+      if (command === 'project_state_read') {
         return JSON.stringify([
           {
             id: 'task-4',
@@ -444,9 +445,9 @@ describe('orchestrator terminal leasing', () => {
       })
     );
 
-    const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
+    const writeCall = invoke.mock.calls.find(([command]) => command === 'project_state_write');
     expect(writeCall).toBeDefined();
-    const [, writeArgs] = writeCall as [string, { path: string; content: string }];
+    const [, writeArgs] = writeCall as [string, { projectId: string; key: string; content: string }];
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-4',
       projectId: 'project-1',
@@ -457,7 +458,7 @@ describe('orchestrator terminal leasing', () => {
 
   it('reclaims an in-progress task from a live owned session when the lease id is missing', async () => {
     invoke.mockImplementation(async (command: string) => {
-      if (command === 'fs_read_file') {
+      if (command === 'project_state_read') {
         return JSON.stringify([
           {
             id: 'task-4',
@@ -486,9 +487,9 @@ describe('orchestrator terminal leasing', () => {
       })
     );
 
-    const writeCall = invoke.mock.calls.find(([command]) => command === 'fs_write_file');
+    const writeCall = invoke.mock.calls.find(([command]) => command === 'project_state_write');
     expect(writeCall).toBeDefined();
-    const [, writeArgs] = writeCall as [string, { path: string; content: string }];
+    const [, writeArgs] = writeCall as [string, { projectId: string; key: string; content: string }];
     expect(JSON.parse(writeArgs.content)[0]).toMatchObject({
       id: 'task-4',
       projectId: 'project-1',
@@ -1450,5 +1451,136 @@ describe('trackedWorktrees', () => {
     expect(tracked).toHaveLength(1);
     // The session entry wins, so live status isn't downgraded to false.
     expect(tracked[0]).toMatchObject({ agentName: 'Alex', live: true });
+  });
+});
+
+/**
+ * Closing a project (or the app) reclaims its agent checkouts so they stop
+ * accumulating on disk. The invariant under test is the one that has been broken
+ * twice before: reclaiming must never destroy work the user has not seen.
+ */
+describe('reclaimProjectWorktrees', () => {
+  const wt = (path: string, branch: string) => ({
+    path, branch, baseBranch: 'main', baseCommit: 'aaaaaaa1', createdAt: 0,
+  });
+  const CLEAN = { head: 'bbbbbbb2', dirty_files: 0, committed_files: 0, up_to_date: true };
+  const DIRTY = { head: 'bbbbbbb2', dirty_files: 3, committed_files: 0, up_to_date: false };
+
+  /**
+   * Route the git commands reclaim depends on; everything else stays undefined.
+   * Also clears the call history, so a `not.toHaveBeenCalledWith` assertion below
+   * is about this test's reclaim and not about setup or an earlier case — the
+   * `invoke` mock is shared across the whole file.
+   */
+  const git = (delta: unknown) => {
+    invoke.mockClear();
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'workspace_git_worktree_delta') return delta;
+      if (command === 'workspace_git_list_worktrees') return [];
+      return undefined;
+    });
+  };
+
+  beforeEach(async () => {
+    await loadProjectOrchestratorTasks({ id: 'project-1', root_path: '/repo' });
+    orchestratorTasks.set([]);
+  });
+
+  it('removes a checkout git confirms is fully staged', async () => {
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? { sessions: [] } : {
+        sessions: [{
+          id: 7, isRunning: true, ownerTaskId: null, agentName: 'Alex',
+          worktree: wt('/repo/.spacron/worktrees/alex', 'spacron/alex-1'),
+        }],
+      });
+    git(CLEAN);
+
+    const outcome = await reclaimProjectWorktrees('project-1');
+
+    expect(outcome).toMatchObject({ removed: 1, kept: 0 });
+    expect(invoke).toHaveBeenCalledWith(
+      'workspace_git_remove_worktree',
+      expect.objectContaining({ worktreePath: '/repo/.spacron/worktrees/alex' }),
+    );
+  });
+
+  it('KEEPS a checkout that still holds unstaged work, and names its agent', async () => {
+    // The whole safety property. A close must not be a data-loss event: the
+    // branch is the only durable copy until the user commits in Source Control.
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? { sessions: [] } : {
+        sessions: [{
+          id: 7, isRunning: true, ownerTaskId: null, agentName: 'Alex',
+          worktree: wt('/repo/.spacron/worktrees/alex', 'spacron/alex-1'),
+        }],
+      });
+    git(DIRTY);
+
+    const outcome = await reclaimProjectWorktrees('project-1');
+
+    expect(outcome).toMatchObject({ removed: 0, kept: 1, keptAgents: ['Alex'] });
+    expect(invoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.anything());
+  });
+
+  it('never deletes the branch, even when the checkout goes', async () => {
+    // Removing the checkout is what reclaims disk space; the branch costs
+    // almost nothing and is the user's only route back to the work.
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? { sessions: [] } : {
+        sessions: [{
+          id: 7, isRunning: true, ownerTaskId: null, agentName: 'Alex',
+          worktree: wt('/repo/.spacron/worktrees/alex', 'spacron/alex-1'),
+        }],
+      });
+    git(CLEAN);
+
+    await reclaimProjectWorktrees('project-1');
+
+    expect(invoke).toHaveBeenCalledWith(
+      'workspace_git_remove_worktree',
+      expect.objectContaining({ deleteBranch: false }),
+    );
+  });
+
+  it('covers agents from BOTH ownership paths and both ambients', async () => {
+    // Session-owned (Spawn Agents picker), dev-ambient, and task-owned agents
+    // all have to be swept — missing any one leaves a checkout behind forever.
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) =>
+      isDev ? {
+        sessions: [{
+          id: 9, isRunning: true, ownerTaskId: null, agentName: 'Iris',
+          worktree: wt('/repo/.spacron/worktrees/iris', 'spacron/iris-2'),
+        }],
+      } : {
+        sessions: [{
+          id: 7, isRunning: true, ownerTaskId: null, agentName: 'Alex',
+          worktree: wt('/repo/.spacron/worktrees/alex', 'spacron/alex-1'),
+        }],
+      });
+    const seed = createOrchestratorTask('project-1', 'Some goal', 'claude', 'Backend');
+    orchestratorTasks.set([{
+      ...seed, status: 'complete', assignedSessionId: null, lastSessionId: 42,
+      worktree: wt('/repo/.spacron/worktrees/backend', 'spacron/backend-3'),
+    }]);
+    git(CLEAN);
+
+    const outcome = await reclaimProjectWorktrees('project-1');
+
+    expect(outcome.removed).toBe(3);
+  });
+
+  it('leaves another project’s worktrees alone', async () => {
+    getTerminalProjectState.mockImplementation(() => ({ sessions: [] }));
+    const seed = createOrchestratorTask('project-2', 'Other goal', 'claude', 'Other');
+    orchestratorTasks.set([{
+      ...seed, status: 'complete', assignedSessionId: null, lastSessionId: 42,
+      worktree: wt('/other/.spacron/worktrees/other', 'spacron/other-9'),
+    }]);
+    git(CLEAN);
+
+    const outcome = await reclaimProjectWorktrees('project-1');
+
+    expect(outcome).toMatchObject({ removed: 0, kept: 0 });
   });
 });

@@ -2,6 +2,7 @@ import { writable, get, derived } from '$lib/stores/storeCompat';
 import { useOrchestratorStore } from './zustand/orchestrator';
 import { invoke } from '@tauri-apps/api/core';
 import { backendInvoke } from '$lib/services/backend';
+import { readProjectState } from '$lib/services/project-state';
 import { showToast } from '$lib/stores/notification';
 import { getPresetRuns } from '$lib/stores/runs';
 import {
@@ -152,10 +153,6 @@ export function getProjectOrchestratorTasks(projectId: string) {
 // projectId → root_path so flushes can write without the full project object.
 const projectPaths = new Map<string, string>();
 
-function storePath(rootPath: string): string {
-  return `${rootPath}/.spacron/orchestrator.json`;
-}
-
 type PersistedTask = Omit<Partial<OrchestratorTask>, 'status'> & {
   id: string;
   projectId: string;
@@ -263,8 +260,8 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
   await loadProjectProfile(project.id, project.root_path);
   let rawPersistedTasks: Array<Partial<PersistedTask> | null | undefined> = [];
   try {
-    const raw = await backendInvoke<string>('fs_read_file', { path: storePath(project.root_path) });
-    const parsed = JSON.parse(raw);
+    const raw = await readProjectState(project.id, project.root_path, 'orchestrator.json');
+    const parsed = JSON.parse(raw ?? '');
     if (Array.isArray(parsed)) {
       rawPersistedTasks = parsed as Array<Partial<PersistedTask> | null | undefined>;
     }
@@ -372,14 +369,16 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
 }
 
 async function flush(projectId: string): Promise<void> {
-  const rootPath = projectPaths.get(projectId);
-  if (!rootPath) return;
+  if (!projectPaths.has(projectId)) return;
   // Adopted tasks track manually-launched agents and die with the process —
   // they're in-memory only, never written to disk.
   const projectTasks = get(orchestratorTasks).filter((t) => t.projectId === projectId && !t.adopted);
   try {
-    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await backendInvoke('fs_write_file', { path: storePath(rootPath), content: JSON.stringify(projectTasks, null, 2) });
+    await backendInvoke('project_state_write', {
+      projectId,
+      key: 'orchestrator.json',
+      content: JSON.stringify(projectTasks, null, 2),
+    });
   } catch (err) {
     console.error('Failed to save orchestrator tasks:', err);
     showToast('Task state could not be saved — changes may be lost on restart', 'error', 8000);
@@ -975,6 +974,56 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<number> 
     // alone; the Agent changes list is already showing it.
   }
   return attempted;
+}
+
+export interface ReclaimAllOutcome {
+  /** Checkouts actually deleted from disk. */
+  removed: number;
+  /** Checkouts kept because they still hold work git could not move. */
+  kept: number;
+  /** Agent names for the kept ones, so the caller can name them to the user. */
+  keptAgents: string[];
+}
+
+/**
+ * Reclaim every worktree belonging to a project — used when the project (or the
+ * whole app) is closing, so agent checkouts don't accumulate on disk.
+ *
+ * Unlike `cleanupStaleWorktrees` this does **not** skip live agents: the panes
+ * are being torn down as part of the same close, so "live" is about to stop
+ * being true. It is still routed through `reclaimWorktree`, which stages
+ * outstanding work onto the agent's branch and re-asks git before deleting
+ * anything — so a checkout holding work is kept, not destroyed.
+ *
+ * `deleteBranch` is deliberately false. The branch is the only durable copy of
+ * an agent's work until the user commits in Source Control, and it costs
+ * essentially nothing on disk once the checkout is gone. Removing the checkout
+ * is what reclaims the space the user cares about.
+ *
+ * Anything this misses (an app kill, a git lock) is caught by
+ * `sweepOrphanWorktrees` on the next project load, so a partial run is safe.
+ */
+export async function reclaimProjectWorktrees(projectId: string): Promise<ReclaimAllOutcome> {
+  const tracked = trackedWorktrees().filter((w) => w.projectId === projectId);
+  const outcome: ReclaimAllOutcome = { removed: 0, kept: 0, keptAgents: [] };
+
+  for (const entry of tracked) {
+    const result = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false });
+    if (result.removed) {
+      outcome.removed += 1;
+      forgetWorktree(entry.worktree.path);
+      const task = get(orchestratorTasks).find((t) => t.worktree?.path === entry.worktree.path);
+      if (task) patchTask(task.id, (t) => ({ ...t, worktree: null }));
+    } else {
+      outcome.kept += 1;
+      outcome.keptAgents.push(entry.agentName);
+    }
+  }
+
+  // Drop any checkout no task or session claims any more, and let git forget
+  // administrative entries for the ones we just deleted.
+  await sweepOrphanWorktrees(projectId);
+  return outcome;
 }
 
 /**

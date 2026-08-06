@@ -1,5 +1,5 @@
 import { writable, get, derived } from '$lib/stores/storeCompat';
-import { backendInvoke } from '$lib/services/backend';
+import { readProjectState, writeProjectState } from '$lib/services/project-state';
 
 export type TaskStatus = 'todo' | 'doing' | 'done';
 
@@ -14,23 +14,16 @@ export interface Task {
 // In-memory store — all currently loaded project tasks
 export const tasks = writable<Task[]>([]);
 
-// Tracks projectId → root_path so flush functions can write without needing the full project object
-const projectPaths = new Map<string, string>();
-
-export function getTasksPath(rootPath: string): string {
-  return `${rootPath}/.spacron/tasks.json`;
-}
-
+// The board is keyed by project id alone now that it persists outside the repo —
+// flushing no longer needs the project's root path, so nothing tracks it here.
 export async function loadProjectTasks(project: { id: string; root_path: string }): Promise<void> {
-  projectPaths.set(project.id, project.root_path);
-  const path = getTasksPath(project.root_path);
   let loaded: Task[] = [];
   try {
-    const raw = await backendInvoke<string>('fs_read_file', { path });
-    const parsed = JSON.parse(raw);
+    const raw = await readProjectState(project.id, project.root_path, 'tasks.json');
+    const parsed = JSON.parse(raw ?? '');
     if (Array.isArray(parsed)) loaded = parsed;
   } catch {
-    // file doesn't exist yet — start with empty board
+    // nothing saved yet — start with an empty board
   }
   tasks.update(all => [
     ...all.filter(t => t.projectId !== project.id),
@@ -39,17 +32,8 @@ export async function loadProjectTasks(project: { id: string; root_path: string 
 }
 
 async function flushProjectTasks(projectId: string): Promise<void> {
-  const rootPath = projectPaths.get(projectId);
-  if (!rootPath) return;
-  const dir = `${rootPath}/.spacron`;
-  const path = getTasksPath(rootPath);
   const projectTasks = get(tasks).filter(t => t.projectId === projectId);
-  try {
-    try { await backendInvoke('fs_create_dir', { path: dir }); } catch { /* already exists */ }
-    await backendInvoke('fs_write_file', { path, content: JSON.stringify(projectTasks, null, 2) });
-  } catch (err) {
-    console.error('Failed to save tasks:', err);
-  }
+  await writeProjectState(projectId, 'tasks.json', JSON.stringify(projectTasks, null, 2));
 }
 
 export function addTask(projectId: string, title: string, status: TaskStatus = 'todo'): Task {

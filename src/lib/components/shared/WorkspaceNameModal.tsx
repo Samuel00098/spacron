@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import { newWorkspacePromptOpen, createNewWorkspace } from '$lib/stores/workspace';
 import { viewTransitionsReliable } from '$lib/utils/tauri';
 import './WorkspaceNameModal.css';
@@ -8,6 +9,9 @@ export default function WorkspaceNameModal() {
   const [nameInput, setNameInput] = useState('');
   const inputEl = useRef<HTMLInputElement | null>(null);
   const submitted = useRef(false);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+
+  useModalFocus(backdropRef);
 
   useEffect(() => {
     inputEl.current?.focus();
@@ -85,6 +89,7 @@ export default function WorkspaceNameModal() {
       aria-modal="true"
       aria-label="New Collection"
       tabIndex={-1}
+      ref={backdropRef}
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
     >

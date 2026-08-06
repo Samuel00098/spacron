@@ -57,6 +57,7 @@ export default function Toasts() {
 
   useEffect(() => {
     const storeById = new Map(storeToasts.map((t) => [t.id, t]));
+    const exitTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     setItems((prev) => {
       const next: RenderItem[] = [];
@@ -71,9 +72,13 @@ export default function Toasts() {
         } else if (!item.leaving) {
           next.push({ toast: item.toast, leaving: true });
           const id = item.toast.id;
-          setTimeout(() => {
-            setItems((cur) => cur.filter((c) => c.toast.id !== id));
-          }, EXIT_MS);
+          exitTimers.set(
+            id,
+            setTimeout(() => {
+              exitTimers.delete(id);
+              setItems((cur) => cur.filter((c) => c.toast.id !== id));
+            }, EXIT_MS),
+          );
         } else {
           next.push(item); // already leaving — keep until its timer removes it
         }
@@ -88,6 +93,10 @@ export default function Toasts() {
 
       return next;
     });
+
+    return () => {
+      for (const timer of exitTimers.values()) clearTimeout(timer);
+    };
   }, [storeToasts]);
 
   return (

@@ -25,16 +25,17 @@ interface NotificationState {
   dismissToast: (id: string) => void;
 }
 
-let permissionGranted = false;
+/** Timers for toasts that auto-dismiss, so an early dismiss can cancel them. */
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Call once on app startup to prompt the user for notification permission. */
 export async function requestNotificationPermission() {
   if (!get(notificationsEnabled)) return;
 
   try {
-    permissionGranted = await isPermissionGranted();
-    if (!permissionGranted) {
-      permissionGranted = (await requestPermission()) === 'granted';
+    const granted = await isPermissionGranted();
+    if (!granted) {
+      await requestPermission();
     }
   } catch (err) {
     console.error('Failed to initialize notification permission:', err);
@@ -62,46 +63,42 @@ function showBrowserNotification(title: string, message: string) {
   };
 }
 
+/**
+ * Show a desktop (system) notification.
+ *
+ * Re-checks permission on every call — the OS setting can change while the app
+ * runs, and a stale `granted` flag silently dropped notifications before. The
+ * native command's failure falls back to the Web Notification API.
+ */
 async function showDesktopNotification(message: string, type: Toast['type']) {
   if (!get(notificationsEnabled)) return;
 
   try {
-    const win = getCurrentWindow();
-    const [focused, visible, minimized] = await Promise.all([
-      win.isFocused(),
-      win.isVisible(),
-      win.isMinimized(),
-    ]);
-    if (focused || (visible && !minimized)) return;
-  } catch {}
-
-  try {
-    if (!permissionGranted) {
-      permissionGranted = await isPermissionGranted();
-      if (!permissionGranted) {
-        permissionGranted = (await requestPermission()) === 'granted';
-      }
-    }
-    if (!permissionGranted) return;
-
-    const titles: Record<Toast['type'], string> = {
-      error: 'Spacron - Error',
-      warning: 'Spacron - Warning',
-      success: 'Spacron - Done',
-      info: 'Spacron',
-    };
-
-    try {
-      await invoke('notification_show', {
-        title: titles[type],
-        body: message,
-      });
-    } catch (err) {
-      console.warn('Native notification command failed, falling back to Web Notification:', err);
-      showBrowserNotification(titles[type], message);
+    const granted = await isPermissionGranted();
+    if (!granted) {
+      const res = await requestPermission();
+      if (res !== 'granted') return;
     }
   } catch (err) {
-    console.error('Failed to show desktop notification:', err);
+    console.error('Failed to read notification permission:', err);
+    return;
+  }
+
+  const titles: Record<Toast['type'], string> = {
+    error: 'Spacron - Error',
+    warning: 'Spacron - Warning',
+    success: 'Spacron - Done',
+    info: 'Spacron',
+  };
+
+  try {
+    await invoke('notification_show', {
+      title: titles[type],
+      body: message,
+    });
+  } catch (err) {
+    console.warn('Native notification command failed, falling back to Web Notification:', err);
+    showBrowserNotification(titles[type], message);
   }
 }
 
@@ -134,13 +131,20 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
     }
 
     if (actualDuration > 0) {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        toastTimers.delete(id);
         getState().dismissToast(id);
       }, actualDuration);
+      toastTimers.set(id, timer);
     }
   },
 
   dismissToast: (id: string) => {
+    const timer = toastTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      toastTimers.delete(id);
+    }
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
   },
 }));

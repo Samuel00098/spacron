@@ -50,7 +50,7 @@ import {
   appendVoiceExchangeMessage,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
-import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking, warmupLocalTts } from '$lib/services/tts';
+import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { openSettings } from '$lib/stores/layout';
 import { requestRoomControl } from '$lib/stores/layoutControl';
 import { addRunEntry } from '$lib/stores/runHistory';
@@ -236,8 +236,8 @@ export default function FloatingPromptBar() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
-  const [voiceLocked, setVoiceLocked] = useSyncedState(false);
-  const [, setVoiceHeld] = useSyncedState(false);
+  const [voiceLocked, setVoiceLocked, voiceLockedRef] = useSyncedState(false);
+  const [, setVoiceHeld, voiceHeldRef] = useSyncedState(false);
   const [, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
@@ -597,6 +597,10 @@ export default function FloatingPromptBar() {
 
   const submitAgentMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
 
+  // A spoken turn that arrived while a dispatch was still in flight, held until
+  // that dispatch settles. See submitAgentMessage for why dropping it is wrong.
+  const pendingVoiceUtteranceRef = useRef<string | null>(null);
+
   // Live GPT Realtime session (speech-to-speech engine). When it's active the
   // classic pipeline (voiceInput loop + auto-speak TTS) must stay dormant: the
   // realtime call owns the mic and speaks for itself.
@@ -660,6 +664,7 @@ export default function FloatingPromptBar() {
   }, [voiceModeActive]);
 
   const stopAgentVoice = useCallback(() => {
+    // Common cleanup — must run for BOTH realtime and pipeline paths.
     setVoiceModeActive(false);
     agentVoiceModeActive.set(false);
     setIsTtsSpeaking(false);
@@ -668,6 +673,12 @@ export default function FloatingPromptBar() {
     stopSpeaking();
     setVoiceLocked(false);
     setVoiceHeld(false);
+    setIsListening(false);
+    setIsRefining(false);
+    setVoiceStopping(false);
+    voiceDraftBaseRef.current = '';
+    setVoiceDraftText('');
+    pendingVoiceUtteranceRef.current = null;
     // Null the session ref BEFORE stopping so the session's onEnded callback
     // (which fires from stop()) sees it gone and doesn't re-enter this teardown.
     const realtimeSession = realtimeSessionRef.current;
@@ -675,13 +686,9 @@ export default function FloatingPromptBar() {
     realtimeActiveRef.current = false;
     if (realtimeSession) {
       realtimeSession.stop();
-      setIsListening(false);
-      setIsRefining(false);
-      setVoiceStopping(false);
       focusInput();
       return;
     }
-    setVoiceStopping(true);
     voiceInput.setConversationMode(false);
     voiceInput.stop();
     focusInput();
@@ -730,6 +737,14 @@ export default function FloatingPromptBar() {
       showToast(`${label} needs an ${provider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`, 'warning');
       openSettings();
       return;
+    }
+    // Tear down any lingering realtime session from a previous attempt so the
+    // old session's onEnded callback can't fire on this new session's state.
+    const prevSession = realtimeSessionRef.current;
+    realtimeSessionRef.current = null;
+    realtimeActiveRef.current = false;
+    if (prevSession) {
+      try { prevSession.stop(); } catch { /* already stopped */ }
     }
     setVoiceModeActive(true);
     agentVoiceModeActive.set(true);
@@ -823,9 +838,6 @@ export default function FloatingPromptBar() {
     lastSpokenMessageKeyRef.current = lastMsg && lastMsg.role === 'assistant' && !lastMsg.pending ? speechKeyForAssistantMessage(lastMsg) : null;
     setVoiceModeActive(true);
     agentVoiceModeActive.set(true);
-    // Warm the local speech engine now so the first reply isn't stalled on a
-    // cold WASM/ONNX start (no-op for cloud providers).
-    warmupLocalTts();
     // Keep the mic warm between turns so each turn re-arms instantly instead of
     // re-acquiring the mic (getUserMedia + AudioContext + warmup) every time.
     voiceInput.setConversationMode(true);
@@ -852,7 +864,25 @@ export default function FloatingPromptBar() {
   }, [isAgentMode, voiceModeActive, stopAgentVoice, focusInput, enterAgentMode, toggleAgentVoiceMode]);
 
   const submitAgentMessage = useCallback(async (textOverride?: string) => {
-    if (!$activeProject || agentSendingRef.current) return;
+    if (!$activeProject) return;
+    if (agentSendingRef.current) {
+      // A dispatch is still running. On the typed path the text stays in the
+      // box, so the user can see it didn't send — but a *spoken* turn has no
+      // such feedback, and simply returning here is how voice mode silently ate
+      // every reply the user gave while the orchestrator was still working.
+      // (The reply TTS deliberately starts before dispatch finishes, so this
+      // window is the common case, not the rare one.) Hold the utterance and
+      // flush it the moment the in-flight send settles.
+      if (textOverride !== undefined && voiceModeActiveRef.current) {
+        const queued = textOverride.trim();
+        if (queued) {
+          pendingVoiceUtteranceRef.current = pendingVoiceUtteranceRef.current
+            ? `${pendingVoiceUtteranceRef.current} ${queued}`
+            : queued;
+        }
+      }
+      return;
+    }
     const { paths, ok } = await materializeAttachments();
     if (!ok) return;
     const promptText = (textOverride ?? inputValueRef.current).trim();
@@ -867,7 +897,15 @@ export default function FloatingPromptBar() {
       });
     } finally {
       setAgentSending(false);
-      resumeVoiceLoopRef.current();
+      // Flush anything the user said while this dispatch was running before
+      // re-arming the mic; that call's own finally resumes the loop.
+      const queued = pendingVoiceUtteranceRef.current;
+      pendingVoiceUtteranceRef.current = null;
+      if (queued && voiceModeActiveRef.current) {
+        void submitAgentMessageRef.current(queued);
+      } else {
+        resumeVoiceLoopRef.current();
+      }
     }
     resetHistoryCursor();
       requestAnimationFrame(adjustInputHeight);
@@ -896,7 +934,6 @@ export default function FloatingPromptBar() {
     lastSpokenMessageKeyRef.current = speechKey;
     setIsTtsSpeaking(true);
     void speakResponse(speechTextForAssistantMessage(lastMsg));
-    queueMicrotask(() => resumeVoiceLoopRef.current());
   }, [voiceModeActive, isAgentMode, isTtsSpeaking, projectChatMessages, speakResponse]);
 
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
@@ -1144,6 +1181,15 @@ export default function FloatingPromptBar() {
     setMentionQuery(null);
   }, [adjustInputHeight, $activeProject]);
 
+  // Clean up the voice input session on unmount to release AudioContext,
+  // MediaStream, and ScriptProcessorNode resources.
+  useEffect(() => {
+    return () => {
+      voiceInputRef.current.stop();
+      voiceInputRef.current.setConversationMode(false);
+    };
+  }, []);
+
   const voiceInputRef = useRef(
     createVoiceInputSession({
       onAudioLevel: (rms) => setAudioRms(rms),
@@ -1152,7 +1198,6 @@ export default function FloatingPromptBar() {
         setIsRefining(false);
         voiceDraftBaseRef.current = inputValueRef.current;
         setVoiceDraftText('');
-        showToast('Listening for terminal prompt...', 'info');
       },
       onSpeechStart: () => {
         stopSpeaking();
@@ -1166,111 +1211,89 @@ export default function FloatingPromptBar() {
         setIsRefining(true);
       },
       onEnd: () => {
-        setVoiceStopping((currentStopping) => {
-          setVoiceLocked((currentLocked) => {
-            setVoiceHeld((currentHeld) => {
-              const shouldRestart = !currentStopping && (currentLocked || currentHeld);
-              const shouldResumeAgentVoice = isAgentModeRef.current && voiceModeActiveRef.current;
-              const transcript = voiceDraftTextRef.current.trim();
-              setIsListening(false);
+        // Read current state from refs (avoid nested setState callbacks).
+        const wasStopping = voiceStoppingRef.current;
+        const wasLocked = voiceLockedRef.current;
+        const held = voiceHeldRef.current;
+        const shouldRestart = !wasStopping && (wasLocked || held);
+        const shouldResumeAgentVoice = isAgentModeRef.current && voiceModeActiveRef.current;
+        const transcript = voiceDraftTextRef.current.trim();
+        // Whatever was already in the prompt bar when this turn started. Captured
+        // BEFORE the reset below, because the merge that uses it happens after an
+        // await — reading the ref there would always see the cleared value and
+        // dictation would overwrite typed text instead of appending to it.
+        const draftBase = voiceDraftBaseRef.current;
 
-              if (!transcript) {
-                setIsRefining(false);
-                setVoiceStopping(false);
-                voiceDraftBaseRef.current = '';
-                setVoiceDraftText('');
-                queueMicrotask(() => {
-                  if (shouldRestart) {
-                    if (currentLocked || currentHeld) {
-                      void voiceInputRef.current.start();
-                    }
-                    return;
-                  }
-                  resumeVoiceLoopRef.current();
-                });
-                return currentHeld;
-              }
+        // Reset all voice state in one pass.
+        setIsListening(false);
+        setIsRefining(false);
+        setVoiceStopping(false);
+        voiceDraftBaseRef.current = '';
+        setVoiceDraftText('');
 
-              // Check for sleep/wake keywords in voice mode
-              if (shouldResumeAgentVoice) {
-                if (voiceSleepingRef.current) {
-                  if (matchVoiceCommand(transcript, WAKE_KEYWORDS)) {
-                    setVoiceSleeping(false);
-                    setIsRefining(false);
-                    setVoiceStopping(false);
-                    voiceDraftBaseRef.current = '';
-                    setVoiceDraftText('');
-                    queueMicrotask(() => resumeVoiceLoopRef.current());
-                    return currentHeld;
-                  }
-                  // Still sleeping — ignore everything else
-                  setIsRefining(false);
-                  setVoiceStopping(false);
-                  voiceDraftBaseRef.current = '';
-                  setVoiceDraftText('');
-                  queueMicrotask(() => resumeVoiceLoopRef.current());
-                  return currentHeld;
-                }
-                if (matchVoiceCommand(transcript, SLEEP_KEYWORDS)) {
-                  setVoiceSleeping(true);
-                  setIsRefining(false);
-                  setVoiceStopping(false);
-                  voiceDraftBaseRef.current = '';
-                  setVoiceDraftText('');
-                  queueMicrotask(() => resumeVoiceLoopRef.current());
-                  return currentHeld;
-                }
-              }
-
-              setIsRefining(true);
-
-              void (async () => {
-                try {
-                  const result = await refineVoicePrompt(transcript, { aiRefinement: !(isAgentModeRef.current && voiceModeActiveRef.current) });
-                  if (result.text) {
-                    const merged = mergeVoiceTranscript(voiceDraftBaseRef.current, result.text);
-                    setInputValue(merged);
-                    requestAnimationFrame(adjustInputHeight);
-                    if (isAgentModeRef.current && voiceModeActiveRef.current) {
-                      await submitAgentMessageRef.current(merged);
-                    } else {
-                      focusInput();
-                      if (result.aiRefined) {
-                        showToast('Prompt refined by AI', 'success', undefined, true);
-                      }
-                    }
-                  }
-                  // An empty refinement (nothing usable was said) just falls through to
-                  // the finally below, which restarts the loop — no special-casing here.
-                } catch (error) {
-                  console.error('Failed to refine voice prompt:', error);
-                  // Surface the failure in voice mode so a silent dead mic isn't the only
-                  // signal; the finally still re-arms listening so the loop survives it.
-                  if (shouldResumeAgentVoice) showToast('Could not process that — listening again.', 'warning', 3000);
-                } finally {
-                  setIsRefining(false);
-                  setVoiceStopping(false);
-                  voiceDraftBaseRef.current = '';
-                  setVoiceDraftText('');
-                  if (shouldRestart) {
-                    queueMicrotask(() => {
-                      if (currentLocked || currentHeld) {
-                        void voiceInputRef.current.start();
-                      }
-                    });
-                  } else {
-                    // Conversational voice loop: re-arm the mic for the next turn. Guarded
-                    // (won't fire mid-speech or mid-send), so racing finalizers are safe.
-                    queueMicrotask(() => resumeVoiceLoopRef.current());
-                  }
-                }
-              })();
-              return currentHeld;
-            });
-            return currentLocked;
+        if (!transcript) {
+          queueMicrotask(() => {
+            if (shouldRestart) {
+              if (wasLocked || held) void voiceInputRef.current.start();
+              return;
+            }
+            resumeVoiceLoopRef.current();
           });
-          return currentStopping;
-        });
+          return;
+        }
+
+        // Check for sleep/wake keywords in voice mode.
+        if (shouldResumeAgentVoice) {
+          if (voiceSleepingRef.current) {
+            if (matchVoiceCommand(transcript, WAKE_KEYWORDS)) {
+              setVoiceSleeping(false);
+            }
+            // Whether wake matched or still sleeping — ignore everything else and re-arm.
+            queueMicrotask(() => resumeVoiceLoopRef.current());
+            return;
+          }
+          if (matchVoiceCommand(transcript, SLEEP_KEYWORDS)) {
+            setVoiceSleeping(true);
+            queueMicrotask(() => resumeVoiceLoopRef.current());
+            return;
+          }
+        }
+
+        setIsRefining(true);
+
+        void (async () => {
+          try {
+            const result = await refineVoicePrompt(transcript, { aiRefinement: !(isAgentModeRef.current && voiceModeActiveRef.current) });
+            if (result.text) {
+              const merged = mergeVoiceTranscript(draftBase, result.text);
+              setInputValue(merged);
+              requestAnimationFrame(adjustInputHeight);
+              if (isAgentModeRef.current && voiceModeActiveRef.current) {
+                await submitAgentMessageRef.current(merged);
+              } else {
+                focusInput();
+                if (result.aiRefined) {
+                  showToast('Prompt refined by AI', 'success', undefined, true);
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Failed to refine voice prompt:', error);
+            if (shouldResumeAgentVoice) showToast('Could not process that — listening again.', 'warning', 3000);
+          } finally {
+            setIsRefining(false);
+            setVoiceStopping(false);
+            voiceDraftBaseRef.current = '';
+            setVoiceDraftText('');
+            if (shouldRestart) {
+              queueMicrotask(() => {
+                if (wasLocked || held) void voiceInputRef.current.start();
+              });
+            } else {
+              queueMicrotask(() => resumeVoiceLoopRef.current());
+            }
+          }
+        })();
       },
       onError: (message) => {
         setIsListening(false);

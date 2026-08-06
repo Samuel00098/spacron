@@ -19,7 +19,7 @@ describe('app-settings (agent settings control)', () => {
   it('lists preset theme names the agent can switch to', () => {
     const names = listThemeNames();
     expect(names).toContain('Solace Sky Workspace');
-    expect(names).toContain('Tokyo Neon Street');
+    expect(names).toContain('Amalfi Coastline (Night)');
   });
 
   it('snapshots current settings values', () => {
@@ -62,9 +62,9 @@ describe('app-settings (agent settings control)', () => {
   });
 
   it('switches to a preset theme by name', async () => {
-    const res = await applyAgentSetting('theme', 'Tokyo Neon Street');
+    const res = await applyAgentSetting('theme', 'Amalfi Coastline (Night)');
     expect(res.ok).toBe(true);
-    expect(get(activeTheme)?.name).toBe('Tokyo Neon Street');
+    expect(get(activeTheme)?.name).toBe('Amalfi Coastline (Night)');
   });
 
   it('rejects an unknown theme and an unknown setting', async () => {

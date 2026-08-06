@@ -102,7 +102,7 @@ import {
   removePresetAgent,
   restorePresetAgent,
 } from '$lib/stores/customAgents';
-import { activeTheme, switchPresetTheme, saveTheme, importTheme, themeColorFields } from '$lib/stores/theme';
+import { activeTheme, switchPresetTheme } from '$lib/stores/theme';
 import { presetThemes } from '$lib/stores/presetThemes';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
@@ -740,11 +740,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     };
   }, []);
   const [updateMessage, setUpdateMessage] = useState('');
-  const [showingCustomThemeEditor, setShowingCustomThemeEditor] = useState(false);
-  const [customThemeName, setCustomThemeName] = useState('');
-  const [customThemeId, setCustomThemeId] = useState('');
-  const [customThemeColors, setCustomThemeColors] = useState<Record<string, string>>({});
-  const [customThemeSyntax, setCustomThemeSyntax] = useState<Record<string, string>>({});
   const [availableShells, setAvailableShells] = useState<ShellInfo[]>([]);
 
   const currentActiveTheme = useStore(activeTheme);
@@ -1293,90 +1288,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     showToast(`Restored built-in agent "${name}".`, 'success');
   }
 
-  async function handleImportTheme() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const theme = await importTheme(file);
-        await saveTheme(theme);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        showToast(message || 'Failed to import theme', 'error');
-      }
-    };
-    input.click();
-  }
-
-  function openCustomThemeEditor() {
-    setCustomThemeName('');
-    setCustomThemeId('');
-    setCustomThemeColors({
-      'bg-primary': '#1e1e1e',
-      'bg-secondary': '#252526',
-      'bg-tertiary': '#2d2d2d',
-      'bg-hover': '#333333',
-      'bg-active': '#3c3c3c',
-      'text-primary': '#d4d4d4',
-      'text-secondary': '#ababab',
-      'text-muted': '#6e6e6e',
-      'accent': '#007acc',
-      'accent-hover': '#1a8ad4',
-      'border': '#3c3c3c',
-      'error': '#f48771',
-      'warning': '#cca700',
-      'success': '#4ec9b0',
-      'info': '#3794ff',
-      'button-bg': '#007acc',
-      'button-text': '#ffffff',
-      'terminal-bg': '#1e1e1e',
-      'titlebar-bg': '#181818',
-      'statusbar-bg': '#007acc',
-      'statusbar-text': '#ffffff',
-    });
-    setCustomThemeSyntax({
-      'keyword': '#569cd6',
-      'string': '#ce9178',
-      'number': '#b5cea8',
-      'comment': '#6a9955',
-      'function': '#dcdcaa',
-      'variable': '#d4d4d4',
-      'type': '#4ec9b0',
-      'operator': '#d4d4d4',
-      'constant': '#4fc1ff',
-      'tag': '#569cd6',
-      'attribute': '#9cdcfe',
-    });
-    setShowingCustomThemeEditor(true);
-  }
-
-  function handleSaveCustomTheme() {
-    if (!customThemeName.trim()) {
-      showToast('Please enter a theme name', 'error');
-      return;
-    }
-    const rawId = customThemeId.trim() || customThemeName.toLowerCase().replace(/\s+/g, '-');
-    const id = rawId.replace(/[^a-z0-9_-]/g, '').slice(0, 64);
-    if (!id) {
-      showToast('Theme ID contains no valid characters (use a-z, 0-9, - or _)', 'error');
-      return;
-    }
-    const theme = {
-      id,
-      name: customThemeName.trim(),
-      type: 'dark' as const,
-      colors: customThemeColors,
-      syntax: customThemeSyntax,
-    };
-    saveTheme(theme).catch(e => {
-      showToast(`Failed to save theme: ${e?.message || e}`, 'error');
-    });
-    setShowingCustomThemeEditor(false);
-  }
-
   async function resetAllSettings() {
     let confirmed = false;
     const message =
@@ -1560,158 +1471,104 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                 </Section>
 
-                {showingCustomThemeEditor ? (
-                  <Section title="Custom Theme Editor">
-                    <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div className="ct-field">
-                        <span className="ct-label">Theme Name</span>
-                        <input className="settings-control input" style={{ height: '34px', width: '100%', padding: '0 10px', borderRadius: '7px', border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }} type="text" value={customThemeName} onChange={(e) => setCustomThemeName(e.target.value)} placeholder="My Custom Theme" />
-                      </div>
-                      <div className="ct-field">
-                        <span className="ct-label">Theme ID</span>
-                        <input className="settings-control input" style={{ height: '34px', width: '100%', padding: '0 10px', borderRadius: '7px', border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }} type="text" value={customThemeId} onChange={(e) => setCustomThemeId(e.target.value)} placeholder="my-custom-theme (auto)" />
-                      </div>
-                      <div className="ct-section-label">Interface Colors</div>
-                      <div className="ct-grid">
-                        {themeColorFields.filter(f => f.category === 'colors').map(field => (
-                          <div className="ct-color-field" key={field.key}>
-                            <span className="ct-color-label">{field.label}</span>
-                            <input className="color-input" type="color" value={customThemeColors[field.key] || '#000000'} onChange={(e) => setCustomThemeColors({ ...customThemeColors, [field.key]: e.target.value })} />
-                          </div>
-                        ))}
-                      </div>
-                      <div className="ct-section-label">Syntax Colors</div>
-                      <div className="ct-grid">
-                        {themeColorFields.filter(f => f.category === 'syntax').map(field => (
-                          <div className="ct-color-field" key={field.key}>
-                            <span className="ct-color-label">{field.label}</span>
-                            <input className="color-input" type="color" value={customThemeSyntax[field.key] || '#000000'} onChange={(e) => setCustomThemeSyntax({ ...customThemeSyntax, [field.key]: e.target.value })} />
-                          </div>
-                        ))}
-                      </div>
-                      <div className="ct-actions">
-                        <button className="ct-btn" onClick={() => setShowingCustomThemeEditor(false)}>Cancel</button>
-                        <button className="ct-btn primary" onClick={handleSaveCustomTheme}>Save Theme</button>
-                      </div>
-                    </div>
-                  </Section>
-                ) : (
-                  <Section title="Color Themes">
-                    <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div className="theme-grid">
-                        {presetThemes.map(theme => {
-                          // ── Per-card smart foreground derivation ──────────
-                          // We drive all foreground colors from the theme's own
-                          // declared type, so each card is self-consistent:
-                          // dark-type cards → light glass text/icons
-                          // light-type cards → dark glass text/icons
-                          const isDarkTheme = theme.type === 'dark';
+                <Section title="Color Themes">
+                  <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div className="theme-grid">
+                      {presetThemes.map(theme => {
+                        // ── Per-card smart foreground derivation ──────────
+                        // We drive all foreground colors from the theme's own
+                        // declared type, so each card is self-consistent:
+                        // dark-type cards → light glass text/icons
+                        // light-type cards → dark glass text/icons
+                        const isDarkTheme = theme.type === 'dark';
 
-                          // Glass panel: use theme's own bg-primary as tint
-                          const bgPrimary = theme.colors['bg-primary'] || (isDarkTheme ? '#111' : '#fafafa');
-                          const glassTintAlpha = isDarkTheme ? 0.72 : 0.76;
-                          const borderColor = theme.colors['border'] || (isDarkTheme ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)');
+                        // Glass panel: use theme's own bg-primary as tint
+                        const bgPrimary = theme.colors['bg-primary'] || (isDarkTheme ? '#111' : '#fafafa');
+                        const glassTintAlpha = isDarkTheme ? 0.72 : 0.76;
+                        const borderColor = theme.colors['border'] || (isDarkTheme ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)');
 
-                          // Theme name footer area
-                          const metaBg = isDarkTheme
-                            ? 'rgba(0,0,0,0.35)'
-                            : 'rgba(255,255,255,0.60)';
-                          const nameColor = isDarkTheme ? '#f0f0f4' : '#1a1a22';
-                          const nameSecondary = isDarkTheme ? '#a8a8b8' : '#4a4a58';
+                        // Theme name footer area
+                        const metaBg = isDarkTheme
+                          ? 'rgba(0,0,0,0.35)'
+                          : 'rgba(255,255,255,0.60)';
+                        const nameColor = isDarkTheme ? '#f0f0f4' : '#1a1a22';
+                        const nameSecondary = isDarkTheme ? '#a8a8b8' : '#4a4a58';
 
-                          return (
-                            <button
-                              key={theme.id}
-                              className={`theme-card ${currentActiveTheme?.id === theme.id ? 'active' : ''}`}
-                              onClick={() => switchPresetTheme(theme.id)}
+                        return (
+                          <button
+                            key={theme.id}
+                            className={`theme-card ${currentActiveTheme?.id === theme.id ? 'active' : ''}`}
+                            onClick={() => switchPresetTheme(theme.id)}
+                          >
+                            <div
+                              className="theme-preview"
+                              style={{
+                                backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
+                                backgroundColor: bgPrimary,
+                              }}
                             >
+                              {/* Scrim overlay to dim the image so the glass panel text is always readable */}
+                              <div style={{
+                                position: 'absolute',
+                                inset: 0,
+                                background: isDarkTheme
+                                  ? 'rgba(0, 0, 0, 0.45)'
+                                  : 'rgba(255, 255, 255, 0.42)',
+                                zIndex: 0,
+                              }} />
                               <div
-                                className="theme-preview"
+                                className="theme-preview-glass"
                                 style={{
-                                  backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
-                                  backgroundColor: bgPrimary,
+                                  position: 'relative',
+                                  zIndex: 1,
+                                  background: isDarkTheme
+                                    ? `rgba(0, 0, 0, 0.55)`
+                                    : `rgba(255, 255, 255, 0.65)`,
+                                  borderColor: borderColor,
+                                  backdropFilter: 'blur(8px) saturate(160%)',
+                                  WebkitBackdropFilter: 'blur(8px) saturate(160%)',
                                 }}
                               >
-                                {/* Scrim overlay to dim the image so the glass panel text is always readable */}
-                                <div style={{
-                                  position: 'absolute',
-                                  inset: 0,
-                                  background: isDarkTheme
-                                    ? 'rgba(0, 0, 0, 0.45)'
-                                    : 'rgba(255, 255, 255, 0.42)',
-                                  zIndex: 0,
-                                }} />
-                                <div
-                                  className="theme-preview-glass"
-                                  style={{
-                                    position: 'relative',
-                                    zIndex: 1,
-                                    background: isDarkTheme
-                                      ? `rgba(0, 0, 0, 0.55)`
-                                      : `rgba(255, 255, 255, 0.65)`,
-                                    borderColor: borderColor,
-                                    backdropFilter: 'blur(8px) saturate(160%)',
-                                    WebkitBackdropFilter: 'blur(8px) saturate(160%)',
-                                  }}
-                                >
-                                  <div className="theme-preview-header">
-                                    <span className="theme-preview-dot" style={{ background: theme.colors['error'] || '#ff5f56' }} />
-                                    <span className="theme-preview-dot" style={{ background: theme.colors['warning'] || '#ffbd2e' }} />
-                                    <span className="theme-preview-dot" style={{ background: theme.colors['success'] || '#27c93f' }} />
+                                <div className="theme-preview-header">
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['error'] || '#ff5f56' }} />
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['warning'] || '#ffbd2e' }} />
+                                  <span className="theme-preview-dot" style={{ background: theme.colors['success'] || '#27c93f' }} />
+                                </div>
+                                <div className="theme-preview-code">
+                                  <div className="theme-preview-line">
+                                    <span className="theme-preview-token" style={{ width: '20%', background: theme.syntax['keyword'] || theme.colors['accent'] }} />
+                                    <span className="theme-preview-token" style={{ width: '35%', background: nameColor }} />
+                                    <span className="theme-preview-token" style={{ width: '15%', background: theme.syntax['operator'] || theme.colors['accent'] }} />
+                                    <span className="theme-preview-token" style={{ width: '10%', background: theme.syntax['number'] || theme.colors['accent'] }} />
                                   </div>
-                                  <div className="theme-preview-code">
-                                    <div className="theme-preview-line">
-                                      <span className="theme-preview-token" style={{ width: '20%', background: theme.syntax['keyword'] || theme.colors['accent'] }} />
-                                      <span className="theme-preview-token" style={{ width: '35%', background: nameColor }} />
-                                      <span className="theme-preview-token" style={{ width: '15%', background: theme.syntax['operator'] || theme.colors['accent'] }} />
-                                      <span className="theme-preview-token" style={{ width: '10%', background: theme.syntax['number'] || theme.colors['accent'] }} />
-                                    </div>
-                                    <div className="theme-preview-line" style={{ paddingLeft: '8px' }}>
-                                      <span className="theme-preview-token" style={{ width: '25%', background: theme.syntax['function'] || theme.colors['accent'] }} />
-                                      <span className="theme-preview-token" style={{ width: '50%', background: theme.syntax['string'] || theme.colors['success'] }} />
-                                    </div>
-                                    <div className="theme-preview-line">
-                                      <span className="theme-preview-token" style={{ width: '70%', background: nameSecondary }} />
-                                    </div>
+                                  <div className="theme-preview-line" style={{ paddingLeft: '8px' }}>
+                                    <span className="theme-preview-token" style={{ width: '25%', background: theme.syntax['function'] || theme.colors['accent'] }} />
+                                    <span className="theme-preview-token" style={{ width: '50%', background: theme.syntax['string'] || theme.colors['success'] }} />
+                                  </div>
+                                  <div className="theme-preview-line">
+                                    <span className="theme-preview-token" style={{ width: '70%', background: nameSecondary }} />
                                   </div>
                                 </div>
                               </div>
-                              <div
-                                className="theme-meta"
-                                style={{ background: metaBg }}
-                              >
-                                <span className="theme-name" style={{ color: nameColor }}>{theme.name}</span>
-                                {currentActiveTheme?.id === theme.id && (
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.colors['accent'] || 'var(--accent)'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="20 6 9 17 4 12"/>
-                                  </svg>
-                                )}
-                              </div>
-                            </button>
-                          );
-                        })}
+                            </div>
+                            <div
+                              className="theme-meta"
+                              style={{ background: metaBg }}
+                            >
+                              <span className="theme-name" style={{ color: nameColor }}>{theme.name}</span>
+                              {currentActiveTheme?.id === theme.id && (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.colors['accent'] || 'var(--accent)'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12"/>
+                                </svg>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
 
-                      </div>
-                      <div className="theme-actions">
-                        <button className="theme-action-btn" onClick={handleImportTheme}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                          </svg>
-                          Import Theme
-                        </button>
-                        <button className="theme-action-btn" onClick={openCustomThemeEditor}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
-                            <circle cx="12" cy="12" r="3"/>
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1-2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                          </svg>
-                          Create Custom Theme
-                        </button>
-                      </div>
                     </div>
-                  </Section>
-                )}
+                  </div>
+                </Section>
 
                 <Section title="Background">
                   <SettingRow title="Custom background" detail="Show an image or live wallpaper behind the interface. The image is always fully solid.">

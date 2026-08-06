@@ -60,6 +60,36 @@ pub fn mcp_write_global_agent_config(agent: String, content: String) -> Result<(
     std::fs::write(&path, content).map_err(|e| format!("Could not write {}: {e}", path.display()))
 }
 
+/// Write the Claude Code `--mcp-config` file and return its absolute path.
+///
+/// This file used to be written into every project as
+/// `<project>/.spacron/mcp/claude.json`. It has no project-specific content —
+/// just the server URL and the browser-tools toggle, both app-global — so a copy
+/// per repo bought nothing and put the server's **auth token** in the user's
+/// working tree, where an agent following the "commit as you go" brief could
+/// publish it. `.git/info/exclude` covered that, but only for git checkouts and
+/// only if the exclude write succeeded.
+///
+/// It now lives once, under the app config dir. The caller contributes no part
+/// of the path, so this cannot be steered elsewhere.
+#[tauri::command]
+pub fn mcp_write_launch_config(
+    content: String,
+    state: State<crate::state::AppState>,
+) -> Result<String, String> {
+    if content.len() > 1024 * 1024 {
+        return Err("Refusing to write an implausibly large MCP config".to_string());
+    }
+    let path = state.config_dir.join("mcp").join("claude.json");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(super::clean_path_buf(path).to_string_lossy().to_string())
+}
+
 /// Register a running agent with the MCP server so other agents can discover
 /// and message it by name.
 #[tauri::command]

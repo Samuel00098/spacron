@@ -1689,8 +1689,7 @@
    grid-template transition on .rooms-table above. */
 .app-shell .room-stack,
 .app-shell .split-switcher {
-  transition: opacity var(--dur-base) var(--ease-out),
-    transform var(--dur-slow) var(--ease-out);
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 
 @starting-style {
@@ -1698,7 +1697,6 @@
   .app-shell .room-stack,
   .app-shell .split-switcher {
     opacity: 0;
-    transform: translateY(8px);
   }
 }
 
@@ -2385,47 +2383,23 @@
 }
 
 @keyframes shell-panel-in {
-  0% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.992);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 @keyframes shell-dock-in {
-  0% {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 @keyframes shell-chip-in {
-  0% {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 @keyframes shell-composer-in {
-  0% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.99);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 @keyframes mode-icon-pop {
@@ -2494,54 +2468,33 @@
 }
 
 /* ── Stage Manager transition ─────────────────────────────────────────
-   When switching stages in Focus mode, the outgoing stage shrinks toward
-   the card rail while the incoming stage expands out of it. The View
-   Transitions API snapshots old/new and these rules turn the default
-   cross-fade into a spatial movement.
+   When switching stages in Focus mode, the outgoing stage fades out while
+   the incoming one fades in, in place. The View Transitions API snapshots
+   old/new and these rules time the cross-fade.
 
-   `transform-origin: 100% 50%` is what makes it read as "toward the rail":
-   the rail is the right-hand grid column, so scaling about the right edge
-   collapses the stage in that direction. Scaling about the centre (the
-   default) just made the panel shrink in place, which is why the original
-   needed a translateX nudge to suggest any direction at all.
-
-   NOTE: this is still a scale/fade at the stage's own position, not a
-   morph into the specific card that was clicked. Real positional
-   continuity needs a shared `view-transition-name` handed to the clicked
-   card for the duration of the transition — worth doing, but it must not
-   collide with another named element or the whole transition aborts. */
+   This used to be a spatial move — the outgoing stage scaled down toward
+   the card rail on the right and the incoming one expanded out of it. That
+   read as a shape sliding across the screen before the panel settled, so
+   the movement is gone and only the opacity remains. Keep it that way:
+   surfaces here appear in place, they don't travel. */
 .app-shell ::view-transition-old(spacron-stage) {
   animation: stage-shrink-out 0.38s var(--ease-out) both;
-  transform-origin: 100% 50%;
 }
 
 .app-shell ::view-transition-new(spacron-stage) {
   animation: stage-expand-in 0.42s var(--ease-out) both;
-  transform-origin: 100% 50%;
 }
 
-/* Outgoing stage: collapses toward the rail on the right. */
+/* Outgoing stage: fades out in place. */
 @keyframes stage-shrink-out {
-  from {
-    opacity: 1;
-    transform: scale(1) translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: scale(0.86) translateX(28px);
-  }
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
-/* Incoming stage: expands out of the rail into full view. */
+/* Incoming stage: fades in at full size, in place. */
 @keyframes stage-expand-in {
-  from {
-    opacity: 0;
-    transform: scale(0.86) translateX(28px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateX(0);
-  }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Individual card entrance animations are omitted to avoid overriding
@@ -2567,13 +2520,13 @@
 }
 
 @keyframes modal-pop-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes modal-pop-out {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.97); }
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 

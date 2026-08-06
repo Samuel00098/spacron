@@ -25,11 +25,3 @@ pub fn theme_get_active(state: State<AppState>) -> Result<Theme, String> {
         .get_active_theme()
         .map_err(|e| e.to_string())
 }
-
-#[tauri::command]
-pub fn theme_save(theme: Theme, state: State<AppState>) -> Result<(), String> {
-    state
-        .theme_registry
-        .save_custom_theme(theme)
-        .map_err(|e| e.to_string())
-}

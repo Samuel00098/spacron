@@ -254,11 +254,11 @@ html.bg-palette-light {
   --text-muted:      #555566;
   --text-placeholder:#3a3a46;
 
-  /* ── Accent (graphite grey) ─────────────── */
-  --accent:          #aeb6c2;
-  --accent-hover:    #c7cdd6;
-  --accent-light:    rgba(174, 182, 194, 0.15);
-  --accent-glow:     rgba(174, 182, 194, 0.08);
+  /* ── Accent (indigo) ────────────────────── */
+  --accent:          #818cf8;
+  --accent-hover:    #a5b4fc;
+  --accent-light:    rgba(129, 140, 248, 0.15);
+  --accent-glow:     rgba(129, 140, 248, 0.08);
 
   /* ── Semantic ───────────────────────────── */
   --error:           #f87171;
@@ -332,8 +332,8 @@ html.bg-palette-light {
   --input-focus-border: var(--accent);
 
   /* ── Buttons ────────────────────────────── */
-  --button-bg:       #0e7490;
-  --button-hover-bg: #0891b2;
+  --button-bg:       #4f46e5;
+  --button-hover-bg: #5850ec;
   --button-text:     #ffffff;
 
   /* ── Status Bar ─────────────────────────── */
@@ -867,15 +867,12 @@ input:focus {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   pointer-events: none;
   opacity: 0;
-  transform: translateY(4px) scale(0.96);
-  transition: opacity var(--dur-fast) var(--ease-standard),
-              transform var(--dur-fast) var(--ease-standard);
+  transition: opacity var(--dur-fast) var(--ease-standard);
   white-space: nowrap;
 }
 
 .global-tooltip.visible {
   opacity: 1;
-  transform: translateY(0) scale(1);
 }
 
 /* Light transparent theme adjustments */

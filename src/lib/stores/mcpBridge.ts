@@ -571,6 +571,10 @@ const CLAUDE_EXECUTABLES = new Set(['claude']);
  * The config is written to a file rather than passed as inline JSON so the
  * `?token=` does not land in terminal scrollback or the process list.
  *
+ * It is written to the **app config dir**, not into the project. Its content is
+ * app-global (server URL + browser-tools toggle), so a copy per repo bought
+ * nothing while putting the server's auth token in the user's working tree.
+ *
  * Returns `''` on any failure: an agent with no cross-agent tools is worse than
  * one with them, but far better than one that fails to launch.
  */
@@ -587,15 +591,13 @@ export async function mcpLaunchFlags(
     const url = await getMcpUrl();
     if (!url) return '';
 
-    const configPath = `${projectRoot.replace(/[\\/]+$/, '')}/.spacron/mcp/claude.json`;
     // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`
     // is treated as streamable HTTP, which it does not serve.
     const mcpServers: Record<string, unknown> = { 'spacron-mcp': { type: 'sse', url } };
     // This file is rewritten on every launch, so an omitted entry is already a
     // removed one — no delete branch needed here, unlike the merging writers.
     if (wantsBrowserTools()) mcpServers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
-    await invoke('fs_write_file', {
-      path: configPath,
+    const configPath = await invoke<string>('mcp_write_launch_config', {
       content: JSON.stringify({ mcpServers }, null, 2),
     });
     return ` --mcp-config "${configPath}"`;
@@ -623,6 +625,7 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
     await ensureMcpConfigsIgnored(projectRoot);
 
     await Promise.allSettled([
+      removeLegacyClaudeConfig(projectRoot),
       injectProjectMcpJson(projectRoot, sseUrl),
       injectGeminiConfig(projectRoot, httpUrl),
       injectOpencodeConfig(projectRoot, httpUrl),
@@ -636,10 +639,35 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
 }
 
 /**
+ * Delete the Claude Code MCP config Spacron used to write into the project at
+ * `.spacron/mcp/claude.json`.
+ *
+ * `mcpLaunchFlags` now writes this to the app config dir, but that alone only
+ * stops *new* copies appearing — every project that ever launched a Claude agent
+ * still holds the old file, and it carries a live `?token=` granting process
+ * spawning and PTY-write. Leaving it there would keep the exact exposure the
+ * move was meant to end, indefinitely.
+ *
+ * Best-effort and idempotent: a project that never had one just gets a failed
+ * delete, which is why this is fire-and-forget inside `Promise.allSettled`.
+ */
+async function removeLegacyClaudeConfig(projectRoot: string): Promise<void> {
+  const root = projectRoot?.replace(/[\\/]+$/, '');
+  if (!root) return;
+  try {
+    await invoke('fs_delete', { path: `${root}/.spacron/mcp/claude.json` });
+  } catch {
+    // Never existed, or already cleaned up.
+  }
+}
+
+/**
  * Project-relative paths this module writes that contain the MCP token.
  *
- * `.spacron/` covers the Claude Code config written by `mcpLaunchFlags` and the
- * worker report files, both of which are app state rather than project content.
+ * The Claude Code config written by `mcpLaunchFlags` is no longer among them —
+ * it now lives in the app config dir, so the token never enters the working tree
+ * at all. `.spacron/` stays on the list for the worker report files and the
+ * worktree checkouts, which are app state rather than project content.
  */
 const TOKEN_BEARING_PATHS = [
   '.mcp.json',

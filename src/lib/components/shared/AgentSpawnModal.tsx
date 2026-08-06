@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useStore } from '$lib/react/useStore';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
@@ -25,6 +26,8 @@ import './AgentSpawnModal.css';
 
 export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const project = useStore(activeProject);
+  const asmBackdropRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(asmBackdropRef);
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
   const layout = useStore(layoutSnapshot);
@@ -186,6 +189,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       aria-modal="true"
       aria-label="Spawn Agents"
       tabIndex={-1}
+      ref={asmBackdropRef}
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
     >

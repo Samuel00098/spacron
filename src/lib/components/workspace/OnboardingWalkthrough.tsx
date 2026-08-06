@@ -10,7 +10,7 @@ import './OnboardingWalkthrough.css';
 const iconSrc = `/icon.png?v=${packageJson.version}`;
 
 const onboardingThemes = presetThemes.filter(t =>
-  ['solace-workspace', 'desert-oasis', 'midnight-glow', 'cabin-fireplace'].includes(t.id)
+  ['solace-workspace', 'nocturne-sky-workspace', 'aether-curves', 'dark-coastline'].includes(t.id)
 );
 
 type Step = 'welcome' | 'appearance' | 'interface' | 'shortcuts' | 'features' | 'done';

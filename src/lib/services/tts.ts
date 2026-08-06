@@ -14,6 +14,8 @@ import {
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 
+// Module-level TTS state: intentionally shared across the module because there is
+// only ever one active TTS pipeline at a time (speak() cancels any in-flight run).
 let currentAudio: HTMLAudioElement | null = null;
 let currentObjectUrl: string | null = null;
 // Resolver for the chunk currently playing, so stopSpeaking() can unblock the
@@ -185,6 +187,9 @@ function releaseAudio(audio: HTMLAudioElement, url: string) {
 
 /** Play one already-synthesised chunk to completion. */
 function playBytes(payload: TtsAudioPayload, token: number): Promise<void> {
+  // Bail immediately if this run was superseded before the chunk arrived — prevents
+  // zombie Audio elements from a stale TTS pipeline.
+  if (token !== speakToken) return Promise.resolve();
   const blob = new Blob([new Uint8Array(payload.bytes)], { type: payload.mime_type || 'audio/wav' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
@@ -204,15 +209,6 @@ function playBytes(payload: TtsAudioPayload, token: number): Promise<void> {
       settle(() => (token === speakToken ? reject(new Error('Audio playback failed')) : resolve()));
     audio.play().catch((err) => settle(() => (token === speakToken ? reject(err) : resolve())));
   });
-}
-
-/**
- * Previously pre-loaded the bundled local speech engine. That engine (Kokoro)
- * has been removed, so this is now a no-op kept for call-site compatibility.
- * Cloud/self-hosted TTS latency is the network round-trip, which can't be warmed.
- */
-export function warmupLocalTts(_options?: SpeakOptions): void {
-  /* no local speech engine to warm up */
 }
 
 export async function speak(text: string, options?: SpeakOptions): Promise<void> {

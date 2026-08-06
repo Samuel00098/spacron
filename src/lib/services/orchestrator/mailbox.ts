@@ -8,14 +8,15 @@
  * handoff, and bi-directional reporting are all just message *kinds* on top of
  * this one channel — build the channel first (see docs/agent-intelligence.md).
  *
- * Persistence mirrors memory.ts exactly: it reuses the same
- * `backendInvoke('fs_read_file' / 'fs_write_file')` seam, so it works locally AND
- * over the remote-workspace transport for free, and lands next to the existing
- * memory at `.spacron/mailbox.json`.
+ * Persistence mirrors memory.ts exactly. Both now go through
+ * `$lib/services/project-state`, which keeps this file in the app config dir
+ * rather than in the user's repository — the log is Spacron's own bookkeeping,
+ * never read by an agent CLI, and it used to sit in the working tree as
+ * `.spacron/mailbox.json`. Existing projects are migrated on first read.
  */
 
 import { writable, get } from '$lib/stores/storeCompat';
-import { backendInvoke } from '$lib/services/backend';
+import { readProjectState, writeProjectState } from '$lib/services/project-state';
 
 /** Reserved sender/recipient handles that are not agent ids. */
 export const ORCHESTRATOR = 'orchestrator';
@@ -63,10 +64,6 @@ export function dismissMailboxCard(id: string): void {
     next.add(id);
     return next;
   });
-}
-
-function mailboxPath(rootPath: string): string {
-  return `${rootPath}/.spacron/mailbox.json`;
 }
 
 function compactText(raw: string, maxChars: number): string {
@@ -158,8 +155,8 @@ export function appendMailboxMessage(
 export async function loadProjectMailbox(projectId: string, rootPath: string): Promise<void> {
   let messages: MailboxMessage[] = [];
   try {
-    const raw = await backendInvoke<string>('fs_read_file', { path: mailboxPath(rootPath) });
-    const parsed = JSON.parse(raw);
+    const raw = await readProjectState(projectId, rootPath, 'mailbox.json');
+    const parsed = JSON.parse(raw ?? '');
     if (Array.isArray(parsed)) {
       messages = parsed.filter(isMailboxMessage).slice(-MAX_MAILBOX_MESSAGES);
     }
@@ -169,14 +166,9 @@ export async function loadProjectMailbox(projectId: string, rootPath: string): P
   mailbox.update((all) => ({ ...all, [projectId]: messages }));
 }
 
-export async function flushProjectMailbox(projectId: string, rootPath: string): Promise<void> {
+export async function flushProjectMailbox(projectId: string, _rootPath?: string): Promise<void> {
   const messages = get(mailbox)[projectId] ?? [];
-  try {
-    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await backendInvoke('fs_write_file', { path: mailboxPath(rootPath), content: JSON.stringify(messages, null, 2) });
-  } catch (err) {
-    console.error('Failed to save mailbox:', err);
-  }
+  await writeProjectState(projectId, 'mailbox.json', JSON.stringify(messages, null, 2));
 }
 
 /**

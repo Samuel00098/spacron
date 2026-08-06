@@ -69,6 +69,7 @@ activeProject.subscribe(($activeProject) => {
 
 export const newWorkspacePromptOpen = syncWritable<boolean>('newWorkspacePromptOpen', false);
 export const newFolderPromptOpen = syncWritable<boolean>('newFolderPromptOpen', false);
+export const cloneRepoPromptOpen = syncWritable<boolean>('cloneRepoPromptOpen', false);
 export const isProjectHUDOpen = syncWritable<boolean>('isProjectHUDOpen', false);
 
 export function toggleProjectHUD() {
@@ -547,6 +548,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
   const { invoke } = await import('@tauri-apps/api/core');
   isRestoringProjectState = true;
   isProjectSwitching.set(true);
+  useWorkspaceStore.getState().setSwitchingPhase('Restoring project…');
   try {
     try {
       await invoke('workspace_set_active', { projectId });
@@ -727,13 +729,20 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           if (persisted.terminalLayout) {
             setGridLayout(persisted.terminalLayout as any);
           }
+          useWorkspaceStore.getState().setSwitchingPhase('Restoring terminals…');
           const spawnedIds: number[] = [];
           // Recreate a session only for panes that actually held one, keeping
           // each session in its original pane slot and leaving empty panes empty.
-          for (let i = 0; i < persisted.terminalPanes.length; i++) {
-            if (generation !== restoreProjectStateGeneration) return;
-            const pane = persisted.terminalPanes[i];
-            if (!pane.hasSession) continue;
+          //
+          // Panes are restored concurrently: each session's pane slot is fixed by
+          // `targetPaneIndex`, and neither attach/create depends on another pane's
+          // result, so serializing them only adds up to N IPC round-trips of
+          // latency to every project switch. `relaunchRestoredAgentSession` awaits
+          // its own freshly created session, so it stays per-pane — only the
+          // cross-pane wait is removed.
+          const restorePane = async (pane: PersistedTerminalPane, i: number) => {
+            if (generation !== restoreProjectStateGeneration) return null;
+            if (!pane.hasSession) return null;
             const metadata = {
               title: pane.title,
               paneTitle: pane.paneTitle,
@@ -754,15 +763,14 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
                 ? await attachTerminalSession(pane.backendSessionId, pane.cwd || rootPath, undefined, projectId, metadata, { assignPane: false })
                 : null;
               if (attachedId !== null) {
-                spawnedIds.push(attachedId);
-              } else {
-                const roomId = await createTerminalSession(pane.cwd || rootPath, undefined, projectId, { assignPane: false, agentPreset: pane.agentPreset });
-                if (roomId !== null) {
-                  spawnedIds.push(roomId);
-                  await relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata);
-                }
+                return attachedId;
               }
-              continue;
+              const roomId = await createTerminalSession(pane.cwd || rootPath, undefined, projectId, { assignPane: false, agentPreset: pane.agentPreset });
+              if (roomId !== null) {
+                await relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata);
+                return roomId;
+              }
+              return null;
             }
             // Legacy plain-terminal panes (persisted before only agents were
             // saved): keep the original behaviour of restoring into the grid.
@@ -775,11 +783,19 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
             // showed a path from a different project than the one you're in.
             const id = attachedId ?? await createTerminalSession(pane.cwd || rootPath, i, projectId);
             if (id !== null) {
-              spawnedIds.push(id);
               if (attachedId === null) {
                 applyRestoredSessionMetadata(id, metadata);
               }
+              return id;
             }
+            return null;
+          };
+
+          const restored = await Promise.all(
+            persisted.terminalPanes.map((pane, i) => restorePane(pane, i)),
+          );
+          for (const id of restored) {
+            if (id !== null) spawnedIds.push(id);
           }
           const { showToast } = await import('./notification');
           if (generation !== restoreProjectStateGeneration) return;
@@ -827,6 +843,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
   } finally {
     isRestoringProjectState = false;
     isProjectSwitching.set(false);
+    useWorkspaceStore.getState().setSwitchingPhase(null);
   }
 }
 
@@ -1131,7 +1148,44 @@ export async function createProjectFolder(parentDir: string, name: string): Prom
   return project;
 }
 
+/** Clone a GitHub repo into `parentDir` and open the result as a project. The
+ *  clone itself (network, auth, folder naming) is the backend's job — this only
+ *  attaches the finished checkout, exactly as `createProjectFolder` does. */
+export async function cloneRepository(url: string, parentDir: string): Promise<Project> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const project = await invoke<Project>('workspace_clone_repo', { url, parent: parentDir });
+  await attachProjectToActiveWorkspace(project, project.root_path);
+  return project;
+}
+
 export function closeProject(projectId: string) {
+  // Reclaim this project's agent worktrees before the sessions that own them go
+  // away — otherwise the checkouts sit in `.spacron/worktrees/` forever, which
+  // is the bulk of what Spacron leaves on disk. Started BEFORE killSession so
+  // `trackedWorktrees()` can still see the sessions; it stages each agent's work
+  // onto its branch and keeps any checkout git says still holds something.
+  //
+  // Deliberately not awaited: closing a project must stay instant. A run cut
+  // short by the app exiting is picked up by `sweepOrphanWorktrees` on the next
+  // load of this project.
+  void (async () => {
+    try {
+      const { reclaimProjectWorktrees } = await import('./orchestrator');
+      const outcome = await reclaimProjectWorktrees(projectId);
+      if (outcome.kept > 0) {
+        const { showToast } = await import('./notification');
+        const names = [...new Set(outcome.keptAgents)].join(', ');
+        showToast(
+          `Kept ${outcome.kept} agent worktree${outcome.kept === 1 ? '' : 's'} holding unmerged work (${names})`,
+          'info',
+          6000,
+        );
+      }
+    } catch (e) {
+      console.error('Worktree reclaim on project close failed:', e);
+    }
+  })();
+
   // Kill terminal sessions for this project
   const cached = projectStateCache.get(projectId);
   if (cached && cached.terminal && cached.terminal.sessions) {

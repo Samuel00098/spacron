@@ -1,5 +1,5 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { backendInvoke } from '$lib/services/backend';
+import { readProjectState, writeProjectState } from '$lib/services/project-state';
 import { loadJson } from '$lib/utils/storage';
 import type { OrchestratorAction } from '$lib/services/orchestrator-brain';
 
@@ -29,10 +29,6 @@ const GLOBAL_KEY = 'spacron_orchestrator_profile';
 
 export const globalOrchestratorProfile = writable<ProfileEntry[]>([]);
 export const orchestratorProfile = writable<Record<string, ProfileEntry[]>>({});
-
-function profilePath(rootPath: string): string {
-  return `${rootPath}/.spacron/orchestrator-profile.json`;
-}
 
 function compact(raw: string, max = MAX_ENTRY_CHARS): string {
   const text = raw.replace(/\s+/g, ' ').trim();
@@ -88,8 +84,8 @@ function flushGlobalProfile(): void {
 export async function loadProjectProfile(projectId: string, rootPath: string): Promise<void> {
   let entries: ProfileEntry[] = [];
   try {
-    const raw = await backendInvoke<string>('fs_read_file', { path: profilePath(rootPath) });
-    const parsed = JSON.parse(raw);
+    const raw = await readProjectState(projectId, rootPath, 'orchestrator-profile.json');
+    const parsed = JSON.parse(raw ?? '');
     if (Array.isArray(parsed)) entries = parsed.filter(isProfileEntry).slice(0, MAX_PROJECT_ENTRIES);
   } catch {
     entries = [];
@@ -97,14 +93,9 @@ export async function loadProjectProfile(projectId: string, rootPath: string): P
   orchestratorProfile.update((all) => ({ ...all, [projectId]: entries }));
 }
 
-async function flushProjectProfile(projectId: string, rootPath: string): Promise<void> {
+async function flushProjectProfile(projectId: string, _rootPath?: string): Promise<void> {
   const entries = get(orchestratorProfile)[projectId] ?? [];
-  try {
-    try { await backendInvoke('fs_create_dir', { path: `${rootPath}/.spacron` }); } catch { /* exists */ }
-    await backendInvoke('fs_write_file', { path: profilePath(rootPath), content: JSON.stringify(entries, null, 2) });
-  } catch (err) {
-    console.error('Failed to save orchestrator profile:', err);
-  }
+  await writeProjectState(projectId, 'orchestrator-profile.json', JSON.stringify(entries, null, 2));
 }
 
 // ─── Read (for the brain) ───────────────────────────────────────────────────

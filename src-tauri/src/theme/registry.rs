@@ -7,8 +7,8 @@ use std::sync::RwLock;
 
 /// Bumped whenever the bundled brand defaults change and on-disk custom themes
 /// derived from an older default should be migrated forward.
-/// v1 = amber → teal/sky. v2 = teal/sky → graphite grey.
-const BRAND_MIGRATION_VERSION: u32 = 2;
+/// v1 = amber → teal/sky. v2 = teal/sky → graphite grey. v3 = grey → indigo.
+const BRAND_MIGRATION_VERSION: u32 = 3;
 
 fn is_valid_css_color(value: &str) -> bool {
     let v = value.trim();
@@ -107,6 +107,50 @@ fn migrate_theme_teal(theme: &mut Theme) -> bool {
     apply_color_map(theme, legacy_teal_map(&theme.theme_type))
 }
 
+/// Per-theme-type `(key, old_default, new_default)` map for the graphite grey →
+/// indigo brand migration. Same key-aware contract as the maps above.
+///
+/// This is the migration that brings the bundled themes onto the same two
+/// accents as the wallpaper presets: one deep indigo for light, one lifted
+/// indigo for dark. Both modes share `button-bg`, because the lifted dark accent
+/// is too pale to carry white label text.
+fn legacy_grey_map(theme_type: &ThemeType) -> &'static [(&'static str, &'static str, &'static str)] {
+    match theme_type {
+        ThemeType::Dark => &[
+            ("accent", "#aeb6c2", "#818cf8"),
+            ("accent-hover", "#c7cdd6", "#a5b4fc"),
+            ("border-focus", "#aeb6c2", "#818cf8"),
+            ("input-focus-border", "#aeb6c2", "#818cf8"),
+            ("button-bg", "#3f4650", "#4f46e5"),
+            ("button-hover-bg", "#4b525d", "#5850ec"),
+            (
+                "selection-bg",
+                "rgba(174,182,194,0.2)",
+                "rgba(129, 140, 248, 0.22)",
+            ),
+        ],
+        ThemeType::Light => &[
+            ("accent", "#5b6470", "#4f46e5"),
+            ("accent-hover", "#474e58", "#4338ca"),
+            ("border-focus", "#5b6470", "#4f46e5"),
+            ("input-focus-border", "#5b6470", "#4f46e5"),
+            ("button-bg", "#3f4650", "#4f46e5"),
+            ("button-hover-bg", "#2f343b", "#4338ca"),
+            (
+                "selection-bg",
+                "rgba(91,100,112,0.22)",
+                "rgba(79, 70, 229, 0.15)",
+            ),
+        ],
+    }
+}
+
+/// Rewrite graphite grey defaults to the indigo brand in-place. Returns whether
+/// anything changed.
+fn migrate_theme_grey(theme: &mut Theme) -> bool {
+    apply_color_map(theme, legacy_grey_map(&theme.theme_type))
+}
+
 /// Apply a key-aware `(key, old, new)` color map to a theme, rewriting only values
 /// that still exactly match the previous bundled default. Returns whether anything
 /// changed.
@@ -147,10 +191,11 @@ fn run_brand_migration(config_dir: &Path) {
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
                     if let Ok(mut theme) = load_theme_from_file(&path) {
                         // Chain migrations so a theme still on the original amber
-                        // brand is carried amber → teal → grey in one pass.
+                        // brand is carried amber → teal → grey → indigo in one pass.
                         let amber_changed = migrate_theme_amber(&mut theme);
                         let teal_changed = migrate_theme_teal(&mut theme);
-                        if amber_changed || teal_changed {
+                        let grey_changed = migrate_theme_grey(&mut theme);
+                        if amber_changed || teal_changed || grey_changed {
                             let _ = save_theme_to_file(&theme, &path);
                         }
                     }
@@ -264,40 +309,6 @@ impl ThemeRegistry {
             .get(theme_id)
             .cloned()
             .ok_or_else(|| ForgeError::ThemeNotFound(theme_id.to_string()))
-    }
-
-    pub fn save_custom_theme(&self, theme: Theme) -> Result<(), ForgeError> {
-        let safe_id: String = theme
-            .id
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-        if safe_id.is_empty() || safe_id != theme.id {
-            return Err(ForgeError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Invalid theme ID",
-            )));
-        }
-        for (key, value) in theme.colors.iter().chain(theme.syntax.iter()) {
-            if !is_valid_css_color(value) {
-                return Err(ForgeError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Invalid color value for '{}': '{}'", key, value),
-                )));
-            }
-        }
-        let theme_path = self
-            .config_dir
-            .join("themes")
-            .join(format!("{}.json", safe_id));
-        crate::theme::loader::save_theme_to_file(&theme, &theme_path)?;
-
-        let mut themes = self
-            .themes
-            .write()
-            .map_err(|_| ForgeError::Io(std::io::Error::other("Lock poisoned")))?;
-        themes.insert(theme.id.clone(), theme);
-        Ok(())
     }
 }
 
@@ -414,5 +425,64 @@ mod tests {
         assert!(migrate_theme_amber(&mut t)); // amber → teal
         assert!(migrate_theme_teal(&mut t)); // teal → grey
         assert_eq!(t.colors["accent"], "#aeb6c2");
+    }
+
+    #[test]
+    fn migrates_dark_grey_defaults_to_indigo() {
+        let mut t = theme_with(
+            ThemeType::Dark,
+            &[
+                ("accent", "#aeb6c2"),
+                ("border-focus", "#aeb6c2"),
+                ("button-bg", "#3f4650"),
+                ("selection-bg", "rgba(174, 182, 194, 0.2)"),
+                ("warning", "#fbbf24"),
+            ],
+        );
+        assert!(migrate_theme_grey(&mut t));
+        assert_eq!(t.colors["accent"], "#818cf8");
+        assert_eq!(t.colors["border-focus"], "#818cf8");
+        assert_eq!(t.colors["button-bg"], "#4f46e5");
+        assert_eq!(t.colors["selection-bg"], "rgba(129, 140, 248, 0.22)");
+        // warning is semantic — must stay amber.
+        assert_eq!(t.colors["warning"], "#fbbf24");
+    }
+
+    #[test]
+    fn migrates_light_grey_defaults_to_indigo() {
+        // #3f4650 was button-bg in BOTH bundled themes but the light theme's
+        // accent (#5b6470) is its own value — the map must key off the field.
+        let mut t = theme_with(
+            ThemeType::Light,
+            &[
+                ("accent", "#5b6470"),
+                ("accent-hover", "#474e58"),
+                ("button-bg", "#3f4650"),
+                ("button-hover-bg", "#2f343b"),
+            ],
+        );
+        assert!(migrate_theme_grey(&mut t));
+        assert_eq!(t.colors["accent"], "#4f46e5");
+        assert_eq!(t.colors["accent-hover"], "#4338ca");
+        assert_eq!(t.colors["button-bg"], "#4f46e5");
+        assert_eq!(t.colors["button-hover-bg"], "#4338ca");
+    }
+
+    #[test]
+    fn chains_all_the_way_from_amber_to_indigo() {
+        // A theme never opened since the original amber build lands on indigo
+        // after one migration pass.
+        let mut t = theme_with(ThemeType::Dark, &[("accent", "#f59e0b")]);
+        assert!(migrate_theme_amber(&mut t)); // amber → teal
+        assert!(migrate_theme_teal(&mut t)); // teal → grey
+        assert!(migrate_theme_grey(&mut t)); // grey → indigo
+        assert_eq!(t.colors["accent"], "#818cf8");
+    }
+
+    #[test]
+    fn indigo_migration_leaves_user_customizations_untouched() {
+        let mut t = theme_with(ThemeType::Dark, &[("accent", "#ff0066")]);
+        assert!(!migrate_theme_grey(&mut t));
+        assert_eq!(t.colors["accent"], "#ff0066");
     }
 }

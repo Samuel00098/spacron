@@ -59,7 +59,7 @@ export default function AgentNotifications() {
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [dismissedCompletions, setDismissedCompletions] = useState<Set<string>>(new Set());
-  const doneTimers = useRef<Set<string>>(new Set());
+  const doneTimers = useRef<Map<string, number>>(new Map());
 
   // Only surface completions that land *after* we start watching a project, so
   // opening a project doesn't dump its whole finished-task history on screen.
@@ -71,10 +71,19 @@ export default function AgentNotifications() {
   // Reset per-project transient state when the active project changes.
   useEffect(() => {
     setDismissedCompletions(new Set());
-    doneTimers.current = new Set();
+    for (const timer of doneTimers.current.values()) clearTimeout(timer);
+    doneTimers.current.clear();
     setReplyingId(null);
     setReplyText('');
   }, [projectId]);
+
+  // Clear any pending auto-dismiss timers on unmount.
+  useEffect(() => {
+    const timers = doneTimers.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+    };
+  }, []);
 
   const mailCards = useMemo(
     () => getMailboxCards(projectId, { actionableOnly: true }),
@@ -96,15 +105,18 @@ export default function AgentNotifications() {
     for (const m of completionCards) {
       const c = m.completion;
       if (c && c.status === 'done' && !c.summaryPending && !doneTimers.current.has(m.id)) {
-        doneTimers.current.add(m.id);
         const id = m.id;
-        window.setTimeout(() => {
-          setDismissedCompletions((prev) => {
-            const next = new Set(prev);
-            next.add(id);
-            return next;
-          });
-        }, DONE_AUTODISMISS_MS);
+        doneTimers.current.set(
+          id,
+          window.setTimeout(() => {
+            doneTimers.current.delete(id);
+            setDismissedCompletions((prev) => {
+              const next = new Set(prev);
+              next.add(id);
+              return next;
+            });
+          }, DONE_AUTODISMISS_MS),
+        );
       }
     }
   }, [completionCards]);

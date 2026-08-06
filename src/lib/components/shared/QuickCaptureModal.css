@@ -42,8 +42,8 @@
 }
 
 @keyframes qc-scale-up {
-  from { transform: scale(0.96) translateY(-8px); opacity: 0; }
-  to   { transform: scale(1) translateY(0);       opacity: 1; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .qc-backdrop .qc-header {

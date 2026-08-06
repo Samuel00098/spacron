@@ -77,13 +77,33 @@ const VAD_ONSET_MIN_RMS = 0.01;
 // (~250 ms). No audio is lost while confirming: buffers keep accumulating in
 // capturedChunks either way.
 const VAD_ONSET_FRAMES = 3;
-// How long of a silence ends an utterance. Kept snappy for responsive turn-
-// taking; the release-multiplier hysteresis (VAD_RELEASE_MULT) holds through the
-// brief quiet dips inside a sentence, so this only elapses on a real end-of-turn
-// pause rather than cutting a speaker off mid-thought.
-const VAD_SILENCE_MS = 500;
-// Absolute ceiling on a single utterance.
-const VAD_MAX_UTTERANCE_MS = 15_000;
+// How long of a silence ends an utterance. The release-multiplier hysteresis
+// (VAD_RELEASE_MULT) holds through the brief quiet dips *inside* a phrase, but
+// this is what decides an end-of-turn — and at the old 500 ms it fired on the
+// ordinary mid-sentence beat people leave while composing a thought ("spawn an
+// agent that… uh… reviews the diff"), sending half a sentence to the
+// orchestrator and swallowing the rest into the next turn. 800 ms is the
+// shortest pause that reliably reads as "I'm done" rather than "I'm thinking".
+const VAD_SILENCE_MS = 800;
+// Grace for an utterance that has barely started. A false start or a one-word
+// opener ("okay…", "so…") is almost never the whole turn, so give the speaker
+// longer to continue before finalizing — this is the difference between the
+// loop feeling patient and feeling like it interrupts.
+const VAD_SILENCE_SHORT_MS = 1_200;
+const VAD_SHORT_UTTERANCE_MS = 1_500;
+// Soft ceiling on a single utterance. Past this we stop *extending* the turn but
+// still wait for a real pause, so a long dictated brief is never chopped
+// mid-word — the old hard 15 s cut is why detailed multi-agent instructions
+// arrived truncated.
+const VAD_MAX_UTTERANCE_MS = 45_000;
+// Absolute ceiling. Only a wedged VAD (sustained noise that never dips below the
+// release gate) can reach this, and it must never listen forever.
+const VAD_HARD_MAX_UTTERANCE_MS = 120_000;
+// While the graph is parked warm between turns we keep this many trailing
+// buffers (~1.4 s at 48 kHz) as pre-roll. Without it, anything said in the gap
+// between the assistant finishing and the mic re-arming is simply gone — which
+// is why replies that began the instant the reply ended lost their first word.
+const PRE_ROLL_CHUNKS = 16;
 // Barge-in gate: while the assistant's TTS reply is playing the mic stays live
 // so the user can interrupt, but echo-cancellation residue can still leak the
 // reply into the capture. Require a clearly louder onset before treating audio
@@ -429,6 +449,13 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   // constant's comment — this is what separates speech from transient noise).
   let onsetRun = 0;
   let startTime = 0;
+  // When speech onset was confirmed in the current turn (0 = not yet). Used to
+  // pick the end-of-turn silence window: a turn that has barely started gets a
+  // longer grace than one already carrying a full sentence.
+  let speechStartedAt = 0;
+  // Rolling pre-roll captured while the graph is warm but not listening, so a
+  // turn that begins before the mic re-arms doesn't lose its first syllable.
+  let preRoll: Float32Array[] = [];
   // Rolling estimate of the ambient noise floor (RMS), seeded during the mic
   // warmup and adapted between utterances so the gate tracks the room.
   let noiseFloor = 0;
@@ -459,8 +486,13 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   // (the room hasn't changed) and re-base the warmup window.
   function softResetVad() {
     clearSilenceTimer();
-    capturedChunks = [];
+    // Seed the new turn with the pre-roll so speech that started in the gap
+    // between turns is still in the audio we transcribe. Skipped while the
+    // assistant is talking — there the pre-roll is its own echo, not the user.
+    capturedChunks = playbackActive ? [] : preRoll;
+    preRoll = [];
     speechDetected = false;
+    speechStartedAt = 0;
     onsetRun = 0;
     startTime = Date.now();
   }
@@ -478,7 +510,9 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     captureContext = null;
     captureStream = null;
     capturedChunks = [];
+    preRoll = [];
     speechDetected = false;
+    speechStartedAt = 0;
     onsetRun = 0;
     noiseFloor = 0;
     listening = false;
@@ -619,7 +653,14 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
 
         starting = true;
         stopRequested = false;
-        const streamOrError = await requestMicrophoneStream();
+        let streamOrError: MediaStream | string;
+        try {
+          streamOrError = await requestMicrophoneStream();
+        } catch (err) {
+          starting = false;
+          callbacks.onError?.(err instanceof Error ? err.message : 'Could not access the microphone.');
+          return;
+        }
         if (typeof streamOrError === 'string') {
           starting = false;
           callbacks.onError?.(streamOrError);
@@ -638,7 +679,9 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           captureSource = captureContext.createMediaStreamSource(streamOrError);
           captureProcessor = captureContext.createScriptProcessor(4096, 1, 1);
           capturedChunks = [];
+          preRoll = [];
           speechDetected = false;
+          speechStartedAt = 0;
           onsetRun = 0;
           clearSilenceTimer();
           startTime = Date.now();
@@ -648,8 +691,18 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           captureProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
             // The processor runs continuously in keep-warm mode; only feed audio
             // into the VAD while a turn is actively listening (not between turns
-            // or during transcription).
-            if (stopRequested || !listening) return;
+            // or during transcription). Between turns we still keep a short
+            // rolling pre-roll so a turn that starts before the mic re-arms
+            // isn't missing its opening syllable (see PRE_ROLL_CHUNKS).
+            if (stopRequested || !listening) {
+              if (!stopRequested && !playbackActive) {
+                preRoll.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+                if (preRoll.length > PRE_ROLL_CHUNKS) {
+                  preRoll.splice(0, preRoll.length - PRE_ROLL_CHUNKS);
+                }
+              }
+              return;
+            }
             const input = event.inputBuffer.getChannelData(0);
             capturedChunks.push(new Float32Array(input));
 
@@ -667,8 +720,11 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
               return;
             }
 
-            // Hard cap: never listen indefinitely.
-            if (Date.now() - startTime >= VAD_MAX_UTTERANCE_MS) {
+            // Absolute ceiling: only a wedged VAD gets here, and it must never
+            // listen forever. The *soft* cap (VAD_MAX_UTTERANCE_MS) is handled
+            // below by shortening the end-of-turn wait rather than cutting, so a
+            // long dictated brief ends on a pause instead of mid-word.
+            if (Date.now() - startTime >= VAD_HARD_MAX_UTTERANCE_MS) {
               clearSilenceTimer();
               autoStopAfterSilence();
               return;
@@ -697,6 +753,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
                 onsetRun += 1;
                 if (onsetRun >= VAD_ONSET_FRAMES) {
                   speechDetected = true;
+                  speechStartedAt = Date.now();
                   callbacks.onSpeechStart?.();
                 }
               }
@@ -711,10 +768,21 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
             noiseFloor = noiseFloor * 0.95 + rms * 0.05;
 
             if (speechDetected && !silenceTimer) {
+              // Pick the end-of-turn wait from how much has actually been said:
+              // a turn still under VAD_SHORT_UTTERANCE_MS is more likely a false
+              // start than a complete thought, so wait longer before finalizing.
+              // Past the soft cap, stop extending — take the first real pause.
+              const spokenMs = speechStartedAt ? Date.now() - speechStartedAt : 0;
+              const overSoftCap = Date.now() - startTime >= VAD_MAX_UTTERANCE_MS;
+              const wait = overSoftCap
+                ? VAD_SILENCE_MS
+                : spokenMs < VAD_SHORT_UTTERANCE_MS
+                  ? VAD_SILENCE_SHORT_MS
+                  : VAD_SILENCE_MS;
               silenceTimer = setTimeout(() => {
                 silenceTimer = null;
                 autoStopAfterSilence();
-              }, VAD_SILENCE_MS);
+              }, wait);
             }
           };
 
@@ -757,6 +825,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
 
       const recognizer: BrowserSpeechRecognition = new SpeechRecognition();
       recognition = recognizer;
+      speechDetected = false;
       recognizer.continuous = true;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 3;
@@ -772,6 +841,11 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       };
 
       recognizer.onresult = (event: any) => {
+        // Fire onSpeechStart on the first result so barge-in works with Web Speech.
+        if (!speechDetected && event?.results?.length > 0) {
+          speechDetected = true;
+          callbacks.onSpeechStart?.();
+        }
         const transcript = buildTranscript(event?.results ?? []);
         callbacks.onResult(transcript);
       };
