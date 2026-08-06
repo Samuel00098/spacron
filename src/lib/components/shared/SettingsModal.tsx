@@ -1698,7 +1698,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>
 
                 <Section title="Background">
-                  <SettingRow title="Custom background" detail="Show an image or live wallpaper behind the interface. The image is always fully solid.">
+                  <SettingRow title="Custom background" detail="Show your own image behind the interface. It replaces the theme's wallpaper while it's on, and is always fully solid.">
                     <div className="bg-actions">
                       <button className="bg-btn" onClick={chooseBackgroundImage}>
                         {bgPresent ? 'Change…' : 'Choose…'}
@@ -1708,11 +1708,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       )}
                     </div>
                   </SettingRow>
-                  <SettingRow title="Media background">
-                    <Toggle label="Toggle background media" checked={bgEnabled} onChange={backgroundImageEnabled.set} />
-                  </SettingRow>
+                  {/* Only meaningful once a background exists: with no image the
+                      toggle is a no-op, since a custom background shows on
+                      `enabled && a file is set`. Turning it off falls back to the
+                      theme's own wallpaper, which is what the label promises. */}
+                  {bgPresent && (
+                    <SettingRow title="Show custom background" detail="Turn off to fall back to the theme's wallpaper without losing your image.">
+                      <Toggle label="Show custom background" checked={bgEnabled} onChange={backgroundImageEnabled.set} />
+                    </SettingRow>
+                  )}
                   <SettingRow title="Blur" detail={`${bgBlur}px`}>
-                    <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgEnabled} />
+                    <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgPresent} />
                   </SettingRow>
                 </Section>
               </>

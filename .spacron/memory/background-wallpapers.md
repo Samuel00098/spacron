@@ -1,6 +1,12 @@
 # Spacron Background Wallpapers
 
-The Spacron developer workspace features 32 preset background wallpapers (16 light mode, 16 dark mode) located in `static/backgrounds/`.
+The Spacron developer workspace ships **6** preset background wallpapers in
+`static/backgrounds/`, and exactly **2** preset themes declare a `backgroundImage`.
+
+Corrected 2026-08-06: this note previously claimed 32 wallpapers (16 light / 16
+dark). That was true before the theming rework (commits `1c60ad5` → `7896257`)
+consolidated everything to one wallpaper set with two accents. Count the
+directory before trusting any number here.
 
 ## Specifications & Requirements
 

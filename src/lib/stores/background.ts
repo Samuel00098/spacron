@@ -2,11 +2,9 @@ import { get, writable } from '$lib/stores/storeCompat';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { backgroundImageEnabled, interfaceTransparency, backgroundImageBlur } from './settings';
 import { showToast } from './notification';
-import { useBackgroundStore, type BackgroundMedia, type BackgroundMediaKind } from './zustand/background';
+import { useBackgroundStore } from './zustand/background';
 import { useThemeStore } from './zustand/theme';
 import { analyseImage } from '$lib/utils/imageAnalysis';
-
-export type { BackgroundMediaKind, BackgroundMedia } from './zustand/background';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useBackgroundStore.getState() as any)[key];
@@ -27,32 +25,42 @@ function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/stor
 }
 
 export const backgroundImagePresent = syncWritable<boolean>('backgroundImagePresent', false);
-export const backgroundMedia = syncWritable<BackgroundMedia | null>('backgroundMedia', null);
 
 let currentAssetUrl: string | null = null;
-let currentMediaKind: BackgroundMediaKind | null = null;
 
-const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'm4v', 'mov', 'ogv']);
+/**
+ * Formats the picker accepts. Deliberately short: these four cover every real
+ * wallpaper and all decode reliably in the webview.
+ *
+ * Dropped on purpose — `svg` is an active document format aimed at the app's own
+ * chrome, and `heic`/`heif`/`tiff`/`tif`/`ico`/`bmp` decode inconsistently
+ * across platforms, so they failed in ways users reported as bugs.
+ */
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'avif'];
+
+/**
+ * Video wallpapers were removed (see [[background-wallpapers]]): a looping
+ * 2560×1440 video behind a terminal holds the GPU awake for the whole session,
+ * stacked on top of the panels' own backdrop blur. Kept only to recognise a
+ * background a previous version stored, so it can be cleared instead of being
+ * handed to `background-image` — which renders nothing and reads as "my
+ * wallpaper vanished".
+ */
+const LEGACY_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'm4v', 'mov', 'ogv']);
 
 function withCacheToken(assetUrl: string, token: string): string {
   return `${assetUrl}${assetUrl.includes('?') ? '&' : '?'}v=${encodeURIComponent(token)}`;
 }
 
-function getMediaKind(filePath: string): BackgroundMediaKind {
+export function isLegacyVideoBackground(filePath: string): boolean {
   const cleanPath = filePath.split(/[?#]/, 1)[0] ?? filePath;
   const ext = cleanPath.split('.').pop()?.toLowerCase() ?? '';
-  return VIDEO_EXTENSIONS.has(ext) ? 'video' : 'image';
+  return LEGACY_VIDEO_EXTENSIONS.has(ext);
 }
 
 function setCurrent(filePath: string | null, cacheToken = `${Date.now()}`) {
   currentAssetUrl = filePath ? withCacheToken(convertFileSrc(filePath), cacheToken) : null;
-  currentMediaKind = filePath ? getMediaKind(filePath) : null;
   backgroundImagePresent.set(filePath !== null);
-  backgroundMedia.set(
-    currentAssetUrl && currentMediaKind
-      ? { url: currentAssetUrl, kind: currentMediaKind }
-      : null
-  );
 }
 
 export async function initBackground(): Promise<void> {
@@ -60,6 +68,14 @@ export async function initBackground(): Promise<void> {
   applyBackgroundAppearance(get(backgroundImageBlur));
   try {
     const storedBackground = await invoke<string | null>('background_image_get');
+    // A wallpaper stored by a version that still supported video would now be
+    // handed to `background-image`, which silently renders nothing. Clear it
+    // once so the user gets their theme back rather than a blank pane.
+    if (storedBackground !== null && isLegacyVideoBackground(storedBackground)) {
+      await removeBackgroundImage();
+      showToast('Video wallpapers are no longer supported — pick an image instead', 'info', 8000);
+      return;
+    }
     setCurrent(storedBackground);
     // Load the stored media but DON'T force the enabled toggle on. Whether the
     // background shows is the user's persisted choice (set true by
@@ -82,12 +98,7 @@ export async function chooseBackgroundImage(): Promise<void> {
   const selected = await open({
     multiple: false,
     directory: false,
-    filters: [
-      {
-        name: 'Background media',
-        extensions: ['png', 'jpg', 'jpeg', 'jfif', 'webp', 'gif', 'apng', 'bmp', 'svg', 'avif', 'ico', 'tiff', 'tif', 'heic', 'heif', 'mp4', 'webm', 'm4v', 'mov', 'ogv']
-      }
-    ],
+    filters: [{ name: 'Background image', extensions: IMAGE_EXTENSIONS }],
   });
   if (!selected || typeof selected !== 'string') return;
 
@@ -116,24 +127,47 @@ export function hasBackgroundImage(): boolean {
   return currentAssetUrl !== null;
 }
 
+/** The active theme's own wallpaper, when it declares one. */
+function activeThemeBackground(): string | null {
+  const theme = (useThemeStore.getState() as { activeTheme?: { backgroundImage?: string } })
+    .activeTheme;
+  return theme?.backgroundImage || null;
+}
+
+/**
+ * Whether the user's own wallpaper should be showing. This is the precedence
+ * rule, and `applyThemeToCSS` asks the same question before painting a theme's
+ * built-in background — so whichever of the two runs first, the answer is the
+ * same: **a background the user chose outranks the theme's.**
+ */
+export function userBackgroundActive(): boolean {
+  return get(backgroundImageEnabled) && currentAssetUrl !== null;
+}
+
 export function applyBackgroundImage(): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  const active = get(backgroundImageEnabled) && currentAssetUrl !== null;
-  const imageActive = active && currentMediaKind === 'image';
+  const active = userBackgroundActive();
 
-  if (imageActive) {
+  if (active) {
     root.style.setProperty('--user-bg-image', `url("${currentAssetUrl}")`);
     root.classList.add('has-bg-image');
   } else {
-    // No CUSTOM background image. A preset theme can own the background via
-    // theme.backgroundImage (applied by applyThemeToCSS) — don't strip it here, or
-    // the theme's own wallpaper vanishes on reload: initBackground() runs alongside
-    // loadThemes() at boot and this used to unconditionally clear has-bg-image,
-    // wiping the preset background loadThemes() had just set. Only clear when the
-    // active theme has no built-in image of its own either.
-    const themeHasBg = !!(useThemeStore.getState() as { activeTheme?: { backgroundImage?: string } }).activeTheme?.backgroundImage;
-    if (!themeHasBg) {
+    // No custom wallpaper. A preset theme can own the background via
+    // theme.backgroundImage, so fall back to it rather than clearing outright —
+    // initBackground() runs alongside loadThemes() at boot, and this used to
+    // unconditionally strip has-bg-image, wiping the preset background
+    // loadThemes() had just set.
+    //
+    // Re-asserting the theme's URL (rather than only leaving the property alone)
+    // is what makes REMOVAL work: on remove, `--user-bg-image` still pointed at
+    // the user's now-cleared file, so the theme's wallpaper never came back and
+    // the app showed a blank layer.
+    const themeBg = activeThemeBackground();
+    if (themeBg) {
+      root.style.setProperty('--user-bg-image', `url("${themeBg}")`);
+      root.classList.add('has-bg-image');
+    } else {
       root.style.removeProperty('--user-bg-image');
       root.classList.remove('has-bg-image');
     }
@@ -149,7 +183,7 @@ export function applyBackgroundImage(): void {
     root.classList.toggle('bg-palette-light', themeType !== 'dark');
 
     // Async: analyse the actual background image and refine palette
-    if (currentMediaKind === 'image' && currentAssetUrl) {
+    if (currentAssetUrl) {
       const urlAtStart = currentAssetUrl;
       analyseImage(urlAtStart).then((analysis) => {
         // Stale check: don't apply if user has since removed/changed the background

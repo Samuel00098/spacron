@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Theme, ThemeInfo } from '$lib/types/theme';
 import { showToast } from './notification';
 import { appearance, backgroundImageEnabled, backgroundImageBlur, interfaceTransparency } from './settings';
-import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, hasBackgroundImage } from './background';
+import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, hasBackgroundImage, userBackgroundActive } from './background';
 import { presetThemes, currentPresetTheme } from './presetThemes';
 import { useThemeStore } from './zustand/theme';
 import { analyseImage, deriveForegroundPalette } from '$lib/utils/imageAnalysis';
@@ -321,8 +321,16 @@ export function applyThemeToCSS(theme: Theme | null) {
     }
   }
 
-  // Apply theme-specific background image if defined
-  if (theme.backgroundImage) {
+  // Apply the theme's own background image — but never over one the user chose.
+  //
+  // This branch used to run on `theme.backgroundImage` alone, so it overwrote
+  // `--user-bg-image` with the preset wallpaper every time a theme was applied:
+  // switching theme, or simply reloading (loadThemes runs at boot), silently
+  // replaced a background the user had picked. `userBackgroundActive()` is the
+  // same question `applyBackgroundImage` asks, so the two agree whichever runs
+  // first — the user's wallpaper outranks the theme's, and the `else` below
+  // hands painting back to the background store.
+  if (theme.backgroundImage && !userBackgroundActive()) {
     root.style.setProperty('--user-bg-image', `url("${theme.backgroundImage}")`);
     root.classList.add('has-bg-image');
     const opacity = theme.backgroundOpacity !== undefined ? theme.backgroundOpacity : 75;
