@@ -137,6 +137,21 @@ function isAgentRoomId(id: RoomId): id is AgentRoomId {
   return id.startsWith('agent:');
 }
 
+/**
+ * Narrow an arbitrary string to a `RoomId`. Restored arrangements come back from
+ * localStorage, so the ids in them are untrusted and may also name a room this
+ * build no longer has.
+ *
+ * A room that is valid but not currently open needs no filtering here — both
+ * `splitRooms` and `activeRoom` already resolve against the open set, and the
+ * effect that prunes closed rooms drops it on the next pass.
+ */
+function isKnownRoomId(id: string | null | undefined): id is RoomId {
+  if (!id) return false;
+  if (/^agent:\d{1,10}$/.test(id)) return true;
+  return Object.prototype.hasOwnProperty.call(ROOM_TITLES, id);
+}
+
 // How many rooms Split will tile at once. Extra rooms stay open and reachable
 // from the switcher, just not on stage. 12 rather than a smaller number because
 // Split absorbed the Fleet grid, which had no cap — it wrapped and scrolled —
@@ -843,6 +858,15 @@ export default function AppShell() {
       return;
     }
 
+    if (layoutCommand.type === 'arrangement') {
+      restoreRoomArrangement(
+        layoutCommand.mode,
+        layoutCommand.slots.filter(isKnownRoomId),
+        isKnownRoomId(layoutCommand.focused) ? layoutCommand.focused : null,
+      );
+      return;
+    }
+
     if (layoutCommand.type !== 'room') return;
 
     const wanted = layoutCommand.room.trim().toLowerCase();
@@ -904,9 +928,13 @@ export default function AppShell() {
         focused: id === activeRoom,
         minimized: minimizedRooms.has(id),
       })),
+      // The raw slot list, not the derived `splitRooms`: empty means the user
+      // has not arranged the stage, and saving what happens to be tiled right
+      // now would pin that accident as a deliberate arrangement.
+      splitSlots,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions]);
+  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots]);
 
   // Preview mode is built around the preview browser; if it gets closed (its X),
   // the mode has nothing to show, so fall back to Focus.
@@ -2451,6 +2479,37 @@ export default function AppShell() {
     }
     setLayoutSwitching(false);
     notifyPanesResized();
+  }
+
+  /**
+   * Put the stage back the way a project left it — mode, Split tiling and focus
+   * in one go. Driven by `restoreProjectState` when you switch projects.
+   *
+   * Ordering is the whole reason this is one function rather than three calls.
+   * `switchAmbientLayout` re-applies the target mode's own remembered focus on
+   * the way in, so setting focus first would simply be overwritten (the same
+   * trap `focusRoomMode` works around). Seed that per-mode entry first, then let
+   * the switch consume it.
+   */
+  function restoreRoomArrangement(mode: AmbientLayout, slots: RoomId[], focused: RoomId | null) {
+    // Collapse to the two modes that actually exist, mirroring the rule inside
+    // `switchAmbientLayout`. Seeding `perLayoutState` under a name it will not
+    // read back (`development`, or `vibe`, which re-tiles with the whole fleet
+    // and would discard the arrangement we were handed) loses the focus.
+    const target: AmbientLayout = mode === 'gallery' || mode === 'vibe' ? 'gallery' : 'focus';
+
+    perLayoutState.current[target] = {
+      focused,
+      minimized: perLayoutState.current[target].minimized,
+    };
+    // Kept even when landing in Focus: it is this project's Split arrangement,
+    // and it should still be there when they switch back to Split.
+    setSplitSlots(slots);
+    setFocusedRoom(focused);
+    // Only when the mode is really changing — `switchAmbientLayout` early-returns
+    // on an unchanged one, which would leave the two setters above as the whole
+    // restore. That is exactly right in that case.
+    if (target !== ambientLayout) switchAmbientLayout(target);
   }
 
   function switchAmbientLayout(requested: AmbientLayout) {

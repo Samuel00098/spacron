@@ -12,6 +12,15 @@ export type RoomOp = 'focus' | 'minimize' | 'restore' | 'close';
 export type LayoutCommand =
   // `nonce` lets an identical command (e.g. "focus terminal" twice) re-fire.
   | { nonce: number; type: 'ambient'; mode: AmbientLayout }
+  /**
+   * Restore a whole arrangement at once — mode, Split tiling and focus together.
+   *
+   * One command rather than three, because the order they land in matters: a
+   * mode switch re-applies that mode's own remembered focus, so a focus set
+   * beforehand is overwritten (see `switchAmbientLayout`). Handing all three to
+   * the shell lets it seed that per-mode entry before switching.
+   */
+  | { nonce: number; type: 'arrangement'; mode: AmbientLayout; slots: string[]; focused: string | null }
   | { nonce: number; type: 'room'; op: RoomOp; room: string };
 
 export interface LayoutRoomSnapshot {
@@ -24,16 +33,39 @@ export interface LayoutRoomSnapshot {
 export interface LayoutSnapshot {
   ambient: AmbientLayout;
   rooms: LayoutRoomSnapshot[];
+  /**
+   * Split's tiling order, left→right. Empty is the "unarranged" sentinel — the
+   * shell then derives the default two-pane stage — so it is carried through
+   * as-is rather than being flattened into the rooms actually on screen.
+   */
+  splitSlots: string[];
 }
 
 export const layoutControlCommand = writable<LayoutCommand | null>(null);
-export const layoutSnapshot = writable<LayoutSnapshot>({ ambient: 'focus', rooms: [] });
+export const layoutSnapshot = writable<LayoutSnapshot>({ ambient: 'focus', rooms: [], splitSlots: [] });
+
+/** The room the shell currently treats as active, or null when there isn't one. */
+export function focusedRoomOf(snapshot: LayoutSnapshot): string | null {
+  return snapshot.rooms.find((room) => room.focused)?.id ?? null;
+}
 
 let commandNonce = 0;
 
 /** Ask the workspace to switch ambient arrangement (Focus / Split / Gallery / Preview). */
 export function requestAmbientLayout(mode: AmbientLayout): void {
   layoutControlCommand.set({ nonce: ++commandNonce, type: 'ambient', mode });
+}
+
+/**
+ * Ask the workspace to restore a saved arrangement wholesale. Used when swapping
+ * projects, so each one comes back to the stage it was left on.
+ */
+export function requestRoomArrangement(
+  mode: AmbientLayout,
+  slots: string[],
+  focused: string | null,
+): void {
+  layoutControlCommand.set({ nonce: ++commandNonce, type: 'arrangement', mode, slots, focused });
 }
 
 /** Ask the workspace to focus / minimize / restore / close a room by name. */

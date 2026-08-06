@@ -6,7 +6,7 @@ import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, pa
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
 import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, terminalRoomOpen, homeScreenOpen } from './layout';
-import { layoutSnapshot, requestAmbientLayout, type AmbientLayout } from './layoutControl';
+import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
 import { backendInvoke } from '$lib/services/backend';
@@ -110,6 +110,10 @@ interface ProjectWorkspaceState {
     selectedPath: string | null;
   };
   ambient: AmbientLayout;
+  /** Split's tiling order. Empty means the project never arranged the stage. */
+  splitSlots: string[];
+  /** The room that was on top / primary when the project was left. */
+  focusedRoom: string | null;
   layout: {
     activeView: string;
     editorVisible: boolean;
@@ -182,6 +186,11 @@ function bindProjectAutosave() {
     expandedPaths,
     selectedPath,
     layout,
+    // The stage arrangement (mode, Split tiling, primary room). Without it only
+    // a project switch would write it out — `saveCurrentProjectState` runs on
+    // the way past — so rearranging panes and then quitting lost the layout,
+    // which is the one case a restart is supposed to cover.
+    layoutSnapshot,
   ];
 
   for (const store of trackedStores) {
@@ -228,6 +237,13 @@ interface PersistedProjectState {
   terminalPanes?: PersistedTerminalPane[];
   /** The workspace's ambient room arrangement (Focus / Split / Gallery). */
   ambient?: AmbientLayout;
+  /**
+   * Split's tiling order, left→right, and the room that was primary. Together
+   * with `ambient` these put the stage back exactly as the project was left.
+   * Empty slots is the "never arranged" sentinel, not an empty stage.
+   */
+  splitSlots?: string[];
+  focusedRoom?: string | null;
   layout?: {
     activeView: string;
     editorVisible: boolean;
@@ -302,6 +318,8 @@ function saveProjectStateToStorage(projectId: string) {
     terminalLayout: 'single',
     terminalPanes,
     ambient: get(layoutSnapshot).ambient,
+    splitSlots: get(layoutSnapshot).splitSlots.slice(0, MAX_SPLIT_SLOTS),
+    focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     layout: {
       activeView: currentLayout.activeView,
       editorVisible: currentLayout.editorVisible,
@@ -340,6 +358,19 @@ function isSafePath(v: unknown): v is string {
 function isSafeLabel(v: unknown, maxLength = 512): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= maxLength && !/[\0\x01-\x1f]/.test(v);
 }
+
+/**
+ * Room ids are a closed vocabulary — a fixed set of panel names, plus
+ * `agent:<session id>`. Shape-check rather than name-check: this module has no
+ * business knowing the shell's room list, and an id for a room this build no
+ * longer has is dropped by the shell anyway (`isKnownRoomId` in `AppShell`).
+ */
+function isSafeRoomId(v: unknown): v is string {
+  return typeof v === 'string' && /^(?:[a-z][a-z-]{0,23}|agent:\d{1,10})$/.test(v);
+}
+
+/** Matches `SPLIT_MAX_PANES` in AppShell — a persisted list can't exceed the stage. */
+const MAX_SPLIT_SLOTS = 12;
 
 /** Validate a persisted agent worktree. Branch names go straight into git
  *  commands on removal, so they're held to git's own naming rules rather than a
@@ -414,6 +445,11 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       ? r.ambient
       : (r.ambient === 'split' ? 'development' : undefined);
 
+  const splitSlots = Array.isArray(r.splitSlots)
+    ? (r.splitSlots as unknown[]).filter(isSafeRoomId).slice(0, MAX_SPLIT_SLOTS)
+    : undefined;
+  const focusedRoom = isSafeRoomId(r.focusedRoom) ? r.focusedRoom : null;
+
   // Sanitise layout sub-object: clamp numerics, strip unknown view names
   let layout: PersistedProjectState['layout'] | undefined;
   if (r.layout && typeof r.layout === 'object') {
@@ -467,8 +503,15 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, layout, preview };
 }
+
+/**
+ * Exposed for tests. A field that is saved but not taught to the sanitiser is
+ * silently stripped on load — the failure mode this whole function invites, and
+ * one nothing else would catch.
+ */
+export const __sanitisePersistedProjectState = sanitisePersistedProjectState;
 
 function loadProjectStateFromStorage(projectId: string): PersistedProjectState | null {
   if (typeof window === 'undefined') return null;
@@ -513,6 +556,8 @@ export function saveProjectState(projectId: string) {
       selectedPath: get(selectedPath),
     },
     ambient: get(layoutSnapshot).ambient,
+    splitSlots: get(layoutSnapshot).splitSlots,
+    focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     layout: {
       activeView: get(layout).activeView,
       editorVisible: get(layout).editorVisible,
@@ -636,11 +681,16 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         sidebarTab: sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
       }));
 
-      // Restore the workspace's ambient room arrangement (Focus / Split /
-      // Gallery) for this project via the AppShell command bus, defaulting to
-      // Focus so a project without a saved arrangement doesn't inherit the
-      // previous project's.
-      requestAmbientLayout(cached.ambient ?? 'focus');
+      // Restore the workspace's stage for this project via the AppShell command
+      // bus — mode, Split tiling and the primary room together, so switching
+      // back lands on the panes that were open rather than on whatever the
+      // project you came from was showing. Defaults to Focus with no
+      // arrangement, so a project that has none doesn't inherit the other's.
+      requestRoomArrangement(
+        cached.ambient ?? 'focus',
+        cached.splitSlots ?? [],
+        cached.focusedRoom ?? null,
+      );
     } else {
       const persisted = loadProjectStateFromStorage(projectId);
       if (generation !== restoreProjectStateGeneration) return;
@@ -712,9 +762,16 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         }));
       }
 
-      // Restore (or default) this project's ambient room arrangement so each
-      // project keeps its own Focus / Split / Gallery layout.
-      requestAmbientLayout(persisted?.ambient ?? 'focus');
+      // Restore (or default) this project's stage so each project keeps its own
+      // mode, Split tiling and primary room. Cold-start path: the agent rooms
+      // named in a saved arrangement belong to sessions from the previous run,
+      // so most of these ids resolve to nothing — the shell drops what isn't
+      // open and falls back to the default stage, which is the right outcome.
+      requestRoomArrangement(
+        persisted?.ambient ?? 'focus',
+        persisted?.splitSlots ?? [],
+        persisted?.focusedRoom ?? null,
+      );
 
       const existingTerminalState = getTerminalProjectState(projectId);
       const hasLiveTerminalState =
