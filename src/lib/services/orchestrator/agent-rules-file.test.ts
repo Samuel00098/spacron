@@ -162,15 +162,26 @@ describe('buildStandingBriefBody', () => {
 
   it('tells the agent to do its own task rather than delegate it', () => {
     const body = buildStandingBriefBody();
-    expect(body).toContain('A task given to you is yours to do');
-    // The escape hatches: an explicit ask, an orchestrator role, or a question.
-    expect(body).toContain('ask before spawning anything');
+    expect(body).toContain('yours to carry out yourself');
+    // Exactly two no-ask exceptions.
+    expect(body).toContain('the user explicitly told you to');
     expect(body).toContain('orchestrator/coordinator role');
     // Spawning a worker in the main checkout stays allowed when asked for.
-    expect(body).toContain('including one in the main repo');
+    expect(body).toContain('in the main repo alongside you');
     // ...but the tool rules for doing it are unchanged.
     expect(body).toContain('delegate_task');
     expect(body).toContain('never for work that writes code');
+  });
+
+  it('routes an agent that WANTS to delegate through the user first', () => {
+    // The gap the first pass left: an agent handed a clear task, deciding on its
+    // own that the work is big enough to fan out. Judging it splittable is not
+    // permission to split it.
+    const body = buildStandingBriefBody();
+    expect(body).toContain('convinced that splitting the work would be faster');
+    expect(body).toContain('ask the user first and wait for their answer');
+    // Rule 4 says "begin immediately" — it must not be read as licence to spawn.
+    expect(body).toMatch(/begin immediately.*does not license it/i);
   });
 
   it('points rule #5 at the shared memory dir it is given', () => {

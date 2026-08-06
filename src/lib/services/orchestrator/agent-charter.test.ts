@@ -35,10 +35,12 @@ describe('buildAgentCharter', () => {
 
   it('tells the agent the task is its own to do, not to hand out', () => {
     const charter = buildAgentCharter('anything', { name: 'Atlas' });
-    expect(charter).toMatch(/The task below is YOURS: do it yourself/);
-    expect(charter).toMatch(/ask before spawning anything/);
+    expect(charter).toMatch(/The task below is YOURS to carry out yourself/);
+    // An agent that judges the work splittable must ask, not act.
+    expect(charter).toMatch(/sure splitting would be faster/);
+    expect(charter).toMatch(/WAIT for an answer before spawning anything/);
     // Spawning a worker in the main checkout is allowed when the user asks.
-    expect(charter).toMatch(/in the main repo alongside you/);
+    expect(charter).toMatch(/main repo alongside you/);
     expect(charter).toMatch(/delegate_task/);
   });
 
