@@ -85,7 +85,7 @@ useLayoutStore.subscribe((state) => {
 // can show, which made opening Settings feel laggy. The modal animates itself
 // in via the `settingsScaleUp` CSS animation, so it appears instantly and still
 // looks smooth.
-export function openSettings() { useLayoutStore.getState().openSettings(); }
+export function openSettings(tab?: import('$lib/types/layout').SettingsTab) { useLayoutStore.getState().openSettings(tab); }
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
 export function openQuickCapture() { useLayoutStore.getState().openQuickCapture(); }
 export function closeQuickCapture() { useLayoutStore.getState().closeQuickCapture(); }

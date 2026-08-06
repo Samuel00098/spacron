@@ -64,7 +64,7 @@ import {
 } from '$lib/services/orchestrator/activity-log';
 import { type AgentTurnOutcome } from '$lib/services/orchestrator/agent-turn-watch';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
-import { requestAmbientLayout, requestRoomControl, requestCanvasControl, layoutSnapshot } from '$lib/stores/layoutControl';
+import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
   leaseOrchestratorTerminal,
   releaseOrchestratorTerminal,
@@ -532,9 +532,11 @@ function announceCompletionAloud(
       `${name} finished: ${title}.`;
     // With a realtime engine, inject the update into the live call so the model
     // mentions it in its own voice. With the pipeline engine
-    // (announceViaRealtimeVoice returns false), the auto-speak effect reads the
-    // completion card instead — skip here to avoid double-speaking.
-    announceViaRealtimeVoice(line);
+    // (announceViaRealtimeVoice returns false), also play a nudge so the user
+    // gets an audible signal even though the auto-speak effect handles the reply.
+    if (!announceViaRealtimeVoice(line)) {
+      playNudge(status);
+    }
     return;
   }
   playNudge(status);
@@ -1623,11 +1625,6 @@ export async function executeAppAction(
       requestRoomControl(action.op, target);
       return true;
     }
-    case 'canvas': {
-      // Drive the Canvas board: zoom, fit-to-content, or lock/unlock the grid.
-      requestCanvasControl(action.op);
-      return true;
-    }
     default:
       return false;
   }
@@ -1694,6 +1691,13 @@ export const chatMessages = writable<Record<string, ChatMessage[]>>(loadChat());
 export const agentCenterOpen = writable(false);
 export const agentForcedAgent = writable('auto');
 export const agentVoiceModeActive = writable(false);
+
+// Keep the Zustand mirror in sync so React components that read from it always
+// see the current value. Without this, the Zustand store can lag behind the
+// legacy writable, causing stale reads in React hooks.
+agentVoiceModeActive.subscribe((val) => {
+  useOrchestratorStore.getState().__set('agentVoiceModeActive', val);
+});
 
 chatMessages.subscribe((val) => {
   if (typeof window === 'undefined') return;
@@ -2772,8 +2776,7 @@ export async function sendChatMessage(
       action.kind === 'task' ||
       action.kind === 'setting' ||
       action.kind === 'layout' ||
-      action.kind === 'room' ||
-      action.kind === 'canvas'
+      action.kind === 'room'
     ) {
       // APP-control actions: drive the application UI directly (no agent).
       await executeAppAction(action, projectId, rootPath);

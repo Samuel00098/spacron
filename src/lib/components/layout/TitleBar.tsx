@@ -261,7 +261,7 @@ export default function TitleBar() {
         {showWorkspaceTools && (
           <button
             className="icon-btn"
-            onClick={openSettings}
+            onClick={() => openSettings()}
             aria-label="Settings"
             title="Settings (Ctrl+,)"
           >

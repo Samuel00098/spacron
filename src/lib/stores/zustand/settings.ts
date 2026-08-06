@@ -37,6 +37,18 @@ function persistValue(key: string, value: unknown) {
   } catch {}
 }
 
+// Built-in shortcut ids whose actions have been deleted. Listed so a persisted
+// `userShortcuts` from an older build can be cleaned up rather than carrying
+// them forever — see the prune in `mergeDefaultShortcuts`.
+const RETIRED_SHORTCUT_IDS = new Set([
+  'canvasZoomIn',
+  'canvasZoomOut',
+  'canvasResetZoom',
+  'goToOrchestrator',
+  'openDailyNote',
+  'toggleSketch',
+]);
+
 function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] {
   // Inlined defaultShortcuts to avoid circular import
   const defaultShortcuts: KeyboardShortcut[] = [
@@ -73,13 +85,17 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'canvasZoomIn', label: 'Canvas Zoom In', keys: 'Alt+=' },
-    { id: 'canvasZoomOut', label: 'Canvas Zoom Out', keys: 'Alt+-' },
-    { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
+    // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
+    // they drove no longer exists, so they were unbound keys occupying Alt+=,
+    // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
     { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
   ];
   if (!Array.isArray(initial)) return defaultShortcuts;
-  const merged = [...initial];
+  // Prune before merging. This function is otherwise additive-only, so a binding
+  // whose action has been deleted survives in every existing install forever —
+  // still listed in the Settings shortcut map, still holding its keys hostage,
+  // and doing nothing when pressed. Dropping an id here retires it for real.
+  const merged = initial.filter((item) => item && !RETIRED_SHORTCUT_IDS.has(item.id));
   for (const def of defaultShortcuts) {
     if (!merged.some((item) => item && item.id === def.id)) {
       merged.push(def);
@@ -180,7 +196,7 @@ function createSettingsState() {
     aiGhostTextEnabled: persistentValue('aiGhostTextEnabled', false),
     aiCompletionProvider: persistentValue<AiProviderId>('aiCompletionProvider', 'groq'),
     aiCompletionModelByProvider: persistentValue<Record<string, string>>('aiCompletionModelByProvider', {}),
-    voiceRefinementEnabled: persistentValue('voiceRefinementEnabled', false),
+    voiceRefinementEnabled: persistentValue('voiceRefinementEnabled', true),
     voiceInputProvider: persistentValue<VoiceInputProviderId>('voiceInputProvider', 'local'),
     voiceInputModelByProvider: persistentValue<Record<string, string>>('voiceInputModelByProvider', {}),
     voiceAiProvider: persistentValue<AiProviderId>('voiceAiProvider', 'groq'),
@@ -188,7 +204,7 @@ function createSettingsState() {
     voiceConversationAiModelByProvider: persistentValue<Record<string, string>>('voiceConversationAiModelByProvider', {}),
     voiceConversationTtsModelByProvider: persistentValue<Record<string, string>>('voiceConversationTtsModelByProvider', {}),
     voiceConversationTtsVoiceByProvider: persistentValue<Record<string, string>>('voiceConversationTtsVoiceByProvider', {}),
-    voiceReplyProvider: persistentValue<AiProviderId>('voiceReplyProvider', 'openrouter'),
+    voiceReplyProvider: persistentValue<AiProviderId>('voiceReplyProvider', 'groq'),
     ttsVoice: persistentValue('ttsVoice', 'austin'),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
     uiZoom: persistentValue('uiZoom', 100),
@@ -243,7 +259,7 @@ const defaults: SettingsValues = {
   aiGhostTextEnabled: false,
   aiCompletionProvider: 'groq',
   aiCompletionModelByProvider: {},
-  voiceRefinementEnabled: false,
+  voiceRefinementEnabled: true,
   voiceInputProvider: 'local',
   voiceInputModelByProvider: {},
   voiceAiProvider: 'groq',
@@ -291,9 +307,9 @@ const defaults: SettingsValues = {
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'canvasZoomIn', label: 'Canvas Zoom In', keys: 'Alt+=' },
-    { id: 'canvasZoomOut', label: 'Canvas Zoom Out', keys: 'Alt+-' },
-    { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
+    // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
+    // they drove no longer exists, so they were unbound keys occupying Alt+=,
+    // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
     { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
   ],
   appearance: 'system',

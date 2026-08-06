@@ -6,6 +6,19 @@ export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'revie
 // drawer tab. A two-column diff is unreadable at drawer width.
 export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'problems';
 
+// Sections of the Settings modal. Lives here rather than in the component so
+// callers can deep-link one (`openSettings('appearance')`) without importing the
+// modal itself.
+export type SettingsTab =
+  | 'general'
+  | 'appearance'
+  | 'models'
+  | 'voice'
+  | 'terminal'
+  | 'agents'
+  | 'shortcuts'
+  | 'about';
+
 export interface LayoutState {
   sidebarVisible: boolean;
   sidebarWidth: number;

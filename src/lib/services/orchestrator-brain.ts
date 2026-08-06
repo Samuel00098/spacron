@@ -61,13 +61,10 @@ export type OrchestratorAction =
   /** Change an application setting or the active theme (the things the user can
    *  set manually in Settings). `setting` names the option; `value` is its new value. */
   | { kind: 'setting'; setting: string; value: string | number | boolean }
-  /** Switch the workspace's ambient arrangement (Focus = one room, Development = dev tools, Canvas = freeform board, Preview = app preview + terminal). */
+  /** Switch the workspace's ambient arrangement (Focus = one room, Split = tiled rooms). */
   | { kind: 'layout'; mode: 'focus' | 'development' | 'gallery' | 'preview' }
   /** Focus / minimize / restore / close a specific room (panel or agent) by name. */
-  | { kind: 'room'; op: 'focus' | 'minimize' | 'restore' | 'close'; target: string }
-  /** Control the Canvas board: zoom, fit everything on screen, or lock/unlock the
-   *  auto-arrange grid (lock = panels fixed in a grid, unlock = free drag/resize). */
-  | { kind: 'canvas'; op: 'zoom-in' | 'zoom-out' | 'fit' | 'lock' | 'unlock' };
+  | { kind: 'room'; op: 'focus' | 'minimize' | 'restore' | 'close'; target: string };
 
 export interface RouteResult {
   /** Short conversational message shown back to the user. */
@@ -1094,25 +1091,10 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     return null;
   }
   if (kind === 'canvas' || kind === 'board') {
-    const raw = str(obj.op).toLowerCase().replace(/[\s_]+/g, '-');
-    // Tolerate the natural aliases the model is likeliest to emit.
-    const aliases: Record<string, OrchestratorAction & { kind: 'canvas' }> = {
-      'zoom-in': { kind: 'canvas', op: 'zoom-in' },
-      'in': { kind: 'canvas', op: 'zoom-in' },
-      'zoom-out': { kind: 'canvas', op: 'zoom-out' },
-      'out': { kind: 'canvas', op: 'zoom-out' },
-      'fit': { kind: 'canvas', op: 'fit' },
-      'reset': { kind: 'canvas', op: 'fit' },
-      'recenter': { kind: 'canvas', op: 'fit' },
-      'center': { kind: 'canvas', op: 'fit' },
-      'lock': { kind: 'canvas', op: 'lock' },
-      'grid': { kind: 'canvas', op: 'lock' },
-      'snap': { kind: 'canvas', op: 'lock' },
-      'unlock': { kind: 'canvas', op: 'unlock' },
-      'freeform': { kind: 'canvas', op: 'unlock' },
-      'free': { kind: 'canvas', op: 'unlock' },
-    };
-    return aliases[raw] ?? null;
+    // The Canvas board was removed. Parsing these into an action was worse than
+    // rejecting them: `executeAppAction` returned true for a command nothing
+    // consumed, so the orchestrator reported success for a no-op.
+    return null;
   }
   return null;
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
+import type { LayoutState, ActiveView, SidebarTab, SettingsTab } from '$lib/types/layout';
 import { loadJson } from '$lib/utils/storage';
 import { requestRoomControl } from '../layoutControl';
 
@@ -125,7 +125,7 @@ interface LayoutActions {
   /** Merge a partial layout patch into the store and persist it. Used to
    *  restore a project's saved view/panels when switching projects. */
   applyLayoutState: (patch: Partial<LayoutState>) => void;
-  openSettings: () => void;
+  openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   openQuickCapture: () => void;
   closeQuickCapture: () => void;
@@ -134,6 +134,8 @@ interface LayoutActions {
   openAgentSpawn: () => void;
   closeAgentSpawn: () => void;
   settingsOpen: boolean;
+  /** Section to open Settings on; null means "wherever it was last left". */
+  settingsInitialTab: SettingsTab | null;
   quickCaptureOpen: boolean;
   envManagerOpen: boolean;
   agentSpawnOpen: boolean;
@@ -190,12 +192,15 @@ function restoreLastAuxView(l: LayoutState): LayoutState {
 export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState) => ({
   ...loadLayout(),
   settingsOpen: false,
+  settingsInitialTab: null,
   quickCaptureOpen: false,
   envManagerOpen: false,
   agentSpawnOpen: false,
 
-  openSettings: () => set({ settingsOpen: true }),
-  closeSettings: () => set({ settingsOpen: false }),
+  // `tab` deep-links a section, so a caller like the palette's "Customize
+  // Theme…" opens Settings where the user asked to go rather than on General.
+  openSettings: (tab) => set({ settingsOpen: true, settingsInitialTab: tab ?? null }),
+  closeSettings: () => set({ settingsOpen: false, settingsInitialTab: null }),
 
   openQuickCapture: () => set({ quickCaptureOpen: true }),
   closeQuickCapture: () => set({ quickCaptureOpen: false }),

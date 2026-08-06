@@ -8,15 +8,11 @@ import { writable } from '$lib/stores/storeCompat';
 
 export type AmbientLayout = 'focus' | 'development' | 'gallery' | 'vibe' | 'preview';
 export type RoomOp = 'focus' | 'minimize' | 'restore' | 'close';
-// Canvas-specific controls: pan/zoom of the freeform board plus the auto-arrange
-// grid toggle (lock = grid on / panels fixed, unlock = freeform drag & resize).
-export type CanvasOp = 'zoom-in' | 'zoom-out' | 'fit' | 'lock' | 'unlock';
 
 export type LayoutCommand =
   // `nonce` lets an identical command (e.g. "focus terminal" twice) re-fire.
   | { nonce: number; type: 'ambient'; mode: AmbientLayout }
-  | { nonce: number; type: 'room'; op: RoomOp; room: string }
-  | { nonce: number; type: 'canvas'; op: CanvasOp };
+  | { nonce: number; type: 'room'; op: RoomOp; room: string };
 
 export interface LayoutRoomSnapshot {
   id: string;
@@ -43,11 +39,6 @@ export function requestAmbientLayout(mode: AmbientLayout): void {
 /** Ask the workspace to focus / minimize / restore / close a room by name. */
 export function requestRoomControl(op: RoomOp, room: string): void {
   layoutControlCommand.set({ nonce: ++commandNonce, type: 'room', op, room });
-}
-
-/** Ask the Canvas board to zoom, fit-to-content, or lock/unlock its grid. */
-export function requestCanvasControl(op: CanvasOp): void {
-  layoutControlCommand.set({ nonce: ++commandNonce, type: 'canvas', op });
 }
 
 /** AppShell publishes its current layout here so controllers can read it. */

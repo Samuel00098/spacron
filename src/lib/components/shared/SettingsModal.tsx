@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import packageJson from '../../../../package.json';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -112,7 +113,8 @@ import {
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import './SettingsModal.css';
 
-type Tab = 'general' | 'appearance' | 'models' | 'voice' | 'terminal' | 'agents' | 'shortcuts' | 'about';
+import { useLayoutStore } from '$lib/stores/zustand/layout';
+import type { SettingsTab as Tab } from '$lib/types/layout';
 
 // App actions a custom shortcut can be bound to. Zoom actions are dispatched
 // separately (window zoom in App.tsx, canvas zoom is view-local), so they're
@@ -427,19 +429,17 @@ function ShortcutEditor({
     for (const shortcut of shortcuts) {
       const category = shortcut.id.startsWith('custom_')
         ? 'Custom Shortcuts'
-        : shortcut.id.startsWith('canvas')
-          ? 'Canvas'
-          : shortcut.id.includes('Terminal') || shortcut.id === 'newTerminal'
-            ? 'Terminal'
-            : shortcut.id.includes('zoom') || shortcut.id.includes('Zoom')
-              ? 'Window'
-              : shortcut.id.includes('Preview') || shortcut.id.includes('proxy')
-                ? 'Preview'
-                : shortcut.id.includes('File') || shortcut.id.includes('Folder')
-                  ? 'File'
-                  : shortcut.id.includes('Voice')
-                    ? 'Voice'
-                    : 'Workspace';
+        : shortcut.id.includes('Terminal') || shortcut.id === 'newTerminal'
+          ? 'Terminal'
+          : shortcut.id.includes('zoom') || shortcut.id.includes('Zoom')
+            ? 'Window'
+            : shortcut.id.includes('Preview') || shortcut.id.includes('proxy')
+              ? 'Preview'
+              : shortcut.id.includes('File') || shortcut.id.includes('Folder')
+                ? 'File'
+                : shortcut.id.includes('Voice')
+                  ? 'Voice'
+                  : 'Workspace';
       groups.set(category, [...(groups.get(category) ?? []), shortcut]);
     }
     return [...groups.entries()];
@@ -517,7 +517,11 @@ const PRESET_AGENTS: PresetAgent[] = [
 ];
 
 export default function SettingsModal({ onclose }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<Tab>('general');
+  // Seeded from the store so a caller can deep-link a section — the palette's
+  // "Customize Theme…" opens straight onto Appearance instead of General.
+  const [activeTab, setActiveTab] = useState<Tab>(
+    () => useLayoutStore.getState().settingsInitialTab ?? 'general',
+  );
 
   // Local models downloader state
   const [localModels, setLocalModels] = useState<any[]>([]);
@@ -745,7 +749,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const currentActiveTheme = useStore(activeTheme);
   const bgPresent = useStore(backgroundImagePresent);
-  const panelRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Focus trap + Escape + register the modal so app-wide shortcuts stand down.
+  useModalFocus(panelRef, onclose);
 
   const currentFontSize = useStore(fontSize);
   const currentFontFamily = useStore(fontFamily);
@@ -865,14 +872,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const ttsVoices = useMemo(() => {
     return getTtsVoiceOptionsForModel(replyProvider, ttsModel);
   }, [replyProvider, ttsModel]);
-
-  useEffect(() => {
-    function handleKeydown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onclose();
-    }
-    window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
-  }, [onclose]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0 });
@@ -1424,7 +1423,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
         onclose();
       }
     }}>
-      <div className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div className="settings-modal" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="settings-header">
           <div>
             <span className="settings-eyebrow">Preferences</span>

@@ -700,7 +700,7 @@ export function providerSupportsReplyTts(provider: AiProviderId): boolean {
   );
 }
 
-export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', false);
+export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', true);
 export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voiceInputProvider', 'local');
 export const voiceInputModelByProvider = persistentWritable<Record<string, string>>('voiceInputModelByProvider', {});
 export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider', 'groq');
@@ -1047,9 +1047,7 @@ export const shortcutActions: ShortcutAction[] = [
   // openDailyNote removed
   // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', category: 'Voice' },
-  { id: 'canvasZoomIn',   label: 'Canvas Zoom In', category: 'Canvas' },
-  { id: 'canvasZoomOut',  label: 'Canvas Zoom Out', category: 'Canvas' },
-  { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', category: 'Canvas' },
+  // Canvas actions removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', category: 'View' },
 ];
 
@@ -1087,9 +1085,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   // openDailyNote removed
   // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-  { id: 'canvasZoomIn',   label: 'Canvas Zoom In', keys: 'Alt+=' },
-  { id: 'canvasZoomOut',  label: 'Canvas Zoom Out', keys: 'Alt+-' },
-  { id: 'canvasResetZoom', label: 'Canvas Reset Zoom', keys: 'Alt+0' },
+  // canvasZoomIn / canvasZoomOut / canvasResetZoom removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
 ];
 

@@ -69,7 +69,7 @@ export function toggleCommandPalette() {
 import { newWorkspacePromptOpen, newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
 import { knowledgeGraphOpen } from '$lib/services/orchestrator/knowledge';
 import { saveActiveFile, formatActiveFile } from './editor';
-import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager } from './layout';
+import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings } from './layout';
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
@@ -154,7 +154,9 @@ export function initDefaultCommands() {
       id: 'view.settings',
       name: 'Go to Settings',
       category: 'View',
-      action: () => setActiveView('settings'),
+      // Settings is a modal, not a view. `setActiveView('settings')` set a field
+      // nothing reads, so this command silently did nothing.
+      action: () => openSettings(),
     },
     {
       id: 'terminal.new',
@@ -194,7 +196,9 @@ export function initDefaultCommands() {
       id: 'theme.customize',
       name: 'Customize Theme...',
       category: 'Preferences',
-      action: () => setActiveView('settings'),
+      // Deep-links the section that actually holds the theme picker, rather than
+      // dropping the user on General to go find it.
+      action: () => openSettings('appearance'),
     },
   ];
 
