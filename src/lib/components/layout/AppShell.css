@@ -326,9 +326,16 @@
      visual clipping paint containment was giving us.
      See the backdrop-root gotcha in `.spacron/memory/glass-panel-recipe.md`. */
   contain: layout;
+  /* `gap` is on the same clock as the panel entrance (`--dur-slow`) so the
+     gutters and the panels finish together. On `--dur-base` it was 80ms quicker,
+     and the 16px→12px gutter drift kept creeping after the panels had already
+     landed — the stage read as still settling once the move looked done.
+     The two grid-template entries only bite where the track COUNT is unchanged;
+     Focus→Split goes 2 tracks→1 (and 1 row→2), which is not interpolable and
+     snaps by design. They are kept for the same-count changes within a mode. */
   transition: grid-template-columns var(--dur-slow) var(--ease-out),
     grid-template-rows var(--dur-slow) var(--ease-out),
-    gap var(--dur-base) var(--ease-out);
+    gap var(--dur-slow) var(--ease-out);
 }
 
 /* Focus, Split & Preview keep their panels above the floating controls. Canvas
@@ -354,11 +361,23 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The focus stage is a raised, rounded card — sitting flush against the left
-   drawer reads as one merged slab. Inset it by the same 16px the stage uses
-   for its own gap so the drawer stays visually separate. */
+/* The stage is a raised, rounded card — sitting flush against the left drawer
+   reads as one merged slab. Inset it by the same 16px the stage uses for its own
+   gap so the drawer stays visually separate.
+
+   Split gets the SAME 16px of clearance, just split differently: it carries
+   `padding: 8px` of its own, so 8px of margin puts its content edge in exactly
+   the place Focus's 16px + no padding does. Without this, only Focus was inset
+   and the entire stage lurched 16px sideways the instant you entered Split —
+   an un-animatable jump (margin on a container of live terminals must not be
+   transitioned; that is 300ms of full-subtree relayout). Removing the
+   discontinuity is free; animating it would not be. */
 .app-shell .rooms-content-horizontal:has(> .left-utility-panel) > .rooms-table.ambient-focus {
   margin-left: 16px;
+}
+
+.app-shell .rooms-content-horizontal:has(> .left-utility-panel) > .rooms-table.ambient-gallery {
+  margin-left: 8px;
 }
 
 .app-shell .rooms-table.ambient-focus .focused-room {
@@ -1142,13 +1161,42 @@
   pointer-events: none;
 }
 
-/* Tiled Split: kill the entrance animation so every panel appears at once.
-   Crucially, KEEP `will-change: transform, opacity` stable across layouts
-   — toggling to `auto` demotes the GPU compositing layer and orphans the
-   xterm canvas backing store, breaking scroll height / viewport. */
-.app-shell .rooms-table.ambient-gallery .room-panel {
+/* ── Stage panel entrance: a property of the SWITCH, not of the render ──────
+   The stage panels are never unmounted (that is the whole point of the
+   persistent stage), so a mount-time entrance on `.room-panel` fires once in
+   the app's life and never again — which is why Split used to have to blank it
+   out with `animation: none` and appear with no entrance at all, hard and flat.
+
+   Tie it to `.layout-switching` instead and both modes get the same entrance,
+   on the same clock, exactly when the user changes layout. Every tile fades in
+   together: a stagger keyed to DOM order would ripple in the wrong sequence,
+   because `.stage-pane` is laid out by its `order` (slot order) and the DOM is
+   in mount order — shells before agents.
+
+   The animation lives on `.room-panel`, NEVER on `.stage-pane`. A transform or
+   an opacity < 1 on the pane makes it a backdrop root, and in Split every panel
+   carries its own `backdrop-filter` — so animating the pane strips the glass off
+   its panel for the length of the flight and the tile reads as bare text on the
+   wallpaper. An element's own transform/opacity does not break its own
+   backdrop-filter, so animating the panel itself is safe.
+   See `.spacron/memory/glass-panel-recipe.md`.
+
+   Opacity only, no scale: scaling a live terminal resamples its text for the
+   duration and it reads as soft/blurry. This matches the same decision already
+   made for the view-transition crossfade below.
+
+   Crucially, `will-change: transform, opacity` is NOT toggled here — demoting
+   the GPU compositing layer orphans the xterm canvas backing store and breaks
+   scroll height / viewport. It stays whatever `.focused-room .room-panel` sets,
+   in both layouts. */
+.app-shell .rooms-table.layout-switching .focused-room .room-panel {
+  animation: shell-panel-in var(--dur-slow) var(--ease-out) backwards;
+}
+
+/* Settled: no entrance in the resting state, so an unrelated re-render can
+   never flash a live panel back to a dim frame while you are working in it. */
+.app-shell .rooms-table:not(.layout-switching) .focused-room .room-panel {
   animation: none;
-  transform: none;
 }
 
 /* Stage that layers every persistent terminal/agent pane on top of each other,
@@ -1166,10 +1214,17 @@
   min-height: 0;
 }
 /* visibility (not display:none) keeps the hidden pane laid out at full size, so
-   its terminal never reflows to zero and is instantly correct when reshown. */
+   its terminal never reflows to zero and is instantly correct when reshown.
+   `clip-path` makes that unconditional: `visibility: hidden` is inherited and a
+   single descendant setting `visibility: visible` paints straight back through
+   it — at full stage size, on top of the tiles, since these panes are absolutely
+   positioned over the whole stage. That is the residue. Clipping is paint-only,
+   so the pane keeps its layout box and the terminal inside still measures
+   correctly; nothing about the reshow path changes. */
 .app-shell .stage-pane.stage-hidden {
   visibility: hidden;
   pointer-events: none;
+  clip-path: inset(50%);
 }
 
 /* Split view reuses the very same persistent stage — the identical mounted xterm
@@ -1284,12 +1339,21 @@
     inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
     inset 0 -1px 0 rgba(0, 0, 0, 0.18),
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
-  animation: shell-panel-in 0.28s var(--ease-out) both;
+  /* `backwards`, not `both`. A filled-forwards animation keeps *winning* over
+     every later declaration of the same property for the element's whole life —
+     animations beat transitions in the cascade — so `both` here permanently
+     pinned `opacity`, and the `opacity` transition listed just below could never
+     actually run. `backwards` fills only before the animation starts, which is
+     all an entrance needs, and hands the property back afterwards. */
+  animation: shell-panel-in 0.28s var(--ease-out) backwards;
   transform-origin: center bottom;
   will-change: transform, opacity;
+  /* `transform` is on the fast tier because the only thing that moves it is the
+     1px `:hover` lift — at `--dur-slower` (0.42s) that lift trails the cursor by
+     a visible beat and the panel feels unresponsive rather than solid. */
   transition: border-color var(--dur-base) var(--ease-out),
     box-shadow var(--dur-base) var(--ease-out),
-    transform var(--dur-slower) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
     opacity var(--dur-base) var(--ease-out),
     filter var(--dur-base) var(--ease-out);
 }
