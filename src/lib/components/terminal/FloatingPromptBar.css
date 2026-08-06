@@ -10,7 +10,7 @@
   gap: 10px;
   pointer-events: none;
   opacity: 1;
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 
 .floating-prompt-shell.active {
@@ -50,7 +50,7 @@
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   color: var(--accent);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .prompt-bubble:hover {
@@ -137,7 +137,7 @@
   text-align: left;
   color: var(--text-secondary);
   background: transparent;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   overflow: hidden;
   min-width: 0;
 }
@@ -166,7 +166,7 @@
   flex-shrink: 0;
   opacity: 0;
   color: var(--accent);
-  transition: opacity 0.12s;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .history-item:hover {
@@ -201,11 +201,10 @@
     0 10px 22px -18px color-mix(in srgb, var(--accent) 34%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     inset 0 -1px 0 rgba(0, 0, 0, 0.16);
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    background 0.18s ease,
-    transform 0.18s ease;
+  transition: border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 
 .floating-prompt-shell .floating-prompt-bar:hover,
@@ -258,7 +257,7 @@
 .floating-prompt-shell .send-btn {
   flex-shrink: 0;
   border: 0;
-  transition: background 0.15s, color 0.15s, opacity 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .spawn-toggle,
@@ -394,7 +393,7 @@
   padding: 0;
   cursor: pointer;
   border-radius: 4px;
-  transition: color 0.12s;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .prompt-target-btn:hover {
@@ -438,7 +437,7 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .target-item:hover {
@@ -497,7 +496,7 @@
   align-items: center;
   gap: 4px;
   border-radius: 9px;
-  transition: background 0.12s;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .spawn-row.selected {
@@ -518,7 +517,7 @@
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: color 0.12s;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .spawn-row:not(.selected) .spawn-item:hover {
@@ -578,7 +577,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.12s, opacity 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .counter-btn:hover:not(:disabled) {
@@ -608,7 +607,7 @@
   font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .spawn-confirm:hover:not(:disabled) {
@@ -663,7 +662,7 @@
   border-radius: 4px;
   border: 1px solid var(--border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
   cursor: pointer;
 }
 
@@ -691,7 +690,7 @@
   cursor: pointer;
   color: var(--text-muted);
   padding: 0;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .chip-remove:hover {
@@ -749,7 +748,7 @@
   cursor: pointer;
   color: var(--text-muted);
   padding: 0;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   margin-left: 1px;
 }
 
@@ -1055,7 +1054,7 @@
   color: var(--text-secondary);
   flex-shrink: 0;
   border: 0;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
   position: relative;
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
@@ -1194,7 +1193,7 @@
   border-radius: 2px;
   background: var(--accent);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
-  transition: width 80ms ease-out;
+  transition: width var(--dur-instant) var(--ease-out);
   min-width: 2px;
 }
 
@@ -1234,7 +1233,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.4s, box-shadow 0.4s, color 0.4s;
+  transition: background var(--dur-slower) var(--ease-out), box-shadow var(--dur-slower) var(--ease-out), color var(--dur-slower) var(--ease-out);
   z-index: 2;
 }
 
@@ -1289,7 +1288,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -1354,7 +1353,7 @@
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .floating-prompt-shell .agent-voice-mode-btn:hover {
@@ -1395,7 +1394,7 @@
   padding: 0;
   cursor: pointer;
   border-radius: 4px;
-  transition: color 0.12s;
+  transition: color var(--dur-fast) var(--ease-out);
   min-width: 0;
 }
 
@@ -1535,7 +1534,7 @@
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.1);
   object-fit: contain;
-  animation: imgScaleUp 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: imgScaleUp 0.2s var(--ease-spring);
 }
 
 .image-preview-close {
@@ -1553,7 +1552,7 @@
   align-items: center;
   justify-content: center;
   font-size: 16px;
-  transition: background 0.15s, transform 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .image-preview-close:hover {

@@ -149,7 +149,7 @@
   font-size: 12px;
   outline: none;
   font-family: var(--font-mono, ui-monospace, monospace);
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .env-overlay .env-input:focus {
   border-color: var(--input-focus-border, var(--accent));

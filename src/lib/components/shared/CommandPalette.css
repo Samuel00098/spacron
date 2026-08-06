@@ -28,7 +28,7 @@
   display: flex;
   flex-direction: column;
   max-height: min(400px, calc(70 * var(--app-vh, 1vh)));
-  animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: scaleUp 0.2s var(--ease-out);
   view-transition-name: spacron-command-palette;
 }
 
@@ -90,7 +90,7 @@
   padding: 8px 12px;
   border-radius: 6px;
   cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   user-select: none;
   border-left: 2px solid transparent;
 }
@@ -130,7 +130,7 @@
   background: var(--bg-hover);
   padding: 2px 6px;
   border-radius: 4px;
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .command-palette-overlay .command-name {
@@ -145,5 +145,5 @@
   padding: 2px 6px;
   border-radius: 4px;
   font-family: var(--editor-font-family, monospace);
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }

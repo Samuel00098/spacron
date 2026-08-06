@@ -14,7 +14,7 @@
   justify-content: center;
   z-index: 10000;
   padding-top: calc(10 * var(--app-vh, 1vh));
-  animation: hudFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: hudFadeIn 0.2s var(--ease-out);
 }
 
 .project-hud {
@@ -35,7 +35,7 @@
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   overflow: hidden;
-  animation: hudSlideDown 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: hudSlideDown 0.28s var(--ease-out);
 }
 
 /* Frosted-glass launcher — opaque base keeps the project grid readable while
@@ -104,7 +104,7 @@
   border-radius: 12px;
   background: color-mix(in srgb, var(--text-primary) 4%, transparent);
   border: 1px solid var(--border);
-  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .hud-search-field:focus-within {
@@ -150,7 +150,7 @@
   background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
 
 .hud-close-btn:hover {
@@ -236,7 +236,7 @@
   align-items: center;
   gap: 6px;
   opacity: 0.72;
-  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 
 .hud-collection-header:hover .hud-collection-actions {
@@ -254,7 +254,9 @@
   justify-content: center;
   cursor: pointer;
   color: var(--text-muted);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
 }
 
 .hud-action-btn:hover {
@@ -299,7 +301,12 @@
   background: rgba(255, 255, 255, 0.015);
   border: 1px solid var(--border);
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
   position: relative;
   gap: 12px;
   min-height: 180px;
@@ -336,7 +343,7 @@
   color: color-mix(in srgb, var(--accent) 70%, transparent);
   flex-shrink: 0;
   margin-bottom: 8px;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: color var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
 }
 
 .project-hud-card.hovered .project-hud-card-avatar {
@@ -434,7 +441,7 @@
   right: 8px;
   top: 8px;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast) var(--ease-out);
   z-index: 5;
 }
 
@@ -453,7 +460,9 @@
   justify-content: center;
   cursor: pointer;
   color: var(--text-muted);
-  transition: all 0.15s;
+  transition: color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .hud-card-action-btn:hover {
@@ -504,7 +513,7 @@
   color: var(--text-primary);
   border-radius: 4px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--dur-fast) var(--ease-out);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -577,7 +586,7 @@
   color: var(--text-primary);
   outline: none;
   width: 180px;
-  transition: all 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .hud-new-collection-input:focus {
@@ -594,7 +603,7 @@
   font-weight: 700;
   padding: 6px 14px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .hud-new-collection-btn:hover {

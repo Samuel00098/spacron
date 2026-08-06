@@ -84,7 +84,7 @@
   height: 100%;
   background: var(--accent);
   border-radius: 2px;
-  transition: width 0.2s;
+  transition: width var(--dur-base) var(--ease-out);
 }
 
 .update-banner .update-pct {

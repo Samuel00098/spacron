@@ -48,7 +48,7 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  transition: background 0.12s ease, opacity 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 
 .pp-chip:hover {
@@ -167,7 +167,7 @@
 .pp-caret {
   flex-shrink: 0;
   color: var(--text-muted);
-  transition: transform 0.12s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .pp-caret.collapsed {

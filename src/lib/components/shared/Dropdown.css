@@ -18,7 +18,7 @@
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s, color 0.2s;
+  transition: border-color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
 }
 .dd-trigger:hover:not(:disabled) {
   border-color: var(--border-focus);
@@ -52,7 +52,7 @@
 .dd-chevron {
   flex-shrink: 0;
   opacity: 0.55;
-  transition: transform 0.18s ease, opacity 0.15s;
+  transition: transform var(--dur-base) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 .dd-trigger.open .dd-chevron {
   transform: rotate(180deg);
@@ -120,7 +120,7 @@
   text-align: left;
   cursor: pointer;
   animation: dd-item-in 0.18s ease both;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .dd-item:hover:not(:disabled) {
   background: var(--bg-hover);

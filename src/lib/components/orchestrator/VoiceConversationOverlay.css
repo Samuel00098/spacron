@@ -1,7 +1,7 @@
 /* Styles for VoiceConversationOverlay.tsx — extracted verbatim from the
-   original CSS. The `transition:fade` is reproduced by
-   the overlay-fade-in entrance animation at the bottom (full: 200ms, compact:
-   140ms, matching the original durations). */
+   original CSS. The `transition: fade` is reproduced by
+   the overlay-fade-in entrance animation at the bottom (full: var(--dur-base) var(--ease-out), compact:
+   var(--dur-fast) var(--ease-out), matching the original durations). */
 
 .overlay {
   position: fixed;
@@ -41,7 +41,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .overlay .close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
@@ -64,7 +64,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.4s, box-shadow 0.4s, color 0.4s;
+  transition: background var(--dur-slower) var(--ease-out), box-shadow var(--dur-slower) var(--ease-out), color var(--dur-slower) var(--ease-out);
 }
 
 .overlay .idle .orb {
@@ -176,7 +176,7 @@
   font-weight: 500;
   margin: 0;
   letter-spacing: 0.03em;
-  transition: color 0.3s;
+  transition: color var(--dur-slow) var(--ease-out);
 }
 .overlay .status.idle      { color: var(--text-muted); }
 .overlay .status.listening { color: #f87171; }
@@ -208,7 +208,7 @@
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .overlay .end-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
@@ -293,8 +293,8 @@
   color: var(--text-primary);
 }
 
-/* Entrance fade — replaces the original `transition:fade`. */
-.overlay { animation: overlay-fade-in 200ms ease; }
+/* Entrance fade — replaces the original `transition: fade`. */
+.overlay { animation: overlay-fade-in var(--dur-base) var(--ease-out); }
 .overlay.compact { animation: overlay-fade-in 140ms ease; }
 @keyframes overlay-fade-in {
   from { opacity: 0; }

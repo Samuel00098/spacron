@@ -30,7 +30,7 @@
   height: 24px;
   border-radius: 6px;
   color: var(--text-secondary);
-  transition: all 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .add-btn:hover {
@@ -74,7 +74,7 @@
   padding: 6px 10px;
   border-radius: 6px;
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-out);
   font-family: inherit;
 }
 
@@ -109,7 +109,7 @@
   text-align: center;
   border-radius: 4px;
   color: var(--text-secondary);
-  transition: all 0.15s;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .toggle-opt.active {
@@ -129,7 +129,7 @@
   font-weight: 600;
   padding: 5px 12px;
   border-radius: 6px;
-  transition: all 0.15s;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .btn-cancel {
@@ -163,7 +163,7 @@
   padding: 6px 10px;
   color: var(--text-secondary);
   border-bottom: 2px solid transparent;
-  transition: all 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .scope-tab:hover {
@@ -188,7 +188,7 @@
   padding: 6px 10px;
   border-radius: 6px;
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .search-input:focus {
@@ -236,7 +236,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color 0.15s ease, background-color 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .snippet-card:hover {
@@ -277,7 +277,7 @@
   align-items: center;
   gap: 4px;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .snippet-card:hover .card-actions {
@@ -292,7 +292,7 @@
   height: 20px;
   border-radius: 4px;
   color: var(--text-secondary);
-  transition: all 0.15s;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
 }
 
 .snippets-panel .icon-btn:hover {
@@ -337,7 +337,12 @@
   font-weight: 600;
   padding: 4px 8px;
   border-radius: 4px;
-  transition: all 0.15s;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
   display: flex;
   align-items: center;
   white-space: nowrap;

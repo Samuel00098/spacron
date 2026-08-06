@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { get } from 'svelte/store';
+import { get } from '$lib/stores/storeCompat';
 import {
   aiProvider,
   currentAiModel,

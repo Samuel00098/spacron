@@ -23,7 +23,7 @@
 /* Each card is interactive; the container itself lets clicks fall through the gaps. */
 .agent-notifs > .agent-notif {
   pointer-events: auto;
-  animation: agent-notif-in 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: agent-notif-in 0.26s var(--ease-out) both;
   box-shadow: 0 10px 32px -8px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border);
 }
 
@@ -91,7 +91,7 @@
   border: 1px solid color-mix(in srgb, var(--accent) 15%, var(--border));
   background: color-mix(in srgb, var(--bg-tertiary) 60%, transparent);
   color: var(--text-secondary); cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .agent-notifs .orc-mb-btn:hover { color: var(--text-primary); border-color: var(--accent); }
 .agent-notifs .orc-mb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -178,7 +178,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .agent-notifs .agent-notif-close:hover { background: var(--bg-hover, color-mix(in srgb, var(--text-muted) 15%, transparent)); color: var(--text-primary); }
 .agent-notifs .agent-notif-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

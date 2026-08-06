@@ -246,7 +246,7 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .left-utility-panel .drawer-tab-btn:hover,
@@ -276,7 +276,7 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .left-utility-panel .drawer-close-btn:hover,
@@ -326,10 +326,9 @@
      visual clipping paint containment was giving us.
      See the backdrop-root gotcha in `.spacron/memory/glass-panel-recipe.md`. */
   contain: layout;
-  transition:
-    grid-template-columns 0.32s cubic-bezier(0.22, 1, 0.36, 1),
-    grid-template-rows 0.32s cubic-bezier(0.22, 1, 0.36, 1),
-    gap 0.2s ease;
+  transition: grid-template-columns var(--dur-slow) var(--ease-out),
+    grid-template-rows var(--dur-slow) var(--ease-out),
+    gap var(--dur-base) var(--ease-out);
 }
 
 /* Focus, Split & Preview keep their panels above the floating controls. Canvas
@@ -476,7 +475,7 @@
     inset 0 -2px 3px rgba(0, 0, 0, 0.22),
     0 2px 3px rgba(0, 0, 0, 0.24),
     0 12px 26px rgba(0, 0, 0, 0.3);
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  transition: border-color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
   /* `backwards` (not the inherited `both`) releases the entry animation's final
      transform after it ends, so the hover lift transform can take effect. */
   animation-fill-mode: backwards;
@@ -571,15 +570,14 @@
      the fan and the depth cue are set as individual properties so they
      compose. Both are compositor-friendly, so fanning a deck of cards
      costs no layout. */
-  transition:
-    translate 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    scale 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.24s ease,
-    color 0.16s ease,
-    box-shadow 0.24s ease,
-    border-color 0.18s ease,
-    background 0.18s ease;
+  transition: translate var(--dur-slow) var(--ease-out),
+    scale var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out);
 }
 
 /* The thumbnail's 60px floor is for the single-card case, where the card
@@ -1225,7 +1223,7 @@
   min-width: 0;
   min-height: 0;
   display: flex;
-  transition: opacity 0.26s ease, transform 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-slower) var(--ease-out);
 }
 
 .app-shell .focused-room.empty-stage {
@@ -1239,7 +1237,7 @@
   min-width: 0;
   min-height: 0;
   display: flex;
-  transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-slow) var(--ease-out);
 }
 
 .app-shell .ambient-secondary-container {
@@ -1286,15 +1284,14 @@
     inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
     inset 0 -1px 0 rgba(0, 0, 0, 0.18),
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
-  animation: shell-panel-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: shell-panel-in 0.28s var(--ease-out) both;
   transform-origin: center bottom;
   will-change: transform, opacity;
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    transform 0.38s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.22s ease,
-    filter 0.22s ease;
+  transition: border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-slower) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    filter var(--dur-base) var(--ease-out);
 }
 
 /* Chrome/WebKit compositing bug (crbug.com/40863759):
@@ -1481,7 +1478,7 @@
   color: var(--text-muted);
   background: transparent;
   cursor: pointer;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .room-action:hover {
@@ -1539,8 +1536,8 @@
   text-align: left;
   color: var(--text-secondary);
   cursor: pointer;
-  animation: shell-chip-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
-  transition: border-color 0.16s ease, color 0.16s ease, transform 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+  animation: shell-chip-in 0.24s var(--ease-out) both;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .room-card-header {
@@ -1692,9 +1689,8 @@
    grid-template transition on .rooms-table above. */
 .app-shell .room-stack,
 .app-shell .split-switcher {
-  transition:
-    opacity 0.24s ease,
-    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
 }
 
 @starting-style {
@@ -1740,8 +1736,8 @@
   backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-  animation: shell-chip-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
-  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  animation: shell-chip-in 0.24s var(--ease-out) both;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .split-switch-item:hover {
@@ -1868,7 +1864,7 @@
   font-size: 10px;
   font-weight: 720;
   cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .split-target-btn:hover {
@@ -1974,8 +1970,8 @@
   cursor: pointer;
   backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
-  animation: shell-chip-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
-  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+  animation: shell-chip-in 0.24s var(--ease-out) both;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .minimized-room:hover {
@@ -2086,7 +2082,7 @@
   background: color-mix(in srgb, var(--bg-secondary) 74%, transparent);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .agent-room-card:hover,
@@ -2208,7 +2204,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  animation: shell-dock-in 0.34s cubic-bezier(0.16, 1, 0.3, 1) 0.04s both;
+  animation: shell-dock-in 0.34s var(--ease-out) 0.04s both;
 }
 
 .app-shell .room-dock::-webkit-scrollbar {
@@ -2272,14 +2268,14 @@
   font-size: 13px;
   font-weight: 650;
   position: relative;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .ambient-switch-btn svg {
   width: 15px;
   height: 15px;
   flex-shrink: 0;
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), color 0.16s ease;
+  transition: transform var(--dur-base) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .ambient-switch-btn:hover {
@@ -2301,7 +2297,7 @@
 
 .app-shell .ambient-switch-btn.active svg {
   color: var(--accent);
-  animation: mode-icon-pop 0.44s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: mode-icon-pop 0.44s var(--ease-out);
 }
 
 .app-shell .room-dock-group {
@@ -2349,7 +2345,7 @@
   background: transparent;
   position: relative;
   cursor: pointer;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .svt-btn:hover {
@@ -2455,7 +2451,7 @@
 
 .app-shell ::view-transition-group(*) {
   animation-duration: 0.44s;
-  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-timing-function: var(--ease-out);
 }
 
 /* Default crossfade for morphing elements (room panels changing layout). Keep it
@@ -2477,14 +2473,14 @@
 .app-shell ::view-transition-new(spacron-command-palette),
 .app-shell ::view-transition-new(spacron-quick-capture-card),
 .app-shell ::view-transition-new(spacron-workspace-modal) {
-  animation: modal-pop-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: modal-pop-in 0.3s var(--ease-out) both;
 }
 .app-shell ::view-transition-old(spacron-settings-modal),
 .app-shell ::view-transition-old(spacron-env-modal),
 .app-shell ::view-transition-old(spacron-command-palette),
 .app-shell ::view-transition-old(spacron-quick-capture-card),
 .app-shell ::view-transition-old(spacron-workspace-modal) {
-  animation: modal-pop-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
+  animation: modal-pop-out 0.2s var(--ease-in) both;
 }
 
 /* Persistent chrome doesn't change between modes — skip the crossfade so it
@@ -2515,12 +2511,12 @@
    card for the duration of the transition — worth doing, but it must not
    collide with another named element or the whole transition aborts. */
 .app-shell ::view-transition-old(spacron-stage) {
-  animation: stage-shrink-out 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: stage-shrink-out 0.38s var(--ease-out) both;
   transform-origin: 100% 50%;
 }
 
 .app-shell ::view-transition-new(spacron-stage) {
-  animation: stage-expand-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: stage-expand-in 0.42s var(--ease-out) both;
   transform-origin: 100% 50%;
 }
 
@@ -2553,11 +2549,11 @@
    The existing @starting-style on .room-stack handles the sidebar entrance. */
 
 .app-shell ::view-transition-old(root) {
-  animation: spacron-view-old 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: spacron-view-old 0.34s var(--ease-out) both;
 }
 
 .app-shell ::view-transition-new(root) {
-  animation: spacron-view-new 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: spacron-view-new 0.42s var(--ease-out) both;
 }
 
 @keyframes panel-fade-out {
@@ -2679,7 +2675,7 @@
   width: 100%;
   min-height: 54px;
   padding: 8px 10px 8px 12px;
-  animation: shell-composer-in 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: shell-composer-in 0.16s var(--ease-out) both;
 }
 
 .app-shell .composer-strip .spawn-toggle,
@@ -2967,7 +2963,7 @@
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  transition: color 0.15s ease, background 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm, 4px);

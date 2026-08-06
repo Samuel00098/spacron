@@ -53,7 +53,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .preview-panel .preview-tab:hover {
@@ -104,7 +104,7 @@
   background: transparent;
   color: var(--text-secondary);
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .preview-panel .preview-tab-add:hover {
@@ -147,7 +147,7 @@
   height: 28px;
   border-radius: 6px;
   color: var(--text-secondary);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -187,7 +187,7 @@
   height: 30px;
   padding: 0 4px 0 12px;
   gap: 6px;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out);
   overflow: hidden;
 }
 
@@ -232,7 +232,7 @@
   border-radius: 5px;
   color: var(--text-muted);
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -286,7 +286,7 @@
   text-align: center;
   outline: none;
   font-family: inherit;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out);
   appearance: textfield;
   -moz-appearance: textfield;
 }
@@ -316,7 +316,7 @@
   background: var(--accent);
   color: var(--button-text, #fff);
   border: 1px solid transparent;
-  transition: background 0.15s, transform 0.1s;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -448,7 +448,7 @@
   cursor: pointer;
   font-size: 11.5px;
   font-weight: 600;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .preview-panel .inspect-add-btn:hover {
@@ -669,7 +669,7 @@
   font-size: 13px;
   border: none;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -750,7 +750,7 @@
   font-size: 10.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--dur-fast) var(--ease-out);
   white-space: nowrap;
   font-family: inherit;
 }
@@ -1252,7 +1252,9 @@
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
   white-space: nowrap;
 }
 .preview-panel .terminal-toggle-btn:hover {

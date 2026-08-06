@@ -68,7 +68,7 @@
 .markdown-container .markdown-body a {
   color: var(--accent-hover);
   text-decoration: none;
-  transition: color 0.15s;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .markdown-container .markdown-body a:hover {

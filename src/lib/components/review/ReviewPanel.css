@@ -105,7 +105,7 @@
   font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .review-panel .toolbar-btn:hover:not(:disabled) {
@@ -250,7 +250,7 @@
   font-size: 11.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .review-panel .rp-file-row:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -278,7 +278,7 @@
   font-size: 10px;
 }
 
-.review-panel .rp-row-actions { opacity: 0; transition: opacity 0.12s; }
+.review-panel .rp-row-actions { opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
 .review-panel .rp-file-row:hover .rp-row-actions,
 .review-panel .rp-file-row.selected .rp-row-actions { opacity: 1; }
 
@@ -373,7 +373,7 @@
   overflow: visible;
   display: flex;
   flex-direction: column;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .review-panel .file-card:hover {
@@ -397,7 +397,7 @@
   gap: 8px;
   border-radius: 6px;
   border-bottom: 1px solid transparent;
-  transition: border-radius 0.15s, border-color 0.15s;
+  transition: border-radius var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .review-panel .file-card.expanded .file-card-header {
@@ -407,7 +407,7 @@
 
 .review-panel .chevron {
   color: var(--text-muted);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -443,7 +443,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -745,7 +745,9 @@
   padding: 3px 10px;
   border-radius: 3px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
   height: 22px;
   display: inline-flex;
   align-items: center;
@@ -836,7 +838,7 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 11px;
-  transition: background 0.15s;
+  transition: background var(--dur-fast) var(--ease-out);
   margin-top: 4px;
 }
 

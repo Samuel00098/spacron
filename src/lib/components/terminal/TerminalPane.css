@@ -13,7 +13,7 @@
   box-shadow:
     inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07)),
     var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65));
-  transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s, filter 0.15s;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane.active {
@@ -59,7 +59,7 @@
   -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
   flex-shrink: 0;
   user-select: none;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane:not(.active) .pane-titlebar {
@@ -96,7 +96,7 @@
   border: none;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, background 0.12s, color 0.12s;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -121,7 +121,7 @@
   border: none;
   cursor: pointer;
   opacity: 0.35;
-  transition: opacity 0.15s, background 0.12s, color 0.12s;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -153,7 +153,7 @@
   color: var(--text-muted);
   overflow: hidden;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane .pane-agent-badge {
@@ -215,7 +215,7 @@
   background: var(--text-muted);
   opacity: 0.3;
   flex-shrink: 0;
-  transition: background 0.2s, opacity 0.2s;
+  transition: background var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out);
 }
 
 .terminal-pane .pane-status-dot.running {
@@ -230,7 +230,7 @@
   min-height: 0;
   padding: 6px 6px 8px 6px;
   background: transparent;
-  transition: opacity 0.15s, filter 0.15s, background 0.15s;
+  transition: opacity var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
   position: relative;
 }
 
@@ -342,7 +342,7 @@
 .terminal-pane .pane-resize-handle {
   position: absolute;
   z-index: 15;
-  transition: background 0.15s;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane .pane-resize-left,
@@ -423,7 +423,7 @@
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane .role-chip:hover {
@@ -457,7 +457,7 @@
   color: var(--text-primary);
   font-size: 11px;
   outline: none;
-  transition: border-color 0.12s;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane .role-custom-input:focus {
@@ -473,7 +473,7 @@
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.12s;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .terminal-pane .role-custom-apply:hover {
@@ -484,7 +484,7 @@
 .terminal-pane.agent-pane {
   border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transition: border-color 0.25s, box-shadow 0.25s;
+  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
 }
 
 /* Custom borders based on agent preset command */

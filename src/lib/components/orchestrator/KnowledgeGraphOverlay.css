@@ -112,7 +112,7 @@
   fill: var(--accent);
   stroke: var(--bg-secondary);
   stroke-width: 2;
-  transition: fill 0.12s ease;
+  transition: fill var(--dur-fast) var(--ease-out);
 }
 .kg-node:hover .kg-node-dot { fill: var(--accent-hover, var(--accent)); }
 .kg-node.selected .kg-node-dot {

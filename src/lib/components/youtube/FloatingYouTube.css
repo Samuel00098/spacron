@@ -36,14 +36,13 @@
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)), /* bright top rim catch */
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18), /* dark bottom rim shade */
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
-  transition: 
-    width 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-    height 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+  transition: width var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    border-color var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out),
     /* Ease the whole-panel fade driven by the transparency slider. */
-    opacity 140ms ease;
+    opacity var(--dur-fast) var(--ease-out);
 }
 
 .floating-youtube.fy-interacting {
@@ -106,9 +105,9 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1), 
-              color 0.2s cubic-bezier(0.16, 1, 0.3, 1), 
-              transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color var(--dur-base) var(--ease-out), 
+              color var(--dur-base) var(--ease-out), 
+              transform var(--dur-base) var(--ease-out);
 }
 
 .floating-youtube .fy-minimize:hover {

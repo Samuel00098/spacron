@@ -33,7 +33,7 @@
   cursor: pointer;
   font-size: 11.5px;
   position: relative;
-  transition: background-color 0.2s, color 0.2s;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
   min-width: 100px;
   max-width: 180px;
   scroll-snap-align: start;
@@ -97,7 +97,7 @@
   border-radius: 4px;
   color: var(--text-muted);
   opacity: 0;
-  transition: opacity 0.15s ease, background-color 0.15s, color 0.15s;
+  transition: opacity var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .editor-tabs .editor-tab:hover .tab-close-btn,

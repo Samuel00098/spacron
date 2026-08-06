@@ -29,7 +29,7 @@
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  transition: transform 0.15s;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .file-node .chevron.rotated {

@@ -18,6 +18,36 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', Consolas, monospace;
 }
 
+/* App-wide motion tokens. Every transition references these instead of a
+   hardcoded duration/curve, so adjacent elements resolve at the same rate —
+   the difference between "animated" and "premium". Five duration tiers are
+   deliberately all we have: if a value doesn't fit one, the interaction
+   probably wants a different tier rather than a new number.
+
+   --dur-instant  press/active feedback, checkbox ticks
+   --dur-fast     hover, focus ring, icon tint — the default for pointer states
+   --dur-base     dropdowns, toggles, inline expand/collapse
+   --dur-slow     modals, panels, overlays entering or leaving
+   --dur-slower   full-surface moves (room retile, view transitions)
+
+   Curves: --ease-out is the house curve (decelerating, no overshoot) and suits
+   almost everything. --ease-standard is symmetric, for things that move both
+   ways along the same path. --ease-spring adds a slight overshoot, reserved for
+   elements that should feel physical (cards lifting, toggles snapping).
+   --ease-in is for exits only — it accelerates away. */
+:root {
+  --dur-instant: 0.1s;
+  --dur-fast:    0.15s;
+  --dur-base:    0.22s;
+  --dur-slow:    0.3s;
+  --dur-slower:  0.42s;
+
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring:   cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-in:       cubic-bezier(0.4, 0, 1, 1);
+}
+
 /* Belt-and-suspenders: pin the app root to the UI face so every panel inherits
    Inter even where a component forgot to. Code/terminal re-assert mono below. */
 #app {
@@ -326,16 +356,15 @@ html.bg-palette-light {
 
 .theme-transitioning,
 .theme-transitioning * {
-  transition:
-    background-color 220ms cubic-bezier(0.4, 0, 0.2, 1),
-    background       220ms cubic-bezier(0.4, 0, 0.2, 1),
-    border-color     220ms cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow       220ms cubic-bezier(0.4, 0, 0.2, 1),
-    color            180ms cubic-bezier(0.4, 0, 0.2, 1),
-    stroke           180ms cubic-bezier(0.4, 0, 0.2, 1),
-    fill             180ms cubic-bezier(0.4, 0, 0.2, 1),
-    outline-color    180ms cubic-bezier(0.4, 0, 0.2, 1),
-    caret-color      180ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: background-color var(--dur-base) var(--ease-standard),
+    background       var(--dur-base) var(--ease-standard),
+    border-color     var(--dur-base) var(--ease-standard),
+    box-shadow       var(--dur-base) var(--ease-standard),
+    color            var(--dur-base) var(--ease-standard),
+    stroke           var(--dur-base) var(--ease-standard),
+    fill             var(--dur-base) var(--ease-standard),
+    outline-color    var(--dur-base) var(--ease-standard),
+    caret-color      var(--dur-base) var(--ease-standard) !important;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -365,8 +394,8 @@ body::before {
   /* Hidden by default; shown at full opacity when the class is active */
   opacity: 0;
   filter: blur(var(--user-bg-blur, 0px));
-  transition: opacity 280ms cubic-bezier(0.4, 0, 0.2, 1),
-              filter  280ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity var(--dur-slow) var(--ease-standard),
+              filter  var(--dur-slow) var(--ease-standard);
   pointer-events: none;
   /* Intentionally NOT promoted to its own GPU layer (no `will-change: transform`
      / `translate3d` / `backface-visibility`). On WebKitGTK a separately
@@ -473,7 +502,7 @@ body::after {
     radial-gradient(110% 130% at 50% 118%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, transparent 50%, rgba(255, 255, 255, 0.01) 100%);
   pointer-events: none;
-  transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--dur-slow) var(--ease-standard);
 }
 
 /* In light mode the frosted overlay (body::after) would use a near-white
@@ -607,7 +636,7 @@ input:focus {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 99px;
-  transition: background 0.15s;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover, rgba(255, 255, 255, 0.2));
@@ -731,10 +760,10 @@ input:focus {
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18), /* dark bottom rim shade */
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   overflow: hidden;
-  transition: border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1), 
-              box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-              background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color var(--dur-slow) var(--ease-out), 
+              box-shadow var(--dur-slow) var(--ease-out),
+              background-color var(--dur-slow) var(--ease-out),
+              transform var(--dur-slow) var(--ease-out);
 }
 
 .bento-card:hover {
@@ -839,8 +868,8 @@ input:focus {
   pointer-events: none;
   opacity: 0;
   transform: translateY(4px) scale(0.96);
-  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1),
-              transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity var(--dur-fast) var(--ease-standard),
+              transform var(--dur-fast) var(--ease-standard);
   white-space: nowrap;
 }
 
@@ -877,30 +906,53 @@ textarea,
 .minimized-room,
 .room-action,
 .svt-btn {
-  transition: 
-    background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    background 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color var(--dur-slow) var(--ease-out),
+    background var(--dur-slow) var(--ease-out),
+    border-color var(--dur-slow) var(--ease-out),
+    color var(--dur-slow) var(--ease-out),
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out);
 }
 
+/* Reduced motion. This used to be a hand-maintained allowlist of a dozen
+   selectors, which meant every new component silently opted itself back in.
+   It is now a blanket rule — anything that moves, stops.
+
+   Near-zero durations rather than `transition: none` / `animation: none`: the
+   transition still "completes", so a `transitionend`/`animationend` listener
+   added later cannot hang waiting for an event that never fires. This matches
+   the idiom already used in AppShell.css and WelcomeScreen.css. */
 @media (prefers-reduced-motion: reduce) {
-  button,
-  a,
-  input,
-  select,
-  textarea,
-  .bento-card,
-  .file-node,
-  .room-card,
-  .ambient-switch-btn,
-  .minimized-room,
-  .room-action,
-  .svt-btn {
-    transition: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Exception: looping indicators that carry STATE rather than decoration.
+     Stopping these does real harm — a frozen spinner reads as "hung" and a
+     still voice orb reads as "mic is off" when it is in fact live. They keep
+     animating, just calmer. Decorative loops (floating nodes, ambient glow,
+     agent-pane pulses) are correctly killed by the rule above. */
+  [class*='spin'],
+  [class*='loading'],
+  [class*='shimmer'],
+  [class*='skeleton'],
+  .orc-typing span,
+  .orc-typing-sm span,
+  .rs-dot.rs-reconnecting,
+  .fc-status-dot,
+  .orb,
+  .voice-ring,
+  .voice-eq-bar,
+  .overlay .ring,
+  .overlay .bar {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
@@ -978,7 +1030,7 @@ a:active,
 .settings-toggle:active {
   transform: scale(0.96) translateY(0.5px) !important;
   filter: brightness(0.94) !important;
-  transition: transform 0.08s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: transform var(--dur-instant) var(--ease-out) !important;
 }
 
 /* 2. Unified spring easing transition parameters for interactive transforms */
@@ -996,14 +1048,13 @@ a,
 .yt-go,
 .yt-icon-btn,
 .settings-toggle {
-  transition: 
-    background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-    background 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-    color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.32s cubic-bezier(0.34, 1.4, 0.64, 1),
-    box-shadow 0.32s cubic-bezier(0.34, 1.4, 0.64, 1);
+  transition: background-color var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-slow) var(--ease-spring),
+    box-shadow var(--dur-slow) var(--ease-spring);
 }
 
 /* 3. Icon (SVG) Micro-Animations inside hovered parent elements */
@@ -1018,7 +1069,7 @@ a:hover svg,
 .yt-mode-btn:hover svg,
 .yt-icon-btn:hover svg {
   transform: scale(1.08);
-  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform var(--dur-slow) var(--ease-spring);
 }
 
 /* Sync/cog/settings icons rotate smoothly on hover */
@@ -1069,7 +1120,7 @@ input[type='range'] {
   border-radius: 99px !important;
   outline: none !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
-  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: background-color var(--dur-base) var(--ease-out) !important;
 }
 
 input[type='range']:hover {
@@ -1087,7 +1138,7 @@ input[type='range']::-webkit-slider-thumb {
   border: 1px solid rgba(0, 0, 0, 0.25) !important;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
   cursor: pointer !important;
-  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), background-color 0.2s ease !important;
+  transition: transform var(--dur-base) var(--ease-spring), background-color var(--dur-base) var(--ease-out) !important;
 }
 
 input[type='range']::-webkit-slider-thumb:hover {
@@ -1110,9 +1161,9 @@ input[type='range']::-webkit-slider-thumb:active {
 
 /* 5. Smooth spring physics for all toggle switches */
 .settings-toggle {
-  transition: background-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1), border-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) !important;
+  transition: background-color var(--dur-slow) var(--ease-spring), border-color var(--dur-slow) var(--ease-spring) !important;
 }
 .settings-toggle-dot {
-  transition: transform 0.28s cubic-bezier(0.34, 1.3, 0.64, 1), background-color 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) !important;
+  transition: transform var(--dur-slow) var(--ease-spring), background-color var(--dur-slow) var(--ease-spring) !important;
 }
 

@@ -16,9 +16,8 @@
   pointer-events: none;
   user-select: none;
   contain: layout paint size;
-  transition:
-    opacity 280ms cubic-bezier(0.4, 0, 0.2, 1),
-    filter 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity var(--dur-slow) var(--ease-standard),
+    filter var(--dur-slow) var(--ease-standard);
   will-change: opacity, filter;
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;

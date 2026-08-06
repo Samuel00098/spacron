@@ -67,7 +67,7 @@
   border-radius: 8px;
   background: var(--bg-secondary);
   min-width: 0;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 
 .fleet-card:hover {
@@ -309,7 +309,7 @@
 
 .fc-caret {
   flex-shrink: 0;
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
   color: var(--text-muted);
 }
 
