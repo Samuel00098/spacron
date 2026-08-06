@@ -160,6 +160,19 @@ describe('buildStandingBriefBody', () => {
     expect(differing).toHaveLength(2);
   });
 
+  it('tells the agent to do its own task rather than delegate it', () => {
+    const body = buildStandingBriefBody();
+    expect(body).toContain('A task given to you is yours to do');
+    // The escape hatches: an explicit ask, an orchestrator role, or a question.
+    expect(body).toContain('ask before spawning anything');
+    expect(body).toContain('orchestrator/coordinator role');
+    // Spawning a worker in the main checkout stays allowed when asked for.
+    expect(body).toContain('including one in the main repo');
+    // ...but the tool rules for doing it are unchanged.
+    expect(body).toContain('delegate_task');
+    expect(body).toContain('never for work that writes code');
+  });
+
   it('points rule #5 at the shared memory dir it is given', () => {
     const body = buildStandingBriefBody({ sharedMemoryDir: '/main/.spacron/memory/' });
     expect(body).toContain('/main/.spacron/memory/auth-flow.md');
