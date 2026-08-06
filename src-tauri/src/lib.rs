@@ -277,6 +277,7 @@ pub fn run() {
             commands::workspace::workspace_git_remove_worktree,
             commands::workspace::workspace_git_list_worktrees,
             commands::workspace::workspace_git_prune_worktrees,
+            commands::workspace::workspace_git_sweep_agent_branches,
             commands::workspace::workspace_git_merge_worktree,
             commands::workspace::workspace_git_worktree_has_changes,
             commands::workspace::workspace_git_worktree_status,

@@ -385,6 +385,84 @@ export async function listWorktreesOnDisk(projectId: string): Promise<string[]> 
   }
 }
 
+/** An agent branch the sweep kept, and why it is worth a second look. */
+export interface RetainedAgentBranch {
+  branch: string;
+  /** Commits this branch has that the base does not. */
+  uniqueCommits: number;
+  /** ISO date of the tip commit, or '' when detail was skipped. */
+  lastCommit: string;
+  /**
+   * `git cherry` says every unique commit is already in the base by patch id —
+   * i.e. the work landed through staging, which applies patches rather than
+   * merging, so the branch never becomes an ancestor. Strong evidence it is
+   * droppable, but not proof; the sweep reports it and deletes nothing.
+   */
+  patchEquivalent: boolean;
+}
+
+export interface AgentBranchSweep {
+  /** Branches deleted, or — with `dryRun` — the ones that would be. */
+  deleted: string[];
+  /** Branches kept because they hold unique commits. */
+  retained: RetainedAgentBranch[];
+  /** Eligible branches git refused to delete. */
+  failed: string[];
+  /** Branch containment was measured against. */
+  base: string;
+}
+
+const EMPTY_SWEEP: AgentBranchSweep = { deleted: [], retained: [], failed: [], base: '' };
+
+/**
+ * Delete agent branches that hold nothing the base branch doesn't already have.
+ *
+ * Removing a worktree keeps its branch on purpose — until the user commits, the
+ * branch is the only durable copy of the agent's work. Nothing came back for
+ * them afterwards, so they piled up: an agent that never commits leaves a branch
+ * pointing at the fork commit forever. Those are what this clears, and clearing
+ * them cannot lose information: a tip already reachable from the base contains
+ * nothing the base is missing.
+ *
+ * `skip` is every branch a live session or task still claims — the caller knows
+ * that, the backend doesn't. Best-effort by design: a remote backend without the
+ * command, or any git failure, yields an empty sweep rather than throwing into a
+ * background timer.
+ */
+export async function sweepAgentBranches(
+  projectId: string,
+  opts?: { skip?: string[]; dryRun?: boolean }
+): Promise<AgentBranchSweep> {
+  try {
+    const raw = await backendInvoke<{
+      deleted: string[];
+      retained: { branch: string; unique_commits: number; last_commit: string; patch_equivalent: boolean }[];
+      failed: string[];
+      base: string;
+    }>('workspace_git_sweep_agent_branches', {
+      projectId,
+      skip: opts?.skip ?? [],
+      dryRun: opts?.dryRun ?? false,
+    });
+    // An unregistered command on a remote backend resolves to undefined rather
+    // than rejecting — same guard as `listWorktreesOnDisk`.
+    if (!raw || !Array.isArray(raw.deleted)) return EMPTY_SWEEP;
+    return {
+      deleted: raw.deleted,
+      retained: (raw.retained ?? []).map((r) => ({
+        branch: r.branch,
+        uniqueCommits: r.unique_commits,
+        lastCommit: r.last_commit,
+        patchEquivalent: r.patch_equivalent,
+      })),
+      failed: raw.failed ?? [],
+      base: raw.base ?? '',
+    };
+  } catch {
+    return EMPTY_SWEEP;
+  }
+}
+
 /** Run `git worktree prune` to clean stale metadata. */
 export async function pruneWorktrees(projectId: string): Promise<void> {
   try {

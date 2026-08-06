@@ -1370,6 +1370,343 @@ pub fn workspace_git_prune_worktrees(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Agent branch sweep
+//
+// Removing a worktree deliberately KEEPS its branch: until the user commits in
+// Source Control the branch is the only durable copy of the agent's work (see
+// `reclaimWorktree`). Nothing ever came back for them afterwards, so they
+// accumulated — 157 in this repo's own checkout, 156 of which held no commits at
+// all, because an agent that never commits leaves a branch pointing at the fork
+// commit.
+//
+// That is exactly the class this sweeps: a branch whose tip is already reachable
+// from a base branch contains nothing the base does not, so deleting it cannot
+// lose information. Branches with unique commits are reported, never deleted —
+// deciding those is the user's call.
+// ---------------------------------------------------------------------------
+
+/// Prefix every agent branch carries. Mirrors `deriveTaskBranch` in
+/// `worktree-manager.ts` (`spacron/<slug>-<id>`). Confining the sweep to this
+/// prefix is the first guard keeping it off the user's own branches.
+const AGENT_BRANCH_PREFIX: &str = "spacron/";
+
+/// Above this many branches holding commits, the per-branch detail reads are
+/// skipped. `git cherry` is a patch-id computation per commit, and a repo in
+/// that state wants the summary count, not a hundred round trips.
+const RETAINED_DETAIL_LIMIT: usize = 60;
+
+/// An agent branch the sweep chose to keep, with enough detail for the user to
+/// decide what to do with it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetainedAgentBranch {
+    pub branch: String,
+    /// Commits on this branch that the base does not have.
+    pub unique_commits: u32,
+    /// Committer date of the tip, ISO-8601, for "last touched" display.
+    pub last_commit: String,
+    /// True when `git cherry` reports every unique commit as already applied to
+    /// the base by patch id — i.e. the work landed through staging (which
+    /// applies patches rather than merging, so the branch never becomes an
+    /// ancestor). Strong evidence it is safe to drop, but NOT proof: a patch
+    /// applied with `--3way` and then edited no longer matches. Reported for
+    /// the user to act on; never acted on automatically.
+    pub patch_equivalent: bool,
+}
+
+/// Result of one sweep pass.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentBranchSweep {
+    /// Branches deleted (or, in a dry run, that would be).
+    pub deleted: Vec<String>,
+    /// Branches kept because they hold commits the base does not have.
+    pub retained: Vec<RetainedAgentBranch>,
+    /// Branches that were eligible but that git refused to delete.
+    pub failed: Vec<String>,
+    /// Branch the containment test was run against.
+    pub base: String,
+}
+
+/// Run a git read and return trimmed stdout, or None when the command failed.
+fn git_read(root: &std::path::Path, args: &[&str]) -> Option<String> {
+    let out = git_base()
+        .args(args)
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Non-empty trimmed lines of a git read.
+fn git_read_lines(root: &std::path::Path, args: &[&str]) -> Vec<String> {
+    git_read(root, args)
+        .map(|s| {
+            s.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Branch names out of `git worktree list --porcelain`, which reports them as
+/// `branch refs/heads/<name>` lines (and omits the line entirely for a detached
+/// worktree).
+fn parse_checked_out_branches(porcelain: &str) -> std::collections::HashSet<String> {
+    porcelain
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("branch refs/heads/"))
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .collect()
+}
+
+/// Branches currently checked out in ANY worktree, including the main one.
+/// Deleting one of these is refused by git anyway; excluding them up front keeps
+/// a live agent's branch out of the failure list entirely.
+fn checked_out_branches(root: &std::path::Path) -> std::collections::HashSet<String> {
+    parse_checked_out_branches(
+        &git_read(root, &["worktree", "list", "--porcelain"]).unwrap_or_default(),
+    )
+}
+
+/// Agent branches whose tip is reachable from `base` — git's own answer, via
+/// `--merged`, in one call rather than a `merge-base` per branch.
+fn agent_branches_merged_into(root: &std::path::Path, base: &str) -> Vec<String> {
+    git_read_lines(
+        root,
+        &[
+            "branch",
+            "--merged",
+            base,
+            "--format=%(refname:short)",
+            "--list",
+            "spacron/*",
+        ],
+    )
+}
+
+/// Delete branches in chunks, returning the ones git confirms it deleted.
+/// `force` selects `-D` over `-d`; see the two-phase note in the sweep.
+fn delete_branches(root: &std::path::Path, branches: &[String], force: bool) -> Vec<String> {
+    let mut deleted = Vec::new();
+    // Chunked so a repo with hundreds of branches can't overflow the command
+    // line length limit.
+    for chunk in branches.chunks(50) {
+        let mut args: Vec<&str> = vec!["branch", if force { "-D" } else { "-d" }];
+        args.extend(chunk.iter().map(String::as_str));
+        let Ok(out) = git_base()
+            .args(&args)
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+        else {
+            continue;
+        };
+        // Parsed from stdout rather than inferred from the exit code: a chunk
+        // where one branch is refused still deletes the rest, and reports a
+        // non-zero status for the whole call.
+        deleted.extend(parse_deleted_branches(&String::from_utf8_lossy(&out.stdout)));
+    }
+    deleted
+}
+
+/// Branch names out of `git branch -d/-D` stdout, whose success line reads
+/// `Deleted branch <name> (was <sha>).` — one per branch deleted.
+fn parse_deleted_branches(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Deleted branch "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Delete agent branches that hold nothing the base branch does not already
+/// have, and report the ones that do.
+///
+/// Three guards stand between this and a user's branch:
+///
+/// 1. **Prefix** — only `spacron/*` is even considered.
+/// 2. **In use** — anything checked out in a worktree, or named in `skip` (the
+///    frontend passes every branch a live session or task still claims), is left
+///    alone.
+/// 3. **Containment** — deletion requires git to have listed the branch under
+///    `--merged`, which is precisely "its tip is reachable from the base".
+///
+/// Containment is tested against the checked-out branch first and, when that is
+/// not the repo's main branch, against `main`/`master` as well — otherwise the
+/// sweep would silently stop working the moment the user starts a feature
+/// branch. Deletion is then two-phase: `-d` for everything (git's own safety
+/// check, which agrees with our set whenever HEAD is the base), then `-D` for
+/// the remainder, which is only ever the branches proven contained in the other
+/// base — where `-d` refuses purely because it measures against HEAD.
+///
+/// `dry_run` fills `deleted` with what would go and touches nothing.
+#[tauri::command(async)]
+pub fn workspace_git_sweep_agent_branches(
+    project_id: String,
+    skip: Option<Vec<String>>,
+    dry_run: Option<bool>,
+    state: State<AppState>,
+) -> Result<AgentBranchSweep, String> {
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    let _repo = lock_repo_write(root_path);
+    sweep_agent_branches_at(root_path, &skip.unwrap_or_default(), dry_run.unwrap_or(false))
+}
+
+/// The sweep itself, against a repository path. Split from the command so it can
+/// be exercised against a real temp repo without an `AppState`; the caller holds
+/// the repo write lock.
+fn sweep_agent_branches_at(
+    root_path: &std::path::Path,
+    skip: &[String],
+    dry_run: bool,
+) -> Result<AgentBranchSweep, String> {
+    // The checked-out branch is the primary base: worktrees fork from HEAD, so
+    // it is what agent branches were cut from. A detached HEAD leaves it unset
+    // and the sweep falls back to main/master alone.
+    let head = git_read(root_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .filter(|h| !h.is_empty());
+
+    let mut bases: Vec<String> = Vec::new();
+    if let Some(h) = &head {
+        bases.push(h.clone());
+    }
+    for candidate in ["main", "master"] {
+        if bases.iter().any(|b| b == candidate) {
+            continue;
+        }
+        // `--verify` keeps a missing branch from being reported as an error.
+        if git_read(
+            root_path,
+            &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{candidate}")],
+        )
+        .is_some_and(|s| !s.is_empty())
+        {
+            bases.push(candidate.to_string());
+        }
+    }
+    if bases.is_empty() {
+        return Err("No branch to compare against — the repository has no commits yet.".to_string());
+    }
+    let primary = bases[0].clone();
+
+    let mut protected = checked_out_branches(root_path);
+    protected.extend(bases.iter().cloned());
+    protected.extend(
+        skip.iter()
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty()),
+    );
+
+    // Contained per base, kept separate so phase two knows which branches were
+    // proven safe by a base that is NOT HEAD.
+    let contained_primary: Vec<String> = agent_branches_merged_into(root_path, &primary)
+        .into_iter()
+        .filter(|b| b.starts_with(AGENT_BRANCH_PREFIX) && !protected.contains(b))
+        .collect();
+    let mut contained: std::collections::HashSet<String> =
+        contained_primary.iter().cloned().collect();
+    for base in bases.iter().skip(1) {
+        for b in agent_branches_merged_into(root_path, base) {
+            if b.starts_with(AGENT_BRANCH_PREFIX) && !protected.contains(&b) {
+                contained.insert(b);
+            }
+        }
+    }
+
+    let eligible: Vec<String> = {
+        let mut v: Vec<String> = contained.iter().cloned().collect();
+        v.sort();
+        v
+    };
+
+    let mut deleted: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    if dry_run {
+        deleted = eligible.clone();
+    } else if !eligible.is_empty() {
+        deleted = delete_branches(root_path, &eligible, false);
+        let remaining: Vec<String> = eligible
+            .iter()
+            .filter(|b| !deleted.contains(b))
+            .cloned()
+            .collect();
+        if !remaining.is_empty() {
+            // Safe: every one of these came out of a `--merged` listing, so git
+            // has already confirmed the base contains it. `-d` refused only
+            // because it measures reachability from HEAD.
+            deleted.extend(delete_branches(root_path, &remaining, true));
+        }
+        failed = eligible
+            .iter()
+            .filter(|b| !deleted.contains(b))
+            .cloned()
+            .collect();
+    }
+
+    // Everything else with the prefix holds commits the base does not.
+    let all_agent_branches = git_read_lines(
+        root_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/spacron/"],
+    );
+    let holding: Vec<String> = all_agent_branches
+        .into_iter()
+        .filter(|b| !contained.contains(b) && !protected.contains(b))
+        .collect();
+    let detail = holding.len() <= RETAINED_DETAIL_LIMIT;
+
+    let retained: Vec<RetainedAgentBranch> = holding
+        .into_iter()
+        .map(|branch| {
+            if !detail {
+                return RetainedAgentBranch {
+                    branch,
+                    unique_commits: 0,
+                    last_commit: String::new(),
+                    patch_equivalent: false,
+                };
+            }
+            let range = format!("{primary}..{branch}");
+            let unique_commits = git_read(root_path, &["rev-list", "--count", &range])
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            let last_commit =
+                git_read(root_path, &["log", "-1", "--format=%cI", &branch]).unwrap_or_default();
+            // Every unique commit marked `-` means git found an equivalent patch
+            // already in the base.
+            let cherry = git_read_lines(root_path, &["cherry", &primary, &branch]);
+            let patch_equivalent =
+                !cherry.is_empty() && cherry.iter().all(|l| l.starts_with('-'));
+            RetainedAgentBranch {
+                branch,
+                unique_commits,
+                last_commit,
+                patch_equivalent,
+            }
+        })
+        .collect();
+
+    Ok(AgentBranchSweep {
+        deleted,
+        retained,
+        failed,
+        base: primary,
+    })
+}
+
 /// Merge a worktree branch into the main checkout, then optionally clean up.
 /// Runs `git merge` from the main project root (not the worktree), returns
 /// success or a conflict/error message.
@@ -3818,6 +4155,163 @@ mod tests {
         // Anything non-hex would otherwise reach a git argv.
         assert!(resolve_diff_base(repo.path(), Some("--upload-pack=evil".to_string())).is_err());
         assert!(resolve_diff_base(repo.path(), Some("HEAD".to_string())).is_err());
+    }
+
+    // --- agent branch sweep ---
+
+    #[test]
+    fn reads_branch_names_out_of_git_porcelain_and_delete_output() {
+        let porcelain = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                         worktree /repo/.spacron/worktrees/x\nHEAD def\nbranch refs/heads/spacron/ada-1\n\n\
+                         worktree /repo/.spacron/worktrees/y\nHEAD 999\ndetached\n";
+        let out = parse_checked_out_branches(porcelain);
+        assert!(out.contains("main"));
+        assert!(out.contains("spacron/ada-1"));
+        // A detached worktree contributes no branch line at all.
+        assert_eq!(out.len(), 2);
+
+        let stdout = "Deleted branch spacron/ada-1 (was 1a2b3c4).\n\
+                      Deleted branch spacron/bane-2 (was 5d6e7f8).\n";
+        assert_eq!(
+            parse_deleted_branches(stdout),
+            vec!["spacron/ada-1".to_string(), "spacron/bane-2".to_string()]
+        );
+        assert!(parse_deleted_branches("").is_empty());
+    }
+
+    /// Cut a branch at the current HEAD without checking it out — exactly what a
+    /// worktree spawn leaves behind when its agent never commits.
+    fn branch_at_head(repo: &TestRepo, name: &str) {
+        let status = git_base()
+            .args(["branch", name])
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn sweeps_agent_branches_that_hold_nothing_the_base_lacks() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+
+        // The dominant real-world case: agents that never committed, so their
+        // branch is just a pointer at the fork commit.
+        branch_at_head(&repo, "spacron/ada-1");
+        branch_at_head(&repo, "spacron/bane-2");
+        // The user's own branch, and an agent branch still in use.
+        branch_at_head(&repo, "my-feature");
+        branch_at_head(&repo, "spacron/live-9");
+
+        let skip = vec!["spacron/live-9".to_string()];
+        let sweep = sweep_agent_branches_at(repo.path(), &skip, false).unwrap();
+
+        let mut deleted = sweep.deleted.clone();
+        deleted.sort();
+        assert_eq!(deleted, vec!["spacron/ada-1", "spacron/bane-2"]);
+        assert!(sweep.failed.is_empty());
+
+        let remaining = git_read(repo.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        // Prefix guard and skip list both held.
+        assert!(remaining.contains("my-feature"));
+        assert!(remaining.contains("spacron/live-9"));
+        assert!(!remaining.contains("spacron/ada-1"));
+    }
+
+    #[test]
+    fn keeps_an_agent_branch_that_holds_its_own_commits() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+
+        // An agent that committed on its branch and was never merged back.
+        let run = |args: &[&str]| {
+            let status = git_base().args(args).current_dir(repo.path()).status().unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        run(&["checkout", "-q", "-b", "spacron/niobe-4"]);
+        repo.write("feature.txt", "agent work\n");
+        repo.commit_all("agent commit");
+        run(&["checkout", "-q", "-"]);
+
+        let sweep = sweep_agent_branches_at(repo.path(), &[], false).unwrap();
+
+        assert!(sweep.deleted.is_empty());
+        assert_eq!(sweep.retained.len(), 1);
+        let kept = &sweep.retained[0];
+        assert_eq!(kept.branch, "spacron/niobe-4");
+        assert_eq!(kept.unique_commits, 1);
+        assert!(!kept.last_commit.is_empty());
+        // Nothing equivalent has been applied to the base, so this is real work.
+        assert!(!kept.patch_equivalent);
+
+        let remaining = git_read(repo.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        assert!(remaining.contains("spacron/niobe-4"));
+    }
+
+    #[test]
+    fn a_dry_run_reports_without_deleting() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        branch_at_head(&repo, "spacron/ada-1");
+
+        let sweep = sweep_agent_branches_at(repo.path(), &[], true).unwrap();
+
+        assert_eq!(sweep.deleted, vec!["spacron/ada-1".to_string()]);
+        let remaining = git_read(repo.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        assert!(remaining.contains("spacron/ada-1"), "dry run must not delete");
+    }
+
+    #[test]
+    fn sweeps_from_a_feature_branch_by_falling_back_to_main() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+        let run = |args: &[&str]| {
+            let status = git_base().args(args).current_dir(repo.path()).status().unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        // Normalise the default branch name, then move off it — `git branch -d`
+        // measures against HEAD, so without the main/master fallback the sweep
+        // would silently stop working here.
+        run(&["branch", "-M", "main"]);
+        branch_at_head(&repo, "spacron/ada-1");
+        run(&["checkout", "-q", "-b", "my-feature"]);
+        repo.write("b.txt", "feature\n");
+        repo.commit_all("feature commit");
+
+        let sweep = sweep_agent_branches_at(repo.path(), &[], false).unwrap();
+
+        assert_eq!(sweep.deleted, vec!["spacron/ada-1".to_string()]);
+        assert!(sweep.failed.is_empty());
+    }
+
+    #[test]
+    fn never_deletes_a_branch_checked_out_in_a_worktree() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        repo.commit_all("initial");
+
+        // A live agent's checkout: contained in the base (no commits yet), but
+        // occupied — deleting it would break the running agent.
+        let wt = repo.path().join(".spacron").join("worktrees").join("live");
+        let status = git_base()
+            .args(["worktree", "add", "-b", "spacron/live-9"])
+            .arg(&wt)
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let sweep = sweep_agent_branches_at(repo.path(), &[], false).unwrap();
+
+        assert!(sweep.deleted.is_empty());
+        // Checked out, so it is neither deleted nor reported as work to review.
+        assert!(sweep.retained.iter().all(|r| r.branch != "spacron/live-9"));
+        let remaining = git_read(repo.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        assert!(remaining.contains("spacron/live-9"));
     }
 
     #[test]

@@ -75,7 +75,7 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import {
   initWorktreeReconciler,
   reconcileNow,
@@ -364,8 +364,11 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
   if (needsFlush) await flush(project.id);
 
   // Fire-and-forget: a best-effort sweep must never reject into the void and
-  // take down project load with an unhandled rejection.
-  void sweepOrphanWorktrees(project.id).catch(() => {});
+  // take down project load with an unhandled rejection. Branches after
+  // checkouts — removing a worktree is what frees its branch for deletion.
+  void sweepOrphanWorktrees(project.id)
+    .then(() => sweepAgentBranchesForProject(project.id))
+    .catch(() => {});
 }
 
 async function flush(projectId: string): Promise<void> {
@@ -1066,6 +1069,34 @@ export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
     console.info(`Swept ${removed} orphan worktree(s) for project ${projectId}`);
   }
   return removed;
+}
+
+/**
+ * Delete agent branches that hold nothing the base branch doesn't already have.
+ *
+ * The counterpart to `sweepOrphanWorktrees`: that reclaims checkouts, this
+ * reclaims the refs they leave behind. Every worktree removal outside the
+ * post-commit path keeps its branch on purpose (it is the only durable copy of
+ * unstaged work), and nothing ever came back for the ones that turned out to
+ * hold nothing — an agent that never commits leaves a branch pointing at its
+ * fork commit, which is an ancestor of the base by construction.
+ *
+ * Every branch a live session or task still claims is passed as `skip`, since
+ * only the frontend knows that. Branches with unique commits are returned, not
+ * deleted.
+ */
+export async function sweepAgentBranchesForProject(projectId: string): Promise<number> {
+  const inUse = trackedWorktrees()
+    .filter((w) => w.projectId === projectId)
+    .map((w) => w.worktree.branch)
+    .filter(Boolean);
+  const sweep = await sweepAgentBranches(projectId, { skip: inUse });
+  if (sweep.deleted.length > 0) {
+    console.info(
+      `Swept ${sweep.deleted.length} spent agent branch(es) for project ${projectId} (contained in ${sweep.base})`
+    );
+  }
+  return sweep.deleted.length;
 }
 
 /** Whether the agent that owns this task still has a live terminal pane. */
@@ -3025,11 +3056,14 @@ if (typeof window !== 'undefined') {
   });
 
   // Periodic orphan sweep + prune: catches worktrees orphaned mid-session (e.g.
-  // a crashed agent whose pane-close cleanup never fired).
+  // a crashed agent whose pane-close cleanup never fired), then the branches
+  // those removals leave behind.
   const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
   setInterval(() => {
     for (const [projectId] of projectPaths) {
-      void sweepOrphanWorktrees(projectId).catch(() => {});
+      void sweepOrphanWorktrees(projectId)
+        .then(() => sweepAgentBranchesForProject(projectId))
+        .catch(() => {});
     }
   }, PRUNE_INTERVAL_MS);
 

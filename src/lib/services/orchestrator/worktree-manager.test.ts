@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { backendInvoke } = vi.hoisted(() => ({ backendInvoke: vi.fn() }));
 vi.mock('$lib/services/backend', () => ({ backendInvoke }));
 
-import { reclaimWorktree, stageBaseline, deriveTaskBranch, type WorktreeInfo } from './worktree-manager';
+import {
+  reclaimWorktree,
+  stageBaseline,
+  deriveTaskBranch,
+  sweepAgentBranches,
+  type WorktreeInfo,
+} from './worktree-manager';
 
 const BASE = 'aaaaaaa1';
 const TIP = 'bbbbbbb2';
@@ -163,5 +169,89 @@ describe('deriveTaskBranch', () => {
     const a = deriveTaskBranch('ot_1700000000_abc123', 'Backend work');
     expect(a).toBe('spacron/backend-work-abc123');
     expect(deriveTaskBranch('ot_1700000000_zzz999', 'Backend work')).not.toBe(a);
+  });
+});
+
+describe('sweepAgentBranches', () => {
+  it('passes the in-use branches through as skip and reports what went', async () => {
+    let args: Record<string, unknown> = {};
+    backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
+      args = a;
+      return {
+        deleted: ['spacron/ada-1', 'spacron/bane-2'],
+        retained: [],
+        failed: [],
+        base: 'main',
+      };
+    });
+
+    const sweep = await sweepAgentBranches('p1', { skip: ['spacron/live-9'] });
+
+    expect(args.skip).toEqual(['spacron/live-9']);
+    expect(args.dryRun).toBe(false);
+    expect(sweep.deleted).toEqual(['spacron/ada-1', 'spacron/bane-2']);
+    expect(sweep.base).toBe('main');
+  });
+
+  it('maps the retained branch detail out of the backend snake_case', async () => {
+    backend({
+      workspace_git_sweep_agent_branches: {
+        deleted: [],
+        retained: [
+          {
+            branch: 'spacron/niobe-4',
+            unique_commits: 2,
+            last_commit: '2026-07-26T21:59:36+01:00',
+            patch_equivalent: true,
+          },
+        ],
+        failed: ['spacron/locked-1'],
+        base: 'main',
+      },
+    });
+
+    const sweep = await sweepAgentBranches('p1');
+
+    expect(sweep.retained).toEqual([
+      {
+        branch: 'spacron/niobe-4',
+        uniqueCommits: 2,
+        lastCommit: '2026-07-26T21:59:36+01:00',
+        patchEquivalent: true,
+      },
+    ]);
+    expect(sweep.failed).toEqual(['spacron/locked-1']);
+  });
+
+  it('forwards a dry run so nothing is deleted', async () => {
+    let args: Record<string, unknown> = {};
+    backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
+      args = a;
+      return { deleted: ['spacron/would-go'], retained: [], failed: [], base: 'main' };
+    });
+
+    const sweep = await sweepAgentBranches('p1', { dryRun: true });
+
+    expect(args.dryRun).toBe(true);
+    expect(sweep.deleted).toEqual(['spacron/would-go']);
+  });
+
+  it('yields an empty sweep rather than throwing into a background timer', async () => {
+    backendInvoke.mockRejectedValueOnce(new Error('git exploded'));
+    await expect(sweepAgentBranches('p1')).resolves.toEqual({
+      deleted: [],
+      retained: [],
+      failed: [],
+      base: '',
+    });
+  });
+
+  it('survives a backend that does not implement the command', async () => {
+    // A remote backend resolves an unregistered command to undefined instead of
+    // rejecting — same guard as listWorktreesOnDisk.
+    backend({ workspace_git_sweep_agent_branches: undefined });
+    const sweep = await sweepAgentBranches('p1');
+    expect(sweep.deleted).toEqual([]);
+    expect(sweep.retained).toEqual([]);
   });
 });
