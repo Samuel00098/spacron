@@ -957,6 +957,110 @@
   margin-bottom: 2px;
 }
 
+.source-control .publish-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.source-control .publish-signin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-control .publish-signin-btn {
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.source-control .publish-signin-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.source-control .publish-signin-btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-weight: 600;
+}
+
+.source-control .publish-signin-btn.primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.source-control .publish-signedin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.source-control .publish-signedin svg {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.source-control .publish-device {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.source-control .publish-device-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.source-control .publish-device-code {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.source-control .publish-device-waiting {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.source-control .publish-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: publish-spin 0.8s linear infinite;
+}
+
+@keyframes publish-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.source-control .publish-note {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .source-control .publish-input {
   padding: 6px 9px;
   background: var(--input-bg);

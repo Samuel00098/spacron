@@ -5,8 +5,6 @@ import { parseGitHubRepo } from '$lib/services/github-repo-url';
 import {
   deleteGithubToken,
   githubListRepos,
-  githubTokenExists,
-  saveGithubToken,
   type GithubRepo,
 } from '$lib/services/github';
 import { errorText, useGithubSignIn } from '$lib/react/useGithubSignIn';
@@ -30,10 +28,6 @@ export default function CloneRepoModal() {
   const [parentDir, setParentDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tokenSaved, setTokenSaved] = useState(false);
-  const [tokenInput, setTokenInput] = useState('');
-  const [savingToken, setSavingToken] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [repoList, setRepoList] = useState<GithubRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [repoFilter, setRepoFilter] = useState('');
@@ -48,7 +42,6 @@ export default function CloneRepoModal() {
     signingIn,
     device,
     error: signInError,
-    load,
     start,
     cancel: cancelSignIn,
     importGhCli,
@@ -59,7 +52,6 @@ export default function CloneRepoModal() {
 
   useEffect(() => {
     inputEl.current?.focus();
-    githubTokenExists().then(setTokenSaved).catch(() => {});
   }, []);
 
   // Surface sign-in failures (expired request, declined, network) as errors.
@@ -92,7 +84,6 @@ export default function CloneRepoModal() {
         } catch {
           // keychain already gone — nothing to do
         }
-        setTokenSaved(false);
         setRepoList([]);
       }
     } finally {
@@ -113,32 +104,6 @@ export default function CloneRepoModal() {
     if (!q) return repoList;
     return repoList.filter((r) => r.full_name.toLowerCase().includes(q));
   }, [repoList, repoFilter]);
-
-  async function openTokenPage() {
-    try {
-      await openInBrowser('https://github.com/settings/tokens/new?scopes=repo&description=Spacron');
-    } catch {
-      window.open('https://github.com/settings/tokens/new?scopes=repo&description=Spacron', '_blank', 'noopener,noreferrer');
-    }
-  }
-
-  async function handleSaveToken() {
-    const trimmed = tokenInput.trim();
-    if (!trimmed) return;
-    setSavingToken(true);
-    try {
-      await saveGithubToken(trimmed);
-      setTokenSaved(true);
-      setTokenInput('');
-      setError(null);
-      // Backfill identity so a saved PAT lands in the repo picker too.
-      void load();
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setSavingToken(false);
-    }
-  }
 
   function close() {
     cloneRepoPromptOpen.set(false);
@@ -378,68 +343,32 @@ export default function CloneRepoModal() {
               )}
             </div>
           ) : (
-            <div className="cr-token-section">
-              {options?.oauth_available && (
-                <div className="cr-signin">
+            <div className="cr-signin-area">
+              <div className="cr-signin">
+                {options?.oauth_available && (
                   <button type="button" className="cr-btn primary cr-signin-btn" onClick={() => void start()} disabled={busy}>
                     <GithubMark size={15} />
                     Sign in with GitHub
                   </button>
-                  {options.gh_cli_available && (
-                    <button type="button" className="cr-btn ghost cr-signin-btn" onClick={() => void importGhCli()} disabled={busy}>
-                      Use my GitHub CLI sign-in
-                    </button>
-                  )}
+                )}
+                {options?.gh_cli_available && (
+                  <button type="button" className="cr-btn ghost cr-signin-btn" onClick={() => void importGhCli()} disabled={busy}>
+                    Use my GitHub CLI sign-in
+                  </button>
+                )}
+              </div>
+              {options && !options.oauth_available && !options.gh_cli_available && (
+                <div className="cr-hint">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>
+                    GitHub sign-in isn&rsquo;t available in this build. Public repositories still
+                    clone fine.
+                  </span>
                 </div>
-              )}
-              {options?.oauth_available ? (
-                <button type="button" className="cr-advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)} disabled={busy}>
-                  Advanced: use a personal access token instead
-                </button>
-              ) : null}
-              {(advancedOpen || !options?.oauth_available) && (
-                tokenSaved ? (
-                  <div className="cr-hint cr-hint--success">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                    <span>GitHub token saved. Private repos will clone automatically.</span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="cr-hint">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                      </svg>
-                      <span>
-                        Private repos need a GitHub Personal Access Token.{' '}
-                        <button type="button" className="cr-hint-link" onClick={() => void openTokenPage()} disabled={busy}>
-                          Create one with &lsquo;repo&rsquo; scope
-                        </button>
-                      </span>
-                    </div>
-                    <div className="cr-token-row">
-                      <input
-                        className="cr-input cr-token-input"
-                        type="password"
-                        placeholder="Paste your token here (ghp_...)"
-                        value={tokenInput}
-                        onChange={(e) => { setTokenInput(e.target.value); setError(null); }}
-                        disabled={savingToken}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveToken(); } }}
-                      />
-                      <button
-                        type="button"
-                        className="cr-btn primary cr-token-save"
-                        onClick={() => void handleSaveToken()}
-                        disabled={savingToken || !tokenInput.trim()}
-                      >
-                        {savingToken ? 'Saving…' : 'Save'}
-                      </button>
-                    </div>
-                  </>
-                )
               )}
             </div>
           )}

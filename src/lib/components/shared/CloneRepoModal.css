@@ -330,30 +330,11 @@
   color: var(--success, #22c55e);
 }
 
-/* Token section — wraps hint + inline token input */
-.cr-token-section {
+/* Sign-in area — the signed-out view: one-click sign-in buttons */
+.cr-signin-area {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.cr-token-row {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-}
-
-.cr-token-input {
-  flex: 1;
-  height: 38px;
-  font-size: 13px;
-}
-
-.cr-token-save {
-  flex-shrink: 0;
-  height: 38px;
-  padding: 0 14px;
-  font-size: 12px;
 }
 
 /* Sign-in buttons — stacked, full width */
@@ -370,27 +351,6 @@
 
 .cr-signin-btn svg {
   flex-shrink: 0;
-}
-
-/* Advanced disclosure — PAT path collapsed behind this */
-.cr-advanced-toggle {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--text-muted, #8a8a99);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--text-muted, #8a8a99) 45%, transparent);
-  text-underline-offset: 2px;
-  transition: color var(--dur-fast) var(--ease-out), text-decoration-color var(--dur-fast) var(--ease-out);
-}
-
-.cr-advanced-toggle:hover {
-  color: var(--text-primary, #fff);
-  text-decoration-color: var(--accent, #6ea8fe);
 }
 
 /* Device-flow sign-in panel */

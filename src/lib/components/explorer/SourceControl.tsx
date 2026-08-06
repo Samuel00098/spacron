@@ -23,7 +23,8 @@ import {
   isLocalProvider,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
-import { createGithubRepo, githubTokenExists, saveGithubToken } from '$lib/services/github';
+import { createGithubRepo } from '$lib/services/github';
+import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useStore } from '$lib/react/useStore';
 import { useGitStatusCache, type GitStatusData as GitStatus, type GitLogEntry } from '$lib/stores/zustand/gitStatus';
 import { cleanupStaleWorktrees } from '$lib/stores/orchestrator';
@@ -78,6 +79,7 @@ export default function SourceControl() {
   const branches = useStore(branchInfo);
   const provider = useStore(aiProvider);
   const model = useStore(currentAiModel);
+  const github = useGithubSignIn();
 
   // Read git status/history from the persistent per-project cache so reopening
   // the panel shows the last-known state instantly (no remount-cold skeleton).
@@ -99,9 +101,8 @@ export default function SourceControl() {
   const [publishDesc, setPublishDesc] = useState('');
   const [publishPrivate, setPublishPrivate] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [githubTokenSaved, setGithubTokenSaved] = useState(false);
-  const [tokenInput, setTokenInput] = useState('');
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishCopied, setPublishCopied] = useState(false);
 
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [knownFiles, setKnownFiles] = useState<Set<string>>(new Set());
@@ -308,7 +309,6 @@ export default function SourceControl() {
     setPublishError(null);
     const base = (projectRef.current?.name ?? '').trim();
     setPublishName(base.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'my-project');
-    setGithubTokenSaved(await githubTokenExists());
     setPublishOpen(true);
   }
 
@@ -320,15 +320,9 @@ export default function SourceControl() {
     setPublishError(null);
     setIsPublishing(true);
     try {
-      if (!githubTokenSaved) {
-        const token = tokenInput.trim();
-        if (!token) {
-          setPublishError('Enter a GitHub personal access token first.');
-          return;
-        }
-        await saveGithubToken(token);
-        setGithubTokenSaved(true);
-        setTokenInput('');
+      if (!github.identity) {
+        setPublishError('Sign in to GitHub first — the form above shows the sign-in options.');
+        return;
       }
 
       const result = await createGithubRepo(id, name, publishDesc.trim(), publishPrivate);
@@ -703,6 +697,17 @@ export default function SourceControl() {
     }
   }
 
+  async function copyPublishCode() {
+    if (!github.device) return;
+    try {
+      await navigator.clipboard.writeText(github.device.user_code);
+      setPublishCopied(true);
+      window.setTimeout(() => setPublishCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable — the code stays visible on screen.
+    }
+  }
+
   function renderPublishForm() {
     return (
       <div className="publish-form">
@@ -712,16 +717,65 @@ export default function SourceControl() {
           </svg>
           Publish to GitHub
         </div>
-        {!githubTokenSaved && (
-          <>
-            <input className="publish-input" type="password" placeholder="Personal access token (ghp_...)" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} autoComplete="off" />
-            <button className="publish-help" onClick={() => openUrlInPreviewPanel('https://github.com/settings/tokens/new?scopes=repo&description=Spacron')}>
-              Create a token with 'repo' scope -&gt;
-            </button>
-          </>
-        )}
+        <div className="publish-signin">
+          {github.identity ? (
+            <div className="publish-signedin">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>
+                Signed in as <strong>{github.identity.login}</strong>
+              </span>
+            </div>
+          ) : github.signingIn ? (
+            github.device ? (
+              <div className="publish-device">
+                <div className="publish-device-row">
+                  <code className="publish-device-code">{github.device.user_code}</code>
+                  <button className="publish-help" onClick={() => void copyPublishCode()}>
+                    {publishCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="publish-device-waiting">
+                  <span className="publish-spinner" aria-hidden="true" />
+                  <span>Waiting for approval in your browser…</span>
+                  <button className="publish-help" onClick={() => github.openInBrowser(github.device!.verification_uri)}>
+                    Open github.com/login/device
+                  </button>
+                </div>
+                <button className="publish-help" onClick={github.cancel}>
+                  Cancel sign-in
+                </button>
+              </div>
+            ) : (
+              <div className="publish-device-waiting">
+                <span className="publish-spinner" aria-hidden="true" />
+                <span>Signing in with your GitHub CLI…</span>
+                <button className="publish-help" onClick={github.cancel}>
+                  Cancel
+                </button>
+              </div>
+            )
+          ) : (
+            <div className="publish-signin-actions">
+              {github.options?.oauth_available && (
+                <button className="publish-signin-btn primary" onClick={() => void github.start()}>
+                  Sign in with GitHub
+                </button>
+              )}
+              {github.options?.gh_cli_available && (
+                <button className="publish-signin-btn" onClick={() => void github.importGhCli()}>
+                  Use my GitHub CLI sign-in
+                </button>
+              )}
+              {github.options && !github.options.oauth_available && !github.options.gh_cli_available && (
+                <div className="publish-note">GitHub sign-in isn&rsquo;t available in this build.</div>
+              )}
+            </div>
+          )}
+        </div>
         <div className="publish-security-note">
-          GitHub tokens are stored in the OS keychain and used only for repository create/push actions from this project.
+          Your GitHub sign-in is stored in the OS keychain and used only for repository create/push actions from this project.
         </div>
         <input className="publish-input" type="text" placeholder="repository-name" value={publishName} onChange={(event) => setPublishName(event.target.value)} autoComplete="off" />
         <input className="publish-input" type="text" placeholder="Description (optional)" value={publishDesc} onChange={(event) => setPublishDesc(event.target.value)} autoComplete="off" />
@@ -729,12 +783,12 @@ export default function SourceControl() {
           <input type="checkbox" checked={publishPrivate} onChange={(event) => setPublishPrivate(event.target.checked)} />
           <span>Private repository</span>
         </label>
-        {publishError && <div className="publish-err-msg">{publishError}</div>}
+        {(github.error || publishError) && <div className="publish-err-msg">{github.error ?? publishError}</div>}
         <div className="publish-actions">
-          <button className="publish-create-btn" onClick={() => void doPublish()} disabled={isPublishing || !publishName.trim() || (!githubTokenSaved && !tokenInput.trim())}>
+          <button className="publish-create-btn" onClick={() => void doPublish()} disabled={isPublishing || !publishName.trim() || !github.identity}>
             {isPublishing ? <><Spinner /><span>Publishing...</span></> : <span>Create &amp; Push</span>}
           </button>
-          <button className="publish-cancel-btn" onClick={() => { setPublishOpen(false); setPublishError(null); }}>Cancel</button>
+          <button className="publish-cancel-btn" onClick={() => { setPublishOpen(false); setPublishError(null); github.cancel(); }}>Cancel</button>
         </div>
       </div>
     );
