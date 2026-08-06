@@ -1240,16 +1240,23 @@
 }
 
 /* Split view reuses the very same persistent stage — the identical mounted xterm
-   panes — but re-flows the primary + secondary rooms into two side-by-side
-   columns (one column when only a single room is on stage). Because it's the same
+   panes — but re-flows the rooms on stage into a tiled grid. Because it's the same
    React container as Focus/Fleet, switching in and out of Split never unmounts a
-   terminal; the panes only resize, which their ResizeObserver handles cleanly. */
+   terminal; the panes only resize, which their ResizeObserver handles cleanly.
+
+   `--split-cols` is set by `splitColumns()` in AppShell.tsx: up to three rooms
+   share a single row, beyond that the grid wraps so panes keep a readable width
+   instead of turning into slivers. `grid-auto-rows: 1fr` keeps every row an equal
+   share of the height, with a floor so a short window scrolls rather than
+   crushing the panes below the point where a terminal is legible. */
 .app-shell .focused-room.stage-layers.split-grid {
   display: grid;
   grid-template-columns: repeat(var(--split-cols, 2), minmax(0, 1fr));
+  grid-auto-rows: minmax(180px, 1fr);
   gap: 12px;
   align-items: stretch;
   position: relative;
+  overflow-y: auto;
 }
 .app-shell .stage-layers.split-grid > .stage-pane {
   position: static;
@@ -1799,18 +1806,55 @@
   transform: translateY(-1px);
 }
 
-.app-shell .split-switch-item.primary,
-.app-shell .split-switch-item.secondary {
+/* Tiled right now. `.primary` (the focused pane) reads a step stronger again, so
+   at six panes it is still obvious which one has room focus. */
+.app-shell .split-switch-item.on-stage {
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  background: color-mix(in srgb, var(--accent) 13%, var(--bg-primary));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+}
+
+.app-shell .split-switch-item.primary {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-primary));
 }
 
 .app-shell .split-switch-summary {
+  appearance: none;
+  flex: 1;
   min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Slot number — the pane's position in the tiling order. Blank for rooms that
+   are open but not on stage, so the column stays aligned either way. */
+.app-shell .split-switch-slot {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.app-shell .split-switch-item.on-stage .split-switch-slot {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .app-shell .split-switch-icon {
@@ -1891,6 +1935,48 @@
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Reorder / remove controls: square, so six panes' worth of chips still fit the
+   strip. The text "Add" button keeps the wider default above. */
+.app-shell .split-target-btn.icon {
+  min-width: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-shell .split-target-btn.danger:hover {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+}
+
+.app-shell .split-target-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.app-shell .split-target-btn:disabled:hover {
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.app-shell .split-switcher-head {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding-right: 2px;
+}
+
+.app-shell .split-switcher-count {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  max-width: 52px;
 }
 
 .app-shell .minimized-room-stack {
@@ -2558,6 +2644,37 @@
   opacity: 0;
   animation: project-switch-fade 0.22s ease forwards;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-switch-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-primary, #111116) 82%, transparent);
+  backdrop-filter: blur(12px);
+  color: var(--text-secondary, #9ca3af);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.project-switch-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text-secondary, #9ca3af) 30%, transparent);
+  border-top-color: var(--accent, #7c9cff);
+  animation: project-switch-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes project-switch-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes project-switch-fade {

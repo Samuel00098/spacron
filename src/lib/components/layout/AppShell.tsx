@@ -5,6 +5,7 @@ import TitleBar from './TitleBar.tsx';
 import UpdateBanner from '$lib/components/shared/UpdateBanner.tsx';
 import { useAction } from '$lib/react/useAction';
 import { useStore } from '$lib/react/useStore';
+import { isModalOpen } from '$lib/react/useModalFocus';
 import { get } from '$lib/stores/storeCompat';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import FileExplorer from '$lib/components/explorer/FileExplorer.tsx';
@@ -31,6 +32,7 @@ import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
+import { useShallow } from 'zustand/react/shallow';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import {
@@ -81,7 +83,7 @@ import {
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
-import type { ActiveView, SidebarTab } from '$lib/types/layout';
+import type { ActiveView, LayoutState, SidebarTab } from '$lib/types/layout';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 // openDailyNote removed
@@ -134,6 +136,21 @@ function isAgentRoomId(id: RoomId): id is AgentRoomId {
   return id.startsWith('agent:');
 }
 
+// How many rooms Split will put on stage at once. Past this the panes are too
+// small to read a streaming agent in, which is the whole point of the view —
+// extra rooms stay open and reachable from the switcher, just not tiled.
+const SPLIT_MAX_PANES = 6;
+
+// Column count for a given pane count. Up to three rooms sit in a single row
+// (the familiar side-by-side); beyond that the grid wraps into rows so panes
+// keep a readable width instead of becoming slivers.
+function splitColumns(count: number): number {
+  if (count <= 1) return 1;
+  if (count <= 3) return count;
+  if (count === 4) return 2;
+  return 3;
+}
+
 function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
 }
@@ -145,7 +162,43 @@ function isPersistentRoomId(id: RoomId): boolean {
   return id === 'terminal' || id === 'dev-terminal' || isAgentRoomId(id);
 }
 
-const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ReturnType<typeof useLayoutStore.getState>> = {
+// The layout fields AppShell reads. Kept as one named union so both the
+// selector-narrowed subscription and PANEL_VISIBILITY_KEYS stay in lockstep —
+// if a field is added to one and not the other, the index at the read site fails
+// to typecheck instead of silently widening the subscription.
+// `agentSpawnOpen`/`envManagerOpen` live on the store's actions (not LayoutState),
+// so they're named here too.
+type ShellLayoutKeys =
+  | 'sidebarVisible'
+  | 'sidebarWidth'
+  | 'sidebarTab'
+  | 'activeView'
+  | 'lastAuxView'
+  | 'editorVisible'
+  | 'editorSplitPreview'
+  | 'previewVisible'
+  | 'reviewVisible'
+  | 'httpVisible'
+  | 'tasksVisible'
+  | 'fleetVisible'
+  | 'dbVisible'
+  | 'containersVisible'
+  | 'toolboxVisible'
+  | 'envVisible'
+  | 'youtubeVisible'
+  | 'agentSpawnOpen'
+  | 'envManagerOpen'
+  | 'auxPanelWidth'
+  | 'auxEditorHeight'
+  | 'leftPanelWidth'
+  | 'rightDrawerWidth';
+
+type ShellLayoutState = Pick<LayoutState, Exclude<ShellLayoutKeys, 'agentSpawnOpen' | 'envManagerOpen'>> & {
+  agentSpawnOpen: boolean;
+  envManagerOpen: boolean;
+};
+
+const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   editor: 'editorVisible',
   preview: 'previewVisible',
   review: 'reviewVisible',
@@ -362,7 +415,40 @@ export default function AppShell() {
     notifyPanesResized();
   }
 
-  const layoutState = useLayoutStore();
+  // Selector-narrowed subscription: return only the layout fields this shell
+  // actually reads, and compare shallowly so unrelated layout changes (a
+  // transient flag elsewhere in the store) don't re-render this entire shell
+  // and every mounted room frame. Widths are included — resizing a divider
+  // changes them and must re-render, but nothing else does.
+  const layoutState = useLayoutStore(
+    useShallow(
+      (s): ShellLayoutState => ({
+        sidebarVisible: s.sidebarVisible,
+        sidebarWidth: s.sidebarWidth,
+        sidebarTab: s.sidebarTab,
+        activeView: s.activeView,
+        lastAuxView: s.lastAuxView,
+        editorVisible: s.editorVisible,
+        editorSplitPreview: s.editorSplitPreview,
+        previewVisible: s.previewVisible,
+        reviewVisible: s.reviewVisible,
+        httpVisible: s.httpVisible,
+        tasksVisible: s.tasksVisible,
+        fleetVisible: s.fleetVisible,
+        dbVisible: s.dbVisible,
+        containersVisible: s.containersVisible,
+        toolboxVisible: s.toolboxVisible,
+        envVisible: s.envVisible,
+        youtubeVisible: s.youtubeVisible,
+        agentSpawnOpen: s.agentSpawnOpen,
+        envManagerOpen: s.envManagerOpen,
+        auxPanelWidth: s.auxPanelWidth,
+        auxEditorHeight: s.auxEditorHeight,
+        leftPanelWidth: s.leftPanelWidth,
+        rightDrawerWidth: s.rightDrawerWidth,
+      }),
+    ),
+  );
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   // Home is an overlay on top of the still-mounted workspace (see
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
@@ -371,6 +457,7 @@ export default function AppShell() {
   const showWelcome = !workspaceId || homeOpen;
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
+  const switchingPhase = useWorkspaceStore((s) => s.switchingPhase);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
   // Stable order so a panel never changes position (and gets re-parented) as
@@ -431,7 +518,12 @@ export default function AppShell() {
   const setTerminalRoomOpen = (val: boolean) => terminalRoomOpenStore.set(val);
   const [devTerminalRoomOpen, setDevTerminalRoomOpen] = useState(false);
   const [roomOrder, setRoomOrder] = useState<RoomId[]>(['workspace', 'terminal']);
-  const [secondaryRoom, setSecondaryRoom] = useState<RoomId | null>(null);
+  // Split (gallery) stage, in left→right / wrap order. Empty means "not yet
+  // arranged" — `splitRooms` then falls back to the historical two-pane default
+  // so entering Split still just works. Once the user arranges the stage this
+  // list is authoritative, which is what stops the slot drift documented in
+  // `.spacron/memory/split-room-slots.md`.
+  const [splitSlots, setSplitSlots] = useState<RoomId[]>([]);
   const lastActiveRoomRef = useRef<RoomId | null>(null);
   // The room the user last actually touched — a click or a focus anywhere inside
   // its pane, not just a title-bar "focus this room" press. In Split this is what
@@ -626,8 +718,23 @@ export default function AppShell() {
     lastActiveRoomRef.current = activeRoom;
   }
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
-  const splitRoom = activeRoom ? ((secondaryRoom && sideRooms.includes(secondaryRoom)) ? secondaryRoom : (sideRooms[0] ?? null)) : null;
   const stackedRooms = sideRooms;
+
+  // The rooms Split tiles, in slot order. `activeRoom` is always on stage (it is
+  // what Focus would show, and what the room dock highlights), so it is spliced
+  // in at the front when an arrangement doesn't already include it.
+  const splitRooms = useMemo<RoomId[]>(() => {
+    if (!activeRoom) return [];
+    const arranged = splitSlots.filter(
+      (room, index) => visibleRooms.includes(room) && splitSlots.indexOf(room) === index,
+    );
+    if (arranged.length === 0) {
+      // Unarranged: today's default — the active room plus the next one open.
+      return [activeRoom, ...sideRooms.slice(0, 1)];
+    }
+    const withActive = arranged.includes(activeRoom) ? arranged : [activeRoom, ...arranged];
+    return withActive.slice(0, SPLIT_MAX_PANES);
+  }, [activeRoom, sideRooms, splitSlots, visibleRooms]);
 
   // WebKitGTK (Linux) leaves stale compositor pixels — a "ghost" of the closed
   // room — behind when a room/panel closes and the grid re-tiles to fill the gap.
@@ -699,13 +806,14 @@ export default function AppShell() {
     if (!room) return;
     switch (layoutCommand.op) {
       case 'focus':
-        // In gallery (split) mode with other rooms visible, show the
-        // preview in the secondary (right) pane instead of the primary
-        // (left) — "agent on the left, preview on the right".
+        // In gallery (split) mode with other rooms visible, append the preview
+        // rather than focusing it, so it lands in a trailing pane and leaves the
+        // rooms already on stage where they are — "agent on the left, preview on
+        // the right".
         if (room === 'preview' && ambientLayout === 'gallery') {
           const otherRooms = visibleRooms.filter((r) => r !== 'preview');
           if (otherRooms.length > 0) {
-            showRoomInSecondary('preview');
+            addRoomToSplit('preview');
             break;
           }
         }
@@ -821,9 +929,11 @@ export default function AppShell() {
       return next.size === current.size ? current : next;
     });
 
-    setSecondaryRoom((current) => {
-      if (!current || !openRooms.includes(current) || current === focusedRoom) return null;
-      return current;
+    // Drop closed rooms from the Split arrangement. Falling to empty is fine —
+    // that is the "unarranged" sentinel and `splitRooms` re-derives the default.
+    setSplitSlots((current) => {
+      const next = current.filter((room) => openRooms.includes(room));
+      return next.length === current.length ? current : next;
     });
   }, [ambientLayout, focusedRoom, openRooms]);
 
@@ -934,6 +1044,11 @@ export default function AppShell() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // A modal dialog is open — its keys are the modal's, not the app's. A
+      // shortcut firing behind Settings (e.g. Ctrl+` while choosing a shell)
+      // is a real reported bug; the modal hook registers itself in the shared
+      // counter so every global handler can stand down at once.
+      if (isModalOpen()) return;
       const matched = (shortcuts || []).find((shortcut) => shortcut && matchShortcut(event, shortcut.keys));
       if (!matched) return;
 
@@ -1300,36 +1415,41 @@ export default function AppShell() {
   /**
    * Split-mode guard for every "bring this room on stage" path.
    *
-   * The pane the user is actually working in keeps its slot; the incoming room
-   * takes the other one. Returns whether the caller should still take room
-   * focus — `false` means the working pane stayed primary on purpose.
+   * Appends the incoming room to the stage rather than swapping it for one
+   * that is already there. Returns whether the caller should still take room
+   * focus — `false` means the pane the user is working in kept it on purpose,
+   * so their typing target doesn't jump to the room that just appeared.
    *
-   * Why this is needed: `secondaryRoom` used to be set only by the switcher's
-   * Left/Right buttons, so in normal use it was null and `splitRoom` fell back
-   * to `sideRooms[0]` — a *derived* value that moves the moment the primary
-   * changes. Bringing a third room on stage therefore replaced both panes at
-   * once, and the terminal you were typing in disappeared. Pinning the survivor
-   * explicitly is what stops that drift.
+   * Why appending matters: Split used to hold exactly two rooms, one of which
+   * (`splitRoom`) was *derived* and moved the moment the primary changed, so
+   * bringing a third room on stage replaced both panes at once and the terminal
+   * you were typing in vanished. With N slots nothing is displaced below the
+   * cap, so that drift cannot happen. At the cap the oldest slot gives way —
+   * never the active room, and never the one being worked in.
    *
    * A no-op outside Split, and for a room that is already on stage.
    */
   function claimSplitSlot(id: RoomId): boolean {
     if (ambientLayout !== 'gallery') return true;
-    if (!activeRoom || id === activeRoom || id === splitRoom) return true;
-    if (lastInteractedRoomRef.current === activeRoom && splitRoom) {
-      // Working on the left → the incoming room takes the right slot, and the
-      // left pane keeps both its position and room focus.
-      setSecondaryRoom(id);
-      return false;
-    }
-    // Working on the right (or nothing touched yet) → pin that pane so the
-    // fallback can't drift, and give the incoming room the left slot.
-    setSecondaryRoom(splitRoom);
-    return true;
+    if (!activeRoom || id === activeRoom || splitRooms.includes(id)) return true;
+
+    const working = lastInteractedRoomRef.current;
+    setSplitSlots(() => {
+      const next = [...splitRooms, id];
+      if (next.length <= SPLIT_MAX_PANES) return next;
+      // Full: evict the earliest slot that is neither the active room nor the
+      // pane being worked in, so the incoming room always finds space.
+      const victim = next.find((room) => room !== activeRoom && room !== working && room !== id);
+      return victim ? next.filter((room) => room !== victim) : next.slice(0, SPLIT_MAX_PANES);
+    });
+
+    // Keep focus on the pane the user is actually in, if it's one on stage.
+    return !(working && working !== id && splitRooms.includes(working));
   }
 
-  function showRoomInPrimary(id: RoomId) {
-    if (id === activeRoom) return;
+  // Bring a room on stage without disturbing what is already there — the
+  // switcher's "show this too" path. Outside Split it behaves as a plain focus.
+  function addRoomToSplit(id: RoomId) {
     withRoomTransition(() => {
       setMinimizedRooms((current) => {
         const next = new Set(current);
@@ -1338,36 +1458,51 @@ export default function AppShell() {
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
       if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
-      if (id === splitRoom) {
-        // Clicked the room already on the right → swap sides: the old left
-        // room moves over to the right.
-        setSecondaryRoom(activeRoom);
-      } else {
-        // Clicked a room that isn't displayed → replace the left pane only,
-        // pinning whatever is on the right so it stays put.
-        setSecondaryRoom(splitRoom);
+      if (ambientLayout !== 'gallery') {
+        setFocusedRoom(id);
+        return;
       }
-      setFocusedRoom(id);
+      if (splitRooms.includes(id)) {
+        setFocusedRoom(id);
+        return;
+      }
+      setSplitSlots(() => [...splitRooms, id].slice(0, SPLIT_MAX_PANES));
     });
   }
 
-  function showRoomInSecondary(id: RoomId) {
+  // Take a room off the Split stage. It stays open and reachable — only its
+  // slot goes away. Removing the active room hands focus to a remaining pane so
+  // `splitRooms` doesn't just splice it straight back in at the front.
+  function removeRoomFromSplit(id: RoomId) {
+    if (splitRooms.length <= 1) return;
     withRoomTransition(() => {
-      setMinimizedRooms((current) => {
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
-      if (id === 'terminal') setTerminalRoomOpen(true);
-      if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
-      if (id === activeRoom) {
-        if (splitRoom) {
-          setFocusedRoom(splitRoom);
-          setSecondaryRoom(id);
-        }
-        return;
-      }
-      setSecondaryRoom(id);
+      const remaining = splitRooms.filter((room) => room !== id);
+      setSplitSlots(remaining);
+      if (id === activeRoom) setFocusedRoom(remaining[0] ?? null);
+    });
+  }
+
+  // Dock button: tile one more of the open rooms. Cycles back to the two-pane
+  // default once every room is on stage (or the cap is reached), so the button
+  // always does something visible rather than dead-ending.
+  function addNextRoomToSplit() {
+    const next = visibleRooms.find((room) => !splitRooms.includes(room));
+    if (!next || splitRooms.length >= SPLIT_MAX_PANES) {
+      withRoomTransition(() => setSplitSlots([]));
+      return;
+    }
+    addRoomToSplit(next);
+  }
+
+  // Shuffle a room one slot earlier / later in the tiling order.
+  function moveSplitSlot(id: RoomId, dir: -1 | 1) {
+    const from = splitRooms.indexOf(id);
+    const to = from + dir;
+    if (from < 0 || to < 0 || to >= splitRooms.length) return;
+    withRoomTransition(() => {
+      const next = [...splitRooms];
+      [next[from], next[to]] = [next[to], next[from]];
+      setSplitSlots(next);
     });
   }
 
@@ -1716,6 +1851,21 @@ export default function AppShell() {
     }
   }
 
+  // Stable per-session callbacks so a memoized TerminalPane can skip re-renders
+  // when the shell re-renders for an unrelated reason. One memoized factory per
+  // action — the sessionId is captured, so each pane gets a stable identity.
+  const onActivateSession = useCallback(
+    (sessionId: number) => () => setActiveSession(sessionId),
+    [],
+  );
+  const onCloseSession = useCallback(
+    (sessionId: number) => () => {
+      void killSession(sessionId);
+    },
+    [],
+  );
+  const onFocusRoom = useCallback((id: RoomId) => () => focusRoom(id), []);
+
   function renderRoomContent(id: RoomId) {
     if (id === 'workspace') return <SidebarContent tab={layoutState.sidebarTab} />;
     if (isAgentRoomId(id)) {
@@ -1736,9 +1886,9 @@ export default function AppShell() {
             sessionId={sessionId}
             paneIndex={terminalPaneAssignments.indexOf(sessionId)}
             isActive={currentActiveSessionId === sessionId}
-            onActivate={() => setActiveSession(sessionId)}
-            onClose={() => void killSession(sessionId)}
-            onMaximize={() => focusRoom(id)}
+            onActivate={onActivateSession(sessionId)}
+            onClose={onCloseSession(sessionId)}
+            onMaximize={onFocusRoom(id)}
           />
         </div>
       );
@@ -1770,7 +1920,14 @@ export default function AppShell() {
               <TerminalPanel />
             </div>
           )}
-          {projectSwitching && <div className="project-switch-overlay" />}
+          {projectSwitching && (
+            <div className="project-switch-overlay">
+              <div className="project-switch-progress">
+                <span className="project-switch-spinner" aria-hidden="true" />
+                <span className="project-switch-label">{switchingPhase ?? 'Switching project…'}</span>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -1778,7 +1935,14 @@ export default function AppShell() {
       return (
         <div className="terminal-room-body dev-terminal">
           <TerminalPanel devMode={true} />
-          {projectSwitching && <div className="project-switch-overlay" />}
+          {projectSwitching && (
+            <div className="project-switch-overlay">
+              <div className="project-switch-progress">
+                <span className="project-switch-spinner" aria-hidden="true" />
+                <span className="project-switch-label">{switchingPhase ?? 'Switching project…'}</span>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -2178,45 +2342,91 @@ export default function AppShell() {
   }
 
   function renderSplitSwitcher() {
+    const atCap = splitRooms.length >= SPLIT_MAX_PANES;
     return (
-      <aside className="split-switcher" aria-label="Switch split rooms">
+      <aside className="split-switcher" aria-label="Arrange split panes">
+        <div className="split-switcher-head">
+          <span className="split-switcher-count">
+            {splitRooms.length} of {SPLIT_MAX_PANES} panes
+          </span>
+        </div>
         <div className="split-switcher-rooms">
           {visibleRooms.map((room) => {
+            const slot = splitRooms.indexOf(room);
+            const onStage = slot >= 0;
             const isPrimary = room === activeRoom;
-            const isSecondary = room === splitRoom;
             return (
               <div
                 key={room}
-                className={`split-switch-item${isPrimary ? ' primary' : ''}${isSecondary ? ' secondary' : ''}`}
+                className={`split-switch-item${onStage ? ' on-stage' : ''}${isPrimary ? ' primary' : ''}`}
               >
-                <span className="split-switch-summary">
+                <button
+                  type="button"
+                  className="split-switch-summary"
+                  onClick={() => (onStage ? focusRoom(room) : addRoomToSplit(room))}
+                  title={onStage ? `Focus ${roomTitle(room)}` : `Add ${roomTitle(room)} to the split`}
+                >
+                  <span className="split-switch-slot" aria-hidden="true">
+                    {onStage ? slot + 1 : ''}
+                  </span>
                   <span className="split-switch-icon" aria-hidden="true">{roomIcon(room)}</span>
                   <span className="split-switch-copy">
                     <span className="split-switch-name">{roomTitle(room)}</span>
                     <span className="split-switch-role">
-                      {isPrimary ? 'Primary' : isSecondary ? 'Secondary' : roomKind(room)}
+                      {onStage ? (isPrimary ? `Pane ${slot + 1} · focused` : `Pane ${slot + 1}`) : roomKind(room)}
                     </span>
                   </span>
-                </span>
+                </button>
                 <span className="split-target-actions">
-                  <button
-                    type="button"
-                    className={`split-target-btn${isPrimary ? ' active' : ''}`}
-                    onClick={() => showRoomInPrimary(room)}
-                    title={`Show ${roomTitle(room)} on the left`}
-                    aria-label={`Show ${roomTitle(room)} on the left`}
-                  >
-                    Left
-                  </button>
-                  <button
-                    type="button"
-                    className={`split-target-btn${isSecondary ? ' active' : ''}`}
-                    onClick={() => showRoomInSecondary(room)}
-                    title={`Show ${roomTitle(room)} on the right`}
-                    aria-label={`Show ${roomTitle(room)} on the right`}
-                  >
-                    Right
-                  </button>
+                  {onStage ? (
+                    <>
+                      <button
+                        type="button"
+                        className="split-target-btn icon"
+                        onClick={() => moveSplitSlot(room, -1)}
+                        disabled={slot === 0}
+                        title={`Move ${roomTitle(room)} earlier`}
+                        aria-label={`Move ${roomTitle(room)} earlier`}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="15 18 9 12 15 6" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="split-target-btn icon"
+                        onClick={() => moveSplitSlot(room, 1)}
+                        disabled={slot === splitRooms.length - 1}
+                        title={`Move ${roomTitle(room)} later`}
+                        aria-label={`Move ${roomTitle(room)} later`}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="split-target-btn icon danger"
+                        onClick={() => removeRoomFromSplit(room)}
+                        disabled={splitRooms.length <= 1}
+                        title={`Take ${roomTitle(room)} off the split`}
+                        aria-label={`Take ${roomTitle(room)} off the split`}
+                      >
+                        <XIcon />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="split-target-btn"
+                      onClick={() => addRoomToSplit(room)}
+                      disabled={atCap}
+                      title={atCap ? `Split is full (${SPLIT_MAX_PANES} panes)` : `Add ${roomTitle(room)} to the split`}
+                      aria-label={`Add ${roomTitle(room)} to the split`}
+                    >
+                      Add
+                    </button>
+                  )}
                 </span>
               </div>
             );
@@ -2318,7 +2528,7 @@ export default function AppShell() {
     const stageRooms: RoomId[] = isVibe
       ? visibleStageRooms.filter(isAgentRoomId)
       : isSplit
-        ? ([activeRoom, splitRoom].filter((room): room is RoomId => room !== null))
+        ? splitRooms
         : activeRoom
           ? [activeRoom]
           : [];
@@ -2336,17 +2546,17 @@ export default function AppShell() {
       : (!isVibe && !activeRoom ? '' : null);
 
     const stageModifier = isVibe ? ' vibe-grid' : isSplit ? ' split-grid' : '';
-    // In Split, force the primary room to the left column and the secondary to the
-    // right, regardless of DOM order (a terminal is mapped before an editor even
-    // when the editor is the primary/left pane).
+    // In Split, lay panes out in slot order regardless of DOM order — the
+    // persistent stage mounts shells before agents, which has nothing to do with
+    // where the user arranged them.
     const paneOrder = (room: RoomId): React.CSSProperties | undefined =>
-      isSplit ? { order: room === activeRoom ? 0 : 1 } : undefined;
+      isSplit ? { order: stageRooms.indexOf(room) } : undefined;
 
     return (
       <>
         <div
           className={`focused-room stage-layers${stageModifier}`}
-          style={isSplit ? ({ '--split-cols': stageRooms.length } as React.CSSProperties) : undefined}
+          style={isSplit ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties) : undefined}
           aria-label={emptyStageMessage ? 'No agents running' : undefined}
         >
           {emptyStageMessage !== null && (
@@ -2458,9 +2668,13 @@ export default function AppShell() {
                   <ActivityButton
                     item={{
                       id: 'split',
-                      title: ambientLayout === 'gallery' ? 'Back to split' : 'Split — two panels',
+                      // Both branches of the old ternary were 'gallery', and
+                      // switchAmbientLayout early-returns on an unchanged mode —
+                      // so this button did nothing at all while Split was active.
+                      title: ambientLayout === 'gallery' ? 'Split — add a pane' : 'Split — tile panels',
                       active: ambientLayout === 'gallery',
-                      onClick: () => switchAmbientLayout(ambientLayout === 'gallery' ? 'gallery' : 'gallery'),
+                      onClick: () =>
+                        ambientLayout === 'gallery' ? addNextRoomToSplit() : switchAmbientLayout('gallery'),
                       icon: <Icon><rect x="3" y="4" width="7.5" height="16" rx="1.3" /><rect x="13.5" y="4" width="7.5" height="16" rx="1.3" /></Icon>,
                     }}
                   />
