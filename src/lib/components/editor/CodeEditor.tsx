@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState, Compartment, type Extension } from '@codemirror/state';
 import {
   EditorView,
   keymap,
@@ -33,27 +33,9 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
 import { addCursorAbove, addCursorBelow } from '$lib/services/editor/multi-cursor';
 
-// Language support
-import { javascript } from '@codemirror/lang-javascript';
-import { html } from '@codemirror/lang-html';
-import { css } from '@codemirror/lang-css';
-import { rust } from '@codemirror/lang-rust';
-import { json } from '@codemirror/lang-json';
-import { markdown } from '@codemirror/lang-markdown';
-import { python } from '@codemirror/lang-python';
-import { java } from '@codemirror/lang-java';
-import { cpp } from '@codemirror/lang-cpp';
-import { php } from '@codemirror/lang-php';
-import { sql } from '@codemirror/lang-sql';
-import { xml } from '@codemirror/lang-xml';
-import { yaml } from '@codemirror/lang-yaml';
-import { go } from '@codemirror/lang-go';
-import { sass } from '@codemirror/lang-sass';
-import { svelte } from '@replit/codemirror-lang-svelte';
-import { shell } from '@codemirror/legacy-modes/mode/shell';
-import { swift } from '@codemirror/legacy-modes/mode/swift';
-import { kotlin, csharp } from '@codemirror/legacy-modes/mode/clike';
-import { toml } from '@codemirror/legacy-modes/mode/toml';
+// Language support is loaded ON DEMAND — see LANGUAGE_LOADERS below. Importing
+// all 20 grammars statically put every one of them in the editor chunk, so
+// opening a .json file also paid for PHP, Java, Swift and Kotlin.
 
 import { updateContent, updateCursorPosition, jumpToLine, activeSelection } from '$lib/stores/editor';
 import { activeProject } from '$lib/stores/workspace';
@@ -132,56 +114,79 @@ const customHighlightStyle = HighlightStyle.define([
   { tag: t.heading, color: "var(--syntax-keyword)", fontWeight: "bold" },
 ]);
 
-function getLanguageExtension(lang: string) {
-  switch (lang) {
-    case 'javascript':
-      return javascript();
-    case 'typescript':
-      return javascript({ typescript: true });
-    case 'html':
-      return html();
-    case 'css':
-      return css();
-    case 'rust':
-      return rust();
-    case 'json':
-      return json();
-    case 'markdown':
-      return markdown();
-    case 'python':
-      return python();
-    case 'java':
-      return java();
-    case 'cpp':
-      return cpp();
-    case 'php':
-      return php();
-    case 'sql':
-      return sql();
-    case 'xml':
-      return xml();
-    case 'yaml':
-      return yaml();
-    case 'go':
-      return go();
-    case 'scss':
-    case 'sass':
-      return sass();
-    case 'svelte':
-      return svelte();
-    case 'toml':
-      return StreamLanguage.define(toml);
-    case 'csharp':
-      return StreamLanguage.define(csharp);
-    case 'shell':
-      return StreamLanguage.define(shell);
-    case 'swift':
-      return StreamLanguage.define(swift);
-    case 'kotlin':
-      return StreamLanguage.define(kotlin);
-    default:
-      return [];
-  }
+/**
+ * Grammar loaders, keyed by the language ids `stores/editor.ts` produces. Each
+ * is a dynamic import, so Vite emits one chunk per grammar and the editor
+ * downloads only the language you actually opened.
+ */
+const LANGUAGE_LOADERS: Record<string, () => Promise<Extension>> = {
+  javascript: async () => (await import('@codemirror/lang-javascript')).javascript(),
+  typescript: async () =>
+    (await import('@codemirror/lang-javascript')).javascript({ typescript: true }),
+  html: async () => (await import('@codemirror/lang-html')).html(),
+  css: async () => (await import('@codemirror/lang-css')).css(),
+  rust: async () => (await import('@codemirror/lang-rust')).rust(),
+  json: async () => (await import('@codemirror/lang-json')).json(),
+  markdown: async () => (await import('@codemirror/lang-markdown')).markdown(),
+  python: async () => (await import('@codemirror/lang-python')).python(),
+  java: async () => (await import('@codemirror/lang-java')).java(),
+  cpp: async () => (await import('@codemirror/lang-cpp')).cpp(),
+  php: async () => (await import('@codemirror/lang-php')).php(),
+  sql: async () => (await import('@codemirror/lang-sql')).sql(),
+  xml: async () => (await import('@codemirror/lang-xml')).xml(),
+  yaml: async () => (await import('@codemirror/lang-yaml')).yaml(),
+  go: async () => (await import('@codemirror/lang-go')).go(),
+  sass: async () => (await import('@codemirror/lang-sass')).sass(),
+  scss: async () => (await import('@codemirror/lang-sass')).sass(),
+  svelte: async () => (await import('@replit/codemirror-lang-svelte')).svelte(),
+  toml: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/toml')).toml),
+  csharp: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/clike')).csharp),
+  kotlin: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/clike')).kotlin),
+  shell: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/shell')).shell),
+  swift: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/swift')).swift),
+};
+
+/**
+ * Resolved grammars, module-scoped so a language is fetched once per session.
+ * A cache hit means `createEditorState` can bake the grammar straight in, so
+ * only the FIRST file of a given language ever shows unhighlighted text.
+ */
+const languageCache = new Map<string, Extension>();
+
+/** In-flight loads, so opening three .ts files at once fetches the pack once. */
+const languageInFlight = new Map<string, Promise<Extension | null>>();
+
+function loadLanguageExtension(lang: string): Promise<Extension | null> {
+  const cached = languageCache.get(lang);
+  if (cached) return Promise.resolve(cached);
+
+  const pending = languageInFlight.get(lang);
+  if (pending) return pending;
+
+  const loader = LANGUAGE_LOADERS[lang];
+  if (!loader) return Promise.resolve(null);
+
+  const promise = loader()
+    .then((extension) => {
+      languageCache.set(lang, extension);
+      return extension;
+    })
+    .catch((e) => {
+      // A missing grammar must not break editing — you just get plain text.
+      console.error(`Failed to load the "${lang}" grammar:`, e);
+      return null;
+    })
+    .finally(() => {
+      languageInFlight.delete(lang);
+    });
+
+  languageInFlight.set(lang, promise);
+  return promise;
 }
 
 export default function CodeEditor({ filePath, initialContent, language }: CodeEditorProps) {
@@ -214,6 +219,11 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
   // LSP extension is loaded asynchronously (server must spawn first), so it lives
   // in its own compartment that starts empty and gets reconfigured once ready.
   const lspCompartmentRef = useRef<Compartment | null>(null);
+  // Same deal for the grammar: it is fetched on demand, so it starts as whatever
+  // `languageCache` already has (usually the grammar, often nothing on the very
+  // first file of a language) and is reconfigured when the import resolves.
+  const languageCompartmentRef = useRef<Compartment | null>(null);
+  const languageGenerationRef = useRef(0);
 
   // The active language-server document handle for the open file, and a
   // generation counter so a slow server start can't clobber a newer file switch.
@@ -226,6 +236,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
     const vimModeCompartment = vimModeCompartmentRef.current!;
     const columnSelectionCompartment = columnSelectionCompartmentRef.current!;
     const lspCompartment = lspCompartmentRef.current!;
+    const languageCompartment = languageCompartmentRef.current!;
 
     return EditorState.create({
       doc: content,
@@ -245,7 +256,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
         autocompletion(),
         highlightActiveLine(),
         highlightSelectionMatches(),
-        getLanguageExtension(language),
+        languageCompartment.of(languageCache.get(language) ?? []),
         ghostText(language),
         customTheme,
         scrollPastEnd(),
@@ -350,6 +361,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
     vimModeCompartmentRef.current = new Compartment();
     columnSelectionCompartmentRef.current = new Compartment();
     lspCompartmentRef.current = new Compartment();
+    languageCompartmentRef.current = new Compartment();
 
     const view = new EditorView({
       state: createEditorState(initialContent),
@@ -369,6 +381,23 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch the grammar for the open file and swap it in. Nothing to do when the
+  // cache already has it — `createEditorState` baked it in synchronously, so
+  // there is no flash on the second file of a language. A generation guard
+  // discards a slow import if the user switched to another language meanwhile.
+  useEffect(() => {
+    if (languageCache.has(language)) return;
+    const gen = ++languageGenerationRef.current;
+
+    void loadLanguageExtension(language).then((extension) => {
+      if (!extension) return;
+      if (gen !== languageGenerationRef.current) return; // newer file won
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({ effects: languageCompartmentRef.current!.reconfigure(extension) });
+    });
+  }, [language]);
 
   // Keep editor content in sync if initialContent changes from parent (e.g. file switched or saved)
   useEffect(() => {

@@ -6,12 +6,18 @@ import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
 import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator-brief';
-import { setMcpProjectRoot } from './mcpBridge';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
 import { activeTheme } from '$lib/stores/theme';
-import { mcpLaunchFlags, registerAgent, unregisterAgent } from './mcpBridge';
+import {
+  getMcpUrl,
+  injectMcpConfigForAgent,
+  mcpLaunchFlags,
+  registerAgent,
+  setMcpProjectRoot,
+  unregisterAgent,
+} from './mcpBridge';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -899,7 +905,6 @@ export async function createTerminalSession(
     // other running agents via the Spacron MCP bridge.
     if (agentPreset) {
       try {
-        const { getMcpUrl, injectMcpConfigForAgent } = await import('./mcpBridge');
         // Carries the `?token=` the MCP server requires — never rebuild this URL
         // from the bare port, or the agent connects unauthenticated and loses
         // every cross-agent tool.

@@ -34,6 +34,28 @@ export default defineConfig({
         // deferred; xterm rides with the (eager) terminal at first paint.
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
+          // Grammars get a chunk EACH, not a shared vendor chunk. CodeEditor
+          // imports them with dynamic import() so you only download the language
+          // you opened; sweeping them into vendor-codemirror would undo that and
+          // ship all 20 to anyone who opens a single .json file. Only
+          // CodeMirror/Lezer CORE — the runtime every language shares — belongs
+          // in the vendor chunk below.
+          //
+          // Each grammar is named `lang-<language>` so the build output stays
+          // readable, and a Lezer parser is deliberately given the same name as
+          // its language wrapper so the two travel together (@lezer/javascript
+          // rides with @codemirror/lang-javascript). Languages that share a
+          // parser — TypeScript and JavaScript, SCSS and Sass — therefore share
+          // one chunk, which is what we want.
+          const lang =
+            /node_modules[\\/](?:@codemirror[\\/]lang-|@replit[\\/]codemirror-lang-)([a-z0-9+-]+)/.exec(id) ||
+            /node_modules[\\/]@lezer[\\/](?!common[\\/]|lr[\\/]|highlight[\\/])([a-z0-9+-]+)/.exec(id);
+          if (lang) return `lang-${lang[1]}`;
+
+          // Legacy stream-parser modes are imported one mode at a time
+          // (@codemirror/legacy-modes/mode/toml), so key the chunk on the mode.
+          const legacy = /node_modules[\\/]@codemirror[\\/]legacy-modes[\\/]mode[\\/]([a-z0-9+-]+)/.exec(id);
+          if (legacy) return `lang-${legacy[1]}`;
           if (/node_modules[\\/](@codemirror|@lezer|@replit[\\/]codemirror|codemirror|codemirror-languageserver|vscode-languageserver)/.test(id)) {
             return 'vendor-codemirror';
           }

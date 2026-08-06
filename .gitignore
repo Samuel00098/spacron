@@ -35,6 +35,10 @@ code-editor-report-*.md
 
 # Scratch screenshots
 devdock-ui-check.png
+# 3.8 MB of website-redesign captures, referenced by nothing. Untracked rather
+# than deleted — they are still on disk if you want them.
+site-redesign-full.png
+site-redesign-hero.png
 spacron-current.png
 
 # AI / IDE tool local configs — machine-specific, never commit.

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import YouTubePanel from './YouTubePanel.tsx';
+// Via the lazy wrapper, not YouTubePanel directly: AppShell mounts this
+// component eagerly, so a direct import pulled the whole panel into the main
+// chunk and made YouTubePanelLazy pointless for BOTH surfaces.
+import YouTubePanel from './YouTubePanelLazy.tsx';
 import './FloatingYouTube.css';
 
 // A free-floating, draggable / resizable / transparent YouTube window — the
