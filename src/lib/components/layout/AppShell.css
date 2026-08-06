@@ -1600,8 +1600,21 @@
   text-align: left;
   color: var(--text-secondary);
   cursor: pointer;
-  animation: shell-chip-in 0.24s var(--ease-out) both;
-  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  /* `backwards`, NOT `both` — and this one was load-bearing. A forwards-filled
+     animation outranks every later declaration of the property it animates, and
+     this one animates `opacity`. That silently killed the deck's entire depth
+     cue: the `opacity: 0.92 / 0.84 / 0.76` ladder on `:nth-last-child(n+2/3/4)`
+     below could never apply, so cards receding up the pile stayed at full
+     strength and the deck read as flat. Same trap as `.room-panel`. */
+  animation: shell-chip-in 0.24s var(--ease-out) backwards;
+  /* `opacity`, `scale` and `translate` belong here because the deck drives all
+     three: opacity for the depth cue, `scale` for the pop and the recede, and
+     `translate` for the fan that moves the following cards out of the way. They
+     were absent, so every one of those changes snapped between states — the
+     motion the fan is built around never actually played. They stay individual
+     properties (never folded into `transform`) so the cue and the fan compose
+     rather than clobber each other. */
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), scale var(--dur-fast) var(--ease-out), translate var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .room-card-header {
@@ -2487,21 +2500,46 @@
   100% { opacity: 1; }
 }
 
+/* ── THE PLUS-LIGHTER CONTRACT ────────────────────────────────────────────
+   Read this before touching any `::view-transition-old/new` pair below.
+
+   The UA stylesheet paints both snapshots with `mix-blend-mode: plus-lighter`
+   inside an isolated image-pair. That blend is ADDITIVE, and it is correct only
+   while the two opacities sum to exactly 1 at every instant — which the UA's own
+   mirrored fade guarantees. Any custom pair that breaks the sum breaks the
+   picture, in one of two directions:
+
+     sum > 1  → additive over-exposure. The surface washes out bright.
+     sum < 1  → under-coverage. The surface goes see-through and reads as dull.
+
+   Both were happening here. The rule to keep: **a custom old/new pair must share
+   its duration and easing and mirror its keyframes** (old 1→0, new 0→1) — then
+   the sum is identically 1 for any curve, and plus-lighter is exactly right.
+   Where a pair genuinely cannot mirror (a deliberate PARTIAL fade, like `root`
+   below), it must opt out with `mix-blend-mode: normal` instead. */
+
 .app-shell ::view-transition-group(*) {
-  animation-duration: 0.44s;
+  /* Same clock as the crossfade below, so the box and its content settle
+     together instead of the image landing before the morph finishes. */
+  animation-duration: var(--dur-slower);
   animation-timing-function: var(--ease-out);
 }
 
 /* Default crossfade for morphing elements (room panels changing layout). Keep it
    opacity-only: the group above already animates position + size, so adding a
    transform here compounded into a visible wobble/double-scale while rooms
-   resized between Focus / Split / Gallery. The new image fades in over roughly
-   the morph duration so content settles together with the box. */
+   resized between Focus / Split / Gallery.
+
+   These were 0.2s `ease` out against 0.34s `ease` in — different lengths AND
+   different phases of the same curve, so the pair summed to about 0.7 for most
+   of the morph. Under plus-lighter that is a 30% hole in coverage: every
+   morphing panel went noticeably see-through in its middle third, which is the
+   "goes dull halfway through" reading. Mirrored on one clock now. */
 .app-shell ::view-transition-old(*) {
-  animation: panel-fade-out 0.2s ease both;
+  animation: panel-fade-out var(--dur-slower) var(--ease-out) both;
 }
 .app-shell ::view-transition-new(*) {
-  animation: panel-fade-in 0.34s ease both;
+  animation: panel-fade-in var(--dur-slower) var(--ease-out) both;
 }
 
 /* Modals appear/disappear rather than morphing between two layouts, so a gentle
@@ -2540,13 +2578,24 @@
    the card rail on the right and the incoming one expanded out of it. That
    read as a shape sliding across the screen before the panel settled, so
    the movement is gone and only the opacity remains. Keep it that way:
-   surfaces here appear in place, they don't travel. */
+   surfaces here appear in place, they don't travel.
+
+   The two halves must stay on ONE duration and ONE curve — see the plus-lighter
+   contract above. They were 0.38s against 0.42s, so the sum drifted off 1 and
+   the stage lost a few percent of coverage through the middle of every room
+   switch. On a frosted panel that shows up as the wallpaper flickering through
+   the glass, which is what made a plain room change look like something had
+   gone wrong.
+
+   Dropped from ~0.4s to `--dur-slow` as well: nothing moves in this transition,
+   it only dissolves, and 0.4s of dissolve on every click of the rail is the kind
+   of delay that reads as the app thinking rather than responding. */
 .app-shell ::view-transition-old(spacron-stage) {
-  animation: stage-shrink-out 0.38s var(--ease-out) both;
+  animation: stage-shrink-out var(--dur-slow) var(--ease-out) both;
 }
 
 .app-shell ::view-transition-new(spacron-stage) {
-  animation: stage-expand-in 0.42s var(--ease-out) both;
+  animation: stage-expand-in var(--dur-slow) var(--ease-out) both;
 }
 
 /* Outgoing stage: fades out in place. */
@@ -2565,12 +2614,29 @@
    the pile effect's opacity/transform values via animation fill mode.
    The existing @starting-style on .room-stack handles the sidebar entrance. */
 
+/* The root snapshot is a deliberate PARTIAL crossfade — neither half ever
+   reaches 0, so the page underneath only softens rather than dissolving. That
+   intent is good and is kept. What it cannot do is stay on plus-lighter: the two
+   halves sum to about 1.55 from the first frame to the last, and an additive
+   blend of two nearly-opaque copies of the whole screen is a bright wash over
+   everything for the entire transition.
+
+   That is the "flash of light" — and it fires on EVERY view transition, which is
+   why it showed up even when a stage switch changed nothing on screen.
+   `mix-blend-mode: normal` composites new over old instead: coverage works out
+   to ~1 throughout, so the softening stays and the flash goes.
+   Do not remove this without making the two keyframes mirror. */
+.app-shell ::view-transition-old(root),
+.app-shell ::view-transition-new(root) {
+  mix-blend-mode: normal;
+}
+
 .app-shell ::view-transition-old(root) {
-  animation: spacron-view-old 0.34s var(--ease-out) both;
+  animation: spacron-view-old var(--dur-slow) var(--ease-out) both;
 }
 
 .app-shell ::view-transition-new(root) {
-  animation: spacron-view-new 0.42s var(--ease-out) both;
+  animation: spacron-view-new var(--dur-slower) var(--ease-out) both;
 }
 
 @keyframes panel-fade-out {
