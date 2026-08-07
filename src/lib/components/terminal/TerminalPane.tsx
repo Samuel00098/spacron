@@ -371,8 +371,23 @@ function TerminalPane({
   // here is what xterm reports in reply to a TUI's OSC 11 "what is your
   // background?" query, so it must match that scrim — it is how termenv-based apps
   // (opencode, Claude Code, and any agent CLI wired up later) pick their theme.
+  //
+  // EXCEPT on WebGL, which cannot draw an attributed cell over a transparent
+  // surface. Its glyph atlas rasterises any cell carrying dim (SGR 2), italic,
+  // underline or strikethrough onto a tile pre-filled with the background colour,
+  // so at alpha 0 every such run lands as an opaque black slab. Measured
+  // 2026-08-07 over a magenta backdrop at xterm 5.5.0 / addon-webgl 0.18.0: plain,
+  // bold and colour-only runs stay correctly transparent; all four attributed ones
+  // slab. Agent statuslines lean on dim constantly, so WebGL panes come out
+  // striped with black boxes. It is not fixed upstream — xterm 6.0.0 +
+  // addon-webgl 0.19.0 drops transparency for the entire surface instead.
+  //
+  // An opaque surface is therefore the only way WebGL renders correctly. The RGB
+  // is deliberately unchanged, so the OSC 11 answer a TUI negotiates is identical
+  // and only the see-through glass is traded away — and only for the user who
+  // opted into WebGL. Canvas (the default) and DOM keep the wallpaper.
   function terminalBackground() {
-    return 'rgba(17, 17, 22, 0)';
+    return renderer === 'webgl' ? 'rgb(17, 17, 22)' : 'rgba(17, 17, 22, 0)';
   }
 
   // The terminal's palette. Always dark, in both app modes, and deliberately

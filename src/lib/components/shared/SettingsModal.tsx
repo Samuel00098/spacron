@@ -2112,7 +2112,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       ariaLabel="Terminal cursor"
                     />
                   </SettingRow>
-                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest but a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
+                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest, but it makes the terminal solid instead of see-through — it cannot draw dim or underlined text over a transparent surface — and a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
                     <SelectField
                       value={renderer}
                       options={[
