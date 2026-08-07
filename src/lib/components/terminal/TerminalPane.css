@@ -229,7 +229,11 @@
   overflow: hidden;
   min-height: 0;
   padding: 6px 6px 8px 6px;
-  background: transparent;
+  /* Opaque dark base, which is what the solid (non-glass) themes land on in BOTH
+     modes — the terminal is a dark surface regardless of app mode, so light solid
+     mode must not fall through to a bright panel under light ANSI text. The
+     frosted themes override this with translucent scrims just below. */
+  background: var(--terminal-surface, #111116);
   transition: opacity var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
   position: relative;
 }
@@ -241,7 +245,7 @@
    frosted (non-solid) themes. Windows/macOS strip it below for a fully
    see-through terminal; Linux keeps this scrim. */
 :root:not(.solid-theme) .terminal-pane .xterm-container {
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim, 0.35));
+  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim, 0.35));
 }
 
 /* Windows / macOS: a GENTLE readability scrim (default 0.22) instead of a fully
@@ -253,7 +257,17 @@
    --terminal-scrim-glass (0 = fully see-through, 1 = opaque). Linux (WebKitGTK)
    keeps its own 0.35 --terminal-scrim above, untouched. */
 :root:not(.solid-theme):not(.is-webkitgtk) .terminal-pane .xterm-container {
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--terminal-scrim-glass, 0.22)) !important;
+  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim-glass, 0.22)) !important;
+}
+
+/* Light mode needs a much heavier scrim than dark, and it is load-bearing rather
+   than cosmetic. The terminal's ANSI palette is dark in both modes (see
+   buildTerminalTheme), so its text is light — and at 0.22 over a bright wallpaper
+   the surface stays pale and that light text is unreadable. Closing the glass to
+   0.88 gives the dark well the text is drawn for, while the wallpaper still
+   registers at the edges. Tunable via --terminal-scrim-light. */
+:root:not(.solid-theme).light-theme .terminal-pane .xterm-container {
+  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim-light, 0.88)) !important;
 }
 
 /* Liquid glass sheen overlay — specular diagonal reflection + vignette */

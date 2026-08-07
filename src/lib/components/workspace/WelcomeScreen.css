@@ -215,21 +215,28 @@
   border: 1px solid transparent;
 }
 
+/* Every colour here is expressed relative to --accent and --on-accent so the
+   button works in both modes. It used to shade toward absolute #000 with a
+   hardcoded #0c0d0f label, which was fine against a bright indigo fill but
+   fails now that light mode's accent is dark graphite — near-black ink on a
+   near-black fill. Mixing toward --on-accent instead flips with the mode:
+   the sheen darkens a near-white dark-mode fill and lightens a graphite
+   light-mode one, and the label is always the readable end. */
 .welcome .action-btn.primary {
-  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 72%, #000) 100%);
-  color: #0c0d0f;
-  box-shadow: 
+  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 86%, var(--on-accent)) 100%);
+  color: var(--on-accent);
+  box-shadow:
     0 4px 12px -4px color-mix(in srgb, var(--accent) 45%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 55%, transparent);
   font-weight: 700;
-  border-color: rgba(255, 255, 255, 0.06);
+  border-color: color-mix(in srgb, var(--on-accent) 12%, transparent);
 }
 
 .welcome .action-btn.primary:hover {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 90%, #fff) 0%, var(--accent) 100%);
-  box-shadow: 
+  background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent) 100%);
+  box-shadow:
     0 8px 18px -4px color-mix(in srgb, var(--accent) 55%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 70%, transparent);
   transform: translateY(-1.2px);
 }
 
@@ -257,8 +264,8 @@
 }
 
 .welcome .action-btn.primary .action-icon {
-  background: rgba(12, 13, 15, 0.06);
-  color: #0c0d0f;
+  background: color-mix(in srgb, var(--on-accent) 8%, transparent);
+  color: var(--on-accent);
 }
 
 .welcome .action-label {
@@ -281,11 +288,18 @@
   font-weight: 600;
 }
 
+/* An actual keycap on the primary button: the cap is --on-accent and the
+   legend is --accent, so the pair inverts the button and stays high-contrast
+   in both modes. Light mode gets a white cap with graphite legend on a dark
+   fill; dark mode gets an ink cap with a near-white legend on a pale fill.
+   A translucent cap with a translucent legend, which is what this was, goes
+   muddy in whichever mode the fill is close to the legend. */
 .welcome .action-btn.primary kbd {
-  border-color: rgba(0, 0, 0, 0.15);
-  border-bottom-color: rgba(0, 0, 0, 0.25);
-  background: rgba(0, 0, 0, 0.1);
-  color: rgba(12, 13, 15, 0.7);
+  border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--on-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 90%, transparent);
+  color: var(--accent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* Centralized Recent Workspaces Card */
@@ -715,7 +729,13 @@
   border-color: rgba(0, 0, 0, 0.06);
 }
 
-.welcome.light .action-btn kbd,
+/* :not(.primary) matters. This rule paints a near-white keycap, which is right
+   on light mode's pale secondary buttons but wrong on the primary one — that is
+   a dark graphite fill, and its kbd sets a light label, so a white keycap here
+   produced white-on-white. The two rules also tie on specificity (0,3,1), so
+   this one won purely by coming later in the file; excluding .primary settles
+   it by intent instead of by line order. */
+.welcome.light .action-btn:not(.primary) kbd,
 .welcome.light .shortcut-pill kbd {
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-bottom: 2px solid rgba(0, 0, 0, 0.16);

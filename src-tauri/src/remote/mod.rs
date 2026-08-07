@@ -581,6 +581,24 @@ fn git_run(workspace: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Like [`git_run`] but keeps the output exactly as git wrote it. Porcelain
+/// status needs this: its first column is a space for unstaged changes, and
+/// trimming would shift the two-character status code out of alignment.
+fn git_run_raw(workspace: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(workspace)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(format!("git {} failed: {stderr}", args.join(" ")))
+    }
+}
+
 fn git_capture(workspace: &Path, args: &[&str]) -> Option<String> {
     std::process::Command::new("git")
         .args(args)
@@ -656,7 +674,7 @@ fn git_status(workspace: &Path) -> Result<Value, String> {
     }
     let branch = git_capture(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|| "HEAD".to_string());
-    let stdout = git_run(workspace, &["status", "--porcelain"])?;
+    let stdout = git_run_raw(workspace, &["status", "--porcelain", "-z"])?;
 
     let mut modified: Vec<String> = Vec::new();
     let mut added: Vec<String> = Vec::new();
@@ -664,10 +682,8 @@ fn git_status(workspace: &Path) -> Result<Value, String> {
     let mut untracked: Vec<String> = Vec::new();
     let mut conflicted: Vec<String> = Vec::new();
 
-    for line in stdout.lines() {
-        if line.len() < 4 { continue; }
-        let status_code = &line[0..2];
-        let file_path = line[3..].trim().to_string();
+    for (status_code, path) in crate::commands::workspace::parse_porcelain_z(&stdout) {
+        let file_path = path.to_string();
         if status_code.contains('U') || status_code == "AA" || status_code == "DD" {
             conflicted.push(file_path);
         } else if status_code.contains('M') {

@@ -1,4 +1,6 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
+import { invoke } from '@tauri-apps/api/core';
+import { isTauriRuntime } from '$lib/utils/tauri';
 
 // Remote-workspace connection state (Step 4 of docs/remote-workspace.md — the
 // "Connection UX"). This grew out of the Step 1 spike's single devtools-set
@@ -11,6 +13,11 @@ import { writable, derived, get } from '$lib/stores/storeCompat';
 // here (was a writable in the spike) so backend.ts / pty-bridge(-remote).ts /
 // lsp/client.ts keep working unchanged: both `get(remoteTarget)` and
 // `remoteTarget.subscribe(...)` behave identically.
+//
+// Token handling (security): the token unlocks a shell on the remote box, so it
+// is deliberately NOT persisted in localStorage with the rest of the connection
+// list. It lives in the OS keychain (`remote_token_set/get` commands) and is
+// held in session memory only — see `tokenCache` below.
 
 /** A saved remote target. `url` is the `/pty` WebSocket endpoint; `token` is the
  *  pre-shared server token (offered as a `token.<TOKEN>` subprotocol). */
@@ -48,13 +55,27 @@ const CONNECTIONS_KEY = 'spacron_remote_connections';
 // Legacy single-target key from the Step 1 spike; migrated on first load.
 const LEGACY_TARGET_KEY = 'spacron_remote_workspace';
 
+// Plaintext tokens found in persisted data written by older builds. They are
+// moved into the OS keychain on first hydrate and never stored again.
+const pendingLegacyTokens = new Map<string, string>();
+
 function safeConnection(raw: unknown): RemoteConnection | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  if (typeof r.url !== 'string' || typeof r.token !== 'string') return null;
+  if (typeof r.url !== 'string') return null;
   const id = typeof r.id === 'string' && r.id ? r.id : newId();
   const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : hostLabel(r.url);
-  return { id, name, url: r.url, token: r.token, reconnectOnStartup: r.reconnectOnStartup === true };
+  const legacyToken = typeof r.token === 'string' ? r.token.trim() : '';
+  if (legacyToken) pendingLegacyTokens.set(id, legacyToken);
+  // `token` starts empty in the store; hydrateRemoteTokens() fills it from the
+  // OS keychain. It is never read back from localStorage.
+  return {
+    id,
+    name,
+    url: r.url,
+    token: '',
+    reconnectOnStartup: r.reconnectOnStartup === true,
+  };
 }
 
 function loadConnections(): RemoteConnection[] {
@@ -97,6 +118,71 @@ function newId(): string {
   return `conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** In-session token cache, hydrated from the OS keychain. Tokens never touch
+ *  localStorage — the keychain is the only durable store
+ *  (`remote_token_set/get` in `src-tauri/src/commands/secrets.rs`). */
+const tokenCache = new Map<string, string>();
+let hydratePromise: Promise<void> | null = null;
+
+/** What gets persisted: everything except the token. */
+function stripToken(c: RemoteConnection) {
+  return { id: c.id, name: c.name, url: c.url, reconnectOnStartup: c.reconnectOnStartup };
+}
+
+/** Load one connection's token from the keychain into session memory. Throws if
+ *  the keychain read fails so callers can decide how to surface it. */
+async function hydrateToken(id: string): Promise<void> {
+  if (tokenCache.has(id)) return;
+  if (!isTauriRuntime()) {
+    tokenCache.set(id, '');
+    return;
+  }
+  const token = (await invoke<string | null>('remote_token_get', { id })) ?? '';
+  tokenCache.set(id, token);
+  remoteConnections.update((list) => list.map((c) => (c.id === id ? { ...c, token } : c)));
+}
+
+/**
+ * Load every saved remote's token from the keychain into session memory, and
+ * migrate any plaintext tokens left in localStorage by older builds. Safe to
+ * call repeatedly; one in-flight hydration is shared by all callers.
+ */
+export async function hydrateRemoteTokens(): Promise<void> {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = (async () => {
+    const list = get(remoteConnections);
+    for (const [id, token] of pendingLegacyTokens) {
+      try {
+        await invoke('remote_token_set', { id, token });
+        tokenCache.set(id, token);
+        remoteConnections.update((l) => l.map((c) => (c.id === id ? { ...c, token } : c)));
+      } catch (err) {
+        // Keychain write failed — keep the token for this session only and
+        // retry the migration on the next launch.
+        console.error('[remoteWorkspace] Failed to migrate remote token to the keychain:', err);
+        tokenCache.set(id, token);
+      }
+    }
+    pendingLegacyTokens.clear();
+    await Promise.all(list.map((c) => hydrateToken(c.id)));
+  })();
+  return hydratePromise;
+}
+
+/** A remote's token for this session, loading it from the keychain if needed. */
+export async function getRemoteToken(id: string): Promise<string> {
+  try {
+    await hydrateToken(id);
+  } catch {
+    /* keychain unavailable — treat as no token */
+  }
+  return tokenCache.get(id) ?? '';
+}
+
+async function setRemoteToken(id: string, token: string): Promise<void> {
+  await invoke('remote_token_set', { id, token });
+}
+
 /** Saved remotes (persisted). The implicit "Local" option isn't in this list. */
 export const remoteConnections = writable<RemoteConnection[]>(loadConnections());
 
@@ -111,7 +197,8 @@ export const connectionStatus = writable<ConnectionStatus>('disconnected');
 if (typeof window !== 'undefined') {
   remoteConnections.subscribe((list) => {
     try {
-      localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(list));
+      // Tokens are never persisted here — the OS keychain owns them.
+      localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(list.map(stripToken)));
     } catch {
       /* ignore persistence failures */
     }
@@ -133,8 +220,13 @@ export const remoteTarget = derived(
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-/** Add a saved remote and return its generated id. */
-export function addRemoteConnection(input: { name?: string; url: string; token: string }): string {
+/** Add a saved remote and return its generated id. The token is written to the
+ *  OS keychain first; if that fails the remote is not added. */
+export async function addRemoteConnection(input: {
+  name?: string;
+  url: string;
+  token: string;
+}): Promise<string> {
   const id = newId();
   const conn: RemoteConnection = {
     id,
@@ -142,17 +234,29 @@ export function addRemoteConnection(input: { name?: string; url: string; token: 
     url: input.url.trim(),
     token: input.token.trim(),
   };
+  await setRemoteToken(id, conn.token);
+  tokenCache.set(id, conn.token);
   remoteConnections.update((list) => [...list, conn]);
   return id;
 }
 
-export function updateRemoteConnection(id: string, patch: Partial<Omit<RemoteConnection, 'id'>>) {
+export async function updateRemoteConnection(
+  id: string,
+  patch: Partial<Omit<RemoteConnection, 'id'>>,
+) {
+  const rest: Partial<Omit<RemoteConnection, 'id' | 'token'>> = { ...patch };
+  const nextToken = typeof patch.token === 'string' ? patch.token.trim() : null;
+  if (nextToken) {
+    await setRemoteToken(id, nextToken);
+    tokenCache.set(id, nextToken);
+  }
   remoteConnections.update((list) =>
     list.map((c) =>
       c.id === id
         ? {
             ...c,
-            ...patch,
+            ...rest,
+            ...(nextToken ? { token: nextToken } : {}),
             name: (patch.name ?? c.name).trim() || hostLabel(patch.url ?? c.url),
           }
         : c,
@@ -160,11 +264,17 @@ export function updateRemoteConnection(id: string, patch: Partial<Omit<RemoteCon
   );
 }
 
-export function removeRemoteConnection(id: string) {
+export async function removeRemoteConnection(id: string) {
   // Disconnecting first keeps us from leaving a live socket pointed at a target
   // that no longer exists.
   if (get(activeRemoteId) === id) void disconnectRemote();
   remoteConnections.update((list) => list.filter((c) => c.id !== id));
+  tokenCache.delete(id);
+  try {
+    await invoke('remote_token_delete', { id });
+  } catch (err) {
+    console.error(`[remoteWorkspace] Failed to remove keychain token for ${id}:`, err);
+  }
 }
 
 export function setConnectionStatus(status: ConnectionStatus) {
@@ -205,6 +315,21 @@ export async function connectRemote(id: string): Promise<void> {
   if (!conn) return;
   if (get(activeRemoteId) === id) return;
 
+  // The token lives in the OS keychain; load it into session memory before
+  // dialing so the WS handshake has a token to present.
+  try {
+    await hydrateToken(id);
+  } catch (err) {
+    connectionStatus.set('disconnected');
+    const { showToast } = await import('./notification');
+    showToast(
+      `Couldn't read the saved token for ${conn.name}: ${(err as Error)?.message ?? String(err)}`,
+      'error',
+      6000,
+    );
+    return;
+  }
+
   connectionStatus.set('connecting');
   // Flip `remoteTarget` first so the dial + `workspace_info` route to this remote.
   activeRemoteId.set(id);
@@ -241,6 +366,9 @@ export async function connectRemote(id: string): Promise<void> {
  */
 export async function maybeAutoReconnectRemote(): Promise<void> {
   if (get(activeRemoteId)) return;
+  // Tokens are keychain-backed; make sure the flagged remote's token is in
+  // session memory before `startupRemote` hands it to the dial.
+  await hydrateRemoteTokens();
   const target = startupRemote();
   if (!target) return;
   try {

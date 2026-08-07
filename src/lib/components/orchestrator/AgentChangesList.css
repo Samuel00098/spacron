@@ -120,7 +120,7 @@
 .agent-changes .ac-stage-btn:hover:not(:disabled) {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .agent-changes .ac-stage-btn:disabled {

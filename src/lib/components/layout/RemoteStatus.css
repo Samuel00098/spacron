@@ -321,7 +321,10 @@
 .rs-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
-.rs-btn-primary:hover { background: color-mix(in srgb, var(--accent) 85%, #000); color: #fff; }
+/* Hover brightens toward --accent-hover rather than mixing toward black:
+   the dark-mode accent is near-white, so darkening it reads as a disabled
+   state instead of a response to the pointer. */
+.rs-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
 .rs-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }

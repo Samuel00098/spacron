@@ -10,6 +10,7 @@ import {
   updateRemoteConnection,
   removeRemoteConnection,
   setReconnectOnStartup,
+  getRemoteToken,
   hostLabel,
   type ConnectionStatus,
 } from '$lib/stores/remoteWorkspace';
@@ -76,18 +77,25 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
       : active.name
     : STATUS_LABEL[status] || 'Local';
 
-  const submitForm = (e: FormEvent) => {
+  const submitForm = async (e: FormEvent) => {
     e.preventDefault();
     if (!form) return;
     const url = form.url.trim();
     const token = form.token.trim();
     if (!url || !token) return;
-    if (form.id) {
-      updateRemoteConnection(form.id, { name: form.name, url, token });
-    } else {
-      addRemoteConnection({ name: form.name, url, token });
+    try {
+      if (form.id) {
+        await updateRemoteConnection(form.id, { name: form.name, url, token });
+      } else {
+        await addRemoteConnection({ name: form.name, url, token });
+      }
+      setForm(null);
+    } catch (err) {
+      // The keychain write failed (e.g. the OS credential store is locked) — the
+      // remote was not saved, so tell the user instead of silently losing the token.
+      const { showToast } = await import('$lib/stores/notification');
+      showToast(`Couldn't save remote: ${(err as Error)?.message ?? String(err)}`, 'error', 5000);
     }
-    setForm(null);
   };
 
   return (
@@ -183,9 +191,12 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
                     type="button"
                     className="rs-icon-btn"
                     title="Edit"
-                    onClick={() =>
-                      setForm({ id: conn.id, name: conn.name, url: conn.url, token: conn.token })
-                    }
+                    onClick={async () => {
+                      // The token is keychain-backed; fetch it into session
+                      // memory so the form prefills without ever persisting it.
+                      const token = await getRemoteToken(conn.id);
+                      setForm({ id: conn.id, name: conn.name, url: conn.url, token });
+                    }}
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 20h9" />
@@ -196,7 +207,9 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
                     type="button"
                     className="rs-icon-btn rs-danger"
                     title="Remove"
-                    onClick={() => removeRemoteConnection(conn.id)}
+                    onClick={() => {
+                      void removeRemoteConnection(conn.id);
+                    }}
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M3 6h18" />

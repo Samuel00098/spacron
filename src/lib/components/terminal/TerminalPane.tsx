@@ -363,29 +363,74 @@ function TerminalPane({
     } catch {}
   }
 
-  // Always render the terminal fully transparent (alpha 0) so the wallpaper shows
-  // through in both light and dark modes — the frosted-glass aesthetic lives on
-  // the pane frame; the content area is see-through.
+  // The terminal is a DARK content surface in both light and dark app modes, and
+  // never follows the theme. See buildTerminalTheme() for the full reasoning.
   //
-  // BUT the *RGB* of that transparent colour still matters: xterm reports it in
-  // response to a TUI's OSC 11 "what is your background?" query, which is how
-  // termenv-based apps (opencode, Claude Code, etc.) auto-detect light vs dark.
-  // A transparent-*black* bg made every TUI pick dark mode even in light theme.
-  // Carry a light RGB in light mode / dark RGB in dark mode so TUIs theme-match,
-  // while alpha 0 keeps the surface fully transparent.
+  // Alpha stays 0 so the frosted wallpaper still shows through; the darkness comes
+  // from the scrim in TerminalPane.css (--terminal-surface-rgb). The RGB carried
+  // here is what xterm reports in reply to a TUI's OSC 11 "what is your
+  // background?" query, so it must match that scrim — it is how termenv-based apps
+  // (opencode, Claude Code, and any agent CLI wired up later) pick their theme.
   function terminalBackground() {
-    const isLight = get(activeTheme)?.type === 'light';
-    // The xterm surface is ALWAYS fully transparent (alpha 0) — the plain shell and
-    // full-screen TUIs alike — so the wallpaper shows through exactly like the code
-    // editor does. TUIs that paint their own full-screen background (opencode and
-    // similar Bubbletea/ncurses CLIs) still look solid because they draw their own
-    // surface over the glass; everything else stays see-through.
-    //
-    // The RGB still matters: xterm reports it in reply to a TUI's OSC 11 "what is
-    // your background?" query, which is how termenv-based apps auto-detect light vs
-    // dark. Carry a light RGB in light mode / dark RGB in dark mode (alpha 0) so any
-    // agent CLI — including ones the user wires up later — theme-matches at launch.
-    return isLight ? 'rgba(250, 250, 252, 0)' : 'rgba(17, 17, 22, 0)';
+    return 'rgba(17, 17, 22, 0)';
+  }
+
+  // The terminal's palette. Always dark, in both app modes, and deliberately
+  // decoupled from light/dark — this is the one surface in the app that does not
+  // follow the theme.
+  //
+  // WHY. A TUI asks "what colour is your background?" exactly once, over OSC 11,
+  // at launch, and then paints its own surface from the answer. It is a separate
+  // process; there is no signal that means "you were told light, it is dark now,
+  // please re-theme". So while the answer tracked app mode, a TUI launched in
+  // light mode kept its white surface forever — including after switching to dark,
+  // where it became a glaring white slab. That is not a styling bug that can be
+  // chased; it is a one-shot negotiation that already concluded. Pinning the
+  // answer to dark is what makes the result deterministic.
+  //
+  // It also has to be the WHOLE palette, not just the reported background. The
+  // xterm surface is transparent, so a plain shell's text lands on whatever shows
+  // through. Report dark while leaving the foreground light-tuned and ordinary
+  // shell output goes dark-on-dark. Background, foreground and ANSI slots move
+  // together, and the scrim in TerminalPane.css darkens the surface to match.
+  //
+  // A dark PRESET may still colour the semantic and syntax slots, so each
+  // wallpaper keeps its character. A light theme's tokens are tuned for a bright
+  // page and are ignored outright — the canonical dark values below are used.
+  function buildTerminalTheme() {
+    const theme = get(activeTheme);
+    const usable = theme?.type === 'light' ? undefined : theme;
+    const colors = usable?.colors ?? {};
+    const syntax = usable?.syntax ?? {};
+    return {
+      background: terminalBackground(),
+      foreground: colors['text-primary'] || '#e6edf3',
+      cursor: colors['accent'] || '#f1f5f9',
+      cursorAccent: colors['bg-primary'] || '#111116',
+      selectionBackground: colors['selection-bg'] || 'rgba(241, 245, 249, 0.28)',
+      black: colors['bg-tertiary'] || '#21262d',
+      red: colors['error'] || '#ff6b6b',
+      green: colors['success'] || '#2ee06d',
+      yellow: colors['warning'] || '#fbbf24',
+      // NOT --accent. The accent is graphite now, so deriving ANSI blue from it
+      // renders every blue token in shell output as near-white. --info is the
+      // token that is actually a blue.
+      blue: colors['info'] || '#58a6ff',
+      magenta: syntax['function'] || '#d2a8ff',
+      cyan: syntax['constant'] || '#39d2c0',
+      white: colors['text-primary'] || '#e6edf3',
+      // ANSI "bright black" is the dim slot agent CLIs use for secondary text
+      // (Thinking lines, tips, hints). Over a see-through terminal it has to stay
+      // legible, so it maps to text-secondary rather than the dimmer text-muted.
+      brightBlack: colors['text-secondary'] || colors['text-muted'] || '#8b949e',
+      brightRed: syntax['keyword'] || '#ff7b72',
+      brightGreen: colors['success'] || '#4ade80',
+      brightYellow: colors['warning'] || '#fbbf24',
+      brightBlue: colors['info'] || '#79b8ff',
+      brightMagenta: syntax['function'] || '#d2a8ff',
+      brightCyan: syntax['constant'] || '#39d2c0',
+      brightWhite: '#ffffff',
+    };
   }
 
   function applyRendererBackground() {
@@ -824,10 +869,6 @@ function TerminalPane({
     const container = containerRef.current;
     if (!container) return;
 
-    const initialColors = get(activeTheme)?.colors || {};
-    const initialSyntax = get(activeTheme)?.syntax || {};
-    const isLight = get(activeTheme)?.type === 'light';
-
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: get(terminalCursorStyle),
@@ -845,37 +886,7 @@ function TerminalPane({
       // the CLI colored it, while leaving already-legible output untouched.
       minimumContrastRatio: 4.5,
       windowsPty,
-      theme: {
-        // Transparent surface, but light/dark RGB so TUIs can OSC-11 theme-detect.
-        background: isLight ? 'rgba(250, 250, 252, 0)' : 'rgba(17, 17, 22, 0)',
-        foreground: initialColors['text-primary'] || (isLight ? '#000000' : '#e6edf3'),
-        cursor: initialColors['accent'] || (isLight ? '#0f766e' : '#7c6af7'),
-        cursorAccent: initialColors['editor-bg'] || initialColors['bg-primary'] || (isLight ? '#ffffff' : '#1a1a1f'),
-        selectionBackground: initialColors['selection-bg'] || (isLight ? 'rgba(15,118,110,0.2)' : 'rgba(124,106,247,0.3)'),
-        black: isLight ? '#1f2328' : (initialColors['bg-tertiary'] || '#484f58'),
-        red: initialColors['error'] || (isLight ? '#cf222e' : '#f85149'),
-        green: initialColors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
-        yellow: initialColors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
-        blue: initialColors['accent'] || (isLight ? '#0969da' : '#7c6af7'),
-        magenta: initialSyntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
-        cyan: initialSyntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        // In light mode ANSI white/brightWhite must stay dark, or shell output
-        // drawn in those colors (e.g. command tokens) is invisible on the light
-        // background. Map them to readable dark tones instead of near-white.
-        white: isLight ? '#24292f' : (initialColors['text-primary'] || '#e6edf3'),
-        // ANSI "bright black" is the dim/muted slot agent CLIs use for secondary
-        // text (Thinking lines, tips, hints). Over the see-through terminal it must
-        // stay legible, so map it to the brighter text-secondary token rather than
-        // text-muted; light mode already uses a dark high-contrast tone.
-        brightBlack: isLight ? '#24292f' : (initialColors['text-secondary'] || initialColors['text-muted'] || '#8b949e'),
-        brightRed: initialSyntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
-        brightGreen: initialColors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
-        brightYellow: initialColors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
-        brightBlue: initialColors['accent-hover'] || (isLight ? '#218bff' : '#9585ff'),
-        brightMagenta: initialSyntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
-        brightCyan: initialSyntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        brightWhite: isLight ? '#000000' : (initialColors['text-primary'] || '#ffffff'),
-      },
+      theme: buildTerminalTheme(),
     });
     termRef.current = term;
 
@@ -1282,37 +1293,11 @@ function TerminalPane({
   useEffect(() => {
     const term = termRef.current;
     if (term && activeThemeValue) {
-      const colors = activeThemeValue.colors;
-      const syntax = activeThemeValue.syntax;
-      const isLight = activeThemeValue.type === 'light';
       term.options.allowTransparency = true;
-      term.options.theme = {
-        // Buffer-aware: opaque theme surface for a full-screen TUI, transparent
-        // glass for the plain shell (see terminalBackground).
-        background: terminalBackground(),
-        foreground: colors['text-primary'] || (isLight ? '#000000' : '#e6edf3'),
-        cursor: colors['accent'] || (isLight ? '#0f766e' : '#7c6af7'),
-        cursorAccent: colors['editor-bg'] || colors['bg-primary'] || (isLight ? '#ffffff' : '#111116'),
-        selectionBackground: colors['selection-bg'] || (isLight ? 'rgba(15,118,110,0.2)' : 'rgba(124,106,247,0.3)'),
-        black: isLight ? '#1f2328' : (colors['bg-tertiary'] || '#21262d'),
-        red: colors['error'] || (isLight ? '#cf222e' : '#f85149'),
-        green: colors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
-        yellow: colors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
-        blue: colors['accent'] || (isLight ? '#0969da' : '#7c6af7'),
-        magenta: syntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
-        cyan: syntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        white: isLight ? '#24292f' : (colors['text-primary'] || '#e6edf3'),
-        // Dim/muted ANSI slot — brightened to text-secondary so agent-CLI secondary
-        // text stays readable over the see-through terminal (see initial theme above).
-        brightBlack: isLight ? '#24292f' : (colors['text-secondary'] || colors['text-muted'] || '#8b949e'),
-        brightRed: syntax['keyword'] || (isLight ? '#cf222e' : '#ff7b72'),
-        brightGreen: colors['success'] || (isLight ? '#1a7f37' : '#4ade80'),
-        brightYellow: colors['warning'] || (isLight ? '#9a6700' : '#fbbf24'),
-        brightBlue: colors['accent-hover'] || (isLight ? '#218bff' : '#9585ff'),
-        brightMagenta: syntax['function'] || (isLight ? '#8250df' : '#d2a8ff'),
-        brightCyan: syntax['constant'] || (isLight ? '#0598bc' : '#39d2c0'),
-        brightWhite: isLight ? '#000000' : (colors['text-primary'] || '#ffffff'),
-      };
+      // Re-applied on every theme change. Note this only re-themes xterm itself —
+      // a TUI already running keeps whatever palette it chose at launch, which is
+      // exactly why buildTerminalTheme() no longer varies by mode.
+      term.options.theme = buildTerminalTheme();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThemeValue]);

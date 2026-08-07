@@ -247,23 +247,28 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* A selected result is a row, not a call to action — a tint plus a rim
+   reads as "you are here" without spending the solid accent on a list that
+   can show thirty of these at once. Text keeps its normal colours, so the
+   code excerpt stays as readable selected as it is unselected. */
 .match-row-spotlight.selected {
-  background: var(--accent);
-  color: #ffffff;
+  background: var(--accent-light);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+  color: var(--text-primary);
 }
 
 .match-row-spotlight.selected .match-line-no-spotlight {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
 }
 
 .match-row-spotlight.selected .match-before-spotlight,
 .match-row-spotlight.selected .match-after-spotlight {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text-secondary);
 }
 
 .match-row-spotlight.selected .match-hit-spotlight {
-  background: rgba(255, 255, 255, 0.25);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--text-primary);
 }
 
 .match-line-no-spotlight {

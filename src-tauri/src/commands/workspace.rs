@@ -760,6 +760,37 @@ fn search_dir_recursive(
     Ok(())
 }
 
+/// Split `git status --porcelain -z` output into `(status_code, path)` pairs.
+///
+/// Always read porcelain with `-z`. The default format runs paths through
+/// git's `quote_path`, which wraps anything containing a space in double
+/// quotes — `"images/a b.png"`. Those quotes are part of the output, not the
+/// filename, and a parser that slices the line verbatim carries them into the
+/// path it hands back to the UI. They then travel into `git add -- <path>` as
+/// part of the pathspec and match nothing. `-z` emits raw bytes with no
+/// quoting at all.
+///
+/// Records are `XY <path>\0`. A rename or copy appends the original path as a
+/// second record, consumed here and dropped — callers want the new name.
+pub(crate) fn parse_porcelain_z(stdout: &str) -> Vec<(&str, &str)> {
+    let mut entries = Vec::new();
+    let mut records = stdout.split('\0');
+    while let Some(record) = records.next() {
+        // 2 status chars + space + at least one path char.
+        if record.len() < 4 || !record.is_char_boundary(3) {
+            continue;
+        }
+        let (head, path) = record.split_at(3);
+        let status_code = &head[0..2];
+        if status_code.contains('R') || status_code.contains('C') {
+            records.next(); // the original path, which we don't report
+        }
+        // No trimming: leading and trailing spaces are legal in a filename.
+        entries.push((status_code, path));
+    }
+    entries
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GitStatus {
     pub branch: String,
@@ -803,7 +834,7 @@ pub fn workspace_git_status(
 
     // 2. Get porcelain status
     let output = git_base()
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "-z"])
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
@@ -816,12 +847,8 @@ pub fn workspace_git_status(
     let mut untracked = Vec::new();
     let mut conflicted = Vec::new();
 
-    for line in stdout.lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let status_code = &line[0..2];
-        let file_path = line[3..].trim().to_string();
+    for (status_code, path) in parse_porcelain_z(&stdout) {
+        let file_path = path.to_string();
 
         // Unmerged paths (merge/rebase conflicts) come first: any 'U', or the
         // both-added / both-deleted cases, which the M/A/D checks would
@@ -844,16 +871,18 @@ pub fn workspace_git_status(
     let mut total_additions = 0;
     let mut total_deletions = 0;
 
+    // `-z` to match the path spelling used above: these keys are looked up by
+    // the paths that came out of porcelain, so both sides must be unquoted.
     let numstat_output = git_base()
-        .args(["diff", "HEAD", "--numstat", "--no-renames"])
+        .args(["diff", "HEAD", "--numstat", "--no-renames", "-z"])
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output();
 
     if let Ok(ref output) = numstat_output {
         let numstat_stdout = String::from_utf8_lossy(&output.stdout);
-        for line in numstat_stdout.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
+        for record in numstat_stdout.split('\0') {
+            let parts: Vec<&str> = record.splitn(3, '\t').collect();
             if parts.len() >= 3 {
                 let additions = parts[0].parse::<i32>().unwrap_or(0);
                 let deletions = parts[1].parse::<i32>().unwrap_or(0);
@@ -3455,15 +3484,17 @@ pub fn workspace_git_worktree_diff_stat(
 fn staged_paths_at(root: &std::path::Path) -> Result<Vec<String>, String> {
     // No HEAD yet: everything in the index is staged, and `diff --cached` has
     // nothing to compare against.
+    // `-z` on both: the UI matches these against the porcelain paths to split
+    // Changes into staged and unstaged, so the spelling has to agree, and
+    // neither list may mangle a path containing a quote, backslash or space.
     let args: &[&str] = if git_capture(root, &["rev-parse", "--verify", "HEAD"]).is_some() {
-        &["diff", "--cached", "--name-only", "--no-renames"]
+        &["diff", "--cached", "--name-only", "--no-renames", "-z"]
     } else {
-        &["ls-files", "--cached"]
+        &["ls-files", "--cached", "-z"]
     };
     let out = run_git(root, args, "list staged files")?;
     Ok(out
-        .lines()
-        .map(str::trim)
+        .split('\0')
         .filter(|l| !l.is_empty())
         .map(str::to_string)
         .collect())
@@ -3614,6 +3645,56 @@ pub fn workspace_get_recent_daily_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- porcelain parsing ---
+
+    #[test]
+    fn keeps_spaced_paths_unquoted() {
+        // The regression: the default porcelain format wraps this path in
+        // double quotes, and those quotes used to end up inside the pathspec
+        // handed to `git add`, which then matched nothing.
+        let out = "?? images/ChatGPT Image Aug 7, 2026, 05_09_51 AM.png\0 M src/App.tsx\0";
+        assert_eq!(
+            parse_porcelain_z(out),
+            vec![
+                ("??", "images/ChatGPT Image Aug 7, 2026, 05_09_51 AM.png"),
+                (" M", "src/App.tsx"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_new_name_for_renames_and_skips_the_original() {
+        let out = "RM images/C D.png\0images/A B.png\0D  plain.txt\0";
+        assert_eq!(
+            parse_porcelain_z(out),
+            vec![("RM", "images/C D.png"), ("D ", "plain.txt")]
+        );
+    }
+
+    #[test]
+    fn preserves_significant_whitespace_in_paths() {
+        // A trailing space is a legal filename character; the old `.trim()`
+        // silently ate it and produced a path that matched nothing.
+        assert_eq!(parse_porcelain_z("?? odd name \0"), vec![("??", "odd name ")]);
+    }
+
+    #[test]
+    fn skips_empty_and_truncated_records() {
+        assert_eq!(parse_porcelain_z(""), vec![]);
+        assert_eq!(parse_porcelain_z("\0\0"), vec![]);
+        assert_eq!(parse_porcelain_z("?? \0"), vec![]);
+        // One-character paths are real and must survive.
+        assert_eq!(parse_porcelain_z("?? a\0"), vec![("??", "a")]);
+    }
+
+    #[test]
+    fn handles_non_ascii_paths_without_panicking() {
+        // `-z` emits raw bytes, so multi-byte characters reach the parser
+        // instead of git's \xxx escapes. Byte-slicing the status code must not
+        // land mid-character.
+        assert_eq!(parse_porcelain_z("?? café/日本.png\0"), vec![("??", "café/日本.png")]);
+    }
 
     // --- upstream tracking ---
 
@@ -3976,6 +4057,36 @@ mod tests {
 
         stage_paths_at(repo.path(), &["new.txt".to_string()]).expect("stage new.txt");
         assert_eq!(staged_paths_at(repo.path()).unwrap(), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn stage_paths_records_a_file_whose_name_contains_spaces() {
+        // End-to-end version of the quoting regression: a path with spaces has
+        // to survive the trip out of porcelain and back into `git add` intact.
+        let repo = TestRepo::new();
+        repo.write("a.txt", "one\n");
+        // images/ must already be tracked, or git collapses the whole
+        // untracked directory to a single `?? images/` entry.
+        repo.write("images/keep.txt", "keep\n");
+        repo.commit_all("initial");
+        let spaced = "images/ChatGPT Image Aug 7, 2026, 05_09_51 AM.png";
+        repo.write(spaced, "png bytes\n");
+
+        let listed = run_git(
+            repo.path(),
+            &["status", "--porcelain", "-z"],
+            "read status for the test",
+        )
+        .unwrap();
+        let untracked: Vec<&str> = parse_porcelain_z(&listed)
+            .into_iter()
+            .filter(|(code, _)| code.contains('?'))
+            .map(|(_, path)| path)
+            .collect();
+        assert_eq!(untracked, vec![spaced]);
+
+        stage_paths_at(repo.path(), &[spaced.to_string()]).expect("stage spaced path");
+        assert_eq!(staged_paths_at(repo.path()).unwrap(), vec![spaced.to_string()]);
     }
 
     #[test]

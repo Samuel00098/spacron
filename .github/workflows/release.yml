@@ -18,13 +18,31 @@ jobs:
   # exist in the releases repo).
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
+      - name: Resolve and validate release tag
+        id: resolve
+        env:
+          TAG_CANDIDATE: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          # Strict validation: the tag is used by bash below and the job env
+          # holds RELEASE_TOKEN plus the updater signing key, so anything that
+          # isn't a clean semver tag aborts before it ever reaches a shell.
+          # `inputs.tag` and `github.ref_name` are NEVER interpolated into bash
+          # directly — the value crosses into the shell only via this env var
+          # after the regex passes.
+          if [[ ! "$TAG_CANDIDATE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: '$TAG_CANDIDATE' (expected v<major>.<minor>.<patch>)" >&2
+            exit 1
+          fi
+          echo "tag=$TAG_CANDIDATE" >> "$GITHUB_OUTPUT"
+
       - name: Create release in spacron-releases
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
         run: |
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-
           # Check if the release already exists in spacron-releases
           if gh release view "$TAG" --repo Samuel00098/spacron-releases >/dev/null 2>&1; then
             echo "Release $TAG already exists in spacron-releases, continuing."
@@ -63,7 +81,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to full commit SHAs (not mutable tags) so a
+      # compromise of an action's repo can't change what this workflow runs.
+      # Update deliberately: bump to the new tag's SHA after review.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Install Linux dependencies
         if: matrix.os == 'linux'
@@ -76,18 +97,18 @@ jobs:
             patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: 'npm'
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable branch
         with:
           targets: ${{ matrix.rust-targets }}
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -95,7 +116,7 @@ jobs:
         run: npm ci
 
       - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5  # v0
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -106,8 +127,8 @@ jobs:
           # Publish the release to the separate public releases repo
           owner: Samuel00098
           repo: spacron-releases
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          releaseName: "Spacron ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: "Spacron ${{ needs.prepare.outputs.tag }}"
           releaseBody: 'See the changelog for what is new in this release.'
           releaseDraft: false
           prerelease: false

@@ -104,6 +104,11 @@
   border-color: var(--accent);
 }
 
+.toolbox .textbox::placeholder,
+.toolbox .input-box::placeholder {
+  color: var(--text-primary);
+}
+
 .toolbox .token-input {
   height: 80px;
 }

@@ -1618,8 +1618,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         const metaBg = isDarkTheme
                           ? 'rgba(0,0,0,0.35)'
                           : 'rgba(255,255,255,0.60)';
-                        const nameColor = isDarkTheme ? '#f0f0f4' : '#1a1a22';
-                        const nameSecondary = isDarkTheme ? '#a8a8b8' : '#4a4a58';
+                        // Same two steps deriveForegroundPalette() hands the real
+                        // app, so a card previews what picking it actually looks
+                        // like. Keep them in step with that function.
+                        const nameColor = isDarkTheme ? '#ffffff' : '#000000';
+                        const nameSecondary = isDarkTheme ? '#cdcdda' : '#2a2a35';
 
                         return (
                           <button

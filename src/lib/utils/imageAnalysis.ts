@@ -140,21 +140,37 @@ export function deriveForegroundPalette(
   // Prefer real measured luminance; fall back to the theme's type tag.
   const effectivelyDark = analysis !== null ? analysis.isDark : themeType === 'dark';
 
+  // These two ramps are the same ones global.css pins under
+  // `html.has-bg-image.bg-palette-*`, and they must stay in step with it.
+  //
+  // That duplication is not redundant — it is the only path that reaches a
+  // *solid* theme. Those CSS rules are gated on a wallpaper class, so with no
+  // wallpaper (forge-dark / forge-light, which is what ships) nothing overrides
+  // what this function writes inline, and the app ran on the old washed-out
+  // values below while every wallpaper preset got the crisp ones. That is why
+  // the bundled themes looked flat next to the presets.
+  //
+  // Both ramps are pinned to a true endpoint rather than the near-white /
+  // near-black they used to sit at, and the lower steps come up with them:
+  // muted was the worst offender at ~3.2:1 in both modes, which is under the
+  // 4.5:1 body text needs and is what read as "greyed out".
   if (effectivelyDark) {
-    // Background is dark → foreground must be bright
+    // Background is dark → foreground must be bright.
+    // On #18181e: 17.7:1 / 11.2:1 / 5.6:1.
     return {
-      primary:     '#f0f0f4',
-      secondary:   '#a8a8b8',
-      muted:       '#686878',
-      placeholder: '#484858',
+      primary:     '#ffffff',
+      secondary:   '#cdcdda',
+      muted:       '#8f8fa2',
+      placeholder: '#5c5c6e',
     };
   } else {
-    // Background is light → foreground must be dark
+    // Background is light → foreground must be dark.
+    // On #fafafa: 20.1:1 / 13.6:1 / 6.3:1.
     return {
-      primary:     '#1a1a22',
-      secondary:   '#4a4a58',
-      muted:       '#8a8a9a',
-      placeholder: '#b0b0ba',
+      primary:     '#000000',
+      secondary:   '#2a2a35',
+      muted:       '#5c5c6a',
+      placeholder: '#9a9aa8',
     };
   }
 }

@@ -35,9 +35,11 @@ import {
 import { loadThemes } from '$lib/stores/theme';
 import { initDefaultCommands } from '$lib/stores/commandpalette';
 import { requestNotificationPermission } from '$lib/stores/notification';
-import { maybeAutoReconnectRemote } from '$lib/stores/remoteWorkspace';
+import { maybeAutoReconnectRemote, hydrateRemoteTokens } from '$lib/stores/remoteWorkspace';
 import {
   uiZoom,
+  fontSize,
+  resolvedFontFamily,
   userShortcuts,
   matchShortcut,
   type KeyboardShortcut,
@@ -107,6 +109,9 @@ export default function App() {
     if (isTauriRuntime()) {
       requestNotificationPermission();
       initMcpBridge();
+      // Tokens live in the OS keychain; load them into session memory so the
+      // remote manager can prefill edit forms and reconnect without waiting.
+      void hydrateRemoteTokens();
       // Opt-in: if a remote is flagged to reconnect on startup, dial it so a
       // workspace whose agents are still running on the box comes back on its own.
       // Fails fast + rolls back to Local if the box is offline, so this can't hang boot.
@@ -182,6 +187,19 @@ export default function App() {
       document.documentElement.style.setProperty('--ui-zoom-percent', `${zoom}`);
     });
 
+    // Publish the editor typeface globally. Plenty of surfaces outside the
+    // editor render code (diffs, problems, the source-control panel) and already
+    // ask for `var(--editor-font-family)` — but CodeEditor only sets it inline on
+    // its own container, so every one of them silently fell back to plain
+    // `monospace` at whatever hardcoded size it picked. Setting both vars on the
+    // root is what makes those existing references resolve.
+    const unsubscribeFontSize = fontSize.subscribe((size) => {
+      document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
+    });
+    const unsubscribeFontFamily = resolvedFontFamily.subscribe((family) => {
+      document.documentElement.style.setProperty('--editor-font-family', family);
+    });
+
     let activeShortcuts: KeyboardShortcut[] = [];
     const unsubscribeShortcuts = userShortcuts.subscribe((value) => {
       activeShortcuts = value || [];
@@ -210,6 +228,8 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('keydown', handleKeyDown);
       unsubscribeZoom();
+      unsubscribeFontSize();
+      unsubscribeFontFamily();
       unlistenClose?.();
       unsubscribeShortcuts();
       unsubFrost();

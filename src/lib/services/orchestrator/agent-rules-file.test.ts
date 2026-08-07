@@ -187,6 +187,22 @@ describe('buildStandingBriefBody', () => {
   it('points rule #5 at the shared memory dir it is given', () => {
     const body = buildStandingBriefBody({ sharedMemoryDir: '/main/.spacron/memory/' });
     expect(body).toContain('/main/.spacron/memory/auth-flow.md');
+    // The index is read from the same store, not the agent's own checkout.
+    expect(body).toContain('/main/.spacron/memory/INDEX.md');
+  });
+
+  it('routes memory reads through the index instead of the whole directory', () => {
+    // 60+ notes is more than an agent should load to answer one question, so the
+    // brief must send it to the index first and have it maintain that index.
+    const body = buildStandingBriefBody();
+    expect(body).toContain('.spacron/memory/INDEX.md');
+    expect(body).toContain('open only the notes your task actually touches');
+    expect(body).toContain("add its line to `INDEX.md`");
+    // A brand-new project has no index yet — the first note author creates it.
+    expect(body).toContain('create the index if it does not exist yet');
+    // One topic per file is load-bearing for concurrent writes; keep the reason
+    // in the brief so a later agent doesn't "tidy" the notes into one file.
+    expect(body).toContain('one topic per file');
   });
 });
 

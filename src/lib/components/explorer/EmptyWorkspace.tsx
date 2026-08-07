@@ -10,7 +10,7 @@ export default function EmptyWorkspace() {
           <defs>
             <linearGradient id="folder-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="var(--accent)" />
-              <stop offset="100%" stopColor="color-mix(in srgb, var(--accent) 30%, #8b5cf6)" />
+              <stop offset="100%" stopColor="color-mix(in srgb, var(--accent) 45%, transparent)" />
             </linearGradient>
             <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="3" result="blur" />

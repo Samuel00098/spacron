@@ -8,29 +8,12 @@ use std::sync::RwLock;
 /// Bumped whenever the bundled brand defaults change and on-disk custom themes
 /// derived from an older default should be migrated forward.
 /// v1 = amber → teal/sky. v2 = teal/sky → graphite grey. v3 = grey → indigo.
-const BRAND_MIGRATION_VERSION: u32 = 3;
-
-fn is_valid_css_color(value: &str) -> bool {
-    let v = value.trim();
-    if v.is_empty() {
-        return false;
-    }
-    // Hex colors
-    if let Some(hex) = v.strip_prefix('#') {
-        return (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
-            && hex.chars().all(|c| c.is_ascii_hexdigit());
-    }
-    // Named/functional values
-    let lower = v.to_lowercase();
-    lower == "transparent"
-        || lower == "currentcolor"
-        || lower == "inherit"
-        || lower.starts_with("rgb(")
-        || lower.starts_with("rgba(")
-        || lower.starts_with("hsl(")
-        || lower.starts_with("hsla(")
-        || lower.starts_with("color(")
-}
+/// v4 = indigo → graphite (the accent stops being a hue; see the note above
+/// LIGHT_ACCENT in src/lib/stores/presetThemes.ts).
+/// v5 = pastel/washed semantic + syntax colours → saturated ones that clear
+/// 4.5:1 in their own mode. Unlike v1–v4 this is not an accent change, so it is
+/// the first migration that also rewrites `syntax`.
+const BRAND_MIGRATION_VERSION: u32 = 5;
 
 /// Normalize a CSS color for comparison: drop all whitespace, lowercase.
 /// Lets `rgba(245, 158, 11, 0.2)` match a stored `rgba(245,158,11,0.2)`.
@@ -151,6 +134,121 @@ fn migrate_theme_grey(theme: &mut Theme) -> bool {
     apply_color_map(theme, legacy_grey_map(&theme.theme_type))
 }
 
+/// Per-theme-type `(key, old_default, new_default)` map for the indigo → graphite
+/// brand migration. Same key-aware contract as the maps above.
+///
+/// Two things differ from every earlier migration. First, focus rings stop
+/// tracking the accent and become neutral translucent values — focus fires on
+/// every input and tab, and an accent spent that often points at nothing.
+/// Second, dark `button-text` flips from white to ink: the dark accent is now
+/// near-white, so a white label on a primary button would be invisible. Light
+/// `button-text` is absent because white is still correct there.
+///
+/// `on-accent` and `focus-ring` are new keys, and this map can only rewrite keys
+/// a theme already has. That is deliberate — themes missing them fall through to
+/// the `:root` / `:root.light-theme` definitions in global.css, which carry
+/// mode-correct values for exactly this case.
+fn legacy_indigo_map(
+    theme_type: &ThemeType,
+) -> &'static [(&'static str, &'static str, &'static str)] {
+    match theme_type {
+        ThemeType::Dark => &[
+            ("accent", "#818cf8", "#f1f5f9"),
+            ("accent-hover", "#a5b4fc", "#ffffff"),
+            ("border-focus", "#818cf8", "rgba(241, 245, 249, 0.45)"),
+            ("input-focus-border", "#818cf8", "rgba(241, 245, 249, 0.45)"),
+            ("button-bg", "#4f46e5", "#f1f5f9"),
+            ("button-hover-bg", "#5850ec", "#ffffff"),
+            ("button-text", "#ffffff", "#18181e"),
+            (
+                "selection-bg",
+                "rgba(129,140,248,0.22)",
+                "rgba(241, 245, 249, 0.16)",
+            ),
+        ],
+        ThemeType::Light => &[
+            ("accent", "#4f46e5", "#1f2328"),
+            ("accent-hover", "#4338ca", "#0d1117"),
+            ("border-focus", "#4f46e5", "rgba(31, 35, 40, 0.55)"),
+            ("input-focus-border", "#4f46e5", "rgba(31, 35, 40, 0.55)"),
+            ("button-bg", "#4f46e5", "#1f2328"),
+            ("button-hover-bg", "#4338ca", "#0d1117"),
+            (
+                "selection-bg",
+                "rgba(79,70,229,0.15)",
+                "rgba(31, 35, 40, 0.12)",
+            ),
+        ],
+    }
+}
+
+/// Rewrite indigo defaults to the graphite brand in-place. Returns whether
+/// anything changed.
+fn migrate_theme_indigo(theme: &mut Theme) -> bool {
+    apply_color_map(theme, legacy_indigo_map(&theme.theme_type))
+}
+
+/// Per-theme-type `(key, old_default, new_default)` map for the washed → vivid
+/// pass on semantic colours. Same key-aware contract as the maps above.
+///
+/// This one is not about the brand accent at all. The dark defaults were
+/// pastel and the light ones were pitched for a dark page, so several sat
+/// under the 4.5:1 that body-sized text needs — bright, but not legible, which
+/// is what read as "washed out". `info` is absent from both lists because
+/// neither bundled theme ever declared it; a theme without the key falls
+/// through to global.css, which already carries a mode-correct value.
+fn legacy_washed_map(
+    theme_type: &ThemeType,
+) -> &'static [(&'static str, &'static str, &'static str)] {
+    match theme_type {
+        ThemeType::Dark => &[
+            ("error", "#f87171", "#ff6b6b"),
+            ("success", "#4ade80", "#2ee06d"),
+        ],
+        ThemeType::Light => &[
+            ("error", "#cf222e", "#d40c0c"),
+            ("warning", "#9a6700", "#a86008"),
+            ("success", "#1a7f37", "#077f33"),
+        ],
+    }
+}
+
+/// Per-theme-type `(token, old_default, new_default)` map for the same pass over
+/// `syntax`.
+///
+/// Dark syntax was already vivid apart from the comment, which measured 2.15:1.
+/// Light syntax needed the real work: `string` was a navy dark enough to read as
+/// body text, `type`/`variable` failed contrast outright, and blue was spread
+/// over four tokens at once, which is why `number`/`constant`/`attribute` all
+/// share an old value here and land on three different new ones.
+fn legacy_washed_syntax_map(
+    theme_type: &ThemeType,
+) -> &'static [(&'static str, &'static str, &'static str)] {
+    match theme_type {
+        ThemeType::Dark => &[("comment", "#4a4a7a", "#7a7aa8")],
+        ThemeType::Light => &[
+            ("keyword", "#d73a49", "#d40c0c"),
+            ("operator", "#d73a49", "#d40c0c"),
+            ("string", "#032f62", "#1359f3"),
+            ("function", "#6f42c1", "#6d28d9"),
+            ("number", "#005cc5", "#a86008"),
+            ("constant", "#005cc5", "#a86008"),
+            ("attribute", "#005cc5", "#0e7490"),
+            ("type", "#e36209", "#b25708"),
+            ("variable", "#e36209", "#b25708"),
+            ("tag", "#22863a", "#077f33"),
+        ],
+    }
+}
+
+/// Rewrite washed-out semantic and syntax defaults to the vivid set in-place.
+/// Returns whether anything changed.
+fn migrate_theme_washed(theme: &mut Theme) -> bool {
+    let colors_changed = apply_color_map(theme, legacy_washed_map(&theme.theme_type));
+    let syntax_changed = apply_syntax_map(theme, legacy_washed_syntax_map(&theme.theme_type));
+    colors_changed || syntax_changed
+}
+
 /// Apply a key-aware `(key, old, new)` color map to a theme, rewriting only values
 /// that still exactly match the previous bundled default. Returns whether anything
 /// changed.
@@ -161,6 +259,21 @@ fn apply_color_map(
     let mut changed = false;
     for (key, old, new) in map {
         if let Some(value) = theme.colors.get_mut(*key) {
+            if norm_color(value) == norm_color(old) {
+                *value = (*new).to_string();
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// `apply_color_map` for the `syntax` map. Same key-aware, only-if-unmodified
+/// contract: a token the user has repainted keeps their value.
+fn apply_syntax_map(theme: &mut Theme, map: &[(&str, &str, &str)]) -> bool {
+    let mut changed = false;
+    for (key, old, new) in map {
+        if let Some(value) = theme.syntax.get_mut(*key) {
             if norm_color(value) == norm_color(old) {
                 *value = (*new).to_string();
                 changed = true;
@@ -191,11 +304,21 @@ fn run_brand_migration(config_dir: &Path) {
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
                     if let Ok(mut theme) = load_theme_from_file(&path) {
                         // Chain migrations so a theme still on the original amber
-                        // brand is carried amber → teal → grey → indigo in one pass.
+                        // brand is carried amber → teal → grey → indigo → graphite
+                        // in one pass. The washed pass is independent of the accent
+                        // chain — it touches semantic and syntax colours only — so
+                        // it runs last and applies whatever the accent history was.
                         let amber_changed = migrate_theme_amber(&mut theme);
                         let teal_changed = migrate_theme_teal(&mut theme);
                         let grey_changed = migrate_theme_grey(&mut theme);
-                        if amber_changed || teal_changed || grey_changed {
+                        let indigo_changed = migrate_theme_indigo(&mut theme);
+                        let washed_changed = migrate_theme_washed(&mut theme);
+                        if amber_changed
+                            || teal_changed
+                            || grey_changed
+                            || indigo_changed
+                            || washed_changed
+                        {
                             let _ = save_theme_to_file(&theme, &path);
                         }
                     }
@@ -484,5 +607,113 @@ mod tests {
         let mut t = theme_with(ThemeType::Dark, &[("accent", "#ff0066")]);
         assert!(!migrate_theme_grey(&mut t));
         assert_eq!(t.colors["accent"], "#ff0066");
+    }
+
+    fn theme_with_syntax(
+        theme_type: ThemeType,
+        colors: &[(&str, &str)],
+        syntax: &[(&str, &str)],
+    ) -> Theme {
+        let mut t = theme_with(theme_type, colors);
+        t.syntax = syntax
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        t
+    }
+
+    #[test]
+    fn migrates_dark_washed_defaults() {
+        let mut t = theme_with_syntax(
+            ThemeType::Dark,
+            &[
+                ("error", "#f87171"),
+                ("success", "#4ade80"),
+                ("warning", "#fbbf24"),
+            ],
+            &[("comment", "#4a4a7a"), ("keyword", "#c792ea")],
+        );
+        assert!(migrate_theme_washed(&mut t));
+        assert_eq!(t.colors["error"], "#ff6b6b");
+        assert_eq!(t.colors["success"], "#2ee06d");
+        // Dark amber was already saturated enough — it is not in the map.
+        assert_eq!(t.colors["warning"], "#fbbf24");
+        assert_eq!(t.syntax["comment"], "#7a7aa8");
+        // The rest of the dark syntax set already cleared contrast.
+        assert_eq!(t.syntax["keyword"], "#c792ea");
+    }
+
+    #[test]
+    fn migrates_light_washed_defaults() {
+        let mut t = theme_with_syntax(
+            ThemeType::Light,
+            &[
+                ("error", "#cf222e"),
+                ("warning", "#9a6700"),
+                ("success", "#1a7f37"),
+            ],
+            &[("string", "#032f62"), ("type", "#e36209")],
+        );
+        assert!(migrate_theme_washed(&mut t));
+        assert_eq!(t.colors["error"], "#d40c0c");
+        assert_eq!(t.colors["warning"], "#a86008");
+        assert_eq!(t.colors["success"], "#077f33");
+        assert_eq!(t.syntax["string"], "#1359f3");
+        assert_eq!(t.syntax["type"], "#b25708");
+    }
+
+    #[test]
+    fn washed_syntax_map_is_key_aware() {
+        // #005cc5 was number, constant AND attribute in the old light theme, and
+        // the three land on different colors — the map must key off the token.
+        let mut t = theme_with_syntax(
+            ThemeType::Light,
+            &[],
+            &[
+                ("number", "#005cc5"),
+                ("constant", "#005cc5"),
+                ("attribute", "#005cc5"),
+            ],
+        );
+        assert!(migrate_theme_washed(&mut t));
+        assert_eq!(t.syntax["number"], "#a86008");
+        assert_eq!(t.syntax["constant"], "#a86008");
+        assert_eq!(t.syntax["attribute"], "#0e7490");
+    }
+
+    #[test]
+    fn washed_migration_leaves_user_customizations_untouched() {
+        let mut t = theme_with_syntax(
+            ThemeType::Light,
+            &[("error", "#ff0066")],
+            &[("string", "#00ffcc")],
+        );
+        assert!(!migrate_theme_washed(&mut t));
+        assert_eq!(t.colors["error"], "#ff0066");
+        assert_eq!(t.syntax["string"], "#00ffcc");
+    }
+
+    #[test]
+    fn bundled_themes_ship_the_migrated_values() {
+        // The migration and the bundled defaults must not drift apart: a theme
+        // carried forward should land exactly where a fresh install starts.
+        for theme in load_bundled_themes() {
+            match theme.theme_type {
+                ThemeType::Dark => {
+                    assert_eq!(theme.colors["error"], "#ff6b6b");
+                    assert_eq!(theme.colors["success"], "#2ee06d");
+                    assert_eq!(theme.colors["info"], "#58a6ff");
+                    assert_eq!(theme.syntax["comment"], "#7a7aa8");
+                }
+                ThemeType::Light => {
+                    assert_eq!(theme.colors["error"], "#d40c0c");
+                    assert_eq!(theme.colors["warning"], "#a86008");
+                    assert_eq!(theme.colors["success"], "#077f33");
+                    assert_eq!(theme.colors["info"], "#1359f3");
+                    assert_eq!(theme.syntax["string"], "#1359f3");
+                    assert_eq!(theme.syntax["type"], "#b25708");
+                }
+            }
+        }
     }
 }

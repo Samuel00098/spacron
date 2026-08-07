@@ -105,26 +105,43 @@
   --input-bg:      rgba(255, 255, 255, 0.20) !important;
 }
 
-/* Role & Semantic colors — darker/higher-contrast variants for readability on light backgrounds */
+/* Role & Semantic colors — deeper variants, because the same hue that reads
+   vivid on near-black turns pale and washed out on a white page. The dark set
+   is the :root default; these override it. Keep the two lists in step — a role
+   added to one and not the other is invisible in that mode. */
+/* Measured against #f8fafc, every one of these now clears 4.5:1. Several did
+   not before — green was 2.96:1, amber 3.37:1, orange 3.92:1 — which is the
+   real reason light mode looked washed out where dark mode looked vivid: the
+   hues were bright, but bright is not the same as legible on a white page.
+   Deepening them costs nothing perceptually (they still read green, amber,
+   orange) and buys the contrast that makes them look deliberate. The pairs
+   that were deliberately identical stay identical: success = role-server,
+   info = role-tests, warning = role-git. */
 :root.light-theme,
 html.bg-palette-light {
-  --error:           #eb0c0c !important;
-  --warning:         #cb720b !important;
-  --success:         #09a944 !important;
+  --error:           #d40c0c !important;
+  --warning:         #a86008 !important;
+  --success:         #077f33 !important;
   --info:            #1359f3 !important;
-  --role-server:     #09a944 !important;
+  --role-server:     #077f33 !important;
   --role-tests:      #1359f3 !important;
-  --role-build:      #c2640a !important;
+  --role-build:      #b25708 !important;
   --role-agent:      #6d28d9 !important;
-  --role-git:        #cb720b !important;
+  --role-git:        #a86008 !important;
+  --role-reviewer:   #0e7490 !important;
 }
 
 :root:not(.solid-theme):not(.light-theme) body {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
+/* No white halo in light mode. A light glow behind dark text does not aid
+   contrast — it lifts a pale fringe off every stem and counter, which is what
+   made light mode look washed out next to dark. Panels already frost their own
+   patch of wallpaper, so the text has a surface to sit on and needs nothing
+   behind it. Black stays black. */
 :root:not(.solid-theme).light-theme body {
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6), 0 0 6px rgba(255, 255, 255, 0.25);
+  text-shadow: none;
 }
 
 /* Make title bar icons and words much brighter in transparency mode */
@@ -226,10 +243,15 @@ html.bg-palette-light {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
 }
 
+/* Matches the blanket light-mode svg rule further down (this one wins on
+   specificity for these three selectors, so the two must stay in step): one
+   tight dark shadow, no white bloom. A 4px white halo used to sit here and it
+   is what made light-mode icons read soft — on a 16px glyph with 1.5px strokes
+   it lifts off every edge and fills the counters. */
 :root:not(.solid-theme).light-theme .svt-btn svg,
 :root:not(.solid-theme).light-theme .file-node svg,
 :root:not(.solid-theme).light-theme .header-btn svg {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.3));
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.28));
 }
 
 
@@ -254,26 +276,61 @@ html.bg-palette-light {
   --text-muted:      #555566;
   --text-placeholder:#3a3a46;
 
-  /* ── Accent (indigo) ────────────────────── */
-  --accent:          #818cf8;
-  --accent-hover:    #a5b4fc;
-  --accent-light:    rgba(129, 140, 248, 0.15);
-  --accent-glow:     rgba(129, 140, 248, 0.08);
+  /* ── Accent (graphite) ──────────────────────
+     The accent is deliberately not a hue. It is the foreground pushed to its
+     brightest, so the one element carrying it is the one element the eye
+     lands on. Colour in this app means exactly one thing now — status
+     (error / warning / success / info) and the categorical --role-* set.
+     Nothing decorative is allowed to spend it.
 
-  /* ── Semantic ───────────────────────────── */
-  --error:           #f87171;
+     Dark mode inverts the primary button: a near-white fill with an ink
+     label. White-on-accent would vanish, so --button-text tracks
+     --on-accent and must never be hardcoded to #fff. Any rule that paints
+     `background: var(--accent)` owes its label `var(--on-accent)`. */
+  --accent:          #f1f5f9;
+  --accent-hover:    #ffffff;
+  --accent-rgb:      241, 245, 249;
+  --on-accent:       #0b0f17;
+  --accent-light:    rgba(241, 245, 249, 0.15);
+  --accent-glow:     rgba(241, 245, 249, 0.07);
+
+  /* ── Semantic ─────────────────────────────
+     Saturated rather than pastel. These are the only things in the UI still
+     allowed to be a hue (see the accent note above), so they should read as
+     colour, not as tinted grey. All four clear 6:1 on every dark surface. */
+  --error:           #ff6b6b;
   --warning:         #fbbf24;
-  --success:         #4ade80;
-  --info:            #60a5fa;
+  --success:         #2ee06d;
+  --info:            #58a6ff;
+
+  /* ── Roles (categorical) ──────────────────
+     Labels for terminal panes and agent rows — a category axis, not chrome,
+     which is why they stay hues. These live in :root so they are the DARK
+     set and can never be undefined: they used to be declared only in the
+     light-theme block below, so in dark mode every `var(--role-*)` call site
+     without a fallback resolved to nothing and the pane borders and status
+     dots simply did not paint. Light overrides them further down.
+     Measured on #18181e / #0b0f17: 6.8:1 at worst, 10.6:1 at best. */
+  --role-server:     #2ee06d;
+  --role-tests:      #58a6ff;
+  --role-build:      #ff8c3a;
+  --role-agent:      #b48cff;
+  --role-git:        #fbbf24;
+  --role-reviewer:   #22d3ee;
 
   /* ── Borders & Surfaces ─────────────────── */
   --border:          rgba(255, 255, 255, 0.06);
   --border-subtle:   rgba(255, 255, 255, 0.03);
-  --border-focus:    var(--accent);
+  /* Focus and selection are neutral on purpose. They fire constantly — on
+     every tab, every input, every drag — so if they carry the accent the
+     accent stops meaning "this is the thing to press". A foreground-tinted
+     ring is just as visible and costs nothing. */
+  --focus-ring:      rgba(241, 245, 249, 0.45);
+  --border-focus:    var(--focus-ring);
   --scrollbar-thumb:      rgba(255, 255, 255, 0.08);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --scrollbar-track:      transparent;
-  --selection-bg:         rgba(6, 182, 212, 0.2);
+  --selection-bg:         rgba(241, 245, 249, 0.16);
   --editor-lineHighlight: rgba(255, 255, 255, 0.03);
   --shadow-sm:       0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md:       0 4px 8px rgba(0, 0, 0, 0.6);
@@ -298,6 +355,16 @@ html.bg-palette-light {
   --frost-base:        0.35;
   --frost-chrome:      0.45;
   --frost-surface:     0.55;
+
+  /* ── Terminal surface ─────────────────────
+     The terminal does NOT follow light/dark — it is a dark content surface in
+     both modes, the way a code editor keeps its syntax theme. A TUI negotiates
+     its palette once over OSC 11 at launch and cannot be re-themed afterwards,
+     so a mode-dependent answer left a light-launched opencode painting white
+     forever, including after switching to dark. See buildTerminalTheme() in
+     TerminalPane.tsx. This RGB must stay in step with the value reported there. */
+  --terminal-surface:     #111116;
+  --terminal-surface-rgb: 17, 17, 22;
 
   /* ── TitleBar ───────────────────────────── */
   --titlebar-bg:     #121216;
@@ -329,12 +396,12 @@ html.bg-palette-light {
   /* ── Input / Form ───────────────────────── */
   --input-bg:        #1e1e24;
   --input-border:    rgba(255, 255, 255, 0.08);
-  --input-focus-border: var(--accent);
+  --input-focus-border: var(--focus-ring);
 
   /* ── Buttons ────────────────────────────── */
-  --button-bg:       #4f46e5;
-  --button-hover-bg: #5850ec;
-  --button-text:     #ffffff;
+  --button-bg:       var(--accent);
+  --button-hover-bg: var(--accent-hover);
+  --button-text:     var(--on-accent);
 
   /* ── Status Bar ─────────────────────────── */
   --statusbar-bg:    #121216;
@@ -352,6 +419,24 @@ html.bg-palette-light {
   --syntax-operator:   #89ddff;
   --syntax-punctuation:#a0a0c0;
   --syntax-constant:   #ff9cac;
+}
+
+/* Light-mode accent fallback. The :root values above are pitched for a dark
+   page — a near-white accent and a near-white focus ring are invisible on a
+   bright one. Preset themes set these per-theme as inline custom properties
+   (see LIGHT_ACCENT in presetThemes.ts), which win over this block; it only
+   covers light mode with no preset applied. Deliberately no !important, or
+   it would override the presets it exists to back up. */
+:root.light-theme {
+  --accent:          #1e293b;
+  --accent-hover:    #0f172a;
+  --accent-rgb:      30, 41, 59;
+  --on-accent:       #ffffff;
+  --accent-light:    rgba(30, 41, 59, 0.12);
+  --accent-glow:     rgba(30, 41, 59, 0.06);
+  --focus-ring:      rgba(15, 23, 42, 0.55);
+  --selection-bg:    rgba(15, 23, 42, 0.12);
+  --editor-lineHighlight: rgba(15, 23, 42, 0.04);
 }
 
 .theme-transitioning,
@@ -412,6 +497,13 @@ html.has-bg-image body::before {
   opacity: 1;
 }
 
+/* Light mode: a hair below full so the bright page background barely bleeds
+   through and dark text keeps an edge of contrast over the image's dark
+   pockets. Dark mode stays fully solid. */
+html.has-bg-image.light-theme body::before {
+  opacity: 0.98;
+}
+
 /* ── Mid-layer scrim ───────────────────────────────────────────────────────
    Sits between the wallpaper (z-index -2) and the frosted-glass UI (z-index
    -1). Darkens or lightens the image just enough that every icon, text label
@@ -421,8 +513,12 @@ html.has-bg-media body::after {
   /* The panels now frost their own patch of wallpaper (see-through + backdrop
      blur), so this global wash no longer has to carry readability. Pull it well
      back from the old near-opaque 0.68 so the wallpaper reads brightly through
-     the gaps between panels while text over glass stays legible. */
-  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.40) !important;
+     the gaps between panels while text over glass stays legible.
+     0.40 → 0.28 → 0.16: dark themes were veiling the wallpaper far harder than
+     light ones (which use the tint below), so the images read as washed out.
+     Readability now rests on the panels' own backdrop blur and the text halo
+     rules further down, not on this wash. */
+  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.16) !important;
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -443,9 +539,9 @@ html.has-bg-media:not(.light-theme) #app::before {
   background:
     linear-gradient(
       180deg,
-      rgba(0, 0, 0, 0.22) 0%,
-      rgba(0, 0, 0, 0.28) 40%,
-      rgba(0, 0, 0, 0.38) 100%
+      rgba(0, 0, 0, 0.10) 0%,
+      rgba(0, 0, 0, 0.14) 40%,
+      rgba(0, 0, 0, 0.20) 100%
     );
   pointer-events: none;
 }
@@ -461,9 +557,9 @@ html.has-bg-media.light-theme #app::before {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.40) 0%,
-      rgba(255, 255, 255, 0.34) 50%,
-      rgba(255, 255, 255, 0.44) 100%
+      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0.15) 50%,
+      rgba(255, 255, 255, 0.22) 100%
     );
   pointer-events: none;
 }
@@ -511,7 +607,7 @@ body::after {
    the wallpaper remains clearly visible. */
 html.has-bg-image.light-theme body::after,
 html.has-bg-media.light-theme body::after {
-  background-color: rgba(255, 255, 255, 0.07) !important;
+  background-color: rgba(255, 255, 255, 0.03) !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -524,71 +620,98 @@ html.has-bg-media.light-theme body::after {
    based on measured background luminance (dark → bright text,
    light → dark text). Falls back to theme type when analysis
    hasn't run yet. */
+/* Both ramps are pinned to a true endpoint — #ffffff on dark, #000000 on light
+   — rather than the near-white/near-black they used to sit at. With the text
+   haloes gone there is nothing veiling the glyphs, so the extremes read as
+   crisp instead of harsh, and the secondary/muted steps come up with them so
+   the whole ramp stays legible over a wallpaper rather than only its top. */
 html.has-bg-media.bg-palette-dark,
 html.has-bg-image.bg-palette-dark {
-  --text-primary:    #f0f0f4 !important;
-  --text-secondary:  #a8a8b8 !important;
-  --text-muted:      #686878 !important;
-  --text-placeholder: #484858 !important;
-  --titlebar-text:   #f0f0f4 !important;
+  --text-primary:    #ffffff !important;
+  --text-secondary:  #cdcdda !important;
+  --text-muted:      #8f8fa2 !important;
+  --text-placeholder: #5c5c6e !important;
+  --titlebar-text:   #ffffff !important;
 }
 
 html.has-bg-media.bg-palette-light,
 html.has-bg-image.bg-palette-light {
-  --text-primary:    #1a1a22 !important;
-  --text-secondary:  #4a4a58 !important;
-  --text-muted:      #8a8a9a !important;
-  --text-placeholder: #b0b0ba !important;
-  --titlebar-text:   #1a1a22 !important;
+  --text-primary:    #000000 !important;
+  --text-secondary:  #2a2a35 !important;
+  --text-muted:      #5c5c6a !important;
+  --text-placeholder: #9a9aa8 !important;
+  --titlebar-text:   #000000 !important;
 }
 
+/* One tight outline, no bloom. The wide 10/18/28px layers this used to stack
+   did not make text more readable — the panels' backdrop blur already does
+   that — they just smeared a dark cloud around every glyph, which at small
+   sizes reads as blur rather than depth. A 1px outline plus a close shadow
+   holds text off a busy wallpaper and keeps the letterforms crisp. */
 html.has-bg-media:not(.light-theme) body,
 html.has-bg-image:not(.light-theme) body {
-  /* Multi-layer halo: tight black outline + wide soft bloom */
   text-shadow:
-    0 0   2px rgba(0, 0, 0, 1.00),   /* pixel-tight outline */
-    0 1px 3px rgba(0, 0, 0, 0.85),   /* close shadow */
-    0 2px 10px rgba(0, 0, 0, 0.55),  /* mid bloom */
-    0 4px 18px rgba(0, 0, 0, 0.30),  /* wide atmospheric glow */
-    0 8px 28px rgba(0, 0, 0, 0.12);  /* far diffuse */
+    0 0   1px rgba(0, 0, 0, 0.90),
+    0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
-/* Subtler icon shadows in dark mode with background */
+/* Subtler icon shadows in dark mode with background.
+
+   No `color` here on purpose. This rule matches EVERY svg on the page, so
+   forcing `color: var(--text-primary)` overrode any icon whose container had
+   deliberately set one — most visibly the glyph on a primary button, which
+   paints itself with --accent and needs --on-accent ink, and got page
+   foreground instead (near-white on a near-white fill). Icons are drawn with
+   `stroke="currentColor"`, so with no override they inherit from whatever
+   container they sit in, which is what everything already wanted: normal
+   containers inherit --text-primary anyway, and accent surfaces get their
+   ink. Only the shadow belongs in a blanket rule. */
 html.has-bg-media:not(.light-theme) svg,
 html.has-bg-image:not(.light-theme) svg {
-  color: var(--text-primary);
   filter:
-    drop-shadow(0 0   1px rgba(0, 0, 0, 1.00))
-    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.85))
-    drop-shadow(0 2px 10px rgba(0, 0, 0, 0.50))
-    drop-shadow(0 4px 18px rgba(0, 0, 0, 0.24));
+    drop-shadow(0 0   1px rgba(0, 0, 0, 0.90))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.50));
 }
 
 /* (Light mode palette handled by .bg-palette-light above —
    the old html.has-bg-media.light-theme path is superseded by
    the class-based system.) */
 
+/* The white stain, removed. Five stacked white blooms out to 36px is what made
+   light mode read soft and grey while dark mode read sharp: a glow *behind*
+   dark text bleeds through the thin parts of every letter and greys them from
+   the inside, and colour text loses saturation the same way. Nothing replaces
+   it — the frosted panels supply the contrast surface, so text renders at its
+   true colour. Do not add a white text-shadow back here. */
 html.has-bg-media.light-theme body,
 html.has-bg-image.light-theme body {
-  /* Triple-layer white halo: tight bright ring + medium aura + wide diffuse bloom */
-  text-shadow:
-    0 0   2px rgba(255, 255, 255, 1.00),  /* pixel-tight white outline */
-    0 1px 4px rgba(255, 255, 255, 0.85),  /* close glow */
-    0 2px 12px rgba(255, 255, 255, 0.55), /* mid halo */
-    0 4px 22px rgba(255, 255, 255, 0.30), /* wide luminous bloom */
-    0 8px 36px rgba(255, 255, 255, 0.12); /* far atmospheric diffuse */
+  text-shadow: none;
 }
 
-/* Subtler icon shadows in light mode with background */
+/* Icon treatment in light mode with a background.
+
+   This is why light-mode icons read soft while dark-mode ones read crisp, and
+   the cause is the halo colour, not the icon. Dark mode haloes in black, which
+   the eye reads as depth behind a shape. Light mode haloed in WHITE at 3px,
+   12px and 20px — on a 15px icon with 2.2px strokes, a 20px white bloom
+   radiates straight through the glyph, fills its counters and lifts the edges
+   off it. The icon ends up sitting in a fog of its own outline.
+
+   One tight 1px white ring is all that is needed to hold an icon off a bright
+   wallpaper; the wide layers only ever cost sharpness. The dark shadow then
+   does the real work of defining the edge, so it firms up (0.30 → 0.42) while
+   staying tight. Do not reintroduce a blurred white layer above ~2px here.
+
+   The white ring is gone too, for the same reason the white text halo is: a
+   glow behind a dark glyph bleeds through its thin strokes and greys it. What
+   is left is a single tight dark shadow — the icon renders at its true colour,
+   and coloured icons (the --role-* set, status glyphs) keep full saturation
+   instead of being veiled.
+
+   `color` is dropped for the same reason as the dark rule above — see there. */
 html.has-bg-media.light-theme svg,
 html.has-bg-image.light-theme svg {
-  color: var(--text-primary);
-  filter:
-    drop-shadow(0 0   1px rgba(255, 255, 255, 1.00))
-    drop-shadow(0 1px 3px rgba(255, 255, 255, 0.85))
-    drop-shadow(0 2px 12px rgba(255, 255, 255, 0.55))
-    drop-shadow(0 4px 20px rgba(255, 255, 255, 0.28))
-    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30));  /* subtle dark underline for depth */
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.28));
 }
 
 /* Keep code text shadow-free for readability */
