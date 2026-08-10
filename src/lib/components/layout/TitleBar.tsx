@@ -10,6 +10,7 @@ import { isTauriRuntime } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
+import InboxBell from '$lib/components/orchestrator/InboxBell';
 import packageJson from '../../../../package.json';
 import './TitleBar.css';
 
@@ -256,6 +257,9 @@ export default function TitleBar() {
             </button>
           </>
         )}
+
+        {/* Agent inbox — finished work and anything waiting on a decision. */}
+        {showWorkspaceTools && <InboxBell />}
 
         {/* Settings button */}
         {showWorkspaceTools && (

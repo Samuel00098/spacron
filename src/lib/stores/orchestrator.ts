@@ -97,6 +97,7 @@ import {
   ORCHESTRATOR,
   USER,
   activeClaims,
+  getMailboxCards,
   getMailboxLines,
   getProjectMailbox,
   findClaimConflicts,
@@ -105,6 +106,7 @@ import {
   dismissMailboxCard,
   type MailboxCard,
 } from '$lib/services/orchestrator/mailbox';
+import { acknowledge, loadProjectInbox } from '$lib/services/orchestrator/inbox';
 import {
   getKnowledgeLines,
   loadKnowledgeGraph,
@@ -256,6 +258,12 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
   projectPaths.set(project.id, project.root_path);
   await loadProjectMemory(project.id, project.root_path);
   await loadProjectMailbox(project.id, project.root_path);
+  // Seed on first run only: everything already on the board counts as seen, so
+  // the badge starts at zero instead of at the project's whole history.
+  await loadProjectInbox(project.id, project.root_path, () => [
+    ...getMailboxCards(project.id, { limit: 200, actionableOnly: true, includeSeen: true }).map((c) => c.id),
+    ...(get(chatMessages)[project.id] ?? []).filter((m) => m.completion).map((m) => m.id),
+  ]);
   await loadKnowledgeGraph(project.id, project.root_path);
   await loadProjectProfile(project.id, project.root_path);
   let rawPersistedTasks: Array<Partial<PersistedTask> | null | undefined> = [];
@@ -866,6 +874,10 @@ async function deliverMailboxReply(
     }
   }
   dismissMailboxCard(card.id);
+  // Acting on a card is the strongest possible "I saw this", so it clears the
+  // inbox's unread flag too — and unlike `mailboxSeen`, that survives a restart,
+  // so a handled card can't float back up as a toast tomorrow.
+  acknowledge(projectId, card.id);
   return delivered;
 }
 

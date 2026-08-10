@@ -1,0 +1,33 @@
+/* The titlebar inbox bell. Inherits `.icon-btn` sizing/hover from TitleBar.css —
+   this file only adds what the badge needs. */
+
+.titlebar .icon-btn.tb-inbox {
+  position: relative;
+}
+
+/* An unread count is a standing state, not a hover affordance, so the bell sits
+   at full strength while anything is waiting. */
+.titlebar .icon-btn.tb-inbox:has(.tb-inbox-badge) {
+  opacity: 1;
+}
+
+.titlebar .tb-inbox-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--accent);
+  /* `--on-accent` is mandatory against an accent fill — see
+     [[accent-and-icon-treatment]]; the accent is a graphite, not a hue, and a
+     hardcoded white goes invisible in the light themes. */
+  color: var(--on-accent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}

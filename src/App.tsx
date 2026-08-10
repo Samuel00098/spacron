@@ -15,6 +15,7 @@ import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
 import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
+import InboxPanel from '$lib/components/orchestrator/InboxPanel.tsx';
 import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
@@ -247,6 +248,7 @@ export default function App() {
       <ProjectHUD />
       <KnowledgeGraphOverlay />
       <AgentNotifications />
+      <InboxPanel />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}

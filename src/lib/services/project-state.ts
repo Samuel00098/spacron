@@ -34,6 +34,7 @@ export type ProjectStateKey =
   | 'orchestrator-memory.json'
   | 'orchestrator-profile.json'
   | 'mailbox.json'
+  | 'inbox.json'
   | 'tasks.json';
 
 /**
@@ -45,6 +46,9 @@ const LEGACY_RELATIVE_PATH: Record<ProjectStateKey, string> = {
   'orchestrator-memory.json': '.spacron/orchestrator-memory.json',
   'orchestrator-profile.json': '.spacron/orchestrator-profile.json',
   'mailbox.json': '.spacron/mailbox.json',
+  // Never shipped in-repo (the key was added after the migration-out), so this
+  // path only ever misses. Present because the map must cover every key.
+  'inbox.json': '.spacron/inbox.json',
   'tasks.json': '.spacron/tasks.json',
 };
 

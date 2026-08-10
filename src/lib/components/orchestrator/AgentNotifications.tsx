@@ -16,6 +16,12 @@ import {
   dismissMailboxCard,
   type MailboxCard,
 } from '$lib/services/orchestrator/mailbox';
+import {
+  inboxState,
+  acknowledge,
+  markDismissed,
+  getDismissedIds,
+} from '$lib/services/orchestrator/inbox';
 import MailboxCardView from './MailboxCard';
 import './AgentNotifications.css';
 
@@ -55,10 +61,12 @@ export default function AgentNotifications() {
   const seen = useStore(mailboxSeen);
   const allChat = useStore(chatMessages);
   const tasks = useStore(orchestratorTasks);
+  // Dismissal now lives in the persisted inbox rather than component state, so
+  // a card cleared here stays cleared across remounts and restarts.
+  const inbox = useStore(inboxState);
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
-  const [dismissedCompletions, setDismissedCompletions] = useState<Set<string>>(new Set());
   const doneTimers = useRef<Map<string, number>>(new Map());
 
   // Only surface completions that land *after* we start watching a project, so
@@ -68,9 +76,9 @@ export default function AgentNotifications() {
     baselineRef.current = { projectId, ts: Date.now() };
   }
 
-  // Reset per-project transient state when the active project changes.
+  // Reset per-project transient state when the active project changes. Dismissal
+  // is no longer reset here — it is per-project in the inbox store already.
   useEffect(() => {
-    setDismissedCompletions(new Set());
     for (const timer of doneTimers.current.values()) clearTimeout(timer);
     doneTimers.current.clear();
     setReplyingId(null);
@@ -85,19 +93,27 @@ export default function AgentNotifications() {
     };
   }, []);
 
-  const mailCards = useMemo(
-    () => getMailboxCards(projectId, { actionableOnly: true }),
+  // Ids cleared from this stack. `mailboxSeen` covers the current session;
+  // this set additionally covers everything cleared before the last restart.
+  const dismissed = useMemo(
+    () => getDismissedIds(projectId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allMail, seen, projectId],
+    [inbox, projectId],
+  );
+
+  const mailCards = useMemo(
+    () => getMailboxCards(projectId, { actionableOnly: true }).filter((c) => !dismissed.has(c.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allMail, seen, dismissed, projectId],
   );
 
   const completionCards = useMemo(() => {
     const msgs = allChat[projectId] ?? [];
     const baseline = baselineRef.current.ts;
     return msgs
-      .filter((m) => m.completion && m.ts >= baseline && !dismissedCompletions.has(m.id))
+      .filter((m) => m.completion && m.ts >= baseline && !dismissed.has(m.id))
       .slice(-MAX_COMPLETION_CARDS);
-  }, [allChat, projectId, dismissedCompletions]);
+  }, [allChat, projectId, dismissed]);
 
   // Auto-clear a plain "finished" card once its summary has settled. Failures and
   // needs-input cards are left for the user to clear deliberately.
@@ -106,20 +122,22 @@ export default function AgentNotifications() {
       const c = m.completion;
       if (c && c.status === 'done' && !c.summaryPending && !doneTimers.current.has(m.id)) {
         const id = m.id;
+        // Capture the project this card belongs to: if the user switches project
+        // before the timer fires, the dismissal still belongs to the old one.
+        const owner = projectId;
         doneTimers.current.set(
           id,
           window.setTimeout(() => {
             doneTimers.current.delete(id);
-            setDismissedCompletions((prev) => {
-              const next = new Set(prev);
-              next.add(id);
-              return next;
-            });
+            // Dismissed, deliberately NOT read: the timer firing is exactly the
+            // case where the user was looking elsewhere. It leaves the corner
+            // and stays bold in the inbox.
+            markDismissed(owner, [id]);
           }, DONE_AUTODISMISS_MS),
         );
       }
     }
-  }, [completionCards]);
+  }, [completionCards, projectId]);
 
   const items = useMemo<NotifItem[]>(() => {
     const merged: NotifItem[] = [
@@ -148,12 +166,14 @@ export default function AgentNotifications() {
     void replyToMailboxCard(projectId, card, text, rootPath);
     cancelReply();
   }
+  // Closing a card by hand is an acknowledgement: it clears the corner *and*
+  // clears the unread flag. The auto-dismiss timer above deliberately does not.
   function dismissCompletion(id: string) {
-    setDismissedCompletions((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
+    acknowledge(projectId, id);
+  }
+  function dismissMail(id: string) {
+    dismissMailboxCard(id);
+    acknowledge(projectId, id);
   }
 
   return (
@@ -174,7 +194,7 @@ export default function AgentNotifications() {
             onSubmitReply={() => submitReply(item.card)}
             onApprove={() => void approveMailboxCard(projectId, item.card, rootPath)}
             onMergeApprove={() => void mergeAndApproveMailboxCard(projectId, item.card, rootPath)}
-            onDismiss={() => dismissMailboxCard(item.card.id)}
+            onDismiss={() => dismissMail(item.card.id)}
           />
         ) : (
           <CompletionNotification
