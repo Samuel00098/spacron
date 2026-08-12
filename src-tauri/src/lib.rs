@@ -74,6 +74,23 @@ pub fn run() {
                 None,
             );
 
+            // First-time launch: open the main window in maximized state.
+            // Persist the `has_launched` flag in `app_flags.json` so subsequent app launches
+            // do not override the user's preferred window layout/size.
+            let flags_path = config_dir.join("app_flags.json");
+            let mut flags: std::collections::BTreeMap<String, String> = std::fs::read_to_string(&flags_path)
+                .ok()
+                .and_then(|content| serde_json::from_str(&content).ok())
+                .unwrap_or_default();
+
+            if !flags.contains_key("has_launched") {
+                let _ = window.maximize();
+                flags.insert("has_launched".to_string(), "true".to_string());
+                if let Ok(content) = serde_json::to_string_pretty(&flags) {
+                    let _ = std::fs::write(&flags_path, content);
+                }
+            }
+
             #[cfg(target_os = "linux")]
             {
                 // WebKitGTK ships with media capture disabled and silently
@@ -286,6 +303,7 @@ pub fn run() {
             commands::workspace::workspace_git_worktree_status,
             commands::workspace::workspace_git_worktree_delta,
             commands::workspace::workspace_git_stage_worktree,
+            commands::workspace::workspace_git_rename_worktree,
             commands::github::github_token_set,
             commands::github::github_token_exists,
             commands::github::github_token_delete,
@@ -328,6 +346,25 @@ pub fn run() {
             commands::lsp::lsp_start,
             commands::lsp::lsp_install_server,
             commands::agent_probe::agent_probe_rules_file,
+            commands::usage::usage_detect_agents,
+            commands::usage::usage_fetch_all,
+            commands::agent_accounts::usage_list_accounts,
+            commands::agent_accounts::usage_select_account,
+            commands::agent_accounts::usage_add_account,
+            commands::agent_accounts::usage_remove_account,
+            commands::agent_accounts::usage_account_env,
+            commands::web_session::web_session_list,
+            commands::web_session::web_session_connect,
+            commands::web_session::web_session_disconnect,
+            commands::usage_stats::stats_get_scan_state,
+            commands::usage_stats::stats_set_enabled,
+            commands::usage_stats::stats_refresh,
+            commands::usage_stats::stats_get_snapshot,
+            commands::usage_stats::stats_get_overview,
+            commands::activity_stats::activity_record_spawn,
+            commands::activity_stats::activity_record_turn,
+            commands::activity_stats::activity_get_summary,
+            commands::activity_stats::activity_reset,
             commands::agent_signals::agent_signal_channel_open,
             commands::agent_signals::agent_signal_channel_close,
             commands::workspace::workspace_git_stage_paths,
