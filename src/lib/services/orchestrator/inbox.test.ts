@@ -10,8 +10,10 @@ import {
   markDismissed,
   acknowledge,
   markAllRead,
+  clearInbox,
   getReadIds,
   getDismissedIds,
+  getClearedIds,
   parseInboxState,
   loadProjectInbox,
   MAX_TRACKED_IDS,
@@ -194,6 +196,24 @@ describe('read and dismissed state', () => {
     // 'a' was already read, so it was not re-recorded.
     expect(read.has('a')).toBe(false);
   });
+
+  it('clearInbox marks entries cleared, read, and dismissed', () => {
+    clearInbox(PROJECT, ['item-1', 'item-2']);
+    expect(getClearedIds(PROJECT).has('item-1')).toBe(true);
+    expect(getClearedIds(PROJECT).has('item-2')).toBe(true);
+    expect(getReadIds(PROJECT).has('item-1')).toBe(true);
+    expect(getDismissedIds(PROJECT).has('item-1')).toBe(true);
+  });
+
+  it('mergeInboxEntries filters out cleared entries', () => {
+    const entries = mergeInboxEntries(
+      [card({ id: 'a' }), card({ id: 'b' })],
+      [completion({ id: 'c' })],
+      new Set(),
+      new Set(['a', 'c']),
+    );
+    expect(entries.map((e) => e.id)).toEqual(['b']);
+  });
 });
 
 describe('loadProjectInbox cold start', () => {
@@ -223,17 +243,17 @@ describe('loadProjectInbox cold start', () => {
 
 describe('parseInboxState', () => {
   it('returns empty state for null, junk and non-objects', () => {
-    expect(parseInboxState(null)).toEqual({ read: [], dismissed: [] });
-    expect(parseInboxState('not json')).toEqual({ read: [], dismissed: [] });
-    expect(parseInboxState('[1,2]')).toEqual({ read: [], dismissed: [] });
+    expect(parseInboxState(null)).toEqual({ read: [], dismissed: [], cleared: [] });
+    expect(parseInboxState('not json')).toEqual({ read: [], dismissed: [], cleared: [] });
+    expect(parseInboxState('[1,2]')).toEqual({ read: [], dismissed: [], cleared: [] });
   });
 
   it('keeps well-formed arrays and drops malformed ones', () => {
-    expect(parseInboxState('{"read":["a"],"dismissed":[1,2]}')).toEqual({ read: ['a'], dismissed: [] });
+    expect(parseInboxState('{"read":["a"],"dismissed":[1,2],"cleared":["c"]}')).toEqual({ read: ['a'], dismissed: [], cleared: ['c'] });
   });
 
   it('caps an oversized file on read', () => {
     const read = Array.from({ length: MAX_TRACKED_IDS + 50 }, (_, i) => `id-${i}`);
-    expect(parseInboxState(JSON.stringify({ read, dismissed: [] })).read).toHaveLength(MAX_TRACKED_IDS);
+    expect(parseInboxState(JSON.stringify({ read, dismissed: [], cleared: [] })).read).toHaveLength(MAX_TRACKED_IDS);
   });
 });

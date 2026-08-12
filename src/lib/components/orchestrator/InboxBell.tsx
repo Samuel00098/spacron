@@ -7,6 +7,7 @@ import {
   inboxState,
   toggleInbox,
   getReadIds,
+  getClearedIds,
   mergeInboxEntries,
   countUnread,
 } from '$lib/services/orchestrator/inbox';
@@ -35,7 +36,9 @@ export default function InboxBell() {
     if (!projectId) return 0;
     const cards = getMailboxCards(projectId, { limit: MAX_ENTRIES, actionableOnly: true, includeSeen: true });
     const completions = (allChat[projectId] ?? []).filter((m) => m.completion);
-    return countUnread(mergeInboxEntries(cards, completions, getReadIds(projectId)).slice(0, MAX_ENTRIES));
+    return countUnread(
+      mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)).slice(0, MAX_ENTRIES),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allMail, allChat, inbox, project?.id]);
 

@@ -8,24 +8,28 @@ import {
   isInboxOpen,
   closeInbox,
   getReadIds,
+  getClearedIds,
   markRead,
   markAllRead,
+  clearInbox,
   mergeInboxEntries,
   countUnread,
   type InboxEntry,
 } from '$lib/services/orchestrator/inbox';
+import StatusIcon, { type StatusIconKind } from './statusIcons';
 import './InboxPanel.css';
 
 /** How many entries the list holds. Older traffic ages out of the mailbox log anyway. */
 const MAX_ENTRIES = 40;
 
-const STATUS_GLYPH: Record<string, string> = {
-  done: '✅',
-  failed: '❌',
-  blocked: '⚠️',
-  report: '📣',
-  handoff: '➡️',
-  ask: '❓',
+/** Maps an inbox status to its line-icon glyph and colour role (CSS class). */
+const STATUS_ICON: Record<string, { kind: StatusIconKind; cls: string }> = {
+  done: { kind: 'done', cls: 'ok' },
+  failed: { kind: 'failed', cls: 'bad' },
+  blocked: { kind: 'blocked', cls: 'warn' },
+  report: { kind: 'report', cls: 'info' },
+  handoff: { kind: 'handoff', cls: 'accent' },
+  ask: { kind: 'ask', cls: 'warn' },
 };
 
 function relativeTime(ts: number, now: number): string {
@@ -63,7 +67,7 @@ export default function InboxPanel() {
     if (!projectId) return [];
     const cards = getMailboxCards(projectId, { limit: MAX_ENTRIES, actionableOnly: true, includeSeen: true });
     const completions = (allChat[projectId] ?? []).filter((m) => m.completion);
-    return mergeInboxEntries(cards, completions, getReadIds(projectId)).slice(0, MAX_ENTRIES);
+    return mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)).slice(0, MAX_ENTRIES);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allMail, allChat, inbox, projectId]);
 
@@ -100,6 +104,18 @@ export default function InboxPanel() {
     markAllRead(projectId, entries);
   }, [projectId, entries]);
 
+  const handleClearAll = useCallback(() => {
+    clearInbox(projectId, entries.map((e) => e.id));
+  }, [projectId, entries]);
+
+  const handleClearEntry = useCallback(
+    (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      clearInbox(projectId, [id]);
+    },
+    [projectId],
+  );
+
   if (!open || !projectId) return null;
 
   const now = Date.now();
@@ -107,14 +123,25 @@ export default function InboxPanel() {
   return (
     <div className="inbox-panel" ref={panelRef} role="dialog" aria-label="Agent inbox">
       <header className="inbox-head">
-        <span className="inbox-title">
-          Inbox
+        <span className="inbox-head-left">
+          <span className="inbox-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+            </svg>
+          </span>
+          <span className="inbox-title">Inbox</span>
           {unread > 0 && <span className="inbox-head-count">{unread} unread</span>}
         </span>
         <div className="inbox-head-actions">
           {unread > 0 && (
             <button className="inbox-mark-all" onClick={handleMarkAll}>
               Mark all read
+            </button>
+          )}
+          {entries.length > 0 && (
+            <button className="inbox-clear-all" onClick={handleClearAll} title="Clear inbox">
+              Clear
             </button>
           )}
           <button className="inbox-close" onClick={closeInbox} aria-label="Close inbox" title="Close">
@@ -133,13 +160,20 @@ export default function InboxPanel() {
       ) : (
         <ul className="inbox-list">
           {entries.map((entry) => (
-            <li key={entry.id}>
+            <li key={entry.id} className="inbox-item">
               <button
                 className={`inbox-row${entry.read ? '' : ' unread'}${entry.actionable ? ' actionable' : ''}`}
                 onClick={() => markRead(projectId, [entry.id])}
               >
-                <span className="inbox-row-glyph" aria-hidden="true">
-                  {STATUS_GLYPH[entry.status] ?? '•'}
+                <span
+                  className={`inbox-row-glyph ${STATUS_ICON[entry.status]?.cls ?? 'muted'}`}
+                  aria-hidden="true"
+                >
+                  {STATUS_ICON[entry.status] ? (
+                    <StatusIcon kind={STATUS_ICON[entry.status].kind} />
+                  ) : (
+                    <span className="inbox-row-fallback" />
+                  )}
                 </span>
                 <span className="inbox-row-body">
                   <span className="inbox-row-head">
@@ -150,6 +184,17 @@ export default function InboxPanel() {
                   {entry.body && <span className="inbox-row-text">{entry.body}</span>}
                 </span>
                 {!entry.read && <span className="inbox-row-dot" aria-label="Unread" />}
+                <button
+                  className="inbox-row-clear"
+                  onClick={(e) => handleClearEntry(e, entry.id)}
+                  aria-label="Clear entry"
+                  title="Clear item"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </button>
             </li>
           ))}

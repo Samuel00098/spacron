@@ -80,10 +80,12 @@ export interface InboxState {
   read: string[];
   /** Entry ids cleared from the floating stack (deliberately or on a timer). */
   dismissed: string[];
+  /** Entry ids explicitly cleared from the inbox panel view by the user. */
+  cleared: string[];
 }
 
 function emptyState(): InboxState {
-  return { read: [], dismissed: [] };
+  return { read: [], dismissed: [], cleared: [] };
 }
 
 /** In-memory mirror of every project's inbox state, keyed by projectId. */
@@ -168,10 +170,14 @@ export function mergeInboxEntries(
   cards: MailboxCard[],
   messages: CompletionLike[],
   read: ReadonlySet<string>,
+  cleared: ReadonlySet<string> = new Set(),
 ): InboxEntry[] {
   const entries: InboxEntry[] = [
-    ...cards.map((card) => mailEntry(card, read.has(card.id))),
+    ...cards
+      .filter((card) => !cleared.has(card.id))
+      .map((card) => mailEntry(card, read.has(card.id))),
     ...messages
+      .filter((msg) => !cleared.has(msg.id))
       .map((msg) => completionEntry(msg, read.has(msg.id)))
       .filter((e): e is InboxEntry => e !== null),
   ];
@@ -201,6 +207,11 @@ export function getDismissedIds(projectId: string): Set<string> {
   return new Set(projectState(get(inboxState), projectId).dismissed);
 }
 
+/** Cleared-state for a project as a set, for filtering cleared entries out of the inbox view. */
+export function getClearedIds(projectId: string): Set<string> {
+  return new Set(projectState(get(inboxState), projectId).cleared ?? []);
+}
+
 function update(projectId: string, fn: (state: InboxState) => InboxState): void {
   inboxState.update((all) => {
     const next = fn(projectState(all, projectId));
@@ -219,6 +230,17 @@ export function markRead(projectId: string, ids: string[]): void {
 export function markDismissed(projectId: string, ids: string[]): void {
   if (!projectId || !ids.length) return;
   update(projectId, (state) => ({ ...state, dismissed: addTrackedIds(state.dismissed, ids) }));
+}
+
+/** Explicitly clear entry ids from the inbox panel view (and mark read + dismissed). */
+export function clearInbox(projectId: string, ids: string[]): void {
+  if (!projectId || !ids.length) return;
+  update(projectId, (state) => ({
+    ...state,
+    read: addTrackedIds(state.read, ids),
+    dismissed: addTrackedIds(state.dismissed, ids),
+    cleared: addTrackedIds(state.cleared ?? [], ids),
+  }));
 }
 
 /**
@@ -255,6 +277,7 @@ export function parseInboxState(raw: string | null): InboxState {
     return {
       read: isStringArray(parsed.read) ? parsed.read.slice(-MAX_TRACKED_IDS) : [],
       dismissed: isStringArray(parsed.dismissed) ? parsed.dismissed.slice(-MAX_TRACKED_IDS) : [],
+      cleared: isStringArray(parsed.cleared) ? parsed.cleared.slice(-MAX_TRACKED_IDS) : [],
     };
   } catch {
     return emptyState();
