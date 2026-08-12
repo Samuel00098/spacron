@@ -6,7 +6,7 @@ import { homeScreenOpen, openQuickCapture, openSettings } from '$lib/stores/layo
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
-import { isTauriRuntime } from '$lib/utils/tauri';
+import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
@@ -38,12 +38,15 @@ export default function TitleBar() {
   const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
 
   async function minimize() {
+    if (win && (await win.isMaximized())) {
+      await restoreWindowToRelativeSize();
+    }
     await win?.minimize();
   }
   async function toggleMaximize() {
     if (!win) return;
     if (await win.isMaximized()) {
-      await win.unmaximize();
+      await restoreWindowToRelativeSize();
     } else {
       await win.maximize();
     }
@@ -257,6 +260,11 @@ export default function TitleBar() {
             </button>
           </>
         )}
+
+        {/* Agent usage used to sit here; it is now docked in the bottom-left
+            corner (`UsageCounter`, mounted in App.tsx) because it is a reading
+            that changes width, not a fixed-size icon button like its former
+            neighbours. */}
 
         {/* Agent inbox — finished work and anything waiting on a decision. */}
         {showWorkspaceTools && <InboxBell />}
