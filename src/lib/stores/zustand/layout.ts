@@ -64,15 +64,52 @@ const AUX_DRAWER_FLAGS: Record<Exclude<RightDrawerTool, 'env'>, keyof LayoutStat
   mobile: 'mobileVisible',
 };
 
-/** Show exactly one right-drawer tool (or none), clearing every other one. */
+/** Show exactly one right-drawer tool (or none), clearing every other one.
+ *  Touches ONLY the drawer's backing flags — `activeView` is deliberately left
+ *  alone so this can restore a project's drawer without also dictating which
+ *  room is on stage (see `applyRightDrawerTool`). */
 function showRightDrawerTool(l: LayoutState, tool: RightDrawerTool | null): LayoutState {
   const next: LayoutState = { ...l };
   for (const t of Object.keys(AUX_DRAWER_FLAGS) as Array<Exclude<RightDrawerTool, 'env'>>) {
     (next as unknown as Record<string, boolean>)[AUX_DRAWER_FLAGS[t]] = t === tool;
   }
+  // `env` carries TWO flags that must move together — `envManagerOpen` is what
+  // the drawer body reads, `envVisible` is its aux-room flag. Setting one and
+  // not the other is the desync that leaves a ghost Env panel behind.
+  next.envVisible = tool === 'env';
   (next as unknown as Record<string, boolean>).envManagerOpen = tool === 'env';
   if (tool && tool !== 'env') next.lastAuxView = tool;
   return next;
+}
+
+/**
+ * Which right-drawer tool is currently showing, or null. THE single definition
+ * of that precedence — the drawer UI, per-project save and per-project restore
+ * all read it here, so a tool can never be persisted as closed while the drawer
+ * still paints it (or the reverse).
+ */
+export function rightDrawerToolOf(l: {
+  toolboxVisible: boolean;
+  httpVisible: boolean;
+  dbVisible: boolean;
+  containersVisible: boolean;
+  envManagerOpen: boolean;
+  mobileVisible: boolean;
+}): RightDrawerTool | null {
+  if (l.toolboxVisible) return 'toolbox';
+  if (l.httpVisible) return 'http';
+  if (l.dbVisible) return 'db';
+  if (l.containersVisible) return 'containers';
+  if (l.envManagerOpen) return 'env';
+  if (l.mobileVisible) return 'mobile';
+  return null;
+}
+
+/** Narrow the loose string a persisted project state carries back to a tool. */
+export function sanitiseRightDrawerTool(v: unknown): RightDrawerTool | null {
+  return typeof v === 'string' && (RIGHT_DRAWER_TOOLS as readonly string[]).includes(v)
+    ? (v as RightDrawerTool)
+    : null;
 }
 
 function loadLayout(): LayoutState {
@@ -128,6 +165,11 @@ interface LayoutActions {
   /** Merge a partial layout patch into the store and persist it. Used to
    *  restore a project's saved view/panels when switching projects. */
   applyLayoutState: (patch: Partial<LayoutState>) => void;
+  /** Restore the right drawer to `tool` (or closed) WITHOUT touching
+   *  `activeView`. `setRightDrawerTool` forces the stage to the tool's room (or
+   *  back to the terminal), which is right for a click but wrong for a project
+   *  switch — there the stage comes from the project's own saved arrangement. */
+  applyRightDrawerTool: (tool: RightDrawerTool | null) => void;
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   openQuickCapture: () => void;
@@ -634,6 +676,14 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   applyLayoutState: (patch: Partial<LayoutState>) => {
     set((l) => {
       const next = { ...l, ...patch };
+      persistLayout(next);
+      return next;
+    });
+  },
+
+  applyRightDrawerTool: (tool: RightDrawerTool | null) => {
+    set((l) => {
+      const next = showRightDrawerTool(l, tool);
       persistLayout(next);
       return next;
     });

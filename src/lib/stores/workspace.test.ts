@@ -64,3 +64,54 @@ describe('persisted stage arrangement', () => {
     expect(state?.focusedRoom).toBeNull();
   });
 });
+
+/**
+ * The right utility drawer is per-project: a tool opened over one project must
+ * not still be open over the next. It rides through persistence as a tool NAME,
+ * so the sanitiser is the one thing standing between a hand-edited
+ * `spacron_project_*` entry and an arbitrary string reaching the drawer.
+ */
+describe('persisted right drawer tool', () => {
+  it('brings the open tool back', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      layout: { activeView: 'mobile', rightDrawerTool: 'mobile' },
+    });
+
+    expect(state?.layout?.rightDrawerTool).toBe('mobile');
+  });
+
+  it('treats a closed drawer as closed', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      layout: { activeView: 'terminal', rightDrawerTool: null },
+    });
+
+    expect(state?.layout?.rightDrawerTool).toBeNull();
+  });
+
+  it('closes the drawer for state saved before it was per-project', () => {
+    // The whole point of the change: an absent field must mean "closed", never
+    // "leave whatever the last project had open".
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      layout: { activeView: 'terminal' },
+    });
+
+    expect(state?.layout?.rightDrawerTool).toBeNull();
+  });
+
+  it('rejects a tool name this build does not have', () => {
+    for (const bogus of ['definitely-not-a-tool', 'proto', 42, {}, ['mobile']]) {
+      const state = sanitise({
+        openFiles: [],
+        expandedPaths: [],
+        layout: { activeView: 'terminal', rightDrawerTool: bogus },
+      });
+      expect(state?.layout?.rightDrawerTool).toBeNull();
+    }
+  });
+});

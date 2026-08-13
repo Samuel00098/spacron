@@ -34,7 +34,7 @@ import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
 import MobilePanel from '$lib/components/mobile/MobilePanel.tsx';
 import { useShallow } from 'zustand/react/shallow';
-import { useLayoutStore } from '$lib/stores/zustand/layout';
+import { useLayoutStore, rightDrawerToolOf } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import {
   toggleSidebar,
@@ -1373,19 +1373,7 @@ export default function AppShell() {
   // The layout-backed tools (Toolbox/HTTP/DB/Containers/Env). One derived
   // "active tool" + one selection handler that updates every backing flag
   // together (React batches them) → switching only swaps the body, no glitch.
-  const rightActiveTool: RightTool | null = layoutState.toolboxVisible
-    ? 'toolbox'
-    : layoutState.httpVisible
-      ? 'http'
-      : layoutState.dbVisible
-        ? 'db'
-        : layoutState.containersVisible
-          ? 'containers'
-          : layoutState.envManagerOpen
-            ? 'env'
-            : layoutState.mobileVisible
-              ? 'mobile'
-              : null;
+  const rightActiveTool: RightTool | null = rightDrawerToolOf(layoutState);
   const rightDrawerOpen = rightActiveTool !== null;
 
   function selectRightTool(tool: RightTool) {

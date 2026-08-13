@@ -2,11 +2,11 @@ import { flushSync } from 'react-dom';
 import { viewTransitionsReliable } from '$lib/utils/tauri';
 import { writable, type Writable } from '$lib/stores/storeCompat';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
-import { useLayoutStore } from './zustand/layout';
+import { useLayoutStore, rightDrawerToolOf as rightDrawerToolOfState } from './zustand/layout';
 
 export type { ActiveView, SidebarTab };
 
-export { sanitiseActiveView, sanitiseSidebarTab, RIGHT_DRAWER_TOOLS } from './zustand/layout';
+export { sanitiseActiveView, sanitiseSidebarTab, RIGHT_DRAWER_TOOLS, rightDrawerToolOf, sanitiseRightDrawerTool } from './zustand/layout';
 export type { RightDrawerTool } from './zustand/layout';
 
 function withTransition(fn: () => void) {
@@ -107,6 +107,15 @@ export function toggleDbVisible() { withTransition(() => { useLayoutStore.getSta
 export function toggleContainersVisible() { withTransition(() => { useLayoutStore.getState().toggleContainersVisible(); }); }
 export function toggleToolboxVisible() { withTransition(() => { useLayoutStore.getState().toggleToolboxVisible(); }); }
 export function setRightDrawerTool(tool: import('./zustand/layout').RightDrawerTool | null) { withTransition(() => { useLayoutStore.getState().setRightDrawerTool(tool); }); }
+/** The right drawer's currently-showing tool, read straight off the live store.
+ *  Goes through the store rather than the `layout` compat writable because the
+ *  `env` tool's open state (`envManagerOpen`) is not part of `LayoutState`. */
+export function currentRightDrawerTool(): import('./zustand/layout').RightDrawerTool | null {
+  return rightDrawerToolOfState(useLayoutStore.getState());
+}
+/** Per-project restore: put the drawer back without moving the stage. No
+ *  `withTransition` — a project switch runs its own. */
+export function applyRightDrawerTool(tool: import('./zustand/layout').RightDrawerTool | null) { useLayoutStore.getState().applyRightDrawerTool(tool); }
 export function setRightDrawerWidth(width: number) { useLayoutStore.getState().setRightDrawerWidth(width); }
 export function toggleYoutubeVisible() { withTransition(() => { useLayoutStore.getState().toggleYoutubeVisible(); }); }
 export function toggleOrchestratorVisible() { withTransition(() => { useLayoutStore.getState().toggleOrchestratorVisible(); }); }

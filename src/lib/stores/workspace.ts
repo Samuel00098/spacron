@@ -5,7 +5,7 @@ import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
-import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, terminalRoomOpen, homeScreenOpen } from './layout';
+import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, currentRightDrawerTool, applyRightDrawerTool, terminalRoomOpen, homeScreenOpen, type RightDrawerTool } from './layout';
 import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
@@ -124,6 +124,8 @@ interface ProjectWorkspaceState {
     orchestratorVisible: boolean;
     dbVisible: boolean;
     toolboxVisible: boolean;
+    /** Which right-drawer tool this project had open, or null for closed. */
+    rightDrawerTool: RightDrawerTool | null;
     lastAuxView: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -254,6 +256,14 @@ interface PersistedProjectState {
     orchestratorVisible?: boolean;
     dbVisible?: boolean;
     toolboxVisible?: boolean;
+    /**
+     * The right utility drawer's open tool, or null/absent for closed. Stored as
+     * the tool NAME rather than as its backing booleans: the drawer is one body
+     * at a time, `env` needs two flags moved together, and a name round-trips
+     * through `applyRightDrawerTool` as one coherent write. Without this the
+     * drawer was pure app-global state and followed you between projects.
+     */
+    rightDrawerTool?: string | null;
     lastAuxView?: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -330,6 +340,7 @@ function saveProjectStateToStorage(projectId: string) {
       orchestratorVisible: currentLayout.orchestratorVisible,
       dbVisible: currentLayout.dbVisible,
       toolboxVisible: currentLayout.toolboxVisible,
+      rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: currentLayout.lastAuxView,
       editorSplitPreview: currentLayout.editorSplitPreview,
       auxPanelWidth: currentLayout.auxPanelWidth,
@@ -464,6 +475,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       orchestratorVisible: Boolean(l.orchestratorVisible),
       dbVisible: Boolean(l.dbVisible),
       toolboxVisible: Boolean(l.toolboxVisible),
+      rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
       lastAuxView: typeof l.lastAuxView === 'string' ? l.lastAuxView : undefined,
       editorSplitPreview: Boolean(l.editorSplitPreview),
       auxPanelWidth: typeof l.auxPanelWidth === 'number' ? Math.max(180, Math.min(2000, l.auxPanelWidth)) : 550,
@@ -568,6 +580,7 @@ export function saveProjectState(projectId: string) {
       orchestratorVisible: get(layout).orchestratorVisible,
       dbVisible: get(layout).dbVisible,
       toolboxVisible: get(layout).toolboxVisible,
+      rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: get(layout).lastAuxView,
       editorSplitPreview: get(layout).editorSplitPreview,
       auxPanelWidth: get(layout).auxPanelWidth,
@@ -681,6 +694,13 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         sidebarTab: sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
       }));
 
+      // The right utility drawer is per-project too: a tool opened over one
+      // project must not still be open over the next. Applied AFTER the layout
+      // patch above so it owns the drawer flags outright, and via
+      // `applyRightDrawerTool` (not `setRightDrawerTool`) so closing the drawer
+      // doesn't drag `activeView` back to the terminal.
+      applyRightDrawerTool(cached.layout.rightDrawerTool ?? null);
+
       // Restore the workspace's stage for this project via the AppShell command
       // bus — mode, Split tiling and the primary room together, so switching
       // back lands on the panes that were open rather than on whatever the
@@ -761,6 +781,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarTab: sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
         }));
       }
+
+      // Unconditional, unlike the layout patch above: a project with no saved
+      // state at all must still land with the drawer CLOSED rather than
+      // inheriting whatever the project we came from had open.
+      applyRightDrawerTool(sanitiseRightDrawerTool(persisted?.layout?.rightDrawerTool));
 
       // Restore (or default) this project's stage so each project keeps its own
       // mode, Split tiling and primary room. Cold-start path: the agent rooms
