@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   severityOfCpu,
   severityOfRamShare,
+  severityOfSystemRam,
   memPercent,
+  describeCpuShare,
+  describeSystemCpu,
   formatBytes,
   groupSessionRowsByProject,
   type ResourceState,
@@ -73,6 +76,7 @@ describe('memPercent', () => {
   it('reports the used share', () => {
     const state = stateWith({
       cpuPercent: 12,
+      cpuCount: 8,
       memUsedBytes: 8 * 1024 ** 3,
       memTotalBytes: 16 * 1024 ** 3,
     });
@@ -82,10 +86,66 @@ describe('memPercent', () => {
   it('is null when total is zero (guards a divide-by-zero)', () => {
     const state = stateWith({
       cpuPercent: 0,
+      cpuCount: 8,
       memUsedBytes: 0,
       memTotalBytes: 0,
     });
     expect(memPercent(state)).toBeNull();
+  });
+});
+
+describe('severityOfSystemRam', () => {
+  it('leaves an ordinary full-ish machine alone', () => {
+    // The regression this exists for: the gauge borrowed the CPU thresholds
+    // (70/90), so a healthy Windows desktop at 82% painted critical red.
+    expect(severityOfSystemRam(70)).toBe('normal');
+    expect(severityOfSystemRam(82)).toBe('normal');
+  });
+
+  it('warns only once what is left is actually running out', () => {
+    expect(severityOfSystemRam(85)).toBe('warn');
+    expect(severityOfSystemRam(94)).toBe('warn');
+    expect(severityOfSystemRam(95)).toBe('critical');
+  });
+
+  it('is normal with no reading yet', () => {
+    expect(severityOfSystemRam(null)).toBe('normal');
+  });
+});
+
+describe('describeSystemCpu', () => {
+  it('names the scale and the Task Manager gap', () => {
+    const text = describeSystemCpu(66, 12);
+    expect(text).toContain('66%');
+    expect(text).toContain('12 logical processors');
+    expect(text).toContain('Task Manager');
+  });
+
+  it('drops the core count when it is not known yet', () => {
+    expect(describeSystemCpu(66, null)).not.toContain('logical processors');
+  });
+
+  it('says warming up before the first reading', () => {
+    expect(describeSystemCpu(null, 12)).toBe('CPU — warming up');
+  });
+});
+
+describe('describeCpuShare', () => {
+  it('converts a machine share back into core-equivalents', () => {
+    // The bug this whole normalization exists for: on a 12-thread box, one
+    // core pinned is 8.3% of the machine — not the 100% sysinfo reports.
+    expect(describeCpuShare(8.33, 12)).toBe('CPU 8% of machine · 1.0 of 12 cores');
+    expect(describeCpuShare(50, 12)).toBe('CPU 50% of machine · 6.0 of 12 cores');
+  });
+
+  it('falls back to the share alone when the CPU count is unknown', () => {
+    // Only reachable before the first snapshot lands; never show "0 cores".
+    expect(describeCpuShare(25, null)).toBe('CPU 25% of machine');
+    expect(describeCpuShare(25, 0)).toBe('CPU 25% of machine');
+  });
+
+  it('says unknown rather than 0% while the sampler is warming up', () => {
+    expect(describeCpuShare(null, 12)).toBe('CPU unknown');
   });
 });
 

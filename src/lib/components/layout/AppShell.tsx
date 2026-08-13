@@ -2599,6 +2599,14 @@ export default function AppShell() {
     // stage renders with every pane hidden and the message layers on top of it.
     const emptyStageMessage = activeRoom ? null : '';
 
+    // Nothing on the stage AND nothing in the rail — every room minimized to a
+    // chip. The stage still has to render at full size (it holds every hidden
+    // pane, per the note above), but it must stop painting a surface: an empty
+    // frosted slab with a border and a shadow over the user's wallpaper is the
+    // one state where there is nothing for it to frame. CSS-only, see
+    // `.focused-room.empty-stage` in AppShell.css.
+    const stageIsVacant = stageRooms.length === 0 && cardedRooms.length === 0;
+
     const stageModifier = isSplit
       ? ` split-grid${stageRooms.length > SPLIT_FIT_PANES ? ' split-scroll' : ''}`
       : '';
@@ -2658,7 +2666,7 @@ export default function AppShell() {
     return (
       <>
         <div
-          className={`focused-room stage-layers${stageModifier}${cardedRooms.length > 0 ? ' has-cards' : ''}`}
+          className={`focused-room stage-layers${stageModifier}${cardedRooms.length > 0 ? ' has-cards' : ''}${stageIsVacant ? ' empty-stage' : ''}`}
           style={
             isSplit
               ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties)

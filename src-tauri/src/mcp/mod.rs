@@ -1219,7 +1219,7 @@ fn tool_check_task() -> serde_json::Value {
 fn tool_emulator_list() -> serde_json::Value {
     serde_json::json!({
         "name": "emulator_list",
-        "description": "Discover every mobile device and emulator the app can drive: the host platform, Android tooling availability, connected Android devices (with serials), installable Android AVDs, and iOS simulators (macOS only, with UDIDs). Returns the serials and UDIDs you pass to the other emulator_* tools.",
+        "description": "Discover every mobile device and emulator the app can drive: the host platform, Android tooling availability, connected Android devices (with serials), installable Android AVDs, and iOS simulators (macOS only, with UDIDs). Returns the serials and UDIDs you pass to the other emulator_* tools. On Android, pick the stock phone AVD that ships with Android Studio — its default device, named like 'Medium_Phone_API_36' or 'Pixel_9_API_35' — unless the task is specifically about another form factor. See emulator_boot.",
         "inputSchema": { "type": "object", "properties": {}, "required": [] }
     })
 }
@@ -1227,7 +1227,7 @@ fn tool_emulator_list() -> serde_json::Value {
 fn tool_emulator_boot() -> serde_json::Value {
     serde_json::json!({
         "name": "emulator_boot",
-        "description": "Boot an Android emulator or iOS simulator. Android: pass an AVD name from emulator_list — the emulator launches detached and can take over a minute to boot, so poll emulator_list until an emulator-* device reports state 'device' before interacting. iOS: pass a simulator UDID; it opens in Simulator.app (macOS only).",
+        "description": "Boot an Android emulator or iOS simulator. Android: pass an AVD name from emulator_list — the emulator launches detached and can take over a minute to boot, so poll emulator_list until an emulator-* device reports state 'device' before interacting. ALWAYS prefer the standard phone AVD that comes with Android Studio (the default device in Device Manager — 'Medium Phone', or a 'Pixel' phone, named like 'Medium_Phone_API_36' / 'Pixel_9_API_35'): it is the reference form factor and the one this app's stream, tap and swipe path is tuned for. Only boot a tablet, foldable, Wear OS, TV or Automotive AVD when the task is explicitly about that form factor. If several phone AVDs are present, take the one with the highest API level. iOS: pass a simulator UDID; it opens in Simulator.app (macOS only).",
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -732,6 +732,19 @@ export default function MobilePanel() {
             )}
           </div>
 
+          {/* Which AVD to launch. The pane is developed and tested against
+              Android Studio's default phone, so say so where the picker is
+              rather than letting someone find out from a tablet AVD that the
+              stream and tap mapping were never tuned for. Only shown when there
+              is an AVD picker to act on, and dropped on short viewports along
+              with the rest of the toolbar's optional chrome. */}
+          {tools?.emulator && avds.length > 0 && (
+            <p className="mobile-hint">
+              For the best experience, use the <strong>Medium Phone</strong> AVD — Android Studio's
+              default device.
+            </p>
+          )}
+
           <div className="mobile-stage" ref={stageRef}>
             {!tools ? (
               <EmptyState

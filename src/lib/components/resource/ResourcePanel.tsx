@@ -11,9 +11,12 @@ import {
   projectDiskState,
   severityOfCpu,
   severityOfRamShare,
+  severityOfSystemRam,
+  describeSystemCpu,
   WARN_CPU_PERCENT,
   WARN_RAM_SHARE_PERCENT,
   formatBytes,
+  describeCpuShare,
   groupSessionRowsByProject,
   type JoinedSessionRow,
   type ProjectResourceGroup,
@@ -267,7 +270,7 @@ export default function ResourcePanel() {
       {/* Machine gauges — always shown once the first snapshot lands. */}
       {system ? (
         <section className="resource-system">
-          <div className="resource-gauge">
+          <div className="resource-gauge" title={describeSystemCpu(cpu, system.cpuCount)}>
             <span className="resource-gauge-label">CPU</span>
             <span className="resource-gauge-track">
               <span
@@ -280,12 +283,18 @@ export default function ResourcePanel() {
               {cpu != null ? `${Math.round(cpu)}%` : '…'}
             </span>
           </div>
-          <div className="resource-gauge">
+          <div
+            className="resource-gauge"
+            title={mem != null ? `RAM ${Math.round(mem)}% of the machine in use` : 'RAM — warming up'}
+          >
             <span className="resource-gauge-label">RAM</span>
             <span className="resource-gauge-track">
               <span
                 className="resource-gauge-fill"
-                data-severity={mem != null ? severityOfCpu(mem) : 'normal'}
+                // Machine fill, NOT the CPU thresholds this used to borrow: a
+                // Windows box idling at 82% is healthy, and painting that red
+                // trains you to ignore the colour. See severityOfSystemRam.
+                data-severity={severityOfSystemRam(mem)}
                 style={{ width: `${Math.min(100, mem ?? 0)}%` }}
               />
             </span>
@@ -356,6 +365,7 @@ export default function ResourcePanel() {
                       <span
                         className="resource-project-stat"
                         data-severity={severityOfCpu(group.cpuPercent)}
+                        title={describeCpuShare(group.cpuPercent, system?.cpuCount ?? null)}
                       >
                         {Math.round(group.cpuPercent)}% CPU
                       </span>
@@ -391,7 +401,7 @@ export default function ResourcePanel() {
                       <span className="resource-row-stats">
                         <span
                           className="resource-mini-stat"
-                          title={`CPU ${row.cpuPercent != null ? `${Math.round(row.cpuPercent)}%` : 'unknown'}`}
+                          title={describeCpuShare(row.cpuPercent, system?.cpuCount ?? null)}
                         >
                           <span className="resource-mini-track" aria-hidden="true">
                             <span
@@ -414,7 +424,14 @@ export default function ResourcePanel() {
                                 // the same bar the machine gauge uses. The floor
                                 // keeps a nonzero sliver visible; the label
                                 // beside the bar always shows the true bytes.
-                                width: `${row.memBytes > 0 && system && system.memTotalBytes > 0 ? Math.max(2, (row.memBytes / system.memTotalBytes) * 100) : 0}%`,
+                                //
+                                // Capped at 100 because the numerator is commit
+                                // charge on Windows, which is backed by RAM +
+                                // pagefile and so can legitimately exceed
+                                // physical RAM. The label stays uncapped — a bar
+                                // may not overflow its track, but a number that
+                                // is genuinely that big should say so.
+                                width: `${row.memBytes > 0 && system && system.memTotalBytes > 0 ? Math.min(100, Math.max(2, (row.memBytes / system.memTotalBytes) * 100)) : 0}%`,
                               }}
                             />
                           </span>

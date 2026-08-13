@@ -44,8 +44,26 @@ export const CRITICAL_CPU_PERCENT = 90;
 export const WARN_RAM_SHARE_PERCENT = 30;
 export const CRITICAL_RAM_SHARE_PERCENT = 50;
 
+/**
+ * How full the MACHINE's RAM is before the system gauge warns. A different
+ * question from the two above, and it needs its own numbers.
+ *
+ * These used to be the CPU thresholds (70/90), which is why an ordinary Windows
+ * desktop sitting at 82% — a perfectly healthy machine, since an OS that leaves
+ * RAM unused is wasting it — painted its gauge critical red all day and taught
+ * you to ignore the one colour that was supposed to mean something. Pressure
+ * starts when what is *left* runs out: at 85% of 16 GB there is ~2.4 GB free,
+ * which is where an agent spawning a toolchain starts to hurt, and 95% is
+ * genuinely into swapping.
+ */
+export const WARN_SYSTEM_RAM_PERCENT = 85;
+export const CRITICAL_SYSTEM_RAM_PERCENT = 95;
+
 export interface SystemResources {
+  /** Machine-wide CPU load, 0–100. */
   cpuPercent: number | null;
+  /** Logical CPUs, for turning a session's share back into core-equivalents. */
+  cpuCount: number;
   memUsedBytes: number;
   memTotalBytes: number;
 }
@@ -54,7 +72,14 @@ export interface SessionResources {
   /** Backend pty session id — join key to the terminal store's session list. */
   sessionId: number;
   pid: number | null;
+  /**
+   * The session tree's CPU as a share of the WHOLE machine, 0–100 — the same
+   * scale as `SystemResources.cpuPercent`, normalized in Rust. sysinfo's raw
+   * per-process number is per-core (0–100×cores) and must never reach here:
+   * these values share the chip's bars and warn/critical thresholds.
+   */
   cpuPercent: number | null;
+  /** RAM held by the tree — private commit on Windows, RSS elsewhere. */
   memBytes: number;
   /** Live processes in the session's tree (shell + descendants). */
   processCount: number;
@@ -206,11 +231,23 @@ export function severityOfCpu(percent: number | null): 'normal' | 'warn' | 'crit
   return 'normal';
 }
 
-/** Severity of a *share of machine RAM* (0–100%, where 100 = all of it). */
+/**
+ * Severity of one project's *share* of machine RAM. Not the same question as
+ * [`severityOfSystemRam`] — 40% of the machine is a lot for a single project
+ * and unremarkable as a total.
+ */
 export function severityOfRamShare(percent: number | null): 'normal' | 'warn' | 'critical' {
   if (percent == null) return 'normal';
   if (percent >= CRITICAL_RAM_SHARE_PERCENT) return 'critical';
   if (percent >= WARN_RAM_SHARE_PERCENT) return 'warn';
+  return 'normal';
+}
+
+/** Severity of how full the machine's RAM is overall (0–100%). */
+export function severityOfSystemRam(percent: number | null): 'normal' | 'warn' | 'critical' {
+  if (percent == null) return 'normal';
+  if (percent >= CRITICAL_SYSTEM_RAM_PERCENT) return 'critical';
+  if (percent >= WARN_SYSTEM_RAM_PERCENT) return 'warn';
   return 'normal';
 }
 
@@ -219,6 +256,43 @@ export function memPercent(state: ResourceState): number | null {
   const system = state.system;
   if (!system || system.memTotalBytes === 0) return null;
   return (system.memUsedBytes / system.memTotalBytes) * 100;
+}
+
+/**
+ * Tooltip text for a session's or project's CPU share.
+ *
+ * The visible label is a share of the whole machine, which is the right default
+ * — it is comparable with the titlebar chip and with every other row. But "8%"
+ * hides whether that is one core pinned or eight cores idling, and for an agent
+ * that is the interesting part, so the tooltip converts it back.
+ */
+export function describeCpuShare(percent: number | null, cpuCount: number | null): string {
+  if (percent == null) return 'CPU unknown';
+  const share = `CPU ${Math.round(percent)}% of machine`;
+  if (!cpuCount || cpuCount <= 0) return share;
+  return `${share} · ${((percent / 100) * cpuCount).toFixed(1)} of ${cpuCount} cores`;
+}
+
+/**
+ * Tooltip for the machine CPU gauge.
+ *
+ * It says what the number measures because it will not match Task Manager and
+ * that looks like a bug until you know why. This is `100 − % Idle Time`: the
+ * share of time a processor had something to do. Task Manager shows
+ * `% Processor Utility`, which weights that by how fast the clock was actually
+ * running, so on a laptop that downclocks it reads materially lower — measured
+ * 66% against 41% on the same machine at the same moment. Both are true; this
+ * one is what psutil, htop and every other cross-platform monitor report, which
+ * is the better default for a number sitting next to per-process rows measured
+ * the same way.
+ */
+export function describeSystemCpu(percent: number | null, cpuCount: number | null): string {
+  if (percent == null) return 'CPU — warming up';
+  const across = cpuCount && cpuCount > 0 ? ` across ${cpuCount} logical processors` : '';
+  return (
+    `CPU ${Math.round(percent)}% — share of time not idle${across}. ` +
+    `Task Manager weights this by clock speed and usually reads lower.`
+  );
 }
 
 /** Human RAM string: `3.4 GB` / `842 MB`. */

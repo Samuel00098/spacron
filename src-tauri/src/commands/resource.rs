@@ -1,10 +1,10 @@
 use crate::state::AppState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, Process, ProcessesToUpdate, System};
 use tauri::State;
 
 /// Persistent process sampler owned by `AppState`.
@@ -36,7 +36,12 @@ impl Default for ResourceSampler {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemResources {
+    /// Machine-wide CPU load, 0–100.
     pub cpu_percent: Option<f32>,
+    /// Logical CPUs. Published so the panel can put a session's share back into
+    /// core-equivalents ("18% — 2.2 cores"), which is the number that actually
+    /// tells you whether an agent is saturating something.
+    pub cpu_count: u32,
     pub mem_used_bytes: u64,
     pub mem_total_bytes: u64,
 }
@@ -47,7 +52,13 @@ pub struct SessionResources {
     /// Backend pty session id — the join key to the frontend's session list.
     pub session_id: u32,
     pub pid: Option<u32>,
+    /// The session tree's CPU load as a share of the WHOLE machine, 0–100 —
+    /// the same scale as [`SystemResources::cpu_percent`], so a row and the
+    /// titlebar chip can be read against each other. See [`sum_tree`] for why
+    /// this is not what sysinfo hands us.
     pub cpu_percent: Option<f32>,
+    /// RAM held by the session tree. See [`process_memory`] for which of the
+    /// several things an OS calls "memory" this is.
     pub mem_bytes: u64,
     /// Number of live processes in the session's process tree (shell + every
     /// descendant). The panel shows this as "N processes" per terminal so the
@@ -66,20 +77,67 @@ pub struct ResourceSnapshot {
     pub sessions: Vec<SessionResources>,
 }
 
+/// Per-process RAM, in the form that answers "what is this agent costing me".
+///
+/// The platforms disagree about what "memory" means and sysinfo passes that
+/// disagreement straight through, so this picks per platform rather than
+/// letting one call mean two things:
+///
+/// * **Windows — `virtual_memory()`, which here is `PROCESS_MEMORY_COUNTERS_EX
+///   ::PrivateUsage`: private commit, the same number Task Manager's "Commit
+///   size" column shows.** `memory()` is `WorkingSetSize`, and that is wrong
+///   for this panel twice over. Working sets *include shared pages*, so summing
+///   a tree counts the same physical memory once per process in it. And working
+///   set is only what is resident right now: an idle agent that has been paged
+///   out reads as almost nothing, which is exactly the trap recorded in
+///   `.spacron/memory/orphaned-agent-processes.md` — orphaned Codex trees
+///   looked like ~0 MB while very much still costing the machine.
+/// * **Everywhere else — `memory()` (RSS).** `virtual_memory()` on Linux and
+///   macOS is the *virtual address space*, tens of gigabytes for an idle
+///   process, and using it there would be far more wrong than what it fixes on
+///   Windows.
+fn process_memory(process: &Process) -> u64 {
+    #[cfg(windows)]
+    {
+        process.virtual_memory()
+    }
+    #[cfg(not(windows))]
+    {
+        process.memory()
+    }
+}
+
 /// Sum CPU + RAM + process count over a process tree rooted at `pid` (the
 /// process itself plus every descendant). The session's PTY child is the
 /// *shell*; the agent runs inside it as a child, so measuring only the shell
 /// would read ~0% for the exact sessions the monitor exists for. A children
 /// map built from `Process::parent()` lets one pass sum the whole subtree.
+///
+/// **The CPU figure returned here is on sysinfo's per-core scale, NOT 0–100.**
+/// `Process::cpu_usage()` ends in `* nb_cpus` on every platform — its own docs
+/// say "it might be bigger than 100 if run on a multi-core machine" — so a
+/// process saturating one core of a 12-thread box reads 100, not 8.3. The
+/// caller divides by the CPU count before this leaves the backend; nothing
+/// downstream should ever see this scale, because `System::global_cpu_usage()`
+/// (the titlebar chip) is a plain 0–100 average and the two were being rendered
+/// with the same bars and the same warn/critical thresholds.
 fn sum_tree(pid: u32, sys: &System, children: &HashMap<u32, Vec<u32>>) -> (f32, u64, u32) {
     let mut cpu = 0.0f32;
     let mut mem = 0u64;
     let mut process_count = 0u32;
     let mut stack = vec![pid];
+    // Windows recycles PIDs, and a recycled pid whose recorded parent is one of
+    // its own descendants closes a loop in the children map. Without this the
+    // walk below never terminates — and it holds the sampler mutex while it
+    // spins, so the whole monitor wedges rather than just reading wrong.
+    let mut visited: HashSet<u32> = HashSet::new();
     while let Some(current) = stack.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
         if let Some(process) = sys.process(Pid::from_u32(current)) {
             cpu += process.cpu_usage();
-            mem += process.memory();
+            mem += process_memory(process);
             process_count += 1;
         }
         // A fresh process's first `cpu_usage()` after refresh reads as its
@@ -122,8 +180,14 @@ pub fn resource_snapshot(state: State<AppState>) -> Result<ResourceSnapshot, Str
 
     let warmed = sampler.warmed.swap(true, Ordering::Relaxed);
 
+    // The divisor that puts per-process CPU back on the machine's 0–100 scale
+    // (see `sum_tree`). `max(1)` because dividing by a CPU list that somehow
+    // came back empty would produce infinities, not a smaller bug.
+    let cpu_count = sys.cpus().len().max(1) as u32;
+
     let system = SystemResources {
         cpu_percent: if warmed { Some(sys.global_cpu_usage()) } else { None },
+        cpu_count,
         mem_used_bytes: sys.used_memory(),
         mem_total_bytes: sys.total_memory(),
     };
@@ -137,7 +201,15 @@ pub fn resource_snapshot(state: State<AppState>) -> Result<ResourceSnapshot, Str
                 let alive = sys.process(Pid::from_u32(pid)).is_some();
                 let (tree_cpu, tree_mem, tree_procs) = sum_tree(pid, &sys, &children);
                 (
-                    if warmed { Some(tree_cpu) } else { None },
+                    // Per-core → share of the machine. This is the only place
+                    // the conversion happens, so every consumer (row label,
+                    // mini bar, severity tint, the project watchdog) is on the
+                    // chip's scale by construction.
+                    if warmed {
+                        Some(tree_cpu / cpu_count as f32)
+                    } else {
+                        None
+                    },
                     tree_mem,
                     tree_procs,
                     alive,

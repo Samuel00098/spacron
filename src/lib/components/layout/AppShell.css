@@ -513,6 +513,65 @@
   view-transition-name: none;
 }
 
+/* AND THE FRAME GOES WITH THE SLAB. The `border` + lifted shadow stack on
+   `.focused-room` only read as "the stage" while a single panel filled it edge
+   to edge — there the line sat exactly on the panel's own edge and did the
+   lifting for it. With a rail, the column under the deck is empty, so that
+   frame is on show by itself: a line with a shadow around nothing, and the
+   whole stage reads as one big panel with the rooms parked inside it (user
+   report, 2026-08-13). Focus is an AREA, not a surface. Every panel already
+   carries its own tint, 1px edge and traveling light (see the "Panel surfaces"
+   section in global.css), so each one can stand on its own here.
+
+   `border-color: transparent`, NOT `border: 0`. Box-sizing is border-box
+   globally, so removing the border moves the padding box 1px on every side —
+   and `.stage-pane` is `inset: 0` against that box, so closing the last card
+   would nudge every pane (and refit the featured terminal) for nothing.
+
+   The featured panel loses a drop shadow in the trade: it is flush with three
+   of the stage's edges, so `overflow: clip` has always eaten its own shadow and
+   the stage's stood in. It keeps its border, rim highlights and traveling light,
+   which is what makes it read as a panel; the lift is the cost of the frame.
+
+   DO NOT reach for `overflow-clip-margin` to hand the shadow back. Measured:
+   that shadow is `0 40px 90px` — at any margin small enough to still catch a
+   fanned card, the clip cuts it near full strength and paints a straight dark
+   band along the stage edge. That is this exact bug again, one step out. */
+.app-shell .rooms-table.ambient-focus .focused-room.has-cards {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* ── …and the same again when the stage is empty ────────────────────────
+   Minimize every room and there is no featured panel and no rail — just the
+   stage, painting a frosted slab with a border and a shadow over a wallpaper
+   nobody can see any more. That is the one state with nothing to frame, so the
+   surface goes entirely and the user's own background comes through clean
+   (user report, 2026-08-13).
+
+   The ELEMENT still renders at full size and must: it is the persistent stage
+   holding every `.stage-hidden` pane, and swapping it for a placeholder would
+   unmount and dispose live terminals (see `emptyStageMessage` in AppShell.tsx).
+   This hides the surface, never the box.
+
+   `.empty-stage` is set in AppShell.tsx only when the stage AND the rail are
+   both empty — a rail with cards is not an empty stage, it is `has-cards`.
+
+   Both rules are scoped to `.ambient-focus` on purpose: it is the only ambient
+   where the stage paints a surface of its own at all. Development and Preview
+   put their border and shadow on `.focused-room > *`, the panel inside. */
+:root:not(.solid-theme):not(.is-webkitgtk)
+  .app-shell .rooms-table.ambient-focus .focused-room.empty-stage {
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app-shell .rooms-table.ambient-focus .focused-room.empty-stage {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .app-shell .rooms-table.ambient-focus .room-stack {
   display: flex;
   flex-direction: column;
@@ -1502,12 +1561,14 @@
   transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-slower) var(--ease-out);
 }
 
-.app-shell .focused-room.empty-stage {
-  grid-column: 1 / -1;
-  min-height: 0;
-  border-radius: 14px;
-  background: transparent;
-}
+/* `.focused-room.empty-stage` used to be declared here with `grid-column: 1/-1`
+   + a 14px radius, from a design where the empty state was its own element. The
+   class was never set by anything, so none of it ever ran. It is live now (see
+   the empty-stage block up in the Focus section) and that span had to go with
+   it: Development and Preview are two-column grids, so a stage spanning 1/-1
+   would sit on top of `.ambient-secondary-room` the moment you minimized
+   everything there. The rest was already inherited — `min-height: 0` from
+   `.focused-room` above, the radius from the ambient-focus rule. */
 
 .app-shell .ambient-secondary-room {
   min-width: 0;
