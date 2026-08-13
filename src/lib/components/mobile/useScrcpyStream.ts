@@ -33,7 +33,7 @@ export interface StreamState {
 
 /** One message from the backend's `mobile_stream_start` channel. */
 interface ScrcpyStreamEvent {
-  kind: 'status' | 'ready' | 'frame' | 'error';
+  kind: 'status' | 'ready' | 'frame' | 'png_frame' | 'error';
   message?: string;
   width?: number;
   height?: number;
@@ -41,6 +41,8 @@ interface ScrcpyStreamEvent {
   keyframe?: boolean;
   config?: boolean;
   pts?: number;
+  /** `png_frame` only: the emulator's frame counter. Skips on dropped frames. */
+  seq?: number;
 }
 
 // Minimal local shapes for the WebCodecs APIs, so this file does not depend on
@@ -96,6 +98,9 @@ export function useScrcpyStream() {
   const serialRef = useRef<string | null>(null);
   const lastFrameAtRef = useRef(0);
   const probeInFlightRef = useRef(false);
+  // Highest emulator frame `seq` already painted, so an out-of-order
+  // `createImageBitmap` result never overwrites a newer frame. Reset per start.
+  const pngSeqRef = useRef(-1);
   // The canvas 2D context, cached per canvas element. `desynchronized` lets the
   // compositor skip a frame of latency, and `alpha: false` drops the per-frame
   // blend — the device screen is fully opaque anyway.
@@ -223,6 +228,72 @@ export function useScrcpyStream() {
     [closeDecoder, createDecoder],
   );
 
+  /**
+   * Paint one whole PNG frame from an emulator's host-side gRPC stream.
+   *
+   * No codec state to carry: unlike the H.264 path there is no keyframe/delta
+   * distinction, no SPS/PPS and nothing to reconfigure on rotation — a rotated
+   * frame simply arrives with new dimensions and the canvas follows.
+   *
+   * `createImageBitmap` is async, so two frames CAN finish decoding out of
+   * order and the later one would be painted over by the earlier. The
+   * emulator's monotonic `seq` is the guard: a bitmap that resolves behind one
+   * already painted is dropped rather than drawn.
+   */
+  const handlePngFrame = useCallback(
+    (ev: ScrcpyStreamEvent) => {
+      if (!ev.data) return;
+      // A frame arriving at all means the emulator is alive — feed the watchdog
+      // before any of the decode work, exactly as the H.264 path does.
+      lastFrameAtRef.current = Date.now();
+      const seq = ev.seq ?? 0;
+      let bytes: Uint8Array;
+      try {
+        bytes = base64ToBytes(ev.data);
+      } catch {
+        return;
+      }
+      const generation = generationRef.current;
+      const blob = new Blob([bytes as unknown as BlobPart], { type: 'image/png' });
+      void createImageBitmap(blob)
+        .then((bitmap) => {
+          const stale =
+            generation !== generationRef.current || !activeRef.current || seq < pngSeqRef.current;
+          const canvas = canvasRef.current;
+          const w = bitmap.width;
+          const h = bitmap.height;
+          if (stale || !canvas || w <= 0 || h <= 0) {
+            bitmap.close();
+            return;
+          }
+          pngSeqRef.current = seq;
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+          }
+          const ctx = contextFor(canvas);
+          if (ctx) {
+            ctx.drawImage(bitmap, 0, 0, w, h);
+            // Same React bail-out as the decoder path: this fires ~26 times a
+            // second and re-rendering the panel each time is exactly the work
+            // that makes pointer events feel late.
+            setState((s) =>
+              s.phase === 'streaming' && s.dims?.width === w && s.dims?.height === h
+                ? s
+                : { ...s, phase: 'streaming', dims: { width: w, height: h } },
+            );
+          }
+          // Bitmaps hold decoded pixels outside the JS heap; not closing them
+          // leaks ~1 MB per frame and the GC will not save you.
+          bitmap.close();
+        })
+        .catch(() => {
+          // One undecodable frame is not fatal — the next one repaints.
+        });
+    },
+    [contextFor],
+  );
+
   const cleanup = useCallback(async () => {
     generationRef.current += 1;
     activeRef.current = false;
@@ -245,7 +316,15 @@ export function useScrcpyStream() {
   }, [closeDecoder]);
 
   const start = useCallback(
-    async (serial: string) => {
+    /**
+     * `maxSide` is the longest edge to ask for, and reaches **both** transports
+     * — the gRPC path's requested box and scrcpy's `max_size`. Omitted means
+     * the backend's own default for the device kind (720 for an emulator that
+     * fell back to scrcpy, 1080 for a physical device). Larger works and stays
+     * usable on the emulator path — 1024 ≈ 15 fps, 1200 ≈ 13 fps, both still
+     * well ahead of scrcpy — but the frame rate falls off steeply past that.
+     */
+    async (serial: string, maxSide?: number) => {
       // Already streaming this device: nothing to do. Streaming a *different*
       // one means the panel switched devices — tear the old stream down first,
       // or the canvas keeps painting the previous device while taps are mapped
@@ -261,6 +340,9 @@ export function useScrcpyStream() {
       // A stale timestamp from a previous stream must not trip this one's
       // watchdog before its first frame lands.
       lastFrameAtRef.current = 0;
+      // Each stream restarts the emulator's frame counter at 0, so a carried
+      // -over high-water mark would reject every frame of the new stream.
+      pngSeqRef.current = -1;
       setState({ phase: 'starting', message: 'Starting screen stream…' });
       const channel = new Channel<ScrcpyStreamEvent>();
       channel.onmessage = (event) => {
@@ -279,13 +361,18 @@ export function useScrcpyStream() {
           });
         } else if (ev.kind === 'frame') {
           handleFrame(ev);
+        } else if (ev.kind === 'png_frame') {
+          // Emulator (host-side gRPC) path. Which kind arrives is the
+          // backend's choice, not ours — it sends PNG when the device is an
+          // emulator with a reachable gRPC endpoint and H.264 otherwise.
+          handlePngFrame(ev);
         } else if (ev.kind === 'error') {
           setState({ phase: 'error', message: ev.message });
           void cleanup();
         }
       };
       try {
-        const id = await invoke<string>('mobile_stream_start', { serial, onFrame: channel });
+        const id = await invoke<string>('mobile_stream_start', { serial, onFrame: channel, maxSide });
         if (generation !== generationRef.current) {
           // Superseded while the invoke was in flight: the backend registered
           // a stream we no longer want — stop it so no thread is orphaned.
@@ -305,7 +392,7 @@ export function useScrcpyStream() {
         setState({ phase: 'error', message: String(e) });
       }
     },
-    [cleanup, handleFrame],
+    [cleanup, handleFrame, handlePngFrame],
   );
 
   const stop = useCallback(() => {

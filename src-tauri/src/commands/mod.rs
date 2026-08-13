@@ -14,6 +14,7 @@ pub mod github;
 pub mod http;
 pub mod lsp;
 pub mod mcp;
+pub mod emulator_grpc;
 pub mod mobile;
 pub mod mobile_stream;
 pub mod ios_sim;

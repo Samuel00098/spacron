@@ -46,6 +46,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::commands::emulator_grpc;
 use crate::commands::mobile::{adb_program, quiet_command};
 use crate::state::AppState;
 
@@ -90,6 +91,37 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// actually renders. Raise it only with a measurement to back it up.
 const MAX_SIDE: u32 = 720;
 
+/// Default long side for a **physical** device.
+///
+/// The 720 above exists because an *emulator* encodes in software and is bound
+/// by pixel rate. A real phone has a hardware H.264 encoder and streams 1080p
+/// without effort, so applying the emulator's budget to it threw away clarity
+/// for a constraint that does not apply. Since emulators now take the gRPC path
+/// entirely (see [`super::emulator_grpc`]), scrcpy is *mostly* the physical-
+/// device transport now — `MAX_SIDE` survives only for the fallback case of an
+/// emulator whose gRPC endpoint could not be reached.
+const PHYSICAL_MAX_SIDE: u32 = 1080;
+
+/// Bounds for a caller-supplied scrcpy `max_size`. Matches the gRPC path's
+/// clamp so one adaptive number from the panel behaves the same on both.
+const SCRCPY_MIN_SIDE: u32 = 240;
+const SCRCPY_MAX_SIDE_CAP: u32 = 4096;
+
+/// The long side to ask scrcpy's encoder for.
+///
+/// An explicit request from the panel wins — it is derived from the pixels the
+/// panel can actually display, so honouring it never wastes encoder work. With
+/// no request the default depends on what is on the other end: a hardware
+/// encoder gets [`PHYSICAL_MAX_SIDE`], a software one the measured
+/// [`MAX_SIDE`] knee.
+fn scrcpy_max_side(serial: &str, requested: Option<u32>) -> u32 {
+    let is_emulator = emulator_grpc::emulator_console_port(serial).is_some();
+    let default = if is_emulator { MAX_SIDE } else { PHYSICAL_MAX_SIDE };
+    requested
+        .unwrap_or(default)
+        .clamp(SCRCPY_MIN_SIDE, SCRCPY_MAX_SIDE_CAP)
+}
+
 // Frame-header flags, from scrcpy's `Streamer`: the PTS is a u62 and the two
 // most significant bits of the u64 header are config / key-frame markers.
 const PACKET_FLAG_CONFIG: u64 = 1 << 63;
@@ -127,6 +159,12 @@ pub enum StreamEvent {
     /// IDR; `pts` is the 62-bit presentation timestamp in microseconds (0 for
     /// config packets — scrcpy replaces the whole field there).
     Frame { data: String, keyframe: bool, config: bool, pts: u64 },
+    /// One whole PNG frame from an **emulator's** host-side gRPC stream (see
+    /// [`super::emulator_grpc`]). Self-contained: unlike `Frame` there is no
+    /// codec state, no keyframe/delta distinction and nothing to reconfigure on
+    /// rotation — the frontend just decodes it and paints. `seq` is the
+    /// emulator's frame counter, which skips when frames are dropped.
+    PngFrame { data: String, width: u32, height: u32, seq: u32 },
     /// The stream died. The frontend falls back to screenshot polling.
     Error { message: String },
 }
@@ -326,9 +364,10 @@ fn run_stream(
     stream_id: String,
     serial: String,
     jar: PathBuf,
+    max_side: u32,
     channel: Channel<StreamEvent>,
 ) {
-    let outcome = stream_session(&active, &serial, &jar, &channel);
+    let outcome = stream_session(&active, &serial, &jar, max_side, &channel);
 
     let was_stopped = active.stop.load(Ordering::SeqCst);
     active.teardown();
@@ -357,6 +396,7 @@ fn stream_session(
     active: &Arc<ActiveStream>,
     serial: &str,
     jar: &PathBuf,
+    max_side: u32,
     channel: &Channel<StreamEvent>,
 ) -> Result<(), String> {
     let send = |event: StreamEvent| {
@@ -421,7 +461,7 @@ fn stream_session(
             // empty tunnel — see the connect loop below.
             "send_dummy_byte=true",
             &scid_arg,
-            &format!("max_size={MAX_SIDE}"),
+            &format!("max_size={max_side}"),
             "cleanup=true",
         ])
         .stdin(Stdio::null())
@@ -552,6 +592,7 @@ fn stream_session(
 pub async fn mobile_stream_start(
     serial: String,
     on_frame: Channel<StreamEvent>,
+    max_side: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     if !valid_serial(&serial) {
@@ -563,6 +604,42 @@ pub async fn mobile_stream_start(
     for previous in take_streams_for(&serial) {
         // Blocking: killing and reaping the adb child spawns a subprocess.
         let _ = tauri::async_runtime::spawn_blocking(move || previous.teardown()).await;
+    }
+    // A previous start may have been the gRPC kind; that registry is separate.
+    emulator_grpc::stop_streams_for(&serial);
+
+    // ── Emulator fast path ───────────────────────────────────────────────
+    // An emulator's screen can be read from the HOST process over gRPC, which
+    // skips the guest's software H.264 encoder entirely — 4x the frame rate
+    // and a 5x tighter p90 (see `emulator_grpc`). No endpoint means a physical
+    // device, an older emulator, or gRPC switched off: all of them fall
+    // through to scrcpy below rather than failing.
+    if let Some(endpoint) = emulator_grpc::discover_endpoint(&serial) {
+        let active = Arc::new(emulator_grpc::ActiveGrpcStream {
+            serial: serial.clone(),
+            stop: AtomicBool::new(false),
+        });
+        emulator_grpc::register_stream(stream_id.clone(), active.clone());
+        let max_side = emulator_grpc::resolve_max_side(max_side);
+        let task_id = stream_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let outcome =
+                emulator_grpc::run_grpc_stream(active.clone(), endpoint, max_side, on_frame.clone())
+                    .await;
+            // A deliberate stop must stay silent: the panel treats an error as
+            // "fall back to snapshot polling", which would undo a user's own
+            // Stop or a device switch.
+            let stopped = active.stop.load(Ordering::SeqCst);
+            emulator_grpc::stop_stream(&task_id);
+            if !stopped {
+                let _ = on_frame.send(StreamEvent::Error {
+                    message: outcome
+                        .err()
+                        .unwrap_or_else(|| "The emulator screen stream ended.".to_string()),
+                });
+            }
+        });
+        return Ok(stream_id);
     }
 
     // Download happens on the async command (first run only) so the thread
@@ -579,7 +656,8 @@ pub async fn mobile_stream_start(
     });
     streams().lock().unwrap().insert(stream_id.clone(), active.clone());
     let thread_id = stream_id.clone();
-    std::thread::spawn(move || run_stream(active, thread_id, serial, jar, on_frame));
+    let scrcpy_side = scrcpy_max_side(&serial, max_side);
+    std::thread::spawn(move || run_stream(active, thread_id, serial, jar, scrcpy_side, on_frame));
     Ok(stream_id)
 }
 
@@ -591,6 +669,12 @@ pub async fn mobile_stream_start(
 /// thread and freeze the window for as long as adb takes to answer.
 #[tauri::command]
 pub async fn mobile_stream_stop(stream_id: String) -> Result<(), String> {
+    // gRPC streams live in their own registry and need no blocking teardown —
+    // flipping the flag makes the pump loop drop the HTTP/2 body on its next
+    // chunk. Checked first because it is the cheap case.
+    if emulator_grpc::stop_stream(&stream_id) {
+        return Ok(());
+    }
     let active = streams().lock().unwrap().remove(&stream_id);
     if let Some(active) = active {
         let _ = tauri::async_runtime::spawn_blocking(move || active.teardown()).await;
@@ -781,9 +865,10 @@ pub async fn mobile_input_text(serial: String, text: String) -> Result<bool, Str
 mod tests {
     use super::{
         encode_keycode, encode_text, encode_touch, float_to_u16fp, parse_frame_header, scid_args,
-        valid_serial, INJECT_TEXT_MAX, KEY_ACTION_DOWN, MSG_INJECT_KEYCODE, MSG_INJECT_TEXT,
-        MSG_INJECT_TOUCH_EVENT, PACKET_FLAG_CONFIG, PACKET_FLAG_KEY_FRAME, TOUCH_ACTION_DOWN,
-        TOUCH_ACTION_UP,
+        scrcpy_max_side, valid_serial, INJECT_TEXT_MAX, KEY_ACTION_DOWN, MAX_SIDE,
+        MSG_INJECT_KEYCODE, MSG_INJECT_TEXT, MSG_INJECT_TOUCH_EVENT, PACKET_FLAG_CONFIG,
+        PACKET_FLAG_KEY_FRAME, PHYSICAL_MAX_SIDE, SCRCPY_MAX_SIDE_CAP, SCRCPY_MIN_SIDE,
+        TOUCH_ACTION_DOWN, TOUCH_ACTION_UP,
     };
 
     #[test]
@@ -827,6 +912,30 @@ mod tests {
     #[test]
     fn rejects_short_headers() {
         assert!(parse_frame_header(&[0; 11]).is_none());
+    }
+
+    #[test]
+    fn physical_devices_are_not_held_to_the_emulator_budget() {
+        // The whole point: 720 is a software-encoder budget. A real phone has a
+        // hardware encoder and must not inherit it.
+        assert_eq!(scrcpy_max_side("39affe1a", None), PHYSICAL_MAX_SIDE);
+        // An emulator only reaches scrcpy when its gRPC endpoint was
+        // unreachable — that fallback keeps the measured software-encoder knee.
+        assert_eq!(scrcpy_max_side("emulator-5554", None), MAX_SIDE);
+    }
+
+    #[test]
+    fn an_explicit_request_wins_over_either_default() {
+        // The panel derives its request from the pixels it can actually show,
+        // so honouring it never wastes encoder work — on either device kind.
+        assert_eq!(scrcpy_max_side("39affe1a", Some(640)), 640);
+        assert_eq!(scrcpy_max_side("emulator-5554", Some(1024)), 1024);
+    }
+
+    #[test]
+    fn requested_sides_are_clamped() {
+        assert_eq!(scrcpy_max_side("39affe1a", Some(0)), SCRCPY_MIN_SIDE);
+        assert_eq!(scrcpy_max_side("39affe1a", Some(99_999)), SCRCPY_MAX_SIDE_CAP);
     }
 
     #[test]

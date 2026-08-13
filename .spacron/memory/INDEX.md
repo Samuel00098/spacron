@@ -31,6 +31,7 @@ up front. When you add a note, add its line here in the matching section.
 - [terminal-agent-launches](terminal-agent-launches.md) — agents launch into a real PTY via `portable-pty`
 - [agent-permission-mode](agent-permission-mode.md) — Yolo/Manual: the three override layers, the one spawn path that applies them, and why the per-row toggle must be idempotent
 - [dev-tools-roadmap-priorities](dev-tools-roadmap-priorities.md) — read "## The plan", not the section numbering
+- [orphaned-agent-processes](orphaned-agent-processes.md) — killing a pane leaves the whole Codex tree running (sandbox bypass + live file handles, dead parent PID); they read as ~0 MB because they're paged out, so measure commit charge not working set
 
 ## Git, worktrees & source control
 
@@ -82,6 +83,7 @@ up front. When you add a note, add its line here in the matching section.
 - [focus-rail-pile](focus-rail-pile.md) — the card-deck rail; since 2026-08-12 the cards ARE the live panes (scaled, never reflowed — a reflow would resize the PTY), why nothing above a panel may carry a transform, and the per-card glass rule
 - [editor-room-focus](editor-room-focus.md) — visible is not on stage; reveal goes through the room system
 - [per-project-persistence](per-project-persistence.md) — `PersistedProjectState` and its two restore paths
+- [right-drawer-per-project](right-drawer-per-project.md) — the right drawer is project-scoped now; `rightDrawerToolOf` is the one precedence definition, and why restore uses `applyRightDrawerTool` not `setRightDrawerTool`
 - [background-precedence](background-precedence.md) — the user's wallpaper outranks the theme's
 - [accent-and-icon-treatment](accent-and-icon-treatment.md) — the accent is graphite not a hue; the 4 files that define it, why `--on-accent` is mandatory, bump the brand migration, the blanket svg rule that overrides icon colour, and why solid themes (forge-dark/light) miss every wallpaper-gated rule
 - [badge-tone-tokens](badge-tone-tokens.md) — badge tones ("Signed in"/"Installed") use `var(--success)`/`var(--warning)`, never hardcoded hex; the three still-hardcoded `#34d399`/`#fbbf24` spots
@@ -102,7 +104,8 @@ up front. When you add a note, add its line here in the matching section.
 - [resource-monitor](resource-monitor.md) — titlebar CPU/RAM chip + dropdown (2026-08-12): persistent sysinfo sampler (CPU deltas), the shell-vs-agent process-TREE gotcha, 2s polling, `sessionId` join to the terminal store, kill via `killSession`; round 2 groups rows by project with per-project disk footprint (`project_disk_usage` walkdir TTL cache, `groupSessionRowsByProject`); round 4 per-project RAM share + watchdog toasts; round 3 Orca close-all/clear-exited ports and the tree-kill fix; rows show name + CPU/RAM bars, no pid/proc (live-tickers)
 - [live-tickers](live-tickers.md) — shared LiveTicker replaces every manual Refresh/Rescan button (usage panel 2m while open, resource 2s + disk 60s while open, stats tab 60s auto-rescan, agents pane 2m); the cadences, the guards (enabled/hidden/in-flight), and what CSS died with the buttons; resource rows slimmed to name-only
 - [mobile-emulator-pane](mobile-emulator-pane.md) — full design in docs/mobile-emulator-pane.md: backend (mobile.rs) already exists unbuilt-frontend; `android`/`ios` views are currently lies; scrcpy raw H.264 + serve-sim sidecar + MCP tools
-- [emulator-encoder-is-the-bottleneck](emulator-encoder-is-the-bottleneck.md) — 2026-08-12 measurements: emulators have no hardware H.264 *encoder*, so `max_size` buys frame rate and bit rate buys nothing; MAX_SIDE 1024→720; why IPC/decode micro-optimisation is second-order; how to measure without fooling yourself
+- [emulator-encoder-is-the-bottleneck](emulator-encoder-is-the-bottleneck.md) — 2026-08-12 measurements: emulators have no hardware H.264 *encoder*, so `max_size` buys frame rate and bit rate buys nothing; MAX_SIDE 1024→720; why IPC/decode micro-optimisation is second-order; how to measure without fooling yourself. Re-measured 2026-08-13 with frame-gap percentiles
+- [emulator-grpc-stream](emulator-grpc-stream.md) — 2026-08-13 spike: the emulator's HOST-side gRPC `streamScreenshot` is 4x scrcpy (p90 gap 272ms→46ms) because it skips the guest encoder; PNG format makes the raw IPC channel unnecessary; emulators only, scrcpy stays for physical devices
 - [scrcpy-wire-protocol](scrcpy-wire-protocol.md) — the six things that silently break the Android stream (hex `scid`, fourcc codec id, dummy-byte handshake, control-socket ordering, AVCC-vs-Annex-B, per-start stream ids) + control-message layouts and measured injection costs
 - [first-launch-maximized](first-launch-maximized.md) — app window opens maximized on first launch ever and persists `has_launched` flag
 - [relative-window-minimize-size](relative-window-minimize-size.md) — unmaximizing or bringing window down resizes dynamically relative to monitor screensize (65% width x 85% height)

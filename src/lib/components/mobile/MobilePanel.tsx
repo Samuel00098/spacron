@@ -4,6 +4,7 @@ import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './MobilePanel.css';
 import { useMjpegStream } from './useMjpegStream';
 import { useScrcpyStream } from './useScrcpyStream';
+import { desiredStreamLongSide } from './streamResolution';
 import { sendStreamKey, sendStreamText, useStreamTouch } from './useStreamInput';
 
 interface AndroidDevice {
@@ -138,6 +139,10 @@ export default function MobilePanel() {
   const [iosError, setIosError] = useState<string | null>(null);
   const [iosActionKey, setIosActionKey] = useState(0);
 
+  // The Android stage. Measured (not the device shell, which is content-sized
+  // until a frame gives it an aspect ratio) to decide what resolution to ask
+  // the device for — see `streamResolution.ts`.
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const screenRef = useRef<HTMLImageElement | null>(null);
   const iosImgRef = useRef<HTMLImageElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -220,7 +225,19 @@ export default function MobilePanel() {
       stopStream();
       return;
     }
-    void startStream(selectedSerial);
+    // Ask for the pixels this panel can actually paint, rather than a fixed
+    // constant: a HiDPI screen needs ~2x a standard one for the same CSS box,
+    // and a narrow drawer needs far less than either. Measured at stream START
+    // only — re-negotiating mid-drag would restart the stream on every frame of
+    // a drawer resize. Widening the panel and wanting it sharper means toggling
+    // Live off/on (or switching device), which restarts it anyway.
+    const stage = stageRef.current?.getBoundingClientRect();
+    const maxSide = desiredStreamLongSide(
+      stage?.width ?? 0,
+      stage?.height ?? 0,
+      typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+    );
+    void startStream(selectedSerial, maxSide);
   }, [tab, selectedSerial, streamMode, streamSupported, startStream, stopStream]);
 
   // A stream failure falls back to snapshot polling and surfaces the reason.
@@ -715,7 +732,7 @@ export default function MobilePanel() {
             )}
           </div>
 
-          <div className="mobile-stage">
+          <div className="mobile-stage" ref={stageRef}>
             {!tools ? (
               <EmptyState
                 title={frameError ? 'Could not reach the Android tooling' : 'Checking for Android SDK…'}
