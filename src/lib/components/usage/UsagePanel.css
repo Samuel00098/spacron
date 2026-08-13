@@ -1,0 +1,349 @@
+/* The usage popover, anchored above the bottom-left usage dock.
+   Frost recipe is the canonical side-panel one — see [[glass-panel-recipe]]:
+   the color-mix layer must stay LAST in the background shorthand, and no
+   ancestor may establish a backdrop root or the blur samples nothing.
+
+   It is deliberately FROSTED HEAVIER than the app's chrome panels. At the
+   shared `--frost-chrome` (0.45) this floats over the terminal — a surface
+   that is itself dark, busy and full of text — and a 5px meter bar read as
+   part of whatever was behind it. Panels that dock to an edge can afford to
+   be see-through; a popover over live text cannot. `--usage-veil` therefore
+   lifts the chrome value toward opaque while still tracking it, so a solid
+   theme (`--frost-chrome: 1`) stays fully solid and a glass theme keeps its
+   blur without giving up legibility. The oblique sheen across the top-left
+   is what still reads it as glass.
+
+   Still one screenful of "who, how much, when it resets" — every element here
+   answers one of those three questions — but sized to be *read*, not squinted
+   at. It was originally matched to Orca's compact popover (300px, 8–10px type);
+   at that size the meters were legible only if you already knew what they said,
+   which defeats a panel whose whole job is to be glanceable. Everything scaled
+   together rather than just the frame: widening the box while leaving 9px text
+   inside would have made it emptier, not clearer. */
+
+.usage-panel {
+  position: fixed;
+  /* Clears the dock (12px inset + ~28px tall) with a hair of breathing room. */
+  bottom: 52px;
+  left: 12px;
+  z-index: 1400;
+  width: min(384px, calc(100vw - 24px));
+  max-height: min(600px, calc(100vh - 68px));
+  display: flex;
+  flex-direction: column;
+  /* 0.45 → 82%, 1.0 (solid themes) → 100%. */
+  --usage-veil: calc((var(--frost-chrome, 0.45) * 0.33 + 0.67) * 100%);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
+  border-radius: 12px;
+  /* The frame is rigid: it never moves, never resizes, and never grows past
+     the viewport — `.usage-list` below is the only thing that scrolls, and only
+     vertically. `touch-action: pan-y` is the other half of that promise: a
+     trackpad pan or touch drag anywhere on the panel scrolls the list instead
+     of panning/zooming the surface itself. */
+  overflow: hidden;
+  touch-action: pan-y;
+  /* Two shadows, not one: the tight ring separates the panel from whatever it
+     covers even where the drop shadow is lost against a dark terminal. */
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 18px 48px rgba(0, 0, 0, 0.55);
+  /* Layer order matters: the corner glint, then the oblique band raked across
+     the surface, then — LAST, per the recipe — the veil the blur shows
+     through. The band is what gives the panel a direction, so it reads as a
+     pane of glass lying over the workspace rather than a hole cut in it. */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 34%, transparent 62%),
+    linear-gradient(
+      118deg,
+      transparent 12%,
+      color-mix(in srgb, var(--text-primary) 5%, transparent) 30%,
+      color-mix(in srgb, var(--text-primary) 7%, transparent) 38%,
+      transparent 56%
+    ),
+    color-mix(in srgb, var(--bg-secondary) var(--usage-veil), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  animation: usage-in var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+/* Rises out of the dock it is anchored to, so the motion points back at what
+   was clicked. */
+@keyframes usage-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-panel {
+    animation: none;
+  }
+}
+
+.usage-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.usage-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-head-age {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.8;
+}
+
+.usage-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.usage-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 5px;
+  transition:
+    background-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.usage-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.usage-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+/* Sits outside the scroll area (below the list, when nothing reports numbers),
+   so it must not be squeezed by the flex:1 list above it. */
+.usage-empty {
+  flex: none;
+  margin: 0;
+  padding: 22px 18px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.usage-list {
+  flex: 1;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  /* A drag inside the panel is always a scroll, never a text selection being
+     swept across the meters — the rows are a readout, not a document. The two
+     bits worth copying (the account line and the note) opt back in below. */
+  user-select: none;
+}
+
+.usage-row-account,
+.usage-row-note {
+  user-select: text;
+}
+
+.usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 11px 10px;
+  border-radius: 8px;
+}
+
+.usage-row + .usage-row {
+  margin-top: 1px;
+}
+
+/* A provider with nothing to report recedes, but stays legible — it is still
+   answering a question ("not signed in"), just a quieter one. */
+.usage-row[data-reporting='false'] {
+  opacity: 0.72;
+}
+
+.usage-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* An explicit pixel box is mandatory around <AgentBrandMark>: the mark paints
+   at 100%/100%, and against an unsized parent that resolves to the asset's
+   intrinsic size — a fetched favicon is routinely 256px square and would
+   destroy the row. See [[agent-brand-marks]]. */
+.usage-row-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  overflow: hidden;
+}
+
+.usage-row-mark svg,
+.usage-row-mark img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.usage-row-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-row-plan {
+  flex: none;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.usage-row-account {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.85;
+  padding-left: 29px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-row-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 29px;
+}
+
+.usage-row-note {
+  margin: 0;
+  padding-left: 29px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+
+/* The Connect / Reconnect action on a web-session row. Sits inline at the end
+   of the explanation rather than on its own line: the sentence and the fix are
+   one thought, and a full-width button would outweigh every meter above it. */
+.usage-row-connect {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--dur-fast, 0.12s) var(--ease-out, ease);
+}
+
+.usage-row-connect:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+.usage-row-connect:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Responsive adjustments for smaller screens or constrained viewports */
+@media (max-width: 480px) {
+  .usage-panel {
+    bottom: 48px;
+    left: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 56px);
+    border-radius: 10px;
+  }
+
+  .usage-head {
+    padding: 8px 11px;
+  }
+
+  .usage-empty {
+    padding: 16px 14px;
+    font-size: 11.5px;
+  }
+
+  .usage-row {
+    padding: 7px 9px 8px;
+  }
+
+  .usage-row-account,
+  .usage-row-meters,
+  .usage-row-note {
+    padding-left: 22px;
+  }
+}
+
+@media (max-width: 360px) {
+  .usage-row-account,
+  .usage-row-meters,
+  .usage-row-note {
+    padding-left: 18px;
+  }
+}
+
+@media (max-height: 520px) {
+  .usage-panel {
+    bottom: 42px;
+    max-height: calc(100vh - 48px);
+  }
+
+  .usage-head {
+    padding: 6px 10px;
+  }
+
+  .usage-row {
+    padding: 6px 8px 7px;
+  }
+}
+

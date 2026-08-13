@@ -308,6 +308,31 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
                 for (url, filename, phase) in PARAKEET_FILES.iter().skip(1) {
                     download_file_inner(&app_handle_clone, &model_id_clone, &cancel_token, url, &models_dir.join(filename), phase).await?;
                 }
+
+                // The weights are useless without the ONNX Runtime that executes
+                // them, and nothing in the build ships one — see
+                // `commands/onnx_runtime.rs`. Fetching it here is what makes
+                // "download Parakeet" mean "Parakeet works": the alternative is a
+                // completed download that still cannot transcribe, failing later
+                // with a message about a library the user never asked for.
+                //
+                // Deliberately not fatal. It is tens of megabytes against ~600 MB
+                // of weights already on disk, and a platform with no prebuilt
+                // runtime (Intel macOS) would otherwise be unable to finish a
+                // download whose model files are all perfectly valid. The weights
+                // stay, and transcription reports what is missing if it is tried.
+                if !crate::commands::onnx_runtime::runtime_present_in(&models_dir) {
+                    let _ = app_handle_clone.emit("download-progress", DownloadProgressPayload {
+                        model_id: model_id_clone.clone(),
+                        progress: 99.0,
+                        bytes_downloaded: 0,
+                        total_bytes: None,
+                        phase: "runtime".to_string(),
+                    });
+                    if let Err(e) = crate::commands::onnx_runtime::onnx_runtime_download().await {
+                        eprintln!("[onnx] Could not install the ONNX Runtime library: {e}");
+                    }
+                }
             }
 
             Ok::<(), String>(())

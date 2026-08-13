@@ -6,6 +6,7 @@ import {
   createBellScanState,
 } from './agent-signals';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
+import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 
 /** Outcome of watching one agent turn on a leased terminal. */
 export type AgentTurnOutcome =
@@ -30,10 +31,12 @@ export interface WatchLeasedAgentOptions {
    */
   tailChars?: number;
   /**
-   * Minimum total new output (chars) before the idle fallback may finish a turn.
-   * Guards against an agent that never actually started: the prompt's own echo
-   * or a lone cursor-blink redraw would otherwise look like a tiny burst of
-   * "activity" that then goes idle and false-completes a turn nothing ran.
+   * Minimum total new output (chars) before the idle fallback may finish a turn
+   * at the normal `idleMs` window. Guards against an agent that never actually
+   * started: the prompt's own echo or a lone cursor-blink redraw would otherwise
+   * look like a tiny burst of "activity" that then goes idle and false-completes
+   * a turn nothing ran. A sub-floor turn is still resolved by the idle fallback
+   * after the much longer [`QUIET_TURN_IDLE_MS`] window.
    */
   minWorkChars?: number;
 }
@@ -53,6 +56,21 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const SIGNALLED_IDLE_MS = 15 * 60 * 1000;
 
 /**
+ * How long a sub-`minWorkChars` turn must sit quiet before the idle fallback
+ * may call it done. The work floor exists to stop a prompt echo or a
+ * cursor-blink redraw from false-completing a turn nothing ran — but a terse
+ * agent that answers in a few lines and goes quiet must not hang its task
+ * `in-progress` forever either. Ten minutes of silence is longer than any real
+ * turn keeps working without producing output, so a quiet-but-real turn
+ * resolves and an echo-only ghost eventually does too (which is still better
+ * than an eternal in-progress with no card). A turn that produced *nothing at
+ * all (`sawActivity` never set — not even a prompt echo) is deliberately left
+ * unresolved: with zero output there is no signal to classify, and an
+ * in-progress task the user can see is safer than a guaranteed-wrong card.
+ */
+export const QUIET_TURN_IDLE_MS = 10 * 60 * 1000;
+
+/**
  * Watch a leased agent terminal and resolve once the current turn ends.
  *
  * CLI agents don't exit when they finish a task — they sit in a REPL — and many
@@ -63,11 +81,30 @@ const SIGNALLED_IDLE_MS = 15 * 60 * 1000;
  *   1. a terminal bell (`\x07`) after the agent has done some work → finished,
  *      unless the recent output is an attention prompt → blocked;
  *   2. an attention prompt on its own → blocked;
- *   3. as a fallback, output that stops growing for `idleMs` → finished.
+ *   3. as a fallback, output that stops growing for `idleMs` → finished; a turn
+ *      under `minWorkChars` (a terse agent) needs the longer
+ *      `QUIET_TURN_IDLE_MS` window instead of hanging in-progress forever.
  *
  * 1–3 remain for CLIs that cannot emit hooks, which is most of them.
  */
 export async function watchLeasedAgentTurn(
+  sessionId: number,
+  opts: WatchLeasedAgentOptions
+): Promise<AgentTurnOutcome> {
+  // Activity stats. This wrapper is the only place a turn's start and end are
+  // both known, and it covers every armed watcher — leased, adopted and
+  // adapter-driven — because they all funnel through this one call.
+  //
+  // An `aborted` turn is deliberately not recorded: the watch was torn down
+  // (task unlinked, session killed), so the elapsed time is how long the watch
+  // lived, not how long the agent worked.
+  markTurnStart(sessionId);
+  const outcome = await watchTurnUntilDone(sessionId, opts);
+  if (outcome.kind !== 'aborted') recordTurnEnd(sessionId, outcome.kind);
+  return outcome;
+}
+
+async function watchTurnUntilDone(
   sessionId: number,
   opts: WatchLeasedAgentOptions
 ): Promise<AgentTurnOutcome> {
@@ -77,7 +114,9 @@ export async function watchLeasedAgentTurn(
   // false-completes turns mid-work — and because the lease is then released and
   // the task severed from its session, the agent's real answer (printed a beat
   // later) is never read back. Discrete bell/attention signals still finish a
-  // turn immediately; this only governs agents that never signal.
+  // turn immediately; this only governs agents that never signal. A turn that
+  // produced less than minWorkChars needs the longer quiet window below before
+  // it counts as done.
   const signalled = hasTurnSignalChannel(sessionId);
   const idleMs = opts.idleMs ?? (signalled ? SIGNALLED_IDLE_MS : 90000);
   const tailChars = opts.tailChars ?? 2000;
@@ -181,7 +220,15 @@ export async function watchLeasedAgentTurn(
         }
       }
 
-      if (sawActivity && grownTotal >= minWorkChars && Date.now() - lastGrowthAt >= idleMs) {
+      // The idle fallback normally requires the work floor — a tiny burst that
+      // never became real work must not false-complete a turn. But a genuine
+      // quiet turn (a terse agent that answers and stops) needs a much longer
+      // quiet window so it still resolves instead of hanging the task
+      // in-progress forever with no card. The quiet window never beats the
+      // normal backstop (a signalled session's 15 min), so the less-certain
+      // sub-floor turn is always the more conservative one.
+      const idleWindow = grownTotal >= minWorkChars ? idleMs : Math.max(QUIET_TURN_IDLE_MS, idleMs);
+      if (sawActivity && Date.now() - lastGrowthAt >= idleWindow) {
         return { kind: 'finished' };
       }
     }

@@ -118,7 +118,7 @@
   align-items: flex-start;
   gap: 10px;
   padding: 11px 12px;
-  padding-right: 30px; /* room for the close button */
+  padding-right: 34px; /* room for the action cluster */
   border-radius: 10px;
   background: color-mix(in srgb, var(--cc) 7%, color-mix(in srgb, var(--bg-secondary) 92%, transparent));
   border: 1px solid color-mix(in srgb, var(--cc) 22%, var(--border));
@@ -128,7 +128,14 @@
 .agent-notifs .orc-completion-failed { --cc: var(--error, #f87171); }
 .agent-notifs .orc-completion-blocked { --cc: var(--warning, #fbbf24); }
 
-.agent-notifs .orc-comp-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+.agent-notifs .orc-comp-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cc);
+}
 .agent-notifs .orc-comp-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .agent-notifs .orc-comp-headline {
   display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
@@ -164,11 +171,56 @@
   .agent-notifs .orc-typing-sm span { animation: none; }
 }
 
-/* ── shared close button (completion cards) ─────────────────────────────────── */
-.agent-notifs .agent-notif-close {
+/* ── grouped burst card ─────────────────────────────────────────────────────── */
+.agent-notifs .orc-comp-group-list {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-notifs .orc-comp-group-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.agent-notifs .orc-comp-group-agent {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-notifs .orc-comp-group-task {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-notifs .orc-comp-more {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+/* ── shared action cluster (show / close on completion cards) ──────────────── */
+.agent-notifs .orc-comp-actions {
   position: absolute;
   top: 7px;
   right: 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.agent-notifs .orc-comp-show,
+.agent-notifs .agent-notif-close {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -180,5 +232,8 @@
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
+.agent-notifs .orc-comp-show:hover,
 .agent-notifs .agent-notif-close:hover { background: var(--bg-hover, color-mix(in srgb, var(--text-muted) 15%, transparent)); color: var(--text-primary); }
+.agent-notifs .orc-comp-show:hover { color: var(--cc); }
+.agent-notifs .orc-comp-show:focus-visible,
 .agent-notifs .agent-notif-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

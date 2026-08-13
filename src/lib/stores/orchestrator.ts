@@ -75,7 +75,7 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, renameTaskWorktree, deriveFirstWorkBranch, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import {
   initWorktreeReconciler,
   reconcileNow,
@@ -128,6 +128,8 @@ import {
   createTerminalSession,
   sendPromptToSession,
   sessionHasRunningProcess,
+  markOrchestratorTrackedSession,
+  unmarkOrchestratorTrackedSession,
   setSessionExecuting,
   setSessionWorktree,
   setActiveSession,
@@ -1138,8 +1140,10 @@ function agentSessionLive(task: OrchestratorTask): boolean {
  * Reconcile a leased task once its agent turn ends (detected by the turn watcher
  * or by terminal exit). Idempotent: only acts while the task is still the
  * in-progress owner of `sessionId`, so the watcher and the exit handler can't
- * double-complete it. `notify` is suppressed on process exit, where the terminal
- * layer already raises its own "finished" notification.
+ * double-complete it. `notify` gates only the "right now" chime — it is
+ * suppressed on process exit, where the terminal layer plays its own exit
+ * nudge — and never the durable completion card, which must be written either
+ * way to land in the inbox.
  */
 async function completeLeasedTask(
   taskId: string,
@@ -1182,22 +1186,12 @@ async function completeLeasedTask(
     void handleReviewerVerdict(updated);
   }
 
-  if (opts?.notify === false || !updated) return;
+  if (!updated) return;
   const name = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
-  if (updated.status === 'blocked') {
-    showToast(`${name} needs your input — ${task.title}`, 'warning', 9000, true);
-  } else if (updated.status === 'failed') {
-    showToast(`${name} failed — ${task.title}`, 'error', 8000, true);
-  } else {
-    // The worktree is handled by the reconciler, not here. Nudging it just makes
-    // staging feel immediate at the moment a turn ends; the guarantee that the
-    // work is noticed comes from its poll, which still holds after this task
-    // reaches `complete`, after the thread is cleared, and across restarts.
-    if (updated.worktree && projectPaths.has(updated.projectId)) void reconcileNow();
-    showToast(`${name} finished — ${task.title}`, 'success', 6000, true);
-  }
 
-  // Post a completion summary to the chat panel so the user sees what happened.
+  // The completion card below is the durable record — it must be written even
+  // when the toast is suppressed, because the card is what lands in the inbox
+  // for a finished agent the user was not watching.
   const elapsed = task.startedAt ? Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000)) : null;
   const completionStatus: CompletionSummary['status'] =
     updated.status === 'blocked' ? 'blocked' : updated.status === 'failed' ? 'failed' : 'done';
@@ -1206,12 +1200,25 @@ async function completeLeasedTask(
     : updated.status === 'failed' ? updated.failureReason
     : null;
 
+  // The completion card is the one visual notification for this event — it
+  // floats as the corner card and lands in the inbox (see AgentNotifications),
+  // so an orchestrator toast here would duplicate it. Only the audible chime
+  // fires as the "right now" cue. `notify: false` (process exit) skips even the
+  // chime — the terminal layer plays its own exit nudge — but the card above is
+  // written either way.
+  if (opts?.notify !== false) {
+    // The worktree is handled by the reconciler, not here. Nudging it just makes
+    // staging feel immediate at the moment a turn ends; the guarantee that the
+    // work is noticed comes from its poll, which still holds after this task
+    // reaches `complete`, after the thread is cleared, and across restarts.
+    if (updated.status !== 'blocked' && updated.status !== 'failed') {
+      if (updated.worktree && projectPaths.has(updated.projectId)) void reconcileNow();
+    }
+    announceCompletionAloud(name, completionStatus, task.title);
+  }
+
   const chatMsgId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const willSummarize = !!(updated.transcript?.trim()) && isAiAvailable();
-
-  // The audible cue is just a nudge — it never waits on (or speaks) the
-  // summary. The recap is generated in the background for the chat card.
-  announceCompletionAloud(name, completionStatus, task.title);
 
   const completionData: CompletionSummary = {
     status: completionStatus,
@@ -1221,6 +1228,7 @@ async function completeLeasedTask(
     reason: completionReason ?? null,
     summary: null,
     summaryPending: willSummarize,
+    taskId: task.id,
   };
 
   appendChat(task.projectId, {
@@ -1276,6 +1284,9 @@ export function deleteOrchestratorTask(id: string) {
   if (task) {
     cancelPendingLaunch(task.id);
     releaseTaskLease(task);
+    // The orchestrator no longer owns this terminal: a later exit should get its
+    // normal toast again.
+    if (task.assignedSessionId != null) unmarkOrchestratorTrackedSession(task.assignedSessionId);
     // Tear down the agent's isolated worktree (best-effort). The branch is kept
     // so any committed work remains recoverable.
     if (task.worktree) void removeTaskWorktree(task.projectId, task.worktree, false);
@@ -1307,6 +1318,9 @@ export function unlinkOrchestratorTask(id: string) {
     captureTaskTranscript(id, task.assignedSessionId);
     cancelPendingLaunch(task.id);
     releaseTaskLease(task);
+    // The user took this terminal back from the orchestrator; its exit toast
+    // belongs to a plain terminal now.
+    if (task.assignedSessionId != null) unmarkOrchestratorTrackedSession(task.assignedSessionId);
   }
   patchTask(id, (t) => {
     const reset = t.status === 'in-progress' ? transitionTask(t, 'todo') : { ...t, status: 'todo' as const };
@@ -1331,6 +1345,7 @@ function buildAgentTaskPanelContext(projectId: string): string {
   return [
     'PROJECT TASK PANEL CONTEXT',
     'Use this as situational context. Do not edit task records unless the user explicitly asks.',
+    'Entries are ordered by urgency (priority, then due date; OVERDUE is past due).',
     ...lines.map((line) => `- ${line}`),
   ].join('\n');
 }
@@ -1487,6 +1502,9 @@ export async function launchOrchestratorTask(
       showToast('Could not start the agent terminal', 'error');
       return null;
     }
+    // Exits of this session surface as a completion card (completeLeasedTask /
+    // the exit handler), so the terminal layer won't double-notify with a toast.
+    markOrchestratorTrackedSession(sessionId);
 
     const currentTask = get(orchestratorTasks).find((entry) => entry.id === task.id);
     const launchState = launchStateByTaskId.get(task.id);
@@ -1760,6 +1778,9 @@ export interface CompletionSummary {
   summary?: string | null;
   /** True while the summary LLM call is in flight. */
   summaryPending?: boolean;
+  /** The orchestrator task this turn belonged to, when one exists. Lets the
+   *  notification card offer a "Show terminal" action while the session lives. */
+  taskId?: string | null;
 }
 
 export interface ChatMessage {
@@ -2003,6 +2024,9 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
     adopted: true,
   };
   orchestratorTasks.update((all) => [...all, adopted]);
+  // This session's exit becomes a completion card; the terminal layer's own
+  // exit toast must not double-notify.
+  markOrchestratorTrackedSession(session.id);
   if (!session.agentName?.trim()) applyOrchestratorAgentName(session.id, name);
   logTaskActivity(adopted.id, 'dispatch', `Adopted live ${getAgentDisplayName(agentPreset) ?? agentPreset} session.`);
   watchAdoptedAgentTurns(adopted.id, session.id);
@@ -2042,19 +2066,20 @@ function shouldNudgeAdopted(sessionId: number, bufLen: number): boolean {
 
 /**
  * Give agents the user launched by hand the same turn-end cue as orchestrated
- * ones — a chime plus a bottom-corner toast that jumps to the terminal.
+ * ones — a chime plus a bottom-corner toast that jumps to the terminal — and a
+ * lightweight inbox card so the turn survives the user looking away.
  *
  * Adopted agents never pass through goal dispatch, which is the only place a
  * turn watcher was ever armed, so until now the spawn-detector route produced
- * no cue at all: the sole completion path was process exit, and that path is
- * deliberately silent for adopted sessions (the user drove it directly, so an
- * orchestrator completion card would be noise).
+ * no cue at all: the sole completion path was process exit, and that path was
+ * deliberately silent for adopted sessions.
  *
- * This keeps that reasoning intact — no completion card, no AI transcript
- * summary, no mailbox post — and adds only the notification. The task stays
- * `in-progress` and the watcher re-arms, because the user is still working in
- * that terminal; ending the task on its first quiet moment would sever the
- * session from agent mode while they were mid-conversation with it.
+ * The card is lightweight by design: no AI transcript summary, no mailbox
+ * post, and the task stays `in-progress` — the watcher re-arms, because the
+ * user is still working in that terminal; ending the task on its first quiet
+ * moment would sever the session from agent mode while they were
+ * mid-conversation with it. `appendAdoptedTurnCard` drops the durable trace;
+ * this function adds the notification on top.
  */
 function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
   void (async () => {
@@ -2076,21 +2101,19 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
   })();
 }
 
-/** The chime + toast pair for one adopted agent's turn end. */
+/** The chime and durable inbox card for one adopted turn end. */
 function notifyAdoptedTurnEnd(task: OrchestratorTask, outcome: AgentTurnOutcome): void {
   const name =
     task.name
     ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
     ?? task.agentPreset
     ?? 'Agent';
-  const sessionId = task.assignedSessionId;
-  const openTerminal = sessionId != null
-    ? { label: 'Show', onClick: () => setActiveSession(sessionId) }
-    : undefined;
 
   logTaskActivity(task.id, outcome.kind === 'blocked' ? 'blocked' : 'finished',
     outcome.kind === 'blocked' ? outcome.reason : 'Finished its turn.');
 
+  // The completion card below is the one visual notification for this turn end —
+  // a toast would duplicate it. The chime stays as the "right now" audio cue.
   if (get(announceAgentCompletions)) {
     // In voice mode the realtime model relays it in its own voice; a chime on
     // top of a live call is jarring. Same split as announceCompletionAloud.
@@ -2105,11 +2128,47 @@ function notifyAdoptedTurnEnd(task: OrchestratorTask, outcome: AgentTurnOutcome)
     }
   }
 
-  if (outcome.kind === 'blocked') {
-    showToast(`${name} needs your input`, 'warning', 9000, true, openTerminal);
-  } else {
-    showToast(`${name} finished — ready to check`, 'success', 6000, true, openTerminal);
-  }
+  // The durable trace for this turn. A card lands only when a cue lands, so it
+  // can never outnumber the chimes (shouldNudgeAdopted already deduped this one).
+  appendAdoptedTurnCard(
+    task,
+    name,
+    outcome.kind === 'blocked' ? 'blocked' : 'done',
+    outcome.kind === 'blocked' ? outcome.reason : null,
+  );
+}
+
+/**
+ * Append the lightweight inbox card for a hand-launched agent's finished turn.
+ *
+ * A real completion card minus the AI summary: no `generateTranscriptSummary`
+ * (the user drove this directly and a recap would be noise), no mailbox post,
+ * and — on the turn-end path — the task stays `in-progress`. `completionEntry`
+ * (inbox.ts) picks this up as a normal inbox row: done turns are informational,
+ * blocked turns are actionable.
+ */
+function appendAdoptedTurnCard(
+  task: OrchestratorTask,
+  name: string,
+  status: 'done' | 'failed' | 'blocked',
+  reason: string | null,
+): void {
+  appendChat(task.projectId, {
+    id: msgId(),
+    role: 'assistant',
+    text: '',
+    ts: Date.now(),
+    completion: {
+      status,
+      agentName: name,
+      taskTitle: task.title,
+      elapsedSec: null,
+      reason,
+      summary: null,
+      summaryPending: false,
+      taskId: task.id,
+    },
+  });
 }
 
 function matchesLiveAgentTarget(session: LiveTerminalSession, wanted: string): boolean {
@@ -2353,6 +2412,9 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
     name: task.name,
   });
   if (sessionId == null) return false;
+  // The exit handler will write the completion card for this resumed session;
+  // keep the terminal layer's own exit toast suppressed.
+  markOrchestratorTrackedSession(sessionId);
 
   patchTask(task.id, (current) => ({
     ...current,
@@ -3041,7 +3103,7 @@ function persistWorktreePatch(projectId: string, worktreePath: string, patch: Pa
 }
 
 /** Whether a session is live, looking in both the normal and Development ambients. */
-function sessionIsRunning(projectId: string, sessionId: number): boolean {
+export function sessionIsRunning(projectId: string, sessionId: number): boolean {
   return [false, true].some((isDev) =>
     getTerminalProjectState(projectId, isDev).sessions.some((s) => s.id === sessionId && s.isRunning)
   );
@@ -3091,6 +3153,26 @@ if (typeof window !== 'undefined') {
     list: trackedWorktrees,
     persist: persistWorktreePatch,
     autoStage: () => get(autoStageAgentChanges) !== false,
+    // Name the branch from the agent's first real work, Orca-style — "fix login
+    // redirect" instead of the spawn-time task label. Best-effort and silent:
+    // a rename that git refuses keeps the old name and `renamedFromWork` is set
+    // either way so the hook never re-fires. When nothing is nameable yet (the
+    // oldest delta is only our own snapshot commit and the file yields no slug)
+    // the flag is left unset, so a later sighting — or the next session, since
+    // the reconciler's in-memory guard is the only thing that remembers — gets
+    // another shot at naming it.
+    onFirstWork: async (entry, delta) => {
+      const branch = deriveFirstWorkBranch(entry.worktree, {
+        file: delta.firstFile ?? null,
+        subject: delta.firstSubject ?? null,
+      });
+      if (!branch) return;
+      const renamed = await renameTaskWorktree(entry.projectId, entry.worktree, branch);
+      persistWorktreePatch(entry.projectId, entry.worktree.path, {
+        renamedFromWork: true,
+        ...(renamed ? { branch: renamed } : {}),
+      });
+    },
     onStaged: (work, stagedFiles) => {
       showToast(
         `${work.agentName}'s ${stagedFiles} file change${stagedFiles === 1 ? '' : 's'} are in Source Control — ready to test`,
@@ -3149,8 +3231,8 @@ if (typeof window !== 'undefined') {
     const sessionStillPresent = getTerminalProjectState(projectId).sessions.some((s) => s.id === sessionId);
     if (!sessionStillPresent) return;
     // An adopted agent (one the user launched by hand) just exited. Snapshot its
-    // output and complete it quietly — the user drove this directly, so don't
-    // raise an orchestrator completion card / summary for it.
+    // output and complete it quietly — no AI summary, but the durable inbox card
+    // still lands so the last turn isn't lost to a transient toast.
     if (task.adopted) {
       captureTaskTranscript(task.id, sessionId);
       const updated = patchTask(task.id, (t) => ({ ...transitionTask(t, 'complete'), assignedSessionId: null }));
@@ -3166,6 +3248,22 @@ if (typeof window !== 'undefined') {
         patchTask(task.id, (t) => ({ ...t, worktree: effectiveWorktree }));
         void reconcileNow();
       }
+      // If the watcher detected the final turn a beat ago there will already be
+      // a done card for it; this exit card is the session ending, a distinct
+      // event, so the two rows are correct rather than a double-write. (The
+      // leased path avoids this via completeLeasedTask's idempotence guard, but
+      // adopted tasks stay in-progress by design.)
+      appendAdoptedTurnCard(
+        task,
+        task.name
+          ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
+          ?? task.agentPreset
+          ?? 'Agent',
+        // Unknown exit code counts as clean, matching the leased path's
+        // `exitCode !== null && exitCode !== 0` convention.
+        code != null && code !== 0 ? 'failed' : 'done',
+        code != null && code !== 0 ? `Agent process exited with code ${code}.` : null,
+      );
       return;
     }
     // Distinguish clean exit (code 0 or unknown) from crash (non-zero code) so

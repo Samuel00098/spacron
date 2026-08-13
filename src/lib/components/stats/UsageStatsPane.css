@@ -1,0 +1,900 @@
+/* Stats pane (Settings → Stats): cards, chart, breakdowns, sessions table.
+   Composes with the global settings classes (.settings-card, .shell-hint…). */
+
+.usage-stats {
+  max-width: 760px;
+}
+
+/* ── Toolbar ── */
+.stats-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.stats-controls {
+  display: flex;
+  gap: 14px;
+}
+
+.stats-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stats-control-label {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* The pickers are the shared <Dropdown>, which brings its own chrome; all this
+   has to do is give each one a width to sit in. See UsageStatsPane.tsx for why
+   these are not native selects. */
+.stats-control-group .dropdown {
+  min-width: 172px;
+}
+
+.stats-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The cadence line leads and the age of the last scan sits under it — two
+   short readings stacked, rather than one long run of text across the
+   toolbar that pushes the share button off the edge on a narrow pane. */
+.stats-refresh-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stats-action-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.stats-action-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+.stats-action-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.stats-last-scanned {
+  margin: 0;
+  padding: 8px 18px 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.stats-busy-note {
+  margin: 0;
+  padding: 10px 18px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.stats-error-note {
+  margin: 0;
+  padding: 10px 18px 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.stats-cost-note {
+  margin: 0;
+  padding: 8px 18px 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.stats-empty-hint {
+  margin: 14px 18px 16px;
+}
+
+.stats-loading {
+  margin: 14px 18px 16px;
+}
+
+/* ── Stat cards ── */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+@media (max-width: 720px) {
+  .stats-cards { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stats-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  background: var(--bg-primary);
+  min-width: 0;
+}
+
+.stats-card-label {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.stats-card-value {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.stats-card small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+/* ── Daily chart ── */
+.stats-chart-wrap {
+  padding: 4px 18px 14px;
+}
+
+/* `align-items: stretch` is load-bearing: the bars are sized by percentage
+   heights inside their column, so every column has to be as tall as the chart
+   for those percentages to resolve against anything. With `flex-end` the
+   columns shrank to their label and the bars rendered at zero height — the
+   chart looked empty apart from the day labels. */
+.stats-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  height: 110px;
+}
+
+.stats-chart-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  height: 100%;
+}
+
+.stats-chart-bar {
+  position: relative;
+  width: 100%;
+  max-width: 26px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  border-radius: 3px 3px 0 0;
+  background: var(--bg-secondary);
+}
+
+.stats-chart-seg {
+  width: 100%;
+  min-height: 1px;
+}
+
+.stats-chart-input {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.stats-chart-cache {
+  background: var(--accent-light);
+  opacity: 0.75;
+}
+
+.stats-chart-output {
+  background: var(--accent);
+}
+
+.stats-chart-label {
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stats-chart-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.stats-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+.stats-dot-input { background: rgba(255, 255, 255, 0.13); }
+.stats-dot-cache { background: var(--accent-light); }
+.stats-dot-output { background: var(--accent); }
+
+/* ── Breakdowns ── */
+.stats-breakdowns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+
+@media (max-width: 720px) {
+  .stats-breakdowns { grid-template-columns: 1fr; }
+}
+
+.stats-breakdowns h4,
+.stats-recent h4 {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stats-breakdown-col {
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  min-width: 0;
+}
+
+.stats-breakdown {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stats-breakdown-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stats-breakdown-label {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-breakdown-turns {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stats-breakdown-tokens {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+.stats-breakdown-cost {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
+.stats-breakdown-track {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.stats-breakdown-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+/* ── Recent sessions ── */
+.stats-recent {
+  padding: 0 18px 18px;
+}
+
+.stats-sessions-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  background: var(--bg-primary);
+}
+
+.stats-sessions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  /* Two more columns than it started with (agent, and the worktree tag inside
+     the project cell) — the scroll container needs a wider floor or the model
+     ids ellipsis away to nothing. */
+  min-width: 680px;
+}
+
+.stats-sessions th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  white-space: nowrap;
+}
+
+.stats-sessions td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  color: var(--text-secondary);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-sessions tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.stats-sessions tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.stats-sessions .stats-project {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* The agent column. An explicit pixel box around the mark is mandatory — it
+   paints at 100%/100% and a fetched favicon is routinely 256px square, which
+   would blow the row height apart. See [[agent-brand-marks]]. */
+.stats-sessions .stats-agent {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.stats-agent-mark {
+  display: inline-grid;
+  place-items: center;
+  vertical-align: -3px;
+  width: 15px;
+  height: 15px;
+  margin-right: 6px;
+}
+
+.stats-agent-mark svg,
+.stats-agent-mark img {
+  width: 13px;
+  height: 13px;
+  object-fit: contain;
+}
+
+/* Reads as a tag on the project, not a second project name. */
+.stats-worktree {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.stats-sessions .stats-branch {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.stats-sessions .stats-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.stats-sessions .stats-when {
+  display: table-cell;
+  color: var(--text-muted);
+}
+
+.stats-when small {
+  display: block;
+  color: var(--text-muted);
+  opacity: 0.7;
+  font-size: 10px;
+}
+
+/* ── Orca-style layout: header, tiles, panels, provider cards ────────────────
+   Added with the multi-provider port. Colours stay on the shared tokens so the
+   pane follows the app theme rather than pinning Orca's palette. */
+
+.stats-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.stats-title {
+  margin: 0 0 3px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.stats-panel-sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.stats-tab-select {
+  flex: none;
+  width: 158px;
+}
+
+.stats-updated {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.stats-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+}
+
+.stats-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Headline tiles ── */
+.stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px 18px 0;
+}
+
+@media (max-width: 720px) {
+  .stats-tiles { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stats-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.stats-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.stats-tile-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stats-tile-value {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-tile-label {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+/* ── Side-by-side panels (heatmap + token mix) ── */
+.stats-panels {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 10px;
+  padding: 10px 18px 0;
+}
+
+@media (max-width: 720px) {
+  .stats-panels { grid-template-columns: 1fr; }
+}
+
+.stats-panel {
+  padding: 13px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.stats-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 11px;
+}
+
+.stats-panel-head h4 {
+  margin: 0 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.stats-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle, var(--border));
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Intensity heatmap ── */
+.stats-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stats-heatmap-row {
+  display: flex;
+  gap: 3px;
+}
+
+.stats-heat-cell {
+  flex: 1 1 0;
+  min-width: 8px;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle, var(--border));
+}
+
+/* Four steps of one hue: the grid reads as intensity, not as categories. */
+.stats-heat-cell.level-0 { background: var(--bg-primary); }
+.stats-heat-cell.level-1 { background: var(--accent); opacity: 0.28; border-color: transparent; }
+.stats-heat-cell.level-2 { background: var(--accent); opacity: 0.5; border-color: transparent; }
+.stats-heat-cell.level-3 { background: var(--accent); opacity: 0.75; border-color: transparent; }
+.stats-heat-cell.level-4 { background: var(--accent); opacity: 1; border-color: transparent; }
+
+.stats-heatmap-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.stats-legend-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.stats-legend-scale .stats-heat-cell {
+  flex: none;
+  width: 9px;
+  min-width: 9px;
+}
+
+/* ── Token mix bar ── */
+.stats-mixbar {
+  display: flex;
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.stats-mix-seg { display: block; height: 100%; }
+
+.seg-input { background: rgba(255, 255, 255, 0.16); }
+.seg-output { background: var(--accent); }
+.seg-cache { background: var(--accent-light); opacity: 0.75; }
+
+.stats-mix-legend {
+  list-style: none;
+  margin: 11px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.stats-mix-legend li { display: inline-flex; align-items: center; }
+
+/* ── Provider cards ── */
+.stats-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 0;
+}
+
+.stats-section-head h4 {
+  margin: 0 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.stats-provider-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 10px 18px 0;
+}
+
+@media (max-width: 720px) {
+  .stats-provider-grid { grid-template-columns: 1fr; }
+}
+
+/* Matches the provider grid's own gutter so it reads as a footnote to the
+   cards rather than a new section. */
+.stats-provider-note {
+  padding: 8px 18px 0;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.stats-provider-card {
+  padding: 12px 13px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.stats-provider-card.is-empty { opacity: 0.62; }
+
+.stats-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.stats-provider-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.stats-pill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle, var(--border));
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.stats-pill.is-on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.stats-provider-sub {
+  margin: 0 0 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-provider-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 9px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-provider-figures span:not(:first-child) { color: var(--text-muted); }
+
+.stats-provider-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.stats-provider-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  min-width: 2px;
+}
+
+/* ── Per-provider figure strip ── */
+.stats-figure-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 12px 18px 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   Agent activity tiles
+   --------------------------------------------------------------------------
+   The per-agent breakdown under the activity stat cards. Each agent is a
+   square tile — mark, name, time worked, detail — stacked centred, and the
+   durations stay tabular so they read at a glance across the grid.
+
+   The mark sizes its own svg/img: `useAgentBrand` falls back to a fetched
+   favicon, which paints at its intrinsic size (often 256px) unless the
+   container constrains both the box and its child. Same rule as the usage
+   dock — see agent-brand-marks in .spacron/memory/. */
+/* One square tile per agent, wrapping into rows of three or four. auto-fill +
+   minmax is what ties the count to the pane's width: the settings pane is
+   resizable, so a fixed column count would only ever suit one of its widths. */
+.stats-activity-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  padding: 10px 18px 0;
+}
+
+.stats-activity-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  aspect-ratio: 1 / 1;
+  padding: 12px 10px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  text-align: center;
+  min-width: 0;
+}
+
+.stats-activity-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.stats-activity-mark svg,
+.stats-activity-mark img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.stats-activity-name {
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-activity-figure {
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.stats-activity-sub {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}

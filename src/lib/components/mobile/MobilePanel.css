@@ -1,0 +1,704 @@
+/* ── Mobile Emulator pane ────────────────────────────────────────────────
+   Interactive Android mirror (polling screencap + adb input injection) with
+   a view-only iOS simulator tab. Styling mirrors the other center-room
+   panels: frosted transparent chrome, the preview panel's device-shell
+   chassis language, and the standard layout tokens. */
+
+.mobile-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  /* Transparent so the frosted aux panel shows through. */
+  background: transparent;
+  overflow: hidden;
+  container-type: inline-size;
+  /* Safety net for phones: a mobile browser's 100vh root is the LARGE
+     viewport (URL bar hidden), taller than the visible screen. Cap the panel
+     at the visible viewport so it can never run off the bottom; dvh == vh on
+     desktop, so this only moves on phones. */
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/* ── Tabs ── */
+.mobile-panel .mobile-tabs {
+  height: 36px;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+
+.mobile-panel .mobile-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mobile-panel .mobile-tab.active {
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.mobile-panel .mobile-tab-note {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1.5px 5px;
+}
+
+/* ── Toolbar ── */
+.mobile-panel .mobile-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  background: transparent;
+}
+
+.mobile-panel .mobile-tool-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Pickers use the app's shared Dropdown (theme-aware, portaled menu) instead
+   of native <select>s — a native select paints its open menu with OS chrome
+   (a white system-font list on Windows) that no stylesheet can theme. Scoped
+   tweaks keep the trigger at toolbar height and with the toolbar's frosted
+   chrome; the menu itself is the standard frosted popover. */
+.mobile-panel .dropdown {
+  min-width: 0;
+  max-width: 230px;
+}
+
+/* .dropdown .dd-trigger keeps the overrides at (0,3,0) — above Dropdown.css's
+   own .dd-trigger/.dd-trigger.open — so they win regardless of stylesheet
+   load order. */
+.mobile-panel .dropdown .dd-trigger {
+  height: 28px;
+  border-radius: 7px;
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.mobile-panel .dropdown .dd-trigger:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+}
+
+.mobile-panel .dropdown .dd-trigger.open {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.mobile-panel .dropdown .dd-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mobile-panel .dropdown .dd-value {
+  font-size: 11.5px;
+}
+
+.mobile-panel .mobile-avd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.mobile-panel .mobile-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mobile-panel .mobile-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mobile-panel .mobile-launch-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--button-text, #fff);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-launch-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.mobile-panel .mobile-launch-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.mobile-panel .mobile-launch-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── Stage / device chassis ── */
+.mobile-panel .mobile-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 20px;
+  /* Theme-aware: the old hardcoded navy gradient stayed dark in every theme,
+     so in light mode the (correctly dark) text over it was unreadable. The
+     subtle center vignette now follows the theme palette. */
+  background: radial-gradient(
+    ellipse at 50% 30%,
+    color-mix(in srgb, var(--bg-tertiary) 55%, var(--bg-primary) 45%) 0%,
+    var(--bg-primary) 100%
+  );
+}
+
+/* Shared device chassis — layered rims + drop shadow, same language as the
+   preview panel's device-shell. Sized by the streamed frame's aspect. */
+.mobile-panel .mobile-device-shell,
+.mobile-panel .mobile-ios-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* `aspect-ratio` is set inline from the live frame dims; these auto sizes
+     plus zero minimums are what let that box scale down to fit the stage
+     instead of staying at the frame's natural (1024px-class) size. */
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  background: #1c1c1e;
+  border-radius: 34px;
+  padding: 10px 7px 12px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1.5px #3c3c3e,
+    0 0 0 3px #1c1c1e,
+    0 0 0 4.5px #4a4a4e,
+    0 0 0 5.5px #1c1c1e,
+    0 32px 80px rgba(0, 0, 0, 0.65),
+    0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* Left side buttons (volume up / down) */
+.mobile-panel .mobile-device-shell::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 110px;
+  width: 4px;
+  height: 34px;
+  background: #3c3c3e;
+  border-radius: 2px 0 0 2px;
+  box-shadow: 0 44px 0 #3c3c3e;
+}
+
+/* Right side button (power) */
+.mobile-panel .mobile-device-shell::after {
+  content: '';
+  position: absolute;
+  right: -6px;
+  top: 140px;
+  width: 4px;
+  height: 68px;
+  background: #3c3c3e;
+  border-radius: 0 2px 2px 0;
+}
+
+.mobile-panel .mobile-device-shell {
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mobile-panel .mobile-device-screen {
+  display: block;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 26px;
+  background: #000;
+  pointer-events: none;
+}
+
+.mobile-panel .mobile-ios-shell {
+  border-radius: 44px;
+  padding: 12px 8px 14px;
+}
+
+.mobile-panel .mobile-ios-shell .mobile-device-screen {
+  border-radius: 36px;
+}
+
+/* ── Hardware key row ── */
+.mobile-panel .mobile-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  background: transparent;
+}
+
+.mobile-panel .mobile-key-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.mobile-panel .mobile-key-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.mobile-panel .mobile-key-btn:active {
+  transform: scale(0.92);
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.mobile-panel .mobile-controls-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* ── Text input row ── */
+.mobile-panel .mobile-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 10px;
+  flex-shrink: 0;
+}
+
+.mobile-panel .mobile-text-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-text-input::placeholder {
+  color: var(--text-muted);
+}
+
+.mobile-panel .mobile-text-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.mobile-panel .mobile-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--button-text, #fff);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.mobile-panel .mobile-send-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.mobile-panel .mobile-send-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.mobile-panel .mobile-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Live stream mode ── */
+.mobile-panel .mobile-stream-canvas {
+  touch-action: none;
+}
+
+.mobile-panel .mobile-stream-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-stream-toggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mobile-panel .mobile-stream-toggle.active {
+  background: color-mix(in srgb, var(--success) 13%, transparent);
+  border-color: color-mix(in srgb, var(--success) 38%, var(--border));
+  color: var(--success);
+}
+
+.mobile-panel .mobile-stream-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Overlay shown while a stream is starting (before the first frame lands). */
+.mobile-panel .mobile-stream-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: inherit;
+  /* Theme-aware scrim (was a hardcoded dark rgba): in light mode a dark scrim
+     behind the (dark) --text-secondary copy made the status unreadable. */
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  backdrop-filter: blur(3px);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  padding: 12px;
+  text-align: center;
+}
+
+.mobile-panel .mobile-stream-overlay-text {
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-panel .mobile-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: mobile-spin 0.8s linear infinite;
+}
+
+@keyframes mobile-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Status bar ── */
+.mobile-panel .mobile-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.mobile-panel .mobile-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-panel .mobile-status.error {
+  color: var(--error);
+}
+
+.mobile-panel .mobile-live-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.45);
+  animation: mobile-pulse 1.8s ease-out infinite;
+}
+
+@keyframes mobile-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+}
+
+/* ── Empty / placeholder states ── */
+.mobile-panel .mobile-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.mobile-panel .mobile-empty-icon {
+  color: var(--text-muted);
+  opacity: 0.4;
+  margin-bottom: 2px;
+}
+
+.mobile-panel .mobile-empty h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mobile-panel .mobile-empty p {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 380px;
+}
+
+/* ── Narrow panel: toolbar wraps, labels compress ── */
+@container (max-width: 560px) {
+  .mobile-panel .mobile-tool-label {
+    display: none;
+  }
+  .mobile-panel .mobile-avd {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+  .mobile-panel .dropdown {
+    max-width: 170px;
+  }
+  .mobile-panel .mobile-stage {
+    padding: 14px;
+  }
+}
+
+@container (max-width: 380px) {
+  .mobile-panel .mobile-tab {
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .mobile-panel .mobile-tab-note {
+    display: none;
+  }
+  .mobile-panel .mobile-controls {
+    gap: 4px;
+  }
+  .mobile-panel .mobile-key-btn {
+    width: 30px;
+  }
+}
+
+/* ── Short screens (phones, small windows): compact the chrome so the whole
+   panel fits one viewport and the stage keeps the room. Each tier layers on
+   the last; the device chassis slims too so the screen fills the stage. ── */
+@media (max-height: 760px) {
+  .mobile-panel .mobile-tabs {
+    height: 30px;
+    padding: 0 8px;
+  }
+  .mobile-panel .mobile-tab {
+    height: 24px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+  .mobile-panel .mobile-toolbar {
+    padding: 4px 8px;
+    gap: 6px;
+  }
+  .mobile-panel .mobile-stage {
+    padding: 12px;
+  }
+  .mobile-panel .mobile-controls {
+    padding: 5px 8px;
+  }
+  .mobile-panel .mobile-input-row {
+    padding: 0 8px 6px;
+  }
+  .mobile-panel .mobile-status {
+    min-height: 22px;
+    padding: 3px 10px;
+  }
+}
+
+@media (max-height: 600px) {
+  .mobile-panel .mobile-tabs {
+    height: 26px;
+  }
+  .mobile-panel .mobile-tab {
+    height: 22px;
+    padding: 0 8px;
+    font-size: 10.5px;
+  }
+  .mobile-panel .mobile-toolbar {
+    padding: 3px 8px;
+    gap: 5px;
+  }
+  .mobile-panel .mobile-tool-label {
+    display: none;
+  }
+  .mobile-panel .mobile-stage {
+    padding: 8px;
+  }
+  .mobile-panel .mobile-controls {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+  .mobile-panel .mobile-controls-sep {
+    margin: 0 2px;
+  }
+  .mobile-panel .mobile-key-btn {
+    width: 30px;
+    height: 28px;
+  }
+  .mobile-panel .mobile-input-row {
+    gap: 6px;
+    padding: 0 8px 5px;
+  }
+  .mobile-panel .mobile-text-input,
+  .mobile-panel .mobile-send-btn,
+  .mobile-panel .mobile-stream-toggle {
+    height: 28px;
+  }
+  /* Slim the device chassis so the streamed screen fills more of the stage. */
+  .mobile-panel .mobile-device-shell {
+    padding: 6px 5px 8px;
+    border-radius: 22px;
+  }
+  /* Decorative side buttons scale with the shell instead of fixed px, so they
+     can't float outside a very short stage (landscape phones). */
+  .mobile-panel .mobile-device-shell::before {
+    left: -5px;
+    top: 18%;
+    width: 3px;
+    height: 20%;
+    box-shadow: 0 24px 0 #3c3c3e;
+  }
+  .mobile-panel .mobile-device-shell::after {
+    right: -5px;
+    top: 48%;
+    width: 3px;
+    height: 34%;
+  }
+  .mobile-panel .mobile-device-screen {
+    border-radius: 16px;
+  }
+  .mobile-panel .mobile-ios-shell {
+    padding: 8px 6px 10px;
+    border-radius: 30px;
+  }
+  .mobile-panel .mobile-ios-shell .mobile-device-screen {
+    border-radius: 24px;
+  }
+}

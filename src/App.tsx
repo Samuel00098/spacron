@@ -16,6 +16,9 @@ import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
 import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
 import InboxPanel from '$lib/components/orchestrator/InboxPanel.tsx';
+import ResourcePanel from '$lib/components/resource/ResourcePanel.tsx';
+import UsageCounter from '$lib/components/usage/UsageCounter.tsx';
+import UsagePanel from '$lib/components/usage/UsagePanel.tsx';
 import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
@@ -249,6 +252,15 @@ export default function App() {
       <KnowledgeGraphOverlay />
       <AgentNotifications />
       <InboxPanel />
+      {/* Titlebar resource chip opens this dropdown; rendered here as a sibling
+          of `.app-shell` so it floats over the workspace (the chip itself lives
+          in the titlebar, which is inside the shell). */}
+      <ResourcePanel />
+      {/* Bottom-left corner dock + the popover it opens above itself. Both are
+          siblings of `.app-shell` so they float over the workspace instead of
+          reserving a strip of it. */}
+      <UsageCounter />
+      <UsagePanel />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}

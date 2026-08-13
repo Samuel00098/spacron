@@ -33,6 +33,7 @@ import {
 } from '$lib/services/orchestrator/worktree-manager';
 import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
+import { usageState } from './usage';
 import { agentBrowserTools } from './settings';
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
@@ -254,15 +255,19 @@ export function initMcpBridge(): void {
   if (initialized) return;
   initialized = true;
 
-  // Keep the server's agent roster live. Both stores fire immediately on
+  // Keep the server's agent roster live. The stores fire immediately on
   // subscribe, so this doubles as the initial push, and again on every add,
   // edit, or removal — a custom agent the user creates mid-session is
-  // delegatable without an app restart.
+  // delegatable without an app restart. `usageState` is subscribed too so the
+  // roster narrows to installed agents the moment the detection scan lands
+  // (see `getAgentRoster` in runs.ts) instead of holding the unfiltered list
+  // until something else changes.
   const publishRoster = () => {
     setMcpAgentPresets(getAgentRoster());
   };
   customAgents.subscribe(publishRoster);
   removedPresetAgents.subscribe(publishRoster);
+  usageState.subscribe(publishRoster);
 
   // The server names delegated workers itself (a worker's name is the handle it
   // returns, so it cannot wait for the frontend), and it draws from this list so
@@ -452,6 +457,24 @@ const PLAYWRIGHT_OPENCODE_ENTRY = {
   enabled: true,
 };
 
+/**
+ * How long Codex waits for the browser server to finish starting.
+ *
+ * Codex's default is 10 seconds, and `npx` does not make it. Measured on a
+ * warm cache — the package already downloaded, printing `--help` and exiting —
+ * `npx -y @playwright/mcp@latest` takes 10.1s on Windows. That is already over
+ * the line before Playwright does any work, so the server was timing out on
+ * every launch and the agent simply had no browser tools, with nothing in the
+ * UI to say why. A first run that still has to download the package is far
+ * slower again, which is what this number is really sized for.
+ *
+ * Only Codex needs this stated: it is the one CLI here whose default is shorter
+ * than an npx cold start. Erring long is the safe direction — a too-short
+ * timeout breaks the server outright, while a too-long one only delays the
+ * error message for a server that was never going to start.
+ */
+const CODEX_BROWSER_STARTUP_TIMEOUT_SEC = 60;
+
 /** Whether the user has opted into giving agents a browser. Off by default. */
 function wantsBrowserTools(): boolean {
   try {
@@ -495,9 +518,15 @@ function browserEntry<T>(entry: T): T | null {
  * | Cursor      | `.cursor/mcp.json`          | streamable HTTP  |
  *
  * Codex and droid have no project-scoped MCP config, so their entries are
- * global. That is safe only because the server's port and token are now stable
- * across restarts (see `load_or_create_token` in `src-tauri/src/mcp/mod.rs`) —
- * before that, a global entry went stale the moment the app was restarted.
+ * global. That rests on the server's port and token being stable across
+ * restarts (see `load_or_create_token` and `DEFAULT_MCP_PORT` in
+ * `src-tauri/src/mcp/mod.rs`) — before that, a global entry went stale the
+ * moment the app was restarted.
+ *
+ * The token is genuinely stable. The port only is while `DEFAULT_MCP_PORT` is
+ * free: a second Spacron instance can't bind it, falls back to an OS-assigned
+ * port, and rewrites these machine-wide files to a URL that dies with it. See
+ * `warnIfGlobalConfigPortIsEphemeral`, which is where that case is caught.
  *
  * Call this *before* spawning the agent's PTY so the config is in place when the
  * agent starts. Every writer is best-effort: a missing config costs the agent
@@ -878,6 +907,7 @@ async function injectOpencodeConfig(
  */
 async function injectDroidConfig(httpUrl: string): Promise<void> {
   try {
+    await warnIfGlobalConfigPortIsEphemeral('droid');
     const existing = await invoke<string>('mcp_read_global_agent_config', { agent: 'droid' });
 
     let config: Record<string, unknown> = {};
@@ -903,6 +933,75 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
 }
 
 /**
+ * The port the MCP server gets when it can have its first choice. Mirrors
+ * `DEFAULT_MCP_PORT` in `src-tauri/src/mcp/mod.rs`.
+ *
+ * Duplicated rather than plumbed through because it feeds only the warning
+ * below. If the two ever drift, the cost is a warning that stops firing, not a
+ * broken config — so a stale copy here degrades quietly in the safe direction.
+ */
+const DEFAULT_MCP_PORT = 51379;
+
+/**
+ * Shout when a **global** agent config is about to be pointed at an ephemeral
+ * port.
+ *
+ * Codex and droid have no project-scoped MCP config, so their entries are
+ * machine-wide. That is fine while the server holds [`DEFAULT_MCP_PORT`], which
+ * survives restarts — but the bind falls back to an OS-assigned port whenever
+ * the default is taken, and the commonest way for it to be taken is *a second
+ * Spacron already running*. When that happens the second instance rewrites the
+ * global config to its own throwaway port, and the moment it closes, every
+ * Codex session on the machine — in every project, not just this one — is
+ * pointing at a dead port. The tools just aren't there, and the CLI reports it
+ * as a connection failure that leads nowhere near the real cause.
+ *
+ * The entry is still written: a URL that works until this instance closes beats
+ * no Spacron tools at all, and refusing would break the running instance to
+ * protect a future one. But it must not happen silently — this is the single
+ * hardest failure in this module to diagnose from the symptom.
+ */
+async function warnIfGlobalConfigPortIsEphemeral(agent: string): Promise<void> {
+  try {
+    const port = await getMcpPort();
+    if (port === DEFAULT_MCP_PORT) return;
+    console.warn(
+      `[mcp] Writing ${agent}'s GLOBAL config with ephemeral port ${port} ` +
+        `(default ${DEFAULT_MCP_PORT} was taken — most likely another Spacron instance ` +
+        `already has it). This URL dies with this instance, and because the config is ` +
+        `machine-wide it will leave every ${agent} session on this machine without Spacron ` +
+        `tools once it does. Running a single Spacron instance keeps the port stable.`,
+    );
+  } catch {
+    // Port unavailable (server not up yet, non-Tauri context). The caller's
+    // write is best-effort too, so a missing warning must not abort it.
+  }
+}
+
+/**
+ * Remove one TOML table — its `[header]` line plus every key it owns — leaving
+ * other tables untouched.
+ *
+ * The obvious regex form (`/\[header\][^[]*+/`) is a trap here: it stops at the
+ * *next* `[` anywhere, and our own blocks contain one (the `args` array in
+ * `spacron-playwright`). That left `["-y", …]` orphaned at top level, which
+ * parses as an unclosed table and breaks Codex's whole config. Line-based is
+ * immune: only a line that starts a new table header ends a block.
+ */
+function stripTomlTable(content: string, header: string): string {
+  const lines = content.split('\n');
+  const kept: string[] = [];
+  let dropping = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (dropping && !trimmed.startsWith('[')) continue;
+    dropping = trimmed === header;
+    if (!dropping) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+/**
  * Codex CLI — global `~/.codex/config.toml`, the only place it reads MCP
  * servers from.
  *
@@ -915,13 +1014,14 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
  */
 async function injectCodexConfig(httpUrl: string): Promise<void> {
   try {
+    await warnIfGlobalConfigPortIsEphemeral('codex');
     let content = await invoke<string>('mcp_read_global_agent_config', { agent: 'codex' });
 
     // Drop any previous blocks: each header plus its keys, up to the next table.
     // Both are rewritten from scratch every time, which is also how the browser
     // server disappears again when the user turns it off.
-    content = content.replace(/\[mcp_servers\.spacron-mcp\][^[]*/g, '');
-    content = content.replace(/\[mcp_servers\.spacron-playwright\][^[]*/g, '');
+    content = stripTomlTable(content, '[mcp_servers.spacron-mcp]');
+    content = stripTomlTable(content, `[mcp_servers.${BROWSER_SERVER_KEY}]`);
 
     content = `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n`;
 
@@ -929,7 +1029,9 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       // TOML wants the argv split into `command` + `args`, unlike opencode's
       // single array. Values are literals we control, so no escaping is needed.
       const args = PLAYWRIGHT_ARGS.map((a) => `"${a}"`).join(', ');
-      content += `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n`;
+      content +=
+        `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n` +
+        `startup_timeout_sec = ${CODEX_BROWSER_STARTUP_TIMEOUT_SEC}\n`;
     }
 
     await invoke('mcp_write_global_agent_config', {

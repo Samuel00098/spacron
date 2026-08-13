@@ -102,6 +102,17 @@ async function showDesktopNotification(message: string, type: Toast['type']) {
   }
 }
 
+/**
+ * Fire a desktop notification WITHOUT an in-app toast.
+ *
+ * Used by the agent completion stack: when the window is hidden, the floating
+ * card is invisible, so a completion pings the OS instead. The in-app toast is
+ * deliberately skipped — the card IS the in-app notification.
+ */
+export function showSystemNotification(message: string, type: Toast['type'] = 'info') {
+  void showDesktopNotification(message, type);
+}
+
 export const useNotificationStore = create<NotificationState>((set, getState) => ({
   toasts: [],
 

@@ -15,9 +15,11 @@ import './AgentChangesList.css';
  * restarted. That is the point of it: there is no state in which an agent's
  * changes exist but nothing is showing them.
  *
- * With auto-staging on this is normally empty, and only fills for the case that
- * genuinely needs a person: a conflict with edits already in the working tree.
- * Renders nothing when there's nothing outstanding.
+ * With auto-staging off (the default — Orca's review-wall model) this is the
+ * standing list of everything waiting to be reviewed and brought in; with it on
+ * the list is normally empty, filling only for the case that genuinely needs a
+ * person: a conflict with edits already in the working tree. Renders nothing
+ * when there's nothing outstanding.
  */
 export default function AgentChangesList() {
   const project = useStore(activeProject);
@@ -59,7 +61,7 @@ export default function AgentChangesList() {
             copies a worktree into your working tree; it is not `git add`. */}
         <span className="ac-sub">
           {autoStage === false
-            ? 'Auto-copy is off — bring work in to run and review it'
+            ? 'Quarantined until you review it — bring work in to run and test it'
             : 'Not in your working tree yet'}
         </span>
       </header>

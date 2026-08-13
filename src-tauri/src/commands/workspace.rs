@@ -1120,7 +1120,11 @@ fn legacy_worktree_area(root: &std::path::Path) -> Option<PathBuf> {
 
 /// Whether `path` sits inside `area`. Compared case-insensitively on Windows,
 /// where the same directory legitimately reaches us with different casing.
-fn is_under(path: &std::path::Path, area: &std::path::Path) -> bool {
+///
+/// Shared with `commands::resource`, which scopes its disk scans to open
+/// projects — one containment check with one set of tests (including the
+/// `worktrees-evil` prefix-lookalike case) beats two that can drift apart.
+pub(crate) fn is_under(path: &std::path::Path, area: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
         let (p, a) = (
@@ -1342,6 +1346,96 @@ pub fn workspace_git_remove_worktree(
     }
 
     Ok(())
+}
+
+/// Rename an agent worktree's branch in place.
+///
+/// The branch is what every surface shows (badges, fleet cards, merge
+/// confirmations), so renaming it is the whole of Orca's "name the work from
+/// what it actually did" behaviour. The checkout FOLDER is deliberately left
+/// where it is: a running agent's terminal has its cwd inside it, so moving the
+/// directory would break that session (and fail on Windows under a lock). The
+/// folder is an internal detail under `.spacron/worktrees/`; the branch is the
+/// identity the user sees.
+///
+/// Renames are confined to the `spacron/` prefix for the same reason the sweep
+/// is — it keeps every guard that keys off the prefix (sweep, brand, detection)
+/// honest, and stops a rename from ever colliding with the user's own branches.
+#[tauri::command(async)]
+pub fn workspace_git_rename_worktree(
+    project_id: String,
+    worktree_path: String,
+    branch: String,
+    new_branch: String,
+    state: State<AppState>,
+) -> Result<String, String> {
+    check_git_available().map_err(|e| format!("Git not available: {e}"))?;
+
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    let new_branch = new_branch.trim();
+    if !is_valid_branch_name(new_branch) {
+        return Err("Invalid branch name".to_string());
+    }
+    if !new_branch.starts_with(AGENT_BRANCH_PREFIX) {
+        return Err(format!("Refusing to rename outside the {AGENT_BRANCH_PREFIX} prefix."));
+    }
+
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to rename a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    let _repo = lock_repo_write(root_path);
+
+    // Confirm the worktree is actually on the branch the caller thinks it is,
+    // so a stale path can't rename the wrong branch.
+    let current = git_capture(&cleaned, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_default();
+    if !branch.trim().is_empty() && current != branch.trim() {
+        return Err(format!(
+            "Worktree is on '{current}', not '{branch}' — rename refused."
+        ));
+    }
+
+    // Rename from INSIDE the worktree: git only lets you rename the branch that
+    // worktree has checked out (`git branch -m <new>` renames the current one),
+    // and renaming a branch checked out in another worktree is refused.
+    let output = git_base()
+        .args(["branch", "-m", new_branch])
+        .current_dir(&cleaned)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git branch -m: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to rename branch: {}",
+            sanitize_git_error(&String::from_utf8_lossy(&output.stderr))
+        ));
+    }
+
+    // Confirm the rename actually landed, rather than assuming the exit code
+    // means the right branch was renamed.
+    let after = git_capture(&cleaned, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_default();
+    if after != new_branch {
+        return Err(format!(
+            "Branch rename did not take effect (still on '{after}')."
+        ));
+    }
+
+    Ok(new_branch.to_string())
 }
 
 /// List worktree directories currently on disk in the project's managed area.
@@ -2094,6 +2188,14 @@ pub struct WorktreeDelta {
     /// True when `since_commit` is already the branch tip and nothing is dirty,
     /// i.e. the main checkout has everything this worktree holds.
     pub up_to_date: bool,
+    /// First changed path on the branch (a commit's first file, else the first
+    /// dirty/untracked path). Fed to the frontend's first-work branch naming
+    /// (`deriveFirstWorkBranch`), so a branch can be renamed from what the agent
+    /// actually did rather than the spawn-time task label.
+    pub first_file: Option<String>,
+    /// Oldest commit subject in the `since_commit..branch` range — the agent's
+    /// first committed work, and the best name source for that branch.
+    pub first_subject: Option<String>,
 }
 
 /// Report what an agent worktree holds beyond `since_commit`.
@@ -2147,17 +2249,50 @@ pub fn workspace_git_worktree_delta(
     // Range must be ONE argv entry — a bare ".." makes git read the rest as a
     // pathspec and the command fails. See the note on worktree_has_changes.
     let range = format!("{}..{}", since_commit.trim(), branch);
-    let committed_files = git_capture(root_path, &["diff", "--name-only", &range])
-        .unwrap_or_default()
+    let committed_paths = git_capture(root_path, &["diff", "--name-only", &range])
+        .unwrap_or_default();
+    let committed_files = committed_paths
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count() as u32;
+
+    // First real work, for naming the branch from what the agent actually did
+    // (see `deriveFirstWorkBranch` in worktree-manager.ts): the oldest commit
+    // subject on the branch, else the first changed path. Both optional — a
+    // branch holding only uncommitted edits has no subject, and a clean worktree
+    // has neither.
+    let first_subject = if committed_files > 0 {
+        git_capture(root_path, &["log", "--reverse", "--format=%s", &range]).and_then(|s| {
+            s.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string)
+        })
+    } else {
+        None
+    };
+    let first_file = committed_paths
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            git_capture(&cleaned, &["status", "--porcelain"]).and_then(|s| {
+                s.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    // Porcelain lines are `XY <path>`; strip the status code.
+                    .map(|l| l[3.min(l.len())..].trim().to_string())
+            })
+        });
 
     Ok(WorktreeDelta {
         up_to_date: dirty_files == 0 && committed_files == 0,
         head,
         dirty_files,
         committed_files,
+        first_file,
+        first_subject,
     })
 }
 

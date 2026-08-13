@@ -1,0 +1,203 @@
+/* The agent usage readout, docked in the bottom-left corner.
+   It used to live in the titlebar and inherit `.icon-btn`; free of that row it
+   now carries its own chrome. Frost recipe matches the popover it opens — see
+   [[glass-panel-recipe]]: the color-mix layer stays LAST in the background
+   shorthand, and no ancestor may establish a backdrop root. */
+
+.usage-dock {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  /* Under `.usage-panel` (1400), which opens directly above it. */
+  z-index: 1350;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* The readout grows and shrinks as agents come and go. A minimum stops the
+     chip collapsing to nothing between polls. Growth runs rightwards from a
+     pinned left edge, so nothing else on screen moves. */
+  min-width: 42px;
+  max-width: min(460px, calc(100vw - 24px));
+  padding: 7px 13px;
+
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.09));
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  transition:
+    border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease),
+    opacity var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.usage-dock:hover {
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.18));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+}
+
+.usage-dock:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
+/* With nothing to report the chip is just an affordance, so it recedes. */
+.usage-dock[data-empty='true'] {
+  opacity: 0.55;
+}
+
+.usage-dock[data-empty='true']:hover {
+  opacity: 1;
+}
+
+.usage-dock-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The brand mark is the part that says *whose* number this is, so it is sized
+   to be recognisable rather than to match the text — at 14px the busier marks
+   (Codex, Gemini) collapsed into an indistinct smudge. */
+.usage-dock-mark {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  flex: none;
+  overflow: hidden;
+}
+
+/* <AgentBrandMark> paints at 100%/100%, so it needs a parent with a real size —
+   without one it falls back to the asset's intrinsic dimensions, and a fetched
+   favicon is routinely 256px square. This dock is a sibling of `.app-shell`, so
+   the shell's sizing rules never reach it and it must state its own. See
+   [[agent-brand-marks]]. */
+.usage-dock-mark svg,
+.usage-dock-mark img {
+  width: 19px;
+  height: 19px;
+  object-fit: contain;
+}
+
+.usage-dock-window {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1.5px;
+  color: var(--text-secondary);
+}
+
+.usage-dock-num {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* The window suffix is what stops a bare "100%" reading as a full tank, so it
+   is quieter than the number but never hidden. */
+.usage-dock-win {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.72;
+}
+
+.usage-dock-sep {
+  margin: 0 3px 0 1px;
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.usage-dock-more {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+/* Severity is per window, not per chip: one agent being out of weekly quota
+   shouldn't paint another agent's healthy session number red. */
+.usage-dock-window[data-severity='warn'] {
+  color: var(--warning, #e2c08d);
+}
+
+.usage-dock-window[data-severity='critical'] {
+  color: var(--error, #c74e39);
+}
+
+/* Refreshing is a background event and the numbers on screen stay valid while
+   it runs, so it gets a breath of transparency rather than a spinner that
+   would imply the values are unknown. */
+.usage-dock[data-loading='true'] {
+  animation: usage-dock-pulse 1.1s var(--ease-in-out, ease-in-out) infinite;
+}
+
+@keyframes usage-dock-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-dock[data-loading='true'] {
+    animation: none;
+  }
+}
+
+/* Narrow windows: drop the secondary window per agent, keeping the mark and
+   the leading (worst) number so the chip still says who and how much. */
+@media (max-width: 900px) {
+  .usage-dock-window:not(:first-of-type) {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .usage-dock-agent:not(:first-of-type) {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .usage-dock {
+    left: 8px;
+    bottom: 8px;
+    padding: 5px 9px;
+    gap: 6px;
+    max-width: calc(100vw - 16px);
+  }
+
+  .usage-dock-mark {
+    width: 17px;
+    height: 17px;
+  }
+
+  .usage-dock-mark svg,
+  .usage-dock-mark img {
+    width: 17px;
+    height: 17px;
+  }
+
+  .usage-dock-num {
+    font-size: 11.5px;
+  }
+}
+
+@media (max-width: 360px) {
+  .usage-dock-win {
+    font-size: 9px;
+  }
+}
+

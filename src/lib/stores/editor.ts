@@ -6,7 +6,7 @@ import { backendInvoke as invoke } from '$lib/services/backend';
 import type { EditorFile } from '$lib/types/editor';
 import { showToast } from './notification';
 import { formatCode } from '$lib/utils/formatter';
-import { formatOnSave } from './settings';
+import { formatOnSave, autoSave } from './settings';
 import { setActiveView } from './layout';
 import { useEditorStore } from './zustand/editor';
 
@@ -220,9 +220,33 @@ export function updateContent(path: string, newContent: string) {
     }
     return next;
   });
+  scheduleAutoSave(path);
 }
 
-export async function saveFile(path: string) {
+// ── Auto save ──
+// A single debounce timer: each keystroke resets it, and when typing has been
+// still for ~1s the latest file is saved silently through the normal save path
+// (so format-on-save and the backend seam apply). Fires only while the setting
+// is on; the toggle is read again at fire time so flipping it off cancels the
+// pending save.
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let autoSavePendingPath: string | null = null;
+
+const AUTO_SAVE_DELAY_MS = 1000;
+
+function scheduleAutoSave(path: string) {
+  if (!get(autoSave)) return;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSavePendingPath = path;
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null;
+    const target = autoSavePendingPath;
+    autoSavePendingPath = null;
+    if (target && get(autoSave)) void saveFile(target, true);
+  }, AUTO_SAVE_DELAY_MS);
+}
+
+export async function saveFile(path: string, silent = false) {
   const cache = get(fileCache);
   const file = cache.get(path);
   if (!file || file.kind !== 'text') return;
@@ -253,8 +277,10 @@ export async function saveFile(path: string) {
       next.set(path, { ...currentFile, content: contentToSave, originalContent: contentToSave, isDirty: false });
       return next;
     });
-    const filename = path.split(/[/\\]/).pop() || path;
-    showToast(`Saved ${filename}`, 'success');
+    if (!silent) {
+      const filename = path.split(/[/\\]/).pop() || path;
+      showToast(`Saved ${filename}`, 'success');
+    }
   } catch (err: any) {
     console.error('Failed to save file:', err);
     showToast(`Failed to save file: ${err?.message || err}`, 'error');

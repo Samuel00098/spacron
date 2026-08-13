@@ -14,6 +14,7 @@ import {
   aiProvider,
   aiProviders,
   appearance,
+  autoSave,
   autoStageAgentChanges,
   backgroundImageBlur,
   backgroundImageEnabled,
@@ -93,14 +94,14 @@ import { get } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { AgentBrandMark } from './useAgentBrand';
+import AgentsPane from '$lib/components/agents/AgentsPane';
+import UsageStatsPane from '$lib/components/stats/UsageStatsPane';
 import {
   customAgents,
   addCustomAgent,
   updateCustomAgent,
   deleteCustomAgent,
   removedPresetAgents,
-  removePresetAgent,
-  restorePresetAgent,
 } from '$lib/stores/customAgents';
 import { activeTheme, switchPresetTheme } from '$lib/stores/theme';
 import { presetThemes } from '$lib/stores/presetThemes';
@@ -138,6 +139,7 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'voice', label: 'Voice', kicker: 'Input, reply, TTS' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
+  { id: 'stats', label: 'Stats', kicker: 'Usage and cost' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map' },
   { id: 'about', label: 'About', kicker: 'Version and reset' },
 ];
@@ -491,32 +493,6 @@ function ShortcutEditor({
   );
 }
 
-interface PresetAgent {
-  name: string;
-  command: string;
-  readsRulesFile: boolean;
-  /**
-   * Shown under the command when the command we launch isn't the obvious one,
-   * so nobody "corrects" it back to a shorter alias that another CLI also owns.
-   */
-  note?: string;
-}
-
-const PRESET_AGENTS: PresetAgent[] = [
-  { name: 'Codex CLI', command: 'codex', readsRulesFile: true },
-  { name: 'Claude Code', command: 'claude', readsRulesFile: true },
-  { name: 'Antigravity', command: 'agy', readsRulesFile: true },
-  { name: 'OpenCode', command: 'opencode', readsRulesFile: true },
-  { name: 'Pi AI Agent', command: 'pi', readsRulesFile: false },
-  {
-    name: 'Cursor',
-    command: 'cursor-agent',
-    readsRulesFile: true,
-    note: 'Not the shorter “agent” alias — the Grok CLI installs an “agent” command too, and whichever comes first on your PATH wins.',
-  },
-  { name: 'Grok CLI', command: 'grok', readsRulesFile: true },
-];
-
 export default function SettingsModal({ onclose }: SettingsModalProps) {
   // Seeded from the store so a caller can deep-link a section — the palette's
   // "Customize Theme…" opens straight onto Appearance instead of General.
@@ -657,7 +633,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [loadLocalModels]);
 
   const $customAgents = useStore(customAgents);
-  const $removedPresetAgents = useStore(removedPresetAgents);
 
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentCommand, setNewAgentCommand] = useState('');
@@ -781,6 +756,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
   const currentFormatOnSave = useStore(formatOnSave);
+  const currentAutoSave = useStore(autoSave);
   const currentAppearance = useStore(appearance);
   const bgEnabled = useStore(backgroundImageEnabled);
   const bgBlur = useStore(backgroundImageBlur);
@@ -1293,16 +1269,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     showToast(`Removed "${name}".`, 'info');
   }
 
-  function handleRemovePresetAgent(command: string, name: string) {
-    removePresetAgent(command);
-    showToast(`Hidden built-in agent "${name}".`, 'info');
-  }
-
-  function handleRestorePresetAgent(command: string, name: string) {
-    restorePresetAgent(command);
-    showToast(`Restored built-in agent "${name}".`, 'success');
-  }
-
   async function resetAllSettings() {
     let confirmed = false;
     const message =
@@ -1394,6 +1360,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow title="Format on save">
                     <Toggle label="Toggle format on save" checked={currentFormatOnSave} onChange={formatOnSave.set} />
+                  </SettingRow>
+                  <SettingRow title="Auto save" detail="Saves the active file ~1s after you stop typing">
+                    <Toggle label="Toggle auto save" checked={currentAutoSave} onChange={autoSave.set} />
                   </SettingRow>
                   <SettingRow title="Language server">
                     <Toggle label="Toggle language server" checked={currentEnableLsp} onChange={enableLsp.set} />
@@ -2139,10 +2108,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               <>
                 <Section title="Isolation & changes">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Each agent can work on its own git branch in a private checkout, so several can edit
-                    the project at once without colliding. Their finished changes are brought back into
-                    your working tree for you to run, review and commit in Source Control — a private
-                    checkout is only removed once everything in it has been brought across.
+                    Each agent works on its own git branch in a private checkout, so several can edit
+                    the project at once without colliding. Work stays quarantined there until you review
+                    it — the fleet dashboard shows every agent's changes with per-file diffs, and you
+                    bring the work in or merge it when it's ready. A branch is only removed once
+                    everything in it has been brought across.
                   </p>
                   <SettingRow
                     title="Isolate agents in worktrees"
@@ -2156,7 +2126,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow
                     title="Auto-stage agent changes"
-                    detail="Bring changes across on their own as agents finish. Off lists them under Agent changes in Source Control with a Stage button instead."
+                    detail="Off (the default) keeps each agent's work in its private checkout until you review and bring it in — the Orca-style review wall. On moves changes across on their own as agents finish, so the app can be run and tested against them without pressing anything."
                   >
                     <Toggle
                       label="Toggle automatic staging of agent changes"
@@ -2186,58 +2156,27 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                 </Section>
 
+                <Section title="Agents">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Spacron scans each known agent CLI on your PATH and checks whether it has
+                    credentials saved, so signed-in agents are ready to spawn without being added
+                    by hand. The toggle sets whether every agent launches with its own
+                    skip-permissions flag; each row can pin itself to the other mode. Rate limits
+                    and reset times live in the usage dock in the corner of the workspace.
+                  </p>
+                  <AgentsPane />
+                </Section>
+
                 <Section title="Coding CLI agents">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Add your own agent CLI alongside the built-ins (Claude Code, Codex…). It appears in the
                     spawn picker, panes running it show its name, and typing its command in any shell is
                     recognized as that agent. Agents that read a <code>CLAUDE.md</code> / <code>AGENTS.md</code>
-                    rules file are briefed automatically.
+                    rules file are briefed automatically. The built-in agents are managed in the list
+                    above — hide one from there and it comes back the same way.
                   </p>
 
                   <div className="agent-list">
-                    {/* Preset/Built-in Agents */}
-                    {PRESET_AGENTS.filter(agent => !$removedPresetAgents.includes(agent.command)).map((agent) => (
-                      <div className="agent-row built-in" key={agent.command}>
-                        <span className="agent-row-icon" aria-hidden="true">
-                          <AgentBrandMark command={agent.command} name={agent.name} />
-                        </span>
-                        <div className="agent-meta">
-                          <div className="agent-name-row">
-                            <span className="agent-name">{agent.name}</span>
-                            <span className="agent-badge">Built-in</span>
-                          </div>
-                          <code className="agent-cmd">{agent.command}</code>
-                          {agent.note && (
-                            <p className="agent-cmd-note">
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <circle cx="12" cy="12" r="10" />
-                                <line x1="12" y1="16" x2="12" y2="12" />
-                                <line x1="12" y1="8" x2="12.01" y2="8" />
-                              </svg>
-                              <span>{agent.note}</span>
-                            </p>
-                          )}
-                        </div>
-                        <label className="agent-rules-toggle disabled" title="Reads a CLAUDE.md / AGENTS.md rules file at startup">
-                          <input
-                            type="checkbox"
-                            checked={agent.readsRulesFile}
-                            disabled
-                          />
-                          <span>Rules file</span>
-                        </label>
-                        <button
-                          type="button"
-                          className="agent-remove"
-                          onClick={() => handleRemovePresetAgent(agent.command, agent.name)}
-                          aria-label={`Remove ${agent.name}`}
-                          title={`Hide ${agent.name}`}
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2m-1 0v14H9V6"/></svg>
-                        </button>
-                      </div>
-                    ))}
-
                     {/* Custom Agents */}
                     {$customAgents.map((agent) => (
                       <div className="agent-row" key={agent.id}>
@@ -2340,29 +2279,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <p className="agent-error">{agentFormError}</p>
                     )}
                   </div>
-
-                  {/* Hidden Built-ins restore section */}
-                  {PRESET_AGENTS.filter(agent => $removedPresetAgents.includes(agent.command)).length > 0 && (
-                    <div className="restore-presets-row">
-                      <span className="restore-presets-label">Hidden built-ins:</span>
-                      <div className="restore-presets-pills">
-                        {PRESET_AGENTS.filter(agent => $removedPresetAgents.includes(agent.command)).map(agent => (
-                          <button
-                            key={agent.command}
-                            type="button"
-                            className="restore-preset-pill"
-                            onClick={() => handleRestorePresetAgent(agent.command, agent.name)}
-                            title={`Restore ${agent.name}`}
-                          >
-                            + {agent.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </Section>
               </>
             )}
+
+            {activeTab === 'stats' && <UsageStatsPane />}
 
             {activeTab === 'shortcuts' && (
               <>

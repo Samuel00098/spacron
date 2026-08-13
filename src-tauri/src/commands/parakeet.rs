@@ -15,7 +15,7 @@
 //! greedy TDT decode loop, SentencePiece detokenisation, and repetition collapse.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
@@ -60,7 +60,97 @@ pub fn reset_parakeet() {
     }
 }
 
+/// The ONNX Runtime shared library's file name on this platform.
+///
+/// This is what `dlopen`/`LoadLibrary` is asked for, and it is also the name a
+/// user dropping the library in by hand has to use.
+const ORT_DYLIB_NAME: &str = if cfg!(windows) {
+    "onnxruntime.dll"
+} else if cfg!(target_os = "macos") {
+    "libonnxruntime.dylib"
+} else {
+    "libonnxruntime.so"
+};
+
+/// Point `ort` at an ONNX Runtime shared library, once per process, and refuse
+/// cleanly when there isn't one.
+///
+/// ## Why this has to exist
+///
+/// The `ort` dependency uses the `load-dynamic` feature, which pulls in
+/// `ort-sys/disable-linking`. That makes `ort-sys`'s build script return
+/// immediately — its own comment says it "doesn't need to download anything
+/// because we don't provide DLLs anymore". So **nothing in this build produces
+/// an ONNX Runtime library**, on any platform: not in `target/`, not next to
+/// the binary, not in a bundle. Parakeet STT is therefore dead everywhere,
+/// dev included, unless the host happens to have ONNX Runtime on its loader
+/// search path.
+///
+/// And it does not fail politely. `ort`'s lazy API setup ends in
+/// `load_dylib_from_path(&path).expect("Failed to load ONNX Runtime dylib")`, so
+/// the first touch of any `ort` API on a machine without the library **panics**.
+/// This function's real job is to make sure that line is never reached: it
+/// returns an ordinary `Err` naming the exact file and the paths searched, which
+/// the caller surfaces as a normal STT error.
+///
+/// ## Search order
+///
+/// 1. `ORT_DYLIB_PATH` already set — the user or a packager has spoken. Left
+///    exactly alone; `ort` reads that variable itself.
+/// 2. The models directory, beside the Parakeet `.onnx` files it pairs with —
+///    the writable, no-admin location the app already owns, and where an in-app
+///    download would land.
+/// 3. Next to the executable — where `copy-dylibs` would put it if the link
+///    strategy ever changes, and where an installer would naturally place it.
+///
+/// The Tauri resource directory is not consulted: reaching it needs an
+/// `AppHandle` this module does not have, and a bundled copy would be staged
+/// into one of the two locations above anyway.
+///
+/// Note the mechanism is the environment variable rather than a builder call:
+/// rc.12 exposes no `with_dylib_path`, and `ORT_DYLIB_PATH` is the only lever it
+/// reads. Setting it here is safe because it happens inside a `OnceLock`, before
+/// this process has made any `ort` call — nothing else in the tree reads or
+/// writes that variable.
+pub(crate) fn ensure_ort_dylib() -> Result<(), String> {
+    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+    INIT.get_or_init(|| {
+        if std::env::var_os("ORT_DYLIB_PATH").is_some_and(|value| !value.is_empty()) {
+            return Ok(());
+        }
+
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(dir) = dirs::config_dir() {
+            candidates.push(dir.join("spacron").join("models").join(ORT_DYLIB_NAME));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join(ORT_DYLIB_NAME));
+            }
+        }
+
+        if let Some(found) = candidates.iter().find(|path| path.is_file()) {
+            std::env::set_var("ORT_DYLIB_PATH", found);
+            return Ok(());
+        }
+
+        Err(format!(
+            "ONNX Runtime is not installed. Offline speech-to-text needs the \
+             {ORT_DYLIB_NAME} shared library, which the app does not currently ship. \
+             Put it in one of these locations, or set ORT_DYLIB_PATH to it: {}",
+            candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })
+    .clone()
+}
+
 fn build_session(path: &PathBuf) -> Result<Session, String> {
+    ensure_ort_dylib()?;
     Session::builder()
         .map_err(|e| format!("ORT session builder failed: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -547,6 +637,37 @@ pub fn transcribe_wav(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The library name must match what the platform's loader expects, and it
+    /// is also the name told to the user in the "not installed" error — a wrong
+    /// one sends them looking for a file that does not exist.
+    #[test]
+    fn the_dylib_name_matches_the_platform() {
+        #[cfg(windows)]
+        assert_eq!(ORT_DYLIB_NAME, "onnxruntime.dll");
+        #[cfg(target_os = "macos")]
+        assert_eq!(ORT_DYLIB_NAME, "libonnxruntime.dylib");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(ORT_DYLIB_NAME, "libonnxruntime.so");
+    }
+
+    /// Absent ONNX Runtime must be an ordinary error, never a panic.
+    ///
+    /// This is the whole point of `ensure_ort_dylib`: ort rc.12's lazy setup
+    /// ends in `.expect("Failed to load ONNX Runtime dylib")`, so any code path
+    /// that reaches an ort API without the library takes the process down. On a
+    /// machine that has ONNX Runtime installed this passes trivially (Ok); on
+    /// one that doesn't it proves the failure is a message, not a crash.
+    #[test]
+    fn a_missing_runtime_is_reported_rather_than_panicking() {
+        match ensure_ort_dylib() {
+            Ok(()) => {}
+            Err(message) => {
+                assert!(message.contains(ORT_DYLIB_NAME), "{message}");
+                assert!(message.contains("ORT_DYLIB_PATH"), "{message}");
+            }
+        }
+    }
 
     #[test]
     fn parse_vocab_finds_blank() {

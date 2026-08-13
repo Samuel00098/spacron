@@ -210,6 +210,7 @@ function createSettingsState() {
     uiZoom: persistentValue('uiZoom', 100),
     swipeNavigationEnabled: persistentValue('swipeNavigationEnabled', true),
     formatOnSave: persistentValue('formatOnSave', true),
+    autoSave: persistentValue('autoSave', false),
     userShortcuts: initialUserShortcuts,
     appearance: persistentValue<'system' | 'light' | 'dark'>('appearance', 'system'),
     interfaceTransparency: persistentValue('interfaceTransparency', 0),
@@ -224,6 +225,22 @@ function createSettingsState() {
     // See the note on `terminalRenderer` in stores/settings.ts for why canvas.
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
+    // Agent permissions & launch overrides — see stores/settings.ts and
+    // services/agent-permissions.ts for the full picture.
+    agentPermissionMode: persistentValue<'yolo' | 'manual'>('agentPermissionMode', 'yolo'),
+    agentCmdOverrides: persistentValue<Record<string, string>>('agentCmdOverrides', {}),
+    agentDefaultArgs: persistentValue<Record<string, string>>('agentDefaultArgs', {}),
+    agentDefaultEnv: persistentValue<Record<string, Record<string, string>>>('agentDefaultEnv', {}),
+    // Agent worktree / auto-stage / browser-tools toggles. These live in
+    // stores/settings.ts behind `persistentWritable` and were NOT declared here,
+    // so that wrapper's boot-time `getState()[key]` read hit undefined and fell
+    // back to its own default every launch — toggles survived a session but
+    // silently reset on restart. Declaring them is what makes the persisted
+    // `forge_setting_*` value (already written by `persistValue` on change)
+    // rehydrate at boot. Defaults must stay in step with stores/settings.ts.
+    agentWorktrees: persistentValue('agentWorktrees', true),
+    autoStageAgentChanges: persistentValue('autoStageAgentChanges', false),
+    agentBrowserTools: persistentValue('agentBrowserTools', false),
   };
 }
 
@@ -273,6 +290,7 @@ const defaults: SettingsValues = {
   uiZoom: 100,
   swipeNavigationEnabled: true,
   formatOnSave: true,
+  autoSave: false,
   userShortcuts: [
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
@@ -324,6 +342,13 @@ const defaults: SettingsValues = {
   terminalFontSize: 14,
   terminalRenderer: 'canvas',
   showSnapshotsTab: false,
+  agentPermissionMode: 'yolo',
+  agentCmdOverrides: {},
+  agentDefaultArgs: {},
+  agentDefaultEnv: {},
+  agentWorktrees: true,
+  autoStageAgentChanges: false,
+  agentBrowserTools: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({
@@ -372,6 +397,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       uiZoom: 'uiZoom',
       swipeNavigationEnabled: 'swipeNavigationEnabled',
       formatOnSave: 'formatOnSave',
+      autoSave: 'autoSave',
       closeBehavior: 'closeBehavior',
       appearance: 'appearance',
       onboardingCompleted: 'onboardingCompleted',
@@ -379,6 +405,13 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
       showSnapshotsTab: 'showSnapshotsTab',
+      agentPermissionMode: 'agentPermissionMode',
+      agentCmdOverrides: 'agentCmdOverrides',
+      agentDefaultArgs: 'agentDefaultArgs',
+      agentDefaultEnv: 'agentDefaultEnv',
+      agentWorktrees: 'agentWorktrees',
+      autoStageAgentChanges: 'autoStageAgentChanges',
+      agentBrowserTools: 'agentBrowserTools',
     };
     const stateKey = setters[key];
     if (stateKey) {

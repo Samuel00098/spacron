@@ -249,13 +249,65 @@ const LOBEHUB_SVG_BASE: &str =
 const LOBEHUB_INK_LIGHT: &str = "#1a1a1a";
 const LOBEHUB_INK_DARK: &str = "#e8e8e8";
 
-/// Favicon-lookup service used as the second logo tier. DuckDuckGo's `ip3`
-/// endpoint returns a site's icon as an image, or a 404 when it has none — so a
-/// genuine miss falls straight through to the caller's letter-glyph fallback
-/// instead of returning a generic placeholder (as Google's service would).
-const FAVICON_SERVICE: &str = "https://icons.duckduckgo.com/ip3/";
+/// Favicon-lookup service used as the third logo tier — Google's `s2/favicons`
+/// endpoint, the same source Orca uses for its agent icons. It answers with a
+/// 301 to a `t*.gstatic.com/faviconV2` URL (our redirect policy follows it and
+/// re-checks the host on the way), returns the site's real favicon as a PNG at
+/// the requested size, and — the property that makes a miss fall through to the
+/// letter glyph — answers **404** for a domain with no favicon. A 200 carrying
+/// the 16×16 globe placeholder is possible on some domains, so the 404 alone is
+/// not relied on; [`png_is_placeholder`] catches that. Verified live 2026-08:
+/// every curated domain in [`FAVICON_DOMAINS`] answers 200 with an icon, while
+/// example.com and nonexistent domains answer 404. `sz=64` fits the ~26px agent
+/// tiles.
+const FAVICON_SERVICE: &str = "https://www.google.com/s2/favicons?domain=";
 /// Common TLDs to guess a tool's domain from its slug, tried in this order.
 const FAVICON_TLDS: [&str; 5] = ["com", "ai", "dev", "app", "io"];
+
+/// Curated agent→domain map, ported from Orca's agent catalog (its per-agent
+/// `faviconDomain` field — the same table that feeds their Google favicon tier).
+/// Keys are the normalized slugs [`logo_slug_candidates`] produces — launch
+/// command, display name, then name words — so both a preset command like
+/// `cursor-agent` and its display name match. Every domain was verified against
+/// [`FAVICON_SERVICE`] before it was added. Agents Orca renders by hand (claude,
+/// codex, kilo, copilot, droid, aider, pi, opencode, omp) have no entry here;
+/// an agent without one falls through to the TLD guess below.
+const FAVICON_DOMAINS: &[(&str, &str)] = &[
+    ("amp", "ampcode.com"),
+    ("ante", "antigma.ai"),
+    ("agy", "antigravity.google"),
+    ("antigravity", "antigravity.google"),
+    ("aug", "augmentcode.com"),
+    ("auggie", "augmentcode.com"),
+    ("augmentcode", "augmentcode.com"),
+    ("autohand", "autohand.ai"),
+    ("cline", "cline.bot"),
+    ("codebuff", "codebuff.com"),
+    ("freebuff", "freebuff.dev"),
+    ("commandcode", "commandcode.ai"),
+    ("continue", "continue.dev"),
+    ("cursor", "cursor.com"),
+    ("cursoragent", "cursor.com"),
+    ("devin", "devin.ai"),
+    ("gemini", "gemini.google.com"),
+    ("goose", "goose-docs.ai"),
+    ("grok", "x.ai"),
+    ("hermes", "nousresearch.com"),
+    ("kimi", "moonshot.cn"),
+    ("kiro", "kiro.dev"),
+    ("kirocli", "kiro.dev"),
+    ("mimo", "mimo.xiaomi.com"),
+    ("mistral", "mistral.ai"),
+    ("mistralvibe", "mistral.ai"),
+    ("openclaw", "openclaw.ai"),
+    ("primeagent", "primeintellect.ai"),
+    ("qwen", "qwenlm.github.io"),
+    ("qwencode", "qwenlm.github.io"),
+    ("rovo", "atlassian.com"),
+    ("trae", "www.trae.cn"),
+    ("traecli", "www.trae.cn"),
+    ("vibe", "mistral.ai"),
+];
 
 /// The `metadata.json` a single icon entry: the theme→variant mapping and the
 /// search aliases. Extra fields in the file (categories, update info, …) are
@@ -456,36 +508,123 @@ fn logo_slug_candidates(tool: &str, name: &str) -> Vec<String> {
     stems
 }
 
+/// First curated domain for any of `stems`, preserving their most-specific-first
+/// order (launch command, display name, then name words). The table is tiny, so
+/// a linear scan per stem is fine.
+fn curated_favicon_domain(stems: &[String]) -> Option<&'static str> {
+    stems.iter().find_map(|stem| {
+        FAVICON_DOMAINS
+            .iter()
+            .find(|(key, _)| key == stem)
+            .map(|(_, domain)| *domain)
+    })
+}
+
+/// True when `bytes` is Google's no-favicon placeholder: a 16×16 PNG. The
+/// service normally signals a miss with the HTTP 404 we already reject, but on
+/// some domains the globe can come back as a 200 — accepting it would paint a
+/// globe on the agent tile instead of falling through to the letter glyph.
+/// Real favicons return at their native size (≥32px at `sz=64`), so 16×16 is a
+/// reliable signature. Returns false for anything that is not a PNG, so a
+/// corrupted or non-image payload is left to the caller's other checks.
+fn png_is_placeholder(bytes: &[u8]) -> bool {
+    if bytes.len() < 24
+        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        // IHDR must be the first chunk; anything else means the dims we read
+        // below are not dims at all.
+        || !bytes[12..16].starts_with(b"IHDR")
+    {
+        return false;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    width == 16 && height == 16
+}
+
+/// Outcome of one favicon fetch: `Found` (a real icon, base64 `data:` URI),
+/// `Missing` (the domain has no favicon — keep trying the next candidate), or
+/// `Unreachable` (the service itself failed — every further request would fail
+/// the same way, so the caller should stop rather than grind through the whole
+/// candidate list at the per-request timeout).
+enum FaviconFetch {
+    Found(String),
+    Missing,
+    Unreachable,
+}
+
+/// Fetch one domain's favicon through [`FAVICON_SERVICE`] and classify the
+/// result. `Missing` covers a non-2xx status (including the 404 Google answers
+/// with for a favicon-less domain), a non-image body, the 16×16 globe
+/// placeholder, and an empty/oversized payload. `Unreachable` covers transport
+/// failures only. The request host is fixed and the only user-derived input is
+/// the bare alphanumeric domain slug, so there is no SSRF surface.
+async fn fetch_favicon_icon(client: &reqwest::Client, domain: &str) -> FaviconFetch {
+    let url = format!("{FAVICON_SERVICE}{domain}&sz=64");
+    let Ok(resp) = client.get(&url).send().await else {
+        return FaviconFetch::Unreachable;
+    };
+    if !resp.status().is_success() {
+        return FaviconFetch::Missing;
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    // Only accept an actual image; skip HTML error pages served as 200.
+    if !content_type.starts_with("image/") {
+        return FaviconFetch::Missing;
+    }
+    let Some(bytes) = resp.bytes().await.ok() else {
+        return FaviconFetch::Missing;
+    };
+    if bytes.is_empty() || bytes.len() > 512 * 1024 || png_is_placeholder(&bytes) {
+        return FaviconFetch::Missing;
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    FaviconFetch::Found(format!("data:{content_type};base64,{encoded}"))
+}
+
+/// Discover a tool's real logo from its own site favicon when the curated
+/// catalogues have no match. The curated agent→domain table
+/// ([`FAVICON_DOMAINS`], ported from Orca's agent catalog) is tried first; for
+/// agents without an entry it guesses the domain from the command/name slug
+/// across a few common TLDs. Either way the lookup runs against Google's
+/// favicon service ([`FAVICON_SERVICE`]) and the first real icon wins, as a
+/// `data:` URI. A transport failure aborts the whole lookup — the service is
+/// unreachable, so no later candidate would succeed — while a plain miss moves
+/// to the next candidate. `None` means nothing was found, so the caller falls
+/// back to a letter glyph.
+///
+/// The request host is a fixed, trusted service and the only thing derived from
+/// user input is the bare alphanumeric domain slug, so there is no SSRF surface.
+/// Candidate slug stems for an agent, most-specific first: the command's tool
+/// token, the FULL display name collapsed to a slug, then each individual word
+/// of the name (skipping generic stopwords) — see [`logo_slug_candidates`].
 async fn fetch_favicon_logo(client: &reqwest::Client, tool: &str, name: &str) -> Option<String> {
     let stems = logo_slug_candidates(tool, name);
 
+    // Curated first: a hand-picked domain is more reliable than any guess.
+    if let Some(domain) = curated_favicon_domain(&stems) {
+        match fetch_favicon_icon(client, domain).await {
+            FaviconFetch::Found(uri) => return Some(uri),
+            // If the service itself is down, guessing won't bring it back.
+            FaviconFetch::Unreachable => return None,
+            FaviconFetch::Missing => {}
+        }
+    }
+
+    // Guessed: the same slug candidates across common TLDs, for agents the
+    // curated table doesn't cover yet (e.g. Qoder). A wrong guess is a 404, so
+    // the loop just moves on to the next candidate.
     for stem in &stems {
         for tld in FAVICON_TLDS {
-            let url = format!("{FAVICON_SERVICE}{stem}.{tld}.ico");
-            let Ok(resp) = client.get(&url).send().await else {
-                continue;
-            };
-            if !resp.status().is_success() {
-                continue;
+            match fetch_favicon_icon(client, &format!("{stem}.{tld}")).await {
+                FaviconFetch::Found(uri) => return Some(uri),
+                FaviconFetch::Unreachable => return None,
+                FaviconFetch::Missing => {}
             }
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_string();
-            // Only accept an actual image; skip HTML error pages served as 200.
-            if !content_type.starts_with("image/") {
-                continue;
-            }
-            let Ok(bytes) = resp.bytes().await else {
-                continue;
-            };
-            if bytes.is_empty() || bytes.len() > 512 * 1024 {
-                continue;
-            }
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            return Some(format!("data:{content_type};base64,{encoded}"));
         }
     }
     None
@@ -619,18 +758,28 @@ pub async fn fetch_agent_logo(command: String, name: String) -> Result<AgentLogo
     // resolving the light and dark theme variants from the icon's metadata. A
     // fetch failure here (e.g. a rare png-only icon) falls through to the favicon
     // tier rather than failing the whole lookup.
-    let catalogue = icon_manifest(&client).await?;
-    if let Some(id) = match_icon(catalogue, &queries) {
-        let (light_file, dark_file) = variant_files(catalogue, id);
-        if let Ok(light) = fetch_catalogue_svg(&client, &light_file).await {
-            let dark = if dark_file == light_file {
-                light.clone()
-            } else {
-                fetch_catalogue_svg(&client, &dark_file)
-                    .await
-                    .unwrap_or_else(|_| light.clone())
-            };
-            return Ok(AgentLogo { light, dark });
+    //
+    // Failing to fetch the CATALOGUE ITSELF must fall through too, and that is
+    // the whole reason this is an `.ok()` and not a `?`. The manifest is one
+    // request to one CDN, and when it fails — CDN blip, offline start, a
+    // corporate proxy that blocks jsdelivr — a `?` here abandoned the lookup
+    // before the LobeHub and favicon tiers ever ran. The user-visible result was
+    // an agent stuck on its letter glyph even though its own site had a perfectly
+    // good favicon waiting, which reads as "the fallback doesn't work".
+    let catalogue = icon_manifest(&client).await.ok();
+    if let Some(catalogue) = catalogue {
+        if let Some(id) = match_icon(catalogue, &queries) {
+            let (light_file, dark_file) = variant_files(catalogue, id);
+            if let Ok(light) = fetch_catalogue_svg(&client, &light_file).await {
+                let dark = if dark_file == light_file {
+                    light.clone()
+                } else {
+                    fetch_catalogue_svg(&client, &dark_file)
+                        .await
+                        .unwrap_or_else(|_| light.clone())
+                };
+                return Ok(AgentLogo { light, dark });
+            }
         }
     }
 
@@ -641,8 +790,10 @@ pub async fn fetch_agent_logo(command: String, name: String) -> Result<AgentLogo
         return Ok(logo);
     }
 
-    // Tier 3: the tool's own site favicon, for agents neither catalogue has added
-    // yet (e.g. Qoder). Favicons have no theme variants, so both sides share it.
+    // Tier 3: the tool's own site favicon via Google's favicon service — the
+    // curated agent→domain table first (ported from Orca), then a TLD guess for
+    // agents neither catalogue has added yet (e.g. Qoder). Favicons have no
+    // theme variants, so both sides share it.
     if let Some(uri) = fetch_favicon_logo(&client, tool, &name).await {
         return Ok(AgentLogo {
             light: uri.clone(),
@@ -656,8 +807,9 @@ pub async fn fetch_agent_logo(command: String, name: String) -> Result<AgentLogo
 #[cfg(test)]
 mod tests {
     use super::{
-        host_is_blocked, icon_file_stem_is_safe, logo_slug_candidates, match_icon,
-        resolved_host_is_blocked, variant_files, IconCatalogue, IconColors, IconMeta,
+        curated_favicon_domain, host_is_blocked, icon_file_stem_is_safe, logo_slug_candidates,
+        match_icon, png_is_placeholder, resolved_host_is_blocked, variant_files, IconCatalogue,
+        IconColors, IconMeta,
     };
 
     fn meta(aliases: &[&str], light: Option<&str>, dark: Option<&str>) -> IconMeta {
@@ -801,6 +953,80 @@ mod tests {
             logo_slug_candidates("", "AI Agent"),
             vec!["aiagent".to_string()],
         );
+    }
+
+    #[test]
+    fn curated_domains_resolve_from_commands_and_names() {
+        // Preset commands — the exact form AI_AGENT_PRESETS stores.
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("cursor-agent", "Cursor")),
+            Some("cursor.com")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("traecli", "TRAE")),
+            Some("www.trae.cn")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("agy", "Antigravity")),
+            Some("antigravity.google")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("qwen", "Qwen Code")),
+            Some("qwenlm.github.io")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("cn", "Continue")),
+            Some("continue.dev")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("vibe", "Mistral Vibe")),
+            Some("mistral.ai")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("auggie", "Augment")),
+            Some("augmentcode.com")
+        );
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("kiro-cli", "Kiro")),
+            Some("kiro.dev")
+        );
+        // A full display name alone (custom agent, command unknown) still hits.
+        assert_eq!(
+            curated_favicon_domain(&logo_slug_candidates("", "Gemini CLI")),
+            Some("gemini.google.com")
+        );
+    }
+
+    #[test]
+    fn curated_domains_leave_unknown_and_handdrawn_agents_alone() {
+        // An agent neither table covers — falls through to the TLD guess.
+        assert_eq!(curated_favicon_domain(&logo_slug_candidates("qoder", "Qoder")), None);
+        // Orca renders these by hand, so they get no curated domain either.
+        assert_eq!(curated_favicon_domain(&logo_slug_candidates("aider", "Aider")), None);
+        assert_eq!(curated_favicon_domain(&logo_slug_candidates("claude", "Claude")), None);
+    }
+
+    /// A minimal PNG header with the given width/height — enough for
+    /// `png_is_placeholder`, which only reads the signature and the IHDR dims.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[0, 0, 0, 13]); // IHDR length
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn detects_the_google_globe_placeholder() {
+        // The 16×16 placeholder is the miss signature.
+        assert!(png_is_placeholder(&png_header(16, 16)));
+        // Real favicons come back at their native size — never 16×16 at sz=64.
+        assert!(!png_is_placeholder(&png_header(64, 64)));
+        assert!(!png_is_placeholder(&png_header(32, 32)));
+        // Non-PNG and truncated payloads are left for the other checks.
+        assert!(!png_is_placeholder(b"not a png at all"));
+        assert!(!png_is_placeholder(&[]));
     }
 
     #[test]

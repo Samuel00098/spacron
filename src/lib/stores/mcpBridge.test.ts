@@ -363,6 +363,21 @@ describe('agent browser tools (Playwright MCP)', () => {
     expect(toml).toContain('[mcp_servers.spacron-mcp]');
   });
 
+  it('gives the Codex browser entry a startup timeout npx can actually meet', async () => {
+    // The regression this guards is invisible from the outside: without an
+    // explicit timeout Codex applies its 10s default, `npx -y @playwright/mcp`
+    // needs more than that even on a warm cache, and the server times out on
+    // every launch. The agent then runs with no browser tools and nothing
+    // anywhere says why — so assert the key is present, not merely the block.
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true });
+    await injectMcpConfigForAgent('codex', 'C:/work/repo');
+
+    const toml = writtenGlobal('codex')!;
+    const timeout = /^startup_timeout_sec = (\d+)$/m.exec(toml);
+    expect(timeout).not.toBeNull();
+    expect(Number(timeout![1])).toBeGreaterThan(10);
+  });
+
   it('removes the entry again when the setting is turned back off', async () => {
     // The regression that matters: a toggle that only ever adds would leave a
     // dead server in every config the user ever opened a project with.
@@ -407,6 +422,10 @@ describe('agent browser tools (Playwright MCP)', () => {
     expect(toml).not.toContain('spacron-playwright');
     expect(toml).toContain('model = "o3"');
     expect(toml).toContain('[projects.foo]');
+    // Regression: the strip must consume the args line too — the `[` inside the
+    // array used to end the removal early, orphaning `["-y", …]` at top level
+    // where TOML reads it as an unclosed table and Codex refuses to start.
+    expect(toml).not.toContain('"-y"');
   });
 });
 

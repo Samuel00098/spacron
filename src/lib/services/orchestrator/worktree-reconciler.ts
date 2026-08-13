@@ -4,10 +4,16 @@ import {
   stageWorktreeChanges,
   stageBaseline,
   type WorktreeInfo,
+  type WorktreeDelta,
 } from './worktree-manager';
 
 /**
- * Keeps the main checkout in step with every live agent worktree.
+ * Watches every live agent worktree and keeps the main checkout in step with it.
+ *
+ * With auto-staging on it stages work in as it lands. With it off (the default —
+ * Orca's review-wall model) it instead keeps the "Agent changes" list populated
+ * with everything waiting to be reviewed, and fires the first-work hook so each
+ * branch gets named from what the agent actually did.
  *
  * ## Why this exists
  *
@@ -89,6 +95,14 @@ type Providers = {
   persist: (projectId: string, worktreePath: string, patch: Partial<WorktreeInfo>) => void;
   /** Whether auto-staging is switched on. */
   autoStage: () => boolean;
+  /**
+   * The agent's first real work has landed in this worktree. Fired once per
+   * worktree; the owner typically names the branch from that work, Orca-style,
+   * and is expected to persist `renamedFromWork` so it never fires again. May
+   * be async — the pass waits for it so a rename lands before this pass stages
+   * or surfaces the work under the old name.
+   */
+  onFirstWork?: (entry: TrackedWorktree, delta: WorktreeDelta) => void | Promise<void>;
   onStaged?: (work: PendingWork, stagedFiles: number) => void;
   onConflict?: (work: PendingWork, message: string) => void;
   /**
@@ -108,6 +122,8 @@ const lastSeen = new Map<string, { head: string; dirty: number; at: number }>();
 const inFlight = new Set<string>();
 /** Non-conflict stage failures per worktree: how many in a row, and when to retry. */
 const failures = new Map<string, { count: number; retryAt: number }>();
+/** Worktrees whose first-work hook has fired — the rename guard's in-memory half. */
+const firstWorkFired = new Set<string>();
 
 export function initWorktreeReconciler(p: Providers): void {
   providers = p;
@@ -122,6 +138,7 @@ export function stopWorktreeReconciler(): void {
   lastSeen.clear();
   inFlight.clear();
   failures.clear();
+  firstWorkFired.clear();
   pendingWorktreeWork.set({});
 }
 
@@ -168,7 +185,7 @@ export async function reconcileNow(): Promise<void> {
 async function reconcileOne(entry: TrackedWorktree): Promise<void> {
   const p = providers;
   if (!p) return;
-  const { projectId, worktree, agentName, live } = entry;
+  let { projectId, worktree, agentName, live } = entry;
   const path = worktree.path;
   if (inFlight.has(path)) return;
 
@@ -178,6 +195,30 @@ async function reconcileOne(entry: TrackedWorktree): Promise<void> {
   if (delta.upToDate) {
     forgetWorktree(path);
     return;
+  }
+
+  // First real work in this worktree — hand it to the owner once, so it can
+  // name the branch from what the agent actually did (Orca-style) before the
+  // work is surfaced or staged. The in-memory set plus the persisted
+  // `renamedFromWork` flag (which the owner sets) make this exactly once per
+  // worktree, not once per poll.
+  if (!worktree.renamedFromWork && p.onFirstWork && !firstWorkFired.has(path)) {
+    firstWorkFired.add(path);
+    try {
+      await p.onFirstWork(entry, delta);
+      // The hook may have renamed the branch (same path, new branch). Re-read
+      // so this pass surfaces and stages under the NEW name, not the old one.
+      const fresh = p.list().find((e) => e.worktree.path === path);
+      if (fresh) {
+        entry = fresh;
+        projectId = fresh.projectId;
+        worktree = fresh.worktree;
+        agentName = fresh.agentName;
+        live = fresh.live;
+      }
+    } catch (err) {
+      console.warn('First-work rename hook failed:', err);
+    }
   }
 
   const work: PendingWork = {

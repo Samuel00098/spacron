@@ -5,12 +5,15 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 import {
   agentExecutable,
+  agentHasNativeExtras,
   agentReadsRulesFile,
   buildManagedBlock,
   buildStandingBriefBody,
   detectRulesFileSupport,
   ensureAgentRulesFiles,
+  hasReadKeyOutsideBlock,
   upsertManagedBlock,
+  upsertYamlManagedBlock,
 } from './agent-rules-file';
 
 describe('agentExecutable', () => {
@@ -103,6 +106,38 @@ describe('agentReadsRulesFile', () => {
       'antigravity',
       'agy',
       'grok',
+      // The Orca-port agents verified by probing their shipped bundles (see
+      // `measure_against_installed_clis` in agent_probe.rs): command-code's
+      // cli.mjs carries the AGENTS.md literal.
+      'command-code',
+      // Codebuff/Freebuff verified against repo source + the real installed
+      // binary (knowledge.ts KNOWLEDGE_FILE_NAMES = AGENTS.md, CLAUDE.md).
+      'codebuff',
+      'freebuff',
+      // Pi/OMP/Prime Agent verified 2026-08-12 against the installed bundles
+      // (resource-loader.js / compiled cli.js — AGENTS.md + CLAUDE.md context
+      // files, --no-context-files flag), and vibe/autohand/ante against their
+      // official docs (AGENTS.md support).
+      'pi',
+      'omp',
+      'prime-agent',
+      'vibe',
+      'autohand',
+      'ante',
+      // Verified 2026-08-12 against official docs: rovo (AGENTS.md Project
+      // Memory), mimo (AGENTS.md at workspace root), openclaude (AGENTS.md
+      // primary, CLAUDE.md fallback), openclaw (AGENTS.md + CLAUDE.md),
+      // hermes (context-file search order .hermes.md → AGENTS.md → CLAUDE.md).
+      'rovo',
+      'mimo',
+      'openclaude',
+      'openclaw',
+      'hermes',
+      // Native-extra agents: they read a file other than the universal three,
+      // but the brief still arrives by file, so they take the file channel.
+      'aider',
+      'cn',
+      'kiro-cli',
     ]) {
       expect(agentReadsRulesFile(id)).toBe(true);
     }
@@ -113,9 +148,25 @@ describe('agentReadsRulesFile', () => {
   });
 
   it('returns false for agents without an auto-loaded rules file and for empty input', () => {
-    for (const id of ['pi', 'aider', '', null, undefined]) {
+    for (const id of ['traecli', 'cody', '', null, undefined]) {
       expect(agentReadsRulesFile(id as string)).toBe(false);
     }
+  });
+});
+
+describe('agentHasNativeExtras', () => {
+  it('is true for agents with any native extra, bonus or required', () => {
+    expect(agentHasNativeExtras('aider')).toBe(true);
+    expect(agentHasNativeExtras('cn')).toBe(true);
+    expect(agentHasNativeExtras('traecli')).toBe(true);
+    expect(agentHasNativeExtras('cursor-agent')).toBe(true);
+  });
+
+  it('is false for agents without extras and for empty input', () => {
+    expect(agentHasNativeExtras('cody')).toBe(false);
+    expect(agentHasNativeExtras('claude')).toBe(false);
+    expect(agentHasNativeExtras('')).toBe(false);
+    expect(agentHasNativeExtras(null)).toBe(false);
   });
 });
 
@@ -243,7 +294,7 @@ describe('ensureAgentRulesFiles', () => {
     invokeMock.mockReset();
   });
 
-  it('creates CLAUDE.md and AGENTS.md and excludes the newly-created files from git', async () => {
+  it('creates CLAUDE.md, AGENTS.md and GEMINI.md and excludes the newly-created files from git', async () => {
     // fs_read_file rejects (file missing) for the rules files; the git exclude
     // read resolves with empty so the exclude write path runs.
     invokeMock.mockImplementation(async (cmd: string, args: { path: string }) => {
@@ -262,6 +313,7 @@ describe('ensureAgentRulesFiles', () => {
     const writtenPaths = writes.map((c) => (c[1] as { path: string }).path);
     expect(writtenPaths).toContain('/repo/CLAUDE.md');
     expect(writtenPaths).toContain('/repo/AGENTS.md');
+    expect(writtenPaths).toContain('/repo/GEMINI.md');
     // Each created file is added to .git/info/exclude.
     expect(writtenPaths.filter((p) => p.endsWith('/.git/info/exclude')).length).toBeGreaterThan(0);
   });
@@ -331,5 +383,242 @@ describe('ensureAgentRulesFiles', () => {
     const paths = invokeMock.mock.calls.map((c) => (c[1] as { path: string }).path);
     expect(paths).toContain('/repo/CLAUDE.md');
     expect(paths.some((p) => p.includes('//'))).toBe(false);
+  });
+});
+
+describe('upsertYamlManagedBlock', () => {
+  it('writes just the block into an empty config', () => {
+    const block = '# SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand\nread: CONVENTIONS.md\n# SORYQ:END agent-brief';
+    expect(upsertYamlManagedBlock('', block)).toBe(`${block}\n`);
+  });
+
+  it('replaces a stale YAML block in place, preserving other config', () => {
+    const block = '# SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand\nread: CONVENTIONS.md\n# SORYQ:END agent-brief';
+    const stale = block.replace('CONVENTIONS.md', 'OLD.md');
+    const existing = `model: gpt-4\n\n${stale}\n\nauto_commits: false`;
+    const result = upsertYamlManagedBlock(existing, block);
+    expect(result).toContain('model: gpt-4');
+    expect(result).toContain('auto_commits: false');
+    expect(result).toContain('read: CONVENTIONS.md');
+    expect(result).not.toContain('OLD.md');
+  });
+});
+
+describe('hasReadKeyOutsideBlock', () => {
+  it('is false for a config with no read key at all', () => {
+    expect(hasReadKeyOutsideBlock('model: gpt-4\nauto_commits: false')).toBe(false);
+  });
+
+  it('is false when the only read key lives inside the managed block', () => {
+    const block = '# SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand\nread: CONVENTIONS.md\n# SORYQ:END agent-brief';
+    expect(hasReadKeyOutsideBlock(block)).toBe(false);
+  });
+
+  it('is true when the user config already declares a read key', () => {
+    expect(hasReadKeyOutsideBlock('read: [CONVENTIONS.md, house.md]')).toBe(true);
+    expect(
+      hasReadKeyOutsideBlock('read: CONVENTIONS.md\n# SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand\nread: CONVENTIONS.md\n# SORYQ:END agent-brief')
+    ).toBe(true);
+  });
+});
+
+describe('ensureAgentRulesFiles — native extras', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it('writes the Continue rule file (frontmatter + block) for cn and reports the channel complete', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: { path: string }) => {
+      if (cmd === 'fs_read_file') {
+        // The git exclude file exists (empty); every other read misses.
+        if (args.path.endsWith('/.git/info/exclude')) return '';
+        throw new Error('not found');
+      }
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'cn');
+    expect(ok).toBe(true);
+
+    const writes = invokeMock.mock.calls.filter((c) => c[0] === 'fs_write_file');
+    const continueWrite = writes.find((c) => (c[1] as { path: string }).path.endsWith('.continue/rules/spacron-brief.md'));
+    expect(continueWrite).toBeDefined();
+    const content = (continueWrite![1] as { content: string }).content;
+    expect(content).toContain('---');
+    expect(content).toContain('alwaysApply: true');
+    expect(content).toContain('<!-- SORYQ:BEGIN agent-brief');
+    // The created rule file is kept out of the user's commits.
+    const excludeWrites = writes.filter((c) => (c[1] as { path: string }).path.endsWith('/.git/info/exclude'));
+    expect(excludeWrites.length).toBeGreaterThan(0);
+  });
+
+  it('writes the Kiro steering file for kiro-cli', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'kiro-cli');
+    expect(ok).toBe(true);
+    const paths = invokeMock.mock.calls
+      .filter((c) => c[0] === 'fs_write_file')
+      .map((c) => (c[1] as { path: string }).path);
+    expect(paths).toContain('/repo/.kiro/steering/spacron-brief.md');
+  });
+
+  it('writes CONVENTIONS.md and an aider config directive for aider', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'aider');
+    expect(ok).toBe(true);
+    const writes = invokeMock.mock.calls.filter((c) => c[0] === 'fs_write_file');
+    const configWrite = writes.find((c) => (c[1] as { path: string }).path.endsWith('.aider.conf.yml'));
+    expect(configWrite).toBeDefined();
+    expect((configWrite![1] as { content: string }).content).toContain('read: CONVENTIONS.md');
+  });
+
+  it('reports the channel incomplete for aider when the config already declares read:', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: { path: string }) => {
+      if (cmd === 'fs_read_file') {
+        if (args.path.endsWith('.aider.conf.yml')) return 'read: [CONVENTIONS.md, house.md]\n';
+        throw new Error('not found');
+      }
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'aider');
+    // The universal files + CONVENTIONS.md still get written, but the paste
+    // caller must NOT skip its fallback — aider would otherwise miss the brief.
+    expect(ok).toBe(false);
+  });
+
+  it('writes Cursor bonus files (.cursorrules + .mdc) and stays complete via the universal trio', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'cursor-agent');
+    // Cursor is a member briefed through AGENTS.md, so the channel is complete
+    // even though the bonus files are only best-effort.
+    expect(ok).toBe(true);
+
+    const writes = invokeMock.mock.calls.filter((c) => c[0] === 'fs_write_file');
+    const paths = writes.map((c) => (c[1] as { path: string }).path);
+    expect(paths).toContain('/repo/.cursorrules');
+    expect(paths).toContain('/repo/.cursor/rules/spacron-brief.mdc');
+
+    const mdcWrite = writes.find((c) =>
+      (c[1] as { path: string }).path.endsWith('.cursor/rules/spacron-brief.mdc')
+    );
+    const mdc = (mdcWrite![1] as { content: string }).content;
+    expect(mdc).toContain('description: Spacron agent operating brief');
+    expect(mdc).toContain('alwaysApply: true');
+    expect(mdc).toContain('<!-- SORYQ:BEGIN agent-brief');
+  });
+
+  it('counts a bonus file toward completeness when the universal writes fail', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: { path: string }) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') {
+        const p = args.path;
+        if (p.endsWith('/CLAUDE.md') || p.endsWith('/AGENTS.md') || p.endsWith('/GEMINI.md')) {
+          throw new Error('read-only');
+        }
+        return undefined;
+      }
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'cursor-agent');
+    // AGENTS.md failed but .cursorrules landed, so the brief still arrived.
+    expect(ok).toBe(true);
+  });
+
+  it('writes the TRAE IDE rule file for traecli but still reports the channel incomplete', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'traecli');
+    // traecli is NOT a member — the paste must keep delivering.
+    expect(ok).toBe(false);
+
+    const paths = invokeMock.mock.calls
+      .filter((c) => c[0] === 'fs_write_file')
+      .map((c) => (c[1] as { path: string }).path);
+    expect(paths).toContain('/repo/.trae/rules/project_rules.md');
+    // A bonus-only non-member triggers no universal-trio writes.
+    expect(
+      paths.some((p) => p.endsWith('/CLAUDE.md') || p.endsWith('/AGENTS.md') || p.endsWith('/GEMINI.md'))
+    ).toBe(false);
+  });
+
+  it('writes the verified bonus files for copilot, hermes, goose and cline', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'fs_read_file') throw new Error('not found');
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const cases = [
+      ['copilot', '.github/copilot-instructions.md'],
+      ['hermes', '.hermes.md'],
+      ['goose', '.goosehints'],
+      ['cline', '.clinerules'],
+    ] as const;
+    for (const [key, expected] of cases) {
+      invokeMock.mockClear();
+      const ok = await ensureAgentRulesFiles('/repo', key);
+      expect(ok).toBe(true);
+      const paths = invokeMock.mock.calls
+        .filter((c) => c[0] === 'fs_write_file')
+        .map((c) => (c[1] as { path: string }).path);
+      expect(paths).toContain(`/repo/${expected}`);
+    }
+  });
+
+  it('updates an existing Continue rule file in place, preserving user frontmatter edits', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: { path: string }) => {
+      if (cmd === 'fs_read_file') {
+        if (args.path.endsWith('.continue/rules/spacron-brief.md')) {
+          return [
+            '---',
+            'name: Renamed by the user',
+            'alwaysApply: true',
+            '---',
+            '',
+            buildManagedBlock().replace('Scope', 'OUTDATED'),
+            '',
+          ].join('\n');
+        }
+        throw new Error('not found');
+      }
+      if (cmd === 'fs_write_file') return undefined;
+      throw new Error(`unexpected ${cmd}`);
+    });
+
+    const ok = await ensureAgentRulesFiles('/repo', 'cn');
+    expect(ok).toBe(true);
+
+    const continueWrite = invokeMock.mock.calls
+      .filter((c) => c[0] === 'fs_write_file')
+      .find((c) => (c[1] as { path: string }).path.endsWith('.continue/rules/spacron-brief.md'));
+    expect(continueWrite).toBeDefined();
+    const content = (continueWrite![1] as { content: string }).content;
+    // The user's frontmatter survives; only the managed block is refreshed.
+    expect(content).toContain('name: Renamed by the user');
+    expect(content).not.toContain('OUTDATED');
+    expect(content).toContain('<!-- SORYQ:BEGIN agent-brief');
   });
 });

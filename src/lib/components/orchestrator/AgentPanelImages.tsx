@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import * as agentPanelImagesModule from '$lib/stores/agentPanelImages';
 import { writeToSession } from '$lib/stores/terminal';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
-import { isTauriRuntime } from '$lib/utils/tauri';
+import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import './AgentPanelImages.css';
 
@@ -174,7 +174,10 @@ export default function AgentPanelImages({ sessionId }: Props) {
         const el = rootRef.current;
         if (!el) return;
         const pos = (event.payload as any).position as { x: number; y: number };
-        setIsDragOver(isOverElement(el, pos.x, pos.y));
+        void dropPositionToCss(pos).then((css) => {
+          if (!css) return;
+          setIsDragOver(isOverElement(el, css.x, css.y));
+        });
         return;
       }
       if (type === 'leave') {
@@ -187,14 +190,21 @@ export default function AgentPanelImages({ sessionId }: Props) {
         const payload = event.payload as any;
         const pos = payload.position as { x: number; y: number };
         setIsDragOver(false);
-        if (!isOverElement(el, pos.x, pos.y)) return;
+        void dropPositionToCss(pos).then((css) => {
+          if (!css) return;
+          // Hidden rooms stay laid out at full size; reject them the same way
+          // TerminalPane does before the rect test.
+          const style = getComputedStyle(el);
+          if (style.visibility === 'hidden' || style.pointerEvents === 'none') return;
+          if (!isOverElement(el, css.x, css.y)) return;
 
-        const paths: string[] = payload.paths ?? [];
-        for (const p of paths) {
-          if (isImagePath(p)) {
-            void addImageFromPath(p);
+          const paths: string[] = payload.paths ?? [];
+          for (const p of paths) {
+            if (isImagePath(p)) {
+              void addImageFromPath(p);
+            }
           }
-        }
+        });
       }
     }).then((u) => { unlisten = u; });
 

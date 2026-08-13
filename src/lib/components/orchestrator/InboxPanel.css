@@ -14,7 +14,11 @@
   flex-direction: column;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.09));
   border-radius: 14px;
+  /* Rigid frame, same contract as the usage popover: the panel itself never
+     moves or resizes, `.inbox-list` is the only scroller, and a pan gesture
+     anywhere on it scrolls that list rather than dragging the surface. */
   overflow: hidden;
+  touch-action: pan-y;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
@@ -35,7 +39,9 @@
   }
 }
 
+/* Pinned: the header holds its height whatever the list does below it. */
 .inbox-head {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -137,6 +143,7 @@
 }
 
 .inbox-empty {
+  flex: none;
   margin: 0;
   padding: 28px 20px;
   text-align: center;
@@ -145,12 +152,20 @@
   color: var(--text-tertiary, var(--text-secondary));
 }
 
+/* Takes whatever height the header leaves and no more: `min-height: 0` is what
+   stops a long queue from pushing the popover past its own max-height. */
 .inbox-list {
+  flex: 1;
+  min-height: 0;
   list-style: none;
   margin: 0;
   padding: 4px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  /* Every row is a button — a drag across them should scroll the queue, not
+     sweep a text selection through it. */
+  user-select: none;
 }
 
 .inbox-row {

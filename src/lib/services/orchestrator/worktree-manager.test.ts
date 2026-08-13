@@ -7,6 +7,8 @@ import {
   reclaimWorktree,
   stageBaseline,
   deriveTaskBranch,
+  deriveFirstWorkBranch,
+  renameTaskWorktree,
   mergeTaskWorktree,
   sweepAgentBranches,
   type WorktreeInfo,
@@ -221,6 +223,74 @@ describe('deriveTaskBranch', () => {
     const a = deriveTaskBranch('ot_1700000000_abc123', 'Backend work');
     expect(a).toBe('spacron/backend-work-abc123');
     expect(deriveTaskBranch('ot_1700000000_zzz999', 'Backend work')).not.toBe(a);
+  });
+});
+
+describe('deriveFirstWorkBranch', () => {
+  it('names the branch from the first commit subject, stripping the conventional prefix', () => {
+    const result = deriveFirstWorkBranch(worktree(), {
+      subject: 'fix: login redirect',
+      file: 'src/login.tsx',
+    });
+    expect(result).toBe('spacron/login-redirect-1');
+  });
+
+  it('falls back to the first changed file when the agent never commits', () => {
+    const result = deriveFirstWorkBranch(worktree(), { file: 'src/components/LoginForm.tsx' });
+    expect(result).toBe('spacron/login-form-1');
+  });
+
+  it('ignores our own snapshot commit as a name source', () => {
+    const result = deriveFirstWorkBranch(worktree(), {
+      subject: 'spacron: snapshot uncommitted agent work',
+      file: 'src/api.ts',
+    });
+    expect(result).toBe('spacron/api-1');
+  });
+
+  it('returns null when there is nothing nameable yet', () => {
+    expect(deriveFirstWorkBranch(worktree(), {})).toBeNull();
+  });
+
+  it('returns null when the derived name matches the current branch', () => {
+    const result = deriveFirstWorkBranch(
+      worktree({ branch: 'spacron/login-1' }),
+      { subject: 'fix: login' },
+    );
+    expect(result).toBeNull();
+  });
+
+  it('keeps the trailing short id so two agents naming the same work stay unique', () => {
+    const a = deriveFirstWorkBranch(worktree({ branch: 'spacron/agent-abc123' }), { file: 'login.tsx' });
+    const b = deriveFirstWorkBranch(worktree({ branch: 'spacron/agent-zzz999' }), { file: 'login.tsx' });
+    expect(a).toBe('spacron/login-abc123');
+    expect(b).toBe('spacron/login-zzz999');
+  });
+});
+
+describe('renameTaskWorktree', () => {
+  it('passes the worktree path and both branch names to the backend', async () => {
+    let args: Record<string, unknown> = {};
+    backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
+      args = a;
+      return 'spacron/login-abc123';
+    });
+
+    const branch = await renameTaskWorktree('p1', worktree(), 'spacron/login-abc123');
+
+    expect(args).toEqual({
+      projectId: 'p1',
+      worktreePath: worktree().path,
+      branch: 'spacron/alex-1',
+      newBranch: 'spacron/login-abc123',
+    });
+    expect(branch).toBe('spacron/login-abc123');
+  });
+
+  it('returns null when the backend refuses the rename', async () => {
+    backendInvoke.mockRejectedValue(new Error('Worktree is on another branch'));
+    const branch = await renameTaskWorktree('p1', worktree(), 'spacron/login-abc123');
+    expect(branch).toBeNull();
   });
 });
 

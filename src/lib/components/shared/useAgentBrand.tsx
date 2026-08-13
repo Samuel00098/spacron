@@ -35,12 +35,22 @@ const FETCHED_LOGOS_KEY = 'spacron_fetched_agent_logos';
 
 // Shared across every component that renders the same agent, so the header mark
 // and its minimized chip resolve together and a slug is fetched only once.
-// Entries left in 'pending' from a crashed previous session are discarded —
-// they would never resolve and would block a fresh fetch forever.
+//
+// Only SUCCESSES are worth carrying across restarts. Two states are dropped on
+// load and both for the same reason — keeping them would make a temporary
+// condition permanent:
+//   * 'pending' left behind by a crashed session would never resolve, and would
+//     block a fresh fetch forever;
+//   * 'failed' is very often not about the agent at all — the app started
+//     offline, the icon CDN was down, the backend hadn't grown its later
+//     fallback tiers yet. Persisting it froze a letter glyph in place for good,
+//     and no amount of improving the lookup would ever be seen. Retrying once
+//     per launch costs one request for an agent that genuinely has no logo, and
+//     is what makes the favicon fallback actually reach the screen.
 function cleanPersisted(raw: Record<string, FetchState>): Record<string, FetchState> {
   const cleaned: Record<string, FetchState> = {};
   for (const [key, state] of Object.entries(raw)) {
-    if (state.status === 'pending') continue; // stale — will be re-fetched
+    if (state.status !== 'ok') continue; // stale or retryable — fetch again
     cleaned[key] = state;
   }
   return cleaned;

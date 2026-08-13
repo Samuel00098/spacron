@@ -1,6 +1,6 @@
 export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settings';
 
-export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet';
+export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet' | 'mobile';
 
 // 'review' was removed 2026-07-26: Code Review is a full center panel now, not a
 // drawer tab. A two-column diff is unreadable at drawer width.
@@ -16,6 +16,7 @@ export type SettingsTab =
   | 'voice'
   | 'terminal'
   | 'agents'
+  | 'stats'
   | 'shortcuts'
   | 'about';
 
@@ -38,6 +39,7 @@ export interface LayoutState {
   toolboxVisible: boolean;
   envVisible: boolean;
   youtubeVisible: boolean;
+  mobileVisible: boolean;
   auxPanelWidth: number;
   auxEditorHeight: number; // percentage split between editor and preview panes
   leftPanelWidth: number; // width of the left utility panel (Files/Search/Git/Snapshots/Snippets/Review)

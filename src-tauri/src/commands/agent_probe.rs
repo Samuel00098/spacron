@@ -270,8 +270,31 @@ fn capture_help(executable: &str) -> Result<String, String> {
 
 /// Locate `program` on PATH, trying `PATHEXT` suffixes on Windows so `grok`
 /// finds `grok.exe` and `cursor-agent` finds `cursor-agent.cmd`.
+///
+/// The search is deliberately broader than the process environment. A desktop
+/// app's `PATH` is frozen at launch, so a CLI installed *after* Spacron
+/// started (`npm i -g`, winget, a native installer, …) is visible to a fresh
+/// terminal but invisible to us — the classic "it works in my shell but the
+/// app says not installed". On Windows the current registry `Path` (machine
+/// then user, `%VAR%` refs expanded) is merged in and searched after the
+/// process PATH, so detection reflects what a new terminal would find rather
+/// than what the parent process happened to have. (GUI-launched apps also get
+/// a PATH that can be truncated relative to the registry, so this closes that
+/// gap too.) On macOS/Linux there is no equivalent registry; the process PATH
+/// is the honest scope there.
 pub fn which(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    #[cfg(windows)]
+    dirs.extend(registry_path_dirs());
+
+    // The same directory frequently appears in the process PATH and the
+    // registry merge; search each directory once.
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|dir| seen.insert(dir.clone()));
+
     #[cfg(windows)]
     let extensions: Vec<String> = std::env::var("PATHEXT")
         .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
@@ -282,7 +305,7 @@ pub fn which(program: &str) -> Option<PathBuf> {
     #[cfg(not(windows))]
     let extensions: Vec<String> = Vec::new();
 
-    for dir in std::env::split_paths(&path) {
+    for dir in dirs {
         let direct = dir.join(program);
         if direct.is_file() {
             return Some(direct);
@@ -295,6 +318,100 @@ pub fn which(program: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Directories from the current registry `Path` — machine (HKLM) first, then
+/// user (HKCU), which is the order Windows merges them into a process
+/// environment. `%VAR%` references are expanded the same way a fresh shell
+/// would. An empty or missing value contributes nothing.
+///
+/// The two hives keep `Path` under **different** subkeys, and that asymmetry is
+/// the whole reason this function exists rather than one lookup: the user's
+/// PATH is `HKCU\Environment`, but the machine's is under Session Manager —
+/// `HKLM\Environment` is not a key Windows creates at all. Reading `Environment`
+/// under both hives therefore made the HKLM half a silent no-op, and a CLI
+/// installed machine-wide (an MSI, `winget` with `--scope machine`) stayed
+/// invisible to detection until the app was restarted.
+#[cfg(windows)]
+fn registry_path_dirs() -> Vec<PathBuf> {
+    use std::collections::HashSet;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    let hives = [
+        (
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(w!(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment").as_ptr()),
+        ),
+        (HKEY_CURRENT_USER, PCWSTR(w!("Environment").as_ptr())),
+    ];
+
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for (hkey, subkey) in hives {
+        if let Some(value) = registry_path_value(hkey, subkey) {
+            for dir in std::env::split_paths(&value) {
+                if seen.insert(dir.clone()) {
+                    out.push(dir);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Read the current `Path` value under `hkey\subkey` and expand its `%VAR%`
+/// references. Returns `None` when the key or value is missing or empty — which
+/// is the ordinary answer for a hive that has no `Path` of its own, not an
+/// error worth surfacing.
+#[cfg(windows)]
+fn registry_path_value(
+    hkey: windows::Win32::System::Registry::HKEY,
+    subkey: windows::core::PCWSTR,
+) -> Option<String> {
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows::Win32::System::Registry::{
+        RegGetValueW, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+
+    // 32 KiB matches the maximum size Windows returns for an environment
+    // value; anything beyond that is not a PATH anyone can use.
+    let mut buffer = [0u16; 32768];
+    let mut len = (buffer.len() * 2) as u32;
+    let result = unsafe {
+        RegGetValueW(
+            hkey,
+            subkey,
+            PCWSTR(w!("Path").as_ptr()),
+            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut len),
+        )
+    };
+    if result.is_err() {
+        return None;
+    }
+    let chars = (len as usize / 2).min(buffer.len());
+    let text = String::from_utf16_lossy(&buffer[..chars]);
+    let text = text.trim_end_matches('\0');
+    if text.is_empty() {
+        return None;
+    }
+
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut expanded = vec![0u16; 32768];
+    let written = unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), Some(&mut expanded)) };
+    if written == 0 {
+        return Some(text.to_string());
+    }
+    // `written` is chars including the NUL. When the result outgrows the
+    // buffer the API returns the *required* size rather than the copied count,
+    // so clamp before slicing — a PATH beyond 32 KiB is absurd, but a panic
+    // in a GUI app is not the right answer to it either.
+    let end = (written as usize - 1).min(expanded.len());
+    Some(String::from_utf16_lossy(&expanded[..end]))
 }
 
 /// Stream `path` looking for any of `RULES_LITERALS`, case-insensitively.
@@ -530,6 +647,40 @@ pub fn agent_probe_rules_file(command: String) -> AgentRulesProbe {
 mod tests {
     use super::*;
 
+    /// The machine hive really does yield a PATH.
+    ///
+    /// This is the regression guard for reading `Path` out of the wrong subkey.
+    /// `HKLM\Environment` — the key this used to query — does not exist on
+    /// Windows, so the old code took the `None` branch on every machine and
+    /// quietly contributed nothing: anything installed machine-wide stayed
+    /// undetected. Asserting on the *presence* of a directory list rather than
+    /// on any particular entry keeps this true on any Windows box, while still
+    /// failing outright if the subkey regresses.
+    #[cfg(windows)]
+    #[test]
+    fn the_machine_hive_contributes_real_directories() {
+        use windows::core::{w, PCWSTR};
+        use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+        let machine = registry_path_value(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(w!(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment").as_ptr()),
+        )
+        .expect("machine PATH is readable from the Session Manager subkey");
+        assert!(
+            std::env::split_paths(&machine).any(|dir| dir.is_dir()),
+            "machine PATH held no existing directory: {machine}"
+        );
+
+        // The user hive keeps its PATH somewhere else, and both must resolve —
+        // reading one subkey for both hives is the bug this pair pins down.
+        let user = registry_path_value(HKEY_CURRENT_USER, PCWSTR(w!("Environment").as_ptr()));
+        assert!(user.is_some(), "user PATH is readable from HKCU\\Environment");
+
+        // And the merge that `which` searches carries the machine entries.
+        assert!(!registry_path_dirs().is_empty());
+    }
+
     #[test]
     fn extracts_a_plain_program() {
         assert_eq!(extract_executable("claude").as_deref(), Some("claude"));
@@ -645,8 +796,32 @@ mod tests {
     #[ignore = "depends on which CLIs are installed on this machine"]
     fn measure_against_installed_clis() {
         // The first group reads AGENTS.md/CLAUDE.md; the second must not be
-        // mistaken for an agent CLI.
-        let expected_true = ["claude", "codex", "cursor-agent", "grok", "opencode"];
+        // mistaken for an agent CLI. The registry agents added 2026-08 live in
+        // the first group so the probe's help-text + byte-scan heuristics can be
+        // re-measured against real installs as this machine changes — read the
+        // output, don't gate on it (known oddity: `copilot` is a legitimate
+        // false negative, its file discovery happens server-side).
+        let expected_true = [
+            "claude", "codex", "cursor-agent", "grok", "opencode",
+            // Wider registry (added 2026-08): droid and devin carry the
+            // AGENTS.md literal in their native binaries; kilo / omp /
+            // command-code resolve through shims the scan follows.
+            "droid", "copilot", "devin", "kilo", "omp", "command-code",
+            // codebuff/freebuff added 2026-08-12 (AGENTS.md/CLAUDE.md knowledge
+            // files, verified in CodebuffAI/codebuff source). Caveat: the npm
+            // shim the probe follows is a launcher with no literals — the
+            // authoritative scan is the downloaded binary under
+            // `~/.config/manicode/` (freebuff.exe carries both literals), so a
+            // probe miss here is a shim limitation, same class as copilot.
+            "codebuff", "freebuff",
+            // pi/omp added 2026-08-12 (AGENTS.md/CLAUDE.md context files,
+            // verified in the installed bundles). Caveat: `omp` resolves through
+            // Bun's `omp.bunx` shim, which is UTF-16LE — `shim_targets` only
+            // reads UTF-8 text, so the probe reports reads=false for omp even
+            // though the real bundle loads AGENTS.md/CLAUDE.md. Same class as
+            // copilot/freebuff: the installed bundle is the authority.
+            "pi", "omp",
+        ];
         let expected_false = ["git", "node"];
 
         for exe in expected_true.iter().chain(expected_false.iter()) {

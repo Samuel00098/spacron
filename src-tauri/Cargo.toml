@@ -1,6 +1,6 @@
 [package]
 name = "spacron"
-version = "0.8.1"
+version = "0.9.0"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"
@@ -36,6 +36,15 @@ dashmap = "5"
 notify = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 portable-pty = "0.8"
+# Recursive directory-size scan for the resource panel's per-project disk
+# usage ("how much data is this project taking"). Already in the tree
+# transitively; promoted to a direct dep for the explicit import.
+walkdir = "2.5"
+# Per-process + machine CPU/RAM sampling for the resource monitor (titlebar
+# chip + dropdown). One small dep for all three platforms; `Process::cpu_usage`
+# needs the same `System` instance refreshed across calls to report deltas,
+# which is why AppState owns a persistent sampler rather than per-command ones.
+sysinfo = "0.39"
 axum = { version = "0.8.9", features = ["ws"] }
 reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli", "cookies", "multipart", "form", "query"] }
 # Same cookie stack reqwest's own `Jar` is built on — used to implement the
@@ -67,13 +76,29 @@ memchr = "2"
 # (this rc) reference Abseil symbols that ort-sys fails to put on the final link
 # line for the Linux GCC/ld toolchain, breaking the build with
 # `undefined reference to absl::...::NominalCPUFrequency`. Dynamic loading sidesteps
-# static linking entirely on every platform. `download-binaries` + `copy-dylibs`
-# (default features) still fetch the dylib and copy it next to the built binary,
-# and `preload-dylibs` (pulled in by `load-dynamic`) loads it from next to the
-# binary at startup. NOTE: this fixes the build/link on all platforms and the
-# `--no-bundle` CI job. Tauri release *bundles* must additionally ship this dylib
-# next to the packaged binary (or point `ORT_DYLIB_PATH`/`ort::init().with_dylib_path`
-# at it) for the installed app to load ONNX Runtime at runtime — still TODO.
+# static linking entirely on every platform, which is why it is here and should
+# stay until that link failure is fixed upstream.
+#
+# CORRECTION (2026-08-13). An earlier version of this comment claimed
+# `download-binaries` + `copy-dylibs` "still fetch the dylib and copy it next to
+# the built binary". They do not. `load-dynamic` enables `ort-sys/disable-linking`,
+# and ort-sys's build script returns before doing anything at all when that is
+# set — its own comment reads "we don't need to download anything because we
+# don't provide DLLs anymore". Confirmed empirically: there is no onnxruntime
+# library anywhere under `target/`.
+#
+# So NOTHING in this build produces an ONNX Runtime library, and the gap is not
+# limited to release bundles — Parakeet STT cannot work in a dev build either
+# unless the host already has ONNX Runtime on its loader search path. Worse, ort
+# rc.12 reacts to a missing library by panicking
+# (`load_dylib_from_path(..).expect("Failed to load ONNX Runtime dylib")`), and
+# rc.12 has no `with_dylib_path` builder — `ORT_DYLIB_PATH` is the only lever.
+#
+# `commands/parakeet.rs::ensure_ort_dylib` resolves that variable from the models
+# dir or the executable's directory and returns a clean error (never reaching the
+# panic) when the library is absent, and `commands/onnx_runtime.rs` downloads the
+# library itself — from Microsoft's official release, NOT from pyke's CDN, whose
+# archives hold a 305 MB static `onnxruntime.lib` and no loadable DLL at all.
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 # Native whisper.cpp bindings for offline Whisper STT. Uses the GGML models the
 # app already downloads; mmaps them so RAM stays low. Optional + gated behind the
@@ -81,6 +106,14 @@ ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 # needs `cmake` at build time. Build with `--no-default-features` to drop Whisper
 # (and the cmake requirement) if needed.
 whisper-rs = { version = "0.16", optional = true }
+# Unpacking the ONNX Runtime release `commands/onnx_runtime.rs` downloads.
+# Microsoft ships it as `.zip` for Windows and gzipped tar for macOS/Linux, so
+# all three are needed. `tar` and `flate2` were already in `Cargo.lock`
+# transitively; `zip` is limited to `deflate` because that is the only method
+# these archives use.
+tar = "0.4"
+flate2 = "1.1.9"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 
 [features]
@@ -124,5 +157,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Environment",
     "Win32_System_Memory",
+    "Win32_System_Registry",
 ] }

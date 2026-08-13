@@ -23,7 +23,7 @@ import {
   stageWorktreeNow,
   type TrackedWorktree,
 } from './worktree-reconciler';
-import type { WorktreeInfo } from './worktree-manager';
+import type { WorktreeInfo, WorktreeDelta } from './worktree-manager';
 
 const BASE = 'aaaaaaa1';
 const TIP = 'bbbbbbb2';
@@ -52,12 +52,13 @@ type PersistFn = (projectId: string, worktreePath: string, patch: Partial<Worktr
 let persist: Mock<PersistFn>;
 let list: TrackedWorktree[];
 
-function start(opts?: { autoStage?: boolean }) {
+function start(opts?: { autoStage?: boolean; onFirstWork?: (entry: TrackedWorktree, delta: WorktreeDelta) => void }) {
   persist = vi.fn<PersistFn>();
   initWorktreeReconciler({
     list: () => list,
     persist,
     autoStage: () => opts?.autoStage ?? true,
+    onFirstWork: opts?.onFirstWork,
   });
 }
 
@@ -280,6 +281,58 @@ describe('the staged baseline', () => {
 
     expect(get(pendingWorktreeWork)).toEqual({});
     expect(stageWorktreeChanges).not.toHaveBeenCalled();
+  });
+});
+
+describe('first-work naming (onFirstWork)', () => {
+  it('fires once with the delta the first time work appears', async () => {
+    const onFirstWork = vi.fn();
+    start({ onFirstWork });
+    getWorktreeDelta.mockResolvedValue(delta({ firstFile: 'src/login.tsx' }));
+
+    await settleAndReconcile();
+    await settleAndReconcile();
+
+    expect(onFirstWork).toHaveBeenCalledTimes(1);
+    expect(onFirstWork.mock.calls[0][1]).toMatchObject({ firstFile: 'src/login.tsx', pendingFiles: 3 });
+  });
+
+  it('does not fire for a worktree already renamed from work', async () => {
+    const onFirstWork = vi.fn();
+    list = [tracked({ worktree: worktree({ renamedFromWork: true }) })];
+    start({ onFirstWork });
+    getWorktreeDelta.mockResolvedValue(delta());
+
+    await settleAndReconcile();
+
+    expect(onFirstWork).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the entry after the hook so the pass surfaces the new branch', async () => {
+    const renamed = worktree({ branch: 'spacron/login-1', renamedFromWork: true });
+    const onFirstWork = vi.fn(async (entry: TrackedWorktree) => {
+      // Simulate the store persisting the rename back onto the owner: the next
+      // read of `list` returns the renamed worktree.
+      list = [tracked({ worktree: renamed })];
+    });
+    start({ onFirstWork });
+    getWorktreeDelta.mockResolvedValue(delta());
+
+    await settleAndReconcile();
+
+    // The pending row carries the renamed branch, not the pre-rename one.
+    const row = get(pendingWorktreeWork)[worktree().path];
+    expect(row.branch).toBe('spacron/login-1');
+  });
+
+  it('does not fire when the worktree is up to date', async () => {
+    const onFirstWork = vi.fn();
+    start({ onFirstWork });
+    getWorktreeDelta.mockResolvedValue(delta({ upToDate: true, committedFiles: 0, pendingFiles: 0 }));
+
+    await settleAndReconcile();
+
+    expect(onFirstWork).not.toHaveBeenCalled();
   });
 });
 

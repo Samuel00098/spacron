@@ -4,12 +4,17 @@
    180ms, matching fly={{ y: 8, duration: 180, opacity: 0 }}). */
 
 .toast-container {
+  /* Top-right, clear of the agent notification stack (which owns the
+     bottom-right corner) so the two surfaces can never collide or visually
+     blend into each other. Generic toasts are the lighter, rarer surface, so
+     they take the upper corner below the titlebar. */
   position: fixed;
-  bottom: 32px;
-  right: 24px;
+  top: 52px;
+  right: 20px;
   z-index: 10000;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
   max-width: 380px;
   width: 100%;

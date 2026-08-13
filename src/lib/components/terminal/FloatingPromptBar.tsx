@@ -38,7 +38,7 @@ import {
   xaiRealtimeVoice,
 } from '$lib/stores/settings';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
-import { isTauriRuntime, isWebkitGtk } from '$lib/utils/tauri';
+import { isTauriRuntime, isWebkitGtk, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -241,6 +241,15 @@ export default function FloatingPromptBar() {
   const [, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
+  // Alt-to-voice is a deliberate act: the shortcut only fires once the user has
+  // actually clicked on the floating bar. A bare Alt anywhere on the machine
+  // must not yank the voice overlay open. Arming happens on pointer-down inside
+  // the shell and disarms on any outside click. Arming deliberately does NOT
+  // happen on focus: `focusInput()` is called programmatically in a dozen
+  // places (mount, session change, after send…), and those focus events would
+  // arm the shortcut without the user ever touching the bar — the exact bug
+  // this ref exists to prevent.
+  const voiceShortcutArmedRef = useRef(false);
   const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(null);
   const [lastExplorerDragPoint, setLastExplorerDragPoint] = useState<{ x: number; y: number } | null>(null);
   // Guard: when the React drop handler fires first, suppress the document-level handler
@@ -1521,9 +1530,16 @@ export default function FloatingPromptBar() {
   }, [inputValue, adjustInputHeight]);
 
   const handleDocumentPointerDown = useCallback((event: MouseEvent) => {
-    if (!historyOpen && !targetPickerOpen && !isExpanded) return;
     const target = event.target as Node | null;
-    if (shellElRef.current && target && !shellElRef.current.contains(target)) {
+    const insideShell = Boolean(
+      shellElRef.current && target && shellElRef.current.contains(target)
+    );
+    // Clicking the bar (or anywhere inside it) arms the Alt→voice shortcut;
+    // any outside click disarms it. This runs before the early return below so
+    // a click on the collapsed pill arms it even though nothing else is open.
+    voiceShortcutArmedRef.current = insideShell;
+    if (!historyOpen && !targetPickerOpen && !isExpanded) return;
+    if (!insideShell) {
       if (!canStayOpen()) setIsExpanded(false);
       setHistoryOpen(false);
       setTargetPickerOpen(false);
@@ -1551,10 +1567,13 @@ export default function FloatingPromptBar() {
 
     if (event.key !== 'Alt' || event.location !== KeyboardEvent.DOM_KEY_LOCATION_LEFT || event.repeat || isRefining) return;
 
-    // In agent mode, Alt always toggles voice regardless of focus —
-    // the transcript area doesn't hold keyboard focus so the old focus
-    // guard would prevent the shortcut from ever firing.
+    // In agent mode, Alt only toggles voice once the user has clicked the
+    // floating bar (see `voiceShortcutArmedRef`). A focus guard can't do this
+    // job — the voice transcript area doesn't hold keyboard focus, so the old
+    // focus-based check could never fire. Arming on click is what makes the
+    // shortcut both reachable and deliberate.
     if (isAgentMode) {
+      if (!voiceShortcutArmedRef.current) return;
       event.preventDefault();
       toggleAgentVoiceMode();
       return;
@@ -1722,8 +1741,12 @@ export default function FloatingPromptBar() {
         const barEl = barElRef.current;
         if (!barEl) return;
         const pos = (event.payload as any).position as { x: number; y: number };
-        const rect = barEl.getBoundingClientRect();
-        setIsDragOver(pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom);
+        void dropPositionToCss(pos).then((css) => {
+          const el = barElRef.current;
+          if (!css || !el) return;
+          const rect = el.getBoundingClientRect();
+          setIsDragOver(css.x >= rect.left && css.x <= rect.right && css.y >= rect.top && css.y <= rect.bottom);
+        });
         return;
       }
       if (type === 'drop') {
@@ -1735,13 +1758,17 @@ export default function FloatingPromptBar() {
         if (!barEl || !paths.length) { setIsDragOver(false); return; }
 
         const pos = payload.position as { x: number; y: number };
-        const rect = barEl.getBoundingClientRect();
-        const isOverBar = pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom;
+        void dropPositionToCss(pos).then((css) => {
+          const el = barElRef.current;
+          if (!css || !el) { setIsDragOver(false); return; }
+          const rect = el.getBoundingClientRect();
+          const isOverBar = css.x >= rect.left && css.x <= rect.right && css.y >= rect.top && css.y <= rect.bottom;
 
-        setIsDragOver(false);
-        if (!isOverBar) return;
+          setIsDragOver(false);
+          if (!isOverBar) return;
 
-        addChipsForPathsRef.current(paths);
+          addChipsForPathsRef.current(paths);
+        });
       }
     }).then((u) => {
       // If the component unmounted before this resolved, unlisten immediately so

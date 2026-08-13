@@ -151,6 +151,12 @@ export function initDefaultCommands() {
       action: () => setActiveView('preview'),
     },
     {
+      id: 'view.mobile',
+      name: 'Go to Mobile Emulator',
+      category: 'View',
+      action: () => setActiveView('mobile'),
+    },
+    {
       id: 'view.settings',
       name: 'Go to Settings',
       category: 'View',

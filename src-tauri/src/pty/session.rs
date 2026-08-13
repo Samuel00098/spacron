@@ -1,8 +1,10 @@
 use crate::pty::shell::ShellConfig;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 /// Transport-agnostic sink for a PTY session's live output. Each attached
 /// frontend (Tauri IPC channel, remote WebSocket, …) provides one. Returning
@@ -24,6 +26,12 @@ pub struct PtySession {
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    /// OS process id of the spawned shell, when the backend exposes one. The
+    /// resource monitor (commands/resource.rs) samples this process to report
+    /// a session's live CPU/RAM. `None` when the platform/pty backend couldn't
+    /// resolve a pid (e.g. some Windows conpty edge cases); the row then shows
+    /// no numbers instead of a fabricated one.
+    pub pid: Option<u32>,
     output_buffer: Arc<Mutex<Vec<u8>>>,
     data_subscribers: Arc<Mutex<Vec<Box<dyn DataSink>>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
@@ -64,6 +72,9 @@ pub fn spawn(
     }
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
+    // Capture the pid BEFORE `child` is moved into the waiter thread below —
+    // `process_id()` borrows the child, and the waiter owns it from then on.
+    let pid = child.process_id();
 
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -182,6 +193,7 @@ pub fn spawn(
         master,
         writer,
         killer,
+        pid,
         output_buffer,
         data_subscribers,
         exit_code,
@@ -241,8 +253,16 @@ impl PtySession {
     }
 
     pub fn close(&self) -> Result<(), String> {
-        let mut killer = self.killer.lock().map_err(|e| e.to_string())?;
-        killer.kill().map_err(|e| e.to_string())
+        {
+            let mut killer = self.killer.lock().map_err(|e| e.to_string())?;
+            // Best-effort direct kill; if the shell is already gone this errors
+            // and the tree walk below still catches whatever survives.
+            let _ = killer.kill();
+        }
+        if let Some(pid) = self.pid {
+            Self::kill_process_tree(pid);
+        }
+        Ok(())
     }
 
     pub fn write(&self, data: &str) -> Result<(), String> {
@@ -251,6 +271,51 @@ impl PtySession {
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())
+    }
+
+    // ─── Process-tree teardown ────────────────────────────────────────────────
+
+    /// Terminate the shell process AND every process in its descendant tree.
+    ///
+    /// portable-pty's `ChildKiller::kill()` only terminates the direct child —
+    /// on Windows `TerminateProcess` never kills the child's children. An agent
+    /// runs *inside* the shell, so closing a session used to leave the agent
+    /// running as an orphan: the pane closed, but Claude/Codex kept burning CPU
+    /// and RAM invisibly. This walks the whole tree via sysinfo and terminates
+    /// every member, leaves first so a dying parent can't reparent a survivor
+    /// out from under us.
+    fn kill_process_tree(root_pid: u32) {
+        // Never walk ourselves — a mis-read children map must not end the app.
+        if root_pid == std::process::id() {
+            return;
+        }
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+
+        // Parent → children once, from the (already snapshot) process list.
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (pid, process) in sys.processes() {
+            if let Some(parent) = process.parent() {
+                children.entry(parent.as_u32()).or_default().push(pid.as_u32());
+            }
+        }
+
+        // Discovery order guarantees every descendant appears after its parent
+        // (a child is only pushed once its parent was popped), so reversing the
+        // order kills leaves before their parents.
+        let mut order: Vec<u32> = Vec::new();
+        let mut stack = vec![root_pid];
+        while let Some(current) = stack.pop() {
+            order.push(current);
+            if let Some(kids) = children.get(&current) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        for pid in order.iter().rev() {
+            if let Some(process) = sys.process(Pid::from_u32(*pid)) {
+                let _ = process.kill();
+            }
+        }
     }
 
     /// Read the terminal output buffer contents.

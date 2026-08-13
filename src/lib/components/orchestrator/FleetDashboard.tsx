@@ -37,7 +37,7 @@
  * unrecoverable. Discard goes through `reclaimWorktree`, which stages anything
  * outstanding and re-asks git before removing anything.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
@@ -60,6 +60,7 @@ import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
+import WorktreeReviewModal from './WorktreeReviewModal.tsx';
 import './FleetDashboard.css';
 
 /** How often the per-card diff stat is refreshed. Three cheap git reads each. */
@@ -172,8 +173,14 @@ export default function FleetDashboard() {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   /** Pending destructive action awaiting explicit confirmation. */
   const [confirming, setConfirming] = useState<{ key: string; action: 'merge' | 'discard' } | null>(null);
+  /** Row key of the worktree whose dedicated review pane is open. */
+  const [reviewing, setReviewing] = useState<string | null>(null);
   /** The checkout's own branch, for labelling main-repo cards. */
   const [mainBranch, setMainBranch] = useState<string | null>(null);
+  /** Suppress the card entrance animation on the panel's first paint, so
+      remounting the room doesn't replay the whole fleet's entrance. Cards that
+      appear later (agents spawning) still animate in. */
+  const [suppressEnter, setSuppressEnter] = useState(true);
 
   const rows = useMemo<FleetRow[]>(() => {
     if (!projectId) return [];
@@ -304,6 +311,12 @@ export default function FleetDashboard() {
       clearInterval(timer);
     };
   }, [rows, refreshStats]);
+
+  // First paint: drop the entrance-suppression class so later-mounted cards
+  // (new agents appearing) animate in.
+  useLayoutEffect(() => {
+    setSuppressEnter(false);
+  }, []);
 
   // Main-repo cards name the branch the agent is actually sitting on, which is
   // the checkout's — and it moves under them if you check something else out.
@@ -463,17 +476,43 @@ export default function FleetDashboard() {
 
   const isolatedCount = rows.filter((row) => row.placement === 'worktree').length;
 
+  /**
+   * A worktree card whose agent has stopped and left unreviewed work is the
+   * fleet's reason for existing: everything a quarantine is supposed to surface
+   * at once. `!row.live` is the honest gate — a working agent's card is
+   * mid-flight, not ready, however many files it has touched so far.
+   */
+  function readyToReview(row: FleetRow): boolean {
+    return (
+      row.placement === 'worktree' &&
+      Boolean(row.worktree) &&
+      !row.live &&
+      (row.status === 'finished' || row.status === 'exited') &&
+      Boolean(stats[statKey(row)]?.files.length)
+    );
+  }
+
   return (
     <div className="fleet-root">
       <header className="fleet-head">
-        <span className="fleet-title">AGENT CHANGES</span>
-        <span className="fleet-count">
+        <div className="fleet-head-left">
+          <span className="fleet-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </span>
+          <span className="fleet-title">Agent Fleet</span>
+        </div>
+        <span className="fleet-count-pill">
           {rows.length} agent{rows.length === 1 ? '' : 's'}
           {isolatedCount > 0 && isolatedCount < rows.length && ` · ${isolatedCount} isolated`}
         </span>
       </header>
 
-      <div className="fleet-grid">
+      <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>
         {rows.map((row) => {
           const stat = stats[statKey(row)];
           const isBusy = busy.has(row.key);
@@ -482,9 +521,11 @@ export default function FleetDashboard() {
           const worktree = row.worktree;
           const hasFiles = Boolean(stat && stat.files.length > 0);
 
+          const ready = readyToReview(row);
+
           return (
             <article
-              className={`fleet-card status-${row.status} placement-${row.placement}`}
+              className={`fleet-card status-${row.status} placement-${row.placement}${ready ? ' ready' : ''}`}
               key={row.key}
             >
               {/* Identity and state in one two-line grid: the mark spans both
@@ -540,6 +581,22 @@ export default function FleetDashboard() {
                 <div className="fc-warning">
                   Staging is paused — this worktree conflicts with edits already in
                   your working tree. Resolve them in Source Control, then stage again.
+                </div>
+              )}
+
+              {/* The reason a quarantine exists: an agent that finished, work that
+                  hasn't been reviewed. Read as a cue to look, not an alarm — the
+                  card's diff is one click away, and merging or discarding is the
+                  resolution. */}
+              {ready && (
+                <div className="fc-ready">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <span>
+                    Ready to review — {stat.files.length} file{stat.files.length === 1 ? '' : 's'}, isolated on{' '}
+                    <code>{worktree?.branch}</code>
+                  </span>
                 </div>
               )}
 
@@ -693,6 +750,20 @@ export default function FleetDashboard() {
                     </div>
                   )}
                   <div className="fc-actions-aside">
+                    {/* The dedicated review pane — the Orca-style gate. Reading
+                        one file at a time inline (See changes) is fine for a
+                        glance; this is the focused surface for actually
+                        judging a finished worktree before merging it. */}
+                    {worktree && hasFiles && (
+                      <button
+                        className="fc-btn review"
+                        onClick={() => setReviewing(row.key)}
+                        disabled={isBusy}
+                        title={`Open the full review of ${worktree.branch} against ${worktree.baseBranch}`}
+                      >
+                        Review
+                      </button>
+                    )}
                     {/* Reading the work is the one thing every card can offer,
                         whatever the placement. It drives the same disclosure as
                         the file-count row above so there is one expanded state,
@@ -746,6 +817,27 @@ export default function FleetDashboard() {
           );
         })}
       </div>
+
+      {reviewing &&
+        (() => {
+          const row = rows.find((r) => r.key === reviewing);
+          if (!row?.worktree) return null;
+          return (
+            <WorktreeReviewModal
+              projectId={row.projectId}
+              agentName={row.agentName}
+              agentPreset={row.agentPreset}
+              worktree={row.worktree}
+              repoPath={row.repoPath ?? row.worktree.path}
+              baseCommit={row.baseCommit ?? row.worktree.baseCommit}
+              live={row.live}
+              onClose={() => setReviewing(null)}
+              // Merge and discard resolve the card; bring-in changes the main
+              // checkout the card's numbers are read against. Refresh either way.
+              onResolved={() => void refreshStats(rows)}
+            />
+          );
+        })()}
     </div>
   );
 }

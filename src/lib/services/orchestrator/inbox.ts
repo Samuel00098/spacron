@@ -249,7 +249,11 @@ export function clearInbox(projectId: string, ids: string[]): void {
  */
 export function acknowledge(projectId: string, id: string): void {
   if (!projectId || !id) return;
+  // Spread the rest of state first — an ack is read + dismissed but must not
+  // wipe the `cleared` list (or any future field) while it's at it. Every
+  // sibling update here spreads; this one was the lone object that didn't.
   update(projectId, (state) => ({
+    ...state,
     read: addTrackedIds(state.read, [id]),
     dismissed: addTrackedIds(state.dismissed, [id]),
   }));

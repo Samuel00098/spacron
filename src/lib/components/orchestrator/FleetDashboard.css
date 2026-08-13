@@ -12,22 +12,54 @@
 .fleet-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.fleet-head-left {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+/* The same icon chip the task board and inbox headers use — one visual
+   language for every panel's identity row. */
+.fleet-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0%, transparent 70%),
+    rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.55);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   flex-shrink: 0;
 }
 
 .fleet-title {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
-.fleet-count {
-  font-size: 11px;
+.fleet-count-pill {
+  font-size: 10px;
+  font-weight: 600;
   color: var(--text-muted);
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.35);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .fleet-empty {
@@ -62,20 +94,77 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 11px;
+  padding: 11px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, transparent 65%),
+    rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   min-width: 0;
-  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  /* Cards rise and fade in as agents appear; the panel's first paint
+     suppresses it via `.no-enter` below. */
+  animation: fc-card-in var(--dur-base) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-base) var(--ease-spring);
 }
 
 .fleet-card:hover {
-  border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+  border-color: var(--border-focus);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 3px 10px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+@keyframes fc-card-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Loading a room (or switching back to it) shouldn't replay the whole fleet's
+   entrance; only cards mounted after the panel's first paint animate. */
+.fleet-grid.no-enter .fleet-card {
+  animation: none;
 }
 
 .fleet-card.status-awaiting {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+/* A finished agent with unreviewed, isolated work is the fleet's whole point —
+   it gets the accent treatment, not another neutral card. Distinct from the
+   awaiting state (which is a question) and failed (which is an incident). */
+.fleet-card.ready {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent) 0%, transparent 65%),
+    rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.6);
+}
+
+.fleet-card.ready:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+.fc-ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.fc-ready code {
+  font-family: var(--editor-font-family, monospace);
+  color: inherit;
 }
 
 .fleet-card.status-failed {
@@ -124,8 +213,11 @@
   justify-content: center;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-tertiary);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, transparent 70%),
+    var(--bg-tertiary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   overflow: hidden;
 }
 
@@ -158,6 +250,7 @@
   flex-shrink: 0;
   padding: 1px 7px 1px 5px;
   border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -321,7 +414,7 @@
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
   max-height: 420px;
   overflow-y: auto;
@@ -468,6 +561,21 @@
   font-family: var(--editor-font-family, monospace);
 }
 
+/* The dedicated review pane's front door: quieter than the primary action
+   buttons, louder than the quiet nav group, so a finished worktree offers its
+   gate first without shouting over Bring in / Merge. */
+.fc-btn.review {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fc-btn.review:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
+
 /* Secondary actions read as plain text until hovered, so only the two that
    move work compete for attention at rest. */
 .fc-btn.quiet {
@@ -526,9 +634,9 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 8px;
+  padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-  border-radius: 6px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 

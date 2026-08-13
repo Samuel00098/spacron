@@ -2,11 +2,11 @@
  * Native agent rules files — the standing operating brief delivered the reliable
  * way: written into the rules/instructions file each CLI reads on its own at
  * startup (CLAUDE.md for Claude Code, AGENTS.md for Codex / Cursor / OpenCode /
- * Antigravity and the broader ecosystem).
+ * Antigravity, GEMINI.md for Gemini CLI, and the broader ecosystem).
  *
  * The older channel pasted the brief straight into the live REPL (see
  * agent-charter.ts + terminal.ts). That works for TUIs that take over the
- * terminal cleanly and echo a paste (Codex, Pi, Aider), but is fragile for
+ * terminal cleanly and echo a paste, but is fragile for
  * Ink-style apps and CLIs that open a first-run trust/login screen — the paste
  * lands on an onboarding modal or races the composer commit, so the brief never
  * registers (Claude Code, Cursor, Antigravity, OpenCode). Those CLIs all read a
@@ -27,11 +27,11 @@ import { getCustomAgents } from '$lib/stores/customAgents';
 // whether we deliver the brief via file (skip the REPL paste) or fall back to
 // pasting.
 //
-// Keep this in sync with `PRESET_AGENTS` in SettingsModal.tsx, whose "Rules
-// file" checkbox reports what this set decides. The two drifted once already:
-// Settings claimed Grok read a rules file while this set omitted it, so Grok
-// silently got the paste channel. `grok inspect` lists AGENTS.md/CLAUDE.md
-// under "Project Instructions", so it belongs here.
+// This set is the single source of truth for the brief channel: it flips the
+// Agents pane badge (agentReadsRulesFile) and decides file-vs-paste. Keep it
+// honest — an agent added here MUST actually read an instruction file at
+// startup, or it silently loses its brief. (The old Settings "Rules file"
+// checkbox that used to mirror this set is gone; this is the only table now.)
 const RULES_FILE_AGENTS = new Set([
   'claude',
   'codex',
@@ -44,9 +44,123 @@ const RULES_FILE_AGENTS = new Set([
   'antigravity',
   'agy',
   'grok',
+  // The wider registry. Verified where the binary was available to scan on a
+  // real machine — `droid` and `grok` both carry the AGENTS.md and CLAUDE.md
+  // literals, and Gemini's bundle carries GEMINI.md. The rest are taken from
+  // the published AGENTS.md adopter list (agents.md).
+  'gemini',
+  'droid',
+  'copilot',
+  'qwen',
+  'cline',
+  'amp',
+  'goose',
+  'kimi',
+  'crush',
+  // Agents added with the Orca catalog port, all of which appear on the
+  // published AGENTS.md adopter list (agents.md): Devin, Kilo Code, Augment.
+  'devin',
+  'kilo',
+  'auggie',
+  // Qoder — verified 2026-08-13 by scanning a real `@qoder-ai/qodercli` 1.1.7
+  // bundle: it defines `AGENTS.md` as a literal memory-file constant and
+  // references it throughout its system prompt. Its single `CLAUDE.md` hit is
+  // prompt prose ("already documented in CLAUDE.md files"), not a loader, so
+  // AGENTS.md is the file that actually reaches it.
+  'qodercli',
+  // Command Code is the exception among the Orca-port agents: it never made
+  // the adopter list, but the probe found the AGENTS.md literal in its real
+  // `cli.mjs` bundle (see `measure_against_installed_clis` in agent_probe.rs),
+  // which outweighs list membership — the probe scans what the CLI actually
+  // ships. Caveat worth remembering: the bundle also names CLAUDE.md, GEMINI.md
+  // and .cursorrules, so it may be a multi-agent adapter that drives other
+  // CLIs; the file channel is still strictly better than the paste fallback
+  // for any CLI that references a rules file at all.
+  'command-code',
+  // Codebuff and Freebuff are one product — Freebuff is Codebuff's free tier,
+  // same launcher, same runtime — and both read AGENTS.md and CLAUDE.md as
+  // their project knowledge files (`KNOWLEDGE_FILE_NAMES` in
+  // CodebuffAI/codebuff's `common/src/constants/knowledge.ts`, loaded into the
+  // run state that forms the session context). Verified 2026-08-12 against
+  // repo source AND the real installed freebuff.exe, which carries the
+  // agents.md and claude.md literals. AGENTS.md wins over CLAUDE.md per
+  // directory when both exist — the same priority as the files we write. The
+  // npm package is a thin launcher, so the byte-scan of the downloaded binary
+  // is the authoritative check, not the shim the probe follows.
+  'codebuff',
+  'freebuff',
+  // Pi / OMP / Prime Agent — one lineage (pi-mono → oh-my-pi → prime-agent),
+  // all load AGENTS.md/CLAUDE.md as project context files at startup and all
+  // expose `--no-context-files` to disable it. Verified 2026-08-12 against the
+  // installed bundles: pi's `dist/core/resource-loader.js` candidates are
+  // `["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]`
+  // (AGENTS.md wins over CLAUDE.md per directory); the omp compiled bundle
+  // (`@oh-my-pi/pi-coding-agent/dist/cli.js`) carries the same context-file
+  // machinery and its system prompt states the files are "loaded
+  // automatically"; prime-agent's usage docs say it loads AGENTS.md or CLAUDE.md
+  // from the global dir, ancestors, and cwd. The omp probe miss is a probe
+  // limitation (Bun's `omp.bunx` shim is UTF-16, so `shim_targets` never
+  // follows it) — the installed bundle is the authority.
+  'pi',
+  'omp',
+  'prime-agent',
+  // Mistral Vibe — official docs: "The CLI loads up to two AGENTS.md files into
+  // context to follow project-specific agent instructions" (user-level
+  // `~/.vibe/AGENTS.md` and the project's AGENTS.md). Verified 2026-08-12.
+  'vibe',
+  // Autohand — docs.autohand.ai has an "AGENTS.md Guide" dedicated to how the
+  // CLI loads AGENTS.md for project context (verified 2026-08-12).
+  'autohand',
+  // Ante — ante.run/extend/agents-md: "AGENTS.md files give Ante persistent
+  // instructions that are separate from auto-memory... Ante reads two
+  // instruction files when the first user message in a session is submitted"
+  // (verified 2026-08-12).
+  'ante',
+  // Rovo / Mimo / OpenClaude / OpenClaw / Hermes — all read AGENTS.md or
+  // CLAUDE.md natively, so the universal files already cover them (verified
+  // 2026-08-12 against official docs):
+  // - rovo (Atlassian Rovo Dev CLI) — Project Memory reads AGENTS.md and
+  //   AGENTS.local.md per workspace directory (plus ~/.rovodev/AGENTS.md).
+  // - mimo (Xiaomi MiMo Code) — reads AGENTS.md from the workspace root.
+  // - openclaude — AGENTS.md is its primary project instruction file, with
+  //   CLAUDE.md kept as the legacy/fallback layout.
+  // - openclaw — root AGENTS.md is injected into the system prompt; CLAUDE.md
+  //   is supported as a model-agnostic workspace memory file.
+  // - hermes (Nous Research) — context-file docs list the search order
+  //   .hermes.md → AGENTS.md → CLAUDE.md → .cursorrules.
+  'rovo',
+  'mimo',
+  'openclaude',
+  'openclaw',
+  'hermes',
+  // Aider / Continue (cn) / Kiro — these read files OTHER than the universal
+  // three, so membership alone is not enough: `ensureAgentRulesFiles` must also
+  // write each one's native file (see AGENT_EXTRA_RULES_FILES below) and only
+  // counts the file channel as complete when that write lands. If it cannot
+  // (e.g. a conflicting `.aider.conf.yml`), the caller falls back to the paste.
+  // - aider — has NO auto-loaded rules file; it reads a conventions markdown
+  //   file only when pointed at it, so Spacron writes CONVENTIONS.md and adds
+  //   `read: CONVENTIONS.md` to a managed block in `.aider.conf.yml`.
+  // - cn (Continue) — loads markdown rule files from `.continue/rules/`.
+  // - kiro-cli — loads every steering markdown file in `.kiro/steering/`.
+  'aider',
+  'cn',
+  'kiro-cli',
+  // Deliberately NOT here: `traecli` and `cody`. Verified 2026-08-12 that
+  // neither auto-loads any rules file: the open-source trae-agent CLI has no
+  // AGENTS.md/CLAUDE.md/.trae-rules scanner (the `.trae/rules/` feature belongs
+  // to the TRAE IDE, and its CLI is driven by trae_config.yaml + prompts), and
+  // the Cody CLI does not auto-read AGENTS.md either (its cody.json holds
+  // commands, not startup instructions). Claiming they read a file would
+  // silently starve them of the brief, so they stay on the REPL paste channel
+  // — the honest fallback for a CLI with no file it reads.
 ]);
 
-/** True when this agent reads CLAUDE.md / AGENTS.md natively at startup. */
+/**
+ * True when this agent reads a native instruction file at startup — one of the
+ * universal CLAUDE.md / AGENTS.md / GEMINI.md, or its own file (see
+ * AGENT_EXTRA_RULES_FILES for aider / cn / kiro-cli).
+ */
 export function agentReadsRulesFile(presetOrCommand: string | null | undefined): boolean {
   if (!presetOrCommand) return false;
   const key = presetOrCommand.trim().toLowerCase();
@@ -56,6 +170,17 @@ export function agentReadsRulesFile(presetOrCommand: string | null | undefined):
   return getCustomAgents().some(
     (a) => a.readsRulesFile && a.command.trim().toLowerCase() === key
   );
+}
+
+/**
+ * True when the agent has an entry in `AGENT_EXTRA_RULES_FILES` — even a
+ * bonus-only one (traecli). Callers use this to decide whether to attempt the
+ * file channel at all; `ensureAgentRulesFiles` still returns false for
+ * non-members so the paste keeps delivering.
+ */
+export function agentHasNativeExtras(command: string | null | undefined): boolean {
+  if (!command) return false;
+  return Boolean(AGENT_EXTRA_RULES_FILES[agentExecutable(command)]?.length);
 }
 
 // Tokens that wrap the real command, skipped when locating the executable.
@@ -161,14 +286,163 @@ export async function detectRulesFileSupport(command: string): Promise<RulesFile
 }
 
 // The rules files we write. CLAUDE.md is Claude Code's; AGENTS.md is the shared
-// standard Codex, Cursor, OpenCode, and Antigravity all read. We write both so a
+// standard Codex, Cursor, OpenCode, and Antigravity all read; GEMINI.md is what
+// Gemini CLI loads by default (it does NOT read AGENTS.md unless the user opts
+// in via `context.fileName` in .gemini/settings.json). We write all three so a
 // repo is briefed for any agent regardless of which one is launched first.
-export const AGENT_RULES_FILENAMES = ['CLAUDE.md', 'AGENTS.md'] as const;
+export const AGENT_RULES_FILENAMES = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'] as const;
 
 // Sentinels around the Spacron-managed region. Anything outside them is the user's
 // and is preserved verbatim; the region between them is overwritten on update.
 const BLOCK_BEGIN = '<!-- SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand -->';
 const BLOCK_END = '<!-- SORYQ:END agent-brief -->';
+
+/**
+ * Per-agent native instruction files beyond the universal three. The universal
+ * CLAUDE.md / AGENTS.md / GEMINI.md cover most CLIs, but a few read a file of
+ * their own instead — writing the brief there is what lets those agents read it
+ * from disk rather than take the fragile REPL paste.
+ *
+ * `kind` decides how the file is authored:
+ *
+ * - `markdown` — a plain markdown file; the managed block is upserted into it
+ *   like the universal files (so a pre-existing user file keeps its content).
+ * - `frontmatter` — rule files that carry YAML frontmatter (Continue
+ *   `.continue/rules/*.md`, Cursor `.cursor/rules/*.mdc`). The whole file is
+ *   app-authored on first write (frontmatter + managed block), and updates
+ *   swap only the managed block so a user's frontmatter edits stay.
+ * - `aider-config` — a YAML config, not markdown. The managed region uses `#`
+ *   comment sentinels and carries the single directive that makes aider load
+ *   the brief (`read: CONVENTIONS.md`). Skipped entirely — with the file
+ *   channel reported incomplete — when the config already declares a `read:`
+ *   key outside our block, rather than risk merging YAML lists blindly.
+ *
+ * `required` is true by default: the file must land for the file channel to be
+ * complete (aider / cn / kiro-cli read ONLY these files). `required: false`
+ * marks a **bonus** surface — a second instruction file the CLI also reads on
+ * top of the universal trio (`.cursorrules`, `.goosehints`, …). Bonus writes
+ * never gate the channel, and the universal trio alone still counts as
+ * complete. `traecli` is the one special case: its CLI reads no file at all,
+ * so its extra is bonus-for-the-IDE only and the paste keeps delivering.
+ */
+type NativeRulesFile =
+  | { path: string; kind: 'markdown'; required?: boolean }
+  | { path: string; kind: 'frontmatter'; frontmatter: string[]; required?: boolean }
+  | { path: string; kind: 'aider-config'; required?: boolean };
+
+/**
+ * Keyed by the bare executable (`agentExecutable`), matching `RULES_FILE_AGENTS`
+ * keys. Membership in `RULES_FILE_AGENTS` is what opens the file channel; this
+ * map is what actually delivers the brief to the CLIs that read a file other
+ * than the universal three.
+ */
+// The two instruction files Cursor reads: the legacy single-file `.cursorrules`
+// (deprecated but still loaded) and the modern `.cursor/rules/*.mdc` rules. Both
+// are bonus — Cursor is already briefed through AGENTS.md.
+const CURSOR_EXTRA_FILES: NativeRulesFile[] = [
+  { path: '.cursorrules', kind: 'markdown', required: false },
+  {
+    path: '.cursor/rules/spacron-brief.mdc',
+    kind: 'frontmatter',
+    frontmatter: ['description: Spacron agent operating brief', 'alwaysApply: true'],
+    required: false,
+  },
+];
+
+const AGENT_EXTRA_RULES_FILES: Record<string, NativeRulesFile[]> = {
+  aider: [
+    // The conventions markdown aider loads as read-only context.
+    { path: 'CONVENTIONS.md', kind: 'markdown' },
+    // The config directive that makes it load CONVENTIONS.md on every launch.
+    { path: '.aider.conf.yml', kind: 'aider-config' },
+  ],
+  // Continue loads every markdown rule file in `.continue/rules/` (project
+  // scope). A dedicated file keeps our block out of the user's rule files.
+  // (A project `.continue/config.yaml` would be inert — Continue only reads
+  // the global `~/.continue/config.yaml`, so the `rules:` key cannot be
+  // delivered per-project without editing the user's global config.)
+  cn: [
+    {
+      path: '.continue/rules/spacron-brief.md',
+      kind: 'frontmatter',
+      frontmatter: ['name: Spacron standing brief', 'alwaysApply: true'],
+    },
+  ],
+  // Kiro auto-loads ALL steering files in `.kiro/steering/` — one more file
+  // there is picked up on the next launch.
+  'kiro-cli': [{ path: '.kiro/steering/spacron-brief.md', kind: 'markdown' }],
+  // Bonus surfaces. These CLIs are all already briefed through the universal
+  // trio (membership in RULES_FILE_AGENTS), so the extra files only make the
+  // brief land in the formats each tool ALSO reads, and their failure never
+  // gates the channel.
+  cursor: CURSOR_EXTRA_FILES,
+  'cursor-agent': CURSOR_EXTRA_FILES,
+  // Copilot combines AGENTS.md/CLAUDE.md/GEMINI.md with `.github/
+  // copilot-instructions.md` (repo-level custom instructions).
+  copilot: [{ path: '.github/copilot-instructions.md', kind: 'markdown', required: false }],
+  // Hermes' context-file search order is .hermes.md → AGENTS.md → CLAUDE.md.
+  hermes: [{ path: '.hermes.md', kind: 'markdown', required: false }],
+  // Goose also reads its own `.goosehints` next to AGENTS.md.
+  goose: [{ path: '.goosehints', kind: 'markdown', required: false }],
+  // Cline also reads `.clinerules` next to AGENTS.md.
+  cline: [{ path: '.clinerules', kind: 'markdown', required: false }],
+  // traecli is deliberately NOT a rules-file member — the trae-agent CLI
+  // auto-loads no instruction file. The write below is a bonus for the TRAE
+  // IDE (which does read `.trae/rules/`); ensureAgentRulesFiles returns false
+  // for non-members, so the paste keeps delivering to the CLI.
+  traecli: [{ path: '.trae/rules/project_rules.md', kind: 'markdown', required: false }],
+};
+
+// Rule files with YAML frontmatter (Continue `.md`, Cursor `.mdc`) are
+// app-authored wholesale on first write (frontmatter + managed block) so the
+// file starts life loadable; subsequent runs swap only the managed block, so a
+// user's frontmatter edits (`alwaysApply`, `globs`, …) are preserved.
+function buildFrontmatterRuleFile(frontmatter: string[], block: string): string {
+  return ['---', ...frontmatter, '---', '', block].join('\n') + '\n';
+}
+
+// Aider has no auto-loaded rules file, so the app points it at CONVENTIONS.md
+// via its YAML config. The managed region is comment-framed so the one real
+// directive (`read:`) parses as YAML while the sentinels stay inert.
+const YAML_BLOCK_BEGIN = '# SORYQ:BEGIN agent-brief — managed by Spacron, do not edit by hand';
+const YAML_BLOCK_END = '# SORYQ:END agent-brief';
+
+function buildAiderConfigBlock(): string {
+  return [
+    YAML_BLOCK_BEGIN,
+    '# Aider has no auto-loaded rules file, so Spacron points it at the standing',
+    '# brief it writes into CONVENTIONS.md (loaded as read-only context).',
+    'read: CONVENTIONS.md',
+    YAML_BLOCK_END,
+  ].join('\n');
+}
+
+const YAML_BLOCK_RE = new RegExp(
+  `${escapeRegExp(YAML_BLOCK_BEGIN)}[\\s\\S]*?${escapeRegExp(YAML_BLOCK_END)}`,
+);
+
+/** Same upsert discipline as `upsertManagedBlock`, but for `#`-framed YAML. */
+export function upsertYamlManagedBlock(existing: string, block: string): string {
+  if (!existing.trim()) return `${block}\n`;
+  if (YAML_BLOCK_RE.test(existing)) {
+    return existing.replace(YAML_BLOCK_RE, block);
+  }
+  const trimmed = existing.replace(/\s+$/, '');
+  return `${trimmed}\n\n${block}\n`;
+}
+
+/**
+ * True when `yaml` declares a `read:` key anywhere OUTSIDE the managed block.
+ * Aider's config with two `read:` keys is a YAML duplicate-key ambiguity we
+ * must not create, so this guard makes the caller skip the config write (and
+ * report the file channel incomplete, letting the paste fallback take over).
+ * Best-effort by design: a `read:` written as a YAML list item or nested in a
+ * block is not caught, but that miss degrades to the paste fallback rather
+ * than to a second `read:` key.
+ */
+export function hasReadKeyOutsideBlock(yaml: string): boolean {
+  return /^\s*read\s*:/m.test(yaml.replace(YAML_BLOCK_RE, ''));
+}
 
 export interface BriefOptions {
   /**
@@ -259,7 +533,9 @@ export function upsertManagedBlock(existing: string, block: string): string {
 
 async function readFileOrNull(path: string): Promise<string | null> {
   try {
-    return await backendInvoke<string>('fs_read_file', { path });
+    // `?? null` because a backend that resolves without a value must read as a
+    // missing file, not as a non-string that would crash `.trim()` below.
+    return (await backendInvoke<string>('fs_read_file', { path })) ?? null;
   } catch {
     return null;
   }
@@ -286,13 +562,6 @@ async function excludeFromGit(rootPath: string, filename: string): Promise<void>
 }
 
 /**
- * Ensure CLAUDE.md and AGENTS.md in `rootPath` carry the current standing brief.
- * Idempotent: only rewrites a file when its managed block is missing or stale.
- * A file we author from scratch is added to `.git/info/exclude` so the brief
- * never pollutes the user's commits. Returns true once at least one rules file
- * holds the brief (so the caller can skip the fragile REPL paste).
- */
-/**
  * Detect whether rootPath is inside a Spacron-managed git worktree, and if so
  * return the **main checkout** path (the parent of `.spacron/`). Returns null
  * when the path is the main checkout or cannot be determined.
@@ -312,7 +581,32 @@ function resolveMainCheckout(worktreePath: string): string | null {
   return null;
 }
 
-export async function ensureAgentRulesFiles(rootPath: string): Promise<boolean> {
+/**
+ * Ensure the standing brief is in place for `rootPath` and, when `agentKey` is
+ * given, for the file(s) THAT agent actually reads. Idempotent: only rewrites a
+ * file when its managed block is missing or stale. A file we author from
+ * scratch is added to `.git/info/exclude` so the brief never pollutes the
+ * user's commits.
+ *
+ * Returns true when the brief is in place through the channel that matters:
+ *
+ * - non-members (`agentReadsRulesFile` false — traecli, unknown custom agents)
+ *   — always false, even when a bonus native file was written: the paste is
+ *   their channel and must keep firing;
+ * - members with a required native extra (aider / cn / kiro-cli) — only when
+ *   that extra file was written, because the universal three are NOT what
+ *   those CLIs read;
+ * - members with only bonus extras (cursor, copilot, …) — once at least one
+ *   universal rules file holds the brief OR one bonus file landed.
+ *
+ * The caller skips the fragile REPL paste on true and falls back to it on
+ * false, so a genuinely unfixable file write degrades to the old channel
+ * instead of silently starving the agent.
+ */
+export async function ensureAgentRulesFiles(
+  rootPath: string,
+  agentKey?: string | null
+): Promise<boolean> {
   const root = rootPath?.replace(/[\\/]+$/, '');
   if (!root) return false;
 
@@ -321,29 +615,107 @@ export async function ensureAgentRulesFiles(rootPath: string): Promise<boolean> 
   // point back at the main checkout's `.spacron/memory/` so notes survive the
   // worktree, and the brief has to describe isolation rather than a shared tree.
   const mainCheckout = resolveMainCheckout(root);
-  const block = buildManagedBlock({
+  const blockOpts = {
     sharedMemoryDir: mainCheckout ? `${mainCheckout}/.spacron/memory/` : undefined,
     isolated: mainCheckout !== null,
-  });
-  let anyOk = false;
+  };
+  const block = buildManagedBlock(blockOpts);
 
-  for (const filename of AGENT_RULES_FILENAMES) {
-    const path = `${root}/${filename}`;
-    try {
-      const existing = await readFileOrNull(path);
-      const next = upsertManagedBlock(existing ?? '', block);
-      if (next !== (existing ?? '')) {
-        await backendInvoke('fs_write_file', { path, content: next });
-        if (existing === null) {
-          // We created this file — shield it from the user's git surface.
-          await excludeFromGit(root, filename);
+  const executable = agentKey ? agentExecutable(agentKey) : '';
+  // Membership opens the file channel at all. Checked against the ORIGINAL key
+  // (not the executable) so a custom agent's full launch command still matches.
+  // A keyless call (no agentKey) means "brief this repo for any agent" — it
+  // always writes the universal trio, like the pre-key signature did.
+  const isMember = !agentKey || agentReadsRulesFile(agentKey);
+  const extras = AGENT_EXTRA_RULES_FILES[executable] ?? [];
+
+  let anyOk = false;
+  if (isMember) {
+    for (const filename of AGENT_RULES_FILENAMES) {
+      const path = `${root}/${filename}`;
+      try {
+        const existing = await readFileOrNull(path);
+        const next = upsertManagedBlock(existing ?? '', block);
+        if (next !== (existing ?? '')) {
+          await backendInvoke('fs_write_file', { path, content: next });
+          if (existing === null) {
+            // We created this file — shield it from the user's git surface.
+            await excludeFromGit(root, filename);
+          }
         }
+        anyOk = true;
+      } catch (err) {
+        console.error(`Failed to write agent rules file ${filename}:`, err);
       }
-      anyOk = true;
-    } catch (err) {
-      console.error(`Failed to write agent rules file ${filename}:`, err);
     }
   }
 
-  return anyOk;
+  // Native extras for the specific agent being launched. Required extras gate
+  // the channel (the universal files do not brief aider/cn/kiro); bonus extras
+  // are best-effort and only help the channel count as complete for members
+  // that have no required file of their own.
+  let requiredOk = true;
+  let bonusOk = false;
+  for (const extra of extras) {
+    const ok = await writeNativeRulesFile(root, extra, block);
+    if (ok && extra.required === false) bonusOk = true;
+    else if (!ok && extra.required !== false) requiredOk = false;
+  }
+
+  // Non-members get their bonus file written but keep the paste channel.
+  if (!isMember) return false;
+
+  const hasRequiredExtras = extras.some((extra) => extra.required !== false);
+  if (hasRequiredExtras) return requiredOk;
+  return anyOk || bonusOk;
+}
+
+/** Write one native rules file, returning whether the brief landed for it. */
+async function writeNativeRulesFile(
+  root: string,
+  extra: NativeRulesFile,
+  block: string
+): Promise<boolean> {
+  const path = `${root}/${extra.path}`;
+  try {
+    if (extra.kind === 'aider-config') {
+      const existing = (await readFileOrNull(path)) ?? '';
+      // Never add a second `read:` key to a config that already declares one —
+      // duplicate YAML keys are ambiguous and we won't merge lists blindly.
+      if (hasReadKeyOutsideBlock(existing)) return false;
+      const next = upsertYamlManagedBlock(existing, buildAiderConfigBlock());
+      if (next !== existing) {
+        await backendInvoke('fs_write_file', { path, content: next });
+        if (existing === null) await excludeFromGit(root, extra.path);
+      }
+      return true;
+    }
+
+    const existing = await readFileOrNull(path);
+    if (extra.kind === 'frontmatter') {
+      if (existing === null) {
+        // First authoring: frontmatter + managed block in one write.
+        await backendInvoke('fs_write_file', {
+          path,
+          content: buildFrontmatterRuleFile(extra.frontmatter, block),
+        });
+        await excludeFromGit(root, extra.path);
+        return true;
+      }
+      // Later runs swap only the block, preserving any user frontmatter edits.
+      const next = upsertManagedBlock(existing, block);
+      if (next !== existing) await backendInvoke('fs_write_file', { path, content: next });
+      return true;
+    }
+
+    const next = upsertManagedBlock(existing ?? '', block);
+    if (next !== (existing ?? '')) {
+      await backendInvoke('fs_write_file', { path, content: next });
+      if (existing === null) await excludeFromGit(root, extra.path);
+    }
+    return true;
+  } catch (err) {
+    console.error(`Failed to write native rules file ${extra.path}:`, err);
+    return false;
+  }
 }

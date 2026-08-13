@@ -1,0 +1,53 @@
+/* The share-card popover.
+
+   Anchored to its toggle in the Stats pane header and opening downward-left,
+   because the button sits at the right edge of the pane: a left-anchored
+   menu would spill past the settings modal. */
+.share-usage {
+  position: relative;
+  display: inline-flex;
+}
+
+.share-usage-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: 300px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: 0 14px 38px rgb(0 0 0 / 34%);
+}
+
+/* The card is drawn at a fixed 480px and scaled down to the popover's width.
+   Its own dark palette is deliberate and theme-independent (a shared image
+   outlives the theme it was made in), so it gets a border rather than
+   blending into a light surface. */
+.share-usage-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, var(--border));
+}
+
+.share-usage-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.share-usage-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.share-usage-error {
+  margin-top: 7px;
+}

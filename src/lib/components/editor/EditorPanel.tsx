@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview.tsx';
@@ -28,24 +28,11 @@ export default function EditorPanel() {
   const files = useEditorStore((s) => s.openFiles);
   const active = useEditorStore((s) => s.activeFile);
   const cache = useEditorStore((s) => s.fileCache);
-  const saveActiveFile = useEditorStore((s) => s.saveActiveFile);
   const markdownPreviewPaths = useEditorStore((s) => s.markdownPreviewPaths);
   const setMarkdownPreview = useEditorStore((s) => s.setMarkdownPreview);
 
   const file = active ? cache.get(active) : null;
   const showMarkdownPreview = active ? markdownPreviewPaths.has(active) : false;
-
-  useEffect(() => {
-    function handleKeydown(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
-        event.preventDefault();
-        void saveActiveFile();
-      }
-    }
-
-    window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
-  }, []);
 
   const codeEditorProps = useMemo(
     () =>

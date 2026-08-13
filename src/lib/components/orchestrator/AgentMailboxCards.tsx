@@ -7,6 +7,7 @@ import {
   type MailboxCard,
 } from '$lib/services/orchestrator/mailbox';
 import { replyToMailboxCard, approveMailboxCard, mergeAndApproveMailboxCard, orchestratorTasks } from '$lib/stores/orchestrator';
+import { acknowledge } from '$lib/services/orchestrator/inbox';
 import { useStore } from '$lib/react/useStore';
 import MailboxCardView from './MailboxCard';
 import './AgentMailboxCards.css';
@@ -54,6 +55,15 @@ export default function AgentMailboxCards({ projectId, rootPath }: { projectId: 
     cancelReply();
   }
 
+  // Closing a card by hand is an acknowledgement: it clears the strip *and*
+  // the inbox's unread flag (read + dismissed), exactly like the notification
+  // stack's dismiss. `dismissMailboxCard` alone only hides it from this strip —
+  // the inbox reads with includeSeen, so the card would stay bold in the list.
+  function dismiss(card: MailboxCard) {
+    dismissMailboxCard(card.id);
+    acknowledge(projectId, card.id);
+  }
+
   return (
     <div className="orc-mailbox" aria-label="Agent messages needing you">
       <div className="orc-mailbox-head">
@@ -75,7 +85,7 @@ export default function AgentMailboxCards({ projectId, rootPath }: { projectId: 
           onSubmitReply={() => submitReply(card)}
           onApprove={() => void approveMailboxCard(projectId, card, rootPath)}
           onMergeApprove={() => void mergeAndApproveMailboxCard(projectId, card, rootPath)}
-          onDismiss={() => dismissMailboxCard(card.id)}
+          onDismiss={() => dismiss(card)}
         />
       ))}
     </div>

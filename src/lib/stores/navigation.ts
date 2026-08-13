@@ -30,6 +30,9 @@ interface NavState {
   activeFile: string | null;
 }
 
+/** Deepest back stack kept. Beyond this the oldest entries are dropped. */
+const MAX_HISTORY = 200;
+
 let history: NavState[] = [];
 let currentIndex = -1;
 let isNavigatingHistory = false;
@@ -58,6 +61,12 @@ export function recordNavigation(state: NavState) {
   // Clear any forward history since we are branching
   history = history.slice(0, currentIndex + 1);
   history.push(state);
+  // Cap the back stack. This grew without limit, so a long-lived window
+  // accumulated an entry for every navigation it had ever made — nobody walks
+  // back further than this, and dropping the oldest keeps the index honest.
+  if (history.length > MAX_HISTORY) {
+    history = history.slice(history.length - MAX_HISTORY);
+  }
   currentIndex = history.length - 1;
   updateCanNav();
 }

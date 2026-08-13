@@ -979,7 +979,7 @@
 }
 
 /* Container queries for responsive toolbar */
-@container (max-width: 650px) {
+@container (max-width: 780px) {
   .preview-panel .browser-bar {
     height: auto;
     min-height: 74px;
@@ -1122,7 +1122,7 @@
   left: 0;
   z-index: 60;
   width: 340px;
-  max-width: calc(80 * var(--app-vw, 1vw));
+  max-width: min(340px, calc(100cqw - 12px));
   max-height: 380px;
   display: flex;
   flex-direction: column;

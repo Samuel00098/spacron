@@ -52,6 +52,17 @@ export function attachPty(id: number, handlers: PtyHandlers): Promise<PtySession
   return get(remoteTarget) ? attachPtyRemote(id, handlers) : attachPtyLocal(id, handlers);
 }
 
+/**
+ * Close a backend pty session directly by id, without a frontend `PtySession`
+ * handle. Used by `killSession` as a fallback for snapshot rows the webview
+ * never attached (see terminal.ts). Local transport only — a remote session
+ * always has a handle.
+ */
+export function closeBackendSession(id: number): Promise<void> {
+  if (get(remoteTarget)) return Promise.resolve();
+  return invoke('terminal_close', { id }).then(() => undefined);
+}
+
 // ── Local (Tauri IPC) transport ─────────────────────────────────────────────
 
 async function getAvailableShellsLocal(): Promise<ShellInfo[]> {

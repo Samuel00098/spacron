@@ -568,6 +568,12 @@ html.has-bg-media.light-theme #app::before {
 body {
   width: 100vw;
   height: 100vh;
+  /* On mobile browsers 100vh is the LARGE viewport (URL bar hidden) — taller
+     than the visible screen, so the app's bottom edge (and any panel near it)
+     sits under the browser chrome. When the dynamic unit is supported, use it:
+     the app then fits the visible viewport exactly. dvh === vh on desktop, so
+     this is a no-op in the desktop app. */
+  height: 100dvh;
   overflow: hidden;
   overscroll-behavior: none;
   font-family: var(--font-sans);
@@ -788,7 +794,13 @@ input:focus {
 .recent-list,
 .file-card-body,
 .markdown-body pre,
-.sticky-content {
+.sticky-content,
+/* The floating popovers (usage meter, inbox) and the spawn picker: a popover
+   that chains its scroll into the workspace behind it reads as the panel
+   itself sliding, which is exactly what it must never do. */
+.usage-list,
+.inbox-list,
+.asm-preset-list {
   overscroll-behavior: none;
 }
 
@@ -804,7 +816,10 @@ input:focus {
 .search-results-dropdown,
 .welcome,
 .recent-list,
-.sticky-content {
+.sticky-content,
+.usage-list,
+.inbox-list,
+.asm-preset-list {
   scrollbar-gutter: stable;
 }
 
@@ -854,7 +869,10 @@ input:focus {
   .recent-list,
   .feed-list,
   .notes-timeline,
-  .ws-menu-list
+  .ws-menu-list,
+  .usage-list,
+  .inbox-list,
+  .asm-preset-list
 ):not(.toolbox-tabs) {
   --scroll-edge-shadow: color-mix(in srgb, var(--bg-primary) 82%, transparent);
   position: relative;
@@ -864,6 +882,252 @@ input:focus {
   box-shadow:
     inset 0 12px 14px -16px var(--scroll-edge-shadow),
     inset 0 -12px 14px -16px var(--scroll-edge-shadow);
+}
+
+/* ══ Panel surfaces ═════════════════════════════════════════════════════════
+   ONE definition of what a panel looks like, for every panel in the app.
+
+   It lives in global.css and not in AppShell.css because "panel" spans two
+   trees: the shell's rooms and side drawers, and the floating panels mounted
+   as SIBLINGS of `.app-shell` in `App.tsx` (usage meter, inbox, project HUD,
+   media player). Keeping the definition in the shell left the floating ones
+   untreated — the usage meter was the one that gave it away.
+
+   Two halves, and both are needed: the TINT settles a panel's field so text
+   sits on a surface instead of on the wallpaper, and the traveling EDGE LIGHT
+   settles its boundary so you can see where one panel stops and the next
+   starts. Each half without the other does half the job.
+
+   ── Tuning: these three tokens, both modes side by side ──
+   Dialling one mode without looking at the other is how a theme pair drifts. */
+:root {
+  /* Dark: tint straight from the theme's own base colour. */
+  --panel-tint-rgb: var(--bg-primary-rgb, 24, 24, 30);
+  --panel-tint: 0.7;
+  --panel-veil: rgba(0, 0, 0, 0.24);
+}
+
+/* Light mode is NOT the dark values with a smaller number. `--bg-primary` is
+   near-white there, so raising the tint adds wash-out rather than separation —
+   light mode's depth comes from the VEIL. A literal "make it darker" would put
+   dark-on-light text on a dark panel, costing the readability this is for.
+
+   The fallback triple is respecified LIGHT on purpose: `--bg-primary-rgb` is
+   injected per theme by `stores/theme.ts`, and inheriting the dark fallback in
+   a light theme paints a near-black panel under dark text — unreadable, not
+   merely off-palette. */
+:root.light-theme {
+  --panel-tint-rgb: var(--bg-primary-rgb, 248, 248, 252);
+  --panel-tint: 0.78;
+  --panel-veil: rgba(28, 32, 44, 0.13);
+}
+
+/* The floating panels. Each ships its own hand-rolled frost recipe in its own
+   stylesheet, and component CSS loads after this file — hence `!important`,
+   the same lever the shell's room panels use for the same reason.
+
+   Gated exactly like the shell's tint in `AppShell.css`, and the `.solid-theme`
+   half is load-bearing rather than tidiness: every one of these panels fills
+   with `color-mix(… calc(var(--frost-chrome) * 100%) …)`, and `--frost-chrome`
+   resolves to `1` under a solid theme — so they are ALREADY fully opaque there.
+   Tinting over that would replace an opaque panel with a 70%-translucent one
+   and hand back the see-through problem this exists to fix. `.is-webkitgtk` is
+   excluded for the same reason as the shell: Linux keeps its original look.
+
+   Modals are deliberately absent: settings, quick capture, the model switcher
+   and the search bar are full-attention overlays that are already solid. */
+:root:not(.solid-theme):not(.is-webkitgtk) .titlebar,
+:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .room-dock,
+:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .composer-strip .floating-prompt-bar,
+:root:not(.solid-theme):not(.is-webkitgtk) .usage-panel,
+:root:not(.solid-theme):not(.is-webkitgtk) .usage-dock,
+:root:not(.solid-theme):not(.is-webkitgtk) .inbox-panel,
+:root:not(.solid-theme):not(.is-webkitgtk) .resource-panel,
+:root:not(.solid-theme):not(.is-webkitgtk) .project-hud,
+:root:not(.solid-theme):not(.is-webkitgtk) .floating-youtube {
+  background:
+    linear-gradient(var(--panel-veil) 0 0),
+    rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;
+}
+
+/* The title bar is a strip, not a panel — it runs the full width of the window
+   directly against the wallpaper, so a full-strength panel tint reads as a
+   heavy black band across the top. It takes the same tint at roughly half
+   weight: enough to seat the brand, nav icons and window controls on a surface,
+   not enough to become the loudest thing on screen. */
+.titlebar {
+  --panel-tint: 0.44;
+  --panel-veil: rgba(0, 0, 0, 0.12);
+}
+
+:root.light-theme .titlebar {
+  --panel-tint: 0.5;
+  --panel-veil: rgba(28, 32, 44, 0.07);
+}
+
+/* ── The traveling edge light ──
+   A conic gradient filling the pseudo-element, punched hollow by a two-layer
+   mask (border box minus content box) so only `padding` width paints. Two
+   diametrically opposite arcs lap the perimeter over a permanent base ring —
+   the base is what keeps the outline visible between passes, and what makes
+   this survive `prefers-reduced-motion` (the blanket rule below freezes the
+   animation, and a frozen ring is still an outline).
+
+   `--panel-edge-angle` MUST stay a registered property. An unregistered custom
+   property is not interpolatable, so the gradient would jump 0deg→360deg in a
+   single step instead of rotating.
+
+   Requirements on any element added to the list below: it must be positioned
+   (the ring is `inset: 0`), must clip (`overflow: hidden`), and must already
+   open a stacking context — a fixed/absolute element with a `z-index` does, and
+   `.room-panel` is given `isolation: isolate` in AppShell.css precisely for
+   this. Without one, the ring's `z-index: 6` escapes into the surrounding
+   context and can paint over unrelated siblings.
+
+   Cost is one masked-gradient repaint per panel per frame, which is why the lap
+   is slow and the ring is thin. Do NOT reach for `filter` / `opacity` /
+   `transform` to tune it — they look cheaper and cost more, and a transform
+   makes the element a backdrop root (`.spacron/memory/glass-panel-recipe.md`). */
+@property --panel-edge-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes panel-edge-travel {
+  to {
+    --panel-edge-angle: 360deg;
+  }
+}
+
+.app-shell .room-panel,
+.app-shell .left-utility-panel,
+.app-shell .right-utility-panel,
+.app-shell .room-dock,
+.app-shell .composer-strip .floating-prompt-bar,
+.usage-panel,
+.usage-dock,
+.inbox-panel,
+.resource-panel,
+.floating-youtube {
+  --panel-edge-w: 2px;
+  --panel-edge-lap: 7s;
+  /* The accent is a graphite, not a hue (see
+     `.spacron/memory/accent-and-icon-treatment.md`), so this reads as a light
+     sweeping the rim rather than a coloured chase. */
+  --panel-edge-core: var(--accent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 46%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.22);
+}
+
+:root.light-theme .app-shell .room-panel,
+:root.light-theme .app-shell .left-utility-panel,
+:root.light-theme .app-shell .right-utility-panel,
+:root.light-theme .app-shell .room-dock,
+:root.light-theme .app-shell .composer-strip .floating-prompt-bar,
+:root.light-theme .usage-panel,
+:root.light-theme .usage-dock,
+:root.light-theme .inbox-panel,
+:root.light-theme .resource-panel,
+:root.light-theme .floating-youtube {
+  /* The accent is a dark slate in light themes, so the light itself flips to
+     dark automatically — only the always-on base ring has to be told. */
+  --panel-edge-base: rgba(0, 0, 0, 0.14);
+}
+
+/* The project HUD is deliberately absent from this list: it is a full-attention
+   overlay you open, read and dismiss, and a light lapping its edge competes
+   with the thing you opened it to look at. It keeps the tint and takes no ring. */
+.app-shell .room-panel::after,
+.app-shell .left-utility-panel::after,
+.app-shell .right-utility-panel::after,
+.app-shell .room-dock::after,
+.app-shell .composer-strip .floating-prompt-bar::after,
+.usage-panel::after,
+.usage-dock::after,
+.inbox-panel::after,
+.resource-panel::after,
+.floating-youtube::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: var(--panel-edge-w);
+  /* A long lit arc rather than a pinpoint: a thin comet reads as a firefly and
+     leaves most of the edge dark, which is the opposite of the point. Each
+     light holds its full-strength core for ~8deg and falls off long and soft
+     on the trailing side, so about a third of the perimeter is lit at any
+     moment. */
+  background:
+    conic-gradient(
+      from var(--panel-edge-angle),
+      transparent 0deg,
+      var(--panel-edge-glow) 14deg,
+      var(--panel-edge-core) 46deg,
+      var(--panel-edge-core) 54deg,
+      var(--panel-edge-glow) 108deg,
+      transparent 126deg,
+      transparent 180deg,
+      var(--panel-edge-glow) 194deg,
+      var(--panel-edge-core) 226deg,
+      var(--panel-edge-core) 234deg,
+      var(--panel-edge-glow) 288deg,
+      transparent 306deg,
+      transparent 360deg
+    ),
+    linear-gradient(var(--panel-edge-base) 0 0);
+  /* Border box minus content box = a ring `padding` thick. The legacy
+     `-webkit-mask-composite: xor` keyword is listed first for older WebKit
+     (WKWebView / WebKitGTK); Chromium takes the standard `exclude` below it. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: panel-edge-travel var(--panel-edge-lap) linear infinite;
+}
+
+/* `.usage-panel`, `.usage-dock`, `.inbox-panel` and `.floating-youtube` are all
+   `position: fixed` with a `z-index`, which satisfies the positioning and
+   stacking-context requirements on their own. These three do not:
+
+   `.room-dock` and `.floating-prompt-bar` are static flow elements. The dock
+   already opens a stacking context via its `view-transition-name`, but still
+   needs a containing block; the prompt bar needs both.
+
+   `isolation` and NOT a z-index bump: these sit among positioned siblings in the
+   shell, and the ring's `z-index: 6` would otherwise compete out there rather
+   than staying inside its own host. */
+.app-shell .room-dock,
+.app-shell .composer-strip .floating-prompt-bar {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Known limit, accepted: `.room-dock` is `overflow-x: auto`, and an absolutely
+   positioned pseudo-element inside a scroll container scrolls with its content.
+   The dock only scrolls when the icon row is wider than the window, so in
+   practice the ring stays put; if it ever does scroll, the ring travels with it
+   rather than staying pinned to the visible edge. Fixing that properly needs a
+   wrapper element around the scrolling row. */
+
+/* The small surfaces sit over live content and are a fraction of a room's size,
+   so they get a thinner, slower light — at room settings the ring reads as a
+   spinning bezel on a 380px popover, and as a loading spinner on a pill. */
+.usage-panel,
+.usage-dock,
+.inbox-panel,
+.resource-panel,
+.floating-youtube,
+.app-shell .room-dock,
+.app-shell .composer-strip .floating-prompt-bar {
+  --panel-edge-w: 1.5px;
+  --panel-edge-lap: 9s;
 }
 
 /* ── Liquid Glass Cards (Apple-inspired Bento) ───────── */
@@ -1066,6 +1330,7 @@ textarea,
   .orc-typing-sm span,
   .rs-dot.rs-reconnecting,
   .fc-status-dot,
+  .live-ticker-dot,
   .orb,
   .voice-ring,
   .voice-eq-bar,

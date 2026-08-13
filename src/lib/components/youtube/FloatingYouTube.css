@@ -5,8 +5,8 @@
 
 .floating-youtube {
   position: fixed;
-  right: 24px;
-  bottom: 108px;
+  right: 16px;
+  bottom: 48px;
   left: auto !important;
   top: auto !important;
   max-width: calc(100 * var(--app-vw, 1vw) - 48px);

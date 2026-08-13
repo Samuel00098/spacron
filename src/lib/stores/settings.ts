@@ -127,9 +127,11 @@ export const notificationsEnabled = persistentWritable('notificationsEnabled', t
 // two spawn routes behaving oppositely.
 export const agentWorktrees = persistentWritable('agentWorktrees', true);
 // Move each agent's changes into the main checkout on their own, so the app can be
-// run and tested against them without pressing anything. Off leaves the same work
-// visible in the Agent changes list with a Stage button per agent.
-export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges', true);
+// run and tested against them without pressing anything. Off — the default — keeps
+// every agent's work quarantined in its own worktree until the user reviews it in
+// the fleet dashboard and brings it in or merges it (Orca's review-wall model).
+// The same work stays visible in the Agent changes list either way.
+export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges', false);
 // Give agents a real browser (Microsoft's Playwright MCP server) alongside
 // Spacron's own tools, so an agent can open what it just built, read the page and
 // fix what's wrong instead of guessing from the dev-server log.
@@ -140,6 +142,28 @@ export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges',
 // downloads a browser on first run. None of that should happen to a user who
 // never asked for it, so this is opt-in rather than opt-out.
 export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
+
+// Agent permissions & launch overrides — the Orca-style "Yolo" mode.
+//
+// `agentPermissionMode` is the global default for how agents are launched:
+// 'yolo' appends each CLI's own bypass flag (Claude's `--dangerously-skip-
+// permissions`, Codex's `--dangerously-bypass-approvals-and-sandbox`, ...) so
+// the run never stalls on a permission prompt; 'manual' launches bare and the
+// CLI asks as usual. Defaults to 'yolo', matching Orca's default behaviour.
+//
+// The three override maps are per-agent escapes from the global mode, keyed by
+// the preset's launch command. An explicit value wins (including an empty
+// string, which pins that agent to manual). See services/agent-permissions.ts.
+//
+// `AgentPermissionMode` itself lives in the service module — the single source
+// of truth for the flag tables and the mode type — and is re-exported here so
+// store consumers keep one import path.
+import type { AgentPermissionMode } from '$lib/services/agent-permissions';
+export type { AgentPermissionMode };
+export const agentPermissionMode = persistentWritable<AgentPermissionMode>('agentPermissionMode', 'yolo');
+export const agentCmdOverrides = persistentWritable<Record<string, string>>('agentCmdOverrides', {});
+export const agentDefaultArgs = persistentWritable<Record<string, string>>('agentDefaultArgs', {});
+export const agentDefaultEnv = persistentWritable<Record<string, Record<string, string>>>('agentDefaultEnv', {});
 
 // Window
 export type CloseBehavior = 'quit' | 'minimize';
@@ -999,6 +1023,9 @@ export const swipeNavigationEnabled = persistentWritable<boolean>('swipeNavigati
 // Code Formatting
 export const formatOnSave = persistentWritable('formatOnSave', true);
 
+// Editor autosave — saves the active file shortly after typing stops.
+export const autoSave = persistentWritable('autoSave', false);
+
 // Keyboard Shortcuts
 export interface KeyboardShortcut {
   id: string;
@@ -1221,6 +1248,10 @@ export const terminalFontSize = persistentWritable('terminalFontSize', 14);
 // falls back via `onContextLoss`; DOM stays available as the no-GPU escape hatch.
 export const terminalRenderer = persistentWritable<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas');
 
+// Legacy generic setter — no callers remain; settings are set through the
+// per-key `persistentWritable` wrappers. Deliberately partial: new settings
+// keys should NOT add a case here, they should be declared in the zustand
+// store (`stores/zustand/settings.ts`) and read through their wrapper.
 export function updateSetting(key: string, value: unknown) {
   switch (key) {
     case 'fontSize':         fontSize.set(value as number); break;
@@ -1257,6 +1288,7 @@ export function updateSetting(key: string, value: unknown) {
     case 'uiZoom':           uiZoom.set(value as number); break;
     case 'swipeNavigationEnabled': swipeNavigationEnabled.set(value as boolean); break;
     case 'formatOnSave':     formatOnSave.set(value as boolean); break;
+    case 'autoSave':         autoSave.set(value as boolean); break;
     case 'closeBehavior':    closeBehavior.set(value as CloseBehavior); break;
     case 'appearance':       appearance.set(value as 'system' | 'light' | 'dark'); break;
     case 'onboardingCompleted': onboardingCompleted.set(value as boolean); break;
@@ -1279,7 +1311,8 @@ export function resetSettingsToDefault() {
   showSnapshotsTab.set(false);
   notificationsEnabled.set(true);
   agentWorktrees.set(true);
-  autoStageAgentChanges.set(true);
+  autoStageAgentChanges.set(false);
+  agentBrowserTools.set(false);
   closeBehavior.set('quit');
   aiProvider.set('openrouter');
   aiModelByProvider.set({});
@@ -1308,6 +1341,7 @@ export function resetSettingsToDefault() {
   uiZoom.set(100);
   swipeNavigationEnabled.set(true);
   formatOnSave.set(true);
+  autoSave.set(false);
   userShortcuts.set(defaultShortcuts);
   appearance.set('system');
   interfaceTransparency.set(0);

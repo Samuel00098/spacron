@@ -5,7 +5,7 @@ import { requestRoomControl } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
-const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env', 'fleet']);
+const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env', 'fleet', 'mobile']);
 // No 'review': a persisted 'review' tab from an older build fails this check and
 // falls back, which is exactly the migration we want.
 const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'problems']);
@@ -39,6 +39,7 @@ const defaultLayout: LayoutState = {
   toolboxVisible: false,
   envVisible: false,
   youtubeVisible: false,
+  mobileVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
   leftPanelWidth: 310,
@@ -49,7 +50,7 @@ const defaultLayout: LayoutState = {
 // exclusive among themselves (one drawer body at a time) but, unlike the aux
 // rooms, opening one does NOT disturb the main rooms (editor/preview/etc.) or
 // the active view — the drawer is a right-edge overlay you pop open and dismiss.
-export const RIGHT_DRAWER_TOOLS = ['toolbox', 'http', 'db', 'containers', 'env'] as const;
+export const RIGHT_DRAWER_TOOLS = ['toolbox', 'http', 'db', 'containers', 'env', 'mobile'] as const;
 export type RightDrawerTool = (typeof RIGHT_DRAWER_TOOLS)[number];
 
 // The tools whose open state is a persisted aux flag on LayoutState. 'env' is
@@ -60,6 +61,7 @@ const AUX_DRAWER_FLAGS: Record<Exclude<RightDrawerTool, 'env'>, keyof LayoutStat
   http: 'httpVisible',
   db: 'dbVisible',
   containers: 'containersVisible',
+  mobile: 'mobileVisible',
 };
 
 /** Show exactly one right-drawer tool (or none), clearing every other one. */
@@ -115,6 +117,7 @@ interface LayoutActions {
   setRightDrawerWidth: (width: number) => void;
   toggleYoutubeVisible: () => void;
   toggleOrchestratorVisible: () => void;
+  toggleMobileVisible: () => void;
   toggleTerminal: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   toggleSidebarTab: (tab: SidebarTab) => void;
@@ -159,6 +162,7 @@ const AUX_VIEW_FLAGS = {
   // aux-flag system means opening another panel never force-closes it, and the
   // window survives ambient mode switches. Its `youtubeVisible` flag is toggled
   // independently by `toggleYoutubeVisible`.
+  mobile: 'mobileVisible',
 } as const satisfies Partial<Record<ActiveView, keyof LayoutState>>;
 
 type AuxView = keyof typeof AUX_VIEW_FLAGS;
@@ -301,6 +305,13 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         // YouTube is a floating pop-up, not a view to switch to: just open the
         // window and leave the current active view in place.
         const next: LayoutState = { ...l, youtubeVisible: true };
+        persistLayout(next);
+        return next;
+      }
+      if (view === 'mobile') {
+        // Mobile is a right-drawer tool (like Toolbox/HTTP/DB), so opening it
+        // clears the other drawer flags to keep the drawer single-body.
+        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false };
         persistLayout(next);
         return next;
       }
@@ -460,7 +471,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   setRightDrawerTool: (tool: RightDrawerTool | null) => {
     if (tool === null) {
       set((l) => {
-        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false };
+        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false };
         persistLayout(next);
         return next;
       });
@@ -475,7 +486,8 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
           containersVisible: tool === 'containers',
           toolboxVisible: tool === 'toolbox',
           envVisible: tool === 'env',
-          envManagerOpen: tool === 'env'
+          envManagerOpen: tool === 'env',
+          mobileVisible: tool === 'mobile'
         };
         persistLayout(next);
         return next;
@@ -497,6 +509,23 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       persistLayout(next);
       return next;
     });
+  },
+
+  toggleMobileVisible: () => {
+    const active = getState().activeView === 'mobile';
+    if (active) {
+      set((l) => {
+        const next = { ...l, activeView: 'terminal' as const, mobileVisible: false };
+        persistLayout(next);
+        return next;
+      });
+    } else {
+      set((l) => {
+        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, editorSplitPreview: false };
+        persistLayout(next);
+        return next;
+      });
+    }
   },
 
   toggleYoutubeVisible: () => {

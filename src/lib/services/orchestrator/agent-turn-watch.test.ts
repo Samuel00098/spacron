@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer }));
 
-import { watchLeasedAgentTurn } from './agent-turn-watch';
+import { watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
 
 describe('watchLeasedAgentTurn', () => {
   let buf = '';
@@ -106,15 +106,31 @@ describe('watchLeasedAgentTurn', () => {
     await expect(p).resolves.toEqual({ kind: 'finished' });
   });
 
-  it('does not idle-finish on a tiny burst that never became real work', async () => {
+  it('does not idle-finish a tiny burst at the normal idle window', async () => {
     // The prompt echo / a cursor-blink redraw nudges the buffer a few chars but
-    // the agent never actually started — quiescence must NOT complete the turn.
+    // the agent never actually started — the NORMAL idle window must not
+    // complete the turn (only the much longer QUIET_TURN_IDLE_MS may).
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
     buf = '> hi'; // below minWorkChars (default 200)
     await vi.advanceTimersByTimeAsync(10); // tiny "activity"
     await vi.advanceTimersByTimeAsync(120); // long past idleMs, but under the work floor
     const settled = await Promise.race([p, Promise.resolve('pending')]);
     expect(settled).toBe('pending');
+  });
+
+  it('resolves a quiet turn below minWorkChars after the longer quiet window', async () => {
+    // A terse agent answers in a few lines and goes silent — under the work
+    // floor, so the normal idle window must not complete it, but the longer
+    // quiet window must, or the task hangs in-progress forever with no card.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
+    buf = 'Done.'; // below minWorkChars
+    await vi.advanceTimersByTimeAsync(10); // activity
+    await vi.advanceTimersByTimeAsync(120); // long past the normal idleMs
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+
+    await vi.advanceTimersByTimeAsync(QUIET_TURN_IDLE_MS);
+    await expect(p).resolves.toEqual({ kind: 'finished' });
   });
 
   it('aborts when shouldContinue turns false', async () => {

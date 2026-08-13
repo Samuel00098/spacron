@@ -32,6 +32,7 @@ import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
+import MobilePanel from '$lib/components/mobile/MobilePanel.tsx';
 import { useShallow } from 'zustand/react/shallow';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
@@ -102,7 +103,8 @@ type AuxPanelId =
   | 'containers'
   | 'toolbox'
   | 'youtube'
-  | 'env';
+  | 'env'
+  | 'mobile';
 
 type AgentRoomId = `agent:${number}`;
 type RoomId = 'workspace' | 'terminal' | 'dev-terminal' | AuxPanelId | AgentRoomId;
@@ -131,6 +133,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   toolbox: 'Toolbox',
   youtube: 'Media Player',
   env: 'Environment',
+  mobile: 'Mobile',
 };
 
 function isAgentRoomId(id: RoomId): id is AgentRoomId {
@@ -210,6 +213,7 @@ type ShellLayoutKeys =
   | 'toolboxVisible'
   | 'envVisible'
   | 'youtubeVisible'
+  | 'mobileVisible'
   | 'agentSpawnOpen'
   | 'envManagerOpen'
   | 'auxPanelWidth'
@@ -234,6 +238,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   toolbox: 'toolboxVisible',
   youtube: 'youtubeVisible',
   env: 'envVisible',
+  mobile: 'mobileVisible',
 };
 
 
@@ -273,6 +278,10 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
   env: {
     title: 'Environment',
     icon: <Icon><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></Icon>,
+  },
+  mobile: {
+    title: 'Mobile Emulator',
+    icon: <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>,
   },
 };
 
@@ -362,6 +371,7 @@ function PanelHost({ id }: { id: AuxPanelId }) {
   }
   if (id === 'preview') return <PreviewPanel />;
   if (id === 'youtube') return <YouTubePanel />;
+  if (id === 'mobile') return <MobilePanel />;
   if (id === 'env') {
     return (
       <Suspense fallback={null}>
@@ -499,6 +509,7 @@ export default function AppShell() {
         toolboxVisible: s.toolboxVisible,
         envVisible: s.envVisible,
         youtubeVisible: s.youtubeVisible,
+        mobileVisible: s.mobileVisible,
         agentSpawnOpen: s.agentSpawnOpen,
         envManagerOpen: s.envManagerOpen,
         auxPanelWidth: s.auxPanelWidth,
@@ -676,9 +687,9 @@ export default function AppShell() {
         { id: 'review' as const, visible: layoutState.reviewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
         { id: 'fleet' as const, visible: layoutState.fleetVisible },
-        // Right utility drawer: http/db/containers/toolbox/env + orchestrator.
-        // Left drawer: the nav tabs. YouTube: free-floating pop-up. None of
-        // those are rooms in the ambient grid.
+        // Right utility drawer: toolbox/http/db/containers/env/mobile +
+        // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
+        // pop-up. None of those are rooms in the ambient grid.
       ].filter((panel) => panel.visible),
     [layoutState],
   );
@@ -1372,7 +1383,9 @@ export default function AppShell() {
           ? 'containers'
           : layoutState.envManagerOpen
             ? 'env'
-            : null;
+            : layoutState.mobileVisible
+              ? 'mobile'
+              : null;
   const rightDrawerOpen = rightActiveTool !== null;
 
   function selectRightTool(tool: RightTool) {
@@ -2015,6 +2028,12 @@ export default function AppShell() {
       return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
     case 'fleet':
       return <Icon><path d="M14 2H6.5A1.5 1.5 0 0 0 5 3.5v17A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5V7Z" /><path d="M14 2v5h5" /><path d="M12 11.5v4" /><path d="M10 13.5h4" /><path d="M10 18.5h4" /></Icon>;
+    case 'mobile':
+      return <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>;
+    case 'youtube':
+      return <Icon><rect x="2" y="4.5" width="20" height="15" rx="4" /><path d="M10 9.2 15 12l-5 2.8V9.2z" /></Icon>;
+    case 'env':
+      return <Icon><path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4z" /><path d="M9.5 12.2l1.8 1.8 3.4-3.6" /></Icon>;
     default:
       return null;
     }
@@ -2123,15 +2142,28 @@ export default function AppShell() {
   // as a JSX element remounts the whole room subtree — including the xterm
   // terminal — on every store-driven re-render, which caused the click flicker
   // and terminal churn.
-  function renderRoomFrame(id: RoomId, featured = false) {
+  //
+  // `carded` marks a pane that is currently shrunk into a Focus rail card. It is
+  // the same live panel, so it must keep rendering — but it stops being reachable:
+  // `inert` keeps tab focus (and the terminal's hidden textarea, which would
+  // otherwise swallow keystrokes aimed at the stage) out of a 200px-tall card.
+  // The overlay button that opens the room is a SIBLING of this section, so it
+  // stays clickable.
+  function renderRoomFrame(id: RoomId, featured = false, carded = false) {
     const title = roomTitle(id);
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
+    // Every other room gets its own glyph in that same slot — the one the dock,
+    // the Split switcher and the minimized stack already use for it, so a room
+    // is the same mark wherever you meet it. `roomIcon` returns null for an id
+    // it has no glyph for, and the header falls back to text-only for those.
+    const roomGlyph = agentSession ? null : roomIcon(id);
     return (
       <section
         key={id}
         className={`room-panel bento-card${featured ? ' featured active-glow' : ''}`}
         data-room-id={id}
+        inert={carded || undefined}
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
         // Capture phase, and a ref rather than state: this fires on every click
         // and focus inside a pane (xterm included), so it must not re-render the
@@ -2142,7 +2174,7 @@ export default function AppShell() {
       >
         <header className="room-header">
           <button
-            className={`room-title${agentSession ? ' has-brand' : ''}`}
+            className={`room-title${agentSession || roomGlyph ? ' has-brand' : ''}`}
             onClick={() => focusRoom(id)}
             // Same click as the rail's pill, so the same vocabulary: in Split it
             // hands this pane the primary role rather than "focusing" a room
@@ -2159,6 +2191,11 @@ export default function AppShell() {
                 name={title}
                 className="room-title-brand"
               />
+            )}
+            {roomGlyph && (
+              <span className="room-title-brand room-title-glyph" aria-hidden="true">
+                {roomGlyph}
+              </span>
             )}
             <span className="room-kind">{roomKind(id)}</span>
             <span className="room-name">{title}</span>
@@ -2193,258 +2230,6 @@ export default function AppShell() {
         </header>
         <div className="room-content">{renderRoomContent(id)}</div>
       </section>
-    );
-  }
-
-  function getRoomPreview(id: RoomId) {
-    if (id === 'editor') {
-      const editorStore = useEditorStore.getState();
-      const fileEntry = activeFile ? editorStore.fileCache.get(activeFile) : null;
-      const fileLines = fileEntry?.kind === 'text' && fileEntry.content
-        ? fileEntry.content.split('\n').filter(line => line.trim().length > 0).slice(0, 3)
-        : [];
-      return (
-        <div className="room-card-preview">
-          {fileLines.length > 0 ? (
-            <pre className="room-card-code-snippet">
-              {fileLines.join('\n')}
-            </pre>
-          ) : (
-            <span className="room-card-empty-snippet">
-              {activeFile ? activeFile.split(/[/\\]/).pop() : 'No active file'}
-            </span>
-          )}
-        </div>
-      );
-    }
-    if (id === 'terminal') {
-      const lastCommands = (history || []).slice(0, 2);
-      return (
-        <div className="room-card-preview">
-          {lastCommands.length > 0 ? (
-            <div className="room-card-terminal-snippet">
-              {lastCommands.map((cmd, i) => (
-                <div key={i} className="terminal-cmd-line">
-                  <span className="terminal-prompt">$</span> {cmd}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <span className="room-card-empty-snippet">
-              {allTerminalSessions.length > 0
-                ? `${allTerminalSessions.length} active session${allTerminalSessions.length > 1 ? 's' : ''}`
-                : 'No active shells'}
-            </span>
-          )}
-        </div>
-      );
-    }
-    if (id === 'workspace') {
-      const openFilesList = useEditorStore.getState().openFiles || [];
-      const openFilesPreview = openFilesList.slice(0, 2);
-      return (
-        <div className="room-card-preview">
-          <div className="room-card-workspace-snippet">
-            <div className="workspace-project-title">{project ? project.name : 'Empty workspace'}</div>
-            {openFilesPreview.length > 0 && (
-              <div className="workspace-open-files">
-                {openFilesPreview.map(f => (
-                  <div key={f} className="workspace-file-item">• {f.split(/[/\\]/).pop()}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    if (id === 'preview') {
-      return <div className="room-card-preview">Live markdown & web preview</div>;
-    }
-    if (id === 'review') {
-      return <div className="room-card-preview">Code review & diff viewer</div>;
-    }
-    if (id === 'tasks') {
-      return <div className="room-card-preview">View & run task checklist</div>;
-    }
-    if (id === 'http') {
-      return <div className="room-card-preview">Compose REST HTTP requests</div>;
-    }
-    if (id === 'db') {
-      return <div className="room-card-preview">Explore connected databases</div>;
-    }
-    if (id === 'containers') {
-      return <div className="room-card-preview">Docker containers & images</div>;
-    }
-    if (id === 'toolbox') {
-      return <div className="room-card-preview">Dev utility toolbox</div>;
-    }
-    return null;
-  }
-
-  // Simple heuristic: colour a code line for the miniature editor preview.
-  function miniHighlightLine(line: string) {
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*')) {
-      return <span className="mini-cm">{line.slice(0, 48)}</span>;
-    }
-    if (/^\s*(const|let|var|function|export|import|return|if|else|for|while|class|interface|type|enum|async|await|default|new|this)\b/.test(line)) {
-      return <span className="mini-kw">{line.slice(0, 48)}</span>;
-    }
-    if (/^\s*["'`]/.test(line)) {
-      return <span className="mini-str">{line.slice(0, 48)}</span>;
-    }
-    if (/^\s*\d/.test(line)) {
-      return <span className="mini-num">{line.slice(0, 48)}</span>;
-    }
-    return <span className="mini-plain">{line.slice(0, 48)}</span>;
-  }
-
-  function getMiniPreview(id: RoomId) {
-    // Agent rooms are terminal-based, but their content is the agent's own
-    // session — NOT the personal shell's `commandHistory`. Reading that made
-    // every agent card render identical text, which defeats the thumbnail.
-    if (isAgentRoomId(id)) {
-      const session = getAgentSessionForRoom(id);
-      // What the CLI reports it is doing (OSC title), then the task it was
-      // briefed with — the two lines that actually differ between agents.
-      const lines = [session?.paneTitle, session?.taskSummary]
-        .filter((line): line is string => !!line && line.trim().length > 0);
-      const status = !session
-        ? 'session ended'
-        : session.isExecuting
-          ? 'working…'
-          : session.isRunning
-            ? 'idle'
-            : `exit ${session.lastExitCode ?? 0}`;
-      return (
-        <div className="mini-term">
-          <div>
-            <span className="mini-prompt">❯</span>{' '}
-            <span className="mini-cmd">{(session?.agentPreset ?? 'agent').slice(0, 36)}</span>
-          </div>
-          {lines.map((line, i) => (
-            <div key={i} className="mini-output">{line.slice(0, 40)}</div>
-          ))}
-          <div className="mini-output">{status}</div>
-          {session?.isExecuting && (
-            <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
-          )}
-        </div>
-      );
-    }
-    if (id === 'editor') {
-      const editorStore = useEditorStore.getState();
-      const fileEntry = activeFile ? editorStore.fileCache.get(activeFile) : null;
-      const lines = fileEntry?.kind === 'text' && fileEntry.content
-        ? fileEntry.content.split('\n').filter(l => l.trim().length > 0).slice(0, 12)
-        : ['// no active file'];
-      return (
-        <div className="mini-editor">
-          <div className="mini-gutter">
-            {lines.map((_, i) => <span key={i}>{i + 1}</span>)}
-          </div>
-          <div className="mini-code">
-            {lines.map((line, i) => (
-              <div key={i} className="mini-line">{miniHighlightLine(line)}</div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-    if (id === 'terminal') {
-      const cmds = (history || []).slice(0, 4);
-      return (
-        <div className="mini-term">
-          {cmds.map((cmd, i) => (
-            <div key={i}>
-              <div><span className="mini-prompt">❯</span> <span className="mini-cmd">{cmd.slice(0, 36)}</span></div>
-              {i === cmds.length - 1 && <div className="mini-output">$ exit 0</div>}
-            </div>
-          ))}
-          {cmds.length === 0 && <div className="mini-output">Waiting for shell…</div>}
-          <div><span className="mini-prompt">❯</span> <span className="mini-cursor" /></div>
-        </div>
-      );
-    }
-    if (id === 'preview') {
-      return (
-        <div className="mini-browser">
-          <div className="mini-browser-bar">
-            <div className="mini-browser-dots"><span /><span /><span /></div>
-            <div className="mini-browser-url" />
-          </div>
-          <div className="mini-browser-content">
-            <div className="mini-heading" />
-            <div className="mini-para" />
-            <div className="mini-para short" />
-            <div className="mini-block" />
-          </div>
-        </div>
-      );
-    }
-    if (id === 'workspace') {
-      return (
-        <div className="mini-workspace">
-          <div className="mini-sidebar">
-            <div className="mini-tree-item folder" />
-            <div className="mini-tree-item file" />
-            <div className="mini-tree-item file" />
-            <div className="mini-tree-item file" />
-            <div className="mini-tree-item folder" />
-            <div className="mini-tree-item file" />
-          </div>
-          <div className="mini-main">
-            <div className="mini-line" />
-            <div className="mini-line" />
-            <div className="mini-line" />
-            <div className="mini-line" />
-            <div className="mini-line" />
-          </div>
-        </div>
-      );
-    }
-    // Generic panel preview for http, db, containers, toolbox, review, tasks, etc.
-    return (
-      <div className="mini-panel">
-        <div className="mini-panel-header">
-          <div className="mini-tab active" style={{ width: 32 }} />
-          <div className="mini-tab" style={{ width: 24 }} />
-          <div className="mini-tab" style={{ width: 28 }} />
-        </div>
-        <div className="mini-panel-body">
-          <div className="mini-row" />
-          <div className="mini-row" />
-          <div className="mini-row" />
-          <div className="mini-row" />
-          <div className="mini-row" />
-        </div>
-      </div>
-    );
-  }
-
-  function renderRoomCard(id: RoomId) {
-    // The rail also renders in the `development` and `preview` layouts, which
-    // have none of the pile/thumbnail CSS (it is all scoped to .ambient-focus).
-    // Emitting the mini preview there would drop an unscaled, opaque mock into
-    // the card, so it is focus-only — those layouts keep the text preview.
-    const isFocusRail = ambientLayout === 'focus';
-    return (
-      <button key={id} className="room-card bento-card" onClick={() => focusRoom(id)} title={`Open ${roomTitle(id)}`}>
-        <div className="room-card-header">
-          <span className="room-card-icon">{roomIcon(id)}</span>
-          <span className="room-card-kind">{roomKind(id)}</span>
-        </div>
-        <span className="room-card-name">{roomTitle(id)}</span>
-        {isFocusRail ? null : getRoomPreview(id)}
-        {isFocusRail && (
-          <div className="room-card-mini-preview">
-            <div className="room-card-mini-inner">
-              {getMiniPreview(id)}
-            </div>
-          </div>
-        )}
-      </button>
     );
   }
 
@@ -2737,7 +2522,6 @@ export default function AppShell() {
               ))}
             </div>
           )}
-          {renderMinimizedRooms()}
         </>
       );
     }
@@ -2763,7 +2547,6 @@ export default function AppShell() {
               ))}
             </div>
           )}
-          {renderMinimizedRooms()}
         </>
       );
     }
@@ -2803,8 +2586,24 @@ export default function AppShell() {
     //   split → the arranged slot list, tiled
     const stageRooms: RoomId[] = isSplit ? splitRooms : activeRoom ? [activeRoom] : [];
     const stageRoomSet = new Set(stageRooms);
+    // Focus's side rail is not a row of drawn thumbnails — it is the REAL panels,
+    // each shrunk into a card. A carded pane is the SAME mounted pane the stage
+    // would show, so a terminal card is the live xterm rather than a picture of
+    // one, and promoting a card is a resize, not a mount.
+    //
+    // Cards are placed by an inline `--pile-index`, NOT by DOM order. The DOM
+    // order here is mount order (shells, then agents by session id) and must
+    // never change: reordering a live pane's node makes React move it with
+    // insertBefore, which detaches and reattaches the element — the thing that
+    // loses an xterm's WebGL context and reloads the preview's iframe.
+    const cardedRooms: RoomId[] = isSplit ? [] : stackedRooms;
+    const cardIndex = new Map<RoomId, number>(cardedRooms.map((room, index) => [room, index]));
     // Non-terminal rooms that must be mounted as their own pane (editor/preview/…).
-    const nonPersistentStageRooms = stageRooms.filter((room) => !isPersistentRoomId(room));
+    // Carded rooms are included: a card IS the panel now, so a room that is not
+    // mounted has nothing to render in the rail.
+    const nonPersistentStageRooms = [...stageRooms, ...cardedRooms].filter(
+      (room) => !isPersistentRoomId(room),
+    );
 
     // The no-active-room empty state must NOT short-circuit past the stage:
     // returning a bare placeholder here unmounts every mounted pane, which would
@@ -2821,47 +2620,95 @@ export default function AppShell() {
     const paneOrder = (room: RoomId): React.CSSProperties | undefined =>
       isSplit ? { order: stageRooms.indexOf(room) } : undefined;
 
+    // Everything a pane needs to know about where it currently lives: on stage,
+    // shrunk into a rail card, or mounted-but-off-stage.
+    function stagePaneProps(room: RoomId) {
+      const index = cardIndex.get(room);
+      const carded = index !== undefined;
+      const hidden = !carded && !stageRoomSet.has(room);
+      return {
+        carded,
+        className: `stage-pane${hidden ? ' stage-hidden' : ''}${carded ? ' stage-carded' : ''}`,
+        style: carded
+          ? ({ '--pile-index': index } as React.CSSProperties)
+          : hidden
+            ? undefined
+            : paneOrder(room),
+      };
+    }
+
+    // The fan (cards below the hovered one slide down so their edge stays
+    // reachable) is driven by a single `--pile-hover` on the stage container,
+    // written straight to the DOM. React state here would re-render the whole
+    // room subtree on every pointer move across the rail.
+    function setPileHover(el: HTMLElement, index: number | null) {
+      const stage = el.closest('.stage-layers') as HTMLElement | null;
+      if (!stage) return;
+      if (index === null) stage.style.removeProperty('--pile-hover');
+      else stage.style.setProperty('--pile-hover', String(index));
+    }
+
+    // The card's click/hover target. Always rendered — never conditionally, so
+    // the pane's child list is structurally identical whether it is carded or
+    // on stage. Swapping a live pane's siblings in and out risks React moving
+    // the pane's own node, and CSS hides this button off-card anyway.
+    const cardHit = (room: RoomId, index: number | undefined) => (
+      <button
+        key="stage-card-hit"
+        type="button"
+        className="stage-card-hit"
+        onClick={() => focusRoom(room)}
+        onMouseEnter={(e) => setPileHover(e.currentTarget, index ?? null)}
+        onMouseLeave={(e) => setPileHover(e.currentTarget, null)}
+        onFocus={(e) => setPileHover(e.currentTarget, index ?? null)}
+        onBlur={(e) => setPileHover(e.currentTarget, null)}
+        title={`Open ${roomTitle(room)}`}
+        aria-label={`Open ${roomTitle(room)}`}
+      />
+    );
+
     return (
       <>
         <div
-          className={`focused-room stage-layers${stageModifier}`}
-          style={isSplit ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties) : undefined}
+          className={`focused-room stage-layers${stageModifier}${cardedRooms.length > 0 ? ' has-cards' : ''}`}
+          style={
+            isSplit
+              ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties)
+              : cardedRooms.length > 0
+                // The pile's reveal band is derived from the card count so a
+                // long rail packs tighter instead of running off the bottom.
+                ? ({ '--pile-count': cardedRooms.length } as React.CSSProperties)
+                : undefined
+          }
           aria-label={emptyStageMessage ? 'No agents running' : undefined}
         >
           {emptyStageMessage !== null && (
             <p className="stage-empty-msg">{emptyStageMessage}</p>
           )}
           {persistentStageRooms.map((room) => {
-            // Focus: only the active pane is visible. Split: every arranged pane.
-            // Off-stage terminals stay mounted but hidden (visibility, not
-            // unmount) so returning is instant and clean.
-            const hidden = !stageRoomSet.has(room);
+            // Focus: the active pane fills the stage and the rest shrink into
+            // rail cards. Split: every arranged pane tiles. Rooms on neither
+            // stay mounted but hidden (visibility, not unmount) so returning is
+            // instant and clean.
+            const { carded, className, style } = stagePaneProps(room);
             return (
-              <div
-                key={room}
-                className={`stage-pane${hidden ? ' stage-hidden' : ''}`}
-                style={hidden ? undefined : paneOrder(room)}
-              >
-                {renderRoomFrame(room, true)}
+              <div key={room} className={className} style={style}>
+                {renderRoomFrame(room, true, carded)}
+                {cardHit(room, cardIndex.get(room))}
               </div>
             );
           })}
-          {nonPersistentStageRooms.map((room) => (
-            <div key={room} className="stage-pane" style={paneOrder(room)}>
-              {renderRoomFrame(room, true)}
-            </div>
-          ))}
+          {nonPersistentStageRooms.map((room) => {
+            const { carded, className, style } = stagePaneProps(room);
+            return (
+              <div key={room} className={className} style={style}>
+                {renderRoomFrame(room, true, carded)}
+                {cardHit(room, cardIndex.get(room))}
+              </div>
+            );
+          })}
         </div>
-        {isSplit
-          ? visibleRooms.length > 0 && renderSplitSwitcher()
-          : stackedRooms.length > 0 && (
-              <aside className="room-stack" aria-label="Open rooms">
-                <div className="room-cards-row">
-                  {stackedRooms.map((room) => renderRoomCard(room))}
-                </div>
-              </aside>
-            )}
-        {renderMinimizedRooms()}
+        {isSplit && visibleRooms.length > 0 && renderSplitSwitcher()}
       </>
     );
   }
@@ -2905,6 +2752,9 @@ export default function AppShell() {
 
                 {renderRightUtilityPanel()}
               </div>
+
+              {/* Minimalist room stack anchored at workspace level — independent of sidebar toggle */}
+              {renderMinimizedRooms()}
 
               <div ref={overlaysRef} className="workspace-overlays">
               <nav className="room-dock bento-card" aria-label="Room launcher">

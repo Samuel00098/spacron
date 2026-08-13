@@ -45,6 +45,7 @@ import {
   getScrollPosition,
 } from '$lib/stores/previewHistory';
 import { promptBarInput, promptBarImage, focusPromptBar } from '$lib/stores/terminal';
+import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import { activeProject } from '$lib/stores/workspace';
 
 import { extractExternalUrlFromProxyUrl } from '$lib/utils/proxy-url';
@@ -57,19 +58,6 @@ const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
   responsive: null,
   tablet: 768,
   mobile: 375,
-};
-
-type SelectedElementInfo = {
-  selector: string;
-  tag: string;
-  text: string;
-  html?: string;
-  attributes?: Record<string, string>;
-  classes?: string[];
-  styles?: Record<string, string>;
-  ancestorPath?: string[];
-  page?: { url: string; title: string };
-  rect: { x: number; y: number; width: number; height: number };
 };
 
 type PreviewConsoleLog = {
@@ -228,13 +216,6 @@ function relativeTime(ts: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function buildElementPrompt(info: SelectedElementInfo): string {
-  const tag = info.tag.toLowerCase();
-  const classStr = info.classes?.length ? `.${info.classes[0]}` : '';
-  const textPreview = info.text ? ` "${info.text.slice(0, 30)}${info.text.length > 30 ? '…' : ''}"` : '';
-  return `<${tag}${classStr}>${textPreview}`;
-}
-
 function pngBytesToDataUrl(pngBytes: number[]): string {
   const uint8 = new Uint8Array(pngBytes);
   let binary = '';
@@ -295,8 +276,13 @@ function getInspectorScript(): string {
       tag: el.tagName.toLowerCase(),
       text: (el.innerText||el.textContent||'').trim().slice(0,500),
       html: (el.outerHTML||'').slice(0,3000),
+      attributes: Object.fromEntries(Array.from(el.attributes||[]).map(a => [a.name, a.value])),
       classes: Array.from(el.classList||[]),
-      styles: { display:computed.display, position:computed.position, color:computed.color, backgroundColor:computed.backgroundColor, width:computed.width, height:computed.height },
+      // Keep this set in step with getStyles() in INSPECTOR_SNIPPET
+      // (src-tauri/src/preview/mod.rs) — the prompt formatter reads whichever
+      // inspector happened to inject, so a field only one of them sends is a
+      // prompt that silently changes shape depending on the page.
+      styles: { display:computed.display, position:computed.position, color:computed.color, backgroundColor:computed.backgroundColor, font:computed.font, margin:computed.margin, padding:computed.padding, width:computed.width, height:computed.height },
       page: { url: location.href, title: document.title },
       rect: { x:Math.round(r.x), y:Math.round(r.y), width:Math.round(r.width), height:Math.round(r.height) }
     };

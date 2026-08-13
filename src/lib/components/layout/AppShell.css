@@ -346,19 +346,20 @@
   padding-bottom: var(--overlay-clear);
 }
 
-/* Stage Manager focus: the active panel fills the stage (resting on top of the
-   dock via the rooms-table's --overlay-clear padding) while the other open
-   rooms sit alongside as a vertical rail of raised cards — each card its own
-   tile, no overlap. */
+/* Stage Manager focus: the active panel fills the stage while the other open
+   rooms sit alongside as a vertical deck of cards — each card being the real
+   panel, shrunk (see `.stage-layers.has-cards`).
+
+   One column, not two. The rail used to be a sibling `<aside class="room-stack">`
+   holding drawn thumbnails, and this grid gave it the second track. Now that the
+   cards are the live panes themselves they cannot live in a separate element —
+   moving a pane between two containers would make React re-parent its DOM node
+   and kill the xterm inside — so they stay in `.stage-layers` and it reserves
+   the rail out of its own width. */
 .app-shell .rooms-table.ambient-focus {
-  grid-template-columns: minmax(0, 1fr) minmax(390px, 490px);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 16px;
-}
-
-/* No side rail rendered (single open room) — give the stage the full width. */
-.app-shell .rooms-table.ambient-focus:not(:has(> .room-stack)) {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 /* The stage is a raised, rounded card — sitting flush against the left drawer
@@ -378,6 +379,18 @@
 
 .app-shell .rooms-content-horizontal:has(> .left-utility-panel) > .rooms-table.ambient-gallery {
   margin-left: 8px;
+}
+
+/* Same clearance on the right, for the same reason. This matters more in Focus
+   than it used to: the rail's cards now sit at the stage's right edge, so
+   without it a card's border touches the utility panel's and the two read as
+   one surface. Mirrors the left rule exactly, including Split's 8px. */
+.app-shell .rooms-content-horizontal:has(> .right-utility-panel) > .rooms-table.ambient-focus {
+  margin-right: 16px;
+}
+
+.app-shell .rooms-content-horizontal:has(> .right-utility-panel) > .rooms-table.ambient-gallery {
+  margin-right: 8px;
 }
 
 .app-shell .rooms-table.ambient-focus .focused-room {
@@ -433,11 +446,71 @@
 /* The panel on the frosted stage carries no glass of its own: its blur would
    sample the stage rather than the app, and stacking a second backdrop-filter
    inside this radius is what the Chromium radius-bleed workaround above existed
-   to contain. One frosted surface per stage. */
+   to contain. One frosted surface per stage.
+
+   `:not(.has-cards)` because that trade only holds while the stage IS one
+   surface. Panels are `background: transparent !important` with their own
+   `blur(18px)` further down (the see-through rule), and this cancels that blur
+   on the assumption the slab behind is supplying it. Once the rail holds real
+   panes there is no slab — so cancelling here left every panel completely
+   transparent, wallpaper straight through. */
 :root:not(.solid-theme):not(.is-webkitgtk)
-  .app-shell .rooms-table.ambient-focus .focused-room .room-panel {
+  .app-shell .rooms-table.ambient-focus .focused-room:not(.has-cards) .room-panel {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* ── …except once the rail holds real panes ─────────────────────────────
+   "One frosted surface per stage" was right when the stage was only the
+   stage: the rail was a separate <aside> outside `.focused-room`, so the
+   slab above covered exactly the featured panel. Now the cards ARE panes
+   and live inside `.focused-room`, so that one slab stretches across the
+   rail as well and reads as a single bulky sheet with cards floating on it.
+
+   So `has-cards` drops the slab and every panel simply keeps the glass it
+   already has — the `blur(18px)` the see-through rule gives every
+   `.room-panel` in the app. The featured panel frosts itself, each card
+   frosts itself, and the frost stops at each card's own edge instead of
+   running the full height of the stage behind them.
+
+   This is why NOTHING inside a card may carry a transform except the panel
+   itself: a transform makes an element a backdrop root for its DESCENDANTS,
+   so a transformed `.stage-pane` would leave the panel inside blurring an
+   empty box and rendering as plain wallpaper. The card's shrink lives on
+   `.room-panel` (an element's own transform does not affect its own
+   backdrop-filter) and the fan moves `top`, never `translate`.
+   See `.spacron/memory/glass-panel-recipe.md`. */
+:root:not(.solid-theme):not(.is-webkitgtk)
+  .app-shell .rooms-table.ambient-focus .focused-room.has-cards {
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* THE BACKDROP ROOT HAS TO GO WITH IT — this is the whole reason per-panel
+   glass was impossible here before.
+
+   `.focused-room` carries `view-transition-name: spacron-stage`, and that is a
+   persistent backdrop root **for descendants** (its own blur is unaffected —
+   verified, see the note above this rule). So every `.room-panel` inside it
+   samples this element's own paint, not the wallpaper. That is precisely why
+   the original design frosted the stage and cancelled the panels' blur: with a
+   root in the way, one frosted surface was the only arrangement that could
+   work.
+
+   Dropping the name in `has-cards` removes the root, so each panel — the
+   featured one and every card — blurs the real wallpaper behind itself, and the
+   frost stops at each card's edge instead of running the stage's full height.
+
+   The cost is the Stage Manager shrink/expand morph, which needs the name to
+   capture. It is a fair trade here: the panes now physically resize between
+   stage and card, so the movement is real rather than a crossfade between two
+   snapshots. Restoring the morph means finding another home for the name —
+   putting it on the active `.stage-pane` works only if the frost moves onto
+   that pane too, and the name must never exist on two panes at once or the
+   transition aborts. */
+.app-shell .rooms-table.ambient-focus .focused-room.has-cards {
+  view-transition-name: none;
 }
 
 .app-shell .rooms-table.ambient-focus .room-stack {
@@ -1227,6 +1300,154 @@
   clip-path: inset(50%);
 }
 
+/* ── Focus rail: the real panels, shrunk into a stacked deck ─────────────
+   These cards are not thumbnails of the rooms — they ARE the rooms. Each
+   card is the same mounted `.stage-pane` the stage would show, so a
+   terminal card is the live xterm and promoting a card is a resize, never
+   a mount. That is the whole point, and it is what the old drawn
+   `.room-card-mini-*` mock-ups replaced badly.
+
+   THE PANEL IS SCALED, NOT REFLOWED, AND THAT IS DELIBERATE.
+
+   Letting a carded pane simply reflow to ~400px would refit its xterm to
+   roughly 30 columns — and xterm's fit propagates a resize to the PTY, so
+   every carded agent would redraw its whole TUI at 30 columns wide and
+   stay wrapped that narrow the entire time it sat in the rail. Instead the
+   panel is LAID OUT at near-stage size (`--card-scale` divides the card
+   box back up to ~1000x520) and then transformed down into the card.
+   A transform does not change the border-box, so the ResizeObserver inside
+   never fires and the PTY keeps its real column count. Do not "simplify"
+   this to a width/height on the pane. */
+.app-shell .stage-layers.has-cards {
+  /* Rail width, and how far the pile's reveal band can compress. The reveal
+     is derived from `--pile-count` (set inline from the number of cards) so
+     a long rail packs tighter instead of running off the bottom of the
+     stage, without needing a `:has(> :nth-child(N))` ladder. */
+  --rail-w: clamp(380px, 32vw, 560px);
+  --rail-gap: 18px;
+  --card-scale: 0.46;
+  --pile-card-h: 286px;
+  /* Budget for the deck's travel, shared across the cards. The cap is what
+     matters visually: at low counts a card reveals 132px — nearly half its
+     body — so each one reads as a separate card rather than a seam in a
+     slab. It only compresses once there are enough rooms to need it. */
+  --pile-reveal: clamp(52px, calc(620px / max(var(--pile-count, 1) - 1, 1)), 132px);
+  --pile-lift: 6px;
+}
+
+/* The stage pane yields the rail's column. `.stage-pane` is absolutely
+   positioned against the padding box, so padding on the container would not
+   reserve anything — the inset has to move. */
+.app-shell .stage-layers.has-cards > .stage-pane:not(.stage-carded):not(.stage-hidden) {
+  right: calc(var(--rail-w) + var(--rail-gap));
+  /* The frost moved off `.focused-room` and onto the panes, so the stage's
+     own 12px radius has to come with it or the blur ends in a hard corner. */
+  border-radius: 12px;
+}
+
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded {
+  left: auto;
+  right: 0;
+  bottom: auto;
+  /* Resting slot, plus the fan's push (see below). `top` carries both, because
+     a `translate` here would make this pane a backdrop root and strip the glass
+     off the panel inside it. */
+  top: calc(
+    12px + var(--pile-index, 0) * var(--pile-reveal) +
+    clamp(0, calc(var(--pile-index, 0) - var(--pile-hover, 999)), 1) *
+    (var(--pile-card-h) - var(--pile-reveal) - var(--pile-lift))
+  );
+  width: var(--rail-w);
+  height: var(--pile-card-h);
+  overflow: hidden;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 4px 10px rgba(0, 0, 0, 0.3),
+    0 18px 38px rgba(0, 0, 0, 0.38);
+  /* `top`, not a transform — see the note on the `top` calc above. This is the
+     one place in the shell where animating a layout property is the correct
+     trade: a transform here costs the panel inside its backdrop-filter, and the
+     fan only runs on hover over a handful of cards. */
+  transition: top var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+  /* No z-index ladder: among positioned siblings with `z-index: auto` the
+     paint order IS the DOM order. Hover raises the popped card explicitly. */
+  transform-origin: center top;
+}
+
+/* The panel itself, laid out big and scaled into the card. */
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .room-panel {
+  flex: none;
+  width: calc(100% / var(--card-scale));
+  height: calc(var(--pile-card-h) / var(--card-scale));
+  transform: scale(var(--card-scale));
+  transform-origin: top left;
+  border-radius: calc(12px / var(--card-scale));
+  /* Clicks belong to the sibling hit target, not the miniature's own
+     buttons — a 5px-tall close button is a trap, not a control. The panel is
+     also `inert` (set in AppShell.tsx) so it takes no tab focus either. */
+  pointer-events: none;
+  /* Cancel the stage's entrance animation: a card is a resting object. */
+  animation: none;
+}
+
+/* The click/hover target. Rendered for every pane so the child list never
+   changes shape, but only a card's is actually live. */
+.app-shell .stage-card-hit {
+  display: none;
+}
+
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .stage-card-hit {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* ── The fan ────────────────────────────────────────────────────────────
+   Only `--pile-reveal` of each card is uncovered at rest, so a hovered card
+   popping over the deck would blanket the next two or three bands and trap
+   the pointer inside itself. So every card BELOW the hovered one slides
+   down by exactly what the pop covers, keeping its band reachable.
+
+   `--pile-hover` is the hovered card's index, written to this container by
+   a plain DOM handler (never React state — re-rendering the room subtree on
+   pointer-move across a rail of live terminals is not affordable). The
+   comparison is done in calc: `clamp(0, index - hover, 1)` is 0 for every
+   card at or above the hovered one and 1 for every card below it, which is
+   how a stylesheet gets an `if` over two custom properties. The 999 default
+   means "nothing hovered", so every card resolves to 0 and rests.
+
+   The push itself is folded into the `top` calc in the geometry block above,
+   because it must not be a transform — see the glass note there. */
+
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded:hover,
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded:has(> .stage-card-hit:focus-visible) {
+  z-index: 10;
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 8px 16px rgba(0, 0, 0, 0.32),
+    0 28px 56px rgba(0, 0, 0, 0.46);
+}
+
+/* Reduced motion: the fan still has to happen (it is what keeps lower cards
+   reachable), it just happens instantly. */
+@media (prefers-reduced-motion: reduce) {
+  .app-shell .stage-layers.has-cards > .stage-pane.stage-carded {
+    transition: none;
+  }
+}
+
 /* Split view reuses the very same persistent stage — the identical mounted xterm
    panes — but re-flows the rooms on stage into a tiled grid. Because it's the same
    React container as Focus/Fleet, switching in and out of Split never unmounts a
@@ -1327,6 +1548,22 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Containing block for the traveling edge light (`::after`, further down).
+     Safe for descendants: in every ambient the panel and the box that used to
+     resolve their absolute positions (`.stage-pane`, inset 0 with the panel as
+     its only flex child) occupy the same rectangle.
+
+     `isolation` is not decoration here — `position: relative` with `z-index:
+     auto` does NOT open a stacking context, so the ring's `z-index: 6` would
+     compete in whatever context is above the panel. In the Focus rail that is
+     the deck: cards overlap and paint in DOM order with no z-index ladder
+     (`.spacron/memory/focus-rail-pile.md` §3), so one card's ring would jump
+     on top of the cards stacked over it. Isolating keeps the ring inside its
+     own panel. It also matches `.focused-room .room-panel`, which already
+     isolates for the Chromium radius bug below. An element's own isolation
+     never affects its own backdrop-filter. */
+  position: relative;
+  isolation: isolate;
   border-radius: 10px;
   /* Liquid glass: frosted translucency */
   background:
@@ -1400,25 +1637,47 @@
     0 12px 30px rgba(0, 0, 0, 0.08);
 }
 
-/* ── Fully see-through panels (Windows / macOS only) ──────────────────────
+/* ── Tinted panels (Windows / macOS only) ─────────────────────────────────
    Every room (editor, terminal, preview, review, http, db, containers, toolbox,
    tasks, youtube, env, workspace) and both utility sidebars (incl. the file
-   explorer) drop their frosted tint entirely so the wallpaper shows straight
-   through — "completely see-through". Any content that paints its own background
-   (a preview, a video) still shows its own colour; only the frame's glass tint
-   is removed. The four solid overlays — settings, model switcher, search bar,
-   quick capture — are separate components and are untouched, so they stay solid.
+   explorer) share ONE tint here, so panel surfaces are uniform no matter which
+   component paints inside them. Any content that paints its own background (a
+   preview, a video, a terminal) still shows its own colour; this is only the
+   frame. The four solid overlays — settings, model switcher, search bar, quick
+   capture — are separate components and are untouched, so they stay solid.
 
-   Scoped to :not(.is-webkitgtk) so LINUX IS UNCHANGED — WebKitGTK already renders
-   the frosted panels see-through the way we want, so it keeps the original look.
-   This only reshapes the Chromium (Windows WebView2) and macOS WKWebView paths. */
+   These panels used to be `background: transparent` — fully see-through onto the
+   wallpaper. That was a deliberate ask, and it was reversed by a later one
+   (2026-08-12): with no tint, a busy wallpaper reads straight through the text
+   and you cannot tell where one panel ends and the next begins. The panels the
+   user pointed at as the readable ones (agent rooms, the toolbox timer) were
+   only readable because their CONTENT paints an opaque background of its own —
+   the frame was never doing any work. This tint gives every panel that same
+   floor, and matches the agent rooms by lifting the frame to the same darkness.
+
+   TUNING IS THREE TOKENS AND NOTHING ELSE — `--panel-tint-rgb` /
+   `--panel-tint` / `--panel-veil`, declared for BOTH modes side by side in
+   `global.css` under "Panel surfaces". They live there rather than here
+   because the floating panels outside `.app-shell` are tinted from the same
+   three values.
+
+   `rgba(var(--bg-primary-rgb), …)` and not `color-mix(var(--bg-primary) …)`:
+   in glass mode `--bg-primary` is ALREADY ~0.15 alpha, so color-mix can only
+   scale that down and never reaches a usable tint. See
+   `.spacron/memory/glass-panel-recipe.md` ("color-mix cannot make a glass token
+   opaque").
+
+   Scoped to :not(.is-webkitgtk) so LINUX IS UNCHANGED — WebKitGTK renders the
+   frosted recipe differently and keeps the original look. This only reshapes the
+   Chromium (Windows WebView2) and macOS WKWebView paths. */
 :root:not(.solid-theme):not(.is-webkitgtk) .app-shell .room-panel,
 :root:not(.solid-theme):not(.is-webkitgtk) .app-shell .left-utility-panel,
 :root:not(.solid-theme):not(.is-webkitgtk) .app-shell .right-utility-panel {
-  background: transparent !important;
-  /* Keep the panels see-through (no tint) but lightly frost the wallpaper behind
-     them — a modest blur rather than the base 40px, so it reads as "a bit blurred"
-     instead of fully transparent. */
+  background:
+    linear-gradient(var(--panel-veil) 0 0),
+    rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;
+  /* A modest blur rather than the base 40px: the tint is now carrying the
+     readability, so the wallpaper only needs softening, not erasing. */
   backdrop-filter: blur(18px) saturate(130%) !important;
   -webkit-backdrop-filter: blur(18px) saturate(130%) !important;
 }
@@ -1436,6 +1695,43 @@
 
 .app-shell .room-panel:hover .room-header {
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
+}
+
+/* ── Traveling edge light: shell-specific variants ─────────────────────────
+   The light itself — the registered `--panel-edge-angle`, the keyframes, the
+   masked ring, and the tokens that colour it — lives in `global.css` under
+   "Panel surfaces", because the floating panels (usage meter, inbox, HUD,
+   media player) are siblings of `.app-shell` and need the same treatment from
+   the same definition. Only the room-specific variants stay here. */
+
+/* The panel you are working in gets a brighter, quicker light so "which panel
+   is live" is answered by the same cue that separates them. */
+.app-shell .room-panel.featured::after {
+  --panel-edge-lap: 5s;
+  --panel-edge-w: 2.5px;
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 62%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.3);
+}
+
+/* The side drawers sit flush against the window edge, where half the ring is
+   off-screen chrome — keep them quieter than the rooms. */
+.app-shell .left-utility-panel::after,
+.app-shell .right-utility-panel::after {
+  --panel-edge-core: color-mix(in srgb, var(--accent) 52%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 16%, transparent);
+  --panel-edge-lap: 9s;
+}
+
+/* A carded panel is scaled by `--card-scale` (~0.46), which would take the ring
+   below a device pixel — pre-divide so it lands at the same visual weight. */
+.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .room-panel::after {
+  --panel-edge-w: calc(1.5px / var(--card-scale));
+}
+
+/* Light theme flips the base ring dark for every panel in `global.css`; only
+   the featured room's brighter base needs its own light-mode value. */
+:root.light-theme .app-shell .room-panel.featured::after {
+  --panel-edge-base: rgba(0, 0, 0, 0.2);
 }
 
 .app-shell .room-header {
@@ -1803,9 +2099,20 @@
   padding: 6px 7px 6px 10px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  /* Tinted from the shared panel tokens (`global.css`, "Panel surfaces") rather
+     than `color-mix(var(--bg-primary) 44%)`: in glass mode `--bg-primary` is
+     already ~0.15 alpha, so that mix landed at ~0.07 effective — a chip you
+     could read the wallpaper straight through. These carry a room's name and
+     its slot number, so they have to be legible at a glance.
+
+     NOT applied via the `!important` rule the rest of the chrome uses: the
+     `:hover`, `.on-stage` and `.primary` states below each set their own
+     background to show which pane is live, and an `!important` base would
+     silently win over all three. They mix the accent INTO this same tint
+     instead, so every state sits on one surface and only the accent changes. */
   background:
     linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), transparent),
-    color-mix(in srgb, var(--bg-primary) 44%, transparent);
+    rgba(var(--panel-tint-rgb), var(--panel-tint));
   color: var(--text-secondary);
   text-align: left;
   backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
@@ -1818,7 +2125,7 @@
 .app-shell .split-switch-item:hover {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+  background: color-mix(in srgb, var(--accent) 10%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
   transform: translateY(-1px);
 }
 
@@ -1827,13 +2134,13 @@
 .app-shell .split-switch-item.on-stage {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+  background: color-mix(in srgb, var(--accent) 10%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
 }
 
 .app-shell .split-switch-item.primary {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-primary));
+  background: color-mix(in srgb, var(--accent) 16%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
 }
 
 .app-shell .split-switch-summary {
@@ -1995,31 +2302,38 @@
   max-width: 52px;
 }
 
-.app-shell .minimized-room-stack {
+.app-shell .minimized-room-stack,
+.app-shell .rooms-table > .minimized-room-stack {
+  position: fixed;
+  left: calc(12px + var(--usage-dock-width, 0px));
+  bottom: 14px;
+  z-index: 1300;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: 100%;
-  padding: 4px 0;
+  max-width: min(440px, calc(50vw - 20px - var(--usage-dock-width, 0px)));
+  padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  pointer-events: auto;
+  transition: left var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
 
 .app-shell .minimized-room-stack::-webkit-scrollbar {
   display: none;
 }
 
-.app-shell .rooms-table > .minimized-room-stack {
-  position: absolute;
-  left: 20px;
-  bottom: 20px;
-  z-index: 30;
-  max-width: max(180px, calc(50 * var(--app-vw, 1vw) - 380px));
-  justify-self: start;
+@media (max-width: 480px) {
+  .app-shell .minimized-room-stack,
+  .app-shell .rooms-table > .minimized-room-stack {
+    left: calc(8px + var(--usage-dock-width, 0px));
+    bottom: 10px;
+    max-width: calc(100vw - 16px - var(--usage-dock-width, 0px));
+  }
 }
 
 .app-shell .minimized-room {
@@ -2117,6 +2431,37 @@
   height: 22px;
   align-self: center;
   flex-shrink: 0;
+}
+
+/* Non-agent rooms put their line glyph in the same slot the agent logo uses, so
+   both kinds of header measure identically. A tinted disc behind it, because a
+   bare stroke icon disappears against a panel that is showing wallpaper through
+   it — the agent logos survive that on their own since they are filled marks.
+
+   `svg { color: … }` and not `fill`/`stroke`: a blanket svg colour rule applies
+   app-wide (see `.spacron/memory/accent-and-icon-treatment.md`), and these icons
+   are `stroke="currentColor"`. */
+.app-shell .room-title-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .room-title-glyph svg {
+  width: 15px;
+  height: 15px;
+}
+
+.app-shell .room-panel.featured .room-title-glyph,
+.app-shell .room-title:hover .room-title-glyph {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .app-shell .minimized-room-label {
@@ -2887,12 +3232,12 @@
   }
 
   .app-shell .rooms-table.ambient-focus .minimized-room-stack {
-    max-width: 100%;
+    max-width: min(440px, calc(50vw - 20px));
     overflow-x: auto;
   }
 
   .app-shell .rooms-table.ambient-development .minimized-room-stack {
-    max-width: 100%;
+    max-width: min(440px, calc(50vw - 20px));
     overflow-x: auto;
   }
 

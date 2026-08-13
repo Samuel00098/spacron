@@ -28,6 +28,17 @@ export function writable<T>(initialValue: T): Writable<T> {
     subscribers.forEach((subscriber) => subscriber(value));
   }
 
+  // Closure-bound rather than `this`-bound. `update` used to call `this.set`,
+  // which broke the moment a caller destructured it — `const { update } =
+  // writable(...)` is the ordinary Svelte-store idiom, and it yielded a
+  // function that threw "Cannot read properties of undefined (reading 'set')".
+  // Referencing `set` directly makes every method safe to detach.
+  function set(nextValue: T) {
+    if (!shouldNotify(value, nextValue)) return;
+    value = nextValue;
+    notify();
+  }
+
   return {
     subscribe(run) {
       run(value);
@@ -36,13 +47,9 @@ export function writable<T>(initialValue: T): Writable<T> {
         subscribers.delete(run);
       };
     },
-    set(nextValue) {
-      if (!shouldNotify(value, nextValue)) return;
-      value = nextValue;
-      notify();
-    },
+    set,
     update(updater) {
-      this.set(updater(value));
+      set(updater(value));
     },
   };
 }

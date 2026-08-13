@@ -29,6 +29,9 @@ export interface CompletionSummary {
   summary?: string | null;
   /** True while the summary LLM call is in flight. */
   summaryPending?: boolean;
+  /** The orchestrator task this turn belonged to, when one exists. Lets the
+   *  notification card offer a "Show terminal" action while the session lives. */
+  taskId?: string | null;
 }
 
 export interface ChatMessage {

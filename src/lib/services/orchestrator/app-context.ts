@@ -5,7 +5,9 @@ import { openFiles, activeFile, fileCache, activeLine, activeColumn, activeSelec
 import { getTerminalProjectState, getAgentDisplayName, getSessionOutputBuffer } from '$lib/stores/terminal';
 import { currentUrl, proxyStarted } from '$lib/stores/preview';
 import { branchInfo } from '$lib/stores/gitBranch';
-import { getPresetRuns } from '$lib/stores/runs';
+import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
+import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
+import { getCustomAgents } from '$lib/stores/customAgents';
 import { captureTranscript } from '$lib/services/orchestrator/activity-log';
 import { getAgentSettingsSnapshot } from '$lib/services/orchestrator/app-settings';
 import type { LayoutState } from '$lib/types/layout';
@@ -27,6 +29,7 @@ const PANEL_FLAGS: Array<{ flag: keyof LayoutState; label: string }> = [
   { flag: 'dbVisible', label: 'db' },
   { flag: 'containersVisible', label: 'containers' },
   { flag: 'toolboxVisible', label: 'toolbox' },
+  { flag: 'mobileVisible', label: 'mobile' },
 ];
 
 /** Every view the assistant may `navigate` to (matches layout's known views). */
@@ -41,6 +44,7 @@ export const NAVIGABLE_VIEWS = [
   'containers',
   'toolbox',
   'youtube',
+  'mobile',
   'settings',
 ] as const;
 
@@ -94,7 +98,19 @@ export function getAppContextSnapshot(projectId: string, rootPath = ''): AppStat
   const branch = get(branchInfo)?.current ?? null;
   const previewUrl = get(currentUrl);
 
-  const availableRuns = getPresetRuns(projectId)
+  // Same "installed only" rule as the spawn picker: an agent roster is a menu
+  // of what the user can actually launch, so once detection has run, built-in
+  // agents narrow to the ones found on PATH. Non-agent presets (Dev Server)
+  // are not subject to agent detection and stay. Before the first scan — or in
+  // a browser session where no scan exists — everything is kept.
+  const allRuns = getPresetRuns(projectId);
+  const usage = get(usageState);
+  const agentRuns = filterInstalledAgents(allRuns.filter((r) => r.isAgent), {
+    installedCommands: installedAgentCommands(usage),
+    customCommands: new Set(getCustomAgents().map((a) => a.command)),
+    haveDetection: haveAgentDetection(usage),
+  });
+  const availableRuns = [...agentRuns, ...allRuns.filter((r) => !r.isAgent)]
     .map((r) => ({ name: r.name, command: r.command }))
     .slice(0, 12);
 

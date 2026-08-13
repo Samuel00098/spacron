@@ -1,0 +1,242 @@
+/* Account switcher, rendered inside a usage row's header.
+
+   Deliberately quiet: the row's job is to show a number, and the account is
+   context for that number rather than a control competing with it. So the
+   trigger is text-weight until hovered. The menu itself is solid, not frosted
+   — see the note on `.account-switch-menu`. */
+
+.account-switch {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+}
+
+.account-switch-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 108px;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 9px;
+  color: var(--text-tertiary, var(--text-secondary));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast, 0.12s) var(--ease-out, ease),
+    background var(--dur-fast, 0.12s) var(--ease-out, ease);
+}
+
+.account-switch-toggle:hover,
+.account-switch-toggle[aria-expanded='true'] {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.09));
+}
+
+.account-switch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-switch-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  width: 190px;
+  max-width: calc(100vw - 32px);
+  max-height: min(240px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
+  border-radius: 9px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 12px 28px rgba(0, 0, 0, 0.5);
+  /* Opaque, from the RAW rgb triple — not `color-mix(var(--bg-secondary) …)`.
+     In any glass theme `global.css` rewrites `--bg-secondary` to
+     `rgba(var(--bg-secondary-rgb), 0.20)`, and color-mix against `transparent`
+     can only ever scale that 0.20 down: mixing it at 96% still lands near
+     alpha 0.19, which is why this menu used to read as see-through no matter
+     what percentage was dialled in. Same idiom as `.rs-popover`.
+
+     Opaque is also the right call rather than a bug workaround: this popover
+     sits ON the usage panel, which is itself frosted, and being a
+     `backdrop-filter` ancestor the panel is this element's backdrop root — so
+     a blur here would sample the panel's own text and blur nothing. See
+     [[glass-panel-recipe]]; small menus are deliberately solid. */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, transparent 55%),
+    rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.account-switch-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.account-switch-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.account-switch-pick:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+}
+
+/* The active account reads as selected without a checkmark column, which would
+   indent every label for the sake of one row. */
+.account-switch-pick[data-active='true'] {
+  color: var(--text-primary);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.account-switch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-switch-flag {
+  flex: none;
+  font-size: 8px;
+  font-weight: 500;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.8;
+}
+
+/* Always visible, unlike the remove button: an account with no credential is
+   broken until this is pressed, so it must not be hidden behind a hover. */
+.account-switch-signin {
+  flex: none;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--dur-fast, 0.12s) var(--ease-out, ease);
+}
+
+.account-switch-signin:hover {
+  background: color-mix(in srgb, var(--text-primary) 20%, transparent);
+}
+
+.account-switch-remove {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-tertiary, var(--text-secondary));
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast, 0.12s) var(--ease-out, ease);
+}
+
+/* Revealed on hover of the row, not hidden behind a submenu — but never the
+   first thing the pointer lands on. */
+.account-switch-item:hover .account-switch-remove,
+.account-switch-remove:focus-visible {
+  opacity: 1;
+}
+
+.account-switch-remove:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.account-switch-new,
+.account-switch-confirm {
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.account-switch-new:hover,
+.account-switch-confirm:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.account-switch-new {
+  margin-top: 2px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+  border-radius: 0 0 5px 5px;
+  padding-top: 6px;
+}
+
+.account-switch-add {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+}
+
+.account-switch-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 5px;
+}
+
+.account-switch-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+
+.account-switch-confirm {
+  flex: none;
+}
+
+.account-switch-hint {
+  margin: 4px 2px 1px;
+  font-size: 8.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.9;
+}

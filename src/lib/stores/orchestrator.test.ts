@@ -146,6 +146,8 @@ vi.mock('$lib/stores/terminal', () => ({
   sendPromptToSession,
   sessionHasRunningProcess,
   setSessionExecuting,
+  markOrchestratorTrackedSession: vi.fn(),
+  unmarkOrchestratorTrackedSession: vi.fn(),
 }));
 
 import { trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
@@ -278,8 +280,25 @@ describe('orchestrator terminal leasing', () => {
   });
 
   it('pastes the full charter for agents that do NOT read a rules file', async () => {
-    // pi has no native rules file, so the only way it gets the standing brief is
-    // the legacy REPL paste — the charter wrapped around the goal.
+    // `traecli` reads no rules file at all (verified 2026-08-12 — the open-source
+    // trae-agent CLI has no AGENTS.md/CLAUDE.md/.trae-rules loader), so the only
+    // way it gets the standing brief is the legacy REPL paste — the charter
+    // wrapped around the goal.
+    const task = createOrchestratorTask('project-1', 'Fix the terminal lease flow', 'traecli');
+    getSessionOutputBuffer.mockReturnValueOnce('').mockReturnValue('booted output................................');
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: task.id }] });
+
+    await launchOrchestratorTask(task.id, 'traecli', '/repo', true);
+    await vi.advanceTimersByTimeAsync(1600);
+    await Promise.resolve();
+
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, buildAgentCharter(task.goal, { name: null }));
+  });
+
+  it('sends only the task message to a rules-file agent like pi', async () => {
+    // pi loads AGENTS.md/CLAUDE.md as context files at startup (verified
+    // 2026-08-12), so re-pasting the charter is redundant — only the goal goes
+    // over the wire, matching the rules-file channel.
     const task = createOrchestratorTask('project-1', 'Fix the terminal lease flow', 'pi');
     getSessionOutputBuffer.mockReturnValueOnce('').mockReturnValue('booted output................................');
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: task.id }] });
@@ -288,7 +307,7 @@ describe('orchestrator terminal leasing', () => {
     await vi.advanceTimersByTimeAsync(1600);
     await Promise.resolve();
 
-    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, buildAgentCharter(task.goal, { name: null }));
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, buildAgentTaskMessage(task.goal, { name: null }));
   });
 
   it('clears stale persisted lease fields for non-in-progress tasks on load', async () => {
@@ -1119,6 +1138,82 @@ describe('orchestrator chat actions', () => {
     else g.localStorage = previousLocalStorage;
   });
 
+  it('writes a completion card to the chat log when a leased process exits', async () => {
+    // The completion card is the durable record that feeds the agent inbox, so it
+    // must be written on process exit too — `notify: false` suppresses only the
+    // orchestrator's own toast/chime (the terminal layer already raised its exit
+    // notification), never the card.
+    vi.resetModules();
+    const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
+    const previousWindow = g.window;
+    const previousLocalStorage = g.localStorage;
+    g.window = {};
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    sessionExitListeners.length = 0;
+    showToast.mockClear();
+    const mod = await import('./orchestrator');
+    const task = mod.createOrchestratorTask('project-1', 'Exit with results', 'claude');
+    mod.orchestratorTasks.set([{ ...task, status: 'in-progress', assignedSessionId: 42, startedAt: 1, promptSentAt: 2 }]);
+
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: false, ownerTaskId: task.id, lastExitCode: 0 }] });
+
+    expect(sessionExitListeners).toHaveLength(1);
+    sessionExitListeners[0]({ sessionId: 42, projectId: 'project-1', code: 0 });
+
+    const updated = get(mod.orchestratorTasks)[0];
+    expect(updated.status).toBe('complete');
+
+    const chat = get(mod.chatMessages)['project-1'] ?? [];
+    const card = chat.find((m) => !!m.completion);
+    expect(card).toBeDefined();
+    expect(card?.completion).toMatchObject({ status: 'done', agentName: 'claude', taskTitle: 'Exit with results' });
+
+    // notify: false → no orchestrator "finished" toast (the terminal layer's own
+    // exit notification covers the "right now" cue).
+    await Promise.resolve(); // let any void async chains settle before asserting
+    expect(showToast).not.toHaveBeenCalled();
+
+    if (previousWindow === undefined) delete g.window;
+    else g.window = previousWindow;
+    if (previousLocalStorage === undefined) delete g.localStorage;
+    else g.localStorage = previousLocalStorage;
+  });
+
+  it('writes a failed completion card when a leased process crashes', async () => {
+    // Same contract on the non-zero exit path: the card must land with a failed
+    // status so it shows up as actionable in the inbox, toast still suppressed.
+    vi.resetModules();
+    const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
+    const previousWindow = g.window;
+    const previousLocalStorage = g.localStorage;
+    g.window = {};
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    sessionExitListeners.length = 0;
+    showToast.mockClear();
+    const mod = await import('./orchestrator');
+    const task = mod.createOrchestratorTask('project-1', 'Crash loudly', 'claude');
+    mod.orchestratorTasks.set([{ ...task, status: 'in-progress', assignedSessionId: 42, startedAt: 1, promptSentAt: 2 }]);
+
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: false, ownerTaskId: task.id, lastExitCode: 17 }] });
+    sessionExitListeners[0]({ sessionId: 42, projectId: 'project-1', code: 17 });
+
+    const updated = get(mod.orchestratorTasks)[0];
+    expect(updated.status).toBe('failed');
+
+    const chat = get(mod.chatMessages)['project-1'] ?? [];
+    const card = chat.find((m) => !!m.completion);
+    expect(card).toBeDefined();
+    expect(card?.completion).toMatchObject({ status: 'failed', agentName: 'claude' });
+
+    await Promise.resolve();
+    expect(showToast).not.toHaveBeenCalled();
+
+    if (previousWindow === undefined) delete g.window;
+    else g.window = previousWindow;
+    if (previousLocalStorage === undefined) delete g.localStorage;
+    else g.localStorage = previousLocalStorage;
+  });
+
   it('ignores a session-exit for a deliberately closed session (no session in state)', async () => {
     vi.resetModules();
     const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
@@ -1186,7 +1281,7 @@ describe('orchestrator chat actions', () => {
     else g.localStorage = previousLocalStorage;
   });
 
-  it('completes an adopted agent quietly when its process exits', async () => {
+  it('completes an adopted agent on exit while dropping a lightweight inbox card', async () => {
     vi.resetModules();
     const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
     const previousWindow = g.window;
@@ -1208,9 +1303,64 @@ describe('orchestrator chat actions', () => {
     const updated = get(mod.orchestratorTasks)[0];
     expect(updated.status).toBe('complete');
     expect(updated.assignedSessionId).toBeNull();
-    // An adopted exit must not raise an orchestrator completion chat card.
+    // The exit still lands a lightweight card (no AI summary) so the last turn
+    // isn't lost to a transient toast.
     const chat = get(mod.chatMessages)['project-1'] ?? [];
-    expect(chat.some((m) => !!m.completion)).toBe(false);
+    const card = chat.find((m) => !!m.completion);
+    expect(card).toBeDefined();
+    expect(card?.completion).toMatchObject({ status: 'done', agentName: 'claude' });
+    expect(card?.completion?.summaryPending).toBe(false);
+    expect(card?.completion?.summary).toBeNull();
+
+    if (previousWindow === undefined) delete g.window;
+    else g.window = previousWindow;
+    if (previousLocalStorage === undefined) delete g.localStorage;
+    else g.localStorage = previousLocalStorage;
+  });
+
+  it('drops a lightweight inbox card when an adopted agent finishes a turn', async () => {
+    // Adoption arms the re-arming turn watcher; when a real turn ends it must
+    // append a lightweight completion card (the inbox source) while the task
+    // stays in-progress — the user is still driving that terminal.
+    vi.resetModules();
+    const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
+    const previousWindow = g.window;
+    const previousLocalStorage = g.localStorage;
+    g.window = {};
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    sessionExitListeners.length = 0;
+    agentDetectedListeners.length = 0;
+    const mod = await import('./orchestrator');
+    mod.orchestratorTasks.set([]);
+
+    // A typed `claude` launch: live, unleased, no task tracking it yet.
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 77, isRunning: true, ownerTaskId: null, agentName: null }] });
+    agentDetectedListeners[0]({ sessionId: 77, projectId: 'project-1', preset: 'claude' });
+
+    const adopted = get(mod.orchestratorTasks)[0];
+    expect(adopted.adopted).toBe(true);
+    expect(adopted.assignedSessionId).toBe(77);
+
+    // leasedSessionLive needs the session to stay running for this task.
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 77, isRunning: true, ownerTaskId: adopted.id }] });
+
+    // A real turn: ≥500 chars of new output (the watcher's minWorkChars gate)…
+    getSessionOutputBuffer.mockReturnValue('x'.repeat(600));
+    await vi.advanceTimersByTimeAsync(500); // a poll sees the growth
+    // …then the output goes quiet; the 90s idle fallback ends the turn.
+    await vi.advanceTimersByTimeAsync(91000);
+    await Promise.resolve();
+
+    const chat = get(mod.chatMessages)['project-1'] ?? [];
+    const cards = chat.filter((m) => !!m.completion);
+    expect(cards).toHaveLength(1); // exactly one card per turn — no double-write
+    const card = cards[0];
+    expect(card.completion).toMatchObject({ status: 'done', agentName: adopted.name ?? 'claude' });
+    expect(card.completion?.summaryPending).toBe(false);
+    expect(card.completion?.summary).toBeNull();
+    // The task stays in-progress — the watcher re-arms because the user is still
+    // working in that terminal.
+    expect(get(mod.orchestratorTasks)[0].status).toBe('in-progress');
 
     if (previousWindow === undefined) delete g.window;
     else g.window = previousWindow;

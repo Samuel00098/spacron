@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 
 /**
  * Official brand marks for the coding-CLI agents shown in the spawn picker.
@@ -27,6 +27,19 @@ function logo(path: string, viewBox = '0 0 24 24'): ReactNode {
   );
 }
 
+// Multi-path monochrome brand mark, for logos whose real geometry is several
+// separate shapes (Amp's three chevrons, Kimi's detached dot). Collapsing them
+// into one path would change the logo, so they stay separate.
+function logoPaths(paths: string[], viewBox = '0 0 24 24'): ReactNode {
+  return (
+    <svg viewBox={viewBox} fill="currentColor" fillRule="evenodd" clipRule="evenodd">
+      {paths.map((d, i) => (
+        <path key={i} d={d} />
+      ))}
+    </svg>
+  );
+}
+
 function glyph(char: string, size = 14): ReactNode {
   return (
     <svg viewBox="0 0 24 24">
@@ -43,6 +56,17 @@ function glyph(char: string, size = 14): ReactNode {
       </text>
     </svg>
   );
+}
+
+// Bundled brand mark, for agents whose real logo is a raster asset we ship in
+// `static/agent-icons/` (the PNGs ported from Orca's icon bundle, plus SVGs
+// fetched from the agent's own site). Served at `/agent-icons/<file>`; containers
+// size it with `object-fit: contain` (see [[agent-brand-marks]]). The tile
+// background shows through transparent pixels, so these need a light-on-dark or
+// dark-on-light glyph rather than relying on `currentColor` — every icon in the
+// bundle is one of those.
+function bundleMark(file: string): ReactNode {
+  return <img src={`/agent-icons/${file}`} alt="" draggable={false} />;
 }
 
 // Anthropic Claude — radial sunburst.
@@ -63,6 +87,28 @@ const GROK =
 
 // OpenCode — nested-square terminal mark.
 const OPENCODE = 'M16 6H8v12h8V6zm4 16H4V2h16v20z';
+
+// Google Gemini — the four-point spark (Simple Icons `googlegemini`).
+const GEMINI =
+  'M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81';
+
+// GitHub Copilot (Simple Icons `githubcopilot`).
+const COPILOT =
+  'M23.922 16.997C23.061 18.492 18.063 22.02 12 22.02 5.937 22.02.939 18.492.078 16.997A.641.641 0 0 1 0 16.741v-2.869a.883.883 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.098 10.098 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952C7.255 2.937 9.248 1.98 11.978 1.98c2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.841.841 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256Zm-11.75-5.992h-.344a4.359 4.359 0 0 1-.355.508c-.77.947-1.918 1.492-3.508 1.492-1.725 0-2.989-.359-3.782-1.259a2.137 2.137 0 0 1-.085-.104L4 11.746v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.359 4.359 0 0 1-.355-.508Zm2.328 3.25c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm-5 0c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm3.313-6.185c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z';
+
+// Qwen (Simple Icons `qwen`).
+const QWEN =
+  'M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z';
+
+// Cline (Simple Icons `cline`).
+const CLINE =
+  'm23.365 13.556-1.442-2.895V8.994c0-2.764-2.218-5.002-4.954-5.002h-2.464c.178-.367.276-.779.276-1.213A2.77 2.77 0 0 0 12.018 0a2.77 2.77 0 0 0-2.763 2.779c0 .434.098.846.276 1.213H7.067c-2.736 0-4.954 2.238-4.954 5.002v1.667L.64 13.549c-.149.29-.149.636 0 .927l1.472 2.855v1.667C2.113 21.762 4.33 24 7.067 24h9.902c2.736 0 4.954-2.238 4.954-5.002V17.33l1.44-2.865c.143-.286.143-.622.002-.91m-12.854 2.36a2.27 2.27 0 0 1-2.261 2.273 2.27 2.27 0 0 1-2.261-2.273v-4.042A2.27 2.27 0 0 1 8.249 9.6a2.267 2.267 0 0 1 2.262 2.274zm7.285 0a2.27 2.27 0 0 1-2.26 2.273 2.27 2.27 0 0 1-2.262-2.273v-4.042A2.267 2.267 0 0 1 15.535 9.6a2.267 2.267 0 0 1 2.261 2.274z';
+
+// Cody (Sourcegraph) — the Sourcegraph chevron-and-axes mark (Simple Icons
+// `sourcegraph`). Cody doesn't ship a standalone mark that survives a 13px
+// tile, so it borrows its parent brand the same way Codex borrows OpenAI's.
+const SOURCEGRAPH =
+  'M17.897 3.84a2.38 2.38 0 1 1 3.09 3.623l-3.525 3.006-2.59-.919-.967-.342-1.625-.576 1.312-1.12.78-.665 3.525-3.007zm-8.27 13.313.78-.665 1.312-1.12-1.624-.575-.967-.344-2.59-.918-3.525 3.007a2.38 2.38 0 1 0 3.09 3.622l3.525-3.007zM8.724 7.37l2.592.92 2.09-1.784-.84-4.556a2.38 2.38 0 1 0-4.683.865l.841 4.555zm6.554 9.262-2.592-.92-2.091 1.784.842 4.557a2.38 2.38 0 0 0 4.682-.866l-.841-4.555zm8.186-.564a2.38 2.38 0 0 0-1.449-3.04l-4.365-1.55-.967-.342-1.625-.576-.966-.343-2.59-.92-.967-.342-1.624-.576-.967-.343-4.366-1.55a2.38 2.38 0 1 0-1.591 4.488l4.366 1.55.966.342 1.625.576.965.343 2.591.92.967.342 1.624.577.966.342 4.367 1.55a2.38 2.38 0 0 0 3.04-1.447';
 
 // Pi Coding Agent — geometric "Pi" mark (dashboardicons/pi-coding-agent),
 // viewBox 0 0 800 800, rendered mono so it adapts to the theme.
@@ -107,6 +153,74 @@ const antigravityMark = (
   />
 );
 
+// Factory Droid — official mark from factory.ai (single path, 508 viewBox).
+// The source SVG paints it over a black rect; only the glyph is kept, so the
+// tile controls the background like every other mark here.
+const FACTORY =
+  'M321.997 150.712C321.401 150.568 320.844 150.299 320.363 149.925C319.883 149.551 319.491 149.08 319.215 148.544C318.938 148.008 318.783 147.42 318.76 146.821C318.738 146.22 318.848 145.624 319.084 145.07C327.226 125.716 330.819 110.23 325.021 103.747C309.666 86.5471 248.085 120.749 228.451 132.333C227.925 132.642 227.337 132.837 226.728 132.903C226.118 132.969 225.501 132.906 224.918 132.719C224.336 132.531 223.801 132.223 223.351 131.815C222.902 131.407 222.548 130.909 222.313 130.356C214.06 111.043 205.384 97.6094 196.589 97.0268C173.279 95.4688 154.491 162.187 148.991 183.932C148.844 184.515 148.57 185.06 148.188 185.528C147.805 185.998 147.323 186.381 146.775 186.651C146.227 186.921 145.626 187.072 145.012 187.094C144.399 187.116 143.788 187.009 143.221 186.778C123.406 178.825 107.545 175.316 100.914 180.98C83.305 195.978 118.315 256.126 130.175 275.304C130.492 275.816 130.692 276.391 130.76 276.987C130.829 277.582 130.765 278.186 130.573 278.755C130.381 279.325 130.065 279.847 129.647 280.286C129.228 280.725 128.718 281.07 128.15 281.298C108.384 289.359 94.6306 297.834 94.0272 306.424C92.439 329.192 160.74 347.544 183.01 352.916C183.605 353.061 184.16 353.33 184.64 353.704C185.118 354.077 185.509 354.548 185.785 355.083C186.061 355.618 186.215 356.205 186.237 356.803C186.26 357.402 186.151 357.998 185.916 358.551C177.773 377.905 174.181 393.398 179.979 399.874C195.334 417.074 256.921 382.877 276.556 371.293C277.081 370.984 277.67 370.789 278.28 370.722C278.889 370.655 279.507 370.717 280.09 370.905C280.673 371.093 281.207 371.402 281.657 371.81C282.106 372.219 282.46 372.717 282.694 373.271C290.947 392.578 299.616 406.012 308.417 406.601C331.728 408.153 350.516 341.44 356.009 319.688C356.157 319.106 356.432 318.562 356.816 318.094C357.2 317.625 357.682 317.243 358.231 316.974C358.779 316.705 359.381 316.554 359.995 316.533C360.608 316.511 361.219 316.619 361.786 316.85C381.601 324.803 397.455 328.304 404.093 322.648C421.702 307.65 386.684 247.495 374.825 228.317C374.51 227.804 374.312 227.229 374.245 226.634C374.177 226.039 374.242 225.436 374.434 224.868C374.626 224.299 374.941 223.777 375.358 223.338C375.775 222.899 376.284 222.552 376.85 222.323C396.623 214.261 410.376 205.786 410.973 197.196C412.568 174.428 344.26 156.078 321.997 150.712ZM295.254 128.885C299.734 136.73 276.646 189 259.474 225.561C259.186 226.172 258.715 226.682 258.121 227.024C257.528 227.365 256.842 227.521 256.155 227.47C255.468 227.419 254.814 227.164 254.28 226.739C253.746 226.314 253.358 225.739 253.169 225.093C246.234 201.322 238.306 173.392 229.824 149.683C229.491 148.752 229.508 147.736 229.871 146.817C230.235 145.897 230.921 145.133 231.808 144.662C252.989 133.363 289.234 118.358 295.254 128.885ZM193.746 135.355C202.589 137.807 224.103 190.714 238.424 228.426C238.664 229.056 238.699 229.742 238.527 230.393C238.354 231.044 237.983 231.627 237.461 232.065C236.939 232.503 236.292 232.775 235.608 232.844C234.923 232.913 234.234 232.775 233.632 232.45C211.501 220.453 185.694 206.159 162.529 195.253C161.622 194.823 160.901 194.093 160.493 193.192C160.085 192.292 160.018 191.279 160.303 190.335C167.12 167.736 181.865 132.069 193.746 135.355ZM126.652 210.04C134.676 205.664 188.197 228.216 225.621 244.989C226.248 245.269 226.771 245.73 227.12 246.31C227.47 246.889 227.629 247.56 227.577 248.23C227.524 248.901 227.264 249.54 226.828 250.062C226.393 250.582 225.805 250.962 225.143 251.147C200.813 257.921 172.211 265.664 147.937 273.949C146.985 274.272 145.946 274.255 145.007 273.9C144.067 273.545 143.286 272.876 142.805 272.011C131.257 251.322 115.867 215.92 126.652 210.04ZM133.275 309.188C135.779 300.551 189.952 279.537 228.562 265.548C229.207 265.315 229.91 265.28 230.576 265.448C231.243 265.617 231.84 265.98 232.288 266.49C232.736 266.999 233.015 267.631 233.085 268.299C233.155 268.968 233.015 269.641 232.682 270.23C220.392 291.846 205.758 317.053 194.592 339.672C194.156 340.561 193.409 341.269 192.486 341.668C191.563 342.068 190.525 342.134 189.557 341.853C166.42 335.235 129.905 320.792 133.275 309.188ZM209.739 374.722C205.252 366.884 228.347 314.608 245.519 278.054C245.806 277.442 246.279 276.931 246.872 276.59C247.465 276.249 248.151 276.093 248.838 276.144C249.525 276.194 250.179 276.45 250.713 276.875C251.247 277.3 251.634 277.874 251.824 278.521C258.759 302.285 266.686 330.222 275.169 353.932C275.499 354.862 275.481 355.877 275.117 356.795C274.752 357.713 274.064 358.475 273.178 358.945C252.004 370.223 215.752 385.256 209.76 374.722H209.739ZM311.247 368.252C302.397 365.807 280.883 312.894 266.562 275.182C266.322 274.55 266.285 273.862 266.458 273.21C266.63 272.559 267.003 271.974 267.526 271.536C268.049 271.097 268.697 270.826 269.382 270.758C270.068 270.69 270.759 270.83 271.361 271.157C293.485 283.154 319.299 297.455 342.457 308.362C343.366 308.789 344.089 309.519 344.497 310.42C344.905 311.321 344.971 312.335 344.683 313.28C337.872 335.912 323.128 371.544 311.247 368.252ZM378.341 293.566C370.31 297.949 316.795 275.391 279.365 258.618C278.738 258.338 278.215 257.877 277.866 257.297C277.516 256.718 277.357 256.047 277.409 255.377C277.461 254.706 277.722 254.067 278.158 253.546C278.593 253.025 279.181 252.646 279.843 252.461C304.18 245.687 332.775 237.943 357.049 229.658C358.003 229.335 359.043 229.353 359.984 229.709C360.925 230.065 361.706 230.737 362.188 231.603C373.729 252.285 389.119 287.693 378.341 293.566ZM371.718 194.419C369.207 203.063 315.041 224.077 276.431 238.066C275.784 238.3 275.08 238.335 274.413 238.167C273.746 237.999 273.148 237.635 272.698 237.124C272.249 236.613 271.972 235.98 271.903 235.31C271.833 234.641 271.975 233.966 272.311 233.377C284.594 211.768 299.228 186.554 310.394 163.935C310.833 163.048 311.58 162.343 312.502 161.945C313.425 161.546 314.462 161.481 315.429 161.76C338.566 168.413 375.081 182.815 371.718 194.419Z';
+
+// Sourcegraph Amp — three ascending chevrons (LobeHub 'amp').
+// This IS Sourcegraph's Amp, confirmed by the source SVG's own <title>. Worth
+// stating because the icon catalogues also carry Google AMP under the same
+// short name, and that is the mark this entry exists to keep out.
+const AMP = [
+  'M15.087 23.18L12.03 24l-2.097-7.823-5.738 5.738-2.251-2.251 5.718-5.719-7.769-2.082.82-3.057 11.294 3.08 3.08 11.295z',
+  'M19.505 18.762l-3.057.82-2.564-9.573-9.572-2.564.819-3.057 11.295 3.079 3.08 11.295z',
+  'M23.893 14.374l-3.057.82-2.565-9.572L8.7 3.057 9.52 0l11.295 3.08 3.079 11.294z',
+];
+
+// Block goose (LobeHub 'goose').
+const GOOSE =
+  'M21.595 23.61c1.167-.254 2.405-.944 2.405-.944l-2.167-1.784a12.124 12.124 0 01-2.695-3.131 12.127 12.127 0 00-3.97-4.049l-.794-.462a1.115 1.115 0 01-.488-.815.844.844 0 01.154-.575c.413-.582 2.548-3.115 2.94-3.44.503-.416 1.065-.762 1.586-1.159.074-.056.148-.112.221-.17.003-.002.007-.004.009-.007.167-.131.325-.272.45-.438.453-.524.563-.988.59-1.193-.061-.197-.244-.639-.753-1.148.319.02.705.272 1.056.569.235-.376.481-.773.727-1.171.165-.266-.08-.465-.086-.471h-.001V3.22c-.007-.007-.206-.25-.471-.086-.567.35-1.134.702-1.639 1.021 0 0-.597-.012-1.305.599a2.464 2.464 0 00-.438.45l-.007.009c-.058.072-.114.147-.17.221-.397.521-.743 1.083-1.16 1.587-.323.391-2.857 2.526-3.44 2.94a.842.842 0 01-.574.153 1.115 1.115 0 01-.815-.488l-.462-.794a12.123 12.123 0 00-4.049-3.97 12.133 12.133 0 01-3.13-2.695L1.332 0S.643 1.238.39 2.405c.352.428 1.27 1.49 2.34 2.302C1.58 4.167.73 3.75.06 3.4c-.103.765-.063 1.92.043 2.816.726.317 1.961.806 3.219 1.066-1.006.236-2.11.278-2.961.262.15.554.358 1.119.64 1.688.119.263.25.52.39.77.452.125 2.222.383 3.164.171l-2.51.897a27.776 27.776 0 002.544 2.726c2.031-1.092 2.494-1.241 4.018-2.238-2.467 2.008-3.108 2.828-3.8 3.67l-.483.678c-.25.351-.469.725-.65 1.117-.61 1.31-1.47 4.1-1.47 4.1-.154.486.202.842.674.674 0 0 2.79-.861 4.1-1.47.392-.182.766-.4 1.118-.65l.677-.483c.227-.187.453-.37.701-.586 0 0 1.705 2.02 3.458 3.349l.896-2.511c-.211.942.046 2.712.17 3.163.252.142.509.272.772.392.569.28 1.134.49 1.688.64-.016-.853.026-1.956.261-2.962.26 1.258.75 2.493 1.067 3.219.895.106 2.051.146 2.816.043a73.87 73.87 0 01-1.308-2.67c.811 1.07 1.874 1.988 2.302 2.34h-.001z';
+
+// Moonshot Kimi (LobeHub 'kimi') — the dot is a separate shape from the K.
+const KIMI = [
+  'M21.846 0a1.923 1.923 0 110 3.846H20.15a.226.226 0 01-.227-.226V1.923C19.923.861 20.784 0 21.846 0z',
+  'M11.065 11.199l7.257-7.2c.137-.136.06-.41-.116-.41H14.3a.164.164 0 00-.117.051l-7.82 7.756c-.122.12-.302.013-.302-.179V3.82c0-.127-.083-.23-.185-.23H3.186c-.103 0-.186.103-.186.23V19.77c0 .128.083.23.186.23h2.69c.103 0 .186-.102.186-.23v-3.25c0-.069.025-.135.069-.178l2.424-2.406a.158.158 0 01.205-.023l6.484 4.772a7.677 7.677 0 003.453 1.283c.108.012.2-.095.2-.23v-3.06c0-.117-.07-.212-.164-.227a5.028 5.028 0 01-2.027-.807l-5.613-4.064c-.117-.078-.132-.279-.028-.381z',
+];
+
+// Aider — official mark from aider.chat/assets/icons/safari-pinned-tab.svg,
+// same derivation Orca ships in its glyph set (MIT). Two loops in the flipped
+// 436-canvas coordinate space the source SVG uses; the transform keeps them
+// upright. The geometry is a monochrome glyph, so `currentColor` tints it.
+const AIDER_1 =
+  'M0 2180 l0 -2180 2180 0 2180 0 0 2180 0 2180 -2180 0 -2180 0 0 -2180z m2705 1818 c20 -20 28 -121 30 -398 l2 -305 216 -5 c118 -3 218 -8 222 -12 3 -3 10 -46 15 -95 5 -48 16 -126 25 -172 17 -86 17 -81 -17 -233 -14 -67 -13 -365 2 -438 21 -100 22 -159 5 -247 -24 -122 -24 -363 1 -458 23 -88 23 -213 1 -330 -9 -49 -17 -109 -17 -132 l0 -43 203 0 c111 0 208 -4 216 -9 10 -6 18 -51 27 -148 8 -76 16 -152 20 -168 7 -39 -23 -361 -37 -387 -10 -18 -21 -19 -214 -16 -135 2 -208 7 -215 14 -22 22 -33 301 -21 501 6 102 8 189 5 194 -8 13 -417 12 -431 -2 -12 -12 -8 -146 8 -261 8 -55 8 -95 1 -140 -6 -35 -14 -99 -17 -143 -9 -123 -14 -141 -41 -154 -18 -8 -217 -11 -679 -11 l-653 0 -11 33 c-31 97 -43 336 -27 533 5 56 6 113 2 128 l-6 26 -194 0 c-211 0 -252 4 -261 28 -12 33 -17 392 -6 522 15 186 -2 174 260 180 115 3 213 8 217 12 4 4 1 52 -5 105 -7 54 -17 130 -22 168 -7 56 -5 91 11 171 10 55 22 130 26 166 4 36 10 72 15 79 7 12 128 15 665 19 l658 5 8 30 c5 18 4 72 -3 130 -12 115 -7 346 11 454 10 61 10 75 -1 82 -8 5 -300 9 -650 9 l-636 0 -27 25 c-18 16 -26 34 -26 57 0 18 -5 87 -10 153 -10 128 5 449 22 472 5 7 26 13 46 15 78 6 1281 3 1287 -4z';
+const AIDER_2 =
+  'M1360 1833 c0 -5 -1 -164 -3 -356 l-2 -347 625 -1 c704 -1 708 -1 722 7 5 4 7 20 4 38 -29 141 -32 491 -6 595 9 38 8 45 -7 57 -15 11 -139 13 -675 14 -362 0 -658 -3 -658 -7z';
+
+const aiderMark = (
+  <svg viewBox="0 0 436 436" fill="currentColor" stroke="none">
+    <g transform="translate(0,436) scale(0.1,-0.1)">
+      <path fill="currentColor" d={AIDER_1} />
+      <path fill="currentColor" d={AIDER_2} />
+    </g>
+  </svg>
+);
+
+// OMP (oh-my-pi) — official transparent mark from omp.sh's homepage, drawn by
+// Orca's glyph set (MIT). The brand is a purple→blue gradient, so it carries
+// its own fills like the Antigravity mark; the id is uniquified per rendered
+// instance so two OMP marks on one screen can't share a gradient def.
+function OmpMark() {
+  const gradientId = `omp-grad-${useId().replace(/:/g, '')}`;
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="oklch(0.7 0.24 340)" />
+          <stop offset=".5" stopColor="oklch(0.62 0.21 295)" />
+          <stop offset="1" stopColor="oklch(0.81 0.14 200)" />
+        </linearGradient>
+      </defs>
+      <path fill={`url(#${gradientId})`} d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" />
+    </svg>
+  );
+}
+
 const BRANDS: Record<string, AgentBrand> = {
   claude: { color: '#D97757', mark: logo(CLAUDE) },
   codex: { color: MONO, mark: logo(OPENAI) },
@@ -117,6 +231,51 @@ const BRANDS: Record<string, AgentBrand> = {
   opencode: { color: MONO, mark: logo(OPENCODE) },
   pi: { color: MONO, mark: piMark },
   hermes: { color: MONO, mark: hermesMark },
+  gemini: { color: '#8E75B2', mark: logo(GEMINI) },
+  copilot: { color: MONO, mark: logo(COPILOT) },
+  qwen: { color: MONO, mark: logo(QWEN) },
+  cline: { color: MONO, mark: logo(CLINE) },
+  droid: { color: MONO, mark: logo(FACTORY, '0 0 508 508') },
+  amp: { color: MONO, mark: logoPaths(AMP) },
+  goose: { color: MONO, mark: logo(GOOSE) },
+  kimi: { color: MONO, mark: logoPaths(KIMI) },
+  cody: { color: MONO, mark: logo(SOURCEGRAPH) },
+  // `aider`'s mark is a monochrome "A" loop from its own site
+  // (safari-pinned-tab.svg), ported the same way Orca ships it — the old
+  // letter glyph existed because aider's OTHER asset is a 200×60 wordmark
+  // built from an embedded bitmap font and blur filters, illegible in a 13px
+  // tile. The pinned-tab mark has none of that, so it swaps in.
+  aider: { color: MONO, mark: aiderMark },
+  // The wider registry — agents ported from Orca's catalog, marked with its
+  // bundled icons where one exists (the file name matches Orca's `agent-icons`
+  // bundle). Commands are the binaries those tools install, so the key here is
+  // the launch command, same as every other entry.
+  openclaude: { color: MONO, mark: bundleMark('openclaude.png') },
+  autohand: { color: MONO, mark: bundleMark('autohand.png') },
+  ante: { color: MONO, mark: bundleMark('ante.png') },
+  traecli: { color: MONO, mark: bundleMark('trae.png') },
+  mimo: { color: MONO, mark: bundleMark('mimo-code.png') },
+  'prime-agent': { color: MONO, mark: bundleMark('prime-agent.png') },
+  kilo: { color: MONO, mark: bundleMark('kilo.png') },
+  'kiro-cli': { color: MONO, mark: bundleMark('kiro.png') },
+  auggie: { color: MONO, mark: bundleMark('aug.png') },
+  // Codebuff and Freebuff are one product (Freebuff is Codebuff's free tier),
+  // and they share the same official mark — the white sparkle-and-dash on a
+  // black rounded tile from freebuff.com's /logo-icon.png. Both entries point
+  // at the same file so the two tiles can't drift apart.
+  codebuff: { color: MONO, mark: bundleMark('freebuff.png') },
+  freebuff: { color: MONO, mark: bundleMark('freebuff.png') },
+  'command-code': { color: MONO, mark: bundleMark('command-code.png') },
+  cn: { color: MONO, mark: bundleMark('continue.png') },
+  vibe: { color: MONO, mark: bundleMark('mistral-vibe.png') },
+  rovo: { color: MONO, mark: bundleMark('rovo.png') },
+  openclaw: { color: MONO, mark: bundleMark('openclaw.png') },
+  devin: { color: MONO, mark: bundleMark('devin.png') },
+  // `omp` has no bundle icon in Orca's set, so its glyph (the omp.sh mark)
+  // is drawn here instead — see OmpMark above.
+  omp: { color: MONO, mark: <OmpMark /> },
+  // Crush gets Orca's bundle glyph rather than the letter it used to carry.
+  crush: { color: MONO, mark: bundleMark('crush.png') },
 };
 
 const NAME_HINTS: [RegExp, string][] = [
@@ -126,8 +285,28 @@ const NAME_HINTS: [RegExp, string][] = [
   [/opencode/i, 'opencode'],
   [/cursor/i, 'agent'],
   [/hermes/i, 'hermes'],
+  [/cody|sourcegraph/i, 'cody'],
   [/grok|xai/i, 'grok'],
   [/\bpi\b/i, 'pi'],
+  [/openclaude/i, 'openclaude'],
+  [/autohand/i, 'autohand'],
+  [/\bante\b/i, 'ante'],
+  [/trae/i, 'traecli'],
+  [/\bmimo\b/i, 'mimo'],
+  [/prime\s?agent/i, 'prime-agent'],
+  [/\bkilo\b/i, 'kilo'],
+  [/\bkiro\b/i, 'kiro-cli'],
+  [/augment|auggie/i, 'auggie'],
+  [/codebuff/i, 'codebuff'],
+  [/freebuff/i, 'freebuff'],
+  [/command\s?code/i, 'command-code'],
+  [/\bcontinue\b/i, 'cn'],
+  [/mistral|\bvibe\b/i, 'vibe'],
+  [/\brovo\b/i, 'rovo'],
+  [/openclaw/i, 'openclaw'],
+  [/devin|cognition/i, 'devin'],
+  [/\bomp\b/i, 'omp'],
+  [/crush|charm/i, 'crush'],
 ];
 
 /**

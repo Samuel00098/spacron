@@ -110,6 +110,7 @@ export function setRightDrawerTool(tool: import('./zustand/layout').RightDrawerT
 export function setRightDrawerWidth(width: number) { useLayoutStore.getState().setRightDrawerWidth(width); }
 export function toggleYoutubeVisible() { withTransition(() => { useLayoutStore.getState().toggleYoutubeVisible(); }); }
 export function toggleOrchestratorVisible() { withTransition(() => { useLayoutStore.getState().toggleOrchestratorVisible(); }); }
+export function toggleMobileVisible() { withTransition(() => { useLayoutStore.getState().toggleMobileVisible(); }); }
 export function toggleTerminal() { withTransition(() => { useLayoutStore.getState().toggleTerminal(); }); }
 export function setSidebarTab(tab: SidebarTab) { withTransition(() => { useLayoutStore.getState().setSidebarTab(tab); }); }
 export function toggleSidebarTab(tab: SidebarTab) { withTransition(() => { useLayoutStore.getState().toggleSidebarTab(tab); }); }

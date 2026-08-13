@@ -401,6 +401,7 @@ fn handle_control(
                 "workspace_git_worktree_delta" => git_worktree_delta(args, &state.workspace),
                 "workspace_git_stage_worktree" => git_stage_worktree(args, &state.workspace),
                 "workspace_git_merge_worktree" => git_merge_worktree(args, &state.workspace),
+                "workspace_git_rename_worktree" => git_rename_worktree(args, &state.workspace),
                 _ => dispatch_invoke(&cmd, args, &[state.workspace.clone()]),
             };
             match result {
@@ -1109,18 +1110,107 @@ fn git_worktree_delta(args: Value, workspace: &Path) -> Result<Value, String> {
 
     // Range must be ONE argv entry — a bare ".." makes git read the rest as a pathspec.
     let range = format!("{}..{}", since_commit, branch);
-    let committed_files = git_capture(workspace, &["diff", "--name-only", &range])
-        .unwrap_or_default()
+    let committed_paths = git_capture(workspace, &["diff", "--name-only", &range])
+        .unwrap_or_default();
+    let committed_files = committed_paths
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count();
+
+    let first_subject = if committed_files > 0 {
+        git_capture(workspace, &["log", "--reverse", "--format=%s", &range]).and_then(|s| {
+            s.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string)
+        })
+    } else {
+        None
+    };
+    let first_file = committed_paths
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            git_capture(&cleaned, &["status", "--porcelain"]).and_then(|s| {
+                s.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .map(|l| l[3.min(l.len())..].trim().to_string())
+            })
+        });
 
     Ok(json!({
         "head": head,
         "dirty_files": dirty_files,
         "committed_files": committed_files,
         "up_to_date": dirty_files == 0 && committed_files == 0,
+        "first_file": first_file,
+        "first_subject": first_subject,
     }))
+}
+
+/// workspace_git_rename_worktree: rename an agent worktree's branch in place.
+/// Mirrors `workspace_git_rename_worktree` in commands/workspace.rs — the folder
+/// is left where it is (a live agent's terminal has its cwd inside it), and the
+/// rename is confined to the `spacron/` prefix.
+fn git_rename_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
+    check_git_remote()?;
+    if !workspace.join(".git").exists() {
+        return Err("This project is not a Git repository.".to_string());
+    }
+
+    let branch = args
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'branch' argument".to_string())?
+        .trim();
+    let new_branch = args
+        .get("newBranch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'newBranch' argument".to_string())?
+        .trim();
+    if !is_valid_remote_branch_name(new_branch) || !new_branch.starts_with("spacron/") {
+        return Err("Invalid branch name".to_string());
+    }
+
+    let worktree_path = args
+        .get("worktreePath")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(worktree_path));
+    if !in_managed_worktree_area(&cleaned, workspace) {
+        return Err("Refusing to rename a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    let current = git_capture(&cleaned, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    if !branch.is_empty() && current != branch {
+        return Err(format!("Worktree is on '{current}', not '{branch}' — rename refused."));
+    }
+
+    let out = std::process::Command::new("git")
+        .args(["branch", "-m", new_branch])
+        .current_dir(&cleaned)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git branch -m: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "Failed to rename branch: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    let after = git_capture(&cleaned, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    if after != new_branch {
+        return Err(format!("Branch rename did not take effect (still on '{after}')."));
+    }
+
+    Ok(json!(new_branch))
 }
 
 /// workspace_git_stage_worktree: snapshot the agent's uncommitted work onto its own

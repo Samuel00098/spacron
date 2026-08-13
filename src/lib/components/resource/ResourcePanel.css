@@ -1,0 +1,516 @@
+/* The resource dropdown, anchored under the titlebar chip.
+
+   Participates in the global "Panel surfaces" treatment defined once in
+   global.css: the tint + traveling edge light cover `.resource-panel` exactly
+   like the usage meter, inbox and media player popovers. The tint rule there
+   overrides this background with `!important` while transparency is active;
+   this hand-rolled frost recipe is the fallback for solid themes and
+   WebKitGTK, the same split the sibling popovers use. Frost recipe is the
+   canonical popover one — see [[glass-panel-recipe]]: the color-mix layer
+   must stay LAST in the background shorthand, and no ancestor may establish
+   a backdrop root or the blur samples nothing. */
+
+.resource-panel {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  z-index: 1400;
+  width: min(480px, calc(100vw - 24px));
+  max-height: min(600px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.09));
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 18px 48px rgba(0, 0, 0, 0.55);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  animation: resource-in var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+@keyframes resource-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resource-panel {
+    animation: none;
+  }
+}
+
+.resource-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 12px 10px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.resource-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.resource-head-age {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.8;
+}
+
+.resource-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.resource-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 5px;
+  transition:
+    background-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.resource-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.resource-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+/* Machine gauges */
+.resource-system {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 13px 11px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.resource-gauge {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.resource-gauge-label {
+  flex: none;
+  width: 30px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.resource-gauge-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  overflow: hidden;
+}
+
+.resource-gauge-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text-secondary);
+  transition: width var(--dur-base, 0.25s) var(--ease-out, ease);
+}
+
+.resource-gauge-fill[data-severity='warn'] {
+  background: var(--warning, #e2c08d);
+}
+
+.resource-gauge-fill[data-severity='critical'] {
+  background: var(--error, #c74e39);
+}
+
+.resource-gauge-value {
+  flex: none;
+  min-width: 96px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Per-project groups */
+.resource-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 4px;
+}
+
+.resource-project {
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.resource-project:last-child {
+  border-bottom: none;
+}
+
+.resource-project-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px 5px;
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  z-index: 1;
+}
+
+/* The name owns its own row, so the stats can never steal its space. It grows
+   to fill everything left of the Close-all button and only ellipsizes when the
+   panel is genuinely too narrow — the meta wraps beneath instead. */
+.resource-project-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.resource-project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 3px 7px;
+  min-width: 0;
+}
+
+.resource-project-stat {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.resource-project-stat[data-severity='warn'] {
+  color: var(--warning, #e2c08d);
+}
+
+.resource-project-stat[data-severity='critical'] {
+  color: var(--error, #c74e39);
+}
+
+.resource-project-disk {
+  font-weight: 650;
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+/* Orca-style bulk close: subtle ghost button that turns into an explicit
+   confirm step. Killing every session in a project is destructive, so it must
+   stay behind a deliberate second click — see Orca's #8459 caution about
+   force-killing live agents. */
+.resource-project-close-all {
+  flex: none;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast, 0.15s) ease,
+    background-color var(--dur-fast, 0.15s) ease,
+    color var(--dur-fast, 0.15s) ease;
+}
+
+.resource-project:hover .resource-project-close-all,
+.resource-project-close-all:focus-visible {
+  opacity: 0.7;
+}
+
+.resource-project-close-all:hover {
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.resource-project-close-all[data-confirming='true'] {
+  opacity: 1 !important;
+  background: color-mix(in srgb, var(--error, #c74e39) 18%, transparent);
+  color: var(--error, #c74e39);
+  font-weight: 600;
+}
+
+/* Dead-session sweep footer (orphan cleanup). */
+.resource-sweep {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 13px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.resource-sweep-label {
+  font-size: 11px;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.85;
+}
+
+.resource-sweep-button {
+  border: none;
+  background: color-mix(in srgb, var(--warning, #e2c08d) 14%, transparent);
+  color: var(--warning, #e2c08d);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 0.15s) ease,
+    color var(--dur-fast, 0.15s) ease;
+}
+
+.resource-sweep-button:hover {
+  background: color-mix(in srgb, var(--warning, #e2c08d) 26%, transparent);
+  color: var(--warning, #e2c08d);
+}
+
+/* Session rows */
+.resource-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 6px 8px;
+}
+
+.resource-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  transition: background-color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.resource-row + .resource-row {
+  margin-top: 1px;
+}
+
+.resource-project + .resource-project .resource-list {
+  padding-top: 2px;
+}
+
+.resource-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* A session whose process is gone stays on screen but recedes — the row is
+   still answering a question ("what did I leave running?"), just a quieter one. */
+.resource-row[data-alive='false'] {
+  opacity: 0.5;
+}
+
+.resource-row-empty {
+  justify-content: center;
+  padding: 20px 14px;
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.85;
+}
+
+.resource-row-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  overflow: hidden;
+}
+
+.resource-row-mark svg,
+.resource-row-mark img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.resource-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Per-session usage bars — CPU and RAM each get a small track + value label.
+   Same recipe as the machine gauges above: track in the text-primary 10%
+   wash, fill severity-tinted for CPU. RAM fill uses a distinct treatment so
+   the two bars are tellable at a glance, and the absolute value stays in the
+   label beside it. */
+.resource-row-stats {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.resource-mini-stat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.resource-mini-track {
+  flex: none;
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  overflow: hidden;
+}
+
+.resource-mini-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text-secondary);
+  transition: width var(--dur-base, 0.25s) var(--ease-out, ease);
+}
+
+.resource-mini-fill[data-severity='warn'] {
+  background: var(--warning, #e2c08d);
+}
+
+.resource-mini-fill[data-severity='critical'] {
+  background: var(--error, #c74e39);
+}
+
+.resource-mini-fill-mem {
+  background: var(--accent, var(--text-secondary));
+  opacity: 0.85;
+}
+
+.resource-mini-value {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.resource-row-kill {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast, 0.15s) ease,
+    background-color var(--dur-fast, 0.15s) ease,
+    color var(--dur-fast, 0.15s) ease;
+}
+
+.resource-row:hover .resource-row-kill,
+.resource-row-kill:focus-visible {
+  opacity: 0.6;
+}
+
+.resource-row-kill:hover {
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--error, #c74e39);
+}
+
+.resource-note {
+  flex: none;
+  margin: 0;
+  padding: 8px 13px;
+  font-size: 10.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.resource-empty {
+  margin: 0;
+  padding: 20px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+@media (max-width: 480px) {
+  .resource-panel {
+    right: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 56px);
+    border-radius: 10px;
+  }
+
+  .resource-gauge-value {
+    min-width: 84px;
+    font-size: 10.5px;
+  }
+}

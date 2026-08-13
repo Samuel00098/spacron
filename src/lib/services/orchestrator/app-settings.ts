@@ -14,6 +14,7 @@ import {
   interfaceTransparency,
   terminalFontSize,
   formatOnSave,
+  autoSave,
   appearance,
 } from '$lib/stores/settings';
 import { useThemeStore } from '$lib/stores/zustand/theme';
@@ -69,6 +70,7 @@ const SETTINGS: Record<string, SettingDescriptor> = {
   minimap: { type: 'boolean', store: minimap },
   vimMode: { type: 'boolean', store: vimMode },
   formatOnSave: { type: 'boolean', store: formatOnSave },
+  autoSave: { type: 'boolean', store: autoSave },
   enableLsp: { type: 'boolean', store: enableLsp },
   showHidden: { type: 'boolean', store: showHidden },
   notificationsEnabled: { type: 'boolean', store: notificationsEnabled },

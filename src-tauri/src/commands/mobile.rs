@@ -18,8 +18,25 @@ use std::process::Command;
 use base64::Engine;
 use serde::Serialize;
 
+/// Run a blocking closure off the async runtime's worker threads.
+///
+/// Every call in this module shells out with `Command::output()`, which blocks
+/// until adb answers — hundreds of milliseconds is normal. Done directly inside
+/// an `async` command that occupies a runtime worker, so a screen capture in
+/// flight can delay the tap the user just made. Handing the blocking work to
+/// the blocking pool keeps input responsive no matter what else is running.
+async fn blocking<T, F>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("Device command failed to run: {e}"))?
+}
+
 /// Build a `Command` that never flashes a console window on Windows.
-fn quiet_command(program: &str) -> Command {
+pub(crate) fn quiet_command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
@@ -95,7 +112,7 @@ fn tool_in_sdk(subdir: &str, exe: &str) -> Option<String> {
 }
 
 /// The `adb` binary: SDK copy if found, otherwise rely on PATH.
-fn adb_program() -> String {
+pub(crate) fn adb_program() -> String {
     tool_in_sdk("platform-tools", "adb").unwrap_or_else(|| "adb".to_string())
 }
 
@@ -161,15 +178,23 @@ fn tool_present(program: &str, version_args: &[&str]) -> bool {
 /// Report whether `adb` and `emulator` are available on PATH.
 #[tauri::command]
 pub async fn android_check() -> AndroidTools {
-    AndroidTools {
-        adb: tool_present(&adb_program(), &["version"]),
-        emulator: tool_present(&emulator_program(), &["-version"]),
-    }
+    blocking(|| {
+        Ok(AndroidTools {
+            adb: tool_present(&adb_program(), &["version"]),
+            emulator: tool_present(&emulator_program(), &["-version"]),
+        })
+    })
+    .await
+    .unwrap_or(AndroidTools { adb: false, emulator: false })
 }
 
 /// List attached devices and running emulators (`adb devices -l`).
 #[tauri::command]
 pub async fn android_list_devices() -> Result<Vec<AndroidDevice>, String> {
+    blocking(list_devices).await
+}
+
+fn list_devices() -> Result<Vec<AndroidDevice>, String> {
     let out = quiet_command(&adb_program())
         .args(["devices", "-l"])
         .output()
@@ -233,19 +258,22 @@ fn android_avd_name(serial: &str) -> Option<String> {
 /// List installed AVDs available to launch (`emulator -list-avds`).
 #[tauri::command]
 pub async fn android_list_avds() -> Result<Vec<String>, String> {
-    let out = quiet_command(&emulator_program())
-        .args(["-list-avds"])
-        .output()
-        .map_err(|e| missing_tool("emulator", e))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(|s| s.to_string())
-        .collect())
+    blocking(|| {
+        let out = quiet_command(&emulator_program())
+            .args(["-list-avds"])
+            .output()
+            .map_err(|e| missing_tool("emulator", e))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|s| s.to_string())
+            .collect())
+    })
+    .await
 }
 
 /// Boot an AVD in the background (`emulator -avd <name>`), detached so it keeps
@@ -279,8 +307,13 @@ const FRAME_MAX_SIDE: u32 = 900;
 /// the raw PNG; the JPEG re-encode keeps the streamed payload small.
 #[tauri::command]
 pub async fn android_screencap(serial: String) -> Result<AndroidFrame, String> {
+    blocking(move || screencap(&serial)).await
+}
+
+fn screencap(serial: &str) -> Result<AndroidFrame, String> {
+    check_serial(serial)?;
     let out = quiet_command(&adb_program())
-        .args(["-s", &serial, "exec-out", "screencap", "-p"])
+        .args(["-s", serial, "exec-out", "screencap", "-p"])
         .output()
         .map_err(|e| missing_tool("adb", e))?;
     if !out.status.success() {
@@ -313,7 +346,25 @@ pub async fn android_screencap(serial: String) -> Result<AndroidFrame, String> {
     })
 }
 
+/// Reject a device serial / simulator UDID that is not shaped like one.
+///
+/// Nothing here spawns a shell — adb, xcrun and the emulator are all invoked
+/// with a raw argv — so this is defence in depth rather than an injection fix.
+/// It exists because the *rest* of the mobile surface already validates
+/// (`mobile_stream`, `ios_sim`, and the MCP server's `require_target` all share
+/// this charset), and a single unguarded entry point is how that kind of
+/// invariant quietly stops being true. Guarding the chokepoints below means a
+/// new command inherits the check instead of having to remember it.
+pub(crate) fn check_serial(serial: &str) -> Result<(), String> {
+    if crate::commands::mobile_stream::valid_serial(serial) {
+        Ok(())
+    } else {
+        Err("Invalid device serial.".to_string())
+    }
+}
+
 fn adb_shell(serial: &str, args: &[&str]) -> Result<(), String> {
+    check_serial(serial)?;
     let mut full = vec!["-s", serial, "shell"];
     full.extend_from_slice(args);
     let out = quiet_command(&adb_program())
@@ -327,9 +378,15 @@ fn adb_shell(serial: &str, args: &[&str]) -> Result<(), String> {
 }
 
 /// Inject a tap at device coordinates.
+///
+/// Note for callers on a latency budget: `input tap` boots an ART VM on the
+/// device for every single event, so this costs a few hundred milliseconds at
+/// best. When a live stream is running, `mobile_stream::mobile_input_touch`
+/// injects over scrcpy's control socket instead and is ~100× faster; this
+/// remains the fallback for the snapshot-polling mirror and for MCP callers.
 #[tauri::command]
 pub async fn android_tap(serial: String, x: i32, y: i32) -> Result<(), String> {
-    adb_shell(&serial, &["input", "tap", &x.to_string(), &y.to_string()])
+    blocking(move || adb_shell(&serial, &["input", "tap", &x.to_string(), &y.to_string()])).await
 }
 
 /// Inject a swipe between two device coordinates over `duration_ms`.
@@ -342,24 +399,27 @@ pub async fn android_swipe(
     y2: i32,
     duration_ms: i32,
 ) -> Result<(), String> {
-    adb_shell(
-        &serial,
-        &[
-            "input",
-            "swipe",
-            &x1.to_string(),
-            &y1.to_string(),
-            &x2.to_string(),
-            &y2.to_string(),
-            &duration_ms.to_string(),
-        ],
-    )
+    blocking(move || {
+        adb_shell(
+            &serial,
+            &[
+                "input",
+                "swipe",
+                &x1.to_string(),
+                &y1.to_string(),
+                &x2.to_string(),
+                &y2.to_string(),
+                &duration_ms.to_string(),
+            ],
+        )
+    })
+    .await
 }
 
 /// Inject a hardware key event by Android keycode (e.g. 4 = BACK, 3 = HOME).
 #[tauri::command]
 pub async fn android_key(serial: String, keycode: i32) -> Result<(), String> {
-    adb_shell(&serial, &["input", "keyevent", &keycode.to_string()])
+    blocking(move || adb_shell(&serial, &["input", "keyevent", &keycode.to_string()])).await
 }
 
 /// Type a string of text into the focused field.
@@ -372,9 +432,123 @@ pub async fn android_text(serial: String, text: String) -> Result<(), String> {
     // escaping embedded single quotes via the `'\''` idiom — so every character
     // reaches `input text` literally. (The host side never invokes a shell: adb
     // is run via Command::args, i.e. a raw argv.)
-    let encoded = text.replace(' ', "%s");
-    let quoted = format!("'{}'", encoded.replace('\'', "'\\''"));
-    adb_shell(&serial, &["input", "text", &quoted])
+    blocking(move || {
+        let encoded = text.replace(' ', "%s");
+        let quoted = format!("'{}'", encoded.replace('\'', "'\\''"));
+        adb_shell(&serial, &["input", "text", &quoted])
+    })
+    .await
+}
+
+/// Rotate the device display. `rotation` is 0–3: 0 = portrait, 1 = landscape
+/// (90° clockwise), 2 = reverse portrait, 3 = reverse landscape.
+///
+/// Auto-rotate is locked off so the requested orientation sticks instead of
+/// being overridden by the accelerometer a moment later.
+#[tauri::command]
+pub async fn android_rotate(serial: String, rotation: i32) -> Result<(), String> {
+    blocking(move || {
+        let rotation = rotation.clamp(0, 3);
+
+        // Modern API (Android 11+): `wm set-user-rotation lock <n>` sets both the
+        // lock state and the orientation in one call. Older devices don't know the
+        // verb, so fall back to the settings-database dance below.
+        let modern = adb_shell(&serial, &["wm", "set-user-rotation", "lock", &rotation.to_string()]);
+        if modern.is_ok() {
+            return Ok(());
+        }
+
+        // Classic path: disable auto-rotate, then write the orientation. The first
+        // call is best-effort — it only fails when the value already matches, which
+        // is fine.
+        let _ = adb_shell(
+            &serial,
+            &["settings", "put", "system", "accelerometer_rotation", "0"],
+        );
+        adb_shell(&serial, &["settings", "put", "system", "user_rotation", &rotation.to_string()])
+    })
+    .await
+}
+
+/// Query the device's current screen size (`wm size`), returning (width,
+/// height) in device pixels.
+///
+/// A plain text call — no screen capture — so MCP input tools can convert
+/// normalized (0–1) coordinates to pixels without decoding a frame. Not a
+/// `#[tauri::command]`: the panel already gets dimensions from the streamed
+/// frame; only the MCP server needs this.
+pub async fn android_screen_size(serial: &str) -> Result<(u32, u32), String> {
+    check_serial(serial)?;
+    let out = quiet_command(&adb_program())
+        .args(["-s", serial, "shell", "wm", "size"])
+        .output()
+        .map_err(|e| missing_tool("adb", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Output is one or more `size:` lines, e.g. "Physical size: 1080x2400"
+    // ("Override size: …" when a scrcpy/ADB override is active). Prefer the
+    // physical size so normalized coordinates track the real framebuffer even
+    // when an override is set.
+    let dims = text.lines().find_map(|line| {
+        let line = line.trim();
+        if !line.to_ascii_lowercase().starts_with("physical size:") {
+            return None;
+        }
+        let (w, h) = line.split(':').nth(1)?.trim().split_once('x')?;
+        Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+    });
+    dims.ok_or_else(|| format!("Could not parse screen size from `wm size`: {text}"))
+}
+
+/// Power off a running Android emulator by serial (`adb emu kill`). No-op-safe:
+/// adb reports an error if the serial is not an emulator, which surfaces here.
+#[tauri::command]
+pub async fn android_emu_kill(serial: String) -> Result<(), String> {
+    check_serial(&serial)?;
+    let out = quiet_command(&adb_program())
+        .args(["-s", &serial, "emu", "kill"])
+        .output()
+        .map_err(|e| missing_tool("adb", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// Dump the most recent device logcat lines (`adb logcat -d -t <lines>`), so
+/// agents can read what an app actually logged. `filter` (optional,
+/// case-insensitive substring) is applied here in Rust rather than in a device
+/// shell, so no shell metacharacter from the caller ever reaches the device.
+#[tauri::command]
+pub async fn android_logcat(
+    serial: String,
+    lines: Option<i32>,
+    filter: Option<String>,
+) -> Result<String, String> {
+    check_serial(&serial)?;
+    let lines = lines.unwrap_or(100).clamp(10, 500);
+    let out = quiet_command(&adb_program())
+        .args(["-s", &serial, "logcat", "-d", "-t", &lines.to_string()])
+        .output()
+        .map_err(|e| missing_tool("adb", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if let Some(needle) = filter.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        let lower = needle.to_lowercase();
+        text = text
+            .lines()
+            .filter(|line| line.to_lowercase().contains(&lower))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            return Ok(format!("No logcat lines matched '{needle}'."));
+        }
+    }
+    Ok(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +601,9 @@ pub async fn ios_list_simulators() -> Result<Vec<IosSimulator>, String> {
 }
 
 /// Parse the `devices` map of `simctl list devices --json` into a flat list.
-fn parse_simctl_devices(json: &str) -> Result<Vec<IosSimulator>, String> {
+/// `pub(crate)` so the serve-sim streamer (`ios_sim`) can resolve a UDID to a
+/// device name without re-invoking simctl.
+pub(crate) fn parse_simctl_devices(json: &str) -> Result<Vec<IosSimulator>, String> {
     let parsed: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("Failed to parse simctl output: {e}"))?;
     let mut sims = Vec::new();
@@ -477,6 +653,7 @@ fn simctl(args: &[&str]) -> Result<(), String> {
 /// Boot a simulator by UDID and reveal the Simulator app window.
 #[tauri::command]
 pub async fn ios_boot(udid: String) -> Result<(), String> {
+    check_serial(&udid)?;
     // `boot` errors if already booted; treat that as success.
     if let Err(e) = simctl(&["boot", &udid]) {
         if !e.to_lowercase().contains("booted") {
@@ -491,6 +668,7 @@ pub async fn ios_boot(udid: String) -> Result<(), String> {
 /// Shut down a simulator by UDID.
 #[tauri::command]
 pub async fn ios_shutdown(udid: String) -> Result<(), String> {
+    check_serial(&udid)?;
     simctl(&["shutdown", &udid])
 }
 
@@ -509,6 +687,7 @@ pub async fn ios_open_simulator() -> Result<(), String> {
 #[tauri::command]
 pub async fn ios_screenshot(udid: String) -> Result<String, String> {
     require_macos()?;
+    check_serial(&udid)?;
     let out = quiet_command("xcrun")
         .args(["simctl", "io", &udid, "screenshot", "--type", "png", "-"])
         .output()
@@ -519,5 +698,21 @@ pub async fn ios_screenshot(udid: String) -> Result<String, String> {
     if out.stdout.is_empty() {
         return Err("Empty screenshot (is the simulator booted?)".to_string());
     }
-    Ok(base64::engine::general_purpose::STANDARD.encode(&out.stdout))
+
+    // Downscale to the same long-edge cap as Android frames. The panel displays
+    // the result in an `<img>` that scales it down anyway, and the MCP server
+    // returns it to an agent verbatim — a full-res modern simulator screenshot
+    // can be several megabytes as base64, which is a hostile MCP response.
+    let img = image::load_from_memory(&out.stdout)
+        .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
+    let scaled = if img.width().max(img.height()) > FRAME_MAX_SIDE {
+        img.resize(FRAME_MAX_SIDE, FRAME_MAX_SIDE, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(scaled.to_rgb8())
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode screenshot: {e}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(buf.get_ref()))
 }

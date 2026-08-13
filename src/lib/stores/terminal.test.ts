@@ -42,7 +42,10 @@ vi.mock('./notification', () => ({
 // Rules-file delivery (CLAUDE.md / AGENTS.md) goes through Tauri's invoke. Most
 // tests pass no cwd, so resolveSessionRoot returns null and this is never hit;
 // the cwd-aware tests below assert against it.
-const invokeMock = vi.hoisted(() => vi.fn(async () => undefined));
+// Accepts any args so individual tests can mockImplementation a richer
+// response (e.g. a pre-existing .aider.conf.yml); still resolves undefined by
+// default. beforeEach resets both calls and the implementation.
+const invokeMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 import {
@@ -637,6 +640,48 @@ describe('rules-file brief delivery', () => {
   const projectId = 'project-terminal-rules-file';
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+  /**
+   * Poll until `predicate` holds, then return.
+   *
+   * Brief delivery is asynchronous, so every test here has to wait for it. A
+   * fixed `sleep` is the wrong tool: it is simultaneously too slow on an idle
+   * machine and too short on a loaded one, and it fails *asymmetrically* —
+   * a test asserting the brief is absent passes trivially when the sleep is too
+   * short, while a test asserting it arrived fails. That is exactly how this
+   * block used to flake under CPU load. Polling makes both directions honest
+   * and usually returns in a few milliseconds.
+   */
+  const waitFor = async (predicate: () => boolean, timeoutMs = 3000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await sleep(10);
+    }
+    return predicate();
+  };
+
+  /** Paths passed to `fs_write_file` so far. */
+  const writtenPathsSoFar = (): string[] =>
+    invokeMock.mock.calls
+      .filter((c: unknown[]) => c[0] === 'fs_write_file')
+      .map((c: unknown[]) => (c[1] as { path: string }).path);
+
+  /** Whether the standing brief has been pasted into the PTY. */
+  const briefWasPasted = (writeSpy: { mock: { calls: unknown[][] } }): boolean =>
+    writeSpy.mock.calls.some(
+      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF')
+    );
+
+  /**
+   * Whether the session has been marked briefed.
+   *
+   * Delivery and this flag do not land in the same tick — the flag is set just
+   * after the write — so any wait that gates only on the delivery can release
+   * while `briefed` is still false. Wait on the *whole* post-condition.
+   */
+  const sessionBriefed = (id: number | null): boolean =>
+    get(sessions).find((s) => s.id === id)?.briefed === true;
+
   beforeEach(() => {
     setActiveTerminalProject(projectId);
     invokeMock.mockClear();
@@ -656,19 +701,17 @@ describe('rules-file brief delivery', () => {
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     const writeSpy = mockPty.write;
 
-    await sleep(350);
+    // Wait for the rules files themselves, not a fixed delay — otherwise the
+    // "nothing was pasted" assertion below passes for free if delivery simply
+    // hasn't run yet.
+    await waitFor(
+      () => writtenPathsSoFar().includes('/repo/AGENTS.md') && sessionBriefed(sessionId),
+    );
 
     // The standing brief was written to rules files, not pasted into the REPL.
-    const writtenPaths = invokeMock.mock.calls
-      .filter((c: unknown[]) => c[0] === 'fs_write_file')
-      .map((c: unknown[]) => (c[1] as { path: string }).path);
-    expect(writtenPaths).toContain('/repo/CLAUDE.md');
-    expect(writtenPaths).toContain('/repo/AGENTS.md');
-
-    const pasted = writeSpy.mock.calls.some(
-      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF')
-    );
-    expect(pasted).toBe(false);
+    expect(writtenPathsSoFar()).toContain('/repo/CLAUDE.md');
+    expect(writtenPathsSoFar()).toContain('/repo/AGENTS.md');
+    expect(briefWasPasted(writeSpy)).toBe(false);
 
     const session = get(sessions).find((s) => s.id === sessionId);
     expect(session?.briefed).toBe(true);
@@ -712,18 +755,13 @@ describe('rules-file brief delivery', () => {
     writeSpy.mockClear();
 
     markSessionAgentPreset(sessionId!, 'claude');
-    await sleep(350);
-
-    const writtenPaths = invokeMock.mock.calls
-      .filter((c: unknown[]) => c[0] === 'fs_write_file')
-      .map((c: unknown[]) => (c[1] as { path: string }).path);
-    expect(writtenPaths).toContain('/repo-typed/CLAUDE.md');
-    expect(writtenPaths).toContain('/repo-typed/AGENTS.md');
-
-    const pasted = writeSpy.mock.calls.some(
-      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF')
+    await waitFor(
+      () => writtenPathsSoFar().includes('/repo-typed/AGENTS.md') && sessionBriefed(sessionId),
     );
-    expect(pasted).toBe(false);
+
+    expect(writtenPathsSoFar()).toContain('/repo-typed/CLAUDE.md');
+    expect(writtenPathsSoFar()).toContain('/repo-typed/AGENTS.md');
+    expect(briefWasPasted(writeSpy)).toBe(false);
 
     const session = get(sessions).find((s) => s.id === sessionId);
     expect(session?.briefed).toBe(true);
@@ -737,17 +775,14 @@ describe('rules-file brief delivery', () => {
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     const writeSpy = mockPty.write;
 
-    await sleep(350);
+    await waitFor(() => briefWasPasted(writeSpy));
 
     // No cwd → no rules file written → the legacy paste path delivers the brief.
     expect(invokeMock).not.toHaveBeenCalledWith('fs_write_file', expect.anything());
-    const pasted = writeSpy.mock.calls.some(
-      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF')
-    );
-    expect(pasted).toBe(true);
+    expect(briefWasPasted(writeSpy)).toBe(true);
   });
 
-  it('still pastes the brief for non-rules agents (Pi) even with a cwd', async () => {
+  it('briefs pi via the rules file, not the paste, even with a cwd', async () => {
     const sessionId = await spawnAgentPreset('pi', '/repo');
     expect(sessionId).not.toBeNull();
 
@@ -755,13 +790,81 @@ describe('rules-file brief delivery', () => {
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     const writeSpy = mockPty.write;
 
-    await sleep(350);
-
-    // Pi doesn't auto-load a rules file, so it keeps the paste delivery.
-    const pasted = writeSpy.mock.calls.some(
-      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('SORYQ AGENT BRIEF')
+    await waitFor(
+      () => writtenPathsSoFar().includes('/repo/AGENTS.md') && sessionBriefed(sessionId),
     );
-    expect(pasted).toBe(true);
+
+    // Pi loads AGENTS.md/CLAUDE.md as context files at startup (verified
+    // 2026-08-12), so the rules file is written and no charter is pasted.
+    expect(writtenPathsSoFar()).toContain('/repo/CLAUDE.md');
+    expect(writtenPathsSoFar()).toContain('/repo/AGENTS.md');
+    expect(briefWasPasted(writeSpy)).toBe(false);
+    const session = get(sessions).find((s) => s.id === sessionId);
+    expect(session?.briefed).toBe(true);
+  });
+
+  it('briefs cn via its Continue rule file, not the paste, even with a cwd', async () => {
+    const sessionId = await spawnAgentPreset('cn', '/repo');
+    expect(sessionId).not.toBeNull();
+
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
+    const writeSpy = mockPty.write;
+
+    await waitFor(
+      () =>
+        writtenPathsSoFar().includes('/repo/.continue/rules/spacron-brief.md') &&
+        sessionBriefed(sessionId),
+    );
+
+    // Continue loads markdown rule files from .continue/rules/ (verified
+    // against docs.continue.dev), so the rules file is written and no charter
+    // is pasted.
+    expect(writtenPathsSoFar()).toContain('/repo/.continue/rules/spacron-brief.md');
+    expect(briefWasPasted(writeSpy)).toBe(false);
+    const session = get(sessions).find((s) => s.id === sessionId);
+    expect(session?.briefed).toBe(true);
+  });
+
+  it('falls back to the paste for aider when its config already declares read:', async () => {
+    // .aider.conf.yml pre-exists with its own read list — the file channel
+    // cannot complete without merging the user's YAML, so the paste delivers
+    // the brief instead of silently starving aider.
+    // The describe-level beforeEach restores the default mock afterwards.
+    invokeMock.mockImplementation(async (cmd: unknown, args: unknown) => {
+      const path = (args as { path?: string } | null)?.path ?? '';
+      if (cmd === 'fs_read_file' && path.endsWith('.aider.conf.yml')) {
+        return 'read: [CONVENTIONS.md, house.md]\n';
+      }
+      return undefined;
+    });
+    const sessionId = await spawnAgentPreset('aider', '/repo');
+    expect(sessionId).not.toBeNull();
+
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
+    const writeSpy = mockPty.write;
+
+    await waitFor(() => briefWasPasted(writeSpy));
+
+    expect(briefWasPasted(writeSpy)).toBe(true);
+  });
+
+  it('still pastes the brief for non-rules agents (traecli) even with a cwd', async () => {
+    const sessionId = await spawnAgentPreset('traecli', '/repo');
+    expect(sessionId).not.toBeNull();
+
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
+    const writeSpy = mockPty.write;
+
+    await waitFor(() => briefWasPasted(writeSpy) && sessionBriefed(sessionId));
+
+    // `traecli` reads no rules file at all (verified 2026-08-12 — the open-source
+    // trae-agent CLI has no AGENTS.md/CLAUDE.md/.trae-rules loader), so it keeps
+    // the paste delivery. The TRAE IDE rule file is still written as a bonus.
+    expect(writtenPathsSoFar()).toContain('/repo/.trae/rules/project_rules.md');
+    expect(briefWasPasted(writeSpy)).toBe(true);
     const session = get(sessions).find((s) => s.id === sessionId);
     expect(session?.briefed).toBe(true);
   });
@@ -795,7 +898,9 @@ describe('restored agent sessions', () => {
     });
 
     expect(relaunched).toBe(true);
-    expect(writeSpy).toHaveBeenCalledWith('claude\r');
+    // Permission mode defaults to yolo, so a relaunched agent carries its own
+    // skip-permissions flag on the launch line.
+    expect(writeSpy).toHaveBeenCalledWith('claude --dangerously-skip-permissions\r');
 
     await sleep(100);
 

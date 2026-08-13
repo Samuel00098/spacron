@@ -1,0 +1,644 @@
+/* ── Settings → Agents — full pane ───────────────────────────────────────── */
+
+.agents-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Permission mode control */
+.agents-mode {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-lg, 12px);
+  background: color-mix(in srgb, var(--bg-hover) 25%, transparent);
+}
+
+.agents-mode-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agents-mode-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agents-mode-detail {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.agents-mode-detail strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.agents-mode-detail code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.agents-mode-customized {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  color: var(--accent);
+}
+
+.agents-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.agents-mode-segment {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #808080);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.agents-mode-segment:hover {
+  color: var(--text-secondary, #c0c0c0);
+}
+
+.agents-mode-segment.active {
+  color: var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 16%, transparent);
+}
+
+/* Roster header */
+.agents-roster-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agents-roster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  /* Optical alignment: the hint lines up with the first row's brand mark, which
+     starts 14px in from the card edge. */
+  padding: 0 2px 0 2px;
+}
+
+.agents-roster-hint {
+  margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Roster rows */
+.agents-roster {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* A closed card, matching the permission-mode block above it. This was a lone
+     border-top, which read as a stray rule floating over the list. */
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-hover) 12%, transparent);
+}
+
+.agents-row {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.agents-row:last-child {
+  border-bottom: none;
+}
+
+.agents-row:hover {
+  background: var(--bg-hover);
+}
+
+/* Dim what the hiding applies to — not the button that undoes it. */
+.agents-row.hidden .agents-row-mark,
+.agents-row.hidden .agents-row-meta {
+  opacity: 0.5;
+}
+
+.agents-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  min-height: 52px;
+}
+
+.agents-row-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--text-primary, #e8e8e8);
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+}
+
+.agents-row-mark svg,
+.agents-row-mark img {
+  width: 18px;
+  height: 18px;
+  display: block;
+  object-fit: contain;
+}
+
+.agents-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.agents-row-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agents-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agents-row-badge {
+  /* One height for every badge in the row, whatever its text: `line-height` and
+     padding are fixed rather than left to the glyphs, so "Built-in" and
+     "Signed in" can't sit at two different sizes next to each other. */
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.agents-row-badge.custom {
+  color: #8b5cf6;
+  border-color: color-mix(in srgb, #8b5cf6 25%, transparent);
+  background: color-mix(in srgb, #8b5cf6 10%, transparent);
+}
+
+.agents-row-badge[data-tone='ready'] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 25%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.agents-row-badge[data-tone='partial'] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.agents-row-badge[data-tone='absent'] {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.agents-row-cmd {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Command + brief channel on one line, so the chip can't wrap under the code. */
+.agents-row-cmd-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* How the agent receives its standing brief — the old "Rules file" checkbox,
+   demoted to a quiet chip so it can't compete with the install/sign-in badge. */
+.agents-row-brief {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 15px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  white-space: nowrap;
+}
+
+.agents-row-brief[data-brief='rules'] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 22%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.agents-row-note-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
+/* Fixed width so every row's status badge starts on the same vertical line —
+   "Signed in" and "Not installed" are very different lengths. A column so a
+   row can stack its one-click Sign in pill under the badge without widening
+   the column (rows without it are unchanged — a single child looks identical). */
+.agents-row-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  width: 92px;
+}
+
+/* One-click Sign in — the same affordance as the spawn picker, so the
+   settings roster and the picker tell the same story (and offer the same
+   fix). Only rendered where detection *knows* credentials are missing. */
+.agents-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.agents-signin-btn:hover {
+  background: var(--accent);
+  color: var(--button-text, #fff);
+  border-color: var(--accent);
+}
+
+.agents-signin-btn:active {
+  transform: scale(0.95);
+}
+
+/* Same pill as Sign in, deliberately quieter: it leaves the app for a web
+   page, and it sits on rows the user may never intend to install. Accent
+   colour here would make forty absent CLIs shout at once. */
+.agents-install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.agents-install-btn:hover {
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.agents-install-btn:active {
+  transform: scale(0.95);
+}
+
+.agents-row-restore {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.agents-row-restore:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.agents-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  /* Pulls the controls clear of the status badge without widening the gap
+     between the mark, the name block and the badge. */
+  margin-left: 4px;
+}
+
+/* Per-row Yolo / Manual pin — a mini version of the global segmented control. */
+.agents-row-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.agents-row-mode-segment {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted, #808080);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.agents-row-mode-segment:hover {
+  color: var(--text-secondary, #c0c0c0);
+}
+
+.agents-row-mode-segment.active {
+  color: var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 16%, transparent);
+}
+
+.agents-expand,
+.agents-hide {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.agents-expand:hover,
+.agents-hide:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.agents-expand svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.agents-expand.open svg {
+  transform: rotate(180deg);
+}
+
+.agents-hide:hover {
+  background: color-mix(in srgb, var(--error, #f87171) 12%, transparent);
+  color: var(--error, #f87171);
+}
+
+/* Launch editor */
+.agents-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 14px 56px;
+  border-top: 1px dashed var(--border-subtle, var(--border));
+  background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
+  animation: agents-editor-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes agents-editor-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agents-editor-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.agents-editor-note code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+}
+
+.agents-editor-hint {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.agents-editor-hint code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.agents-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.agents-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agents-editor-field > span {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.agents-editor-field input,
+.agents-editor-field textarea {
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  resize: vertical;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.agents-editor-field input:focus,
+.agents-editor-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.agents-editor-field input::placeholder,
+.agents-editor-field textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.agents-editor-env {
+  grid-column: 1 / -1;
+}
+
+.agents-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agents-editor-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  /* Not --bg-primary: dark mode's accent is near-white and the label vanished
+     against it. Any accent fill owes its label --on-accent. */
+  color: var(--on-accent, var(--button-text));
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--dur-fast) var(--ease-out);
+}
+
+.agents-editor-btn:hover {
+  filter: brightness(1.12);
+}
+
+.agents-editor-btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+.agents-editor-btn.ghost:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.agents-editor-footnote {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Keyboard focus ──────────────────────────────────────────────────────────
+   Every control in this pane was reachable by Tab with nothing to show for it.
+   The ring is --focus-ring, never the accent: focus fires on every element in
+   turn, and an accent spent that often stops pointing at anything. */
+.agents-pane button:focus-visible,
+.agents-pane select:focus-visible,
+.agents-pane input:focus-visible,
+.agents-pane textarea:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--text-secondary));
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 6px);
+}
+
+/* The segmented controls clip at the group edge, so their rings sit inside. */
+.agents-mode-segment:focus-visible,
+.agents-row-mode-segment:focus-visible {
+  outline-offset: -1px;
+}
+
+.agents-editor-field input:focus-visible,
+.agents-editor-field textarea:focus-visible {
+  /* These already signal focus with a border colour change — a ring on top
+     would double it. */
+  outline: none;
+}

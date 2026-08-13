@@ -41,6 +41,12 @@ export interface WorktreeInfo {
    * can't re-apply the same conflicting patch on a loop.
    */
   stageConflict?: boolean;
+  /**
+   * True once the branch has been renamed from the agent's first real work
+   * (Orca-style). Persisted so the rename happens exactly once per worktree,
+   * not once per reconcile pass or per restart.
+   */
+  renamedFromWork?: boolean;
 }
 
 /** Where a stage should resume from: the last staged tip, else the fork point. */
@@ -79,6 +85,83 @@ export function deriveTaskBranch(taskId: string, label?: string | null): string 
  * possible (not a git repo, no commits yet, backend failure) — the caller then
  * falls back to running the agent in the project root.
  */
+/**
+ * Derive a branch name from the agent's first real work, Orca-style: name the
+ * work from what it actually did rather than the spawn-time label. The commit
+ * subject is the best source ("fix: login redirect" → `fix-login-redirect`);
+ * when the agent never commits, the first changed file's name stands in. The
+ * trailing short id is kept from the current branch so a rename never collides
+ * with another agent's branch.
+ *
+ * Returns null when there's nothing nameable yet, or when the derived name is
+ * identical to the current branch (the work already matches the label).
+ */
+export function deriveFirstWorkBranch(
+  worktree: WorktreeInfo,
+  first: { file?: string | null; subject?: string | null },
+): string | null {
+  // The trailing segment of `spacron/<slug>-<short>` is the uniqueness suffix
+  // (`deriveTaskBranch` appends one). Keeping it through the rename is what
+  // lets two agents doing the same kind of work stay on distinct branches.
+  const short = worktree.branch.split('-').pop() ?? '';
+  if (!short) return null;
+
+  // Prefer the oldest commit subject — that's the agent's own summary of what
+  // the branch does. Strip conventional-commit prefixes (feat:, fix:, chore:)
+  // so the slug reads as the work, not the ceremony around it. Our own snapshot
+  // commit ("spacron: snapshot uncommitted agent work") says nothing about the
+  // work, so it is skipped like any other empty subject.
+  const subject = first.subject?.trim() ?? '';
+  const fromSubject =
+    subject && !/^spacron\s*:/i.test(subject)
+      ? slugify(subject.replace(/^(feat|fix|chore|docs|refactor|style|test|perf|build|ci|revert)(\([^)]*\))?:\s*/i, ''))
+      : '';
+
+  // No commit subject (an agent that never commits) — fall back to the first
+  // changed file's name, without its extension. CamelCase is split into words
+  // first (`LoginForm` → `login-form`), which `slugify` alone would mangle into
+  // `loginform` — file names are where agents reveal the work when they don't
+  // commit.
+  const file = first.file?.trim() ?? '';
+  const fileName = file.replace(/\\/g, '/').split('/').pop() ?? file;
+  const splitWords = fileName
+    .replace(/\.[^.]+$/, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  const fromFile = splitWords ? slugify(splitWords) : '';
+
+  // `slugify` falls back to "agent" on empty input, but an empty slug here
+  // means "nothing nameable yet" — keep the spawn-time label instead.
+  const slug = (fromSubject || fromFile).slice(0, 24);
+  if (!slug || slug === 'agent') return null;
+  const branch = `spacron/${slug}-${short}`;
+  return branch === worktree.branch ? null : branch;
+}
+
+/**
+ * Rename an agent worktree's branch in place (Orca-style first-work naming).
+ * Only the branch moves — the checkout folder stays put, because a running
+ * agent's terminal has its cwd inside it. Returns the new branch name, or null
+ * when the rename was refused.
+ */
+export async function renameTaskWorktree(
+  projectId: string,
+  worktree: WorktreeInfo,
+  newBranch: string,
+): Promise<string | null> {
+  try {
+    const renamed = await backendInvoke<string>('workspace_git_rename_worktree', {
+      projectId,
+      worktreePath: worktree.path,
+      branch: worktree.branch,
+      newBranch,
+    });
+    return typeof renamed === 'string' && renamed ? renamed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createTaskWorktree(args: {
   projectId: string;
   taskId: string;
@@ -265,6 +348,10 @@ export interface WorktreeDelta {
   upToDate: boolean;
   /** Total outstanding files — what the UI counts. */
   pendingFiles: number;
+  /** First changed path on the branch — for naming the branch from the work. */
+  firstFile?: string | null;
+  /** Oldest commit subject on the branch — the best name source when present. */
+  firstSubject?: string | null;
 }
 
 /**
@@ -285,6 +372,8 @@ export async function getWorktreeDelta(
       dirty_files: number;
       committed_files: number;
       up_to_date: boolean;
+      first_file?: string | null;
+      first_subject?: string | null;
     }>('workspace_git_worktree_delta', {
       projectId,
       worktreePath: worktree.path,
@@ -297,6 +386,8 @@ export async function getWorktreeDelta(
       committedFiles: raw.committed_files,
       upToDate: raw.up_to_date,
       pendingFiles: Math.max(raw.dirty_files, raw.committed_files),
+      firstFile: raw.first_file ?? null,
+      firstSubject: raw.first_subject ?? null,
     };
   } catch {
     return null;

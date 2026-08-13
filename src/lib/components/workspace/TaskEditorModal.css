@@ -1,0 +1,333 @@
+/* Task detail editor — a compact modal over the kanban board. Frost recipe
+   follows the canonical side-panel one (color-mix last, backdrop root here). */
+
+.task-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: te-backdrop-in 0.18s ease-out;
+}
+
+@keyframes te-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.task-editor {
+  width: min(420px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+  animation: te-in 0.22s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+@keyframes te-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-editor, .task-editor-backdrop { animation: none; }
+}
+
+.te-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.te-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.te-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  color: var(--accent);
+  background: var(--accent-light);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  flex-shrink: 0;
+}
+
+.te-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.te-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-fast, 0.15s) var(--ease-out, ease), color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.te-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.te-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.te-field {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 70%),
+    rgba(var(--bg-primary-rgb, 10, 10, 14), 0.5);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+  transition:
+    border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease);
+  box-sizing: border-box;
+}
+
+.te-field:hover {
+  border-color: var(--border-focus, var(--border));
+}
+
+.te-field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.te-title-input {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.te-desc {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.te-field::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.te-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.te-label {
+  width: 58px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.te-seg {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  background: rgba(var(--bg-primary-rgb, 10, 10, 14), 0.28);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 3px;
+}
+
+.te-seg-btn {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.te-seg-btn:hover {
+  color: var(--text-primary);
+}
+
+.te-seg-btn.active {
+  color: var(--on-accent, var(--bg-primary));
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* Priority-active states keep their semantic colour instead of the neutral accent. */
+.te-seg-btn.pri-high.active { background: var(--error); border-color: var(--error); color: var(--on-accent, var(--bg-primary)); }
+.te-seg-btn.pri-medium.active { background: var(--warning); border-color: var(--warning); color: var(--on-accent, var(--bg-primary)); }
+.te-seg-btn.pri-low.active { background: var(--text-muted); border-color: var(--text-muted); color: var(--on-accent, var(--bg-primary)); }
+
+.te-due {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.te-date {
+  flex: 1;
+  min-width: 0;
+  /* The native picker follows the app's theme rather than the OS. */
+  color-scheme: dark;
+}
+
+:root.light-theme .te-date {
+  color-scheme: light;
+}
+
+.te-clear-due {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.te-clear-due:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
+}
+
+.te-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.te-run-wrap {
+  position: relative;
+}
+
+.te-run,
+.te-delete {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color var(--dur-fast, 0.15s) var(--ease-out, ease), color var(--dur-fast, 0.15s) var(--ease-out, ease), border-color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.te-run {
+  color: var(--on-accent, var(--bg-primary));
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.te-run:hover {
+  background: var(--accent-hover, var(--accent));
+}
+
+.te-delete {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.te-delete:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+}
+
+/* The shared run menu, re-anchored below the modal footer button. */
+.task-editor .te-run-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 170px;
+  max-width: 240px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: te-run-in 0.14s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+@keyframes te-run-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.task-editor .te-run-menu .task-run-opt {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 550;
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-editor .te-run-menu .task-run-opt:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

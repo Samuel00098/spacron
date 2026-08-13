@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
 import { copyTextToClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
-import { isTauriRuntime } from '$lib/utils/tauri';
+import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -1176,31 +1176,43 @@ function TerminalPane({
         const pos = payload.position as { x: number; y: number } | undefined;
         if (!pos) return;
 
-        // Only handle drops within this pane's container
         const c = containerRef.current;
         if (!c) return;
-        const rect = c.getBoundingClientRect();
-        if (
-          pos.x < rect.left || pos.x > rect.right ||
-          pos.y < rect.top || pos.y > rect.bottom
-        ) return;
 
-        // Don't steal drops from the floating prompt bar
-        const barEl = document.querySelector('#floating-prompt-bar');
-        if (barEl) {
-          const barRect = barEl.getBoundingClientRect();
+        void dropPositionToCss(pos).then((css) => {
+          if (disposed || !css) return;
+
+          // Hidden rooms (parked project layers, stage-hidden panes) stay laid
+          // out at full size, so their rects contain every drop point. Hidden
+          // layers are `visibility: hidden` + `pointer-events: none`, which the
+          // container inherits — reject those before the rect test.
+          const style = getComputedStyle(c);
+          if (style.visibility === 'hidden' || style.pointerEvents === 'none') return;
+
+          // Only handle drops within this pane's container
+          const rect = c.getBoundingClientRect();
           if (
-            pos.x >= barRect.left && pos.x <= barRect.right &&
-            pos.y >= barRect.top && pos.y <= barRect.bottom
+            css.x < rect.left || css.x > rect.right ||
+            css.y < rect.top || css.y > rect.bottom
           ) return;
-        }
 
-        // Write each path as quoted text into the terminal
-        const text = paths
-          .map((p) => p.replace(/\\/g, '/'))
-          .map((p) => (p.includes(' ') ? `"${p}"` : p))
-          .join(' ');
-        writeToSession(sessionId, text);
+          // Don't steal drops from the floating prompt bar
+          const barEl = document.querySelector('#floating-prompt-bar');
+          if (barEl) {
+            const barRect = barEl.getBoundingClientRect();
+            if (
+              css.x >= barRect.left && css.x <= barRect.right &&
+              css.y >= barRect.top && css.y <= barRect.bottom
+            ) return;
+          }
+
+          // Write each path as quoted text into the terminal
+          const text = paths
+            .map((p) => p.replace(/\\/g, '/'))
+            .map((p) => (p.includes(' ') ? `"${p}"` : p))
+            .join(' ');
+          writeToSession(sessionId, text);
+        });
       }).then((u) => {
         if (disposed) u();
         else unlistenOsDrop = u;

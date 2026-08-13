@@ -74,22 +74,7 @@ pub fn run() {
                 None,
             );
 
-            // First-time launch: open the main window in maximized state.
-            // Persist the `has_launched` flag in `app_flags.json` so subsequent app launches
-            // do not override the user's preferred window layout/size.
-            let flags_path = config_dir.join("app_flags.json");
-            let mut flags: std::collections::BTreeMap<String, String> = std::fs::read_to_string(&flags_path)
-                .ok()
-                .and_then(|content| serde_json::from_str(&content).ok())
-                .unwrap_or_default();
 
-            if !flags.contains_key("has_launched") {
-                let _ = window.maximize();
-                flags.insert("has_launched".to_string(), "true".to_string());
-                if let Ok(content) = serde_json::to_string_pretty(&flags) {
-                    let _ = std::fs::write(&flags_path, content);
-                }
-            }
 
             #[cfg(target_os = "linux")]
             {
@@ -261,12 +246,17 @@ pub fn run() {
             commands::models::cancel_download,
             commands::models::delete_model,
             commands::models::get_model_path,
+            commands::onnx_runtime::onnx_runtime_status,
+            commands::onnx_runtime::onnx_runtime_download,
+            commands::onnx_runtime::onnx_runtime_remove,
             commands::models::local_stt_transcribe,
             commands::fs_watch::start_fs_watch,
             commands::fs_watch::stop_fs_watch,
             commands::http::http_send_request,
             commands::remote_relay::remote_relay_start,
             commands::http::fetch_agent_logo,
+            commands::resource::resource_snapshot,
+            commands::resource::project_disk_usage,
             commands::music_library::music_library_scan,
             commands::music_library::music_library_reveal,
             commands::notification::notification_show,
@@ -397,12 +387,26 @@ pub fn run() {
             commands::mobile::android_swipe,
             commands::mobile::android_key,
             commands::mobile::android_text,
+            commands::mobile::android_rotate,
+            commands::mobile::android_emu_kill,
+            commands::mobile::android_logcat,
             commands::mobile::ios_available,
             commands::mobile::ios_list_simulators,
             commands::mobile::ios_boot,
             commands::mobile::ios_shutdown,
             commands::mobile::ios_open_simulator,
             commands::mobile::ios_screenshot,
+            commands::mobile_stream::mobile_stream_start,
+            commands::mobile_stream::mobile_stream_stop,
+            commands::mobile_stream::mobile_input_touch,
+            commands::mobile_stream::mobile_input_key,
+            commands::mobile_stream::mobile_input_text,
+            commands::ios_sim::ios_sim_stream_start,
+            commands::ios_sim::ios_sim_stream_stop,
+            commands::ios_sim::ios_sim_tap,
+            commands::ios_sim::ios_sim_button,
+            commands::ios_sim::ios_sim_type,
+            commands::ios_sim::ios_sim_rotate,
             commands::mcp::mcp_register_agent,
             commands::mcp::mcp_unregister_agent,
             commands::mcp::mcp_server_port,

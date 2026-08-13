@@ -1,12 +1,36 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { attachPty, openPty, type PtySession } from '$lib/services/pty-bridge';
-import { terminalShell, announceAgentCompletions } from '$lib/stores/settings';
+import {
+  attachPty,
+  openPty,
+  closeBackendSession,
+  type PtySession,
+} from '$lib/services/pty-bridge';
+import {
+  terminalShell,
+  announceAgentCompletions,
+  agentPermissionMode,
+  agentCmdOverrides,
+  agentDefaultArgs,
+  agentDefaultEnv,
+} from '$lib/stores/settings';
+import {
+  resolveAgentLaunchArgs,
+  resolveAgentLaunchCommand,
+  resolveAgentLaunchEnv,
+} from '$lib/services/agent-permissions';
 import { playNudge } from '$lib/services/nudge';
 import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
-import { agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
+import {
+  agentReadsRulesFile,
+  agentHasNativeExtras,
+  ensureAgentRulesFiles,
+} from '$lib/services/orchestrator/agent-rules-file';
 import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator-brief';
 import { getCustomAgents } from '$lib/stores/customAgents';
+import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
+import { accountEnvFor } from '$lib/stores/agentAccounts';
+import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
 import { activeTheme } from '$lib/stores/theme';
@@ -385,6 +409,26 @@ export function onSessionExit(listener: (info: SessionExitInfo) => void): () => 
   return () => sessionExitListeners.delete(listener);
 }
 
+// Sessions the orchestrator owns — leased tasks and adopted agents. Their exits
+// surface as completion cards in the inbox, so the generic "finished its work"
+// exit toast below is suppressed for them: one notification per exit, and the
+// card is the durable one. The orchestrator marks a session when it leases or
+// adopts it; ids are never reused, so entries are never removed.
+const orchestratorTrackedSessions = new Set<number>();
+export function markOrchestratorTrackedSession(sessionId: number): void {
+  orchestratorTrackedSessions.add(sessionId);
+}
+export function isOrchestratorTrackedSession(sessionId: number): boolean {
+  return orchestratorTrackedSessions.has(sessionId);
+}
+/** Call ONLY when the orchestrator deliberately stops tracking a session
+ *  (unlink / delete), so a later exit of the now-untracked terminal gets its
+ *  normal exit toast again. NOT called on turn completion — a card has already
+ *  landed there, so the exit toast must stay suppressed. */
+export function unmarkOrchestratorTrackedSession(sessionId: number): void {
+  orchestratorTrackedSessions.delete(sessionId);
+}
+
 // Project-independent "agent launched" broadcast. Fires when a manually-typed
 // command is recognized as an AI agent CLI — the typed-launch path only, NOT an
 // orchestrator/floating-bar spawn (those manage their own bookkeeping). The
@@ -754,13 +798,19 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
 
   if (isAgent) {
     // Exit is the other way an agent's work ends (the turn watcher covers agents
-    // that stay in their REPL). Pair the toast with the same chime so the cue is
-    // the same however the agent was started and however it ended.
+    // that stay in their REPL). Pair the chime with the completion card the
+    // orchestrator writes on exit, so the cue is the same however the agent was
+    // started and however it ended.
     if (get(announceAgentCompletions)) playNudge(clean ? 'done' : 'failed');
-    if (clean) {
-      showToast(`${label} finished its work`, 'success', 6000, true);
-    } else {
-      showToast(`${label} exited with errors (code ${code})`, 'error', 8000, true);
+    // Orchestrator-tracked sessions (leased/adopted) already get a completion
+    // card in the inbox on exit — the card is the notification. Only untracked
+    // agent terminals — a CLI run by hand and never adopted — get the toast.
+    if (!isOrchestratorTrackedSession(id)) {
+      if (clean) {
+        showToast(`${label} finished its work`, 'success', 6000, true);
+      } else {
+        showToast(`${label} exited with errors (code ${code})`, 'error', 8000, true);
+      }
     }
   } else if (!clean) {
     showToast(`${label} process died (exit ${code})`, 'error', 6000, true);
@@ -878,7 +928,13 @@ export async function createTerminalSession(
   cwd?: string,
   targetPaneIndex?: number,
   projectId?: string,
-  opts?: { assignPane?: boolean; agentPreset?: string | null; isDev?: boolean }
+  opts?: {
+    assignPane?: boolean;
+    agentPreset?: string | null;
+    isDev?: boolean;
+    /** Extra environment for this session only, merged over the defaults. */
+    extraEnv?: Record<string, string>;
+  }
 ): Promise<number | null> {
   const assignPane = opts?.assignPane ?? true;
   const agentPreset = opts?.agentPreset ?? null;
@@ -899,6 +955,7 @@ export async function createTerminalSession(
       CLAUDE_CODE_THEME: isLight ? 'light' : 'dark',
       THEME: isLight ? 'light' : 'dark',
       COLORFGBG: isLight ? '0;15' : '15;0',
+      ...(opts?.extraEnv ?? {}),
     };
 
     // Inject MCP server config when launching an agent so it auto-discovers
@@ -1305,11 +1362,23 @@ export async function relaunchRestoredAgentSession(
   });
 
   const mcpFlags = await mcpLaunchFlags(agentPreset, resolveSessionRoot(id) ?? undefined);
+  // A restored session is a relaunch of an agent Spacron spawned, so it follows
+  // the same permission mode as a fresh spawn — the yolo args belong on the
+  // line written to the PTY, never in the preset key. (Env overrides like
+  // Goose's `GOOSE_MODE=auto` can't be re-injected into an existing PTY, so
+  // they only apply at first spawn; relaunch inherits the shell's env.)
+  const launchOverrides = {
+    agentCmdOverrides: get(agentCmdOverrides),
+    agentDefaultArgs: get(agentDefaultArgs),
+  };
+  const launchCommand = resolveAgentLaunchCommand(agentPreset, launchOverrides);
+  const launchArgs = resolveAgentLaunchArgs(agentPreset, get(agentPermissionMode), launchOverrides);
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
 
   agentLaunchStartLengths.set(id, getSessionOutputBuffer(id).length);
   suppressAgentDetection.add(id);
   try {
-    writeToSession(id, `${agentPreset}${mcpFlags}\r`);
+    writeToSession(id, `${launchLine}\r`);
   } finally {
     suppressAgentDetection.delete(id);
   }
@@ -1485,9 +1554,12 @@ async function autoBriefSession(id: number, preset: string) {
   autoBriefInFlight.add(id);
 
   try {
-    if (agentReadsRulesFile(preset)) {
+    // Attempt the file channel for rules-file agents AND for agents that have a
+    // bonus native file (e.g. traecli's .trae/rules) — ensureAgentRulesFiles
+    // returns false for non-members, so the paste fallback below still fires.
+    if (agentReadsRulesFile(preset) || agentHasNativeExtras(preset)) {
       const root = resolveSessionRoot(id);
-      if (root && (await ensureAgentRulesFiles(root))) {
+      if (root && (await ensureAgentRulesFiles(root, preset))) {
         logAgentSend(id, 'briefed-via-rules-file', { preset, root });
         markSessionBriefed(id, true);
         return;
@@ -1523,6 +1595,11 @@ export function markSessionAgentPreset(id: number, agentPreset: string | null, b
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);
   if (!projectId) return;
+  // Activity stats: this is the one point every agent passes through, whether
+  // spawned from the picker or adopted after the user typed `claude` into a
+  // shell. The recorder dedupes by session id — this fires again on re-brief.
+  if (agentPreset) recordAgentSpawn(id, agentPreset);
+  else forgetAgentSpawn(id);
   updateProjectState(projectId, (state) => ({
     ...state,
     sessions: state.sessions.map((x) => {
@@ -1915,7 +1992,33 @@ export async function spawnAgentPreset(
       }
     : null;
 
-  const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, { assignPane: false, agentPreset: command, isDev });
+  // Resolve the effective launch before the session exists: the env has to be
+  // in place at PTY creation (Goose's `GOOSE_MODE=auto` cannot be injected
+  // after the fact), and the args land on the typed command below.
+  const launchOverrides = {
+    agentCmdOverrides: get(agentCmdOverrides),
+    agentDefaultArgs: get(agentDefaultArgs),
+    agentDefaultEnv: get(agentDefaultEnv),
+  };
+  const permissionMode = get(agentPermissionMode);
+  const launchCommand = resolveAgentLaunchCommand(command, launchOverrides);
+  const launchArgs = resolveAgentLaunchArgs(command, permissionMode, launchOverrides);
+  const launchEnv = resolveAgentLaunchEnv(command, permissionMode, launchOverrides);
+
+  // Point the CLI at the selected account's config directory. Empty for the
+  // default account and for every CLI that doesn't do account switching, so
+  // this needs no per-provider branching here. Merged *under* `launchEnv` on
+  // purpose: an env var the user set themselves in Settings is a deliberate
+  // override and must outrank the account picker.
+  const accountEnv = await accountEnvFor(command);
+  const effectiveEnv = { ...accountEnv, ...launchEnv };
+
+  const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, {
+    assignPane: false,
+    agentPreset: command,
+    isDev,
+    extraEnv: effectiveEnv,
+  });
   if (sessionId === null || sessionId === undefined) return null;
 
   opts?.onSessionCreated?.(sessionId);
@@ -1923,8 +2026,8 @@ export async function spawnAgentPreset(
   let rulesBriefed = false;
   const briefRoot = cwd ?? resolveSessionRoot(sessionId);
   if (briefRoot) {
-    if (agentReadsRulesFile(command)) {
-      try { rulesBriefed = await ensureAgentRulesFiles(briefRoot); }
+    if (agentReadsRulesFile(command) || agentHasNativeExtras(command)) {
+      try { rulesBriefed = await ensureAgentRulesFiles(briefRoot, command); }
       catch (err) { console.error('Failed to ensure agent rules files:', err); }
     }
     // Deliberately NOT gated on `agentReadsRulesFile`: the orchestrator protocol
@@ -1940,10 +2043,15 @@ export async function spawnAgentPreset(
   // the Spacron MCP server only from `--mcp-config`. Empty for every other preset.
   const mcpFlags = await mcpLaunchFlags(command, briefRoot ?? undefined);
 
+  // `command` (not `launchCommand`) stays the preset key for detection, rules
+  // files and display names; only the line written to the PTY carries the
+  // resolved command + permission args + MCP flags.
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
+
   agentLaunchStartLengths.set(sessionId, getSessionOutputBuffer(sessionId).length);
   suppressAgentDetection.add(sessionId);
   try {
-    writeToSession(sessionId, command + mcpFlags + '\r');
+    writeToSession(sessionId, launchLine + '\r');
   } finally {
     suppressAgentDetection.delete(sessionId);
   }
@@ -2064,6 +2172,11 @@ export async function killSession(id: number) {
   terminalSessionProjects.delete(id);
   commandBlocks.update((map) => { const c = new Map(map); c.delete(id); return c; });
   _pendingBlockText.delete(id);
+  // Images dropped on this session's agent panel are held as object URLs, which
+  // pin their Blobs in the renderer until revoked. Nothing revoked them when a
+  // session closed — the entry simply stayed in the map — so every image ever
+  // attached leaked for the life of the window. `clear` does the revoking.
+  agentPanelImages.clear(id);
 
   // Close the mosaic cell so surrounding terminals reclaim the freed space.
   // No-op when: called from closePane (cell already removed before killSession),
@@ -2077,6 +2190,21 @@ export async function killSession(id: number) {
   if (pty) {
     ptyInstances.delete(id);
     await pty.close().catch((err) => console.error('Failed to close terminal:', err));
+  } else {
+    // A resource-panel row can list a backend session the webview never
+    // attached a PtySession to (e.g. a session created while the webview was
+    // down, or one that only lives in the pty manager). There is no handle to
+    // close, so tell the backend directly — otherwise the process keeps
+    // running with no way to stop it from this surface. "Session not found"
+    // here is the already-exited case (the exit path freed it first) — not an
+    // error worth logging.
+    try {
+      await closeBackendSession(id);
+    } catch (err) {
+      if (!String(err).includes('not found')) {
+        console.error('Failed to close backend terminal:', err);
+      }
+    }
   }
 }
 

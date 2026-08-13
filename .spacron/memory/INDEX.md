@@ -10,7 +10,7 @@ up front. When you add a note, add its line here in the matching section.
 
 - [agent-spawn-picker](agent-spawn-picker.md) — the Spawn Agents modal; where the CLI presets live
 - [agent-placement-gate](agent-placement-gate.md) — every spawn asks worktree-vs-main-repo first, and why it's a blocking dialog
-- [agent-brand-marks](agent-brand-marks.md) — agent logos in room chrome; the `useAgentBrand` resolution layer
+- [agent-brand-marks](agent-brand-marks.md) — agent logos in room chrome; the `useAgentBrand` resolution layer; codebuff/freebuff share one official sparkle mark (`freebuff.png`)
 - [worker-naming](worker-naming.md) — who names an agent: pool in TypeScript, MCP decision in Rust
 - [agent-work-staging-vocabulary](agent-work-staging-vocabulary.md) — "Stage" means two different things; keep them labelled apart
 - [fleet-panel-placements](fleet-panel-placements.md) — Fleet rows come from agent sessions, not worktrees
@@ -19,15 +19,15 @@ up front. When you add a note, add its line here in the matching section.
 - [review-panel-diff-layout](review-panel-diff-layout.md) — two diff surfaces on purpose; don't add a third
 - [completion-announcements](completion-announcements.md) — how a turn's end is detected and surfaced to the user
 - [agent-inbox-unread](agent-inbox-unread.md) — the inbox behind the toasts; why "read" and "dismissed" must stay separate bits
-- [agent-usage-meters](agent-usage-meters.md) — rate-limit meters + detection table: the verified endpoints, never-refresh rule, and the three keychain CLIs (Copilot probe, Gemini settings marker, Cody env) plus the provider list
+- [agent-usage-meters](agent-usage-meters.md) — rate-limit meters + detection table: the verified endpoints, never-refresh rule, the three keychain CLIs (Copilot probe, Gemini settings marker, Cody env), the 9 live providers (Cursor via web session + Amp via secrets.json, both 2026-08-12), and why Copilot/Droid/Antigravity stay detection-only
 - [tasks-kanban](tasks-kanban.md) — the tasks board: rich fields (priority/due/notes/order), drag & drop, and the task→agent "Run with agent" link
-- [web-session-credentials](web-session-credentials.md) — OpenCode + MiniMax meter through a cookie lifted from a real login window; Tauri DOES have a cookie jar (the old "impossible" note was wrong), plus the MiniMax remaining-vs-used inversion
+- [web-session-credentials](web-session-credentials.md) — OpenCode + MiniMax + Cursor meter through a cookie lifted from a real login window; Tauri DOES have a cookie jar (the old "impossible" note was wrong), plus the MiniMax remaining-vs-used inversion
 - [agent-account-switching](agent-account-switching.md) — several logins per CLI: switching sets `CLAUDE_CONFIG_DIR`/`CODEX_HOME`, never writes a credential; where each CLI really records the account email; why Add Account must run the login itself
 - [agent-install-links](agent-install-links.md) — where "Not installed" rows send you; every URL is fetched, never guessed, and unknown CLIs fall through to a search
-- [antigravity-usage](antigravity-usage.md) — why Antigravity gets no meter: keychain-only creds, one quota RPC that lies and one that's API-key gated
+- [antigravity-usage](antigravity-usage.md) — why Antigravity gets no meter: keychain-only creds, one quota RPC that lies and one that's API-key gated; re-verified 2026-08-12 (still closed)
 - [bell-osc-false-positives](bell-osc-false-positives.md) — a BEL inside an OSC sequence is not a turn end
-- [standing-brief-sources](standing-brief-sources.md) — the agent brief has TWO builders; editing one leaves half the presets stale
-- [agent-rules-file-verification](agent-rules-file-verification.md) — 2026-08-11: which new registry agents really read AGENTS.md/CLAUDE.md (binary scans + docs); GEMINI.md gap; the .env non-question
+- [standing-brief-sources](standing-brief-sources.md) — the agent brief has TWO builders; editing one leaves half the presets stale; since 2026-08-12 a THIRD surface: `AGENT_EXTRA_RULES_FILES` native files for aider/cn/kiro-cli, leaving only traecli/cody on the paste channel
+- [agent-rules-file-verification](agent-rules-file-verification.md) — 2026-08-12: which new registry agents really read AGENTS.md/CLAUDE.md (binary scans + docs); GEMINI.md gap; the .env non-question; pi/omp/prime-agent/vibe/autohand/ante moved to the file channel; the omp Bun-shim probe gap; native-extra tier (aider→CONVENTIONS.md+.aider.conf.yml, cn→.continue/rules/, kiro-cli→.kiro/steering/) + rovo/mimo/openclaude/openclaw/hermes moved; bonus surfaces (cursor→.cursorrules+.mdc, copilot→copilot-instructions.md, hermes→.hermes.md, goose→.goosehints, cline→.clinerules), traecli bonus .trae/rules write but stays on paste, no project .continue/config.yaml
 - [terminal-agent-launches](terminal-agent-launches.md) — agents launch into a real PTY via `portable-pty`
 - [agent-permission-mode](agent-permission-mode.md) — Yolo/Manual: the three override layers, the one spawn path that applies them, and why the per-row toggle must be idempotent
 - [dev-tools-roadmap-priorities](dev-tools-roadmap-priorities.md) — read "## The plan", not the section numbering
@@ -65,18 +65,26 @@ up front. When you add a note, add its line here in the matching section.
 - [os-drag-drop-routing](os-drag-drop-routing.md) — OS file drops hit every mounted pane; `dropPositionToCss` + hidden-rect guard, and why raw position comparisons stay banned
 - [running-two-instances](running-two-instances.md) — why a dev build starts but never opens a window
 
+## Editor
+
+- [save-shortcut](save-shortcut.md) — Ctrl+S is AppShell's keybinding (Settings-rebindable); never add a second handler in EditorPanel; zustand `saveActiveFile` mirrors compat `saveFile` via `fs_write_file`; `formatCode` takes a path, and `formatActiveFile` still passes a language; auto-save setting (1s debounce, silent) reuses `saveFile` and must be declared in both settings stores
+
 ## Workspace shell, rooms & visuals
 
+- [floating-prompt-bar-alt-voice](floating-prompt-bar-alt-voice.md) — Alt→voice is CLICK-armed (pointer-down in the shell only); never arm on focus, `focusInput()` fires programmatically in a dozen places
 - [split-room-slots](split-room-slots.md) — Split's ordered slot list; empty is the "unarranged" sentinel
 - [split-transition-smoothness](split-transition-smoothness.md) — the five causes of Focus↔Split residue
 - [view-transition-blend-contract](view-transition-blend-contract.md) — the `plus-lighter` contract; read before any `::view-transition` pair
 - [motion-tokens](motion-tokens.md) — never hardcode a duration or bezier; pick a tier
 - [glass-panel-recipe](glass-panel-recipe.md) — the canonical frosted-panel recipe
-- [focus-rail-pile](focus-rail-pile.md) — the card-deck rail; geometry lives in two custom properties
+- [floating-panel-scroll-contract](floating-panel-scroll-contract.md) — popovers are a rigid frame with ONE scroller; pinned chrome, `min-height: 0` bodies, size caps on the card, and the three global.css scroll lists every scroller must be registered in
+- [panel-edge-and-tint](panel-edge-and-tint.md) — 2026-08-12: panels are TINTED now, not see-through (the `background: transparent` other notes quote is gone); the tint + traveling edge light are defined ONCE in global.css "Panel surfaces" and cover the floating panels too (incl. the resource panel, same day), plus the room-header icons
+- [focus-rail-pile](focus-rail-pile.md) — the card-deck rail; since 2026-08-12 the cards ARE the live panes (scaled, never reflowed — a reflow would resize the PTY), why nothing above a panel may carry a transform, and the per-card glass rule
 - [editor-room-focus](editor-room-focus.md) — visible is not on stage; reveal goes through the room system
 - [per-project-persistence](per-project-persistence.md) — `PersistedProjectState` and its two restore paths
 - [background-precedence](background-precedence.md) — the user's wallpaper outranks the theme's
 - [accent-and-icon-treatment](accent-and-icon-treatment.md) — the accent is graphite not a hue; the 4 files that define it, why `--on-accent` is mandatory, bump the brand migration, the blanket svg rule that overrides icon colour, and why solid themes (forge-dark/light) miss every wallpaper-gated rule
+- [badge-tone-tokens](badge-tone-tokens.md) — badge tones ("Signed in"/"Installed") use `var(--success)`/`var(--warning)`, never hardcoded hex; the three still-hardcoded `#34d399`/`#fbbf24` spots
 - [background-wallpapers](background-wallpapers.md) — the wallpaper pairs, and how to add one (ffmpeg recipe; presetThemes.ts is the only file to touch)
 - [background-prompts](background-prompts.md) — the prompt source file and the final 22-prompt set
 - [editor-font-vars](editor-font-vars.md) — `--editor-font-size`/`--editor-font-family` are published on the root in App.tsx; derive code-surface sizes from them instead of hardcoding px
@@ -90,7 +98,12 @@ up front. When you add a note, add its line here in the matching section.
 - [orca-competitor](orca-competitor.md) — Orca (MIT, onorca.dev): its published style guide + tokens, and why its "recede and frame" thesis contradicts Nightglass
 - [orca-stats-usage-page](orca-stats-usage-page.md) — Orca Settings → Stats page: token/cost analytics, the scanner→store→IPC→pane flow, pricing table, and the minimal Spacron cut
 - [agent-activity-stats](agent-activity-stats.md) — agents spawned / time worked / turns: a recorder, not a scanner (Spacron persists no session history); the two call sites, the dedupe set, and why there is no "PRs created" card
-- [usage-stats-port](usage-stats-port.md) — the Stats tab implementation: six CLIs in one provider-keyed ledger (Claude, Codex, OpenCode, Pi, OMP, Command Code); which CLIs have no token data at all and why Copilot is the near miss, Codex's cumulative-total trap, and how a session's reported model is chosen
+- [usage-stats-port](usage-stats-port.md) — the Stats tab implementation: six CLIs in one provider-keyed ledger (Claude, Codex, OpenCode, Pi, OMP, Command Code); which CLIs have no token data at all (Droid/Kimi verified empty 2026-08-12) and why Copilot is the near miss, Codex's cumulative-total trap, and how a session's reported model is chosen
+- [resource-monitor](resource-monitor.md) — titlebar CPU/RAM chip + dropdown (2026-08-12): persistent sysinfo sampler (CPU deltas), the shell-vs-agent process-TREE gotcha, 2s polling, `sessionId` join to the terminal store, kill via `killSession`; round 2 groups rows by project with per-project disk footprint (`project_disk_usage` walkdir TTL cache, `groupSessionRowsByProject`); round 4 per-project RAM share + watchdog toasts; round 3 Orca close-all/clear-exited ports and the tree-kill fix; rows show name + CPU/RAM bars, no pid/proc (live-tickers)
+- [live-tickers](live-tickers.md) — shared LiveTicker replaces every manual Refresh/Rescan button (usage panel 2m while open, resource 2s + disk 60s while open, stats tab 60s auto-rescan, agents pane 2m); the cadences, the guards (enabled/hidden/in-flight), and what CSS died with the buttons; resource rows slimmed to name-only
+- [mobile-emulator-pane](mobile-emulator-pane.md) — full design in docs/mobile-emulator-pane.md: backend (mobile.rs) already exists unbuilt-frontend; `android`/`ios` views are currently lies; scrcpy raw H.264 + serve-sim sidecar + MCP tools
+- [emulator-encoder-is-the-bottleneck](emulator-encoder-is-the-bottleneck.md) — 2026-08-12 measurements: emulators have no hardware H.264 *encoder*, so `max_size` buys frame rate and bit rate buys nothing; MAX_SIDE 1024→720; why IPC/decode micro-optimisation is second-order; how to measure without fooling yourself
+- [scrcpy-wire-protocol](scrcpy-wire-protocol.md) — the six things that silently break the Android stream (hex `scid`, fourcc codec id, dummy-byte handshake, control-socket ordering, AVCC-vs-Annex-B, per-start stream ids) + control-message layouts and measured injection costs
 - [first-launch-maximized](first-launch-maximized.md) — app window opens maximized on first launch ever and persists `has_launched` flag
 - [relative-window-minimize-size](relative-window-minimize-size.md) — unmaximizing or bringing window down resizes dynamically relative to monitor screensize (65% width x 85% height)
 
@@ -115,5 +128,6 @@ up front. When you add a note, add its line here in the matching section.
 - [release-process](release-process.md) — the five files carrying the version (Cargo.lock is tool-denied; regenerate it), and why `git push` 408s
 - [cross-platform-status](cross-platform-status.md) — Windows / macOS / Linux audit against v0.7.5
 - [bundle-chunking](bundle-chunking.md) — `manualChunks` silently defeats dynamic imports
+- [test-suite-timing-sensitivity](test-suite-timing-sensitivity.md) — a test that fails in the full suite but passes alone is CPU contention, not a regression; why vitest is capped at 6 workers and `waitForAgentReady`'s 40ms test windows are the reason
 - [dead-code-cleanup](dead-code-cleanup.md) — ~50 files of confirmed-dead code removed, and what went
 - [licensing-and-docs](licensing-and-docs.md) — closed source by design; don't flip the repo public

@@ -38,6 +38,8 @@ use std::{
 };
 use tokio::sync::{broadcast, mpsc, Mutex, oneshot};
 
+use crate::commands::mobile;
+
 /// Callback for reading output from a PTY session by session id.
 pub type ReadFn = Arc<dyn Fn(u32) -> Vec<u8> + Send + Sync>;
 
@@ -1203,6 +1205,166 @@ fn tool_check_task() -> serde_json::Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Emulator tools
+//
+// Connected agents drive devices and emulators through the same
+// `commands::mobile` backend the Mobile Emulator pane uses — same process, no
+// IPC round-trip. Android gets full control (discover, boot, screenshot,
+// tap/swipe/key/text/rotate, and logcat via adb); iOS gets discover,
+// boot/shutdown and a view-only screenshot, because `simctl` cannot inject
+// touches (that needs the Phase-4 serve-sim helper).
+// ---------------------------------------------------------------------------
+
+fn tool_emulator_list() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_list",
+        "description": "Discover every mobile device and emulator the app can drive: the host platform, Android tooling availability, connected Android devices (with serials), installable Android AVDs, and iOS simulators (macOS only, with UDIDs). Returns the serials and UDIDs you pass to the other emulator_* tools.",
+        "inputSchema": { "type": "object", "properties": {}, "required": [] }
+    })
+}
+
+fn tool_emulator_boot() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_boot",
+        "description": "Boot an Android emulator or iOS simulator. Android: pass an AVD name from emulator_list — the emulator launches detached and can take over a minute to boot, so poll emulator_list until an emulator-* device reports state 'device' before interacting. iOS: pass a simulator UDID; it opens in Simulator.app (macOS only).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android AVD name, or iOS simulator UDID, from emulator_list." },
+                "platform": { "type": "string", "enum": ["android", "ios"], "description": "Which kind of target. Default 'android'." }
+            },
+            "required": ["target"]
+        }
+    })
+}
+
+fn tool_emulator_shutdown() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_shutdown",
+        "description": "Shut down a running emulator or simulator. Android: pass an emulator-* serial from emulator_list (powers the emulator off via adb). iOS: pass a simulator UDID (simctl shutdown).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android emulator serial, or iOS simulator UDID, from emulator_list." },
+                "platform": { "type": "string", "enum": ["android", "ios"], "description": "Which kind of target. Default 'android'." }
+            },
+            "required": ["target"]
+        }
+    })
+}
+
+fn tool_emulator_screenshot() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_screenshot",
+        "description": "Capture the current screen of an Android device or iOS simulator as a base64 image. Android returns a JPEG plus the device's pixel width and height — use those dimensions to convert normalized (0–1) positions to pixels for emulator_tap and emulator_swipe. iOS returns a PNG with no dimensions (view-only). Take a fresh screenshot to see the result of your taps and swipes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android serial, or iOS UDID, from emulator_list." },
+                "platform": { "type": "string", "enum": ["android", "ios"], "description": "Which kind of target. Default 'android'." }
+            },
+            "required": ["target"]
+        }
+    })
+}
+
+fn tool_emulator_tap() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_tap",
+        "description": "Tap a point on an Android device screen. Coordinates are normalized 0.0–1.0 (0,0 is the top-left corner, 1,1 the bottom-right), so 'the center of the screen' is x=0.5, y=0.5 without knowing the resolution. Android only — iOS simulators cannot receive touches.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "x": { "type": "number", "description": "Normalized x, 0.0–1.0, from the left edge." },
+                "y": { "type": "number", "description": "Normalized y, 0.0–1.0, from the top edge." }
+            },
+            "required": ["target", "x", "y"]
+        }
+    })
+}
+
+fn tool_emulator_swipe() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_swipe",
+        "description": "Swipe (drag) on an Android device screen between two points. Coordinates are normalized 0.0–1.0 like emulator_tap — use it for scrolling, dismissing overlays, and pull-to-refresh. Android only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "x1": { "type": "number", "description": "Start x, normalized 0.0–1.0." },
+                "y1": { "type": "number", "description": "Start y, normalized 0.0–1.0." },
+                "x2": { "type": "number", "description": "End x, normalized 0.0–1.0." },
+                "y2": { "type": "number", "description": "End y, normalized 0.0–1.0." },
+                "duration_ms": { "type": "number", "description": "Optional. Gesture duration in ms (default 300, max 2000)." }
+            },
+            "required": ["target", "x1", "y1", "x2", "y2"]
+        }
+    })
+}
+
+fn tool_emulator_key() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_key",
+        "description": "Press a hardware key on an Android device. Pass 'key' as a named key (back, home, recents, menu, power, volume_up, volume_down, enter, delete, tab, space, camera, search, notifications, media_play_pause, media_next, media_previous) or a raw Android keycode integer. Android only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "key": { "type": "string", "description": "A named key, or a raw Android keycode integer." }
+            },
+            "required": ["target", "key"]
+        }
+    })
+}
+
+fn tool_emulator_text() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_text",
+        "description": "Type text into the currently focused field on an Android device. Works on the field that has focus — tap it first if needed. Android only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "text": { "type": "string", "description": "The text to type." }
+            },
+            "required": ["target", "text"]
+        }
+    })
+}
+
+fn tool_emulator_rotate() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_rotate",
+        "description": "Rotate an Android device's display. Rotation 0 = portrait, 1 = landscape (90° clockwise), 2 = reverse portrait, 3 = reverse landscape. Auto-rotate is locked off so the orientation sticks. Android only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "rotation": { "type": "number", "description": "0–3. Default 1 (one 90° clockwise turn)." }
+            },
+            "required": ["target"]
+        }
+    })
+}
+
+fn tool_emulator_logcat() -> serde_json::Value {
+    serde_json::json!({
+        "name": "emulator_logcat",
+        "description": "Read the recent Android system log (logcat) from a device — the app's own log output, stack traces, and system messages. Use it after installing or launching an app to see what it actually did. Optionally filter to lines containing a substring (e.g. the app's package name or a log tag). Returns the last N lines (default 100, max 500). Android only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Android device serial from emulator_list." },
+                "lines": { "type": "number", "description": "Optional. How many trailing lines to fetch (default 100, max 500)." },
+                "filter": { "type": "string", "description": "Optional. Case-insensitive substring; only matching lines are returned." }
+            },
+            "required": ["target"]
+        }
+    })
+}
+
 fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
     vec![
         tool_list_agents(),
@@ -1212,6 +1374,16 @@ fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
         tool_delegate_task(presets),
         tool_bounce_task(),
         tool_check_task(),
+        tool_emulator_list(),
+        tool_emulator_boot(),
+        tool_emulator_shutdown(),
+        tool_emulator_screenshot(),
+        tool_emulator_tap(),
+        tool_emulator_swipe(),
+        tool_emulator_key(),
+        tool_emulator_text(),
+        tool_emulator_rotate(),
+        tool_emulator_logcat(),
     ]
 }
 
@@ -1927,7 +2099,578 @@ async fn handle_tool_call(
             ))
         }
 
+        // ── Emulators ────────────────────────────────────────────────────
+        // These drive devices through `commands::mobile` directly — no frontend
+        // round-trip, so they work for any connected agent, not just ones the
+        // pane is open for. Each handler owns its own arg parsing.
+        "emulator_list" => emulator_list(id).await,
+        "emulator_boot" => emulator_boot(id, &params).await,
+        "emulator_shutdown" => emulator_shutdown(id, &params).await,
+        "emulator_screenshot" => emulator_screenshot(id, &params).await,
+        "emulator_tap" => emulator_tap(id, &params).await,
+        "emulator_swipe" => emulator_swipe(id, &params).await,
+        "emulator_key" => emulator_key(id, &params).await,
+        "emulator_text" => emulator_text(id, &params).await,
+        "emulator_rotate" => emulator_rotate(id, &params).await,
+        "emulator_logcat" => emulator_logcat(id, &params).await,
+
         _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: '{}'", tool_name))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Emulator tool handlers
+//
+// Each handler parses its own arguments and calls `commands::mobile` directly.
+// `target` is validated against the characters real adb serials and simctl
+// UDIDs contain before it reaches any subprocess argument; coordinates are
+// normalized (0–1) and converted to pixels against the device's live `wm size`.
+// ---------------------------------------------------------------------------
+
+/// The `{ "content": [{ "type": "text", "text": … }] }` wrapper every tool
+/// result uses.
+fn text_content(text: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "content": [{ "type": "text", "text": text.into() }] })
+}
+
+/// The `arguments` object of a `tools/call` request.
+fn tool_args(params: &serde_json::Value) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    params.get("arguments").and_then(|a| a.as_object())
+}
+
+/// Normalize the `platform` argument: `"android"` (default) or `"ios"`, either
+/// case — an LLM is as likely to send "Android" as "android".
+fn resolve_platform(raw: Option<&str>) -> Result<&'static str, String> {
+    match raw
+        .map(str::trim)
+        .unwrap_or("android")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "android" => Ok("android"),
+        "ios" => Ok("ios"),
+        other => Err(format!(
+            "'{other}' is not a supported platform — use 'android' or 'ios'."
+        )),
+    }
+}
+
+/// Reject anything that cannot be a real adb serial or simctl UDID before it
+/// reaches a subprocess argument. Serials are `emulator-5554`, USB ids like
+/// `1a2b3c4d`, or `host:port` transports; UDIDs are hex UUIDs.
+fn require_target(raw: Option<&str>) -> Result<String, String> {
+    let target = raw.map(str::trim).unwrap_or("");
+    if target.is_empty() {
+        return Err("Missing required parameter 'target'.".to_string());
+    }
+    if !target
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+    {
+        return Err(
+            "'target' contains characters that are not valid in a device serial or UDID."
+                .to_string(),
+        );
+    }
+    Ok(target.to_string())
+}
+
+/// Named keys accepted by `emulator_key`, mapped to Android keycodes. The full
+/// keycode table is too large to enumerate here, so a raw integer keycode is
+/// also accepted by the handler.
+fn android_keycode(name: &str) -> Option<i32> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "home" => 3,
+        "back" => 4,
+        "call" => 5,
+        "end_call" => 6,
+        "volume_up" => 24,
+        "volume_down" => 25,
+        "power" => 26,
+        "camera" => 27,
+        "tab" => 61,
+        "space" => 62,
+        "enter" => 66,
+        "delete" | "backspace" => 67,
+        "menu" => 82,
+        "notifications" => 83,
+        "search" => 84,
+        "media_play_pause" => 85,
+        "media_next" => 87,
+        "media_previous" => 88,
+        "recents" | "app_switch" => 187,
+        _ => return None,
+    })
+}
+
+/// One normalized (0–1) coordinate → device pixel. Out-of-range values fold
+/// into [0, size]; the caller snaps the result to [0, size-1] so a 1.0 lands on
+/// the last pixel rather than one past the framebuffer.
+fn coord_to_pixel(normalized: f64, size: u32) -> i32 {
+    (normalized.clamp(0.0, 1.0) * size as f64).round() as i32
+}
+
+/// Snap a computed pixel into the valid index range [0, size - 1].
+fn clamp_pixel(px: i32, size: u32) -> i32 {
+    px.min(size as i32 - 1).max(0)
+}
+
+/// Convert normalized (0–1) coordinates to device pixels, clamped into range so
+/// a slightly-off 1.02 still lands on the screen edge instead of erroring.
+async fn normalized_to_pixels(serial: &str, x: f64, y: f64) -> Result<(i32, i32), String> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err("Coordinates must be finite numbers.".to_string());
+    }
+    let (w, h) = mobile::android_screen_size(serial).await?;
+    Ok((
+        clamp_pixel(coord_to_pixel(x, w), w),
+        clamp_pixel(coord_to_pixel(y, h), h),
+    ))
+}
+
+async fn emulator_list(id: Option<serde_json::Value>) -> Json<JsonRpcResponse> {
+    let platform = mobile::mobile_platform();
+
+    // Best-effort discovery: a missing adb/xcrun fails one section, not the
+    // whole report, so an agent still sees what *is* reachable. Errors are
+    // accumulated rather than last-write-wins, so when adb is missing the
+    // report says so instead of being overwritten by the emulator error.
+    let tools = mobile::android_check().await;
+    let mut android_errors: Vec<String> = Vec::new();
+    if !tools.adb && !tools.emulator {
+        android_errors.push(
+            "Neither adb nor the emulator was found — install the Android SDK platform-tools."
+                .to_string(),
+        );
+    }
+    let devices = match mobile::android_list_devices().await {
+        Ok(d) => d,
+        Err(e) => {
+            android_errors.push(e);
+            Vec::new()
+        }
+    };
+    let avds = match mobile::android_list_avds().await {
+        Ok(a) => a,
+        Err(e) => {
+            android_errors.push(e);
+            Vec::new()
+        }
+    };
+    let android_error = if android_errors.is_empty() {
+        None
+    } else {
+        Some(android_errors.join(" "))
+    };
+
+    let (ios_available, sims, ios_error) = if platform == "macos" {
+        match mobile::ios_list_simulators().await {
+            Ok(s) => (true, s, None),
+            Err(e) => (false, Vec::new(), Some(e)),
+        }
+    } else {
+        (
+            false,
+            Vec::new(),
+            Some("The iOS Simulator is only available on macOS.".to_string()),
+        )
+    };
+
+    let payload = serde_json::json!({
+        "platform": platform,
+        "android": {
+            "adb": tools.adb,
+            "emulator": tools.emulator,
+            "devices": devices.iter().map(|d| serde_json::json!({
+                "serial": d.serial, "state": d.state, "label": d.label
+            })).collect::<Vec<_>>(),
+            "avds": avds,
+            "error": android_error,
+        },
+        "ios": {
+            "available": ios_available,
+            "simulators": sims.iter().map(|s| serde_json::json!({
+                "udid": s.udid, "name": s.name, "state": s.state, "runtime": s.runtime
+            })).collect::<Vec<_>>(),
+            "error": ios_error,
+        },
+    });
+
+    Json(JsonRpcResponse::success(
+        id,
+        text_content(format!(
+            "Mobile device discovery:\n{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        )),
+    ))
+}
+
+async fn emulator_boot(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let args = tool_args(params);
+    let platform =
+        match resolve_platform(args.and_then(|a| a.get("platform")).and_then(|v| v.as_str())) {
+            Ok(p) => p,
+            Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+        };
+    let target = match require_target(args.and_then(|a| a.get("target")).and_then(|v| v.as_str())) {
+        Ok(t) => t,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+    };
+
+    let text = match platform {
+        "ios" => match mobile::ios_boot(target.clone()).await {
+            Ok(()) => format!(
+                "Booting iOS simulator {target}. It opens in Simulator.app; poll emulator_list until its state is 'Booted'."
+            ),
+            Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+        _ => match mobile::android_launch_avd(target.clone()).await {
+            Ok(()) => format!(
+                "Launched Android AVD '{target}' detached. Booting can take over a minute — poll emulator_list until an emulator-* device reports state 'device'."
+            ),
+            Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+    };
+    Json(JsonRpcResponse::success(id, text_content(text)))
+}
+
+async fn emulator_shutdown(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let args = tool_args(params);
+    let platform =
+        match resolve_platform(args.and_then(|a| a.get("platform")).and_then(|v| v.as_str())) {
+            Ok(p) => p,
+            Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+        };
+    let target = match require_target(args.and_then(|a| a.get("target")).and_then(|v| v.as_str())) {
+        Ok(t) => t,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+    };
+
+    let text = match platform {
+        "ios" => match mobile::ios_shutdown(target.clone()).await {
+            Ok(()) => format!("Shut down iOS simulator {target}."),
+            Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+        _ => match mobile::android_emu_kill(target.clone()).await {
+            Ok(()) => format!("Powered off Android emulator {target}."),
+            Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+    };
+    Json(JsonRpcResponse::success(id, text_content(text)))
+}
+
+async fn emulator_screenshot(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let args = tool_args(params);
+    let platform =
+        match resolve_platform(args.and_then(|a| a.get("platform")).and_then(|v| v.as_str())) {
+            Ok(p) => p,
+            Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+        };
+    let target = match require_target(args.and_then(|a| a.get("target")).and_then(|v| v.as_str())) {
+        Ok(t) => t,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32602, e)),
+    };
+
+    match platform {
+        "ios" => match mobile::ios_screenshot(target.clone()).await {
+            Ok(png) => {
+                let payload = serde_json::json!({
+                    "target": target,
+                    "format": "png",
+                    "image": png,
+                    "note": "iOS is view-only: no touch input and no reported dimensions. Use the image directly.",
+                });
+                Json(JsonRpcResponse::success(
+                    id,
+                    text_content(format!(
+                        "iOS simulator screenshot:\n{}",
+                        serde_json::to_string_pretty(&payload).unwrap_or_default()
+                    )),
+                ))
+            }
+            Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+        _ => match mobile::android_screencap(target.clone()).await {
+            Ok(frame) => {
+                let payload = serde_json::json!({
+                    "target": target,
+                    "format": "jpeg",
+                    "width": frame.width,
+                    "height": frame.height,
+                    "image": frame.image,
+                    "hint": "Convert normalized positions to pixels with: px = round(x * width), py = round(y * height).",
+                });
+                Json(JsonRpcResponse::success(
+                    id,
+                    text_content(format!(
+                        "Android screenshot ({}x{}):\n{}",
+                        frame.width,
+                        frame.height,
+                        serde_json::to_string_pretty(&payload).unwrap_or_default()
+                    )),
+                ))
+            }
+            Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+        },
+    }
+}
+
+/// Shared entry for the touch tools: parse platform/target, refuse iOS (simctl
+/// cannot inject touches), and hand back the validated serial.
+fn android_touch_target(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Result<(Option<serde_json::Value>, String), Json<JsonRpcResponse>> {
+    let args = tool_args(params);
+    let platform =
+        match resolve_platform(args.and_then(|a| a.get("platform")).and_then(|v| v.as_str())) {
+            Ok(p) => p,
+            Err(e) => return Err(Json(JsonRpcResponse::error(id, -32602, e))),
+        };
+    if platform == "ios" {
+        return Err(Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "This tool works on Android only — iOS simulators cannot receive touches (simctl has no input injection).",
+        )));
+    }
+    let target = match require_target(args.and_then(|a| a.get("target")).and_then(|v| v.as_str())) {
+        Ok(t) => t,
+        Err(e) => return Err(Json(JsonRpcResponse::error(id, -32602, e))),
+    };
+    Ok((id, target))
+}
+
+async fn emulator_tap(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let x = args.and_then(|a| a.get("x")).and_then(|v| v.as_f64());
+    let y = args.and_then(|a| a.get("y")).and_then(|v| v.as_f64());
+    let (Some(x), Some(y)) = (x, y) else {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "emulator_tap needs 'x' and 'y' (normalized 0.0–1.0 numbers).",
+        ));
+    };
+
+    let (px, py) = match normalized_to_pixels(&target, x, y).await {
+        Ok(p) => p,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+    };
+    match mobile::android_tap(target.clone(), px, py).await {
+        Ok(()) => Json(JsonRpcResponse::success(
+            id,
+            text_content(format!(
+                "Tapped at ({px}, {py}) on {target} (normalized ({x}, {y})). Take a screenshot to confirm."
+            )),
+        )),
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+    }
+}
+
+async fn emulator_swipe(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let x1 = args.and_then(|a| a.get("x1")).and_then(|v| v.as_f64());
+    let y1 = args.and_then(|a| a.get("y1")).and_then(|v| v.as_f64());
+    let x2 = args.and_then(|a| a.get("x2")).and_then(|v| v.as_f64());
+    let y2 = args.and_then(|a| a.get("y2")).and_then(|v| v.as_f64());
+    let (Some(x1), Some(y1), Some(x2), Some(y2)) = (x1, y1, x2, y2) else {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "emulator_swipe needs 'x1', 'y1', 'x2' and 'y2' (normalized 0.0–1.0 numbers).",
+        ));
+    };
+    let duration_ms = args
+        .and_then(|a| a.get("duration_ms"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(300)
+        .clamp(50, 2000);
+
+    let (p1x, p1y) = match normalized_to_pixels(&target, x1, y1).await {
+        Ok(p) => p,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+    };
+    let (p2x, p2y) = match normalized_to_pixels(&target, x2, y2).await {
+        Ok(p) => p,
+        Err(e) => return Json(JsonRpcResponse::error(id, -32000, e)),
+    };
+    match mobile::android_swipe(target.clone(), p1x, p1y, p2x, p2y, duration_ms as i32).await {
+        Ok(()) => Json(JsonRpcResponse::success(
+            id,
+            text_content(format!(
+                "Swiped from ({p1x}, {p1y}) to ({p2x}, {p2y}) on {target} over {duration_ms} ms."
+            )),
+        )),
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+    }
+}
+
+async fn emulator_key(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let key = args
+        .and_then(|a| a.get("key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if key.trim().is_empty() {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "emulator_key needs a 'key' — a named key or a raw Android keycode integer.",
+        ));
+    }
+
+    // A raw integer keycode passes straight through; otherwise look the name
+    // up. Parsed once — the same value also labels the success message.
+    let raw_keycode = key.trim().parse::<i32>().ok();
+    let keycode = raw_keycode.or_else(|| android_keycode(key));
+    let Some(keycode) = keycode else {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            format!(
+                "Unknown key '{key}'. Named keys: back, home, recents, menu, power, volume_up, volume_down, enter, delete, tab, space, camera, search, notifications, media_play_pause, media_next, media_previous — or pass a raw Android keycode integer."
+            ),
+        ));
+    };
+    let label = if raw_keycode.is_some() {
+        "keycode"
+    } else {
+        key.trim()
+    };
+
+    match mobile::android_key(target.clone(), keycode).await {
+        Ok(()) => Json(JsonRpcResponse::success(
+            id,
+            text_content(format!("Pressed '{label}' (keycode {keycode}) on {target}.")),
+        )),
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+    }
+}
+
+async fn emulator_text(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let text = args
+        .and_then(|a| a.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if text.is_empty() {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "emulator_text needs a non-empty 'text' to type.",
+        ));
+    }
+    if text.len() > 4096 {
+        return Json(JsonRpcResponse::error(
+            id,
+            -32602,
+            "emulator_text accepts at most 4096 characters.",
+        ));
+    }
+
+    match mobile::android_text(target.clone(), text.to_string()).await {
+        Ok(()) => Json(JsonRpcResponse::success(
+            id,
+            text_content(format!("Typed {} character(s) into the focused field on {target}.", text.chars().count())),
+        )),
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+    }
+}
+
+async fn emulator_rotate(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let rotation = args
+        .and_then(|a| a.get("rotation"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .clamp(0, 3);
+
+    match mobile::android_rotate(target.clone(), rotation as i32).await {
+        Ok(()) => Json(JsonRpcResponse::success(
+            id,
+            text_content(format!(
+                "Rotated {target} to orientation {rotation} (0 portrait, 1 landscape, 2 reverse portrait, 3 reverse landscape)."
+            )),
+        )),
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+    }
+}
+
+async fn emulator_logcat(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+) -> Json<JsonRpcResponse> {
+    let (id, target) = match android_touch_target(id, params) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let args = tool_args(params);
+    let lines = args
+        .and_then(|a| a.get("lines"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as i32);
+    let filter = args
+        .and_then(|a| a.get("filter"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    match mobile::android_logcat(target.clone(), lines, filter).await {
+        Ok(log) => {
+            let payload = serde_json::json!({ "target": target, "log": log });
+            Json(JsonRpcResponse::success(
+                id,
+                text_content(format!(
+                    "Logcat:\n{}",
+                    serde_json::to_string_pretty(&payload).unwrap_or_default()
+                )),
+            ))
+        }
+        Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
     }
 }
 
@@ -2130,6 +2873,57 @@ mod tests {
         // because that is what gets typed into the shell.
         assert_eq!(resolve_preset("Pi AI Agent", &roster()).unwrap(), "pi");
         assert_eq!(resolve_preset("Aider", &roster()).unwrap(), "aider --no-auto-commits");
+    }
+
+    // ── Emulator tool arg validation ──────────────────────────────────────
+
+    #[test]
+    fn platform_defaults_to_android_and_rejects_junk() {
+        assert_eq!(resolve_platform(None).unwrap(), "android");
+        assert_eq!(resolve_platform(Some("ios")).unwrap(), "ios");
+        assert_eq!(resolve_platform(Some("  Android ")).unwrap(), "android");
+        assert!(resolve_platform(Some("tizen")).is_err());
+    }
+
+    #[test]
+    fn target_accepts_real_serials_and_udids_only() {
+        // What agents actually pass: an emulator serial, a USB serial, a
+        // host:port transport, an iOS UDID, an AVD name.
+        for valid in ["emulator-5554", "1a2b3c4d", "192.168.1.5:5555",
+                      "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX", "Pixel_9_API_35"] {
+            assert!(require_target(Some(valid)).is_ok(), "should accept '{valid}'");
+        }
+        // Nothing that could smuggle shell meaning into an adb argument.
+        assert!(require_target(Some("")) .is_err());
+        assert!(require_target(None).is_err());
+        for bad in ["emulator; rm -rf", "$(whoami)", "serial with space", "a/b", "a\u{0}"] {
+            assert!(require_target(Some(bad)).is_err(), "should reject '{bad}'");
+        }
+    }
+
+    #[test]
+    fn named_keys_resolve_and_raw_keycodes_pass_through() {
+        assert_eq!(android_keycode("back"), Some(4));
+        assert_eq!(android_keycode("HOME"), Some(3));
+        assert_eq!(android_keycode("volume_up"), Some(24));
+        assert_eq!(android_keycode("recents"), Some(187));
+        assert_eq!(android_keycode("app_switch"), Some(187));
+        assert_eq!(android_keycode("nonsense_key"), None);
+        // Raw integers bypass the map (the full keycode table is not enumerated).
+        assert_eq!("111".parse::<i32>().ok().or_else(|| android_keycode("111")), Some(111));
+    }
+
+    #[test]
+    fn normalized_coords_convert_and_clamp() {
+        // Center of a 1080-wide portrait display.
+        assert_eq!(coord_to_pixel(0.5, 1080), 540);
+        // Out-of-range folds into the display, then clamps onto the last pixel.
+        assert_eq!(coord_to_pixel(1.5, 1080), 1080);
+        assert_eq!(clamp_pixel(coord_to_pixel(1.5, 1080), 1080), 1079);
+        assert_eq!(clamp_pixel(coord_to_pixel(-0.2, 1080), 1080), 0);
+        assert_eq!(clamp_pixel(coord_to_pixel(1.0, 2400), 2400), 2399);
+        // 0.5 of 2400 rounds up to the exact middle pixel boundary value.
+        assert_eq!(coord_to_pixel(0.5, 2400), 1200);
     }
 
     #[test]

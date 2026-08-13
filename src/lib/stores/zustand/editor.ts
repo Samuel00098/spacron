@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import type { EditorFile } from '$lib/types/editor';
 import { useNotificationStore } from './notification';
 import { useSettingsStore } from './settings';
@@ -59,10 +60,37 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
   },
 
   saveActiveFile: async () => {
-    const { activeFile: file, activeLine } = getState();
+    const { activeFile: file, fileCache, activeLine } = getState();
     if (!file) return;
+    const entry = fileCache.get(file);
+    if (!entry || entry.kind !== 'text') return;
+
+    let contentToSave = entry.content;
+
+    if (useSettingsStore.getState().formatOnSave) {
+      try {
+        const formatted = await formatCode(entry.content, entry.path);
+        if (formatted !== null && formatted !== entry.content) {
+          contentToSave = formatted;
+        }
+      } catch (err: any) {
+        console.warn('Formatting failed before save, saving unformatted content:', err);
+      }
+    }
+
     try {
-      await invoke('editor_save', { path: file, cursorLine: activeLine });
+      await backendInvoke('fs_write_file', { path: file, content: contentToSave });
+      const updated: EditorFile = {
+        ...entry,
+        content: contentToSave,
+        originalContent: contentToSave,
+        isDirty: false,
+      };
+      const nextCache = new Map(fileCache);
+      nextCache.set(file, updated);
+      set({ fileCache: nextCache });
+      const filename = file.split(/[\\/]/).pop() || file;
+      useNotificationStore.getState().showToast(`Saved ${filename}`, 'success');
     } catch (err: any) {
       useNotificationStore.getState().showToast(`Failed to save: ${err?.message || err}`, 'error');
     }

@@ -70,7 +70,7 @@ export async function restoreWindowToRelativeSize(
     const targetWidth = Math.round(screenWidth * widthPercent);
     const targetHeight = Math.round(screenHeight * heightPercent);
 
-    const targetX = Math.round(screenX + screenWidth * 0.025);
+    const targetX = Math.round(screenX + (screenWidth - targetWidth) / 2);
     const targetY = Math.round(screenY + (screenHeight - targetHeight) / 2);
 
     if (await win.isMaximized()) {
