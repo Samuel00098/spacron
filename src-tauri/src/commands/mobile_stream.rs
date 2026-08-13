@@ -615,11 +615,13 @@ pub async fn mobile_stream_start(
     // device, an older emulator, or gRPC switched off: all of them fall
     // through to scrcpy below rather than failing.
     if let Some(endpoint) = emulator_grpc::discover_endpoint(&serial) {
-        let active = Arc::new(emulator_grpc::ActiveGrpcStream {
-            serial: serial.clone(),
-            stop: AtomicBool::new(false),
-        });
+        let active =
+            Arc::new(emulator_grpc::ActiveGrpcStream::new(serial.clone(), endpoint.clone()));
         emulator_grpc::register_stream(stream_id.clone(), active.clone());
+        // Resolve the device's pixel size now rather than on the first tap:
+        // input over gRPC is in device coordinates, and looking that up costs an
+        // adb round trip that would otherwise land on the user's first touch.
+        emulator_grpc::prime_device_size(active.clone());
         let max_side = emulator_grpc::resolve_max_side(max_side);
         let task_id = stream_id.clone();
         tauri::async_runtime::spawn(async move {
@@ -828,7 +830,14 @@ pub async fn mobile_input_touch(
         return Err("Invalid frame dimensions for a touch event.".to_string());
     }
     // A lifted finger reports no pressure; everything else is a full press.
-    let pressure = if action == TOUCH_ACTION_UP || action == TOUCH_ACTION_CANCEL { 0.0 } else { 1.0 };
+    let touching = !(action == TOUCH_ACTION_UP || action == TOUCH_ACTION_CANCEL);
+    // An emulator streaming over gRPC has no scrcpy server and so no control
+    // socket. The endpoint serving its frames takes input too, and using it is
+    // what keeps a tap in single-digit milliseconds instead of adb's 600–1300.
+    if emulator_grpc::send_touch(&serial, x, y, width, height, touching).await {
+        return Ok(true);
+    }
+    let pressure = if touching { 1.0 } else { 0.0 };
     let message = encode_touch(action, x, y, width as u16, height as u16, pressure);
     send_control(&serial, &[message.to_vec()])
 }
@@ -838,6 +847,12 @@ pub async fn mobile_input_touch(
 pub async fn mobile_input_key(serial: String, keycode: i32, metastate: Option<u32>) -> Result<bool, String> {
     if !valid_serial(&serial) {
         return Err("Invalid device serial.".to_string());
+    }
+    // gRPC first, for the same reason as touch. A keycode this transport has no
+    // w3c name for reports "not handled" and falls through rather than pressing
+    // an approximation of the key the caller asked for.
+    if emulator_grpc::send_key(&serial, keycode).await {
+        return Ok(true);
     }
     let meta = metastate.unwrap_or(0);
     send_control(
@@ -856,6 +871,9 @@ pub async fn mobile_input_text(serial: String, text: String) -> Result<bool, Str
         return Err("Invalid device serial.".to_string());
     }
     if text.is_empty() {
+        return Ok(true);
+    }
+    if emulator_grpc::send_text(&serial, &text).await {
         return Ok(true);
     }
     send_control(&serial, &encode_text(&text))
