@@ -32,6 +32,7 @@ up front. When you add a note, add its line here in the matching section.
 - [terminal-agent-launches](terminal-agent-launches.md) — agents launch into a real PTY via `portable-pty`
 - [agent-permission-mode](agent-permission-mode.md) — Yolo/Manual: the three override layers, the one spawn path that applies them, and why the per-row toggle must be idempotent
 - [dev-tools-roadmap-priorities](dev-tools-roadmap-priorities.md) — read "## The plan", not the section numbering
+- [keep-system-awake](keep-system-awake.md) — "Stay awake while agents work": the hold is keyed on **turns**, not sessions (a REPL agent is idle, not working); reconcile-only frontend, per-platform inhibitor in `keep_awake.rs`, and why Windows needs a dedicated parked thread
 - [orphaned-agent-processes](orphaned-agent-processes.md) — killing a pane leaves the whole Codex tree running (sandbox bypass + live file handles, dead parent PID); they read as ~0 MB because they're paged out, so measure commit charge not working set
 
 ## Git, worktrees & source control
@@ -110,6 +111,7 @@ up front. When you add a note, add its line here in the matching section.
 - [mobile-emulator-pane](mobile-emulator-pane.md) — full design in docs/mobile-emulator-pane.md: backend (mobile.rs) already exists unbuilt-frontend; `android`/`ios` views are currently lies; scrcpy raw H.264 + serve-sim sidecar + MCP tools
 - [emulator-encoder-is-the-bottleneck](emulator-encoder-is-the-bottleneck.md) — 2026-08-12 measurements: emulators have no hardware H.264 *encoder*, so `max_size` buys frame rate and bit rate buys nothing; MAX_SIDE 1024→720; why IPC/decode micro-optimisation is second-order; how to measure without fooling yourself. Re-measured 2026-08-13 with frame-gap percentiles
 - [emulator-grpc-stream](emulator-grpc-stream.md) — 2026-08-13 spike: the emulator's HOST-side gRPC `streamScreenshot` is 4x scrcpy (p90 gap 272ms→46ms) because it skips the guest encoder; PNG format makes the raw IPC channel unnecessary; emulators only, scrcpy stays for physical devices
+- [mobile-emulator-gestures](mobile-emulator-gestures.md) — 2026-08-14: the grab/grabbing cursor, and the desktop gesture set (wheel→scroll as one long finger drag, sideways swipe/right-click/side buttons→back-forward-home); why `onWheel` can't preventDefault, why axis lock + nav latch are load-bearing, and the unmapped `KEYCODE_FORWARD` gRPC gap
 - [scrcpy-wire-protocol](scrcpy-wire-protocol.md) — the six things that silently break the Android stream (hex `scid`, fourcc codec id, dummy-byte handshake, control-socket ordering, AVCC-vs-Annex-B, per-start stream ids) + control-message layouts and measured injection costs
 - [first-launch-maximized](first-launch-maximized.md) — app window opens maximized on first launch ever and persists `has_launched` flag
 - [relative-window-minimize-size](relative-window-minimize-size.md) — unmaximizing or bringing window down resizes dynamically relative to monitor screensize (65% width x 85% height)

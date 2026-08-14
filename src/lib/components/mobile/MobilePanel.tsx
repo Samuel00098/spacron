@@ -5,7 +5,14 @@ import './MobilePanel.css';
 import { useMjpegStream } from './useMjpegStream';
 import { useScrcpyStream } from './useScrcpyStream';
 import { desiredStreamLongSide } from './streamResolution';
-import { sendStreamKey, sendStreamText, useStreamTouch } from './useStreamInput';
+import { sendStreamKey, sendStreamText, useStreamTouch, type FrameDims } from './useStreamInput';
+import {
+  advanceScroll,
+  createWheelGestures,
+  mouseButtonIntent,
+  scrollAnchor,
+  type GestureIntent,
+} from './gestures';
 
 interface AndroidDevice {
   serial: string;
@@ -51,6 +58,25 @@ const IOS_ORIENTATIONS = ['portrait', 'landscape_right', 'portrait_upside_down',
 const POLL_MS = 1000;
 /** iOS screenshot poll cadence (view-only mirror). */
 const IOS_POLL_MS = 1500;
+
+/**
+ * How long the scrolling finger stays down after the last wheel event. Long
+ * enough to keep one continuous scroll as one gesture (so the device flings
+ * rather than stuttering), short enough that the finger lifts before the user
+ * reaches for anything else.
+ */
+const SCROLL_IDLE_MS = 130;
+/**
+ * Wheel events are collected for this long before the snapshot fallback replays
+ * them as a single `adb shell input swipe`. Each of those costs the better part
+ * of a second, so sending one per wheel notch would queue up a scroll the user
+ * stopped asking for ten notches ago.
+ */
+const POLL_SCROLL_FLUSH_MS = 140;
+
+/** Tooltip for the mirror — the only place the gesture set is spelled out. */
+const GESTURE_HINT =
+  'Drag to swipe · wheel to scroll · swipe sideways (or shift+wheel) for back/forward · right-click Back · middle-click Home';
 
 function Ico({ children, size = 15 }: { children: React.ReactNode; size?: number }) {
   return (
@@ -151,6 +177,29 @@ export default function MobilePanel() {
   // When it is false the gesture is replayed as one adb tap/swipe on release.
   const liveGestureRef = useRef(false);
   const touch = useStreamTouch();
+
+  // ── Gesture plumbing ───────────────────────────────────────────────────
+  // Closed-fist cursor while a drag is in flight, so the hand reads as holding
+  // the screen rather than hovering over it.
+  const [dragging, setDragging] = useState(false);
+  const wheelGesturesRef = useRef(createWheelGestures());
+  // The wheel's finger: pressed on the first notch, walked by each one after
+  // it, lifted once the wheel goes quiet. Carries its own serial and dims so a
+  // lift scheduled before a device switch cannot land on the new device.
+  const scrollSessionRef = useRef<{
+    serial: string;
+    x: number;
+    y: number;
+    dims: FrameDims;
+    idle: number;
+  } | null>(null);
+  // Snapshot-mode accumulator: wheel deltas coalesced into one adb swipe.
+  const pollScrollRef = useRef<{ serial: string; dy: number; dims: FrameDims; timer: number } | null>(
+    null,
+  );
+  // The wheel listener has to be registered natively (see the effect below), so
+  // it reads the current handler through a ref instead of capturing a render.
+  const wheelHandlerRef = useRef<(e: WheelEvent) => void>(() => {});
 
   // Live-stream hooks: one for the Android scrcpy H.264 stream (WebCodecs), one
   // for the iOS serve-sim MJPEG stream. Each owns its canvas, its Tauri
@@ -407,8 +456,185 @@ export default function MobilePanel() {
     return androidStreaming ? streamState.dims : undefined;
   }
 
+  // ── Gestures: wheel scrolling and navigation ───────────────────────────
+
+  /** Lift the wheel's finger, if one is down. Safe to call at any time. */
+  function endLiveScroll() {
+    const session = scrollSessionRef.current;
+    scrollSessionRef.current = null;
+    if (!session) return;
+    window.clearTimeout(session.idle);
+    void touch
+      .up(session.serial, session.x, session.y, session.dims)
+      .catch((err) => setFrameError(String(err)));
+  }
+
+  /**
+   * Scroll by dragging a finger over the control channel.
+   *
+   * The device has no notion of a wheel — a scroll is a finger that presses,
+   * travels and lifts — so a burst of wheel events becomes one long drag. When
+   * the finger runs into the edge of the screen the drag ends immediately
+   * (`exhausted`), which both lets the device fling and puts the next notch at
+   * a fresh anchor instead of pushing against the frame border.
+   */
+  function liveScroll(deviceDy: number, anchor: { x: number; y: number }, dims: FrameDims) {
+    let session = scrollSessionRef.current;
+    if (session && (session.serial !== selectedSerial || session.dims !== dims)) {
+      // Device switched or the stream resized: the old finger belongs to a
+      // frame the server no longer accepts coordinates in.
+      endLiveScroll();
+      session = null;
+    }
+    if (!session) {
+      session = { serial: selectedSerial, x: anchor.x, y: anchor.y, dims, idle: 0 };
+      scrollSessionRef.current = session;
+      const started = session;
+      void touch
+        .down(selectedSerial, anchor.x, anchor.y, dims)
+        .then((delivered) => {
+          // No control channel after all — drop the session rather than leave a
+          // phantom finger, and let the next notch take the adb path.
+          if (!delivered && scrollSessionRef.current === started) scrollSessionRef.current = null;
+        })
+        .catch((err) => {
+          if (scrollSessionRef.current === started) scrollSessionRef.current = null;
+          setFrameError(String(err));
+        });
+    }
+
+    const next = advanceScroll(session, 0, deviceDy, dims);
+    session.x = next.x;
+    session.y = next.y;
+    touch.move(selectedSerial, session.x, session.y, dims);
+
+    window.clearTimeout(session.idle);
+    session.idle = window.setTimeout(endLiveScroll, next.exhausted ? 0 : SCROLL_IDLE_MS);
+  }
+
+  /**
+   * Snapshot-mode scrolling: collect the wheel deltas and replay them as one
+   * `adb shell input swipe` down the middle of the screen once the wheel stops.
+   */
+  function pollScroll(deviceDy: number, dims: FrameDims) {
+    const acc = pollScrollRef.current ?? { serial: selectedSerial, dy: 0, dims, timer: 0 };
+    // A device switch mid-flush would otherwise replay this scroll on the phone
+    // the user just navigated away from.
+    if (acc.serial !== selectedSerial) {
+      acc.serial = selectedSerial;
+      acc.dy = 0;
+    }
+    acc.dy += deviceDy;
+    acc.dims = dims;
+    window.clearTimeout(acc.timer);
+    acc.timer = window.setTimeout(flushPollScroll, POLL_SCROLL_FLUSH_MS);
+    pollScrollRef.current = acc;
+  }
+
+  function flushPollScroll() {
+    const acc = pollScrollRef.current;
+    pollScrollRef.current = null;
+    if (!acc || !acc.dy || !acc.serial) return;
+    const { dims, dy, serial } = acc;
+    const x = Math.round(dims.width / 2);
+    const middle = Math.round(dims.height / 2);
+    const clampY = (value: number) => Math.max(0, Math.min(dims.height - 1, Math.round(value)));
+    const y1 = clampY(middle - dy / 2);
+    const y2 = clampY(middle + dy / 2);
+    if (y1 === y2) return;
+    const durationMs = Math.min(500, Math.max(80, Math.round(Math.abs(y2 - y1) * 0.4)));
+    void inject(() => invoke('android_swipe', { serial, x1: x, y1, x2: x, y2, durationMs }));
+  }
+
+  /**
+   * Wheel → scroll, in whichever mode the mirror is running.
+   *
+   * `deltaY` is in CSS pixels of the *displayed* screen, which is scaled down
+   * from the device's own pixels; without converting through the element rect a
+   * notch would travel a third as far on a big phone as on a small one.
+   * A wheel *down* scrolls the content down, which a finger does by moving up —
+   * hence the sign flip.
+   */
+  function scrollDevice(deltaY: number, client: { x: number; y: number } | null) {
+    const el = (androidStreaming ? streamCanvasRef.current : screenRef.current) as HTMLElement | null;
+    const dims = androidStreaming ? streamState.dims : frame;
+    if (!el || !dims) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.height === 0) return;
+    const deviceDy = -Math.round(deltaY * (dims.height / rect.height));
+    if (deviceDy === 0) return;
+    if (androidStreaming) {
+      const anchor = (client && clientToDevice(client.x, client.y)) || scrollAnchor(dims);
+      liveScroll(deviceDy, anchor, dims);
+    } else {
+      pollScroll(deviceDy, dims);
+    }
+  }
+
+  /** Run a recognized gesture. Navigation keys reuse the hardware-key path. */
+  function runGesture(intent: GestureIntent, client: { x: number; y: number } | null) {
+    if (intent.kind === 'key') {
+      endLiveScroll();
+      sendKey(intent.keycode);
+      return;
+    }
+    scrollDevice(intent.dy, client);
+  }
+
+  wheelHandlerRef.current = (e: WheelEvent) => {
+    // Only the mirrored screen consumes the wheel; over the empty stage the
+    // event belongs to whatever the drawer wants to do with it.
+    if (!selectedSerial || !(e.target as HTMLElement | null)?.closest?.('.mobile-device-shell')) return;
+    e.preventDefault();
+    const intent = wheelGesturesRef.current.handle(e, e.timeStamp);
+    if (intent) runGesture(intent, { x: e.clientX, y: e.clientY });
+  };
+
+  // React registers `wheel` as a passive listener on its root, so an `onWheel`
+  // prop could never call `preventDefault` — and without that, scrolling the
+  // phone would scroll the drawer behind it as well. Hence a native listener.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (tab !== 'android' || !stage) return;
+    const listener = (e: WheelEvent) => wheelHandlerRef.current(e);
+    stage.addEventListener('wheel', listener, { passive: false });
+    return () => stage.removeEventListener('wheel', listener);
+  }, [tab]);
+
+  // Never leave a finger down — or a queued swipe — on a device the panel is no
+  // longer driving.
+  useEffect(() => {
+    return () => {
+      endLiveScroll();
+      if (pollScrollRef.current) window.clearTimeout(pollScrollRef.current.timer);
+      pollScrollRef.current = null;
+      wheelGesturesRef.current.reset();
+    };
+    // Deliberately not listing the helpers: this effect exists only for its
+    // cleanup, and re-running it on every render would lift the finger between
+    // two wheel notches of the same scroll.
+  }, [selectedSerial, androidStreaming, tab]);
+
   function onPointerDown(e: React.PointerEvent) {
     if (!selectedSerial) return;
+
+    // Non-primary buttons are navigation gestures, not fingers: right for Back,
+    // middle for Home, the side buttons for Back/Forward. Suppressing the
+    // default also stops the side buttons from navigating the webview itself.
+    const buttonGesture = mouseButtonIntent(e.button);
+    if (buttonGesture) {
+      e.preventDefault();
+      runGesture(buttonGesture, null);
+      return;
+    }
+    if (e.button !== 0) return;
+
+    // A drag takes over from the wheel's finger; two of them at once would be
+    // read as a pinch the panel never meant to send.
+    endLiveScroll();
+    wheelGesturesRef.current.reset();
+    setDragging(true);
+
     pointerStartRef.current = { x: e.clientX, y: e.clientY };
     pointerMovedRef.current = false;
     liveGestureRef.current = false;
@@ -455,6 +681,7 @@ export default function MobilePanel() {
   function onPointerUp(e: React.PointerEvent) {
     const start = pointerStartRef.current;
     pointerStartRef.current = null;
+    setDragging(false);
     if (!start || !selectedSerial) return;
 
     if (liveGestureRef.current) {
@@ -767,13 +994,14 @@ export default function MobilePanel() {
               />
             ) : androidStreaming ? (
               <div
-                className="mobile-device-shell"
+                className={`mobile-device-shell${dragging ? ' dragging' : ''}`}
                 style={aspectStyle(streamState.dims)}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
-                title="Click to tap · drag to swipe"
+                onContextMenu={(e) => e.preventDefault()}
+                title={GESTURE_HINT}
               >
                 <canvas ref={streamCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
               </div>
@@ -784,13 +1012,14 @@ export default function MobilePanel() {
               />
             ) : (
               <div
-                className="mobile-device-shell"
+                className={`mobile-device-shell${dragging ? ' dragging' : ''}`}
                 style={aspectStyle(frame)}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
-                title="Click to tap · drag to swipe"
+                onContextMenu={(e) => e.preventDefault()}
+                title={GESTURE_HINT}
               >
                 <img
                   ref={screenRef}

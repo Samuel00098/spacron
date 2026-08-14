@@ -292,11 +292,18 @@
   border-radius: 0 2px 2px 0;
 }
 
+/* An open hand, closing while a drag is in flight. The pointer here *is* the
+   finger on the device — a crosshair suggested precision aiming, when what the
+   surface actually affords is grabbing the screen and moving it. */
 .mobile-panel .mobile-device-shell {
-  cursor: crosshair;
+  cursor: grab;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.mobile-panel .mobile-device-shell.dragging {
+  cursor: grabbing;
 }
 
 .mobile-panel .mobile-device-screen {
