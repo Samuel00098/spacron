@@ -232,7 +232,7 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
               />
               <input
                 className="rs-input"
-                placeholder="ws://host:9000/pty"
+                placeholder="ws://host:9000/pty or wss://host:9000/pty"
                 value={form.url}
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
                 autoFocus

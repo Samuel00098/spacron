@@ -70,6 +70,9 @@ pub struct ServerConfig {
     /// If set, auto-commit uncommitted changes in the workspace at this interval.
     /// None (default) disables auto-commit.
     pub auto_commit_interval: Option<Duration>,
+    /// PEM cert + key. Some — serve `wss://` (TLS). None — plaintext `ws://`,
+    /// only safe behind a link that encrypts for you (Tailscale/VPN).
+    pub tls: Option<(PathBuf, PathBuf)>,
 }
 
 struct ServerState {
@@ -149,20 +152,128 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
     }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    if let Some((cert, key)) = cfg.tls {
+        serve_tls(app, state, listener, cert, key).await?;
+    } else {
+        println!(
+            "spacron-server listening on ws://{addr}/pty  (workspace: {})",
+            state.workspace.display()
+        );
+        // Plaintext ws:// — the token authenticates but does not encrypt. Run
+        // behind Tailscale/VPN, which encrypts the link, or start with
+        // `--cert/--key` for wss://. See docs/remote-workspace.md.
+        eprintln!(
+            "WARNING: plaintext transport (ws://). Bound to 0.0.0.0:{:?} — only expose this over \
+             Tailscale/VPN, never a public network.",
+            cfg.port
+        );
+        axum::serve(listener, app).await?;
+    }
+    Ok(())
+}
+
+/// rustls 0.23 refuses to auto-pick a crypto provider when the crate-feature
+/// graph enables both `ring` and `aws-lc-rs` (the updater pulls ring, reqwest's
+/// rustls stack pulls aws-lc-rs), and `ClientConfig::builder()` panics. Install
+/// `ring` explicitly, once, process-wide — lazy so it covers the desktop app,
+/// the spacron-server binary, and the relay tests alike.
+pub(crate) fn ensure_crypto_provider() {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// How long a client gets to finish the TLS handshake before its connection is
+/// dropped. Generous for a real client on a slow link, short enough that idle
+/// sockets cannot pile up.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serve the router over TLS (wss://) with the official axum TLS pattern:
+/// a tokio-rustls `TlsAcceptor` accept loop feeding hyper-util's auto builder,
+/// which performs WebSocket upgrades (the axum 0.8 Router implements
+/// `Service<Request<B>>`, so `serve_connection_with_upgrades` is the right call).
+async fn serve_tls(
+    app: axum::Router<()>,
+    state: Arc<ServerState>,
+    listener: tokio::net::TcpListener,
+    cert: PathBuf,
+    key: PathBuf,
+) -> anyhow::Result<()> {
+    ensure_crypto_provider();
+    use std::io::BufReader;
+    use std::sync::Arc as StdArc;
+
+    use hyper_util::rt::TokioExecutor;
+    use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
+    use tokio_rustls::TlsAcceptor;
+
+    let certs: Vec<_> = {
+        let mut reader = BufReader::new(
+            std::fs::File::open(&cert)
+                .map_err(|e| anyhow::anyhow!("--cert {:?}: {e}", cert))?,
+        );
+        rustls_pemfile::certs(&mut reader)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("--cert {:?} is not valid PEM: {e}", cert))?
+    };
+    if certs.is_empty() {
+        return Err(anyhow::anyhow!("--cert {:?} contains no certificates", cert));
+    }
+    let key = {
+        let mut reader = BufReader::new(
+            std::fs::File::open(&key).map_err(|e| anyhow::anyhow!("--key {:?}: {e}", key))?,
+        );
+        rustls_pemfile::private_key(&mut reader)
+            .map_err(|e| anyhow::anyhow!("--key {:?} is not valid PEM: {e}", key))?
+            .ok_or_else(|| anyhow::anyhow!("--key {:?} contains no private key", key))?
+    };
+
+    let server_config = RustlsServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| anyhow::anyhow!("TLS config from --cert/--key failed: {e}"))?;
+    let acceptor = TlsAcceptor::from(StdArc::new(server_config));
+
+    let addr = listener.local_addr()?;
     println!(
-        "spacron-server listening on ws://{addr}/pty  (workspace: {})",
+        "spacron-server serving WSS (TLS) on wss://{addr}/pty  (workspace: {})",
         state.workspace.display()
     );
-    // The transport is plaintext ws:// — the token authenticates but does not
-    // encrypt. Run behind Tailscale/VPN, which encrypts the link. TLS (wss://) is
-    // a later hardening step; see docs/remote-workspace.md.
-    eprintln!(
-        "WARNING: plaintext transport (ws://). Bound to 0.0.0.0:{} — only expose this over \
-         Tailscale/VPN, never a public network.",
-        cfg.port
-    );
-    axum::serve(listener, app).await?;
-    Ok(())
+
+    loop {
+        // `accept` fails for per-connection reasons too (the peer vanished
+        // mid-handshake, the fd table is full). `axum::serve` swallows those
+        // and backs off; propagating instead would take the whole server down
+        // on one bad client, which matters here because TLS mode is the one
+        // meant to face a public network.
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(err) => {
+                eprintln!("spacron-server: accept failed: {err}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        let acceptor = acceptor.clone();
+        let app = app.clone();
+        tokio::spawn(async move {
+            // Bounded: a client that connects and then sends nothing would
+            // otherwise hold this task and its fd forever.
+            let handshake = tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream));
+            let Ok(Ok(stream)) = handshake.await else {
+                return; // timed out, or handshake failed (e.g. plaintext client)
+            };
+            let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                .serve_connection_with_upgrades(
+                    hyper_util::rt::TokioIo::new(stream),
+                    // axum implements tower_service::Service; hyper 1.x speaks
+                    // its own hyper::service::Service, so bridge the two.
+                    hyper_util::service::TowerToHyperService::new(app),
+                )
+                .await;
+        });
+    }
 }
 
 async fn ws_handler(

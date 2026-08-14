@@ -85,15 +85,21 @@ Same split Cursor uses: UI local, dev tools remote.
 
 ## Auth & transport security
 
-- **Networking boundary:** Tailscale/VPN. The server binds `0.0.0.0` (so it's reachable over the
-  tailnet — loopback-only would defeat the feature) and must never be exposed on a public network.
-  It prints a plaintext-transport warning on startup as a reminder.
+- **Networking boundary:** The server binds `0.0.0.0` (so it's reachable over the
+  tailnet — loopback-only would defeat the feature). With plain `ws://` it must never be
+  exposed on a public network; the startup warning says so as a reminder.
 - **Token:** a **pre-shared token** (same idea as VS Code Server's random key), presented as the
   `token.<TOKEN>` WebSocket subprotocol and validated in constant time — kept out of the URL so it
   can't leak via logs/history. Token must be a valid subprotocol token (alphanumeric / base64url).
-- **TLS (`wss://`) — deferred to Step 4 hardening.** Today the wire is plaintext and relies on
-  Tailscale for encryption. Adding TLS (e.g. `axum-server` + rustls, or a self-signed cert pinned
-  by the client) removes that dependency and is the main remaining transport-security item.
+- **TLS (`wss://`) — shipped 2026-08-13.** `spacron-server --cert <pem> --key <pem>` serves
+  wss:// via tokio-rustls + hyper-util (TlsAcceptor accept loop feeding the
+  axum router; see src/remote/mod.rs serve_tls). The desktop relay (`remote_relay.rs`) terminates TLS
+  itself and verifies the upstream certificate against the **OS trust store**
+  (`rustls-platform-verifier`) — so a self-signed CA works once the operator installs it in
+  the client's OS store, and public CAs (Let's Encrypt, Tailscale certs) work with no setup.
+  Without `--cert/--key` the server still serves plaintext `ws://` and prints the warning —
+  only safe behind Tailscale/VPN. The two transport options are what the "wire is encrypted"
+  claim rests on: `wss://` for direct internet exposure, `ws://` for a tailnet/VPN link.
 
 ---
 

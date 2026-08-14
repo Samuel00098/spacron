@@ -1,6 +1,6 @@
 [package]
 name = "spacron"
-version = "0.9.1"
+version = "0.9.2"
 description = "A lightweight developer workspace built with Tauri 2, Rust, and React"
 authors = ["samue"]
 edition = "2021"
@@ -56,6 +56,26 @@ cookie_store = "0.22"
 # external sites (chat/collab web apps); plain local-dev `ws://` forwarding
 # worked without TLS.
 tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
+# TLS client for the remote-workspace relay (remote_relay.rs): the relay must
+# terminate TLS itself because the WebView is CSP-limited to plaintext loopback.
+# Already in the lockfile via tokio-tungstenite; promoted to a direct dep for the
+# explicit import. Provider pinned to `ring`: the rest of the graph (updater,
+# tungstenite) already enables rustls/ring, and aws-lc-rs would leave rustls with
+# two providers, which makes `ClientConfig::builder()` panic.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# PEM parsing for the server's `--cert/--key` pair (remote/mod.rs TLS mode).
+# Already in the lockfile transitively; promoted for the explicit import.
+rustls-pemfile = "2"
+# HTTP/1.1 auto server used by the TLS accept loop (remote/mod.rs serve_tls);
+# axum 0.8's own `serve` does not speak TLS, so the TlsAcceptor feeds hyper-util.
+# Already in the lockfile transitively; promoted for the explicit import.
+hyper-util = { version = "0.1", features = ["server-auto", "http1", "tokio", "service"] }
+# Verify upstream certs against the OS trust store (Windows/macOS cert stores,
+# Linux nss/native) so self-signed CAs installed by the operator — the common
+# cloud-VM case — validate alongside public ones. webpki-roots alone would reject
+# every self-signed cert, which is useless for a box the operator controls. The
+# `BuilderVerifierExt` trait supplies the `.with_platform_verifier()` builder step.
+rustls-platform-verifier = "0.5"
 futures-util = "0.3.32"
 sha2 = "0.10"
 url = "2"
@@ -124,6 +144,10 @@ whisper-stt = ["dep:whisper-rs"]
 
 [dev-dependencies]
 tempfile = "3"
+# Generates throwaway CAs/leaf certs for the relay's TLS end-to-end test (the
+# production path verifies against the OS trust store; the test injects its own
+# root store instead, so it never touches the machine's real trust).
+rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 
 # Release binary size/perf. `strip` drops debug symbols (large win, no runtime
 # cost); `lto` + single codegen unit shrink and often speed up the binary. Panic
