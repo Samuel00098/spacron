@@ -1,4 +1,4 @@
-import { getSessionOutputBuffer } from '$lib/stores/terminal';
+import { getSessionOutputBuffer, getSessionOutputLength } from '$lib/stores/terminal';
 import {
   attentionReason,
   containsAttentionRequest,
@@ -122,7 +122,7 @@ async function watchTurnUntilDone(
   const tailChars = opts.tailChars ?? 2000;
   const minWorkChars = opts.minWorkChars ?? 500;
 
-  let lastLen = getSessionOutputBuffer(sessionId).length;
+  let lastLen = getSessionOutputLength(sessionId);
   let lastGrowthAt = Date.now();
   let sawActivity = false;
   let grownTotal = 0;

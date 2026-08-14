@@ -1,6 +1,13 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '$lib/utils/tauri';
+// Static, not dynamic: pty-bridge.ts and backend.ts already import this module
+// statically, so the `await import(...)` never split it into a separate chunk —
+// it just deferred the connection helpers behind an async hop for nothing.
+import {
+  ensureRemoteConnected,
+  closeRemoteConnection,
+} from '$lib/services/pty-bridge-remote';
 
 // Remote-workspace connection state (Step 4 of docs/remote-workspace.md — the
 // "Connection UX"). This grew out of the Step 1 spike's single devtools-set
@@ -334,7 +341,6 @@ export async function connectRemote(id: string): Promise<void> {
   // Flip `remoteTarget` first so the dial + `workspace_info` route to this remote.
   activeRemoteId.set(id);
   try {
-    const { ensureRemoteConnected } = await import('$lib/services/pty-bridge-remote');
     // Fail fast if the box is unreachable rather than hanging; the socket sets
     // status to 'connected' once open.
     await ensureRemoteConnected();
@@ -343,7 +349,6 @@ export async function connectRemote(id: string): Promise<void> {
   } catch (err) {
     console.error('Failed to connect to remote workspace:', err);
     // Roll back cleanly to Local so we don't leave a half-connected state.
-    const { closeRemoteConnection } = await import('$lib/services/pty-bridge-remote');
     closeRemoteConnection();
     activeRemoteId.set(null);
     connectionStatus.set('disconnected');
@@ -386,12 +391,7 @@ export async function maybeAutoReconnectRemote(): Promise<void> {
  */
 export async function disconnectRemote(): Promise<void> {
   if (!get(activeRemoteId)) return;
-  try {
-    const { closeRemoteConnection } = await import('$lib/services/pty-bridge-remote');
-    closeRemoteConnection();
-  } catch (err) {
-    console.error('Failed to close remote connection:', err);
-  }
+  closeRemoteConnection();
   activeRemoteId.set(null);
   connectionStatus.set('disconnected');
   try {

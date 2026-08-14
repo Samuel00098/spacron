@@ -35,6 +35,6 @@ export default defineConfig({
      * windows meaningful. Suite wall time is barely affected — the run is
      * dominated by transform work, not by test execution.
      */
-    poolOptions: { threads: { maxThreads: 6 }, forks: { maxForks: 6 } },
+    maxWorkers: 6,
   },
 });

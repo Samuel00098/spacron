@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
-vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer }));
+const getSessionOutputLength = vi.hoisted(() => vi.fn(() => 0));
+vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer, getSessionOutputLength }));
 
 import { watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
 
@@ -12,6 +13,8 @@ describe('watchLeasedAgentTurn', () => {
     buf = '';
     getSessionOutputBuffer.mockReset();
     getSessionOutputBuffer.mockImplementation(() => buf);
+    getSessionOutputLength.mockReset();
+    getSessionOutputLength.mockImplementation(() => buf.length);
   });
   afterEach(() => {
     vi.clearAllTimers();

@@ -156,7 +156,31 @@ fn sum_tree(pid: u32, sys: &System, children: &HashMap<u32, Vec<u32>>) -> (f32, 
 /// deliberately read-only — killing a session stays on the existing
 /// `terminal_close` path so the kill goes through the same reclaim/cleanup
 /// bookkeeping as every other close.
-#[tauri::command]
+/// `async` is load-bearing, not decoration. A plain `#[tauri::command]` runs on
+/// the main thread — which on Windows is the window's message-pump thread — and
+/// this one enumerates *every process on the machine*. The frontend polls it
+/// every 2 s for as long as a workspace is open, so any stall here is a stall of
+/// the whole window, and Windows paints the title bar "(Not Responding)" once it
+/// passes ~5 s.
+///
+/// Measured on Windows with 347 processes, warm, machine idle: **~100 ms per
+/// call**. On the main thread that was ~100 ms of frozen window every 2 s — a 5%
+/// duty cycle of dropped input, which is the constant background stutter this
+/// used to produce even when nothing was wrong.
+///
+/// Ordinarily the enumeration is tens of milliseconds and the block just reads
+/// as jank. **After the machine resumes from sleep it is not ordinarily.** Every
+/// process on the box is being paged back in off disk at once, so the per-process
+/// queries below block on disk I/O, and the poll that lands right after a resume
+/// can hold the main thread for seconds — exactly when the user has come back and
+/// is trying to scroll. Moving it onto the async runtime means a slow sample now
+/// costs a late reading instead of a frozen app. Same reasoning as the file-system
+/// commands (see `commands::file_system`) and the git commands in
+/// `commands::workspace`.
+///
+/// Concurrency is safe: the sampler's `System` is behind a mutex, and the
+/// frontend already dedupes overlapping polls.
+#[tauri::command(async)]
 pub fn resource_snapshot(state: State<AppState>) -> Result<ResourceSnapshot, String> {
     let sampler = &state.resource_sampler;
     let mut sys = sampler.sys.lock().map_err(|e| e.to_string())?;
@@ -166,6 +190,15 @@ pub fn resource_snapshot(state: State<AppState>) -> Result<ResourceSnapshot, Str
     // Refresh ALL processes (not just session pids): the tree sum needs the
     // parent→children map to cover the whole subtree below each shell, and
     // that requires seeing every process, not only the roots we already know.
+    //
+    // Narrowing this to `refresh_processes_specifics(.., ProcessRefreshKind::
+    // nothing().with_cpu().with_memory())` looks like an obvious win and is not
+    // one — measured on Windows, 347 processes: 101 ms for the full
+    // `everything()` refresh vs 116 ms for the narrowed one, i.e. no better and
+    // possibly worse. The cost here is walking the process table at all, not the
+    // per-process extras. It would also put `sum_tree` at risk, since the
+    // children map needs `parent()` and a narrowed kind is not documented to
+    // populate it. Don't re-attempt this without re-measuring.
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -418,3 +451,4 @@ mod tests {
         assert!(root_is_in_scope(&projects(), r"c:\WORK\Spacron\src"));
     }
 }
+

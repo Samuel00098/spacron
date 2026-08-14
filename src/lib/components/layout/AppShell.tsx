@@ -974,6 +974,19 @@ export default function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
+  // Home layers OVER the still-mounted workspace and hides it with `visibility`,
+  // so closing it puts every pane back on screen without changing a single box —
+  // no ResizeObserver fires, and nothing else in the layout effects below is
+  // keyed on it. Panes skip their glyph-atlas flush while off screen (see
+  // TerminalPane's visibilitychange handler), so this is the signal that repaints
+  // them on the way back.
+  useEffect(() => {
+    if (homeOpen || !workspaceId) return;
+    const t = window.setTimeout(() => notifyPanesResized(), 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeOpen]);
+
   // Trailing refit after a layout/focus change settles. A room panel grows into
   // place via the ~0.32s grid transition; the immediate refit from
   // withRoomTransition fits the terminal to the mid-transition (smaller) size,

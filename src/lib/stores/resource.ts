@@ -17,11 +17,28 @@ import { writable, get } from '$lib/stores/storeCompat';
 import { isTauriRuntime } from '$lib/utils/tauri';
 
 /**
- * Poll cadence. CPU% is a live number, so this is fast — not the usage
- * meters' 15 minutes, which is right for quota windows but would make a CPU
- * reading a lagging indicator of nothing.
+ * Poll cadence *while the panel is open*. CPU% is a live number, so this is fast
+ * — not the usage meters' 15 minutes, which is right for quota windows but would
+ * make a CPU reading a lagging indicator of nothing.
  */
 export const POLL_INTERVAL_MS = 2000;
+
+/**
+ * Poll cadence while the panel is **closed**, i.e. when the only consumers are
+ * the titlebar chip and the background heavy-load watchdog in `ResourcePanel`.
+ *
+ * A sample is not cheap: `resource_snapshot` walks the whole process table, and
+ * that measured ~100 ms on Windows at 347 processes. At the 2 s cadence that is
+ * ~5% of a core burning continuously, all day, to drive a chip nobody is
+ * staring at — and it competes with the agents for the machine.
+ *
+ * Nothing on screen while the panel is closed changes fast enough to notice the
+ * difference. The one behaviour this does affect is the watchdog: it needs two
+ * consecutive hot samples before it warns, so "project under heavy load" now
+ * arrives ~12 s after load starts instead of ~4 s. That is a deliberate trade —
+ * the toast is an ambient nudge, not an alarm.
+ */
+export const IDLE_POLL_INTERVAL_MS = 6000;
 
 /**
  * How often the panel re-requests per-project disk footprints while it is
@@ -371,8 +388,27 @@ export async function refreshProjectDiskUsage(roots: string[]): Promise<void> {
   return diskInFlight;
 }
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let listenersBound = false;
+let panelSubscription: (() => void) | null = null;
+
+/**
+ * A self-rescheduling timeout rather than `setInterval`, because the cadence is
+ * not fixed — it depends on whether the panel is open (see
+ * [`IDLE_POLL_INTERVAL_MS`]). Reading it fresh each hop means a cadence change
+ * takes effect on the next tick without having to tear the timer down.
+ */
+function scheduleNextPoll(): void {
+  const delay = get(isResourcePanelOpen) ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
+  pollTimer = setTimeout(() => {
+    // Not `return` — that would end the chain and stop polling forever once the
+    // window was hidden even for one tick. Skip the sample, keep the schedule.
+    if (!(typeof document !== 'undefined' && document.hidden)) {
+      void refreshResource();
+    }
+    scheduleNextPoll();
+  }, delay);
+}
 
 /**
  * Begin background polling. Idempotent — safe to call from any mount.
@@ -384,11 +420,28 @@ export function startResourcePolling(): void {
   if (!isTauriRuntime() || pollTimer) return;
 
   void refreshResource();
+  scheduleNextPoll();
 
-  pollTimer = setInterval(() => {
-    if (typeof document !== 'undefined' && document.hidden) return;
-    void refreshResource();
-  }, POLL_INTERVAL_MS);
+  // Re-arm on every open/close so the new cadence takes effect immediately
+  // rather than after the pending tick — otherwise closing the panel still
+  // spends one more sample at the fast rate, and opening it leaves the user
+  // staring at a reading up to IDLE_POLL_INTERVAL_MS stale while the slow timer
+  // runs down.
+  if (!panelSubscription) {
+    let wasOpen = get(isResourcePanelOpen);
+    panelSubscription = isResourcePanelOpen.subscribe((open) => {
+      if (open === wasOpen) return;
+      wasOpen = open;
+      // No live chain (polling stopped, or not started yet) — nothing to re-arm,
+      // and starting one here would resurrect a stopped poller.
+      if (!pollTimer) return;
+      clearTimeout(pollTimer);
+      pollTimer = null;
+      // Opening is a deliberate "tell me now"; closing only needs the schedule.
+      if (open) void refreshResource();
+      scheduleNextPoll();
+    });
+  }
 
   if (!listenersBound && typeof document !== 'undefined') {
     listenersBound = true;
@@ -402,7 +455,9 @@ export function startResourcePolling(): void {
 
 export function stopResourcePolling(): void {
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
+  panelSubscription?.();
+  panelSubscription = null;
 }

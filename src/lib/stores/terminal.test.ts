@@ -55,6 +55,7 @@ import {
   commandBlocks,
   createTerminalSession,
   getSessionOutputBuffer,
+  getSessionOutputLength,
   registerDataCallback,
   unregisterDataCallback,
   finalizeCommandBlockWithExit,
@@ -187,6 +188,87 @@ describe('reattach history replay', () => {
     expect(getSessionOutputBuffer(backendId)).toContain('live output');
 
     unregisterDataCallback(backendId);
+  });
+});
+
+describe('session output buffer', () => {
+  const projectId = 'project-output-buffer';
+  // Mirrors MAX_SESSION_BUFFER_CHARS in the store.
+  const MAX = 250000;
+
+  beforeEach(() => {
+    setActiveTerminalProject(projectId);
+  });
+
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+  });
+
+  // The buffer keeps chunks in a list and trims them as they age out, rather
+  // than rebuilding one big string per chunk. These lock in that the window it
+  // exposes is byte-for-byte what the naive `(buffer + text).slice(-MAX)` gave,
+  // including the case where the trim has to cut a chunk in half.
+  it('keeps exactly the last MAX chars once output passes the cap', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    expect(id).not.toBeNull();
+
+    // Chunk size deliberately does not divide MAX, so the cap lands mid-chunk.
+    const chunk = 'abcdefg'.repeat(1000); // 7000 chars
+    let expected = '';
+    for (let i = 0; i < 60; i++) {
+      feedPtyOutput(id!, chunk);
+      expected = (expected + chunk).slice(-MAX);
+    }
+
+    const actual = getSessionOutputBuffer(id!);
+    expect(actual.length).toBe(MAX);
+    expect(getSessionOutputLength(id!)).toBe(actual.length);
+    expect(actual).toBe(expected);
+  });
+
+  it('returns everything written while still under the cap', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    feedPtyOutput(id!, 'first ');
+    feedPtyOutput(id!, 'second ');
+    feedPtyOutput(id!, 'third');
+
+    expect(getSessionOutputBuffer(id!)).toBe('first second third');
+    expect(getSessionOutputLength(id!)).toBe('first second third'.length);
+  });
+
+  it('reports a length that matches the buffer across repeated reads', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    // The joined string is memoised and invalidated on write; reading twice with
+    // a write in between must not go stale.
+    feedPtyOutput(id!, 'x'.repeat(10));
+    expect(getSessionOutputBuffer(id!).length).toBe(getSessionOutputLength(id!));
+    feedPtyOutput(id!, 'y'.repeat(5));
+    expect(getSessionOutputBuffer(id!)).toBe('x'.repeat(10) + 'y'.repeat(5));
+    expect(getSessionOutputLength(id!)).toBe(15);
+  });
+
+  it('decodes a multi-byte character split across two chunks', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    // A single stateful decoder per session is what makes this work; the pane
+    // no longer runs a second one over the same bytes.
+    const bytes = new TextEncoder().encode('é');
+    ptyDataHandlers.get(id!)?.(bytes.slice(0, 1));
+    ptyDataHandlers.get(id!)?.(bytes.slice(1));
+
+    expect(getSessionOutputBuffer(id!)).toBe('é');
+  });
+
+  it('hands the decoded chunk to the data callback', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    const cb = vi.fn();
+    registerDataCallback(id!, cb);
+
+    feedPtyOutput(id!, 'hello');
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][1]).toBe('hello');
+    unregisterDataCallback(id!);
   });
 });
 

@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const invoke = vi.hoisted(() =>
+  vi.fn(async (..._args: any[]): Promise<any> => ({
+    system: { cpuPercent: 3, cpuCount: 8, memUsedBytes: 1, memTotalBytes: 2 },
+    sessions: [],
+  })),
+);
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('$lib/utils/tauri', () => ({ isTauriRuntime: () => true }));
+
 import {
   severityOfCpu,
   severityOfRamShare,
@@ -8,6 +18,11 @@ import {
   describeSystemCpu,
   formatBytes,
   groupSessionRowsByProject,
+  startResourcePolling,
+  stopResourcePolling,
+  isResourcePanelOpen,
+  POLL_INTERVAL_MS,
+  IDLE_POLL_INTERVAL_MS,
   type ResourceState,
   type ResourceSnapshot,
   type JoinedSessionRow,
@@ -209,5 +224,125 @@ describe('groupSessionRowsByProject', () => {
     expect(group.cpuPercent).toBe(40);
     expect(group.memBytes).toBe(150);
     expect(group.processCount).toBe(5);
+  });
+});
+
+/**
+ * The sampler walks the whole process table (~100 ms on Windows at 347
+ * processes), so the cadence is not cosmetic — it is the difference between a
+ * few percent of a core burning all day and not. See IDLE_POLL_INTERVAL_MS.
+ */
+describe('resource polling cadence', () => {
+  let hidden = false;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    invoke.mockClear();
+    hidden = false;
+    // The suite runs on `environment: 'node'`, so there is no `document` at
+    // all. `resource.ts` guards every use with `typeof document !== 'undefined'`
+    // — stub the two members it touches so the hidden-tick path is reachable
+    // here instead of being silently skipped.
+    vi.stubGlobal('document', {
+      get hidden() {
+        return hidden;
+      },
+      addEventListener: () => {},
+    });
+    isResourcePanelOpen.set(false);
+  });
+
+  afterEach(() => {
+    stopResourcePolling();
+    isResourcePanelOpen.set(false);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('samples once immediately so the chip is not blank on open', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the slow cadence while the panel is closed', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockClear();
+
+    // One idle interval => exactly one sample.
+    await vi.advanceTimersByTimeAsync(IDLE_POLL_INTERVAL_MS);
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    // And it is genuinely slower than the open cadence: the fast interval alone
+    // must not have been enough to produce that sample.
+    expect(IDLE_POLL_INTERVAL_MS).toBeGreaterThan(POLL_INTERVAL_MS);
+  });
+
+  it('does not sample at the fast cadence while the panel is closed', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('speeds up and samples at once when the panel opens', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockClear();
+
+    isResourcePanelOpen.set(true);
+    await vi.advanceTimersByTimeAsync(0);
+    // Opening is a deliberate "tell me now" — don't make the user wait out the
+    // remainder of a slow tick.
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops back to the slow cadence when the panel closes', async () => {
+    startResourcePolling();
+    isResourcePanelOpen.set(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    isResourcePanelOpen.set(false);
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Regression: the schedule is a self-rescheduling timeout, so an early
+   * `return` on the hidden check would end the chain and stop polling for the
+   * rest of the session after a single hidden tick.
+   */
+  it('keeps polling after a tick that was skipped for being hidden', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockClear();
+
+    hidden = true;
+    await vi.advanceTimersByTimeAsync(IDLE_POLL_INTERVAL_MS);
+    expect(invoke).not.toHaveBeenCalled();
+
+    hidden = false;
+    await vi.advanceTimersByTimeAsync(IDLE_POLL_INTERVAL_MS);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops cleanly, leaving no timer behind', async () => {
+    startResourcePolling();
+    await vi.advanceTimersByTimeAsync(0);
+    stopResourcePolling();
+    invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(IDLE_POLL_INTERVAL_MS * 3);
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

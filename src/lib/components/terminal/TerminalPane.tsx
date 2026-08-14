@@ -986,7 +986,6 @@ function TerminalPane({
 
     let disposed = false;
     let executingTimeout: ReturnType<typeof setTimeout> | null = null;
-    const decoder = new TextDecoder();
     // True only while the reattach buffer below is being parsed. Replayed history
     // re-feeds the agent's startup color/DA queries (e.g. Codex's ESC]10;?/ESC]11;?),
     // and xterm answers them again — those synthetic replies must NOT be written
@@ -1070,10 +1069,9 @@ function TerminalPane({
         if (!isActiveRef.current) onActivate();
       });
 
-      registerDataCallback(sessionId, (bytes: Uint8Array) => {
+      registerDataCallback(sessionId, (bytes: Uint8Array, text: string) => {
         term.write(bytes);
         try {
-          const text = decoder.decode(bytes);
           parseOscSequences(text, currentShellCwd);
           detectDevServerUrl(text);
           detectBuildProcess(text);
@@ -1140,15 +1138,36 @@ function TerminalPane({
 
     // Recover from idle rendering corruption: when the window/tab regains visibility after
     // being hidden (e.g., user switches away and back), the WebView2 GPU scheduler may have
-    // evicted canvas textures. Force a full atlas flush on all panes.
-    function onVisibilityChange() {
-      if (document.visibilityState === 'visible') {
-        requestAnimationFrame(() => {
-          forceRedraw();
-          // Second pass after layout settles
-          setTimeout(forceRedraw, 80);
-        });
+    // evicted canvas textures. Force a full atlas flush.
+    //
+    // Only for panes that are actually on screen. Every pane stays mounted for the
+    // whole life of its session, and the ones that aren't on stage are hidden with
+    // `visibility` at full size, never unmounted — panes behind the Home overlay,
+    // and panes belonging to a project you've switched away from. So a busy
+    // workspace holds far more panes than it shows, and this used to flush the
+    // glyph atlas and repaint every one of them, twice, in the first 80 ms after
+    // the window came back: exactly the moment the user is trying to interact
+    // again. A hidden pane gains nothing from it either, since it is repainted by
+    // the `pane-resize-end` pass that fires whenever it is shown again.
+    function isPaneOnScreen() {
+      const c = containerRef.current;
+      if (!c) return false;
+      if (typeof c.checkVisibility === 'function') {
+        return c.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true });
       }
+      // WebKitGTK below 17.4 has no checkVisibility; `visibility` inherits, so a
+      // hidden ancestor still resolves to 'hidden' here.
+      return c.offsetParent !== null && getComputedStyle(c).visibility !== 'hidden';
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState !== 'visible') return;
+      requestAnimationFrame(() => {
+        if (!isPaneOnScreen()) return;
+        forceRedraw();
+        // Second pass after layout settles
+        setTimeout(forceRedraw, 80);
+      });
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
 

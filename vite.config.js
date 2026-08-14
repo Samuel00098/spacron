@@ -24,6 +24,14 @@ export default defineConfig({
     // what dev serves; the size cost is irrelevant for a locally-loaded desktop
     // app. JS minification is unaffected. See src/lib/components/layout/AppShell.css.
     cssMinify: false,
+    // Monaco is the largest thing the app ships (editor.browser ~500 kB,
+    // several ~440 kB language bundles, plus the main chunk it shares). It
+    // cannot be split safely with manualChunks — its workers are created from
+    // blob URLs over its own module graph, so a vendor chunk for it breaks the
+    // worker bootstrap. Size is a non-issue here anyway: the bundle is loaded
+    // from disk by a desktop WebView, not a network. 800 kB keeps the warning
+    // off while still flagging genuine regressions.
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       input: resolve('./index.html'),
       output: {

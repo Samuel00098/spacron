@@ -17,6 +17,7 @@ up front. When you add a note, add its line here in the matching section.
 - [review-loop-design](review-loop-design.md) — the orchestrator is the reviewer; no spawned Reviewer agent
 - [reviewer-verdict-signals](reviewer-verdict-signals.md) — APPROVED / BOUNCE BACK parsing, and the transcript-echo trap
 - [review-panel-diff-layout](review-panel-diff-layout.md) — two diff surfaces on purpose; don't add a third
+- [orchestrator-app-control-and-voice](orchestrator-app-control-and-voice.md) — the brain can drive app-control actions from app state, but there is no first-class project-switch action; classic voice and realtime voice both route through the same orchestrator flow
 - [completion-announcements](completion-announcements.md) — how a turn's end is detected and surfaced to the user
 - [agent-inbox-unread](agent-inbox-unread.md) — the inbox behind the toasts; why "read" and "dismissed" must stay separate bits
 - [agent-usage-meters](agent-usage-meters.md) — rate-limit meters + detection table: the verified endpoints, never-refresh rule, the three keychain CLIs (Copilot probe, Gemini settings marker, Cody env), the 9 live providers (Cursor via web session + Amp via secrets.json, both 2026-08-12), and why Copilot/Droid/Antigravity stay detection-only
@@ -61,8 +62,11 @@ up front. When you add a note, add its line here in the matching section.
 
 - [terminal-pane-lifetime](terminal-pane-lifetime.md) — a `TerminalPane` must never unmount while its session is alive
 - [terminal-renderers](terminal-renderers.md) — default is `canvas`; the "transparent background ghost" claim is false; WebGL slabs dim/italic/underline text over a transparent surface, so it gets an opaque one
+- [terminal-agent-executing-pulse](terminal-agent-executing-pulse.md) — `agent-executing` used to pulse the terminal pane; keep the background static
 - [terminal-is-always-dark](terminal-is-always-dark.md) — the terminal never follows light/dark, because OSC 11 theme detection is a one-shot negotiation a running TUI can't redo; the four places that must agree
 - [terminal-startup-and-agent-split](terminal-startup-and-agent-split.md) — startup shell, cwd, and shells vs agents in one session list
+- [terminal-output-buffer-cost](terminal-output-buffer-cost.md) — 2026-08-13: the 250k session buffer is written on every pty chunk; the old concat+slice cost 32ms/s per agent ONCE FULL (184ms/s across six), which is the "lags after the agents have been running a while" report; keep appends O(chunk), use `getSessionOutputLength` for length-only polls, and `registerDataCallback` now gets the pre-decoded text
+- [terminal-visibility-redraw](terminal-visibility-redraw.md) — atlas flush on window-return must skip panes hidden by `visibility` (Home overlay, parked projects) or it repaints every mounted pane twice; closing Home is the one reveal path with no geometry change, so AppShell fires `pane-resize-end` for it
 - [os-drag-drop-routing](os-drag-drop-routing.md) — OS file drops hit every mounted pane; `dropPositionToCss` + hidden-rect guard, and why raw position comparisons stay banned
 - [running-two-instances](running-two-instances.md) — why a dev build starts but never opens a window
 
@@ -126,9 +130,12 @@ up front. When you add a note, add its line here in the matching section.
 
 ## Platform, build & housekeeping
 
+- [main-thread-tauri-commands](main-thread-tauri-commands.md) — 2026-08-13: a sync `#[tauri::command]` runs on the window's MESSAGE PUMP, so blocking work there is a literal "(Not Responding)" hang, not jank; `resource_snapshot` was enumerating every process on the machine every 2s on that thread (worst right after a sleep/resume); measured ~100ms/call at 347 processes = a 5% duty cycle of frozen window; how the three declaration forms differ, why narrowing `ProcessRefreshKind` is a measured non-win, and which commands are still sync
 - [electron-conversion-assessment](electron-conversion-assessment.md) — 2026-08-10: Tauri→Electron feasibility; Rust sidecar path reuses spacron-server; full rewrite is large (recommendation not taken)
 - [stack-decision-tauri](stack-decision-tauri.md) — 2026-08-10 DECISION: staying on Tauri; what a re-litigation has to beat, and why agents get an external browser instead
 - [release-process](release-process.md) — the five files carrying the version (Cargo.lock is tool-denied; regenerate it), and why `git push` 408s
+- [codebase-health-audit](codebase-health-audit.md) — 2026-08-13 audit at v0.9.1: local suite green, Release CI green on 3 platforms (Build runs get cancelled by tag pushes — expected), Vercel deployed; how to run Spacron on a cloud VM (in-process `remote/mod.rs::serve()`, plaintext ws, agents not remote yet)
+- [remote-tls-hardening](remote-tls-hardening.md) — 2026-08-13: spacron-server `--cert/--key` wss:// mode + wss-capable relay; the gotchas that cost real time: `with_state`'s S2 inferred from context (Router<()> is servable, not Router<State>), TowerToHyperService/TokioIo adapters, the ring-vs-aws-lc-rs provider panic + `ensure_crypto_provider`, rustls 0.23 / rcgen 0.13 API changes
 - [cross-platform-status](cross-platform-status.md) — Windows / macOS / Linux audit against v0.7.5
 - [bundle-chunking](bundle-chunking.md) — `manualChunks` silently defeats dynamic imports
 - [test-suite-timing-sensitivity](test-suite-timing-sensitivity.md) — a test that fails in the full suite but passes alone is CPU contention, not a regression; why vitest is capped at 6 workers and `waitForAgentReady`'s 40ms test windows are the reason

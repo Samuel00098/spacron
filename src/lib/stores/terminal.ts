@@ -393,7 +393,11 @@ export function restoreTerminalProjectState(projectId: string, state: TerminalPr
 }
 
 const ptyInstances = new Map<number, PtySession>();
-const dataCallbacks = new Map<number, (data: Uint8Array) => void>();
+// `text` is the chunk already decoded by appendSessionOutputBuffer. It is handed
+// to the callback rather than left for it to decode again: the pane needs the
+// same string for its OSC/dev-server/agent-attention scanning, and running a
+// second stateful TextDecoder over every byte of every session bought nothing.
+const dataCallbacks = new Map<number, (data: Uint8Array, text: string) => void>();
 const exitCallbacks = new Map<number, (code: number) => void>();
 
 // Project-independent exit broadcast. Unlike `exitCallbacks` (registered by the
@@ -442,7 +446,16 @@ export function onAgentDetected(listener: (info: AgentDetectedInfo) => void): ()
   agentDetectedListeners.add(listener);
   return () => agentDetectedListeners.delete(listener);
 }
-const sessionOutputBuffers = new Map<number, string>();
+// A session's recent output, held as the list of chunks it arrived in rather
+// than as one repeatedly re-sliced string.
+//
+// `parts` are the decoded chunks still inside the window, oldest first; `len` is
+// their combined length and is kept at or under MAX_SESSION_BUFFER_CHARS by
+// trimming on append, so it always equals the length of the string
+// getSessionOutputBuffer() returns. `joined` memoises that string until the next
+// append dirties it.
+type SessionOutput = { parts: string[]; len: number; joined: string | null };
+const sessionOutputBuffers = new Map<number, SessionOutput>();
 const sessionOutputDecoders = new Map<number, TextDecoder>();
 const sessionInputBuffers = new Map<number, string>();
 const agentLaunchStartLengths = new Map<number, number>();
@@ -666,7 +679,7 @@ export function activateSessionInPane(id: number) {
   }, isDev);
 }
 
-export function registerDataCallback(id: number, cb: (data: Uint8Array) => void) {
+export function registerDataCallback(id: number, cb: (data: Uint8Array, text: string) => void) {
   dataCallbacks.set(id, cb);
 }
 
@@ -721,7 +734,7 @@ function processSessionInput(id: number, data: string) {
       if (command) {
         const preset = detectAgentPresetFromCommand(buffer);
         if (preset && !suppressAgentDetection.has(id)) {
-          agentLaunchStartLengths.set(id, getSessionOutputBuffer(id).length);
+          agentLaunchStartLengths.set(id, getSessionOutputLength(id));
           markSessionAgentPreset(id, preset);
           // Broadcast a genuine typed launch so the orchestrator can adopt it.
           // Skip panes already leased by the orchestrator (it tracks those via
@@ -760,17 +773,69 @@ function processSessionInput(id: number, data: string) {
   sessionInputBuffers.set(id, buffer);
 }
 
-function appendSessionOutputBuffer(id: number, bytes: Uint8Array) {
+// Append one chunk of a session's output, and return the decoded text so the
+// caller can hand it to listeners instead of decoding the same bytes twice.
+//
+// This used to be `buffer = (buffer + text).slice(-MAX)`. That is two full
+// copies of the whole window per chunk, and the pty layer coalesces at 15 ms /
+// 8 KB, so a busy agent delivers up to ~66 chunks a second. While the buffer is
+// still filling that is cheap; once it reaches MAX_SESSION_BUFFER_CHARS — a
+// couple of minutes of a working agent — every later chunk pays the full price,
+// forever, because the buffer never shrinks back below the cap again. Measured
+// cost of one second of streaming output: 0.5 ms with a fresh buffer, 32 ms for
+// a single session at the cap, 184 ms across six sessions at the cap. That is
+// the "fine at first, then everything lags once the agents have been running a
+// while" behaviour, and it is paid on the main thread, ahead of rendering.
+//
+// Appending is now O(chunk): push the chunk, then drop leading chunks that have
+// fallen out of the window. Only the first surviving chunk is ever sliced, and
+// it is one pty chunk rather than the whole 250k window.
+function appendSessionOutputBuffer(id: number, bytes: Uint8Array): string {
   const decoder = sessionOutputDecoders.get(id) ?? new TextDecoder();
   sessionOutputDecoders.set(id, decoder);
   const text = decoder.decode(bytes, { stream: true });
-  if (!text) return;
-  const next = (sessionOutputBuffers.get(id) ?? '') + text;
-  sessionOutputBuffers.set(id, next.length > MAX_SESSION_BUFFER_CHARS ? next.slice(-MAX_SESSION_BUFFER_CHARS) : next);
+  if (!text) return '';
+
+  let entry = sessionOutputBuffers.get(id);
+  if (!entry) {
+    entry = { parts: [], len: 0, joined: null };
+    sessionOutputBuffers.set(id, entry);
+  }
+
+  entry.parts.push(text);
+  entry.len += text.length;
+  entry.joined = null;
+
+  // Drop whole chunks that are entirely outside the window, then trim whatever
+  // still overhangs off the front of the oldest surviving chunk.
+  while (entry.parts.length > 1 && entry.len - entry.parts[0].length >= MAX_SESSION_BUFFER_CHARS) {
+    entry.len -= entry.parts[0].length;
+    entry.parts.shift();
+  }
+  if (entry.len > MAX_SESSION_BUFFER_CHARS) {
+    const overflow = entry.len - MAX_SESSION_BUFFER_CHARS;
+    entry.parts[0] = entry.parts[0].slice(overflow);
+    entry.len -= overflow;
+  }
+
+  return text;
 }
 
 export function getSessionOutputBuffer(id: number): string {
-  return sessionOutputBuffers.get(id) ?? '';
+  const entry = sessionOutputBuffers.get(id);
+  if (!entry) return '';
+  if (entry.joined === null) entry.joined = entry.parts.join('');
+  return entry.joined;
+}
+
+/**
+ * Length of what {@link getSessionOutputBuffer} would return, without building
+ * the string. The polling loops that only compare growth (prompt echo, submit
+ * confirmation, agent-ready detection) run every 60–120 ms, so joining a 250k
+ * window just to read `.length` is pure waste.
+ */
+export function getSessionOutputLength(id: number): number {
+  return sessionOutputBuffers.get(id)?.len ?? 0;
 }
 
 function handlePtyExit(id: number, owningProjectId: string, code: number) {
@@ -987,9 +1052,9 @@ export async function createTerminalSession(
 
     const ptyPromise = openPty(80, 24, {
       onData: (bytes) => {
-        appendSessionOutputBuffer(pty.id, bytes);
+        const text = appendSessionOutputBuffer(pty.id, bytes);
         const cb = dataCallbacks.get(pty.id);
-        cb?.(bytes);
+        cb?.(bytes, text);
       },
       onExit: (code) => {
         handlePtyExit(pty.id, owningProjectId, code);
@@ -1030,9 +1095,9 @@ export async function attachTerminalSession(
         appendSessionOutputBuffer(backendSessionId, bytes);
       },
       onData: (bytes) => {
-        appendSessionOutputBuffer(backendSessionId, bytes);
+        const text = appendSessionOutputBuffer(backendSessionId, bytes);
         const cb = dataCallbacks.get(backendSessionId);
-        cb?.(bytes);
+        cb?.(bytes, text);
       },
       onExit: (code) => {
         handlePtyExit(backendSessionId, owningProjectId, code);
@@ -1157,7 +1222,7 @@ async function confirmAgentStarted(sessionId: number, baseLen: number): Promise<
   const startedAt = Date.now();
   for (;;) {
     if (!ptyInstances.get(sessionId)) return false;
-    if (getSessionOutputBuffer(sessionId).length >= baseLen + SUBMIT_CONFIRM_DELTA) return true;
+    if (getSessionOutputLength(sessionId) >= baseLen + SUBMIT_CONFIRM_DELTA) return true;
     if (Date.now() - startedAt >= SUBMIT_CONFIRM_WINDOW_MS) return false;
     await sleep(SUBMIT_CONFIRM_POLL_MS);
   }
@@ -1165,11 +1230,11 @@ async function confirmAgentStarted(sessionId: number, baseLen: number): Promise<
 
 async function waitForComposerQuiescent(sessionId: number): Promise<void> {
   const startedAt = Date.now();
-  let lastLen = getSessionOutputBuffer(sessionId).length;
+  let lastLen = getSessionOutputLength(sessionId);
   for (;;) {
     await sleep(PASTE_COMMIT_QUIET_MS);
     if (!ptyInstances.get(sessionId)) return;
-    const len = getSessionOutputBuffer(sessionId).length;
+    const len = getSessionOutputLength(sessionId);
     if (len === lastLen) return;
     lastLen = len;
     if (Date.now() - startedAt >= PASTE_COMMIT_QUIET_MAX_MS) return;
@@ -1217,13 +1282,13 @@ async function deliverPromptRaw(sessionId: number, text: string): Promise<boolea
 
   for (let attempt = 0; attempt < MAX_SUBMIT_ATTEMPTS; attempt += 1) {
     if (!ptyInstances.get(sessionId)) return false;
-    const lenBeforeEnter = getSessionOutputBuffer(sessionId).length;
+    const lenBeforeEnter = getSessionOutputLength(sessionId);
     pty.write('\r').catch((err) => console.error('Failed to submit prompt:', err));
     const confirmed = await confirmAgentStarted(sessionId, lenBeforeEnter);
     logAgentSend(sessionId, 'enter', {
       attempt: attempt + 1,
       confirmed,
-      growth: getSessionOutputBuffer(sessionId).length - lenBeforeEnter,
+      growth: getSessionOutputLength(sessionId) - lenBeforeEnter,
     });
     if (confirmed) {
       markSessionBriefed(sessionId, true);
@@ -1375,7 +1440,7 @@ export async function relaunchRestoredAgentSession(
   const launchArgs = resolveAgentLaunchArgs(agentPreset, get(agentPermissionMode), launchOverrides);
   const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
 
-  agentLaunchStartLengths.set(id, getSessionOutputBuffer(id).length);
+  agentLaunchStartLengths.set(id, getSessionOutputLength(id));
   suppressAgentDetection.add(id);
   try {
     writeToSession(id, `${launchLine}\r`);
@@ -1476,7 +1541,7 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
   let initiallyGrown = false;
   while (Date.now() - startedAt < (mustSeeMarker ? maxWaitMs : READY_NO_OUTPUT_WAIT_MS)) {
     if (launchFailed()) return 'launch-failed';
-    if (getSessionOutputBuffer(sessionId).length > startLen + READY_OUTPUT_DELTA || tuiMarkerSeen()) {
+    if (getSessionOutputLength(sessionId) > startLen + READY_OUTPUT_DELTA || tuiMarkerSeen()) {
       initiallyGrown = true;
       break;
     }
@@ -1496,7 +1561,7 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
   while (Date.now() - startedAt < maxWaitMs) {
     if (launchFailed()) return 'launch-failed';
     if (tuiMarkerSeen()) break;
-    const currentLen = getSessionOutputBuffer(sessionId).length;
+    const currentLen = getSessionOutputLength(sessionId);
     if (mustSeeMarker) {
       if (currentLen >= startLen + READY_BOOT_BANNER_DELTA) break;
     } else if (currentLen >= startLen + READY_BANNER_DELTA || Date.now() - startedAt >= READY_MIN_STARTUP_MS) {
@@ -1506,14 +1571,14 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
   }
 
   let markerAt: number | null = tuiMarkerSeen() ? Date.now() : null;
-  let lastLen = getSessionOutputBuffer(sessionId).length;
+  let lastLen = getSessionOutputLength(sessionId);
   let lastChangeAt = Date.now();
 
   while (Date.now() - startedAt < maxWaitMs) {
     await new Promise<void>((resolve) => setTimeout(resolve, READY_POLL_MS));
     if (markerAt === null && launchFailed()) return 'launch-failed';
     if (markerAt === null && tuiMarkerSeen()) markerAt = Date.now();
-    const currentLen = getSessionOutputBuffer(sessionId).length;
+    const currentLen = getSessionOutputLength(sessionId);
     if (currentLen !== lastLen) {
       lastLen = currentLen;
       lastChangeAt = Date.now();
@@ -1529,7 +1594,7 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
     preset: session?.agentPreset ?? null,
     mustSeeMarker,
     marker: markerAt !== null,
-    grownChars: getSessionOutputBuffer(sessionId).length - startLen,
+    grownChars: getSessionOutputLength(sessionId) - startLen,
     elapsedMs: Date.now() - startedAt,
   });
   return 'ready';
@@ -2048,7 +2113,7 @@ export async function spawnAgentPreset(
   // resolved command + permission args + MCP flags.
   const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
 
-  agentLaunchStartLengths.set(sessionId, getSessionOutputBuffer(sessionId).length);
+  agentLaunchStartLengths.set(sessionId, getSessionOutputLength(sessionId));
   suppressAgentDetection.add(sessionId);
   try {
     writeToSession(sessionId, launchLine + '\r');

@@ -134,6 +134,7 @@ import {
   setSessionWorktree,
   setActiveSession,
   getSessionOutputBuffer,
+  getSessionOutputLength,
 } from '$lib/stores/terminal';
 
 export type {
@@ -2092,7 +2093,7 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       const task = get(orchestratorTasks).find((t) => t.id === taskId);
       if (!task) return;
 
-      const bufLen = getSessionOutputBuffer(sessionId).length;
+      const bufLen = getSessionOutputLength(sessionId);
       if (shouldNudgeAdopted(sessionId, bufLen)) {
         lastAdoptedNudge.set(sessionId, { len: bufLen, at: Date.now() });
         notifyAdoptedTurnEnd(task, outcome);

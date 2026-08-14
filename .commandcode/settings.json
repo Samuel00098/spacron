@@ -12,7 +12,8 @@
       "Shell(powershell -NoProfile -Command \"cd 'C:\\Users\\samue\\OneDrive\\Documents\\Projects\\Real Projects\\spacron\\src-tauri'; cargo test --lib agent_probe::tests::measure_against_installed_clis -- --ignored --nocapture 2>&1 | Out-File -FilePath '$env:TEMP\\probe-measure.log' -Encoding utf8; Get-Content '$env:TEMP\\probe-measure.log' | Select-String -Pattern 'reads=' | ForEach-Object { $_.Line }\")",
       "Shell(powershell -NoProfile -Command \"cd 'C:\\Users\\samue\\OneDrive\\Documents\\Projects\\Real Projects\\spacron\\src-tauri'; cargo test --lib agent_probe::tests::measure_against_installed_clis -- --ignored --nocapture 2>&1 | Out-File -FilePath (Join-Path $env:TEMP 'probe-measure.log') -Encoding utf8; Get-Content (Join-Path $env:TEMP 'probe-measure.log') | Select-String -Pattern 'reads=' | ForEach-Object { $_.Line }\")",
       "Shell(powershell -NoProfile -Command \"Get-Content (Join-Path $env:TEMP 'probe-measure.log') -ErrorAction SilentlyContinue | Select-String -Pattern 'reads=' | ForEach-Object { $_.Line }\")",
-      "Shell(powershell -NoProfile -Command \"cd 'C:\\Users\\samue\\OneDrive\\Documents\\Projects\\Real Projects\\spacron'; npx vitest run 2>&1 | Select-String -Pattern 'FAIL|✗|×|failed' | Select-Object -First 40\")"
+      "Shell(powershell -NoProfile -Command \"cd 'C:\\Users\\samue\\OneDrive\\Documents\\Projects\\Real Projects\\spacron'; npx vitest run 2>&1 | Select-String -Pattern 'FAIL|✗|×|failed' | Select-Object -First 40\")",
+      "powershell"
     ],
     "deny": [],
     "defaultMode": "default"

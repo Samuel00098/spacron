@@ -7,6 +7,7 @@
 - When presented with a prioritized fix/improvement plan, prefers to approve and implement the complete scope at once ("yes work on them all") rather than a subset or staged rollout. Confidence: 0.65
 - Project workflow runs multiple coding agents in parallel (e.g., claude, codex), each in its own pane and worktree branch, producing independent diffs the user can watch and review separately. Confidence: 0.7
 - At times prefers the assistant to implement work directly in-process rather than delegating to parallel coding agents — when offered delegation for a multi-workstream task, explicitly said "do it yourself." Delegation is a workflow option, not a default expectation. Confidence: 0.7
+- Demands permanent, root-cause fixes rather than symptom-level patches: when told a problem "has already been fixed," pushes back and asks to verify it's durable ("we need to check that it has been done... not like something that will happen again") — expects evidence that the underlying cause (e.g., the code that writes the config) was fixed and is guarded by regression tests, not just that the symptom isn't currently present. Confidence: 0.7
 - Drawn to urban/cityscape imagery (e.g., Chicago-style skylines, cityscapes) as visual aesthetics for tools and application backgrounds. Confidence: 0.7
 - Prefers 2K resolution (2560×1440) for generated image assets to ensure sharpness on larger screens. Confidence: 0.8
 - Prefers WebP format over PNG for image assets. Confidence: 0.8

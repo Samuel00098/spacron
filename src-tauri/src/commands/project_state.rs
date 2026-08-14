@@ -68,9 +68,19 @@ fn state_path(state: &State<AppState>, project_id: &str, key: &str) -> Result<Pa
     Ok(project_dir(state, project_id)?.join(key))
 }
 
+/// Every command below touches the disk, so all four are `#[tauri::command(async)]`
+/// — a plain `#[tauri::command]` runs on the main thread, which is the window's
+/// message pump, and a stalled write (or the `remove_dir_all` in
+/// `project_state_clear`) freezes the whole window while it waits. Same reasoning
+/// and same fix as `commands::file_system`; these were missed for the same reason.
+///
+/// Concurrency is safe: each command re-validates its own segments and the paths
+/// are per-project and per-key, so two of them never contend for one file that
+/// they could not already have contended for from the frontend.
+
 /// Read one app-private state file. `None` when it has never been written —
 /// callers treat that as "no saved state" and fall back to their defaults.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_state_read(
     project_id: String,
     key: String,
@@ -85,7 +95,7 @@ pub fn project_state_read(
 }
 
 /// Write one app-private state file, creating the project's directory on demand.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_state_write(
     project_id: String,
     key: String,
@@ -103,7 +113,7 @@ pub fn project_state_write(
 /// Absolute path to one state file, for the cases that must hand a real path to
 /// an external process — notably the generated MCP config, which reaches the CLI
 /// as `--mcp-config <path>`. Creates the directory so the caller can write there.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_state_path(
     project_id: String,
     key: String,
@@ -120,7 +130,7 @@ pub fn project_state_path(
 /// Drop every app-private file for a project. Called when the user removes a
 /// project from the workspace, so closing a project doesn't leave its
 /// bookkeeping behind forever.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_state_clear(project_id: String, state: State<AppState>) -> Result<(), String> {
     let dir = project_dir(&state, &project_id)?;
     match std::fs::remove_dir_all(&dir) {

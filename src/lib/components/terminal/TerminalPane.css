@@ -568,14 +568,3 @@
     var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65));
 }
 
-/* Pulse animation when the agent is executing */
-@keyframes agentPulse {
-  0% { opacity: 0.8; }
-  50% { opacity: 1; filter: brightness(1.2) saturate(1.2); }
-  100% { opacity: 0.8; }
-}
-
-.terminal-pane.agent-pane.agent-executing {
-  animation: agentPulse 2s infinite ease-in-out;
-}
-

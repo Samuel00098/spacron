@@ -13,6 +13,10 @@ const setSessionRole = vi.hoisted(() => vi.fn());
 const setActiveSession = vi.hoisted(() => vi.fn());
 const sendAgentPromptDirect = vi.hoisted(() => vi.fn());
 const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
+// Delegates to the buffer mock so the `mockReturnValueOnce` sequences the launch
+// tests set up stay call-for-call identical to when callers read `.length` off
+// the buffer themselves.
+const getSessionOutputLength = vi.hoisted(() => vi.fn());
 const killSession = vi.hoisted(() => vi.fn(async () => undefined));
 const getAgentDisplayName = vi.hoisted(() => vi.fn((id: string) => id));
 const promptBarInput = vi.hoisted(() => ({ set: vi.fn() }));
@@ -135,6 +139,7 @@ vi.mock('$lib/stores/terminal', () => ({
   setActiveSession,
   sendAgentPromptDirect,
   getSessionOutputBuffer,
+  getSessionOutputLength,
   killSession,
   getAgentDisplayName,
   promptBarInput,
@@ -171,6 +176,8 @@ function resetMocks() {
   sendAgentPromptDirect.mockResolvedValue(true);
   getSessionOutputBuffer.mockReset();
   getSessionOutputBuffer.mockReturnValue('');
+  getSessionOutputLength.mockReset();
+  getSessionOutputLength.mockImplementation(() => getSessionOutputBuffer().length);
   killSession.mockReset();
   getAgentDisplayName.mockReset();
   getAgentDisplayName.mockImplementation((id: string) => id);
