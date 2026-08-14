@@ -7,6 +7,7 @@ import {
 } from './agent-signals';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
+import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
 
 /** Outcome of watching one agent turn on a leased terminal. */
 export type AgentTurnOutcome =
@@ -99,9 +100,17 @@ export async function watchLeasedAgentTurn(
   // (task unlinked, session killed), so the elapsed time is how long the watch
   // lived, not how long the agent worked.
   markTurnStart(sessionId);
-  const outcome = await watchTurnUntilDone(sessionId, opts);
-  if (outcome.kind !== 'aborted') recordTurnEnd(sessionId, outcome.kind);
-  return outcome;
+  // Keep-awake shares this funnel for the same reason, but counts an `aborted`
+  // turn as ended: a torn-down watch has nothing left to keep the machine awake
+  // for. The release is in a `finally` so a throw here cannot strand the hold.
+  agentTurnStarted(sessionId);
+  try {
+    const outcome = await watchTurnUntilDone(sessionId, opts);
+    if (outcome.kind !== 'aborted') recordTurnEnd(sessionId, outcome.kind);
+    return outcome;
+  } finally {
+    agentTurnEnded(sessionId);
+  }
 }
 
 async function watchTurnUntilDone(

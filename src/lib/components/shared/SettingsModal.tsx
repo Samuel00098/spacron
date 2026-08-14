@@ -39,6 +39,7 @@ import {
   getVoiceInputModelOptions,
   interfaceTransparency,
   isLocalProvider,
+  keepSystemAwake,
   minimap,
   notificationsEnabled,
   resetSettingsToDefault,
@@ -93,6 +94,7 @@ import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDow
 import { get } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { keepAwakeState } from '$lib/services/keep-awake';
 import { AgentBrandMark } from './useAgentBrand';
 import AgentsPane from '$lib/components/agents/AgentsPane';
 import UsageStatsPane from '$lib/components/stats/UsageStatsPane';
@@ -753,6 +755,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAgentWorktrees = useStore(agentWorktrees);
   const currentAutoStage = useStore(autoStageAgentChanges);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
+  const currentKeepSystemAwake = useStore(keepSystemAwake);
+  const keepAwake = useStore(keepAwakeState);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
   const currentFormatOnSave = useStore(formatOnSave);
@@ -2134,6 +2138,49 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       onChange={autoStageAgentChanges.set}
                     />
                   </SettingRow>
+                </Section>
+
+                <Section title="Power">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    A long agent run is unattended by design — which is exactly what your machine
+                    reads as idle before it suspends, taking every agent down mid-turn. Spacron can
+                    hold the system awake for as long as agents are actually working, and let go the
+                    moment the last one finishes.
+                  </p>
+                  <SettingRow
+                    title="Stay awake while agents work"
+                    detail="Blocks idle sleep only while at least one agent is mid-turn — the display still turns off, and asking your machine to sleep still works. Nothing is held once every agent is idle."
+                  >
+                    <Toggle
+                      label="Toggle keeping the system awake while agents work"
+                      checked={currentKeepSystemAwake}
+                      onChange={keepSystemAwake.set}
+                    />
+                  </SettingRow>
+                  {currentKeepSystemAwake && (
+                    <p
+                      className="shell-hint"
+                      style={{
+                        marginTop: 0,
+                        marginBottom: 0,
+                        color: keepAwake.error
+                          ? 'var(--warning)'
+                          : keepAwake.holding
+                          ? 'var(--success)'
+                          : undefined,
+                      }}
+                    >
+                      {keepAwake.error
+                        ? `Couldn't hold the system awake: ${keepAwake.error}`
+                        : !keepAwake.supported
+                        ? 'This platform has no sleep inhibitor Spacron can use.'
+                        : keepAwake.holding
+                        ? `Holding the system awake — ${keepAwake.workingAgents} agent${
+                            keepAwake.workingAgents === 1 ? '' : 's'
+                          } working.`
+                        : 'Idle — nothing held. The hold is taken when an agent starts a turn.'}
+                    </p>
+                  )}
                 </Section>
 
                 <Section title="Browser">

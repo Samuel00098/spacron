@@ -241,6 +241,8 @@ function createSettingsState() {
     agentWorktrees: persistentValue('agentWorktrees', true),
     autoStageAgentChanges: persistentValue('autoStageAgentChanges', false),
     agentBrowserTools: persistentValue('agentBrowserTools', false),
+    // Keep the machine awake while agents are mid-turn — see stores/settings.ts.
+    keepSystemAwake: persistentValue('keepSystemAwake', false),
   };
 }
 
@@ -349,6 +351,7 @@ const defaults: SettingsValues = {
   agentWorktrees: true,
   autoStageAgentChanges: false,
   agentBrowserTools: false,
+  keepSystemAwake: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({
@@ -412,6 +415,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       agentWorktrees: 'agentWorktrees',
       autoStageAgentChanges: 'autoStageAgentChanges',
       agentBrowserTools: 'agentBrowserTools',
+      keepSystemAwake: 'keepSystemAwake',
     };
     const stateKey = setters[key];
     if (stateKey) {

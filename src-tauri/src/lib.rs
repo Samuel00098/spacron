@@ -355,6 +355,8 @@ pub fn run() {
             commands::activity_stats::activity_record_turn,
             commands::activity_stats::activity_get_summary,
             commands::activity_stats::activity_reset,
+            commands::keep_awake::keep_awake_set,
+            commands::keep_awake::keep_awake_status,
             commands::agent_signals::agent_signal_channel_open,
             commands::agent_signals::agent_signal_channel_close,
             commands::workspace::workspace_git_stage_paths,

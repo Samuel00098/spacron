@@ -29,6 +29,7 @@ import {
 import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator-brief';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
+import { agentSessionClosed } from '$lib/services/keep-awake';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
@@ -860,6 +861,11 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const label = session ? getSessionLabel(session, visibleSessions) : `Terminal ${id}`;
   const isAgent = isAgentSession(session);
   const clean = code === 0;
+
+  // A dead process is not working, whatever its turn watcher still believes.
+  // The watcher normally releases its own hold, but a process that dies without
+  // the watch noticing would otherwise keep the machine awake for nothing.
+  agentSessionClosed(id);
 
   if (isAgent) {
     // Exit is the other way an agent's work ends (the turn watcher covers agents

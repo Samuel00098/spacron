@@ -143,6 +143,16 @@ export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges',
 // never asked for it, so this is opt-in rather than opt-out.
 export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 
+// Hold an OS sleep inhibitor for as long as any agent is mid-turn, so a long
+// unattended run isn't suspended halfway through by the machine's idle timer.
+// The refcount, the platform calls and the "idle sleep only, never the display"
+// rule all live in `services/keep-awake.ts` and `commands/keep_awake.rs`.
+//
+// Defaults OFF: overriding the machine's power policy is not something to do to
+// a user who never asked, and on a laptop away from a charger it is the wrong
+// trade. The hold is released the moment the last turn ends either way.
+export const keepSystemAwake = persistentWritable('keepSystemAwake', false);
+
 // Agent permissions & launch overrides — the Orca-style "Yolo" mode.
 //
 // `agentPermissionMode` is the global default for how agents are launched:
@@ -1313,6 +1323,7 @@ export function resetSettingsToDefault() {
   agentWorktrees.set(true);
   autoStageAgentChanges.set(false);
   agentBrowserTools.set(false);
+  keepSystemAwake.set(false);
   closeBehavior.set('quit');
   aiProvider.set('openrouter');
   aiModelByProvider.set({});
