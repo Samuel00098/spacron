@@ -162,6 +162,22 @@
   border-left: 1px solid var(--border);
 }
 
+/* Stream resolution. Same divider treatment as the AVD group, but a much
+   narrower trigger: its longest value is "1440p", so the shared 230px would be
+   mostly empty space in an already busy toolbar. */
+.mobile-panel .mobile-quality {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.mobile-panel .mobile-quality .dropdown {
+  max-width: 116px;
+}
+
 .mobile-panel .mobile-icon-btn {
   display: flex;
   align-items: center;
@@ -597,7 +613,8 @@
   .mobile-panel .mobile-tool-label {
     display: none;
   }
-  .mobile-panel .mobile-avd {
+  .mobile-panel .mobile-avd,
+  .mobile-panel .mobile-quality {
     margin-left: 0;
     padding-left: 0;
     border-left: none;

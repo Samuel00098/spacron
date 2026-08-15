@@ -2,8 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   desiredStreamLongSide,
+  formatStreamSideChoice,
+  MAX_REQUESTABLE_SIDE,
   MAX_STREAM_SIDE,
+  MIN_REQUESTABLE_SIDE,
   MIN_STREAM_SIDE,
+  parseStreamSideChoice,
+  resolveStreamSide,
+  STREAM_SIDE_CHOICES,
 } from './streamResolution';
 
 /**
@@ -37,7 +43,8 @@ describe('desiredStreamLongSide', () => {
   });
 
   it('never exceeds the measured ceiling', () => {
-    // Past 1024 the frame rate falls away faster than the sharpness is worth.
+    // Past the ceiling the frame rate falls off a cliff (measured: 12.7 fps at
+    // 1024 against 15.7 at 864) faster than the sharpness is worth.
     expect(desiredStreamLongSide(2000, 4000, 2)).toBe(MAX_STREAM_SIDE);
   });
 
@@ -58,5 +65,72 @@ describe('desiredStreamLongSide', () => {
     expect(desiredStreamLongSide(350, Infinity, 2)).toBe(MIN_STREAM_SIDE);
     // A nonsense DPR must not poison the result either.
     expect(desiredStreamLongSide(350, 900, 0)).toBe(770);
+  });
+});
+
+/**
+ * The switcher's job is to let someone override the automatic pick — including
+ * *upward*, past the ceiling that exists to keep the automatic pick fast. These
+ * pin that asymmetry, since getting it wrong would silently cap the one case
+ * the control exists for.
+ */
+describe('resolveStreamSide', () => {
+  it('follows the panel size on auto', () => {
+    expect(resolveStreamSide('auto', 350, 900, 1)).toBe(desiredStreamLongSide(350, 900, 1));
+  });
+
+  it('honours an explicit pick regardless of the stage', () => {
+    // The same 720 whether the stage is tiny or huge — that is the point of
+    // taking manual control.
+    expect(resolveStreamSide(720, 80, 100, 1)).toBe(720);
+    expect(resolveStreamSide(720, 2000, 4000, 2)).toBe(720);
+  });
+
+  it('lets an explicit pick exceed the automatic ceiling', () => {
+    // MAX_STREAM_SIDE bounds the *automatic* pick only. A user choosing 1440
+    // has accepted the frame-rate cost and must actually get 1440.
+    expect(1440).toBeGreaterThan(MAX_STREAM_SIDE);
+    expect(resolveStreamSide(1440, 350, 900, 1)).toBe(1440);
+  });
+
+  it('clamps to what the backends accept', () => {
+    // Both transports clamp to [240, 4096]; matching here keeps the number the
+    // panel shows equal to the number the device is asked for.
+    expect(resolveStreamSide(10, 350, 900, 1)).toBe(MIN_REQUESTABLE_SIDE);
+    expect(resolveStreamSide(99_999, 350, 900, 1)).toBe(MAX_REQUESTABLE_SIDE);
+  });
+
+  it('falls back to auto for a nonsense number', () => {
+    expect(resolveStreamSide(NaN, 350, 900, 1)).toBe(desiredStreamLongSide(350, 900, 1));
+  });
+
+  it('offers only rungs the backends will honour', () => {
+    for (const { side } of STREAM_SIDE_CHOICES) {
+      expect(resolveStreamSide(side, 350, 900, 1)).toBe(side);
+    }
+  });
+});
+
+describe('parseStreamSideChoice / formatStreamSideChoice', () => {
+  it('round-trips every offered rung and auto', () => {
+    expect(parseStreamSideChoice(formatStreamSideChoice('auto'))).toBe('auto');
+    for (const { side } of STREAM_SIDE_CHOICES) {
+      expect(parseStreamSideChoice(formatStreamSideChoice(side))).toBe(side);
+    }
+  });
+
+  it('falls back to auto for anything unrecognised', () => {
+    // A hand-edited localStorage value, or a rung dropped in a later build,
+    // must not pin the stream to a number nothing offers any more.
+    expect(parseStreamSideChoice(null)).toBe('auto');
+    expect(parseStreamSideChoice('')).toBe('auto');
+    expect(parseStreamSideChoice('banana')).toBe('auto');
+    expect(parseStreamSideChoice('-720')).toBe('auto');
+    expect(parseStreamSideChoice('0')).toBe('auto');
+  });
+
+  it('clamps an out-of-range stored value instead of trusting it', () => {
+    expect(parseStreamSideChoice('99999')).toBe(MAX_REQUESTABLE_SIDE);
+    expect(parseStreamSideChoice('12')).toBe(MIN_REQUESTABLE_SIDE);
   });
 });

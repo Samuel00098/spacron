@@ -2,9 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './MobilePanel.css';
+import { nextSelectedSerial } from './deviceSelection';
 import { useMjpegStream } from './useMjpegStream';
 import { useScrcpyStream } from './useScrcpyStream';
-import { desiredStreamLongSide } from './streamResolution';
+import {
+  formatStreamSideChoice,
+  parseStreamSideChoice,
+  resolveStreamSide,
+  STREAM_SIDE_CHOICES,
+  type StreamSideChoice,
+} from './streamResolution';
 import { sendStreamKey, sendStreamText, useStreamTouch, type FrameDims } from './useStreamInput';
 import {
   advanceScroll,
@@ -56,6 +63,26 @@ const IOS_ORIENTATIONS = ['portrait', 'landscape_right', 'portrait_upside_down',
 
 /** Live-mirror poll cadence for the Android screencap. */
 const POLL_MS = 1000;
+/**
+ * How often to re-scan for devices while no live stream is up.
+ *
+ * Without this the device list was refreshed only when the tab changed, so an
+ * emulator booted *outside* the panel (Android Studio, `emulator -avd`, or one
+ * still booting when the pane opened) went unnoticed until someone pressed
+ * Refresh — the pane sat on snapshots next to a perfectly streamable device.
+ * Polling stops the moment a stream is live, because every adb call then
+ * competes with the stream and with injected input for the same connection.
+ */
+const DEVICE_POLL_MS = 2000;
+/**
+ * How many times a failed live stream is retried before the panel settles for
+ * snapshots. The common failure is a race, not a fault — an emulator that is
+ * listed by adb but has not yet published its gRPC endpoint — so retrying a
+ * few times converts "stuck in Snapshot forever" into a short delay.
+ */
+const STREAM_RETRY_LIMIT = 4;
+/** First retry delay. Doubles per attempt: 1.5s, 3s, 6s, 12s. */
+const STREAM_RETRY_BASE_MS = 1500;
 /** iOS screenshot poll cadence (view-only mirror). */
 const IOS_POLL_MS = 1500;
 
@@ -152,7 +179,23 @@ export default function MobilePanel() {
   // Streaming vs snapshot-polling mirror. Live streaming (scrcpy on Android,
   // serve-sim on iOS) is the default when the platform supports it; a stream
   // failure auto-falls back to polling with the reason surfaced.
+  // What the *user* asked for. A stream failure must never overwrite this —
+  // otherwise one early error (a stale serial from localStorage, an emulator
+  // still coming up) silently demoted the panel to snapshots for the rest of
+  // the session and only a manual click brought it back.
   const [streamMode, setStreamMode] = useState<'stream' | 'poll'>('stream');
+  // The *forced* fallback: set when a stream errors, cleared on retry. Snapshot
+  // polling runs while this is set even though `streamMode` still says 'stream'.
+  const [streamFallback, setStreamFallback] = useState<string | null>(null);
+  /** Retries spent on the current device. Reset when the target changes. */
+  const streamRetryRef = useRef(0);
+  /** The last failure was unfixable by retrying — see `StreamState.fatal`. */
+  const streamFatalRef = useRef(false);
+  // Stream resolution. 'auto' follows the panel size; a number is the long side
+  // the user asked for and overrides the automatic ceiling.
+  const [streamSide, setStreamSide] = useState<StreamSideChoice>(() =>
+    parseStreamSideChoice(localStorage.getItem('spacron.mobile.streamSide')),
+  );
   const [iosStreamMode, setIosStreamMode] = useState<'stream' | 'poll'>('stream');
   const [iosText, setIosText] = useState('');
   const [iosOrientation, setIosOrientation] = useState(0);
@@ -209,7 +252,6 @@ export default function MobilePanel() {
     state: streamState,
     start: startStream,
     stop: stopStream,
-    supported: streamSupported,
   } = useScrcpyStream();
   const {
     canvasRef: mjpegCanvasRef,
@@ -227,6 +269,12 @@ export default function MobilePanel() {
     if (selectedSerial) localStorage.setItem('spacron.mobile.serial', selectedSerial);
   }, [selectedSerial]);
 
+  // …and the resolution pick, which is a preference about this machine (how
+  // much it can push) rather than about any one device.
+  useEffect(() => {
+    localStorage.setItem('spacron.mobile.streamSide', formatStreamSideChoice(streamSide));
+  }, [streamSide]);
+
   // Host OS — gates the iOS tab.
   useEffect(() => {
     void (async () => {
@@ -237,6 +285,13 @@ export default function MobilePanel() {
       }
     })();
   }, []);
+
+  // Derived up here rather than next to the markup because the stream retry
+  // effects below key off it: a device coming online is the signal to try the
+  // live stream again.
+  const selectedDevice = devices.find((d) => d.serial === selectedSerial);
+  const deviceOnline = selectedDevice?.state === 'device';
+  const deviceOffline = Boolean(selectedDevice && !deviceOnline);
 
   // ── Android: list devices + AVDs + tool presence ───────────────────────
   const refreshAndroid = useCallback(async () => {
@@ -268,34 +323,119 @@ export default function MobilePanel() {
     if (tab === 'android') void refreshAndroid();
   }, [tab, refreshAndroid]);
 
+  // Keep watching for devices while nothing is streaming, so an emulator that
+  // boots (or finishes booting) after the pane opened is picked up on its own
+  // rather than waiting for a manual Refresh. `androidStreaming` in the deps is
+  // what stops the scan once a stream is live — see DEVICE_POLL_MS.
+  //
+  // Deliberately NOT `refreshAndroid`: that also re-lists AVDs and re-checks the
+  // toolchain (neither changes while the pane is open) and drives
+  // `devicesLoading`, which would flicker the Refresh button disabled every two
+  // seconds. This is the one call that can actually report something new.
+  useEffect(() => {
+    if (tab !== 'android' || androidStreaming) return;
+    let cancelled = false;
+    let inFlight = false;
+    const scan = async () => {
+      if (inFlight || cancelled || document.hidden) return;
+      inFlight = true;
+      try {
+        const devs = await invoke<AndroidDevice[]>('android_list_devices');
+        if (cancelled) return;
+        setDevices(devs);
+        setSelectedSerial((prev) => nextSelectedSerial(prev, devs));
+      } catch {
+        // A transient adb hiccup is not worth surfacing here — the screencap
+        // poll and the stream both report their own failures.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const id = window.setInterval(scan, DEVICE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [tab, androidStreaming]);
+
   // ── Android: live H.264 stream (scrcpy) when supported + enabled ─────
   useEffect(() => {
-    if (tab !== 'android' || !selectedSerial || !streamSupported || streamMode !== 'stream') {
+    // Deliberately not gated on WebCodecs: an emulator streams PNG over the
+    // host-side gRPC endpoint and needs no video decoder at all. If the backend
+    // does pick H.264 and this webview cannot decode it, the stream reports a
+    // fatal error on the first frame and the panel falls back to snapshots.
+    if (tab !== 'android' || !selectedSerial || streamMode !== 'stream' || streamFallback) {
       stopStream();
       return;
     }
-    // Ask for the pixels this panel can actually paint, rather than a fixed
-    // constant: a HiDPI screen needs ~2x a standard one for the same CSS box,
-    // and a narrow drawer needs far less than either. Measured at stream START
-    // only — re-negotiating mid-drag would restart the stream on every frame of
-    // a drawer resize. Widening the panel and wanting it sharper means toggling
-    // Live off/on (or switching device), which restarts it anyway.
+    // On 'auto', ask for the pixels this panel can actually paint rather than a
+    // fixed constant: a HiDPI screen needs ~2x a standard one for the same CSS
+    // box, and a narrow drawer needs far less than either. Measured at stream
+    // START only — re-negotiating mid-drag would restart the stream on every
+    // frame of a drawer resize. Widening the panel and wanting it sharper means
+    // toggling Live off/on (or switching device), which restarts it anyway.
+    //
+    // An explicit pick from the switcher skips the measurement entirely, so the
+    // stage size stops mattering; changing it restarts the stream, because the
+    // size is fixed in the stream's opening request.
     const stage = stageRef.current?.getBoundingClientRect();
-    const maxSide = desiredStreamLongSide(
+    const maxSide = resolveStreamSide(
+      streamSide,
       stage?.width ?? 0,
       stage?.height ?? 0,
       typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
     );
     void startStream(selectedSerial, maxSide);
-  }, [tab, selectedSerial, streamMode, streamSupported, startStream, stopStream]);
+  }, [
+    tab,
+    selectedSerial,
+    streamMode,
+    streamSide,
+    streamFallback,
+    startStream,
+    stopStream,
+  ]);
 
-  // A stream failure falls back to snapshot polling and surfaces the reason.
+  // A stream failure falls back to snapshot polling and surfaces the reason —
+  // without touching `streamMode`, so the user's own choice survives it.
   useEffect(() => {
     if (streamState.phase === 'error') {
-      setStreamMode('poll');
-      setFrameError(streamState.message ?? 'Screen stream failed.');
+      const message = streamState.message ?? 'Screen stream failed.';
+      // A fatal failure (this webview cannot decode what the device sends)
+      // spends the whole retry budget up front: retrying cannot change the
+      // answer, and 22s of futile reconnects would just delay the snapshots.
+      streamFatalRef.current = Boolean(streamState.fatal);
+      setStreamFallback(message);
+      setFrameError(message);
     }
-  }, [streamState.phase, streamState.message]);
+  }, [streamState.phase, streamState.message, streamState.fatal]);
+
+  // A new target gets a clean slate: clear the forced fallback and the retry
+  // budget, so switching device (or one finally coming online) tries the live
+  // stream again instead of inheriting the previous device's failure.
+  useEffect(() => {
+    streamRetryRef.current = 0;
+    streamFatalRef.current = false;
+    setStreamFallback(null);
+  }, [selectedSerial, deviceOnline]);
+
+  // Retry a forced fallback with a widening delay. This is what turns "the
+  // emulator was not quite ready" from a dead end into a couple of seconds:
+  // the panel keeps showing snapshots meanwhile, then upgrades itself to live.
+  useEffect(() => {
+    if (!streamFallback || streamMode !== 'stream' || tab !== 'android') return;
+    if (!selectedSerial || !deviceOnline || streamFatalRef.current) return;
+    if (streamRetryRef.current >= STREAM_RETRY_LIMIT) return;
+    const attempt = streamRetryRef.current;
+    const id = window.setTimeout(
+      () => {
+        streamRetryRef.current = attempt + 1;
+        setStreamFallback(null);
+      },
+      STREAM_RETRY_BASE_MS * 2 ** attempt,
+    );
+    return () => window.clearTimeout(id);
+  }, [streamFallback, streamMode, tab, selectedSerial, deviceOnline]);
 
   // ── Android: live mirror — poll screencap while a device is selected ───
   //
@@ -743,6 +883,12 @@ export default function MobilePanel() {
 
   function toggleStreamMode() {
     setFrameError(null);
+    // Asking for Live by hand also forgives whatever made it fall back and
+    // hands back a full retry budget — otherwise the click would be swallowed
+    // by a fallback the user is explicitly overriding.
+    streamRetryRef.current = 0;
+    streamFatalRef.current = false;
+    setStreamFallback(null);
     setStreamMode((m) => (m === 'stream' ? 'poll' : 'stream'));
   }
 
@@ -853,9 +999,17 @@ export default function MobilePanel() {
     }
   }
 
-  const selectedDevice = devices.find((d) => d.serial === selectedSerial);
-  const deviceOffline = Boolean(selectedDevice && selectedDevice.state !== 'device');
   const iosSelectedSim = sims.find((s) => s.udid === iosUdid);
+  // Whether the panel is between live-stream attempts, so the status line can
+  // say "this is temporary" instead of showing a bare failure the panel is in
+  // fact already recovering from. Reading the retry ref during render is fine
+  // for a hint: it is accurate as of this paint, and the next attempt repaints.
+  const streamRetrying =
+    Boolean(streamFallback) &&
+    streamMode === 'stream' &&
+    deviceOnline &&
+    !streamFatalRef.current &&
+    streamRetryRef.current < STREAM_RETRY_LIMIT;
 
   return (
     <div className="mobile-panel">
@@ -943,20 +1097,47 @@ export default function MobilePanel() {
               </Ico>
             </button>
 
-            {streamSupported && (
-              <button
-                className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
-                onClick={toggleStreamMode}
-                disabled={!selectedSerial}
-                title={
-                  streamMode === 'stream'
-                    ? 'Live streaming is on — switch to snapshot polling'
-                    : 'Live streaming is off — switch to the live stream'
-                }
-              >
-                {streamMode === 'stream' ? 'Live' : 'Snapshot'}
-              </button>
-            )}
+            {/* Resolution. Only meaningful for the live stream — the snapshot
+                mirror's size is whatever `android_screencap` returns — so it is
+                disabled (with the reason) rather than hidden in Snapshot mode,
+                which would make the toolbar jump on every mode toggle. */}
+            <span
+              className="mobile-quality"
+              title={
+                streamMode !== 'stream'
+                  ? 'Resolution applies to the live stream — switch back from Snapshot to change it'
+                  : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
+              }
+            >
+              <span className="mobile-tool-label">Size</span>
+              <Dropdown
+                options={[
+                  { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
+                  ...STREAM_SIDE_CHOICES.map((c) => ({
+                    value: String(c.side),
+                    label: `${c.side}p`,
+                    sublabel: c.sublabel,
+                  })),
+                ]}
+                value={formatStreamSideChoice(streamSide)}
+                onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
+                disabled={!selectedSerial || streamMode !== 'stream'}
+                ariaLabel="Stream resolution"
+              />
+            </span>
+
+            <button
+              className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
+              onClick={toggleStreamMode}
+              disabled={!selectedSerial}
+              title={
+                streamMode === 'stream'
+                  ? 'Live streaming is on — switch to snapshot polling'
+                  : 'Live streaming is off — switch to the live stream'
+              }
+            >
+              {streamMode === 'stream' ? 'Live' : 'Snapshot'}
+            </button>
           </div>
 
           {/* Which AVD to launch. The pane is developed and tested against
@@ -1078,7 +1259,9 @@ export default function MobilePanel() {
           <div className={`mobile-status${frameError ? ' error' : ''}`}>
             <span className="mobile-status-text">
               {frameError
-                ? frameError
+                ? streamRetrying
+                  ? `${frameError} · retrying the live stream…`
+                  : frameError
                 : deviceOffline
                   ? `${selectedDevice?.label} is ${selectedDevice?.state} — unlock the device and authorize USB debugging.`
                   : streamMode === 'stream' && streamState.phase === 'starting'

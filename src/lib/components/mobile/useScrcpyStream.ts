@@ -29,6 +29,12 @@ export interface StreamState {
   phase: StreamPhase;
   message?: string;
   dims?: StreamDims;
+  /**
+   * The failure cannot be fixed by trying again (this webview simply cannot
+   * decode what this device sends). The panel uses it to fall back to
+   * snapshots immediately instead of spending its retry budget.
+   */
+  fatal?: boolean;
 }
 
 /** One message from the backend's `mobile_stream_start` channel. */
@@ -96,6 +102,8 @@ export function useScrcpyStream() {
   const decoderRef = useRef<VideoDecoderLike | null>(null);
   const descriptionRef = useRef<Uint8Array | null>(null);
   const serialRef = useRef<string | null>(null);
+  /** The `maxSide` the live stream was opened with, to detect a resolution change. */
+  const maxSideRef = useRef<number | undefined>(undefined);
   const lastFrameAtRef = useRef(0);
   const probeInFlightRef = useRef(false);
   // Highest emulator frame `seq` already painted, so an out-of-order
@@ -185,6 +193,25 @@ export function useScrcpyStream() {
   const handleFrame = useCallback(
     (ev: ScrcpyStreamEvent) => {
       if (!ev.data) return;
+      // Only this transport needs WebCodecs — the emulator's PNG path decodes
+      // with `createImageBitmap`, which every webview has. Which transport the
+      // backend picks is not known until the first frame arrives, so the check
+      // belongs here and not at `start()`: gating the whole live stream on
+      // WebCodecs would strand an emulator on 1 fps snapshots (WebKitGTK below
+      // 2.44 has no WebCodecs) for a codec it was never going to use.
+      if (!supported) {
+        setState((s) =>
+          s.phase === 'error' && s.fatal
+            ? s
+            : {
+                phase: 'error',
+                fatal: true,
+                message:
+                  'This device streams H.264, which this webview cannot decode (WebCodecs unavailable) — falling back to snapshots.',
+              },
+        );
+        return;
+      }
       // A frame arriving at all means the device is alive and the tunnel is
       // carrying data — feed the watchdog regardless of what the NALs hold.
       lastFrameAtRef.current = Date.now();
@@ -225,7 +252,7 @@ export function useScrcpyStream() {
         }
       }
     },
-    [closeDecoder, createDecoder],
+    [closeDecoder, createDecoder, supported],
   );
 
   /**
@@ -325,18 +352,22 @@ export function useScrcpyStream() {
      * well ahead of scrcpy — but the frame rate falls off steeply past that.
      */
     async (serial: string, maxSide?: number) => {
-      // Already streaming this device: nothing to do. Streaming a *different*
-      // one means the panel switched devices — tear the old stream down first,
-      // or the canvas keeps painting the previous device while taps are mapped
-      // against the new one.
+      // Already streaming this device at this resolution: nothing to do.
+      // Streaming a *different* one means the panel switched devices — tear the
+      // old stream down first, or the canvas keeps painting the previous device
+      // while taps are mapped against the new one. A changed `maxSide` (the
+      // user moved the resolution switcher) also has to restart: the size is
+      // negotiated in the stream's opening request and cannot be renegotiated
+      // in place, so without this the new pick would be silently ignored.
       if (streamIdRef.current) {
-        if (serialRef.current === serial) return;
+        if (serialRef.current === serial && maxSideRef.current === maxSide) return;
         await cleanup();
       }
       const generation = generationRef.current + 1;
       generationRef.current = generation;
       activeRef.current = true;
       serialRef.current = serial;
+      maxSideRef.current = maxSide;
       // A stale timestamp from a previous stream must not trip this one's
       // watchdog before its first frame lands.
       lastFrameAtRef.current = 0;
