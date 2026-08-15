@@ -5275,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "spacron"
-version = "0.9.2"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "axum",

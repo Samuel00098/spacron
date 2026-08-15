@@ -3,6 +3,15 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v0.9.4] - 2026-08-15
+
+A single fix, in the launcher's collections view, where the "move to collection" popover was see-through enough to read the card underneath it. The cause is worth naming because it is a trap this codebase has now fallen into three times: in any glass theme `--bg-secondary` is *already* a translucent colour, so `color-mix`ing it against `transparent` can only ever make it more transparent — there is no percentage that reaches opaque, and a menu written that way looks like its background never applied.
+
+### Fixed
+
+- **The "move to collection" popover is solid** — opening it from a project card in the collections launcher left the card's folder icon and project name legible straight through the menu, over the top of the collection names it was offering. It was filling itself with `color-mix(in srgb, var(--bg-secondary) 90%, transparent)`, and in every glass theme `--bg-secondary` is rewritten to `rgba(…, 0.20)` before that mix ever runs — so 90% of it computes to alpha **0.18**, not the near-opaque the number reads as. It now fills from the raw rgb triple at alpha 1, the idiom the remote-status and account-switcher popovers already use, and its `backdrop-filter` is gone rather than fixed: the menu sits on the frosted launcher panel, which is therefore its backdrop root, so the blur was sampling the panel's own text and blurring nothing behind it. Small popover menus in this app are deliberately solid, and this one is now one of them.
+- **`Cargo.lock` records the version it ships** — the lock's `spacron` entry still said `0.9.2` through the whole of v0.9.3, because it is the one version file the release checklist does not touch by hand and CI does not build with `--locked`, so nothing failed and the release simply carried a lock disagreeing with its own manifest. Regenerated from the manifest, and the checklist now runs `cargo metadata` as the step that does it.
+
 ## [v0.9.3] - 2026-08-14
 
 Both halves of this release are about a machine that stops cooperating the moment you stop touching it. A long agent run is unattended by design, and that is exactly what a power policy reads as idle: the box suspends, and every agent goes down mid-turn, which is the one failure that costs the whole run rather than a retry. Spacron can now hold an OS sleep inhibitor for precisely as long as agents are actually working — keyed on *turns*, not open sessions, because a CLI agent sits in its REPL forever after finishing and a session-keyed hold would simply pin the machine awake all day. The second half is the mobile mirror learning the inputs a desktop user reaches for without thinking: the scroll wheel, and the sideways swipe and side buttons that mean "back" everywhere else on their machine. A phone has no wheel, so a scroll had to become what it physically is — one finger that presses, travels and lifts.
