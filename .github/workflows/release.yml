@@ -65,7 +65,7 @@ jobs:
         include:
           - platform: windows-latest  # GitHub hosted — free for public repos
             os: windows
-            args: ''
+            args: '--bundles nsis'
             rust-targets: ''
 
           - platform: macos-26       # macOS Apple Silicon (arm64)
