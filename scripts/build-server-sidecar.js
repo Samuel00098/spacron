@@ -40,11 +40,16 @@
  * command falls back to `target/release` (or `SPACRON_SERVER_PATH`) so the
  * wizard still works locally after a `npm run server:build`.
  */
-const { execSync } = require('node:child_process');
-const fs = require('node:fs');
-const path = require('node:path');
+// This file is ESM: package.json sets `"type": "module"`, so a `.js` script here
+// is loaded as a module and `require`/`__dirname` do not exist. Keep the imports
+// below in ESM form — a CommonJS slip here only shows up in `tauri build` (this
+// runs as `beforeBuildCommand`), i.e. in release CI rather than in `npm test`.
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const repoRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauriDir = path.join(repoRoot, 'src-tauri');
 
 function run(command) {
