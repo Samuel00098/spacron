@@ -48,7 +48,6 @@ import { promptBarInput, promptBarImage, focusPromptBar } from '$lib/stores/term
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import { activeProject } from '$lib/stores/workspace';
 
-import { extractExternalUrlFromProxyUrl } from '$lib/utils/proxy-url';
 
 import './PreviewPanel.css';
 
@@ -325,7 +324,9 @@ export default function PreviewPanel() {
   const [showConsole, setShowConsole] = useState(false);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
 
-  const loadFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // One slow-load timer per tab: a single shared timer meant navigating in one
+  // tab cancelled another tab's pending "still loading" feedback.
+  const loadFeedbackTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const tabListRef = useAction<HTMLDivElement>(clampHorizontalScroll);
 
@@ -543,10 +544,15 @@ export default function PreviewPanel() {
     return 'DEV';
   }, [currentUrlValue]);
 
-  const clearLoadFeedbackTimer = useCallback(() => {
-    if (loadFeedbackTimerRef.current) {
-      clearTimeout(loadFeedbackTimerRef.current);
-      loadFeedbackTimerRef.current = null;
+  /** Clear one tab's slow-load timer, or every tab's when called with no id. */
+  const clearLoadFeedbackTimer = useCallback((tabId?: string) => {
+    const timers = loadFeedbackTimersRef.current;
+    for (const id of tabId ? [tabId] : Object.keys(timers)) {
+      const timer = timers[id];
+      if (timer) {
+        clearTimeout(timer);
+        delete timers[id];
+      }
     }
   }, []);
 
@@ -554,8 +560,9 @@ export default function PreviewPanel() {
     (tabId: string | undefined = activeTabRef.current?.id) => {
       if (!tabId) return;
       updateTabLoadState(tabId, { isLoading: true, iframeError: false, slowLoad: false });
-      clearLoadFeedbackTimer();
-      loadFeedbackTimerRef.current = setTimeout(() => {
+      clearLoadFeedbackTimer(tabId);
+      loadFeedbackTimersRef.current[tabId] = setTimeout(() => {
+        delete loadFeedbackTimersRef.current[tabId];
         setTabLoadState((prev) => {
           const state = prev[tabId] ?? DEFAULT_TAB_LOAD_STATE;
           if (!state.isLoading) return prev;
@@ -660,7 +667,9 @@ export default function PreviewPanel() {
     if (!canGoBack) return;
     markDrivenLoad();
     goBackPreviewTab();
-    setInputUrl(currentUrl as unknown as string);
+    // The address bar is mirrored from `currentUrlValue` by the sync effect
+    // below; setting it here is redundant (and previously wrote the store
+    // object itself into the field).
     startLoadFeedback();
   }, [canGoBack, startLoadFeedback, markDrivenLoad]);
 
@@ -827,94 +836,20 @@ export default function PreviewPanel() {
 
   const handleIframeLoad = useCallback(
     (tabId: string) => {
-      updateTabLoadState(tabId, { isLoading: false, slowLoad: false, iframeError: false });
-      clearLoadFeedbackTimer();
+      // `iframeError` is deliberately not cleared here: a proxy error page is a
+      // served 200-ish body, so it fires `load` like any other page. It is
+      // cleared when a new load starts (startLoadFeedback) and when a page
+      // reports its own location, which an error page never does.
+      updateTabLoadState(tabId, { isLoading: false, slowLoad: false });
+      clearLoadFeedbackTimer(tabId);
 
-      // Try to restore video/audio playback position if available
-      try {
-        const tab = (tabsRef.current || []).find((t) => t.id === tabId);
-        const iframeElement = iframeElementsRef.current[tabId];
-        if (tab && tab.mediaPlaybackState && iframeElement && iframeElement.contentWindow) {
-          const doc = iframeElement.contentDocument || iframeElement.contentWindow.document;
-          if (doc) {
-            const video = doc.querySelector('video');
-            const audio = doc.querySelector('audio');
-            const media = video || audio;
-            if (media) {
-              const restoreState = () => {
-                if (media && tab.mediaPlaybackState) {
-                  media.currentTime = tab.mediaPlaybackState.currentTime;
-                  if (!tab.mediaPlaybackState.paused) {
-                    media.play().catch(() => {});
-                  }
-                }
-              };
-              if (media.readyState >= 1) {
-                restoreState();
-              } else {
-                media.addEventListener('loadedmetadata', restoreState, { once: true });
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to restore media playback state:', err);
-      }
-
+      // Everything else this handler could want — the page's real URL, its
+      // scroll offset, its media position — has to arrive by postMessage. The
+      // iframe is served from the loopback proxy while the app shell runs on
+      // tauri.localhost, so touching `contentWindow.location`/`contentDocument`
+      // throws SecurityError. See handleInspectorMessage for the live paths.
       if (activeTabRef.current?.id === tabId) {
         postInspectorState();
-      }
-      try {
-        const iframeElement = iframeElementsRef.current[tabId];
-        if (iframeElement && iframeElement.contentWindow) {
-          const href = iframeElement.contentWindow.location.href;
-          if (!href) return;
-
-          const activeTabNow = activeTabRef.current;
-
-          // Local dev server: direct same-origin URL, no '/proxy' prefix.
-          // Read the pathname and push it to both store and address bar.
-          if (!href.includes('/proxy')) {
-            const path = iframeElement.contentWindow.location.pathname;
-            const search = iframeElement.contentWindow.location.search;
-            if (path && activeTabNow?.id === tabId) {
-              const newUrl = path + search;
-              // If the active tab's current URL is a full localhost URL whose
-              // path already matches this load, the iframe just (re)loaded the
-              // page we're already on — typically after Back/Forward to a
-              // typed-in `http://localhost:PORT/...` history entry. Pushing here
-              // would rewrite that entry to a relative path and truncate the
-              // forward history, so only sync the address bar instead.
-              const currentLocalDev = parseLocalDevUrl(normalizeUrl(activeTabNow.url));
-              if (currentLocalDev) {
-                const absoluteLocalUrl = `http://${currentLocalDev.host}:${currentLocalDev.port}${newUrl}`;
-                if (activeTabNow.url === absoluteLocalUrl) {
-                  setInputUrl(activeTabNow.url);
-                } else {
-                  commitInternalNavigation(absoluteLocalUrl);
-                  setInputUrl(absoluteLocalUrl);
-                }
-              } else {
-                commitInternalNavigation(newUrl);
-                setInputUrl(newUrl);
-              }
-            }
-            return;
-          }
-
-          // External URL proxied through the background server. The iframe already
-          // navigated itself, so record it into history with commitInternalNavigation
-          // (NOT navigatePreviewTab) — that updates url/history without re-driving
-          // loadUrl, so we don't reload the page the user is already viewing, while
-          // still making Back return to it instead of the last typed URL.
-          const externalUrl = extractExternalUrlFromProxyUrl(href);
-          if (externalUrl && activeTabNow?.id === tabId) {
-            commitInternalNavigation(externalUrl);
-            setInputUrl(externalUrl);
-          }
-        }
-      } catch {
-        // Cross-origin expected for direct external URLs without proxy
       }
     },
     [updateTabLoadState, clearLoadFeedbackTimer, postInspectorState],
@@ -922,11 +857,24 @@ export default function PreviewPanel() {
 
   const handleIframeError = useCallback(
     (tabId: string) => {
-      clearLoadFeedbackTimer();
+      clearLoadFeedbackTimer(tabId);
       drivenLoadTabsRef.current.delete(tabId);
       updateTabLoadState(tabId, { isLoading: false, slowLoad: false, iframeError: true });
     },
     [clearLoadFeedbackTimer, updateTabLoadState],
+  );
+
+  // Which loopback origin a given tab's page is legitimately served from: its
+  // own local dev proxy when the tab points at a dev server, otherwise the
+  // shared background proxy. Every inbound postMessage is checked against this.
+  const expectedOriginForTab = useCallback(
+    (tabId: string): string | null => {
+      const sourceTab = (tabsRef.current || []).find((t) => t.id === tabId);
+      const sourceLocalDev = sourceTab ? parseLocalDevUrl(normalizeUrl(sourceTab.url)) : null;
+      if (sourceLocalDev) return getLocalDevProxyOrigin(sourceLocalDev);
+      return proxyPortRef.current ? `http://127.0.0.1:${proxyPortRef.current}` : null;
+    },
+    [getLocalDevProxyOrigin],
   );
 
   const handleInspectorMessage = useCallback(
@@ -945,9 +893,9 @@ export default function PreviewPanel() {
       // with where the page has actually navigated.
       if (event.data.type === 'forge-preview:location') {
         if (!sourceTabId) return;
-        const expectedOrigin = proxyPortRef.current
-          ? `http://127.0.0.1:${proxyPortRef.current}`
-          : null;
+        // Local dev pages report through their own dev proxy origin, external
+        // pages through the shared one — both are legitimate here.
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
         if (!expectedOrigin || event.origin !== expectedOrigin) return;
         const reported = typeof event.data.url === 'string' ? event.data.url : '';
         if (!/^https?:\/\//i.test(reported)) return;
@@ -972,6 +920,10 @@ export default function PreviewPanel() {
           /* unparseable URL — leave the partition as it is */
         }
 
+        // A page that can report itself is a page that loaded, so retire any
+        // error banner left over from a previous failed load of this tab.
+        updateTabLoadState(sourceTabId, { iframeError: false });
+
         const wasDriven = drivenLoadTabsRef.current.delete(sourceTabId);
         if (reported === activeTabRef.current?.url) return; // already accurate
         if (wasDriven) {
@@ -995,12 +947,7 @@ export default function PreviewPanel() {
         if (!sourceTabId) return;
         const sourceTab = (tabsRef.current || []).find((t) => t.id === sourceTabId);
         if (!sourceTab) return;
-        const sourceLocalDev = parseLocalDevUrl(normalizeUrl(sourceTab.url));
-        const expectedOrigin = sourceLocalDev
-          ? getLocalDevProxyOrigin(sourceLocalDev)
-          : proxyPortRef.current
-            ? `http://127.0.0.1:${proxyPortRef.current}`
-            : null;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
         if (!expectedOrigin || event.origin !== expectedOrigin) return;
 
         if (event.data.type === 'forge-preview:scroll') {
@@ -1024,13 +971,7 @@ export default function PreviewPanel() {
       // Console log events: only accept from our proxy origin
       if (event.data.type === 'forge-preview:console') {
         if (!sourceTabId) return;
-        const sourceTab = (tabsRef.current || []).find((t) => t.id === sourceTabId);
-        const sourceLocalDev = sourceTab ? parseLocalDevUrl(normalizeUrl(sourceTab.url)) : null;
-        const expectedOrigin = sourceLocalDev
-          ? getLocalDevProxyOrigin(sourceLocalDev)
-          : proxyPortRef.current
-            ? `http://127.0.0.1:${proxyPortRef.current}`
-            : null;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
         if (!expectedOrigin || event.origin !== expectedOrigin) return;
         const payload = event.data.payload || {};
         const level = ['log', 'info', 'warn', 'error', 'debug'].includes(payload.level) ? payload.level : 'log';
@@ -1048,18 +989,54 @@ export default function PreviewPanel() {
         return;
       }
 
+      // Media playback bridge: the page reports its <video>/<audio> position and
+      // asks for it back after a reload. This used to be done by polling
+      // `iframe.contentDocument` from here, which silently threw on every tick —
+      // the iframe is cross-origin to the app shell.
+      if (event.data.type === 'forge-preview:media' || event.data.type === 'forge-preview:media-ready') {
+        if (!sourceTabId) return;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
+        if (!expectedOrigin || event.origin !== expectedOrigin) return;
+
+        if (event.data.type === 'forge-preview:media') {
+          const currentTime = Number(event.data.currentTime) || 0;
+          const paused = Boolean(event.data.paused);
+          previewTabs.update((list) =>
+            list.map((tab) =>
+              tab.id === sourceTabId ? { ...tab, mediaPlaybackState: { currentTime, paused } } : tab,
+            ),
+          );
+        } else {
+          const saved = (tabsRef.current || []).find((t) => t.id === sourceTabId)?.mediaPlaybackState;
+          if (saved) {
+            iframeElementsRef.current[sourceTabId]?.contentWindow?.postMessage(
+              { type: 'forge-preview:media-restore', currentTime: saved.currentTime, paused: saved.paused },
+              expectedOrigin,
+            );
+          }
+        }
+        return;
+      }
+
+      // The proxy's own error page announcing that it could not reach the target.
+      // An iframe fires `load`, not `error`, for a served error body, so this is
+      // the only signal that distinguishes a failure from a real page.
+      if (event.data.type === 'forge-preview:error') {
+        if (!sourceTabId) return;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
+        if (!expectedOrigin || event.origin !== expectedOrigin) return;
+        clearLoadFeedbackTimer(sourceTabId);
+        drivenLoadTabsRef.current.delete(sourceTabId);
+        updateTabLoadState(sourceTabId, { isLoading: false, slowLoad: false, iframeError: true });
+        return;
+      }
+
       // Inspector selection events: only accept from our proxy origin or a local dev URL.
       // External-URL iframes never have the inspector injected, so we reject those.
       if (event.data.type !== 'forge-inspector:selected') return;
       if (!sourceTabId) return;
       {
-        const sourceTab = (tabsRef.current || []).find((t) => t.id === sourceTabId);
-        const sourceLocalDev = sourceTab ? parseLocalDevUrl(normalizeUrl(sourceTab.url)) : null;
-        const expectedOrigin = sourceLocalDev
-          ? getLocalDevProxyOrigin(sourceLocalDev)
-          : proxyPortRef.current
-            ? `http://127.0.0.1:${proxyPortRef.current}`
-            : null;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
         if (!expectedOrigin || event.origin !== expectedOrigin) return;
       }
       const info = event.data.payload;
@@ -1071,7 +1048,7 @@ export default function PreviewPanel() {
         void addElementToPrompt(info);
       }
     },
-    [getLocalDevProxyOrigin, postInspectorState, addElementToPrompt],
+    [expectedOriginForTab, postInspectorState, addElementToPrompt, updateTabLoadState, clearLoadFeedbackTimer],
   );
 
   const handleInputKeydown = useCallback(
@@ -1185,16 +1162,25 @@ export default function PreviewPanel() {
       });
     })();
 
-    window.addEventListener('message', handleInspectorMessage);
-
     return () => {
       unsubscribePort?.();
       unsubscribeUrl?.();
-      window.removeEventListener('message', handleInspectorMessage);
       clearLoadFeedbackTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The iframe bridge (console, scroll, address bar, inspector) must be
+  // re-registered whenever handleInspectorMessage changes. It closes over
+  // `localDevProxyPortsValue`, which is empty on the first render and only
+  // fills in once a local dev proxy has been started — pinning the listener to
+  // the mount-time closure made every local-dev message fail its origin check,
+  // so console output, scroll restore and element picking silently did nothing
+  // until the panel happened to remount.
+  useEffect(() => {
+    window.addEventListener('message', handleInspectorMessage);
+    return () => window.removeEventListener('message', handleInspectorMessage);
+  }, [handleInspectorMessage]);
 
   // Window click handler for dismissing history popup
   useEffect(() => {
@@ -1248,53 +1234,6 @@ export default function PreviewPanel() {
     recordHistoryVisit(currentUrlValue, title);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUrlValue]);
-
-  // Periodically check all tabs' iframes for video/audio media elements,
-  // and record their currentTime and playback/paused states in the store.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      let updatedAny = false;
-      const currentTabs = tabsRef.current || [];
-      
-      const nextTabs = currentTabs.map((tab) => {
-        const iframe = iframeElementsRef.current[tab.id];
-        if (!iframe) return tab;
-        try {
-          const doc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (doc) {
-            const video = doc.querySelector('video');
-            const audio = doc.querySelector('audio');
-            const media = video || audio;
-            if (media && !isNaN(media.currentTime)) {
-              const nextState = {
-                currentTime: media.currentTime,
-                paused: media.paused,
-              };
-              
-              const oldState = tab.mediaPlaybackState;
-              if (
-                !oldState ||
-                Math.abs(oldState.currentTime - nextState.currentTime) > 0.5 ||
-                oldState.paused !== nextState.paused
-              ) {
-                updatedAny = true;
-                return { ...tab, mediaPlaybackState: nextState };
-              }
-            }
-          }
-        } catch {
-          // Cross-origin exception (expected for direct external URLs)
-        }
-        return tab;
-      });
-
-      if (updatedAny) {
-        previewTabs.set(nextTabs);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <div className="preview-panel">
@@ -1709,7 +1648,7 @@ export default function PreviewPanel() {
                         key={tab.id}
                         ref={(node) => setIframeElement(tab.id, node)}
                         src={tabSrc}
-                        title="Web Preview"
+                        aria-label="Web Preview"
                         className={`preview-iframe${tab.id === activeTabId ? ' is-active' : ''}`}
                         onLoad={() => handleIframeLoad(tab.id)}
                         onError={() => handleIframeError(tab.id)}
@@ -1734,7 +1673,7 @@ export default function PreviewPanel() {
                     key={tab.id}
                     ref={(node) => setIframeElement(tab.id, node)}
                     src={tabSrc}
-                    title="Web Preview"
+                    aria-label="Web Preview"
                     className={`preview-iframe${tab.id === activeTabId ? ' is-active' : ''}`}
                     onLoad={() => handleIframeLoad(tab.id)}
                     onError={() => handleIframeError(tab.id)}

@@ -289,6 +289,102 @@ const SCROLL_SNIPPET: &str = r#"<script data-spacron-scroll-sync>
 })();
 </script>"#;
 
+const LOCAL_LOCATION_FLAG: &str = "spacron-local-location";
+// Location reporter injected into *local dev* proxied pages only. External pages
+// get the same job done by NAV_SNIPPET, which they need anyway for link
+// rewriting; local dev navigation is already same-origin with the proxy, so it
+// only needs the reporting half.
+//
+// Without this the app shell has no way to learn that the page navigated: the
+// iframe is served from the loopback proxy origin and the shell runs on
+// tauri.localhost, so reading `contentWindow.location` from the parent throws.
+// The dev-server URL to report comes from the server-injected
+// <meta name="spacron-location">, which holds the URL the proxy actually fetched
+// (i.e. http://localhost:{dev_port}{path}), so the address bar shows the dev
+// origin the user typed rather than the proxy's loopback port.
+const LOCAL_LOCATION_SNIPPET: &str = r#"<script data-spacron-local-location>
+(() => {
+    if (window.__spacronLocalLocation) return;
+    window.__spacronLocalLocation = true;
+    let devOrigin = '';
+    const readMeta = () => {
+        const meta = document.querySelector('meta[name="spacron-location"]');
+        const content = meta && meta.content ? meta.content : '';
+        if (content) { try { devOrigin = new URL(content).origin; } catch (e) {} }
+        return content;
+    };
+    // For in-page history changes the meta is stale (it only describes the
+    // document the server sent), so rebuild from our own path against the dev
+    // origin the meta established.
+    const here = () => (devOrigin ? devOrigin + location.pathname + location.search + location.hash : '');
+    const report = (url) => {
+        if (!url) return;
+        try { parent.postMessage({ type: 'forge-preview:location', url: url }, '*'); } catch (e) {}
+    };
+    const reportInitial = () => report(readMeta() || here());
+    const reportDynamic = () => report(here());
+    if (document.readyState !== 'loading') reportInitial();
+    else document.addEventListener('DOMContentLoaded', reportInitial);
+    window.addEventListener('popstate', reportDynamic);
+    window.addEventListener('hashchange', reportDynamic);
+    ['pushState', 'replaceState'].forEach((fn) => {
+        const orig = history[fn];
+        if (typeof orig !== 'function') return;
+        history[fn] = function () {
+            const out = orig.apply(this, arguments);
+            reportDynamic();
+            return out;
+        };
+    });
+})();
+</script>"#;
+
+const MEDIA_FLAG: &str = "spacron-media-sync";
+// Media playback bridge injected into *every* proxied HTML page. Same reason as
+// the scroll bridge: the parent cannot touch `contentDocument` across origins, so
+// the page reports its own <video>/<audio> position and asks to have it restored
+// after a reload. The parent keeps the value on the tab (and persists it), which
+// is what makes playback survive closing and reopening the preview room.
+const MEDIA_SNIPPET: &str = r#"<script data-spacron-media-sync>
+(() => {
+    if (window.__spacronMediaSync) return;
+    window.__spacronMediaSync = true;
+    const findMedia = () => document.querySelector('video') || document.querySelector('audio');
+    const post = (msg) => { try { parent.postMessage(msg, '*'); } catch (e) {} };
+    let lastTime = -1;
+    let lastPaused = null;
+    const report = () => {
+        const media = findMedia();
+        if (!media || isNaN(media.currentTime)) return;
+        // Same thresholds the parent used to apply while polling: only speak up
+        // on a real seek or a play/pause flip, so we are not posting 60x/second.
+        if (lastPaused === media.paused && Math.abs(lastTime - media.currentTime) <= 0.5) return;
+        lastTime = media.currentTime;
+        lastPaused = media.paused;
+        post({ type: 'forge-preview:media', currentTime: media.currentTime, paused: media.paused });
+    };
+    setInterval(report, 1000);
+    window.addEventListener('message', (event) => {
+        if (event.source !== window.parent) return;
+        const data = event.data || {};
+        if (data.type !== 'forge-preview:media-restore') return;
+        const media = findMedia();
+        if (!media) return;
+        const apply = () => {
+            try {
+                media.currentTime = Number(data.currentTime) || 0;
+                if (!data.paused) { const p = media.play(); if (p && p.catch) p.catch(() => {}); }
+            } catch (e) {}
+        };
+        if (media.readyState >= 1) apply();
+        else media.addEventListener('loadedmetadata', apply, { once: true });
+    });
+    const ready = () => { if (findMedia()) post({ type: 'forge-preview:media-ready' }); };
+    if (document.readyState === 'complete') ready();
+    else window.addEventListener('load', ready);
+})();
+</script>"#;
+
 const NAV_FLAG: &str = "spacron-nav-rewrite";
 // Navigation rewriter injected into *external* proxied pages only. The proxy
 // serves external sites under its own loopback origin
@@ -1988,7 +2084,7 @@ async fn proxy_handler(State(state): State<ProxyState>, req: Request<Body>) -> R
             .await
         }
         Err(message) => {
-            (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", message)).into_response()
+            preview_error_response(&message)
         }
     }
 }
@@ -2271,11 +2367,7 @@ async fn proxy_external_url(
             )
             .await
         }
-        Err(err) => (
-            StatusCode::BAD_GATEWAY,
-            format!("Proxy error: {}", describe_request_error(&err)),
-        )
-            .into_response(),
+        Err(err) => preview_error_response(&describe_request_error(&err)),
     }
 }
 
@@ -2646,7 +2738,7 @@ async fn build_preview_response(
         let body_bytes = match res.bytes().await {
             Ok(bytes) => bytes,
             Err(err) => {
-                return (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", err)).into_response()
+                return preview_error_response(&err.to_string())
             }
         };
         let html = String::from_utf8_lossy(&body_bytes);
@@ -2659,6 +2751,20 @@ async fn build_preview_response(
         // The scroll-position bridge is harmless and useful everywhere, so inject
         // it into both local dev and external pages.
         let injected = inject_scroll_script(&injected);
+        // Likewise the media bridge — it is the only way the parent can see or
+        // restore <video>/<audio> position across the origin boundary.
+        let injected = inject_media_script(&injected);
+        // Local dev pages need the location half of the nav rewriter (the link
+        // rewriting half is pointless when the page is already same-origin with
+        // the proxy). The meta carries the dev-server URL the proxy fetched, so
+        // the address bar tracks in-page navigation instead of freezing on the
+        // URL the user first typed.
+        let injected = if strip_embed_headers {
+            injected
+        } else {
+            let injected = inject_location_meta(&injected, &final_url);
+            inject_local_location_script(&injected)
+        };
         // The navigation rewriter keeps in-page links/forms on the proxy origin so
         // clicked results (e.g. DuckDuckGo) actually load instead of escaping the
         // proxy and being blocked by the destination's X-Frame-Options, and it
@@ -2874,6 +2980,82 @@ fn inject_ytm_snippet(html: &str) -> String {
         return html.to_string();
     }
     inject_at_head_top(html, YTM_SNIPPET)
+}
+
+/// Append a snippet late in the document (before `</body>`, else `</head>`,
+/// else at the end), skipping the work if `flag` is already present. Shared by
+/// the bridges that only need to run after the page's own markup exists.
+/// A 502 the preview iframe can actually present. Returning bare text here used
+/// to leave the user staring at `Proxy error: connection refused` in the frame
+/// with no banner, because an iframe fires `load` (not `error`) for a served
+/// error body — so the panel had no way to tell a failure from a page. This
+/// renders something legible *and* posts `forge-preview:error` to the app shell
+/// so the panel can raise its status banner.
+fn preview_error_response(message: &str) -> Response<Body> {
+    let escaped = html_escape_attr(message);
+    let body = format!(
+        r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>Preview unavailable</title>
+<style>
+  html,body {{ height:100%; margin:0; }}
+  body {{ display:flex; align-items:center; justify-content:center;
+         background:#141418; color:#e6e6ea;
+         font:14px/1.6 system-ui,-apple-system,Segoe UI,sans-serif; }}
+  .box {{ max-width:34rem; padding:2rem; text-align:center; }}
+  h1 {{ margin:0 0 .5rem; font-size:1rem; font-weight:600; }}
+  p {{ margin:0; color:#9a9aa5; }}
+  code {{ display:block; margin-top:1rem; padding:.6rem .8rem; border-radius:6px;
+          background:#1d1d23; color:#c9c9d4; font-size:12px; word-break:break-word; }}
+</style></head>
+<body data-spacron-error="{escaped}">
+  <div class="box">
+    <h1>Preview unavailable</h1>
+    <p>Spacron could not reach this page through the embedded proxy.</p>
+    <code>{escaped}</code>
+  </div>
+  <script>
+    (() => {{
+      const msg = document.body.getAttribute('data-spacron-error') || 'Preview request failed';
+      try {{ parent.postMessage({{ type: 'forge-preview:error', message: msg }}, '*'); }} catch (e) {{}}
+    }})();
+  </script>
+</body></html>"#,
+        escaped = escaped
+    );
+
+    Response::builder()
+        .status(StatusCode::BAD_GATEWAY)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| {
+            (StatusCode::BAD_GATEWAY, "Preview request failed").into_response()
+        })
+}
+
+fn inject_late(html: &str, flag: &str, snippet: &str) -> String {
+    if html.contains(flag) {
+        return html.to_string();
+    }
+
+    for close in ["</body>", "</head>"] {
+        if let Some(index) = html.rfind(close) {
+            let mut output = String::with_capacity(html.len() + snippet.len() + 8);
+            output.push_str(&html[..index]);
+            output.push_str(snippet);
+            output.push_str(&html[index..]);
+            return output;
+        }
+    }
+
+    format!("{}{}", html, snippet)
+}
+
+fn inject_local_location_script(html: &str) -> String {
+    inject_late(html, LOCAL_LOCATION_FLAG, LOCAL_LOCATION_SNIPPET)
+}
+
+fn inject_media_script(html: &str) -> String {
+    inject_late(html, MEDIA_FLAG, MEDIA_SNIPPET)
 }
 
 fn inject_scroll_script(html: &str) -> String {
@@ -3095,8 +3277,10 @@ async fn bridge_ws_streams(
 mod tests {
     use super::{
         consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
-        inject_bridge_snippet, inject_ytm_snippet, is_first_party_host, is_ytm_host,
-        local_file_error, proxy_request_allowed, wants_html_error,
+        html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
+        inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
+        local_file_error, preview_error_response, proxy_request_allowed, wants_html_error,
+        LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
     };
     use axum::http::{HeaderMap, StatusCode};
 
@@ -3164,6 +3348,53 @@ mod tests {
         let injected = inject_ytm_snippet(html);
         assert!(injected.contains("<style data-spacron-ytm-chrome>"));
         assert_eq!(inject_ytm_snippet(&injected), injected);
+    }
+
+    #[test]
+    fn local_location_and_media_scripts_inject_late_and_are_idempotent() {
+        let html = "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>";
+
+        let injected = inject_local_location_script(html);
+        assert!(injected.contains("<script data-spacron-local-location>"));
+        // Late injection: after the page's own markup, before </body>.
+        assert!(injected.find("<p>hi</p>").unwrap() < injected.find(LOCAL_LOCATION_FLAG).unwrap());
+        assert!(injected.find(LOCAL_LOCATION_FLAG).unwrap() < injected.find("</body>").unwrap());
+        assert_eq!(inject_local_location_script(&injected), injected);
+
+        let injected = inject_media_script(html);
+        assert!(injected.contains("<script data-spacron-media-sync>"));
+        assert_eq!(inject_media_script(&injected), injected);
+    }
+
+    #[test]
+    fn inject_late_falls_back_to_head_then_append() {
+        let head_only = "<html><head><title>t</title></head>";
+        let injected = inject_late(head_only, MEDIA_FLAG, MEDIA_SNIPPET);
+        assert!(injected.find(MEDIA_FLAG).unwrap() < injected.find("</head>").unwrap());
+
+        let headless = "<p>bare</p>";
+        assert!(inject_late(headless, MEDIA_FLAG, MEDIA_SNIPPET).starts_with("<p>bare</p>"));
+        assert!(inject_late(headless, MEDIA_FLAG, MEDIA_SNIPPET).contains(MEDIA_FLAG));
+    }
+
+    #[test]
+    fn preview_error_response_is_html_that_reports_itself() {
+        let res = preview_error_response("connection refused");
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn preview_error_response_escapes_the_message() {
+        // The failure text can echo a URL or a server string; it must not be able
+        // to close the attribute it is embedded in and inject markup.
+        let escaped = html_escape_attr("<img src=x onerror=\"alert(1)\">");
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('"'));
+        assert!(escaped.contains("&lt;img"));
     }
 
     #[test]
