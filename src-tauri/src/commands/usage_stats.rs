@@ -2635,7 +2635,14 @@ mod tests {
     #[test]
     fn snapshot_filters_by_range() {
         let mut store = StoreFile::default();
-        upsert_day(&mut store, PROVIDER_CLAUDE, "2026-08-10", "claude-sonnet-4-5", "Projects/a", false, 2, 1, 1, 200, 80, 20, 10);
+        // The "recent" row must be dated relative to now, not pinned. `filter_rows`
+        // resolves its cutoff from `now_ms()`, so a hardcoded date is a test that
+        // passes when written and starts failing on a calendar date nobody chose —
+        // which is exactly what a literal `2026-08-10` here did once it aged past
+        // the 7-day window. Yesterday is comfortably inside every range under test
+        // (the 7d cutoff is six days back) and never lands in the future.
+        let recent = utc_date_str(now_ms() / 1000 - 86_400);
+        upsert_day(&mut store, PROVIDER_CLAUDE, &recent, "claude-sonnet-4-5", "Projects/a", false, 2, 1, 1, 200, 80, 20, 10);
         upsert_day(&mut store, PROVIDER_CLAUDE, "2020-01-01", "claude-sonnet-4-5", "Projects/old", false, 9, 9, 1, 900, 900, 0, 0);
 
         let rows = filter_rows(&store, PROVIDER_ALL, SCOPE_ALL, RANGE_7D);
@@ -2779,7 +2786,7 @@ mod tests {
         upsert_day(&mut store, PROVIDER_CLAUDE, "2026-08-10", "claude-sonnet-4-5", "Projects/a", false, 2, 1, 1, 200, 80, 20, 10);
         // The same branch `load_store` takes on a version mismatch: the ledger
         // is rebuilt from scratch; nothing from the old shape survives.
-        let mut rebuilt = StoreFile::default();
+        let rebuilt = StoreFile::default();
         assert_eq!(rebuilt.schema_version, SCHEMA_VERSION);
         assert!(rebuilt.days.is_empty());
     }
