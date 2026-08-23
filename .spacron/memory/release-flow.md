@@ -38,6 +38,11 @@ one nothing else runs for you, and it has been red on `main` before without
 anyone noticing (a fixture pinned to a literal date aged out of a 7-day filter).
 `cargo check --all-targets` should be warning-free too.
 
+Also run **`npm run server:build`** once. It is the only thing that exercises
+Tauri's `beforeBuildCommand`, which no other check touches — a broken script
+there passes every local and CI check and then kills all three release jobs
+after the tag is pushed. See [[build-scripts-are-esm]].
+
 ## Changelog voice
 
 Look at the file, not at generic keep-a-changelog advice. Each release opens

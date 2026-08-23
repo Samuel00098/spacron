@@ -28,8 +28,12 @@ matching section.
 - [modal-containing-block-gotcha](modal-containing-block-gotcha.md) — the title bar's `backdrop-filter` is the containing block for `position: fixed`, so modals mounted from `RemoteStatus`/`TitleBar` must portal to `<body>`; native `<select>` popups also detach under CSS zoom — use the shared `Dropdown`
 - [markdown-preview-default](markdown-preview-default.md) — markdown files (`.md`, `.markdown`) default to opening in Markdown Preview mode rather than the code editor; toggling to code mode persists per-file while open and cleans up on close
 - [text-editor-styling](text-editor-styling.md) — the editor is transformed into a clean, distraction-free document canvas (no line numbers, no fold gutters, centered readable width, relaxed line height, word wrap, and clean pill tabs)
+- [preview-iframe-bridge](preview-iframe-bridge.md) — the preview iframe is cross-origin to the app shell, so `contentDocument`/`location` reaches always throw; the full postMessage message table, the per-tab origin check, and why `iframeError` is not cleared on load
+- [preview-room-is-persistent](preview-room-is-persistent.md) — `preview` is a persistent stage room, hidden not unmounted, so switching rooms no longer reloads the page in the iframe
 - [fleet-in-right-drawer](fleet-in-right-drawer.md) — Agent Fleet is a right-drawer tool, not a centre room; `visiblePanels` is the room/not-room switch, `rightDrawerToolOf` checks fleet LAST on purpose, and tiling all agents auto-opens it via `applyRightDrawerTool`
 - [tools-menu-launcher](tools-menu-launcher.md) — the bottom room dock is gone; every launcher is now the "Tools" dropdown at the right end of the floating prompt bar (`ToolsMenu.tsx`), with Spawn/Split/Tile inline beside it
+- [project-hud-in-left-sidebar](project-hud-in-left-sidebar.md) — Project HUD is moved from a center modal overlay to a dedicated Projects tab in the left utility drawer, toggled via TitleBar or Ctrl+K
+- [sketch-room](sketch-room.md) — the Sketch button opens a native drawing room, not excalidraw.com; the canvas was restored from a deleted 4.5k-line component, and stops being an overlay / stops eating other panes' keys
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the separate Focus mode icon is removed; Split mode panes can be zoomed 100% full-stage on top of other cards while keeping the card selection strip below
 - [terminal-rendering-stability](terminal-rendering-stability.md) — safeguards for zero-jitter, native-parity terminal rendering (Unicode 11 widths, 120x34 initial PTY spawn, custom box glyphs, atlas eviction gating, and DPI scaling)
 
@@ -41,4 +45,5 @@ matching section.
 
 ## Build, release & repo hygiene
 
+- [build-scripts-are-esm](build-scripts-are-esm.md) — `scripts/*.js` are ESM (`"type": "module"`); `build-server-sidecar.js` runs only as Tauri's `beforeBuildCommand`, so a `require` slip is green in every check and red only in the release matrix
 - [release-flow](release-flow.md) — cutting a release: CHANGELOG entry first (it gates the version bump), `npm version --no-git-tag-version`, then the `cargo metadata` step that refreshes `Cargo.lock` and is the one everybody forgets; separate `Release vX.Y.Z` commit, then the tag
