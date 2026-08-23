@@ -1182,7 +1182,7 @@ export default function MobilePanel() {
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
                 onContextMenu={(e) => e.preventDefault()}
-                title={GESTURE_HINT}
+                aria-label="Live mobile stream"
               >
                 <canvas ref={streamCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
               </div>
@@ -1200,7 +1200,7 @@ export default function MobilePanel() {
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
                 onContextMenu={(e) => e.preventDefault()}
-                title={GESTURE_HINT}
+                aria-label="Device screen"
               >
                 <img
                   ref={screenRef}
@@ -1334,7 +1334,7 @@ export default function MobilePanel() {
                       className="mobile-ios-shell mobile-ios-shell--stream"
                       style={aspectStyle(mjpegState.dims)}
                       onPointerUp={iosTap}
-                      title="Click to tap"
+                      aria-label="iOS Simulator live stream"
                     >
                       <canvas ref={mjpegCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
                     </div>
@@ -1343,7 +1343,7 @@ export default function MobilePanel() {
                       className="mobile-ios-shell"
                       style={aspectStyle(iosShotDims)}
                       onPointerUp={iosTap}
-                      title="Click to tap"
+                      aria-label="iOS Simulator screen"
                     >
                       <img
                         ref={iosImgRef}

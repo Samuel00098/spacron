@@ -200,9 +200,11 @@ export default function SourceControl() {
       clearCommitGrace();
       setSelectedFiles(new Set());
       setKnownFiles(new Set());
+      setExpandedFile(null);
       void refreshAll();
       void refreshBranches(projectId);
     } else {
+      setExpandedFile(null);
       setErrorMsg(null);
     }
   }, [projectId]);
