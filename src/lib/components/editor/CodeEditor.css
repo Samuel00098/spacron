@@ -15,11 +15,18 @@
   /* Transparent — the AppShell panel behind provides the frosted glass surface */
   background: transparent;
   position: relative;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.editor-layout .cm-editor.cm-focused {
+  outline: none !important;
 }
 
 /* Override any inline theme background CM6 injects on the scroller */
 .editor-layout .cm-editor .cm-scroller {
   background: transparent !important;
+  scroll-behavior: smooth;
 }
 
 /* Liquid glass sheen on editor content area */

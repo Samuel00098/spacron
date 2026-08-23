@@ -17,11 +17,8 @@ export interface SendOptions {
   shouldContinue?: () => boolean;
 }
 
-const DEFAULT_OUTPUT_POLL_MS = 500;
-
 export class AgentAdapter {
   readonly sessionId: number;
-  private outputTimers = new Set<ReturnType<typeof setInterval>>();
   private disposed = false;
 
   constructor(sessionId: number) {
@@ -64,24 +61,6 @@ export class AgentAdapter {
     return getSessionOutputBuffer(this.sessionId);
   }
 
-  subscribeOutput(onChunk: (chunk: string) => void, intervalMs = DEFAULT_OUTPUT_POLL_MS): () => void {
-    let lastLen = getSessionOutputBuffer(this.sessionId).length;
-    const timer = setInterval(() => {
-      const buf = getSessionOutputBuffer(this.sessionId);
-      if (buf.length > lastLen) {
-        onChunk(buf.slice(lastLen));
-        lastLen = buf.length;
-      } else if (buf.length < lastLen) {
-        lastLen = buf.length;
-      }
-    }, intervalMs);
-    this.outputTimers.add(timer);
-    return () => {
-      clearInterval(timer);
-      this.outputTimers.delete(timer);
-    };
-  }
-
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   watchTurn(opts: WatchLeasedAgentOptions): Promise<AgentTurnOutcome> {
@@ -97,8 +76,6 @@ export class AgentAdapter {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const timer of this.outputTimers) clearInterval(timer);
-    this.outputTimers.clear();
   }
 }
 

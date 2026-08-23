@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
+    "server:build": "node scripts/build-server-sidecar.js",
     "version": "node scripts/sync-version.js && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml"
   },
   "private": true,
@@ -42,6 +43,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.10",
+    "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-web-links": "^0.11",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5",

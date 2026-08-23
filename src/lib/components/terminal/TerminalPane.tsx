@@ -8,6 +8,7 @@ import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import {
@@ -28,6 +29,7 @@ import {
   finalizeCommandBlockWithExit,
   paneAssignments as paneAssignmentsOrig,
   createTerminalSession as createTerminalSessionOrig,
+  recordTerminalGeometry,
   terminalInputRequest,
   getSessionLabel,
   getAgentDisplayName,
@@ -189,7 +191,7 @@ function TerminalPane({
     return get(sessions).find((session) => session.id === id)?.isExecuting ?? false;
   }
 
-  const createTerminalSession = (cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null }) => {
+  const createTerminalSession = (cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null; initialCols?: number; initialRows?: number }) => {
     return createTerminalSessionOrig(cwd, targetPaneIndex, projectId, { ...opts, isDev: devMode });
   };
 
@@ -540,18 +542,24 @@ function TerminalPane({
     const fitAddon = fitAddonRef.current;
     const term = termRef.current;
     if (!container || !fitAddon || !term) return;
-    if (container.clientWidth === 0 || container.clientHeight === 0) return;
+    if (container.clientWidth <= 0 || container.clientHeight <= 0) return;
     try {
       // Check proposed dimensions BEFORE resizing — skip if pane is too small to produce a
       // valid atlas. This prevents the degenerate small→large texture corruption.
       const dims = fitAddon.proposeDimensions();
       if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) return;
 
-      fitAddon.fit();
+      const sizeChanged = dims.cols !== term.cols || dims.rows !== term.rows;
+      if (sizeChanged) {
+        fitAddon.fit();
+        (term as any).clearTextureAtlas?.();
+        canvasAddonRef.current?.clearTextureAtlas();
+        term.refresh(0, term.rows - 1);
+      }
 
-      // Flush stale glyph cache immediately — cell pixel size changes with every col/row change.
-      (term as any).clearTextureAtlas?.();
-      term.refresh(0, term.rows - 1);
+      // Teach the next spawn what a real pane measures, so a new PTY opens at
+      // this grid instead of the 120x34 placeholder and never has to reflow.
+      recordTerminalGeometry(dims.cols, dims.rows);
 
       // Second pass after layout settles — the first fit can run before the
       // pane's flex/grid layout has stabilised (especially in vibe mode where
@@ -564,16 +572,16 @@ function TerminalPane({
         const fa = fitAddonRef.current;
         if (!t || !fa) return;
         const settled = fa.proposeDimensions();
-        if (
-          settled &&
-          settled.cols >= MIN_COLS &&
-          settled.rows >= MIN_ROWS &&
-          (settled.cols !== t.cols || settled.rows !== t.rows)
-        ) {
+        if (!settled || settled.cols < MIN_COLS || settled.rows < MIN_ROWS) return;
+        // The settled pass is the authoritative measurement — record it even
+        // when nothing changed, since that is the steady-state pane size.
+        recordTerminalGeometry(settled.cols, settled.rows);
+        if (settled.cols !== t.cols || settled.rows !== t.rows) {
           fa.fit();
+          (t as any).clearTextureAtlas?.();
+          canvasAddonRef.current?.clearTextureAtlas();
+          t.refresh(0, t.rows - 1);
         }
-        (t as any).clearTextureAtlas?.();
-        t.refresh(0, t.rows - 1);
       }, 350);
     } catch {}
   }
@@ -888,11 +896,18 @@ function TerminalPane({
       cursorBlink: true,
       cursorStyle: get(terminalCursorStyle),
       allowTransparency: true,
+      // Required by Unicode11Addon (loaded below): xterm gates its width
+      // tables behind the proposed API, and `loadAddon` throws without this.
+      allowProposedApi: true,
       scrollback: get(terminalScrollback),
       fontSize: get(terminalFontSize),
       fontFamily: get(resolvedFontFamily),
       fontWeight: 400,
       fontWeightBold: 700,
+      lineHeight: 1.12,
+      letterSpacing: 0,
+      customGlyphs: true,
+      rescaleOverlappingGlyphs: true,
       // The terminal surface is fully transparent (glass), so any glyph a TUI
       // draws in a near-background tone (e.g. Antigravity's input text, which it
       // colors near-black) vanishes into the wallpaper — black-on-black. xterm's
@@ -965,6 +980,11 @@ function TerminalPane({
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
+
+    const unicode11Addon = new Unicode11Addon();
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = '11';
+
     term.loadAddon(
       new WebLinksAddon(
         (event: MouseEvent, uri: string) => {
@@ -1171,6 +1191,19 @@ function TerminalPane({
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // Handle display DPI scaling / moving window across high-DPI monitors
+    let dprMediaQuery: MediaQueryList | null = null;
+    const handleDprChange = () => {
+      forceRedraw();
+      scheduleFit();
+    };
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      try {
+        dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        dprMediaQuery.addEventListener('change', handleDprChange);
+      } catch {}
+    }
+
     // Paste element context from the web preview inspector into this terminal pane
     const unsubInput = terminalInputRequest.subscribe((req) => {
       if (req && req.sessionId === sessionId && termRef.current) {
@@ -1244,6 +1277,11 @@ function TerminalPane({
       if (executingTimeout) clearTimeout(executingTimeout);
       document.removeEventListener('pane-resize-end', onResizeEnd);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (dprMediaQuery) {
+        try {
+          dprMediaQuery.removeEventListener('change', handleDprChange);
+        } catch {}
+      }
       unsubInput();
       if (fitRafRef.current !== null) cancelAnimationFrame(fitRafRef.current);
       if (fitTimerRef.current !== null) clearTimeout(fitTimerRef.current);
@@ -1305,18 +1343,27 @@ function TerminalPane({
 
   useEffect(() => {
     const term = termRef.current;
-    if (term) {
-      const fontChanged = term.options.fontFamily !== fontFamily || term.options.fontSize !== fontSize;
-      term.options.fontFamily = fontFamily;
-      term.options.fontSize = fontSize;
-      term.options.cursorStyle = cursorStyle;
-      term.options.scrollback = scrollback;
-      term.options.windowsPty = windowsPty;
+    if (!term) return;
+
+    let cancelled = false;
+    const applyFontOptions = async () => {
+      try {
+        await document.fonts.ready;
+      } catch {}
+      if (cancelled || !termRef.current) return;
+
+      const t = termRef.current;
+      const fontChanged = t.options.fontFamily !== fontFamily || t.options.fontSize !== fontSize;
+      t.options.fontFamily = fontFamily;
+      t.options.fontSize = fontSize;
+      t.options.cursorStyle = cursorStyle;
+      t.options.scrollback = scrollback;
+      t.options.windowsPty = windowsPty;
       if (fontChanged && webglAddonRef.current) {
         // WebGL addon caches glyphs in a GPU texture atlas keyed by the font.
         // Just setting term.options.fontFamily doesn't reliably flush this
         // cache — the old glyph bitmaps stay on the GPU and the terminal keeps
-        // displaying them.  Recreating the addon is the only guaranteed way to
+        // displaying them. Recreating the addon is the only guaranteed way to
         // rebuild the atlas with the new font.
         webglAddonRef.current.dispose();
         webglAddonRef.current = null;
@@ -1325,7 +1372,12 @@ function TerminalPane({
         forceRedraw();
         scheduleFit();
       }
-    }
+    };
+
+    void applyFontOptions();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fontFamily, fontSize, cursorStyle, scrollback, windowsPty]);
 

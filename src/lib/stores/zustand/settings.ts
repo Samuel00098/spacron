@@ -64,7 +64,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -85,6 +85,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
+    { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', keys: 'Ctrl+Alt+M' },
     // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
     // they drove no longer exists, so they were unbound keys occupying Alt+=,
     // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
@@ -306,7 +307,7 @@ const defaults: SettingsValues = {
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -327,6 +328,7 @@ const defaults: SettingsValues = {
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
+    { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', keys: 'Ctrl+Alt+M' },
     // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
     // they drove no longer exists, so they were unbound keys occupying Alt+=,
     // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.

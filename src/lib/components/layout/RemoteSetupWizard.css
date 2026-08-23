@@ -1,0 +1,179 @@
+/* "Set up a remote VPS" wizard (RemoteSetupWizard.tsx) — modal over the app. */
+
+.rsw-overlay {
+  position: fixed;
+  inset: 0;
+  /* Portaled to <body> — same plane as SettingsModal's overlay, above app
+     content but below the title bar (z-index 100000, kept clickable). */
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.rsw-card {
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  /* With the platform-mismatch warning, an error and every field visible at
+     once, the card can outgrow a short window — and the actions sit at the
+     bottom, so it must be able to scroll rather than clip them away. */
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 12px;
+  /* Fully opaque surface so the wizard never shows the window through it. */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rsw-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rsw-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.rsw-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.rsw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rsw-field-wide {
+  grid-column: 1 / -1;
+}
+
+.rsw-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+.rsw-input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(var(--bg-primary-rgb, 24, 24, 30), 1);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.rsw-input:focus {
+  border-color: var(--accent);
+}
+
+/* The shared Dropdown's trigger defaults to the compact toolbar size — match
+   the wizard's own inputs so the platform picker doesn't read as a smaller
+   control sitting in the form grid. */
+.rsw-field .dd-trigger {
+  height: 33px;
+  font-size: 13px;
+}
+
+.rsw-warn {
+  color: var(--amber, #f5b045);
+  border-left: 2px solid color-mix(in srgb, var(--amber, #f5b045) 60%, transparent);
+  padding-left: 8px;
+}
+
+/* A bare <code> inherits the UA's monospace default, which lands a size larger
+   than the prose around it. Match the paragraph instead. */
+.rsw-desc code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+
+/* OS-detection hint under the platform picker. */
+.rsw-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rsw-hint-ok {
+  color: var(--success, #46c07a);
+}
+
+.rsw-error {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--error, #e5484d) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--error, #e5484d) 12%, transparent);
+  color: var(--error, #e5484d);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rsw-status {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.rsw-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.rsw-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.rsw-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rsw-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rsw-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.rsw-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}

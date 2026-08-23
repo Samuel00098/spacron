@@ -9,7 +9,8 @@ vi.mock('./notification', () => ({
   showToast: vi.fn(),
 }));
 
-import { activeFile, fileCache, onFileDeleted, openFiles } from './editor';
+import { activeFile, fileCache, onFileDeleted, onFileRenamed, openFiles } from './editor';
+import { useEditorStore } from './zustand/editor';
 import type { EditorFile } from '$lib/types/editor';
 
 function textFile(path: string): EditorFile {
@@ -51,3 +52,62 @@ describe('editor file deletion handling', () => {
     expect([...get(fileCache).keys()]).toEqual([sibling]);
   });
 });
+
+describe('markdown preview default and toggle behavior', () => {
+  beforeEach(() => {
+    openFiles.set([]);
+    activeFile.set(null);
+    fileCache.set(new Map());
+    useEditorStore.setState({
+      openFiles: [],
+      activeFile: null,
+      fileCache: new Map(),
+      markdownCodeModePaths: new Set(),
+      markdownPreviewPaths: new Set(),
+    });
+  });
+
+  it('defaults to preview mode (not in markdownCodeModePaths) when opened', () => {
+    const mdPath = 'C:\\repo\\README.md';
+
+    // By default, markdownCodeModePaths does not contain the path -> preview is active
+    expect(useEditorStore.getState().markdownCodeModePaths.has(mdPath)).toBe(false);
+  });
+
+  it('switches to code mode when preview is toggled off, and restores preview when toggled on', () => {
+    const mdPath = 'C:\\repo\\README.md';
+
+    // User switches to code mode (preview = false)
+    useEditorStore.getState().setMarkdownPreview(mdPath, false);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(mdPath)).toBe(true);
+
+    // User switches back to preview mode (preview = true)
+    useEditorStore.getState().setMarkdownPreview(mdPath, true);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(mdPath)).toBe(false);
+  });
+
+  it('resets code mode state when file is closed', () => {
+    const mdPath = 'C:\\repo\\README.md';
+
+    useEditorStore.getState().addOpenFile(mdPath);
+    useEditorStore.getState().setMarkdownPreview(mdPath, false);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(mdPath)).toBe(true);
+
+    useEditorStore.getState().closeFile(mdPath);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(mdPath)).toBe(false);
+  });
+
+  it('migrates code mode state on file rename', () => {
+    const oldPath = 'C:\\repo\\README.md';
+    const newPath = 'C:\\repo\\DOCS.md';
+
+    useEditorStore.getState().addOpenFile(oldPath);
+    useEditorStore.getState().setMarkdownPreview(oldPath, false);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(oldPath)).toBe(true);
+
+    onFileRenamed(oldPath, newPath);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(oldPath)).toBe(false);
+    expect(useEditorStore.getState().markdownCodeModePaths.has(newPath)).toBe(true);
+  });
+});
+

@@ -736,6 +736,12 @@ export function providerSupportsReplyTts(provider: AiProviderId): boolean {
 
 export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', true);
 export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voiceInputProvider', 'local');
+/**
+ * Terminal transcription (Transcribe-to-Terminal hotkey): when on, the
+ * transcript is submitted to the terminal as if Enter was pressed; when off,
+ * it is only typed in.
+ */
+export const transcriptionAutoSend = persistentWritable('transcriptionAutoSend', true);
 export const voiceInputModelByProvider = persistentWritable<Record<string, string>>('voiceInputModelByProvider', {});
 export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider', 'groq');
 export const voiceAiModelByProvider = persistentWritable<Record<string, string>>('voiceAiModelByProvider', {});
@@ -1063,7 +1069,7 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
   { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
-  { id: 'goToFleet',      label: 'Go to Agent Changes', category: 'View' },
+  { id: 'goToFleet',      label: 'Go to Agent Fleet', category: 'View' },
   { id: 'goToDb',         label: 'Go to Database Explorer', category: 'View' },
   { id: 'goToContainers', label: 'Go to Containers',   category: 'View' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  category: 'View' },
@@ -1084,6 +1090,7 @@ export const shortcutActions: ShortcutAction[] = [
   // openDailyNote removed
   // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', category: 'Voice' },
+  { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', category: 'Voice' },
   // Canvas actions removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', category: 'View' },
 ];
@@ -1101,7 +1108,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
   { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
-  { id: 'goToFleet',      label: 'Go to Agent Changes', keys: 'Ctrl+Shift+G' },
+  { id: 'goToFleet',      label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
   { id: 'goToDb',         label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
   { id: 'goToContainers', label: 'Go to Containers',   keys: 'Ctrl+Shift+C' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  keys: 'Ctrl+Shift+X' },
@@ -1122,6 +1129,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   // openDailyNote removed
   // toggleSketch removed
   { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
+  { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', keys: 'Ctrl+Alt+M' },
   // canvasZoomIn / canvasZoomOut / canvasResetZoom removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
 ];
@@ -1142,42 +1150,83 @@ export function parseShortcutString(str: string): string[] {
   return trimmed.split('+').map(p => p.trim());
 }
 
+// Shifted punctuation → the unshifted character printed on the same key.
+//
+// `KeyboardEvent.key` reports the *produced* character, so `Ctrl+Shift+\`` -
+// which is how "New Terminal Tab" is written - arrives as `~`, not as `` ` ``.
+// Comparing the raw characters made every shortcut on a shifted punctuation key
+// unreachable. Canonicalising both sides through this table is what lets a
+// binding be written with the key cap the user actually presses.
+const UNSHIFTED_PUNCTUATION: Record<string, string> = {
+  '~': '`', '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6',
+  '&': '7', '*': '8', '(': '9', ')': '0', '_': '-', '+': '=',
+  '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/',
+};
+
+// `event.code` → the character that physical key prints on a US layout. Only
+// consulted when `event.key` is not plain ASCII, which is the macOS case: Option
+// (Alt) rewrites the produced character, so `Alt+Shift+F` arrives as `Ï` and
+// nothing would ever match. Deliberately NOT the primary comparison — on a
+// non-US layout `code` names the US key cap, so preferring it would fire the
+// Ctrl+Q binding when an AZERTY user pressed Ctrl+A.
+function keyFromCode(code: string | undefined): string | null {
+  if (!code) return null;
+  const letter = /^Key([A-Z])$/.exec(code);
+  if (letter) return letter[1].toLowerCase();
+  const digit = /^Digit(\d)$/.exec(code);
+  if (digit) return digit[1];
+  const punctuation: Record<string, string> = {
+    Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+    Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
+    Slash: '/', Space: ' ',
+  };
+  return punctuation[code] ?? null;
+}
+
+function canonicalKey(key: string): string {
+  const lower = key.toLowerCase();
+  return UNSHIFTED_PUNCTUATION[lower] ?? lower;
+}
+
 export function matchShortcut(e: KeyboardEvent, shortcutKeys: string): boolean {
   if (!shortcutKeys) return false;
   const parts = parseShortcutString(shortcutKeys).map(p => p.toLowerCase());
-  
+
   const hasCtrl = parts.includes('ctrl');
   const hasShift = parts.includes('shift');
   const hasAlt = parts.includes('alt');
   const hasMeta = parts.includes('meta');
-  
+
   const modifiers = ['ctrl', 'shift', 'alt', 'meta'];
   const primaryKeyPart = parts.find(p => !modifiers.includes(p));
   if (!primaryKeyPart) return false;
-  
-  const isCtrlPressed = e.ctrlKey || e.metaKey;
+
+  // A binding written with `Ctrl` matches Cmd on macOS, which is why Meta counts
+  // as Ctrl here. A binding that names `Meta` explicitly is the exception: it
+  // wants the Meta key specifically, so Ctrl is checked on its own.
+  const isCtrlPressed = hasMeta ? e.ctrlKey : (e.ctrlKey || e.metaKey);
   const ctrlMatch = isCtrlPressed === hasCtrl;
   const shiftMatch = e.shiftKey === hasShift;
   const altMatch = e.altKey === hasAlt;
-  const metaMatch = e.metaKey === hasMeta;
-  
+  const metaMatch = hasMeta ? e.metaKey : true;
+
   let keyMatch = false;
   const eventKeyLower = e.key.toLowerCase();
   const targetKeyLower = primaryKeyPart.toLowerCase();
-  
+
   if (targetKeyLower === 'space') {
     keyMatch = eventKeyLower === ' ' || eventKeyLower === 'space';
   } else if (targetKeyLower === 'esc' || targetKeyLower === 'escape') {
     keyMatch = eventKeyLower === 'escape' || eventKeyLower === 'esc';
-  } else if (targetKeyLower === '+') {
-    keyMatch = eventKeyLower === '+' || eventKeyLower === '=';
-  } else if (targetKeyLower === '=') {
-    keyMatch = eventKeyLower === '=' || eventKeyLower === '+';
   } else {
-    keyMatch = eventKeyLower === targetKeyLower;
+    keyMatch = canonicalKey(eventKeyLower) === canonicalKey(targetKeyLower);
+    if (!keyMatch && !/^[\x20-\x7e]$/.test(e.key)) {
+      const fromCode = keyFromCode(e.code);
+      keyMatch = fromCode !== null && canonicalKey(fromCode) === canonicalKey(targetKeyLower);
+    }
   }
-  
-  return ctrlMatch && shiftMatch && altMatch && keyMatch;
+
+  return ctrlMatch && shiftMatch && altMatch && metaMatch && keyMatch;
 }
 
 // Appearance / Theme

@@ -995,6 +995,80 @@ function findSessionAnyProject(id: number): TerminalSessionInfo | undefined {
   return pool.find((s) => s.id === id);
 }
 
+/**
+ * The last grid an on-screen pane actually measured, and the storage key it
+ * survives a restart under.
+ *
+ * ## Why this exists
+ *
+ * A PTY has to be opened with *some* size before any pane exists to measure,
+ * and that used to be a hardcoded 120x34. The shell (and worse, a TUI agent)
+ * draws its first frame at that size, then the pane finishes laying out, xterm
+ * fits, `term.onResize` fires, and `resizeSession` sends the real grid. The
+ * process gets SIGWINCH and reflows everything it had already painted — the
+ * visible "opens wrong, then snaps" flicker on every new terminal.
+ *
+ * Threading an explicit size in from the call sites does not fix it: there are
+ * ~20 of them (command palette, snapshots, workspace restore, the orchestrator)
+ * and almost none own a DOM node to measure. So the default itself is what has
+ * to be right. Any pane that fits successfully records its grid here, and the
+ * next spawn opens at that size — which, since panes in one window are usually
+ * the same size, is normally exact. Persisting it means even the first terminal
+ * after a restart opens at the size the last one ended at, instead of 120x34.
+ *
+ * `initialCols` / `initialRows` on the options still win when a caller genuinely
+ * knows better; this is only the fallback.
+ */
+const TERMINAL_GEOMETRY_KEY = 'forge_terminal_geometry';
+const FALLBACK_COLS = 120;
+const FALLBACK_ROWS = 34;
+/** Guards against a collapsed or mid-animation pane poisoning the default. */
+const MIN_SANE_COLS = 20;
+const MIN_SANE_ROWS = 5;
+
+let lastMeasuredGeometry: { cols: number; rows: number } | null = null;
+
+/**
+ * Publish the grid a pane just measured. Called from the fit path in
+ * `TerminalPane`, which is the only place that knows a real cell size.
+ */
+export function recordTerminalGeometry(cols: number, rows: number): void {
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
+  if (cols < MIN_SANE_COLS || rows < MIN_SANE_ROWS) return;
+  const next = { cols: Math.floor(cols), rows: Math.floor(rows) };
+  if (lastMeasuredGeometry?.cols === next.cols && lastMeasuredGeometry?.rows === next.rows) return;
+  lastMeasuredGeometry = next;
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(TERMINAL_GEOMETRY_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+/** Size to open a new PTY at: measured this session, else last session's, else the fallback. */
+function defaultSpawnGeometry(): { cols: number; rows: number } {
+  if (lastMeasuredGeometry) return lastMeasuredGeometry;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(TERMINAL_GEOMETRY_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { cols?: unknown; rows?: unknown };
+        const cols = Number(parsed.cols);
+        const rows = Number(parsed.rows);
+        if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= MIN_SANE_COLS && rows >= MIN_SANE_ROWS) {
+          lastMeasuredGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
+          return lastMeasuredGeometry;
+        }
+      }
+    } catch {}
+  }
+  return { cols: FALLBACK_COLS, rows: FALLBACK_ROWS };
+}
+
+/** Test seam: forget the measured grid so a case can assert the fallback. */
+export function __resetTerminalGeometry(): void {
+  lastMeasuredGeometry = null;
+}
+
 export async function createTerminalSession(
   cwd?: string,
   targetPaneIndex?: number,
@@ -1005,6 +1079,8 @@ export async function createTerminalSession(
     isDev?: boolean;
     /** Extra environment for this session only, merged over the defaults. */
     extraEnv?: Record<string, string>;
+    initialCols?: number;
+    initialRows?: number;
   }
 ): Promise<number | null> {
   const assignPane = opts?.assignPane ?? true;
@@ -1056,7 +1132,11 @@ export async function createTerminalSession(
       }
     }
 
-    const ptyPromise = openPty(80, 24, {
+    const fallback = defaultSpawnGeometry();
+    const cols = opts?.initialCols && opts.initialCols >= 10 ? opts.initialCols : fallback.cols;
+    const rows = opts?.initialRows && opts.initialRows >= 3 ? opts.initialRows : fallback.rows;
+
+    const ptyPromise = openPty(cols, rows, {
       onData: (bytes) => {
         const text = appendSessionOutputBuffer(pty.id, bytes);
         const cb = dataCallbacks.get(pty.id);

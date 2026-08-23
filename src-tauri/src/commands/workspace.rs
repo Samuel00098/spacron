@@ -1120,10 +1120,8 @@ fn legacy_worktree_area(root: &std::path::Path) -> Option<PathBuf> {
 
 /// Whether `path` sits inside `area`. Compared case-insensitively on Windows,
 /// where the same directory legitimately reaches us with different casing.
-///
-/// Shared with `commands::resource`, which scopes its disk scans to open
-/// projects — one containment check with one set of tests (including the
-/// `worktrees-evil` prefix-lookalike case) beats two that can drift apart.
+/// One containment check with one set of tests (including the
+/// `worktrees-evil` prefix-lookalike case) beats several that can drift apart.
 pub(crate) fn is_under(path: &std::path::Path, area: &std::path::Path) -> bool {
     #[cfg(windows)]
     {

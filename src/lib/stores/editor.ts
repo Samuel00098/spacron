@@ -179,7 +179,7 @@ export function closeFile(path: string) {
   const updatedFiles = files.filter((f) => f !== path);
   openFiles.set(updatedFiles);
   fileCache.update((c) => { const next = new Map(c); next.delete(path); return next; });
-  useEditorStore.getState().setMarkdownPreview(path, false);
+  useEditorStore.getState().setMarkdownPreview(path, true);
   revokeEditorAsset(cachedFile);
   if (currentActive === path) {
     activeFile.set(updatedFiles.length > 0 ? updatedFiles[updatedFiles.length - 1] : null);
@@ -197,6 +197,13 @@ export function onFileRenamed(oldPath: string, newPath: string) {
     next.set(newPath, { ...existing, path: newPath });
     return next;
   });
+  const state = useEditorStore.getState();
+  if (state.markdownCodeModePaths?.has(oldPath)) {
+    const nextCodeMode = new Set(state.markdownCodeModePaths);
+    nextCodeMode.delete(oldPath);
+    nextCodeMode.add(newPath);
+    useEditorStore.setState({ markdownCodeModePaths: nextCodeMode });
+  }
 }
 
 function normalisePathSeparators(path: string): string {

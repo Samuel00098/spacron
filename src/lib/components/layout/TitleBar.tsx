@@ -11,7 +11,6 @@ import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
-import ResourceChip from '$lib/components/resource/ResourceChip';
 import packageJson from '../../../../package.json';
 import './TitleBar.css';
 
@@ -263,11 +262,6 @@ export default function TitleBar() {
             corner (`UsageCounter`, mounted in App.tsx) because it is a reading
             that changes width, not a fixed-size icon button like its former
             neighbours. */}
-
-        {/* Machine-load reading — CPU/RAM chip that opens the resource
-            dropdown (per-session CPU/RAM + kill). Fixed-width so it holds its
-            place in the icon row as the digits tick. */}
-        {showWorkspaceTools && <ResourceChip />}
 
         {/* Agent inbox — finished work and anything waiting on a decision. */}
         {showWorkspaceTools && <InboxBell />}

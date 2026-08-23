@@ -240,6 +240,12 @@
 }
 .rs-icon-btn:hover { background: var(--bg-active); color: var(--text-primary); }
 .rs-icon-btn.rs-danger:hover { color: var(--error, #e5484d); }
+/* Armed state of the two-click remove: filled with danger color so it reads
+   as "one click from deleting", not as a hover. Self-disarms after 4s. */
+.rs-icon-btn.rs-armed {
+  background: color-mix(in srgb, var(--error, #e5484d) 16%, transparent);
+  color: var(--error, #e5484d);
+}
 .rs-icon-btn.rs-on { color: var(--accent); }
 .rs-icon-btn.rs-on svg { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
 

@@ -1,0 +1,180 @@
+/* Styles for ToolsMenu.tsx — the launcher that replaced the `.room-dock` strip.
+   The popover is portaled to <body>, so nothing here may be nested under
+   `.app-shell`; the trigger lives in the floating prompt bar. */
+
+.tools-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tools-trigger {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.tools-trigger:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+/* A tool being open lights the trigger the way the dock button used to light. */
+.tools-trigger.has-active {
+  color: var(--text-primary);
+}
+
+.tools-trigger.open {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-active));
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.tools-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
+.tools-trigger-label {
+  line-height: 1;
+}
+
+.tools-chevron {
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: transform var(--dur-base) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.tools-trigger.open .tools-chevron {
+  transform: rotate(180deg);
+  opacity: 0.9;
+}
+
+/* ── Popover ───────────────────────────────────────────────────────────── */
+
+.tools-menu-popover {
+  /* Position is set inline by ToolsMenu.tsx (fixed + coordinates). */
+  transform-origin: bottom right;
+  z-index: 10000;
+  width: max-content;
+  min-width: 260px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 14px;
+  box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  animation: tools-menu-pop 0.13s ease;
+}
+
+@keyframes tools-menu-pop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.tools-group-label {
+  padding: 0 6px 5px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.tools-group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 2px;
+}
+
+.tools-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.tools-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.tools-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: -1px;
+}
+
+/* Open tools stay marked in the list — the dock's lit-button state, carried over. */
+.tools-item.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-active));
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.tools-item.active .tools-item-icon {
+  color: var(--accent);
+}
+
+.tools-item-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.tools-item:hover .tools-item-icon {
+  color: inherit;
+}
+
+.tools-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .tools-group-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tools-menu-popover {
+    animation-duration: 0.001ms;
+  }
+  .tools-trigger,
+  .tools-item,
+  .tools-chevron {
+    transition-duration: 0.001ms;
+  }
+}

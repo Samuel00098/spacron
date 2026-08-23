@@ -228,6 +228,8 @@
   flex: 1;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 6px 6px 8px 6px;
   /* Opaque dark base, which is what the solid (non-glass) themes land on in BOTH
      modes — the terminal is a dark surface regardless of app mode, so light solid
@@ -340,6 +342,19 @@
   scrollbar-color: var(--scrollbar-thumb) transparent;
   background-color: transparent !important;
   overflow-y: scroll;
+}
+
+.terminal-pane .xterm-container .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-pane .xterm-container .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-pane .xterm-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
 }
 
 .terminal-pane .xterm-container .xterm-helper-textarea {

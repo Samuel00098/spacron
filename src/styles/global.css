@@ -760,6 +760,16 @@ input:focus {
   border-color: var(--input-focus-border);
 }
 
+/* One focus standard for the whole app. The resets above strip outlines so
+   pointer users only ever see the hover/border treatments; this puts a
+   foreground-tinted ring back for KEYBOARD focus specifically, everywhere,
+   instead of each component hand-rolling its own. Components that already
+   paint a focus ring (the Dropdown trigger) match it, so nothing doubles. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -942,7 +952,6 @@ input:focus {
 :root:not(.solid-theme):not(.is-webkitgtk) .usage-panel,
 :root:not(.solid-theme):not(.is-webkitgtk) .usage-dock,
 :root:not(.solid-theme):not(.is-webkitgtk) .inbox-panel,
-:root:not(.solid-theme):not(.is-webkitgtk) .resource-panel,
 :root:not(.solid-theme):not(.is-webkitgtk) .project-hud,
 :root:not(.solid-theme):not(.is-webkitgtk) .floating-youtube {
   background:
@@ -971,7 +980,9 @@ input:focus {
    diametrically opposite arcs lap the perimeter over a permanent base ring —
    the base is what keeps the outline visible between passes, and what makes
    this survive `prefers-reduced-motion` (the blanket rule below freezes the
-   animation, and a frozen ring is still an outline).
+   animation, and a frozen ring is still an outline). Room panels take that
+   further: their lap is paused unless the room's agent is working (see the
+   gating rules after the shared block).
 
    `--panel-edge-angle` MUST stay a registered property. An unregistered custom
    property is not interpolatable, so the gradient would jump 0deg→360deg in a
@@ -1008,7 +1019,6 @@ input:focus {
 .usage-panel,
 .usage-dock,
 .inbox-panel,
-.resource-panel,
 .floating-youtube {
   --panel-edge-w: 2px;
   --panel-edge-lap: 7s;
@@ -1028,8 +1038,7 @@ input:focus {
 :root.light-theme .usage-panel,
 :root.light-theme .usage-dock,
 :root.light-theme .inbox-panel,
-:root.light-theme .resource-panel,
-:root.light-theme .floating-youtube {
+:root.light-theme :root.light-theme .floating-youtube {
   /* The accent is a dark slate in light themes, so the light itself flips to
      dark automatically — only the always-on base ring has to be told. */
   --panel-edge-base: rgba(0, 0, 0, 0.14);
@@ -1046,7 +1055,6 @@ input:focus {
 .usage-panel::after,
 .usage-dock::after,
 .inbox-panel::after,
-.resource-panel::after,
 .floating-youtube::after {
   content: '';
   position: absolute;
@@ -1092,6 +1100,22 @@ input:focus {
   animation: panel-edge-travel var(--panel-edge-lap) linear infinite;
 }
 
+/* Rooms keep their edge light PAUSED unless the room is working. Everywhere
+   else the lap is ambient chrome and stays running; on a room — the surface
+   where agents actually do things — a permanently traveling light is motion
+   that carries no information, which reads as alive for ten minutes and as an
+   itch after an hour. `is-working` is set by AppShell from the room agent
+   session's `isExecuting`, so the light sweeps only while an agent runs, and
+   the always-on base ring above is the resting outline (the same property
+   that lets this ring survive prefers-reduced-motion is what makes a paused
+   one still read as a border). */
+.app-shell .room-panel::after {
+  animation-play-state: paused;
+}
+.app-shell .room-panel.is-working::after {
+  animation-play-state: running;
+}
+
 /* `.usage-panel`, `.usage-dock`, `.inbox-panel` and `.floating-youtube` are all
    `position: fixed` with a `z-index`, which satisfies the positioning and
    stacking-context requirements on their own. These three do not:
@@ -1122,7 +1146,6 @@ input:focus {
 .usage-panel,
 .usage-dock,
 .inbox-panel,
-.resource-panel,
 .floating-youtube,
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar {
@@ -1216,10 +1239,12 @@ input:focus {
    and the selectors intentionally reach into repeated card markup.
    ─────────────────────────────────────────────────────────────────────── */
 
-/* Subtitle: clamp to 2 lines and remove forced min-height */
+/* Subtitle: clamp to 2 lines and remove forced min-height. 9px is the type
+   floor — smaller than that, text over translucent panels stops being
+   legible, which is where the glass aesthetic's contrast cost lands first. */
 .voice-input-provider-card .provider-card-subtitle {
-  font-size: 8.5px !important;
-  line-height: 1.25 !important;
+  font-size: 9px !important;
+  line-height: 1.3 !important;
   min-height: 0 !important;
   word-break: break-word;
   overflow: hidden;
@@ -1230,7 +1255,7 @@ input:focus {
 
 /* Status badge: smaller pill to match other compact badges */
 .voice-input-provider-card .voice-input-provider-status {
-  font-size: 7.5px !important;
+  font-size: 9px !important;
   font-weight: 600 !important;
   padding: 1px 4px !important;
   border-radius: 3px !important;
@@ -1380,7 +1405,11 @@ samp {
 
 /* ── Apple-Inspired Liquid Glass Spring Micro-Animations & Sliders ── */
 
-/* 1. Tactile spring scale-up on hover and scale-down on active press */
+/* 1. Tactile spring scale-up on hover and scale-down on active press.
+   Deliberately excludes list rows (.file-node etc.): the lift is for primary
+   controls, and a cursor swept down a file tree making every row breathe
+   reads as jitter, not feedback. Row hover highlight still comes from their
+   own background rules. */
 button:hover:not(:disabled),
 a:hover,
 .room-card:hover,
@@ -1388,7 +1417,6 @@ a:hover,
 .svt-btn:hover,
 .icon-btn:hover:not(:disabled),
 .nav-btn:hover:not(:disabled),
-.file-node:hover,
 .drawer-tab-btn:hover,
 .drawer-close-btn:hover,
 .yt-mode-btn:hover,
@@ -1406,11 +1434,10 @@ a:active,
 .svt-btn:active,
 .icon-btn:active:not(:disabled),
 .nav-btn:active:not(:disabled),
-.file-node:active,
 .drawer-tab-btn:active,
 .drawer-close-btn:active,
 .yt-mode-btn:active,
-.yt-go:active:not(:disabled),
+.yt-go:active,
 .yt-icon-btn:active,
 .settings-toggle:active {
   transform: scale(0.96) translateY(0.5px) !important;
@@ -1445,7 +1472,6 @@ a,
 /* 3. Icon (SVG) Micro-Animations inside hovered parent elements */
 button:hover svg,
 a:hover svg,
-.file-node:hover svg,
 .svt-btn:hover svg,
 .nav-btn:hover svg,
 .icon-btn:hover svg,

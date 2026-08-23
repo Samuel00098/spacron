@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import './Dropdown.css';
 
@@ -27,6 +27,14 @@ interface DropdownProps {
 
 // Menu max-height (keep in sync with .dd-menu max-height in CSS).
 const MENU_MAX = 260;
+
+/** Widest a content-sized menu may grow. Past this a long option ellipsizes
+ *  rather than the menu spanning half the window. */
+const MENU_MAX_WIDTH = 420;
+
+/** Gap kept between a menu and the window edge when it has to be nudged back
+ *  inside. */
+const EDGE_MARGIN = 8;
 
 export default function Dropdown({
   options,
@@ -78,7 +86,16 @@ export default function Dropdown({
     const next: CSSProperties = {
       position: 'fixed',
       left: r.left,
-      width: r.width,
+      // The trigger's width is the menu's FLOOR, not its size. An option list is
+      // routinely wider than the control that opens it — the mobile panel's
+      // resolution picker is a 116px "864p" trigger whose options read
+      // "Sharpest · slowest" — and pinning the menu to the trigger collapsed
+      // every one of those labels to an ellipsis. Sizing to content and only
+      // then clamping (see the layout effect below) keeps a wide list readable
+      // without ever making a menu narrower than it used to be.
+      minWidth: r.width,
+      width: 'max-content',
+      maxWidth: Math.max(r.width, Math.min(MENU_MAX_WIDTH, window.innerWidth - EDGE_MARGIN * 2)),
       maxHeight,
     };
     if (willDropUp) {
@@ -88,6 +105,34 @@ export default function Dropdown({
     }
     setMenuStyle(next);
   }, [boundarySelector]);
+
+  /**
+   * Second placement pass. The menu sizes to its content, so its real width is
+   * only knowable once it has rendered — which is also the moment it can be
+   * clamped back inside the window. A menu opened near the right edge (a picker
+   * in the right utility drawer, say) right-aligns with its trigger and grows
+   * inward instead of running off-screen.
+   *
+   * `useLayoutEffect`, so the corrected position is the first one painted. The
+   * width guard makes this converge: the second run computes the same `left`
+   * and returns the previous style object unchanged.
+   */
+  useLayoutEffect(() => {
+    if (!open || !menuEl.current || !rootEl.current) return;
+    const menu = menuEl.current.getBoundingClientRect();
+    const anchor = rootEl.current.getBoundingClientRect();
+    if (menu.width === 0) return;
+
+    let left = anchor.left;
+    if (left + menu.width > window.innerWidth - EDGE_MARGIN) {
+      left = Math.min(anchor.right - menu.width, window.innerWidth - EDGE_MARGIN - menu.width);
+    }
+    left = Math.max(EDGE_MARGIN, left);
+
+    setMenuStyle((prev) =>
+      typeof prev.left === 'number' && Math.abs(prev.left - left) < 0.5 ? prev : { ...prev, left },
+    );
+  }, [open, menuStyle]);
 
   function toggle() {
     if (disabled) return;

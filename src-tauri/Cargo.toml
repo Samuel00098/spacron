@@ -36,14 +36,9 @@ dashmap = "5"
 notify = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 portable-pty = "0.8"
-# Recursive directory-size scan for the resource panel's per-project disk
-# usage ("how much data is this project taking"). Already in the tree
-# transitively; promoted to a direct dep for the explicit import.
-walkdir = "2.5"
-# Per-process + machine CPU/RAM sampling for the resource monitor (titlebar
-# chip + dropdown). One small dep for all three platforms; `Process::cpu_usage`
-# needs the same `System` instance refreshed across calls to report deltas,
-# which is why AppState owns a persistent sampler rather than per-command ones.
+# Process-tree inspection for the PTY layer's kill-tree path
+# (`pty/session.rs`), which must terminate an agent's whole child tree rather
+# than just the shell it launched.
 sysinfo = "0.39"
 axum = { version = "0.8.9", features = ["ws"] }
 reqwest = { version = "0.13.3", features = ["json", "stream", "gzip", "brotli", "cookies", "multipart", "form", "query"] }

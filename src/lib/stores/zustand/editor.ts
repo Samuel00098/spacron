@@ -21,8 +21,9 @@ interface EditorState {
   jumpToLine: { path: string; line: number } | null;
   selectedText: string;
   openFileHistory: string[];
-  /** Paths currently shown in markdown preview mode. Persists per-file so the
-   *  preview stays open across tab switches until explicitly toggled off. */
+  /** Paths where the user has explicitly switched from default markdown preview to the code editor. */
+  markdownCodeModePaths: Set<string>;
+  /** Paths currently shown in markdown preview mode. */
   markdownPreviewPaths: Set<string>;
 
   saveActiveFile: () => Promise<void>;
@@ -48,14 +49,21 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
   jumpToLine: null,
   selectedText: '',
   openFileHistory: [],
+  markdownCodeModePaths: new Set(),
   markdownPreviewPaths: new Set(),
 
   setMarkdownPreview: (path: string, on: boolean) => {
     set((s) => {
-      const next = new Set(s.markdownPreviewPaths);
-      if (on) next.add(path);
-      else next.delete(path);
-      return { markdownPreviewPaths: next };
+      const nextCodeMode = new Set(s.markdownCodeModePaths);
+      const nextPreview = new Set(s.markdownPreviewPaths);
+      if (on) {
+        nextCodeMode.delete(path);
+        nextPreview.add(path);
+      } else {
+        nextCodeMode.add(path);
+        nextPreview.delete(path);
+      }
+      return { markdownCodeModePaths: nextCodeMode, markdownPreviewPaths: nextPreview };
     });
   },
 
@@ -153,16 +161,23 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
   },
 
   closeFile: (path: string) => {
-    const { openFiles, activeFile } = getState();
+    const { openFiles, activeFile, markdownCodeModePaths, markdownPreviewPaths } = getState();
     const nextOpen = openFiles.filter((p) => p !== path);
     let nextActive = activeFile;
     if (activeFile === path) {
       const idx = openFiles.indexOf(path);
       nextActive = nextOpen[Math.min(idx, nextOpen.length - 1)] ?? null;
     }
-    const nextPreview = new Set(getState().markdownPreviewPaths);
+    const nextCodeMode = new Set(markdownCodeModePaths);
+    nextCodeMode.delete(path);
+    const nextPreview = new Set(markdownPreviewPaths);
     nextPreview.delete(path);
-    set({ openFiles: nextOpen, activeFile: nextActive, markdownPreviewPaths: nextPreview });
+    set({
+      openFiles: nextOpen,
+      activeFile: nextActive,
+      markdownCodeModePaths: nextCodeMode,
+      markdownPreviewPaths: nextPreview,
+    });
   },
 
   setActiveFile: (path: string | null) => {

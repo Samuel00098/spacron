@@ -19,6 +19,7 @@ import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
+import ToolsMenu, { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
@@ -32,7 +33,7 @@ import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
-import MobilePanel from '$lib/components/mobile/MobilePanel.tsx';
+import MobilePanel from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
 import { useLayoutStore, rightDrawerToolOf } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
@@ -82,6 +83,8 @@ import {
   allProjectSessions,
   commandHistory,
 } from '$lib/stores/terminal';
+import { toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
+import TranscriptionIndicator from '$lib/components/terminal/TranscriptionIndicator.tsx';
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
@@ -259,6 +262,10 @@ function Icon({ children }: { children: React.ReactNode }) {
 // strip. Icons mirror the dock buttons so the same tool reads identically in
 // both places.
 const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.ReactNode }> = {
+  fleet: {
+    title: 'Agent Fleet',
+    icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></Icon>,
+  },
   toolbox: {
     title: 'Dev Toolbox',
     icon: <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>,
@@ -572,6 +579,7 @@ export default function AppShell() {
   const [auxPanelWidth, setAuxPanelWidth] = useState(layoutState.auxPanelWidth);
   const [auxEditorHeight, setAuxEditorHeight] = useState(layoutState.auxEditorHeight);
   const [focusedRoom, setFocusedRoom] = useState<RoomId | null>('terminal');
+  const [expandedRoom, setExpandedRoom] = useState<RoomId | null>(null);
   const [minimizedRooms, setMinimizedRooms] = useState<Set<RoomId>>(() => new Set());
   const [ambientLayout, setAmbientLayout] = useState<AmbientLayout>('gallery');
   // Each ambient layout keeps its own minimize/focus state so switching modes
@@ -626,8 +634,8 @@ export default function AppShell() {
     return () => observer.disconnect();
   }, [workspaceId]);
 
-  // Visibility guarantee for the dock (.room-dock) and floating prompt bar
-  // (.composer-strip) on WebKitGTK (Linux). Even at opacity:1 these are regularly
+  // Visibility guarantee for the floating prompt bar (.composer-strip) on
+  // WebKitGTK (Linux). Even at opacity:1 it is regularly
   // left *present but unpainted* after a first paint or a layout switch — either an
   // entrance animation stuck at its 0% frame, or an uncomposited GPU layer. The CSS
   // override handles the animation/opacity case; here we additionally force a hard
@@ -640,7 +648,7 @@ export default function AppShell() {
     if (!el) return;
 
     const forceVisible = () => {
-      el.querySelectorAll<HTMLElement>('.room-dock, .composer-strip').forEach((node) => {
+      el.querySelectorAll<HTMLElement>('.composer-strip').forEach((node) => {
         node.style.animation = 'none';
         node.style.visibility = 'visible';
         node.style.opacity = '1';
@@ -686,8 +694,7 @@ export default function AppShell() {
         { id: 'preview' as const, visible: layoutState.previewVisible },
         { id: 'review' as const, visible: layoutState.reviewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
-        { id: 'fleet' as const, visible: layoutState.fleetVisible },
-        // Right utility drawer: toolbox/http/db/containers/env/mobile +
+        // Right utility drawer: fleet/toolbox/http/db/containers/env/mobile +
         // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
         // pop-up. None of those are rooms in the ambient grid.
       ].filter((panel) => panel.visible),
@@ -788,7 +795,6 @@ export default function AppShell() {
     lastActiveRoomRef.current = activeRoom;
   }
   const sideRooms = activeRoom ? visibleRooms.filter((room) => room !== activeRoom) : visibleRooms;
-  const stackedRooms = sideRooms;
 
   // The rooms Split tiles, in slot order. `activeRoom` is always on stage (it is
   // what Focus would show, and what the room dock highlights), so it is spliced
@@ -814,6 +820,9 @@ export default function AppShell() {
     ambient: AmbientLayout;
     slots: RoomId[];
     focused: RoomId | null;
+    // The right drawer is part of the arrangement now — tiling the agents opens
+    // Agent Fleet beside them, so untiling has to put back whatever was there.
+    drawer: RightTool | null;
   } | null>(null);
 
   // Whether the Split stage is currently exactly "every running agent" — what
@@ -837,6 +846,12 @@ export default function AppShell() {
   // movement) and leaves layout size unchanged, so the terminal panes never refit.
   // Linux-only; Windows/macOS repaint correctly on their own.
   const prevVisibleRoomsRef = useRef<RoomId[]>([]);
+  useEffect(() => {
+    if (expandedRoom && !visibleRooms.includes(expandedRoom)) {
+      setExpandedRoom(null);
+    }
+  }, [expandedRoom, visibleRooms]);
+
   useEffect(() => {
     const prev = prevVisibleRoomsRef.current;
     prevVisibleRoomsRef.current = visibleRooms;
@@ -1281,6 +1296,9 @@ export default function AppShell() {
         case 'launchVoiceMode':
           launchPromptBarVoiceMode();
           break;
+        case 'transcribeToTerminal':
+          toggleTerminalTranscription();
+          break;
         case 'cycleAmbientLayout': {
           // Two reachable arrangements now that Fleet is an action rather than a
           // mode: Focus ↔ Split.
@@ -1641,13 +1659,24 @@ export default function AppShell() {
    */
   function toggleFleetArrangement() {
     if (!fleetArrangementActive) {
-      preFleetLayoutRef.current = { ambient: ambientLayout, slots: splitSlots, focused: focusedRoom };
+      preFleetLayoutRef.current = {
+        ambient: ambientLayout,
+        slots: splitSlots,
+        focused: focusedRoom,
+        drawer: rightActiveTool,
+      };
       switchAmbientLayout('vibe');
       return;
     }
 
     const prev = preFleetLayoutRef.current;
     preFleetLayoutRef.current = null;
+    // Agent Fleet came up with the tiling, so it goes away with it — unless the
+    // user had it open beforehand, or has since switched the drawer to another
+    // tool, in which case leave their choice alone.
+    if (rightActiveTool === 'fleet' && prev?.drawer !== 'fleet') {
+      useLayoutStore.getState().applyRightDrawerTool(prev?.drawer ?? null);
+    }
     // Falls back to `[]` — the unarranged sentinel — when there is nothing to
     // restore (a reload, or the stage happening to already be the agent set).
     withStageRetile(() => setSplitSlots(prev?.slots ?? []));
@@ -1688,6 +1717,9 @@ export default function AppShell() {
 
   function minimizeRoom(id: RoomId) {
     withRoomTransition(() => {
+      if (expandedRoom === id) {
+        setExpandedRoom(null);
+      }
       setMinimizedRooms((current) => {
         const next = new Set(current);
         next.add(id);
@@ -1710,22 +1742,19 @@ export default function AppShell() {
     });
   }
 
-  // Promote a room out of the tiled stage and into Focus, where it fills the
-  // screen on its own. Seeds Focus's saved state before switching so the room
-  // lands focused and un-minimized; the Split arrangement is untouched, so the
-  // Split dock button brings the exact same tiling back.
+  // Expand a room to 100% full stage on top of the split grid.
   function focusRoomMode(id: RoomId) {
     if (id === 'terminal') setTerminalRoomOpen(true);
     if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
-    const focusSaved = perLayoutState.current['focus'];
-    const minimized = new Set(focusSaved.minimized);
-    minimized.delete(id);
-    perLayoutState.current['focus'] = { focused: id, minimized };
-    switchAmbientLayout('focus');
+    setExpandedRoom(id);
+    setFocusedRoom(id);
   }
 
   function closeRoom(id: RoomId) {
     withRoomTransition(() => {
+      if (expandedRoom === id) {
+        setExpandedRoom(null);
+      }
       if (id === 'workspace') {
         toggleSidebar();
         if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
@@ -1808,17 +1837,8 @@ export default function AppShell() {
       onClick: () => togglePanelRoom('tasks'),
       icon: <Icon><rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="5" height="8" rx="1" /></Icon>,
     },
-    {
-      id: 'fleet',
-      // Named for what the room shows — each agent's diff, ready to merge or
-      // discard — not for the fleet abstraction behind it. The old grid icon
-      // was also identical to the Fleet *layout* button further down the dock,
-      // so two unrelated buttons read as the same thing.
-      title: 'Agent Changes',
-      active: layoutState.fleetVisible,
-      onClick: () => togglePanelRoom('fleet'),
-      icon: <Icon><path d="M14 2H6.5A1.5 1.5 0 0 0 5 3.5v17A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5V7Z" /><path d="M14 2v5h5" /><path d="M12 11.5v4" /><path d="M10 13.5h4" /><path d="M10 18.5h4" /></Icon>,
-    },
+    // No 'fleet' entry: Agent Fleet is a right-drawer tool now, so its launcher
+    // is generated from RIGHT_TOOLS_ALL into the Utilities group below.
     {
       id: 'db',
       title: 'Database Explorer',
@@ -1850,35 +1870,37 @@ export default function AppShell() {
     },
   ];
 
-  const bottomItems: ActivityItem[] = [
-    {
-      id: 'spawnAgent',
-      title: 'Spawn Agents',
-      active: layoutState.agentSpawnOpen,
-      onClick: () => {
-        if (layoutState.agentSpawnOpen) closeAgentSpawn();
-        else openAgentSpawn();
-      },
-      icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>,
+  // Stays inline in the prompt bar rather than going into the Tools menu — it
+  // is a one-press action, not a panel you toggle.
+  const spawnAgentItem: ActivityItem = {
+    id: 'spawnAgent',
+    title: 'Spawn Agents',
+    active: layoutState.agentSpawnOpen,
+    onClick: () => {
+      if (layoutState.agentSpawnOpen) closeAgentSpawn();
+      else openAgentSpawn();
     },
-    {
-      id: 'excalidraw',
-      title: 'Sketch (Excalidraw)',
-      active: false,
-      onClick: () => {
-        // Start the embedding proxy first — excalidraw.com only renders through
-        // it, so creating the tab before the proxy is up leaves a blank frame.
-        void ensureProxyRunning();
-        createPreviewBrowserTab('https://excalidraw.com');
-        setPanelRoomOpen('preview', true);
-      },
-      icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
-    },
-  ];
+    icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>,
+  };
 
-  // Launcher buttons for the LEFT utility drawer's tools, grouped at the left
-  // end of the dock (mirror of the right tools group). Toggling re-uses the
-  // unified left-drawer selection so it never closes/reopens the frame.
+  // Opens in the Preview room, so it is grouped with the room launchers.
+  const sketchItem: ActivityItem = {
+    id: 'excalidraw',
+    title: 'Sketch',
+    active: false,
+    onClick: () => {
+      // Start the embedding proxy first — excalidraw.com only renders through
+      // it, so creating the tab before the proxy is up leaves a blank frame.
+      void ensureProxyRunning();
+      createPreviewBrowserTab('https://excalidraw.com');
+      setPanelRoomOpen('preview', true);
+    },
+    icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
+  };
+
+  // Launcher buttons for the LEFT utility drawer's tools — the Workspace group
+  // of the Tools menu. Toggling re-uses the unified left-drawer selection so it
+  // never closes/reopens the frame.
   const leftNavDockItems: ActivityItem[] = leftDrawerTools.map((tool) => ({
     id: tool,
     title: LEFT_TOOL_META[tool].title,
@@ -1887,8 +1909,8 @@ export default function AppShell() {
     icon: LEFT_TOOL_META[tool].icon,
   }));
 
-  // Launcher buttons for the right utility drawer's tools (incl. Orchestrator),
-  // grouped together at the right end of the dock.
+  // Launcher buttons for the right utility drawer's tools (incl. Orchestrator) —
+  // the Utilities group of the Tools menu.
   const drawerToolItems: ActivityItem[] = RIGHT_TOOLS_ALL.map((tool) => ({
     id: tool,
     title: RIGHT_TOOL_META[tool].title,
@@ -1897,9 +1919,51 @@ export default function AppShell() {
     icon: RIGHT_TOOL_META[tool].icon,
   }));
   const drawerToolIds = new Set<string>(RIGHT_DRAWER_TOOLS);
-  // The remaining dock buttons launch center rooms; the drawer tools are pulled
-  // out into their own right-aligned group.
+  // The remaining launchers open center rooms; the drawer tools are pulled out
+  // into their own group.
   const roomLauncherItems = panelItems.filter((item) => !drawerToolIds.has(item.id));
+
+  // The Tools menu in the prompt bar is now the only launcher — it replaced the
+  // `.room-dock` strip that used to sit above the composer. Same items, same
+  // order, same lit-when-open state; just folded into one popover.
+  const toolMenuGroups: ToolMenuGroup[] = [
+    { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
+    { id: 'rooms', label: 'Rooms', items: [...roomLauncherItems, sketchItem] },
+    { id: 'utilities', label: 'Utilities', items: drawerToolItems },
+  ].filter((group) => group.items.length > 0);
+
+  // Layout actions stay as bare icons next to the Tools menu: they are pressed
+  // constantly while arranging panes, so a popover round-trip would cost more
+  // than the chrome they take up.
+  const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
+  const layoutActionItems: ActivityItem[] = [
+    spawnAgentItem,
+    {
+      id: 'split',
+      title: isExpanded ? 'Restore split grid' : 'Split — add a pane',
+      active: !isExpanded && splitRooms.length > 1,
+      onClick: () => {
+        if (isExpanded) {
+          setExpandedRoom(null);
+        } else {
+          addNextRoomToSplit();
+        }
+      },
+      icon: <Icon><rect x="3" y="4" width="7.5" height="16" rx="1.3" /><rect x="13.5" y="4" width="7.5" height="16" rx="1.3" /></Icon>,
+    },
+    {
+      id: 'fleet',
+      title: fleetArrangementActive
+        ? 'Untile agents — back to your layout'
+        : 'Tile all agents',
+      active: fleetArrangementActive && !isExpanded,
+      onClick: () => {
+        if (isExpanded) setExpandedRoom(null);
+        toggleFleetArrangement();
+      },
+      icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
+    },
+  ];
 
   function renderAuxPanes() {
     if (visiblePanels.length === 3) {
@@ -2150,8 +2214,9 @@ export default function AppShell() {
   // otherwise swallow keystrokes aimed at the stage) out of a 200px-tall card.
   // The overlay button that opens the room is a SIBLING of this section, so it
   // stays clickable.
-  function renderRoomFrame(id: RoomId, featured = false, carded = false) {
+  function renderRoomFrame(id: RoomId, featured = false) {
     const title = roomTitle(id);
+    const isThisExpanded = expandedRoom === id;
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
     // Every other room gets its own glyph in that same slot — the one the dock,
@@ -2162,9 +2227,10 @@ export default function AppShell() {
     return (
       <section
         key={id}
-        className={`room-panel bento-card${featured ? ' featured active-glow' : ''}`}
+        className={`room-panel bento-card${featured ? ' featured active-glow' : ''}${
+          agentSession?.isExecuting ? ' is-working' : ''
+        }`}
         data-room-id={id}
-        inert={carded || undefined}
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
         // Capture phase, and a ref rather than state: this fires on every click
         // and focus inside a pane (xterm included), so it must not re-render the
@@ -2177,13 +2243,10 @@ export default function AppShell() {
           <button
             className={`room-title${agentSession || roomGlyph ? ' has-brand' : ''}`}
             onClick={() => focusRoom(id)}
-            // Same click as the rail's pill, so the same vocabulary: in Split it
-            // hands this pane the primary role rather than "focusing" a room
-            // that is already fully on screen.
             title={
-              ambientLayout === 'gallery'
-                ? `Make ${title} the primary pane`
-                : `Focus ${title}`
+              isThisExpanded
+                ? `${title} (expanded)`
+                : `Make ${title} the primary pane`
             }
           >
             {agentSession && (
@@ -2202,14 +2265,26 @@ export default function AppShell() {
             <span className="room-name">{title}</span>
           </button>
           <div className="room-actions">
-            {/* Split only — in Focus the room already fills the stage, so the
-                button would be a no-op sitting in every header. */}
-            {ambientLayout === 'gallery' && (
+            {isThisExpanded ? (
               <button
                 className="room-action"
-                onClick={() => focusRoomMode(id)}
-                title={`Focus ${title} — fill the stage`}
-                aria-label={`Focus ${title} — fill the stage`}
+                onClick={() => setExpandedRoom(null)}
+                title={`Restore ${title} — back to split`}
+                aria-label={`Restore ${title} — back to split`}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 14 10 14 10 20" />
+                  <polyline points="20 10 14 10 14 4" />
+                  <line x1="14" y1="10" x2="21" y2="3" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                className="room-action"
+                onClick={() => setExpandedRoom(id)}
+                title={`Expand ${title} — full stage`}
+                aria-label={`Expand ${title} — full stage`}
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="15 3 21 3 21 9" />
@@ -2336,6 +2411,11 @@ export default function AppShell() {
     // workspace lands you back on a live terminal.
     if (fleetRequested) {
       setTerminalRoomOpen(true);
+      // Agent Fleet rides along on the right, so the tiled agents and the state
+      // of what each one changed are on screen at the same time.
+      // `applyRightDrawerTool`, not `setRightDrawerTool`: the drawer must not
+      // steal `activeView` from the agent this switch is about to focus.
+      useLayoutStore.getState().applyRightDrawerTool('fleet');
     }
 
     // Restore target mode's own minimize/focus state (independent per layout)
@@ -2399,19 +2479,22 @@ export default function AppShell() {
   }
 
   function renderSplitSwitcher() {
+    const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
     const atCap = splitRooms.length >= SPLIT_MAX_PANES;
     return (
       <aside className="split-switcher" aria-label="Arrange split panes">
         <div className="split-switcher-head">
           <span className="split-switcher-count">
-            {splitRooms.length} of {SPLIT_MAX_PANES} panes
+            {isExpanded
+              ? `1 of ${visibleRooms.length} panes (expanded)`
+              : `${splitRooms.length} of ${SPLIT_MAX_PANES} panes`}
           </span>
         </div>
         <div className="split-switcher-rooms">
           {visibleRooms.map((room) => {
             const slot = splitRooms.indexOf(room);
             const onStage = slot >= 0;
-            const isPrimary = room === activeRoom;
+            const isPrimary = isExpanded ? room === expandedRoom : room === activeRoom;
             return (
               <div
                 key={room}
@@ -2420,18 +2503,29 @@ export default function AppShell() {
                 <button
                   type="button"
                   className="split-switch-summary"
-                  onClick={() => (onStage ? focusRoom(room) : addRoomToSplit(room))}
-                  // "Focus X" was the wrong promise in Split: every pane is
-                  // already on screen, so nothing appears to happen and the word
-                  // collides with Focus *mode*. What the click actually does is
-                  // hand this pane the primary role, and the tooltip is the only
-                  // place there is room to say what that role is worth.
+                  onClick={() => {
+                    if (isExpanded) {
+                      if (room === expandedRoom) {
+                        setExpandedRoom(null);
+                      } else {
+                        setExpandedRoom(room);
+                        focusRoom(room);
+                      }
+                    } else {
+                      if (onStage) focusRoom(room);
+                      else addRoomToSplit(room);
+                    }
+                  }}
                   title={
-                    !onStage
-                      ? `Add ${roomTitle(room)} to the split`
-                      : isPrimary
-                        ? `${roomTitle(room)} is the primary pane — the one Focus mode opens and the dock highlights`
-                        : `Make ${roomTitle(room)} the primary pane — the one Focus mode opens and the dock highlights`
+                    isExpanded
+                      ? isPrimary
+                        ? `${roomTitle(room)} is currently expanded — click to restore split grid`
+                        : `Show ${roomTitle(room)} full stage`
+                      : !onStage
+                        ? `Add ${roomTitle(room)} to the split`
+                        : isPrimary
+                          ? `${roomTitle(room)} is the primary pane`
+                          : `Make ${roomTitle(room)} the primary pane`
                   }
                 >
                   <span className="split-switch-slot" aria-hidden="true">
@@ -2441,7 +2535,11 @@ export default function AppShell() {
                   <span className="split-switch-copy">
                     <span className="split-switch-name">{roomTitle(room)}</span>
                     <span className="split-switch-role">
-                      {onStage ? (isPrimary ? `Pane ${slot + 1} · primary` : `Pane ${slot + 1}`) : roomKind(room)}
+                      {isExpanded && isPrimary
+                        ? 'Expanded'
+                        : onStage
+                          ? (isPrimary ? `Pane ${slot + 1} · primary` : `Pane ${slot + 1}`)
+                          : roomKind(room)}
                     </span>
                   </span>
                 </button>
@@ -2475,7 +2573,10 @@ export default function AppShell() {
                       <button
                         type="button"
                         className="split-target-btn icon danger"
-                        onClick={() => removeRoomFromSplit(room)}
+                        onClick={() => {
+                          if (expandedRoom === room) setExpandedRoom(null);
+                          removeRoomFromSplit(room);
+                        }}
                         disabled={splitRooms.length <= 1}
                         title={`Take ${roomTitle(room)} off the split`}
                         aria-label={`Take ${roomTitle(room)} off the split`}
@@ -2505,219 +2606,79 @@ export default function AppShell() {
   }
 
   function renderAmbientLayout() {
-    if (ambientLayout === 'preview') {
-      // The live app preview is the stage; other open and non-minimized panels
-      // (like the terminal and running agents) stack alongside.
-      const secondaryRooms = visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room));
-      return (
-        <>
-          <div className="focused-room">
-            {renderRoomFrame('preview', true)}
-          </div>
-          {secondaryRooms.length > 0 && (
-            <div className="ambient-secondary-container">
-              {secondaryRooms.map((room) => (
-                <div key={room} className="ambient-secondary-room">
-                  {renderRoomFrame(room, true)}
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      );
-    }
-
-    if (ambientLayout === 'development') {
-      const devTool = ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.activeView)
-        ? layoutState.activeView
-        : (layoutState.lastAuxView && ['toolbox', 'http', 'db', 'containers', 'env'].includes(layoutState.lastAuxView) ? layoutState.lastAuxView : 'toolbox');
-      
-      const secondaryRooms = visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room));
-      
-      return (
-        <>
-          <div className="focused-room">
-            {renderRoomFrame(devTool as RoomId, true)}
-          </div>
-          {secondaryRooms.length > 0 && (
-            <div className="ambient-secondary-container">
-              {secondaryRooms.map((room) => (
-                <div key={room} className="ambient-secondary-room">
-                  {renderRoomFrame(room, true)}
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      );
-    }
-
-    // VS Code-style persistence: every open terminal/agent keeps its xterm
-    // mounted at all times. Focus LAYERS them (only the active one visible);
-    // Split (gallery) re-flows the SAME live panes into a tiled grid. Both modes
-    // render the identical keyed `.stage-layers` container + `.stage-pane`
-    // children, so switching between them only swaps CSS classes and each pane's
-    // `order` — React never unmounts an xterm, so the PTY view is never
-    // disposed/rebuilt (no lost scrollback, no corrupted WebGL atlas) and the
-    // panes just resize into place (their ResizeObserver refits the terminal).
-    // Non-terminal rooms (editor/preview/…) are mounted as their own keyed pane;
-    // `isSplit` decides which panes are visible and how they lay out.
     const isSplit = ambientLayout === 'gallery';
-    // What gets MOUNTED, which is deliberately wider than what gets shown:
-    //   • `openRooms`, not `visibleRooms` — a minimized room is still open, so it
-    //     keeps its xterm (just hidden). Minimizing, and any layout switch that
-    //     swaps in another mode's minimized set, used to unmount the pane.
-    //   • plus every other project's agent rooms, so switching projects hides
-    //     their panes instead of disposing them.
-    // Everything not on `stageRooms` renders with `.stage-hidden`.
-    //
-    // Ordered deterministically (shells first, then agents by session id — which
-    // is monotonic, so it's creation order) rather than by whichever list a room
-    // came from. An agent moves between those two lists as you switch projects,
-    // and letting that reorder the children would make React re-parent a live
-    // pane's DOM on every switch.
+    const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
+
     const persistentStageRooms: RoomId[] = [
       ...(['terminal', 'dev-terminal'] as RoomId[]).filter((room) => openRooms.includes(room)),
       ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
         (a, b) => getAgentRoomSessionId(a) - getAgentRoomSessionId(b),
       ),
     ];
-    // Which rooms occupy the stage right now:
-    //   focus → the active room only
-    //   split → the arranged slot list, tiled
-    const stageRooms: RoomId[] = isSplit ? splitRooms : activeRoom ? [activeRoom] : [];
+
+    const stageRooms: RoomId[] = isExpanded
+      ? [expandedRoom]
+      : isSplit
+        ? splitRooms
+        : activeRoom
+          ? [activeRoom]
+          : [];
     const stageRoomSet = new Set(stageRooms);
-    // Focus's side rail is not a row of drawn thumbnails — it is the REAL panels,
-    // each shrunk into a card. A carded pane is the SAME mounted pane the stage
-    // would show, so a terminal card is the live xterm rather than a picture of
-    // one, and promoting a card is a resize, not a mount.
-    //
-    // Cards are placed by an inline `--pile-index`, NOT by DOM order. The DOM
-    // order here is mount order (shells, then agents by session id) and must
-    // never change: reordering a live pane's node makes React move it with
-    // insertBefore, which detaches and reattaches the element — the thing that
-    // loses an xterm's WebGL context and reloads the preview's iframe.
-    const cardedRooms: RoomId[] = isSplit ? [] : stackedRooms;
-    const cardIndex = new Map<RoomId, number>(cardedRooms.map((room, index) => [room, index]));
-    // Non-terminal rooms that must be mounted as their own pane (editor/preview/…).
-    // Carded rooms are included: a card IS the panel now, so a room that is not
-    // mounted has nothing to render in the rail.
-    const nonPersistentStageRooms = [...stageRooms, ...cardedRooms].filter(
+    const nonPersistentStageRooms = stageRooms.filter(
       (room) => !isPersistentRoomId(room),
     );
 
-    // The no-active-room empty state must NOT short-circuit past the stage:
-    // returning a bare placeholder here unmounts every mounted pane, which would
-    // dispose live terminals. `stageRooms` is already empty in that case, so the
-    // stage renders with every pane hidden and the message layers on top of it.
-    const emptyStageMessage = activeRoom ? null : '';
+    const emptyStageMessage = stageRooms.length === 0 ? 'No open panes' : null;
+    const stageIsVacant = stageRooms.length === 0;
 
-    // Nothing on the stage AND nothing in the rail — every room minimized to a
-    // chip. The stage still has to render at full size (it holds every hidden
-    // pane, per the note above), but it must stop painting a surface: an empty
-    // frosted slab with a border and a shadow over the user's wallpaper is the
-    // one state where there is nothing for it to frame. CSS-only, see
-    // `.focused-room.empty-stage` in AppShell.css.
-    const stageIsVacant = stageRooms.length === 0 && cardedRooms.length === 0;
-
-    const stageModifier = isSplit
-      ? ` split-grid${stageRooms.length > SPLIT_FIT_PANES ? ' split-scroll' : ''}`
-      : '';
-    // In Split, lay panes out in slot order regardless of DOM order — the
-    // persistent stage mounts shells before agents, which has nothing to do with
-    // where the user arranged them.
+    const stageModifier = isExpanded
+      ? ' stage-expanded'
+      : isSplit
+        ? ` split-grid${stageRooms.length > SPLIT_FIT_PANES ? ' split-scroll' : ''}`
+        : '';
     const paneOrder = (room: RoomId): React.CSSProperties | undefined =>
-      isSplit ? { order: stageRooms.indexOf(room) } : undefined;
+      !isExpanded && isSplit ? { order: stageRooms.indexOf(room) } : undefined;
 
-    // Everything a pane needs to know about where it currently lives: on stage,
-    // shrunk into a rail card, or mounted-but-off-stage.
     function stagePaneProps(room: RoomId) {
-      const index = cardIndex.get(room);
-      const carded = index !== undefined;
-      const hidden = !carded && !stageRoomSet.has(room);
+      const hidden = !stageRoomSet.has(room);
       return {
-        carded,
-        className: `stage-pane${hidden ? ' stage-hidden' : ''}${carded ? ' stage-carded' : ''}`,
-        style: carded
-          ? ({ '--pile-index': index } as React.CSSProperties)
-          : hidden
-            ? undefined
-            : paneOrder(room),
+        className: `stage-pane${hidden ? ' stage-hidden' : ''}`,
+        style: hidden ? undefined : paneOrder(room),
       };
     }
-
-    // The fan (cards below the hovered one slide down so their edge stays
-    // reachable) is driven by a single `--pile-hover` on the stage container,
-    // written straight to the DOM. React state here would re-render the whole
-    // room subtree on every pointer move across the rail.
-    function setPileHover(el: HTMLElement, index: number | null) {
-      const stage = el.closest('.stage-layers') as HTMLElement | null;
-      if (!stage) return;
-      if (index === null) stage.style.removeProperty('--pile-hover');
-      else stage.style.setProperty('--pile-hover', String(index));
-    }
-
-    // The card's click/hover target. Always rendered — never conditionally, so
-    // the pane's child list is structurally identical whether it is carded or
-    // on stage. Swapping a live pane's siblings in and out risks React moving
-    // the pane's own node, and CSS hides this button off-card anyway.
-    const cardHit = (room: RoomId, index: number | undefined) => (
-      <button
-        key="stage-card-hit"
-        type="button"
-        className="stage-card-hit"
-        onClick={() => focusRoom(room)}
-        onMouseEnter={(e) => setPileHover(e.currentTarget, index ?? null)}
-        onMouseLeave={(e) => setPileHover(e.currentTarget, null)}
-        onFocus={(e) => setPileHover(e.currentTarget, index ?? null)}
-        onBlur={(e) => setPileHover(e.currentTarget, null)}
-        title={`Open ${roomTitle(room)}`}
-        aria-label={`Open ${roomTitle(room)}`}
-      />
-    );
 
     return (
       <>
         <div
-          className={`focused-room stage-layers${stageModifier}${cardedRooms.length > 0 ? ' has-cards' : ''}${stageIsVacant ? ' empty-stage' : ''}`}
+          className={`focused-room stage-layers${stageModifier}${stageIsVacant ? ' empty-stage' : ''}`}
           style={
-            isSplit
+            !isExpanded && isSplit
               ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties)
-              : cardedRooms.length > 0
-                // The pile's reveal band is derived from the card count so a
-                // long rail packs tighter instead of running off the bottom.
-                ? ({ '--pile-count': cardedRooms.length } as React.CSSProperties)
-                : undefined
+              : undefined
           }
-          aria-label={emptyStageMessage ? 'No agents running' : undefined}
+          aria-label={emptyStageMessage ?? undefined}
         >
           {emptyStageMessage !== null && (
             <p className="stage-empty-msg">{emptyStageMessage}</p>
           )}
           {persistentStageRooms.map((room) => {
-            // Focus: the active pane fills the stage and the rest shrink into
-            // rail cards. Split: every arranged pane tiles. Rooms on neither
-            // stay mounted but hidden (visibility, not unmount) so returning is
-            // instant and clean.
-            const { carded, className, style } = stagePaneProps(room);
+            const { className, style } = stagePaneProps(room);
             return (
               <div key={room} className={className} style={style}>
-                {renderRoomFrame(room, true, carded)}
-                {cardHit(room, cardIndex.get(room))}
+                {renderRoomFrame(room, true)}
               </div>
             );
           })}
           {nonPersistentStageRooms.map((room) => {
-            const { carded, className, style } = stagePaneProps(room);
+            const { className, style } = stagePaneProps(room);
             return (
               <div key={room} className={className} style={style}>
-                {renderRoomFrame(room, true, carded)}
-                {cardHit(room, cardIndex.get(room))}
+                {renderRoomFrame(room, true)}
               </div>
             );
           })}
         </div>
-        {isSplit && visibleRooms.length > 0 && renderSplitSwitcher()}
+        {(isSplit || isExpanded) && visibleRooms.length > 0 && renderSplitSwitcher()}
       </>
     );
   }
@@ -2766,66 +2727,19 @@ export default function AppShell() {
               {renderMinimizedRooms()}
 
               <div ref={overlaysRef} className="workspace-overlays">
-              <nav className="room-dock bento-card" aria-label="Room launcher">
-                {/* Single unified dock (the 5-mode `development` branch is gone).
-                    Left→right: workspace nav · room launchers · dev tools (open
-                    the docked overlay) · actions + Fleet. */}
-                <div className="room-dock-group nav">
-                  {leftNavDockItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group tools">
-                  {roomLauncherItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group utilities">
-                  {drawerToolItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                </div>
-                <div className="room-dock-separator" />
-                <div className="room-dock-group">
-                  {bottomItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                  <ActivityButton
-                    item={{
-                      id: 'focus',
-                      title: ambientLayout === 'focus' ? 'Back to split' : 'Focus — single panel',
-                      active: ambientLayout === 'focus',
-                      onClick: () => switchAmbientLayout(ambientLayout === 'focus' ? 'gallery' : 'focus'),
-                      icon: <Icon><rect x="4" y="4" width="16" height="16" rx="1.5" /></Icon>,
-                    }}
-                  />
-                  <ActivityButton
-                    item={{
-                      id: 'split',
-                      // Both branches of the old ternary were 'gallery', and
-                      // switchAmbientLayout early-returns on an unchanged mode —
-                      // so this button did nothing at all while Split was active.
-                      title: ambientLayout === 'gallery' ? 'Split — add a pane' : 'Split — tile panels',
-                      active: ambientLayout === 'gallery',
-                      onClick: () =>
-                        ambientLayout === 'gallery' ? addNextRoomToSplit() : switchAmbientLayout('gallery'),
-                      icon: <Icon><rect x="3" y="4" width="7.5" height="16" rx="1.3" /><rect x="13.5" y="4" width="7.5" height="16" rx="1.3" /></Icon>,
-                    }}
-                  />
-                  <ActivityButton
-                    item={{
-                      id: 'fleet',
-                      // Toggles the agent arrangement on and off. `active`
-                      // reflects "the stage is exactly the agent set", so it
-                      // lights up while that arrangement holds and drops as
-                      // soon as you add or remove a pane by hand — at which
-                      // point the next press gathers the agents again.
-                      title: fleetArrangementActive
-                        ? 'Untile agents — back to your layout'
-                        : 'Tile all agents',
-                      active: fleetArrangementActive,
-                      onClick: () => toggleFleetArrangement(),
-                      icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
-                    }}
-                  />
-                </div>
-              </nav>
+              {/* The room dock used to sit here as its own strip. Its launchers
+                  now live in the prompt bar's Tools menu, and its layout
+                  actions inline beside it. */}
               <div className="composer-strip">
-                <FloatingPromptBar />
+                <FloatingPromptBar
+                  trailingControls={
+                    <div className="prompt-trailing">
+                      {layoutActionItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                      <div className="prompt-trailing-separator" />
+                      <ToolsMenu groups={toolMenuGroups} />
+                    </div>
+                  }
+                />
               </div>
               </div>
             </div>
@@ -2845,6 +2759,8 @@ export default function AppShell() {
             ambient rooms grid) so it overlays any page and survives Focus /
             Split / Canvas switches without unmounting. */}
         {layoutState.youtubeVisible && <FloatingYouTube onClose={() => toggleYoutubeVisible()} />}
+
+        <TranscriptionIndicator />
       </div>
     </div>
   );

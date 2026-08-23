@@ -11,6 +11,9 @@ vite.config.ts.timestamp-*
 # Build artifacts — distributed via GitHub Releases, not source control
 /dist
 
+# Generated Tauri sidecar (spacron-server) — built by scripts/build-server-sidecar.js
+/src-tauri/binaries/
+
 # Signing keys — never commit these
 ~/
 ~

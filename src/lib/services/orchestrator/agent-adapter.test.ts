@@ -80,23 +80,6 @@ describe('AgentAdapter', () => {
       expect(getSessionOutputBuffer).toHaveBeenCalledWith(5);
       expect(out).toBe('clean:raw output');
     });
-
-    it('subscribeOutput emits only the newly-grown tail and stops after unsubscribe', () => {
-      vi.useFakeTimers();
-      bufferState.value = 'abc';
-      const chunks: string[] = [];
-      const stop = new AgentAdapter(1).subscribeOutput((c) => chunks.push(c), 100);
-
-      bufferState.value = 'abcdef';
-      vi.advanceTimersByTime(100);
-      bufferState.value = 'abcdefghi';
-      vi.advanceTimersByTime(100);
-      stop();
-      bufferState.value = 'abcdefghiXYZ';
-      vi.advanceTimersByTime(100);
-
-      expect(chunks).toEqual(['def', 'ghi']);
-    });
   });
 
   describe('lifecycle', () => {

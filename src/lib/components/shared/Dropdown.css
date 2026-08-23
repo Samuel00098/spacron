@@ -143,11 +143,20 @@
   white-space: nowrap;
   font-weight: 500;
 }
+/* The sublabel yields before the label does. It used to be `flex-shrink: 0`,
+   which in a menu too narrow for both squeezed the label — the actual value
+   being chosen — down to an ellipsis while the descriptive text survived
+   whole, exactly backwards. Both can ellipsize now; the label, being the wider
+   flex base, keeps most of the room. */
 .dd-item-sub {
   font-size: 10px;
   color: var(--text-muted);
   font-family: var(--font-mono, monospace);
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dd-check {
   color: var(--accent);

@@ -135,7 +135,7 @@ export default function TerminalPanel({
   const paneAssignments = devMode ? devPaneAssignments : paneAssignmentsOrig;
 
   // Shadow imported functions to automatically append devMode parameter
-  const createTerminalSession = useCallback((cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null }) => {
+  const createTerminalSession = useCallback((cwd?: string, targetPaneIndex?: number, projectId?: string, opts?: { assignPane?: boolean; agentPreset?: string | null; initialCols?: number; initialRows?: number }) => {
     return createTerminalSessionOrig(cwd, targetPaneIndex, projectId, { ...opts, isDev: devMode });
   }, [devMode]);
 

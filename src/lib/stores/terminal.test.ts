@@ -80,6 +80,8 @@ import {
   waitForAgentReady,
   isAgentSession,
   updateSessionTitle,
+  recordTerminalGeometry,
+  __resetTerminalGeometry,
 } from './terminal';
 import { openPty } from '$lib/services/pty-bridge';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
@@ -1131,5 +1133,72 @@ describe('MCP project root propagation', () => {
     setTerminalProjectRoot(projectId, '/repo-closing');
     setActiveTerminalProject(null);
     expect(lastPushedRoot()).toBeNull();
+  });
+});
+
+describe('new PTY spawn geometry', () => {
+  const projectId = 'project-spawn-geometry';
+
+  // The node test environment has no localStorage, and the persistence hop is
+  // half of what this covers — so stand up the smallest thing that behaves
+  // like one rather than skipping the cold-start case.
+  const store = new Map<string, string>();
+  const fakeLocalStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal('localStorage', fakeLocalStorage);
+    __resetTerminalGeometry();
+    vi.mocked(openPty).mockClear();
+    setActiveTerminalProject(projectId);
+  });
+
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+    __resetTerminalGeometry();
+    store.clear();
+    vi.unstubAllGlobals();
+  });
+
+  function lastSpawnSize() {
+    const calls = vi.mocked(openPty).mock.calls;
+    const [cols, rows] = calls[calls.length - 1] as unknown as [number, number];
+    return { cols, rows };
+  }
+
+  it('falls back to 120x34 before any pane has measured', async () => {
+    await createTerminalSession('/repo');
+    expect(lastSpawnSize()).toEqual({ cols: 120, rows: 34 });
+  });
+
+  it('opens at the grid a pane last measured, so the shell never reflows', async () => {
+    recordTerminalGeometry(97, 21);
+    await createTerminalSession('/repo');
+    expect(lastSpawnSize()).toEqual({ cols: 97, rows: 21 });
+  });
+
+  it('recovers the measured grid from storage on a cold start', async () => {
+    recordTerminalGeometry(88, 19);
+    __resetTerminalGeometry(); // simulate a fresh process with the same localStorage
+    await createTerminalSession('/repo');
+    expect(lastSpawnSize()).toEqual({ cols: 88, rows: 19 });
+  });
+
+  it('ignores a collapsed or mid-animation pane rather than poisoning the default', async () => {
+    recordTerminalGeometry(60, 15);
+    recordTerminalGeometry(2, 1); // pane collapsed during a layout transition
+    await createTerminalSession('/repo');
+    expect(lastSpawnSize()).toEqual({ cols: 60, rows: 15 });
+  });
+
+  it('lets an explicit initialCols/initialRows win over the measured default', async () => {
+    recordTerminalGeometry(97, 21);
+    await createTerminalSession('/repo', undefined, undefined, { initialCols: 200, initialRows: 50 });
+    expect(lastSpawnSize()).toEqual({ cols: 200, rows: 50 });
   });
 });

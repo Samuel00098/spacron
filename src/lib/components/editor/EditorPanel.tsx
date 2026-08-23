@@ -28,11 +28,12 @@ export default function EditorPanel() {
   const files = useEditorStore((s) => s.openFiles);
   const active = useEditorStore((s) => s.activeFile);
   const cache = useEditorStore((s) => s.fileCache);
-  const markdownPreviewPaths = useEditorStore((s) => s.markdownPreviewPaths);
+  const markdownCodeModePaths = useEditorStore((s) => s.markdownCodeModePaths);
   const setMarkdownPreview = useEditorStore((s) => s.setMarkdownPreview);
 
   const file = active ? cache.get(active) : null;
-  const showMarkdownPreview = active ? markdownPreviewPaths.has(active) : false;
+  const canPreviewMarkdown = file?.kind === 'text' && file?.language === 'markdown';
+  const showMarkdownPreview = canPreviewMarkdown && active ? !markdownCodeModePaths?.has(active) : false;
 
   const codeEditorProps = useMemo(
     () =>
@@ -50,15 +51,20 @@ export default function EditorPanel() {
     return (
       <div className="editor-panel">
         <div className="editor-empty-placeholder">
-          <div className="placeholder-icon">&#128196;</div>
-          <p className="placeholder-text">Open a file from the Explorer</p>
-          <p className="placeholder-hint">Click the folder icon in the activity bar to browse files</p>
+          <div className="placeholder-icon">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.35 }}>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+            </svg>
+          </div>
+          <p className="placeholder-text">No document open</p>
+          <p className="placeholder-hint">Select a file from the explorer to view or edit</p>
         </div>
       </div>
     );
   }
-
-  const canPreviewMarkdown = file.kind === 'text' && file.language === 'markdown';
 
   return (
     <div className="editor-panel">

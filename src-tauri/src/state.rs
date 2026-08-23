@@ -1,4 +1,3 @@
-use crate::commands::resource::{DiskUsageCache, ResourceSampler};
 use crate::lsp::bridge::LspBridge;
 use crate::preview::PreviewManager;
 use crate::pty::manager::PtyManager;
@@ -49,13 +48,6 @@ pub struct AppState {
     pub preview_manager: PreviewManager,
     pub write_rate_limiter: WriteRateLimiter,
     pub config_dir: PathBuf,
-    /// Persistent sysinfo sampler for the resource monitor. Lives across
-    /// `resource_snapshot` calls so CPU deltas are computed between polls
-    /// rather than from a cold baseline every time.
-    pub resource_sampler: ResourceSampler,
-    /// TTL cache for `project_disk_usage` scans — walking a project tree is
-    /// too slow to redo on every poll, so sizes stay fresh for a minute.
-    pub disk_usage_cache: DiskUsageCache,
 }
 
 impl AppState {
@@ -68,8 +60,6 @@ impl AppState {
             lsp_bridge: LspBridge::new(),
             preview_manager: PreviewManager::new(active_project_id, config_dir.clone()),
             write_rate_limiter: WriteRateLimiter::new(),
-            resource_sampler: ResourceSampler::default(),
-            disk_usage_cache: DiskUsageCache::default(),
             config_dir,
         }
     }

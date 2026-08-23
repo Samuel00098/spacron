@@ -42,8 +42,8 @@ export interface MailboxCardProps {
 }
 
 /**
- * Shared mailbox card component used by both the "Needs you" strip
- * (AgentMailboxCards) and the notification stack (AgentNotifications).
+ * Mailbox card component, rendered by the notification stack
+ * (AgentNotifications).
  * Accepts card data and action callbacks as props — no store imports.
  */
 export default function MailboxCardView({

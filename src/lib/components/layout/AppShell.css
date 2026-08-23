@@ -70,17 +70,17 @@
 }
 
 .app-shell .rooms-workspace {
-  /* Height of the floating bottom cluster (dock + composer). Focus/Split pad
-     their content by this so it clears the controls; Canvas lets windows flow
-     full-bleed behind them. */
-  --overlay-clear: 128px;
+  /* Height of the floating bottom cluster (the composer, which now carries the
+     Tools menu and layout actions too). Focus/Split pad their content by this so
+     it clears the controls; Canvas lets windows flow full-bleed behind them. */
+  --overlay-clear: 84px;
   flex-direction: column;
   padding: 16px 20px 20px;
 }
 
-/* The dock + prompt bar float over the workspace as one bottom-centred cluster
-   instead of sitting in their own opaque band. pointer-events pass through the
-   empty gaps so the canvas behind stays draggable. */
+/* The prompt bar floats over the workspace as a bottom-centred cluster instead
+   of sitting in its own opaque band. pointer-events pass through the empty gaps
+   so the canvas behind stays draggable. */
 .app-shell .workspace-overlays {
   position: absolute;
   left: 0;
@@ -109,14 +109,14 @@
   overflow: hidden;
   position: relative;
   flex: 0 0 auto;
-  /* Constrain the panel height to the space above the dock so the panel ends
-     naturally at the dock boundary. Content taller than this scrolls inside
+  /* Constrain the panel height to the space above the composer so the panel
+     ends naturally at that boundary. Content taller than this scrolls inside
      the drawer body. */
   max-height: calc(100% - var(--overlay-clear, 128px));
 }
 
 /* Make the drawer body a scroll container so content taller than the panel
-   (which is capped at the dock boundary) scrolls inside instead of being
+   (which is capped at the composer boundary) scrolls inside instead of being
    clipped. A flex column lets a single fill-height child (e.g. FileExplorer)
    handle its own scroll, while shorter panels overflow the body and scroll it. */
 .app-shell .left-utility-panel .drawer-body,
@@ -346,16 +346,7 @@
   padding-bottom: var(--overlay-clear);
 }
 
-/* Stage Manager focus: the active panel fills the stage while the other open
-   rooms sit alongside as a vertical deck of cards — each card being the real
-   panel, shrunk (see `.stage-layers.has-cards`).
-
-   One column, not two. The rail used to be a sibling `<aside class="room-stack">`
-   holding drawn thumbnails, and this grid gave it the second track. Now that the
-   cards are the live panes themselves they cannot live in a separate element —
-   moving a pane between two containers would make React re-parent its DOM node
-   and kill the xterm inside — so they stay in `.stage-layers` and it reserves
-   the rail out of its own width. */
+/* Focus mode: the active panel fills 100% of the stage cleanly without side cards. */
 .app-shell .rooms-table.ambient-focus {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -443,123 +434,16 @@
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
 }
 
-/* The panel on the frosted stage carries no glass of its own: its blur would
-   sample the stage rather than the app, and stacking a second backdrop-filter
-   inside this radius is what the Chromium radius-bleed workaround above existed
-   to contain. One frosted surface per stage.
-
-   `:not(.has-cards)` because that trade only holds while the stage IS one
-   surface. Panels are `background: transparent !important` with their own
-   `blur(18px)` further down (the see-through rule), and this cancels that blur
-   on the assumption the slab behind is supplying it. Once the rail holds real
-   panes there is no slab — so cancelling here left every panel completely
-   transparent, wallpaper straight through. */
 :root:not(.solid-theme):not(.is-webkitgtk)
-  .app-shell .rooms-table.ambient-focus .focused-room:not(.has-cards) .room-panel {
+  .app-shell .rooms-table.ambient-focus .focused-room .room-panel {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-/* ── …except once the rail holds real panes ─────────────────────────────
-   "One frosted surface per stage" was right when the stage was only the
-   stage: the rail was a separate <aside> outside `.focused-room`, so the
-   slab above covered exactly the featured panel. Now the cards ARE panes
-   and live inside `.focused-room`, so that one slab stretches across the
-   rail as well and reads as a single bulky sheet with cards floating on it.
-
-   So `has-cards` drops the slab and every panel simply keeps the glass it
-   already has — the `blur(18px)` the see-through rule gives every
-   `.room-panel` in the app. The featured panel frosts itself, each card
-   frosts itself, and the frost stops at each card's own edge instead of
-   running the full height of the stage behind them.
-
-   This is why NOTHING inside a card may carry a transform except the panel
-   itself: a transform makes an element a backdrop root for its DESCENDANTS,
-   so a transformed `.stage-pane` would leave the panel inside blurring an
-   empty box and rendering as plain wallpaper. The card's shrink lives on
-   `.room-panel` (an element's own transform does not affect its own
-   backdrop-filter) and the fan moves `top`, never `translate`.
-   See `.spacron/memory/glass-panel-recipe.md`. */
-:root:not(.solid-theme):not(.is-webkitgtk)
-  .app-shell .rooms-table.ambient-focus .focused-room.has-cards {
-  background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-/* THE BACKDROP ROOT HAS TO GO WITH IT — this is the whole reason per-panel
-   glass was impossible here before.
-
-   `.focused-room` carries `view-transition-name: spacron-stage`, and that is a
-   persistent backdrop root **for descendants** (its own blur is unaffected —
-   verified, see the note above this rule). So every `.room-panel` inside it
-   samples this element's own paint, not the wallpaper. That is precisely why
-   the original design frosted the stage and cancelled the panels' blur: with a
-   root in the way, one frosted surface was the only arrangement that could
-   work.
-
-   Dropping the name in `has-cards` removes the root, so each panel — the
-   featured one and every card — blurs the real wallpaper behind itself, and the
-   frost stops at each card's edge instead of running the stage's full height.
-
-   The cost is the Stage Manager shrink/expand morph, which needs the name to
-   capture. It is a fair trade here: the panes now physically resize between
-   stage and card, so the movement is real rather than a crossfade between two
-   snapshots. Restoring the morph means finding another home for the name —
-   putting it on the active `.stage-pane` works only if the frost moves onto
-   that pane too, and the name must never exist on two panes at once or the
-   transition aborts. */
-.app-shell .rooms-table.ambient-focus .focused-room.has-cards {
-  view-transition-name: none;
-}
-
-/* AND THE FRAME GOES WITH THE SLAB. The `border` + lifted shadow stack on
-   `.focused-room` only read as "the stage" while a single panel filled it edge
-   to edge — there the line sat exactly on the panel's own edge and did the
-   lifting for it. With a rail, the column under the deck is empty, so that
-   frame is on show by itself: a line with a shadow around nothing, and the
-   whole stage reads as one big panel with the rooms parked inside it (user
-   report, 2026-08-13). Focus is an AREA, not a surface. Every panel already
-   carries its own tint, 1px edge and traveling light (see the "Panel surfaces"
-   section in global.css), so each one can stand on its own here.
-
-   `border-color: transparent`, NOT `border: 0`. Box-sizing is border-box
-   globally, so removing the border moves the padding box 1px on every side —
-   and `.stage-pane` is `inset: 0` against that box, so closing the last card
-   would nudge every pane (and refit the featured terminal) for nothing.
-
-   The featured panel loses a drop shadow in the trade: it is flush with three
-   of the stage's edges, so `overflow: clip` has always eaten its own shadow and
-   the stage's stood in. It keeps its border, rim highlights and traveling light,
-   which is what makes it read as a panel; the lift is the cost of the frame.
-
-   DO NOT reach for `overflow-clip-margin` to hand the shadow back. Measured:
-   that shadow is `0 40px 90px` — at any margin small enough to still catch a
-   fanned card, the clip cuts it near full strength and paints a straight dark
-   band along the stage edge. That is this exact bug again, one step out. */
-.app-shell .rooms-table.ambient-focus .focused-room.has-cards {
-  border-color: transparent;
-  box-shadow: none;
-}
-
-/* ── …and the same again when the stage is empty ────────────────────────
-   Minimize every room and there is no featured panel and no rail — just the
-   stage, painting a frosted slab with a border and a shadow over a wallpaper
-   nobody can see any more. That is the one state with nothing to frame, so the
-   surface goes entirely and the user's own background comes through clean
-   (user report, 2026-08-13).
-
-   The ELEMENT still renders at full size and must: it is the persistent stage
-   holding every `.stage-hidden` pane, and swapping it for a placeholder would
-   unmount and dispose live terminals (see `emptyStageMessage` in AppShell.tsx).
-   This hides the surface, never the box.
-
-   `.empty-stage` is set in AppShell.tsx only when the stage AND the rail are
-   both empty — a rail with cards is not an empty stage, it is `has-cards`.
-
-   Both rules are scoped to `.ambient-focus` on purpose: it is the only ambient
-   where the stage paints a surface of its own at all. Development and Preview
-   put their border and shadow on `.focused-room > *`, the panel inside. */
+/* ── Empty stage ──────────────────────────────────────────────────────────
+   When every room is minimized to a chip, the stage element stays mounted
+   to hold persistent hidden terminals, but removes the surface styling so the
+   wallpaper is unobscured. */
 :root:not(.solid-theme):not(.is-webkitgtk)
   .app-shell .rooms-table.ambient-focus .focused-room.empty-stage {
   background: none;
@@ -571,638 +455,6 @@
   border-color: transparent;
   box-shadow: none;
 }
-
-.app-shell .rooms-table.ambient-focus .room-stack {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  gap: 12px;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 12px 6px;
-  mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  align-items: stretch;
-  justify-content: flex-start;
-  overflow: visible;
-  padding: 4px 2px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row::-webkit-scrollbar {
-  display: none;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
-  width: 100%;
-  height: auto;
-  min-height: 260px;
-  flex-shrink: 0;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  border-radius: 14px;
-  /* 3D tile: lit face gradient, bright top edge / dark bottom edge, and a
-     contact + ambient shadow pair so each card reads as its own raised slab. */
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.015) 45%, rgba(0, 0, 0, 0.12) 100%),
-    rgba(var(--editor-bg-rgb, 30, 30, 40), 0.6);
-  border: 1px solid var(--border);
-  border-top-color: rgba(255, 255, 255, 0.14);
-  border-bottom-color: rgba(0, 0, 0, 0.5);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 -2px 3px rgba(0, 0, 0, 0.22),
-    0 2px 3px rgba(0, 0, 0, 0.24),
-    0 12px 26px rgba(0, 0, 0, 0.3);
-  transition: border-color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
-  /* `backwards` (not the inherited `both`) releases the entry animation's final
-     transform after it ends, so the hover lift transform can take effect. */
-  animation-fill-mode: backwards;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card:hover {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 45%, rgba(0, 0, 0, 0.1) 100%),
-    rgba(var(--editor-bg-rgb, 30, 30, 40), 0.72);
-  border-color: var(--accent);
-  transform: translateY(-4px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
-    0 4px 8px rgba(0, 0, 0, 0.3),
-    0 22px 46px rgba(0, 0, 0, 0.42);
-}
-
-/* ── Pile effect: a deck stacked downwards ──────────────────────────────
-   With 2+ cards the focus rail stops being a spaced column and becomes an
-   overlapping deck: each card sits below the previous one and paints ON
-   TOP of it, so what stays visible of every card is its own top edge —
-   the icon, kind and name. That is what makes every card pickable: each
-   one owns an uncovered `--pile-reveal`-tall band containing its header,
-   and hovering it raises the whole card clear of the deck.
-
-   GEOMETRY IS DRIVEN BY TWO CUSTOM PROPERTIES, SET ONCE ON THE ROW:
-
-     --pile-card-h   the card's exact height (not a min — see below)
-     --pile-reveal   how much of each card's top stays uncovered
-
-   and the overlap is derived: `margin-top: reveal - height`. Keep it that
-   way. The original version hand-wrote a height ladder and a matching
-   margin ladder as five `:has(> :nth-child(N))` rules each, and BOTH
-   ladders were inert:
-
-   - Every one of those selectors has identical specificity — `:has()`
-     takes the specificity of its argument, and `:nth-child()` is
-     class-level, so all ten were (0,7,0). A later generic
-     `margin-top: -120px` rule therefore beat all five margin values, and
-     the overlap never adapted to the count at all.
-   - The heights were `min-height`, but the card's content floor (padding +
-     header + name + the thumbnail's own min-height) is ~148px, so every
-     value below that did nothing either.
-
-   With the two fighting, 4+ open rooms overlapped by more than the card
-   was tall and the deck collapsed into itself. Hence: one height, one
-   reveal, one derived margin, and a real `height` so the ladder binds.
-
-   `--pile-reveal` must stay >= padding-top(16) + header(16) + gap(8) +
-   name(18) = 58px, or the band stops showing the card's name and you are
-   back to picking blind. */
-
-/* Activate deck mode when there are 2+ cards: kill the gap, reserve
-   bottom padding so the deck doesn't clip at the scroll edge.
-   These three blocks are the ONLY place the ladder lives — each one
-   matches a superset of the previous, so source order picks the last. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) {
-  --pile-card-h: 260px;
-  --pile-reveal: 66px;
-  /* How far a hovered card lifts. The fan below subtracts it so the lift
-     never opens a seam between the hovered card and the one under it. */
-  --pile-lift: 6px;
-  gap: 0;
-  /* Reserve the fan's travel. Transformed boxes count toward scrollable
-     overflow, so without this the fan would grow .room-stack's scroll
-     extent on hover and flash a scrollbar, reflowing the whole rail. */
-  padding-bottom: calc(var(--pile-card-h) - var(--pile-reveal) + 16px);
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(4)) {
-  --pile-card-h: 240px;
-  --pile-reveal: 62px;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(6)) {
-  --pile-card-h: 224px;
-  --pile-reveal: 58px;
-}
-
-/* Fixed height (not min-height) so the derived overlap is exact. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card {
-  height: var(--pile-card-h);
-  min-height: var(--pile-card-h);
-  overflow: hidden;
-  /* No z-index: among `position: relative` siblings with `z-index: auto`
-     the painting order IS the DOM order, so each card naturally lands on
-     top of the one before it. That is the whole downward-stack effect —
-     do not reintroduce a descending z-index ladder here. */
-  position: relative;
-  /* `translate` and `scale` are the animated pair here, not `transform` —
-     the fan and the depth cue are set as individual properties so they
-     compose. Both are compositor-friendly, so fanning a deck of cards
-     costs no layout. */
-  transition: translate var(--dur-slow) var(--ease-out),
-    scale var(--dur-slow) var(--ease-out),
-    transform var(--dur-slow) var(--ease-out),
-    opacity var(--dur-base) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out),
-    background var(--dur-base) var(--ease-out);
-}
-
-/* The thumbnail's 60px floor is for the single-card case, where the card
-   is content-sized. In the deck the card height is fixed, so let the
-   thumbnail take whatever is left instead of overflowing the card. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card .room-card-mini-preview {
-  min-height: 0;
-}
-
-/* Every card after the first is pulled up under its predecessor so exactly
-   `--pile-reveal` of that predecessor stays visible. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-child(n+2) {
-  margin-top: calc(var(--pile-reveal) - var(--pile-card-h));
-}
-
-/* Depth cue, counted from the BOTTOM: the last card is the one fully on
-   show, and cards recede as they get more covered. `transform-origin:
-   center top` keeps each card's top edge pinned, so scaling never eats
-   into the reveal band — the visible strip is exactly --pile-reveal.
-
-   These use the individual `scale` property, NOT `transform: scale()`, so
-   they compose with the fan's `translate` below instead of one clobbering
-   the other. Keep both as individual properties. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+2) {
-  opacity: 0.92;
-  scale: 0.985;
-  transform-origin: center top;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+3) {
-  opacity: 0.84;
-  scale: 0.97;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:nth-last-child(n+4) {
-  opacity: 0.76;
-  scale: 0.955;
-}
-
-/* ── Fan: a hovered card makes room instead of taking it ────────────────
-   Cards do not grow on hover — the height is always --pile-card-h. What
-   "popping" does is raise the card to z-index 10, which draws its full
-   body over whatever is beneath it. Since only --pile-reveal of each card
-   is uncovered at rest, that pop blankets the next TWO OR THREE header
-   bands, and the pointer is then inside the popped card wherever you move
-   it. You could not reach the card below without leaving the rail
-   entirely, then coming back.
-
-   So: slide every following card down by exactly what the pop covers
-   (card height minus the reveal, less the lift so no seam opens). The next
-   card's band lands flush under the popped card's bottom edge — still
-   visible, and the pointer crosses straight into it, which hands the pop
-   to that card in turn. Running the cursor down the rail now walks the
-   deck one card at a time. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover ~ .room-card,
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:focus-visible ~ .room-card {
-  translate: 0 calc(var(--pile-card-h) - var(--pile-reveal) - var(--pile-lift));
-}
-
-/* Hover/focus: the card pops clear of the deck — z-index beats every
-   sibling, so the whole card (thumbnail included) is visible and clickable,
-   not just its header band. */
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:hover,
-.app-shell .rooms-table.ambient-focus .room-cards-row:has(> :nth-child(2)) .room-card:focus-visible {
-  z-index: 10;
-  opacity: 1;
-  /* `transform: none` cancels the non-deck `.room-card:hover` rules, which
-     set `transform: translateY(-4px)`. They target a different property
-     from our `translate`/`scale`, so without this the two would compose
-     and the lift would double up. */
-  transform: none;
-  translate: 0 calc(var(--pile-lift) * -1);
-  scale: 1.02;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
-    0 8px 16px rgba(0, 0, 0, 0.3),
-    0 28px 56px rgba(0, 0, 0, 0.45);
-  border-color: var(--accent);
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-kind {
-  display: inline-block;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  opacity: 0.6;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-icon {
-  font-size: 14px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  width: 100%;
-  text-align: left;
-}
-
-/* ── Miniature live preview thumbnails ─────────────────────────────────
-   Each room card gets a scaled-down visual representation of its content:
-   the inner box is laid out at 1/--mini-scale of the container and then
-   scaled back down, so the room's chrome renders at "real" pixel sizes
-   and lands miniaturised at exactly the container's bounds.
-
-   Do NOT go back to a fixed inner size (it was 380x280 at scale 0.55 =
-   209x154). The container is 260-350px wide and 40-90px tall depending on
-   room count, so a fixed inner leaves a wide dead strip on the right while
-   clipping most of the height. Sizing off the container is what keeps the
-   thumbnail filling its box at every card count. */
-.app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
-  --mini-scale: 0.5;
-  width: 100%;
-  flex: 1;
-  min-height: 60px;
-  margin-top: 6px;
-  border-radius: 6px;
-  overflow: hidden;
-  position: relative;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  /* No backdrop-filter here: the .mini-* child paints an opaque background
-     over the full box, so a blur behind it can never be seen — it was only
-     ever an extra compositing layer per card. */
-}
-
-:root.light-theme .app-shell .rooms-table.ambient-focus .room-card .room-card-mini-preview {
-  background: rgba(0, 0, 0, 0.06);
-  border-color: rgba(0, 0, 0, 0.08);
-}
-
-.app-shell .rooms-table.ambient-focus .room-card .room-card-mini-inner {
-  width: calc(100% / var(--mini-scale));
-  height: calc(100% / var(--mini-scale));
-  transform: scale(var(--mini-scale));
-  transform-origin: top left;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-
-/* ── Miniature terminal preview ──────────────────────────────────────── */
-.app-shell .rooms-table.ambient-focus .mini-term {
-  width: 100%;
-  height: 100%;
-  background: #1a1b26;
-  display: flex;
-  flex-direction: column;
-  font-family: var(--font-code, 'JetBrains Mono', monospace);
-  font-size: 11px;
-  line-height: 1.5;
-  padding: 8px 10px;
-  gap: 3px;
-  color: #a9b1d6;
-}
-
-.app-shell .mini-term .mini-prompt {
-  color: #7aa2f7;
-  font-weight: 700;
-}
-
-.app-shell .mini-term .mini-cmd {
-  color: #c0caf5;
-}
-
-.app-shell .mini-term .mini-output {
-  color: #565f89;
-}
-
-.app-shell .mini-term .mini-cursor {
-  display: inline-block;
-  width: 6px;
-  height: 13px;
-  background: #c0caf5;
-  animation: mini-blink 1s step-end infinite;
-  vertical-align: middle;
-  margin-left: 2px;
-}
-
-/* ── Light theme: miniature terminal ──────────────────────────────── */
-:root.light-theme .app-shell .rooms-table.ambient-focus .mini-term {
-  background: #fafafa;
-  color: #383a42;
-}
-:root.light-theme .app-shell .mini-term .mini-prompt { color: #4078f2; }
-:root.light-theme .app-shell .mini-term .mini-cmd { color: #383a42; }
-:root.light-theme .app-shell .mini-term .mini-output { color: #a0a1a7; }
-:root.light-theme .app-shell .mini-term .mini-cursor { background: #383a42; }
-
-@keyframes mini-blink {
-  50% { opacity: 0; }
-}
-
-/* ── Miniature editor preview ────────────────────────────────────────── */
-.app-shell .rooms-table.ambient-focus .mini-editor {
-  width: 100%;
-  height: 100%;
-  background: #1a1b26;
-  display: flex;
-  flex-direction: row;
-  font-family: var(--font-code, 'JetBrains Mono', monospace);
-  font-size: 10px;
-  line-height: 1.6;
-  overflow: hidden;
-}
-
-.app-shell .mini-editor .mini-gutter {
-  width: 32px;
-  flex-shrink: 0;
-  background: #16161e;
-  padding: 8px 0;
-  text-align: right;
-  color: #3b4261;
-  user-select: none;
-}
-
-.app-shell .mini-editor .mini-gutter span {
-  display: block;
-  padding-right: 8px;
-}
-
-.app-shell .mini-editor .mini-code {
-  flex: 1;
-  padding: 8px 10px;
-  overflow: hidden;
-}
-
-.app-shell .mini-editor .mini-code .mini-line {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.app-shell .mini-editor .mini-code .mini-kw { color: #bb9af7; }
-.app-shell .mini-editor .mini-code .mini-fn { color: #7aa2f7; }
-.app-shell .mini-editor .mini-code .mini-str { color: #9ece6a; }
-.app-shell .mini-editor .mini-code .mini-cm { color: #565f89; }
-.app-shell .mini-editor .mini-code .mini-num { color: #ff9e64; }
-.app-shell .mini-editor .mini-code .mini-type { color: #2ac3de; }
-.app-shell .mini-editor .mini-code .mini-op { color: #89ddff; }
-.app-shell .mini-editor .mini-code .mini-var { color: #c0caf5; }
-.app-shell .mini-editor .mini-code .mini-plain { color: #a9b1d6; }
-
-/* ── Light theme: miniature editor ───────────────────────────────── */
-:root.light-theme .app-shell .rooms-table.ambient-focus .mini-editor { background: #fafafa; }
-:root.light-theme .app-shell .mini-editor .mini-gutter { background: #f0f0f0; color: #c4c6c9; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-kw { color: #a626a4; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-fn { color: #4078f2; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-str { color: #50a14f; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-cm { color: #a0a1a7; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-num { color: #986801; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-type { color: #c18401; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-op { color: #4078f2; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-var { color: #383a42; }
-:root.light-theme .app-shell .mini-editor .mini-code .mini-plain { color: #383a42; }
-
-/* ── Miniature preview/browser frame ─────────────────────────────────── */
-.app-shell .rooms-table.ambient-focus .mini-browser {
-  width: 100%;
-  height: 100%;
-  background: #1a1b26;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.app-shell .mini-browser .mini-browser-bar {
-  height: 22px;
-  background: #16161e;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  gap: 4px;
-  border-bottom: 1px solid #292e42;
-}
-
-.app-shell .mini-browser .mini-browser-dots {
-  display: flex;
-  gap: 3px;
-}
-
-.app-shell .mini-browser .mini-browser-dots span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #ccc;
-}
-
-.app-shell .mini-browser .mini-browser-dots span:first-child { background: #ff5f57; }
-.app-shell .mini-browser .mini-browser-dots span:nth-child(2) { background: #ffbd2e; }
-.app-shell .mini-browser .mini-browser-dots span:last-child { background: #28ca41; }
-
-.app-shell .mini-browser .mini-browser-url {
-  flex: 1;
-  height: 14px;
-  background: #292e42;
-  border-radius: 3px;
-  border: 1px solid #3b4261;
-  margin: 0 4px;
-}
-
-.app-shell .mini-browser .mini-browser-content {
-  flex: 1;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.app-shell .mini-browser .mini-browser-content .mini-heading {
-  height: 8px;
-  width: 60%;
-  background: #c0caf5;
-  border-radius: 2px;
-}
-
-.app-shell .mini-browser .mini-browser-content .mini-para {
-  height: 5px;
-  width: 90%;
-  background: #292e42;
-  border-radius: 2px;
-}
-
-.app-shell .mini-browser .mini-browser-content .mini-para.short { width: 70%; }
-.app-shell .mini-browser .mini-browser-content .mini-block {
-  height: 30px;
-  width: 100%;
-  background: #292e42;
-  border-radius: 4px;
-  margin-top: 4px;
-}
-
-/* ── Light theme: miniature browser ──────────────────────────────── */
-:root.light-theme .app-shell .rooms-table.ambient-focus .mini-browser { background: #ffffff; }
-:root.light-theme .app-shell .mini-browser .mini-browser-bar { background: #f0f0f0; border-bottom-color: #ddd; }
-:root.light-theme .app-shell .mini-browser .mini-browser-url { background: #fff; border-color: #ccc; }
-:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-heading { background: #333; }
-:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-para { background: #ddd; }
-:root.light-theme .app-shell .mini-browser .mini-browser-content .mini-block { background: #e8e8e8; }
-
-/* ── Miniature generic panel preview ─────────────────────────────────── */
-.app-shell .rooms-table.ambient-focus .mini-panel {
-  width: 100%;
-  height: 100%;
-  background: #1a1b26;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.app-shell .mini-panel .mini-panel-header {
-  height: 24px;
-  background: #16161e;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  border-bottom: 1px solid #292e42;
-  gap: 6px;
-}
-
-.app-shell .mini-panel .mini-panel-header .mini-tab {
-  height: 10px;
-  border-radius: 2px;
-  background: #292e42;
-}
-
-.app-shell .mini-panel .mini-panel-header .mini-tab.active {
-  background: #7aa2f7;
-}
-
-.app-shell .mini-panel .mini-panel-body {
-  flex: 1;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.app-shell .mini-panel .mini-panel-body .mini-row {
-  height: 7px;
-  background: #292e42;
-  border-radius: 2px;
-}
-
-.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(2) { width: 85%; }
-.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(3) { width: 70%; }
-.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(4) { width: 92%; }
-.app-shell .mini-panel .mini-panel-body .mini-row:nth-child(5) { width: 60%; }
-
-/* ── Light theme: miniature panel ────────────────────────────────── */
-:root.light-theme .app-shell .rooms-table.ambient-focus .mini-panel { background: #fafafa; }
-:root.light-theme .app-shell .mini-panel .mini-panel-header { background: #f0f0f0; border-bottom-color: #e0e0e0; }
-:root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab { background: #e0e0e0; }
-:root.light-theme .app-shell .mini-panel .mini-panel-header .mini-tab.active { background: #4078f2; }
-:root.light-theme .app-shell .mini-panel .mini-panel-body .mini-row { background: #e8e8e8; }
-
-/* ── Miniature workspace/file-tree preview ───────────────────────────── */
-.app-shell .rooms-table.ambient-focus .mini-workspace {
-  width: 100%;
-  height: 100%;
-  background: #1a1b26;
-  display: flex;
-  flex-direction: row;
-  overflow: hidden;
-}
-
-.app-shell .mini-workspace .mini-sidebar {
-  width: 35%;
-  background: #16161e;
-  padding: 8px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.app-shell .mini-workspace .mini-sidebar .mini-tree-item {
-  height: 7px;
-  margin: 0 8px;
-  border-radius: 2px;
-  background: #292e42;
-}
-
-.app-shell .mini-workspace .mini-sidebar .mini-tree-item.folder {
-  background: #7aa2f7;
-  width: 60%;
-}
-
-.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file { width: 75%; }
-.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file:nth-child(3) { width: 55%; margin-left: 16px; }
-.app-shell .mini-workspace .mini-sidebar .mini-tree-item.file:nth-child(4) { width: 65%; margin-left: 16px; }
-
-.app-shell .mini-workspace .mini-main {
-  flex: 1;
-  background: #1a1b26;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.app-shell .mini-workspace .mini-main .mini-line {
-  height: 6px;
-  background: #292e42;
-  border-radius: 2px;
-}
-
-.app-shell .mini-workspace .mini-main .mini-line:nth-child(2) { width: 80%; }
-.app-shell .mini-workspace .mini-main .mini-line:nth-child(3) { width: 65%; }
-.app-shell .mini-workspace .mini-main .mini-line:nth-child(4) { width: 90%; }
-.app-shell .mini-workspace .mini-main .mini-line:nth-child(5) { width: 45%; }
-
-/* ── Light theme: miniature workspace ────────────────────────────── */
-:root.light-theme .app-shell .rooms-table.ambient-focus .mini-workspace { background: #fafafa; }
-:root.light-theme .app-shell .mini-workspace .mini-sidebar { background: #f0f0f0; }
-:root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item { background: #ddd; }
-:root.light-theme .app-shell .mini-workspace .mini-sidebar .mini-tree-item.folder { background: #4078f2; }
-:root.light-theme .app-shell .mini-workspace .mini-main .mini-line { background: #e0e0e0; }
 
 
 .app-shell .rooms-table.ambient-development {
@@ -1359,152 +611,30 @@
   clip-path: inset(50%);
 }
 
-/* ── Focus rail: the real panels, shrunk into a stacked deck ─────────────
-   These cards are not thumbnails of the rooms — they ARE the rooms. Each
-   card is the same mounted `.stage-pane` the stage would show, so a
-   terminal card is the live xterm and promoting a card is a resize, never
-   a mount. That is the whole point, and it is what the old drawn
-   `.room-card-mini-*` mock-ups replaced badly.
-
-   THE PANEL IS SCALED, NOT REFLOWED, AND THAT IS DELIBERATE.
-
-   Letting a carded pane simply reflow to ~400px would refit its xterm to
-   roughly 30 columns — and xterm's fit propagates a resize to the PTY, so
-   every carded agent would redraw its whole TUI at 30 columns wide and
-   stay wrapped that narrow the entire time it sat in the rail. Instead the
-   panel is LAID OUT at near-stage size (`--card-scale` divides the card
-   box back up to ~1000x520) and then transformed down into the card.
-   A transform does not change the border-box, so the ResizeObserver inside
-   never fires and the PTY keeps its real column count. Do not "simplify"
-   this to a width/height on the pane. */
-.app-shell .stage-layers.has-cards {
-  /* Rail width, and how far the pile's reveal band can compress. The reveal
-     is derived from `--pile-count` (set inline from the number of cards) so
-     a long rail packs tighter instead of running off the bottom of the
-     stage, without needing a `:has(> :nth-child(N))` ladder. */
-  --rail-w: clamp(380px, 32vw, 560px);
-  --rail-gap: 18px;
-  --card-scale: 0.46;
-  --pile-card-h: 286px;
-  /* Budget for the deck's travel, shared across the cards. The cap is what
-     matters visually: at low counts a card reveals 132px — nearly half its
-     body — so each one reads as a separate card rather than a seam in a
-     slab. It only compresses once there are enough rooms to need it. */
-  --pile-reveal: clamp(52px, calc(620px / max(var(--pile-count, 1) - 1, 1)), 132px);
-  --pile-lift: 6px;
-}
-
-/* The stage pane yields the rail's column. `.stage-pane` is absolutely
-   positioned against the padding box, so padding on the container would not
-   reserve anything — the inset has to move. */
-.app-shell .stage-layers.has-cards > .stage-pane:not(.stage-carded):not(.stage-hidden) {
-  right: calc(var(--rail-w) + var(--rail-gap));
-  /* The frost moved off `.focused-room` and onto the panes, so the stage's
-     own 12px radius has to come with it or the blur ends in a hard corner. */
-  border-radius: 12px;
-}
-
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded {
-  left: auto;
-  right: 0;
-  bottom: auto;
-  /* Resting slot, plus the fan's push (see below). `top` carries both, because
-     a `translate` here would make this pane a backdrop root and strip the glass
-     off the panel inside it. */
-  top: calc(
-    12px + var(--pile-index, 0) * var(--pile-reveal) +
-    clamp(0, calc(var(--pile-index, 0) - var(--pile-hover, 999)), 1) *
-    (var(--pile-card-h) - var(--pile-reveal) - var(--pile-lift))
-  );
-  width: var(--rail-w);
-  height: var(--pile-card-h);
-  overflow: hidden;
-  border-radius: 12px;
-  cursor: pointer;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 4px 10px rgba(0, 0, 0, 0.3),
-    0 18px 38px rgba(0, 0, 0, 0.38);
-  /* `top`, not a transform — see the note on the `top` calc above. This is the
-     one place in the shell where animating a layout property is the correct
-     trade: a transform here costs the panel inside its backdrop-filter, and the
-     fan only runs on hover over a handful of cards. */
-  transition: top var(--dur-slow) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out);
-  /* No z-index ladder: among positioned siblings with `z-index: auto` the
-     paint order IS the DOM order. Hover raises the popped card explicitly. */
-  transform-origin: center top;
-}
-
-/* The panel itself, laid out big and scaled into the card. */
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .room-panel {
-  flex: none;
-  width: calc(100% / var(--card-scale));
-  height: calc(var(--pile-card-h) / var(--card-scale));
-  transform: scale(var(--card-scale));
-  transform-origin: top left;
-  border-radius: calc(12px / var(--card-scale));
-  /* Clicks belong to the sibling hit target, not the miniature's own
-     buttons — a 5px-tall close button is a trap, not a control. The panel is
-     also `inert` (set in AppShell.tsx) so it takes no tab focus either. */
-  pointer-events: none;
-  /* Cancel the stage's entrance animation: a card is a resting object. */
-  animation: none;
-}
-
-/* The click/hover target. Rendered for every pane so the child list never
-   changes shape, but only a card's is actually live. */
-.app-shell .stage-card-hit {
-  display: none;
-}
-
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .stage-card-hit {
+/* ── Expanded (100% Zoom) stage ──────────────────────────────────────────
+   When a pane in Split mode is expanded, it zooms 100% on top of all other
+   cards to fill the entire stage cleanly, while preserving all persistent
+   xterm panes underneath and keeping the split switcher below. */
+.app-shell .focused-room.stage-layers.stage-expanded {
+  position: relative;
   display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.app-shell .focused-room.stage-layers.stage-expanded > .stage-pane {
   position: absolute;
   inset: 0;
-  z-index: 1;
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
-/* ── The fan ────────────────────────────────────────────────────────────
-   Only `--pile-reveal` of each card is uncovered at rest, so a hovered card
-   popping over the deck would blanket the next two or three bands and trap
-   the pointer inside itself. So every card BELOW the hovered one slides
-   down by exactly what the pop covers, keeping its band reachable.
-
-   `--pile-hover` is the hovered card's index, written to this container by
-   a plain DOM handler (never React state — re-rendering the room subtree on
-   pointer-move across a rail of live terminals is not affordable). The
-   comparison is done in calc: `clamp(0, index - hover, 1)` is 0 for every
-   card at or above the hovered one and 1 for every card below it, which is
-   how a stylesheet gets an `if` over two custom properties. The 999 default
-   means "nothing hovered", so every card resolves to 0 and rests.
-
-   The push itself is folded into the `top` calc in the geometry block above,
-   because it must not be a transform — see the glass note there. */
-
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded:hover,
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded:has(> .stage-card-hit:focus-visible) {
-  z-index: 10;
-  border-color: var(--accent);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 8px 16px rgba(0, 0, 0, 0.32),
-    0 28px 56px rgba(0, 0, 0, 0.46);
-}
-
-/* Reduced motion: the fan still has to happen (it is what keeps lower cards
-   reachable), it just happens instantly. */
-@media (prefers-reduced-motion: reduce) {
-  .app-shell .stage-layers.has-cards > .stage-pane.stage-carded {
-    transition: none;
-  }
+.app-shell .focused-room.stage-layers.stage-expanded > .stage-pane.stage-hidden {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  clip-path: inset(50%);
 }
 
 /* Split view reuses the very same persistent stage — the identical mounted xterm
@@ -1783,11 +913,6 @@
   --panel-edge-lap: 9s;
 }
 
-/* A carded panel is scaled by `--card-scale` (~0.46), which would take the ring
-   below a device pixel — pre-divide so it lands at the same visual weight. */
-.app-shell .stage-layers.has-cards > .stage-pane.stage-carded > .room-panel::after {
-  --panel-edge-w: calc(1.5px / var(--card-scale));
-}
 
 /* Light theme flips the base ring dark for every panel in `global.css`; only
    the featured room's brighter base needs its own light-mode value. */
@@ -2658,40 +1783,6 @@
   font-size: 12px;
 }
 
-.app-shell .room-dock {
-  /* Own view-transition group so the dock is lifted out of the root snapshot and
-     stays visually fixed while the rooms morph between layouts. */
-  view-transition-name: spacron-room-dock;
-  /* See-through dock: drop the opaque bento fill to a low-alpha tint so the panel
-     behind shows through, while the inherited backdrop blur keeps the icons
-     legible (frosted glass). Tune --frost-dock to taste. */
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%),
-              rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-dock, 0.26));
-  min-height: 42px;
-  width: min(100%, 1040px);
-  align-self: center;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  /* `safe center` keeps the dock centred when everything fits, but falls back to
-     start-alignment when the content is wider than the dock — so the leftmost
-     switchers stay reachable instead of being clipped off the centre. */
-  justify-content: safe center;
-  gap: 6px;
-  padding: 5px 9px;
-  border-radius: 12px;
-  /* Scroll horizontally rather than clip when the row can't fit, so cramped
-     icons stay reachable instead of spilling over each other. */
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  animation: shell-dock-in 0.34s var(--ease-out) 0.04s both;
-}
-
-.app-shell .room-dock::-webkit-scrollbar {
-  display: none;
-}
-
 .app-shell .ambient-switcher {
   display: inline-flex;
   align-items: center;
@@ -2781,36 +1872,6 @@
   animation: mode-icon-pop 0.44s var(--ease-out);
 }
 
-.app-shell .room-dock-group {
-  min-width: 0;
-  /* Hold natural width: the 34px icon buttons inside never shrink, so a
-     shrinking group would let them spill out and overlap its neighbours. */
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* The tools group is the single shrinkable/scrollable region — it absorbs the
-   squeeze (and scrolls internally) so the fixed switchers and other groups keep
-   their spacing instead of collapsing. */
-.app-shell .room-dock-group.tools {
-  flex-shrink: 1;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.app-shell .room-dock-group.tools::-webkit-scrollbar {
-  display: none;
-}
-
-.app-shell .room-dock-separator {
-  width: 1px;
-  height: 20px;
-  flex-shrink: 0;
-  background: var(--border);
-}
-
 .app-shell .svt-btn {
   appearance: none;
   width: 34px;
@@ -2866,11 +1927,6 @@
 }
 
 @keyframes shell-panel-in {
-  0% { opacity: 0; }
-  100% { opacity: 1; }
-}
-
-@keyframes shell-dock-in {
   0% { opacity: 0; }
   100% { opacity: 1; }
 }
@@ -2967,8 +2023,6 @@
 
 /* Persistent chrome doesn't change between modes — skip the crossfade so it
    stays perfectly steady (no faint opacity dip) while rooms morph around it. */
-.app-shell ::view-transition-old(spacron-room-dock),
-.app-shell ::view-transition-new(spacron-room-dock),
 .app-shell ::view-transition-old(spacron-composer),
 .app-shell ::view-transition-new(spacron-composer) {
   animation: none;
@@ -3167,6 +2221,36 @@
   animation: shell-composer-in 0.16s var(--ease-out) both;
 }
 
+/* Tail of the prompt bar, between the input and Send: the layout actions that
+   used to sit in the room dock, then the Tools menu. Holds its natural width —
+   the textarea beside it is the flexible part — and never wraps. */
+.app-shell .composer-strip .prompt-trailing {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.app-shell .composer-strip .prompt-trailing-separator {
+  width: 1px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-inline: 4px;
+  background: var(--border);
+}
+
+/* Match the bar's other icon buttons rather than the old 34px dock sizing. */
+.app-shell .composer-strip .prompt-trailing .svt-btn {
+  width: 36px;
+  height: 36px;
+}
+
+/* The dock's lit-button underline reads as clutter in a dense bar row — the
+   tinted fill already carries the active state here. */
+.app-shell .composer-strip .prompt-trailing .svt-btn.svt-active::after {
+  display: none;
+}
+
 .app-shell .composer-strip .spawn-toggle,
 .app-shell .composer-strip .attach-toggle,
 .app-shell .composer-strip .voice-toggle,
@@ -3261,37 +2345,6 @@
   }
 
   /* When minimized chips are present in focus mode, allow the room-stack row to
-     grow large enough to contain them instead of clipping or collapsing. */
-  .app-shell .rooms-table.ambient-focus .room-stack {
-    min-height: 60px;
-    max-height: none;
-    height: auto;
-    overflow-x: auto;
-    overflow-y: visible;
-    mask-image: none;
-    -webkit-mask-image: none;
-  }
-  .app-shell .rooms-table.ambient-focus .room-cards-row {
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
-    overflow: visible;
-    padding: 4px 0;
-  }
-
-  .app-shell .rooms-table.ambient-focus .room-cards-row .room-card {
-    width: 160px;
-    min-width: 160px;
-    min-height: 64px;
-    height: 64px;
-    justify-content: center;
-  }
-
-  .app-shell .rooms-table.ambient-focus .room-cards-row .room-card .room-card-preview {
-    display: none;
-  }
-
   .app-shell .rooms-table.ambient-focus .minimized-room-stack {
     max-width: min(440px, calc(50vw - 20px));
     overflow-x: auto;
@@ -3314,10 +2367,6 @@
     height: auto;
   }
 
-.app-shell .room-dock {
-  will-change: transform;
-}
-
 /* NOTE: .composer-strip deliberately does NOT get `will-change: transform`.
    will-change:transform makes it a backdrop root, which would isolate the
    floating prompt bar's backdrop-filter from the terminal behind it and kill
@@ -3338,22 +2387,11 @@
     min-height: 64px;
   }
 
-  .app-shell .room-dock {
-    width: 100%;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
   .app-shell .ambient-switcher {
     flex-shrink: 0;
   }
 
   .app-shell .ambient-switch-btn span {
-    display: none;
-  }
-
-  .app-shell .room-dock::-webkit-scrollbar {
     display: none;
   }
 
@@ -3380,6 +2418,28 @@
     min-width: 52px;
     height: 34px;
     padding-inline: 13px;
+  }
+
+  /* Tight bar: the Tools trigger drops to its icon and the layout actions
+     shrink, so the textarea keeps a usable width. Nothing is hidden — every
+     launcher stays reachable. */
+  .app-shell .composer-strip .tools-trigger-label {
+    display: none;
+  }
+
+  .app-shell .composer-strip .tools-trigger {
+    height: 34px;
+    padding-inline: 7px;
+  }
+
+  .app-shell .composer-strip .prompt-trailing .svt-btn {
+    width: 30px;
+    height: 30px;
+    padding: 6px;
+  }
+
+  .app-shell .composer-strip .prompt-trailing-separator {
+    margin-inline: 2px;
   }
 
   .app-shell .composer-strip .prompt-hint {
@@ -3422,7 +2482,6 @@
 @media (prefers-reduced-motion: reduce) {
   .app-shell .room-panel,
   .app-shell .room-card,
-  .app-shell .room-dock,
   .app-shell .split-switch-item,
   .app-shell .minimized-room,
   .app-shell .composer-strip .floating-prompt-bar,
@@ -3447,33 +2506,12 @@
   }
 }
 
-.app-shell .room-dock .back-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm, 4px);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-}
-
-.app-shell .room-dock .back-btn:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.08);
-}
-
 /* WebKitGTK (Linux) regularly leaves elements that carry an entrance animation,
    a `view-transition-name`, or a GPU layer hint (`will-change`) present but never
-   painted — which is why the dock and floating prompt bar went invisible on first
-   paint and on layout switches. Neutralise those fragile hints for the bottom
-   overlays so they are always drawn at their resting visible state. Scoped to
+   painted — which is why the floating prompt bar went invisible on first paint
+   and on layout switches. Neutralise those fragile hints for the bottom overlay
+   so it is always drawn at its resting visible state. Scoped to
    WebKitGTK via the `is-webkitgtk` root class, so Windows/macOS keep the polish. */
-html.is-webkitgtk .app-shell .room-dock,
 html.is-webkitgtk .app-shell .composer-strip {
   animation: none !important;
   opacity: 1 !important;
@@ -3560,16 +2598,6 @@ html.is-webkitgtk .app-shell .composer-strip {
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18),
     var(--depth-shadow-md);
-}
-
-/* ── Bottom chrome: dock, mode switcher, prompt pill ── */
-.app-shell .room-dock {
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
-}
-
-:root.light-theme .app-shell .room-dock {
-  border-color: rgba(0, 0, 0, 0.1);
 }
 
 .app-shell .ambient-switcher,

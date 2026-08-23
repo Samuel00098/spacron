@@ -68,6 +68,7 @@ import {
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceRefinementEnabled,
+  transcriptionAutoSend,
   announceAgentCompletions,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
@@ -782,6 +783,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const voiceInput = useStore(voiceInputProvider);
   const voiceInputModel = useStore(currentVoiceInputModel);
   const voiceRefinement = useStore(voiceRefinementEnabled);
+  const transcriptionSend = useStore(transcriptionAutoSend);
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
   const voiceBrainModel = useStore(currentVoiceConversationAiModel);
@@ -1837,6 +1839,21 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       />
                     </SettingRow>
                   )}
+                </Section>
+
+                <Section title="Terminal transcription">
+                  <SettingRow
+                    title="Hotkey"
+                    detail="Speak one command and it goes straight into the active terminal. Press the hotkey again to send, Esc to cancel."
+                  >
+                    <kbd>{shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'Ctrl+Alt+M'}</kbd>
+                  </SettingRow>
+                  <SettingRow
+                    title="Send after transcribing"
+                    detail="On presses Enter after typing the transcript; off only types it in."
+                  >
+                    <Toggle label="Toggle send after transcribing" checked={transcriptionSend} onChange={transcriptionAutoSend.set} />
+                  </SettingRow>
                 </Section>
 
                 <Section title="Voice refinement">

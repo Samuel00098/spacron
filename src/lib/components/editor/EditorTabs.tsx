@@ -3,41 +3,55 @@ import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
 import './EditorTabs.css';
 
-// Short, language-specific badge (label + brand color) shown on each tab,
-// replacing a generic "TXT" for every file. Keyed by the language ids that
-// detectLanguage() produces (see stores/editor.ts).
-type Badge = { label: string; color: string };
-const LANG_BADGE: Record<string, Badge> = {
-  image: { label: 'IMG', color: '#b78cf0' },
-  javascript: { label: 'JS', color: '#f0db4f' },
-  typescript: { label: 'TS', color: '#3178c6' },
-  html: { label: 'HTML', color: '#e34f26' },
-  css: { label: 'CSS', color: '#519aba' },
-  scss: { label: 'SCSS', color: '#cd6799' },
-  sass: { label: 'SASS', color: '#cd6799' },
-  rust: { label: 'RS', color: '#dea584' },
-  json: { label: 'JSON', color: '#cbcb41' },
-  markdown: { label: 'MD', color: '#519aba' },
-  python: { label: 'PY', color: '#ffd43b' },
-  java: { label: 'JAVA', color: '#e76f00' },
-  cpp: { label: 'C++', color: '#5e97d0' },
-  csharp: { label: 'C#', color: '#a074c4' },
-  svelte: { label: 'SV', color: '#ff3e00' },
-  toml: { label: 'TOML', color: '#b8845f' },
-  php: { label: 'PHP', color: '#8993be' },
-  sql: { label: 'SQL', color: '#e38c00' },
-  xml: { label: 'XML', color: '#e37933' },
-  yaml: { label: 'YAML', color: '#cb171e' },
-  go: { label: 'GO', color: '#00add8' },
-  swift: { label: 'SW', color: '#f05138' },
-  kotlin: { label: 'KT', color: '#a97bff' },
-  shell: { label: 'SH', color: '#89e051' },
-  plaintext: { label: 'TXT', color: 'var(--text-muted)' },
+const LANG_COLORS: Record<string, string> = {
+  image: '#b78cf0',
+  javascript: '#f0db4f',
+  typescript: '#3178c6',
+  html: '#e34f26',
+  css: '#519aba',
+  scss: '#cd6799',
+  sass: '#cd6799',
+  rust: '#dea584',
+  json: '#cbcb41',
+  markdown: '#519aba',
+  python: '#ffd43b',
+  java: '#e76f00',
+  cpp: '#5e97d0',
+  csharp: '#a074c4',
+  svelte: '#ff3e00',
+  toml: '#b8845f',
+  php: '#8993be',
+  sql: '#e38c00',
+  xml: '#e37933',
+  yaml: '#cb171e',
+  go: '#00add8',
+  swift: '#f05138',
+  kotlin: '#a97bff',
+  shell: '#89e051',
 };
 
-function langBadge(language: string | undefined, kind: string): Badge {
-  if (kind === 'image') return LANG_BADGE.image;
-  return LANG_BADGE[language ?? ''] ?? LANG_BADGE.plaintext;
+function getLanguageColor(language: string | undefined, kind: string): string {
+  if (kind === 'image') return LANG_COLORS.image;
+  return LANG_COLORS[language ?? ''] ?? 'var(--text-muted)';
+}
+
+function TabIcon({ language, kind }: { language?: string; kind: string }) {
+  const color = getLanguageColor(language, kind);
+  if (kind === 'image') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg" style={{ color }}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+        <circle cx="8.5" cy="8.5" r="1.5" />
+        <polyline points="21 15 16 10 5 21" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg" style={{ color }}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
 }
 
 function getFileName(path: string) {
@@ -66,7 +80,6 @@ export default function EditorTabs() {
       {files.map((file) => {
         const fileState = cache.get(file);
         if (!fileState) return null;
-        const badge = langBadge(fileState.language, fileState.kind);
         return (
           <button
             key={file}
@@ -74,9 +87,7 @@ export default function EditorTabs() {
             onClick={() => handleTabClick(file)}
             title={file}
           >
-            <span className="tab-icon" style={{ color: badge.color }}>
-              {badge.label}
-            </span>
+            <TabIcon language={fileState.language} kind={fileState.kind} />
             <span className="tab-label">{getFileName(file)}</span>
             {fileState.isDirty && <span className="tab-dirty-indicator"></span>}
             <span

@@ -50,13 +50,16 @@ const defaultLayout: LayoutState = {
 // exclusive among themselves (one drawer body at a time) but, unlike the aux
 // rooms, opening one does NOT disturb the main rooms (editor/preview/etc.) or
 // the active view — the drawer is a right-edge overlay you pop open and dismiss.
-export const RIGHT_DRAWER_TOOLS = ['toolbox', 'http', 'db', 'containers', 'env', 'mobile'] as const;
+// Order here is the drawer's TAB order, not its precedence — Fleet leads because
+// it is the panel you keep open while agents run.
+export const RIGHT_DRAWER_TOOLS = ['fleet', 'toolbox', 'http', 'db', 'containers', 'env', 'mobile'] as const;
 export type RightDrawerTool = (typeof RIGHT_DRAWER_TOOLS)[number];
 
 // The tools whose open state is a persisted aux flag on LayoutState. 'env' is
 // handled separately — its open state is the transient `envManagerOpen` flag
 // (kept in sync below so the drawer stays single-body).
 const AUX_DRAWER_FLAGS: Record<Exclude<RightDrawerTool, 'env'>, keyof LayoutState> = {
+  fleet: 'fleetVisible',
   toolbox: 'toolboxVisible',
   http: 'httpVisible',
   db: 'dbVisible',
@@ -95,6 +98,7 @@ export function rightDrawerToolOf(l: {
   containersVisible: boolean;
   envManagerOpen: boolean;
   mobileVisible: boolean;
+  fleetVisible: boolean;
 }): RightDrawerTool | null {
   if (l.toolboxVisible) return 'toolbox';
   if (l.httpVisible) return 'http';
@@ -102,6 +106,10 @@ export function rightDrawerToolOf(l: {
   if (l.containersVisible) return 'containers';
   if (l.envManagerOpen) return 'env';
   if (l.mobileVisible) return 'mobile';
+  // Last on purpose. `fleetVisible` is opened by things other than the drawer's
+  // own tab strip (tiling all agents), so ranking it above the tools would let a
+  // leftover flag shadow the tool the user just clicked.
+  if (l.fleetVisible) return 'fleet';
   return null;
 }
 
@@ -256,7 +264,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
 
   openEnvManager: () => {
     set((l) => {
-      const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+      const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, fleetVisible: false };
       persistLayout(next);
       return next;
     });
@@ -309,7 +317,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'http') {
-        const next: LayoutState = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        const next: LayoutState = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
@@ -319,27 +327,29 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'fleet') {
-        const next: LayoutState = { ...l, activeView: 'fleet' as const, lastAuxView: 'fleet' as const, fleetVisible: true };
+        // Fleet is a right-drawer tool (like Toolbox/HTTP/DB), so opening it
+        // clears the other drawer flags to keep the drawer single-body.
+        const next = { ...l, activeView: 'fleet' as const, lastAuxView: 'fleet' as const, fleetVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false };
         persistLayout(next);
         return next;
       }
       if (view === 'db') {
-        const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        const next: LayoutState = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
       if (view === 'containers') {
-        const next: LayoutState = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
+        const next: LayoutState = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
       if (view === 'toolbox') {
-        const next: LayoutState = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
+        const next: LayoutState = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
       if (view === 'env') {
-        const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false };
+        const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
@@ -353,7 +363,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       if (view === 'mobile') {
         // Mobile is a right-drawer tool (like Toolbox/HTTP/DB), so opening it
         // clears the other drawer flags to keep the drawer single-body.
-        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false };
+        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, fleetVisible: false };
         persistLayout(next);
         return next;
       }
@@ -430,7 +440,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        const next = { ...l, activeView: 'http' as const, lastAuxView: 'http' as const, httpVisible: true, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -447,14 +457,11 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     });
   },
 
+  // Agent Fleet lives in the right utility drawer now, not in a centre room, so
+  // its shortcut has to move the drawer. Flipping `fleetVisible` on its own
+  // would set a flag nothing paints.
   toggleFleetVisible: () => {
-    set((l) => {
-      const next: LayoutState = l.fleetVisible
-        ? { ...l, fleetVisible: false, activeView: 'terminal' as const }
-        : { ...l, fleetVisible: true, lastAuxView: 'fleet' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'fleet' as const };
-      persistLayout(next);
-      return next;
-    });
+    getState().setRightDrawerTool(getState().fleetVisible ? null : 'fleet');
   },
 
   toggleDbVisible: () => {
@@ -467,7 +474,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false };
+        const next = { ...l, activeView: 'db' as const, lastAuxView: 'db' as const, dbVisible: true, httpVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -484,7 +491,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false };
+        const next = { ...l, activeView: 'containers' as const, lastAuxView: 'containers' as const, containersVisible: true, httpVisible: false, dbVisible: false, toolboxVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -501,7 +508,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false };
+        const next = { ...l, activeView: 'toolbox' as const, lastAuxView: 'toolbox' as const, toolboxVisible: true, httpVisible: false, dbVisible: false, containersVisible: false, envVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -513,7 +520,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   setRightDrawerTool: (tool: RightDrawerTool | null) => {
     if (tool === null) {
       set((l) => {
-        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false };
+        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -529,7 +536,8 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
           toolboxVisible: tool === 'toolbox',
           envVisible: tool === 'env',
           envManagerOpen: tool === 'env',
-          mobileVisible: tool === 'mobile'
+          mobileVisible: tool === 'mobile',
+          fleetVisible: tool === 'fleet'
         };
         persistLayout(next);
         return next;
@@ -563,7 +571,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, editorSplitPreview: false };
+        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, fleetVisible: false, editorSplitPreview: false };
         persistLayout(next);
         return next;
       });

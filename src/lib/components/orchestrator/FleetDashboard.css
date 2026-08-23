@@ -1,4 +1,5 @@
-/* Agent Fleet Dashboard. A center room, so it owns its own scroll. */
+/* Agent Fleet Dashboard. Lives in the right utility drawer; the drawer body
+   gives it a definite height, and the card grid owns the scroll inside it. */
 
 .fleet-root {
   display: flex;

@@ -25,12 +25,21 @@ const FOCUSABLE =
  *
  * `onEscape` is optional — the modal can keep its own Escape handling, but the
  * trap and the count apply regardless.
+ *
+ * `active` defaults to true, for the common case where the component is only
+ * mounted while its dialog is open. Pass it explicitly from a host that stays
+ * mounted and renders `null` when closed (AgentPlacementModal): hooks can't be
+ * called conditionally, so without this the host would increment the count once
+ * at startup and never release it — leaving `isModalOpen()` permanently true and
+ * every app-wide keyboard shortcut permanently dead.
  */
 export function useModalFocus(
   containerRef: RefObject<HTMLElement | null>,
   onEscape?: () => void,
+  active: boolean = true,
 ): void {
   useEffect(() => {
+    if (!active) return;
     const container = containerRef.current;
     const previouslyFocused = document.activeElement as HTMLElement | null;
 
@@ -74,5 +83,5 @@ export function useModalFocus(
       previouslyFocused?.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [active]);
 }

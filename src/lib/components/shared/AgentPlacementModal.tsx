@@ -71,7 +71,12 @@ export default function AgentPlacementModal() {
 
   // Register as a modal too: it layers over AgentSpawnModal, and while it is up
   // the app's shortcuts must stand down (the card owns Enter/Escape/arrows).
-  useModalFocus(backdropRef);
+  //
+  // Gated on `request`, because this host is mounted for the app's whole
+  // lifetime and renders `null` until a placement is asked for — an ungated
+  // registration here pinned `isModalOpen()` to true from startup and killed
+  // every global shortcut in the app.
+  useModalFocus(backdropRef, undefined, Boolean(request));
 
   // Reseed (and refocus) whenever a new request reaches the head of the queue.
   useEffect(() => {
