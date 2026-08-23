@@ -45,5 +45,6 @@ matching section.
 
 ## Build, release & repo hygiene
 
+- [sidecar-externalbin-deadlock](sidecar-externalbin-deadlock.md) — `externalBin` is resolved on every cargo invocation, so a clean checkout cannot build the sidecar that the check demands; `build.rs` stamps a placeholder — never revert it to a bare `tauri_build::build()`
 - [build-scripts-are-esm](build-scripts-are-esm.md) — `scripts/*.js` are ESM (`"type": "module"`); `build-server-sidecar.js` runs only as Tauri's `beforeBuildCommand`, so a `require` slip is green in every check and red only in the release matrix
 - [release-flow](release-flow.md) — cutting a release: CHANGELOG entry first (it gates the version bump), `npm version --no-git-tag-version`, then the `cargo metadata` step that refreshes `Cargo.lock` and is the one everybody forgets; separate `Release vX.Y.Z` commit, then the tag
