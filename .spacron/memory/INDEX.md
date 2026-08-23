@@ -38,3 +38,7 @@ matching section.
 - [remote-invoke-seam-gap](remote-invoke-seam-gap.md) — the server's `invoke` allowlist covers `fs_*`/`workspace_git_*`/`lsp_*` but **not** `project_state_*`, so the orchestrator silently reads empty against a remote
 - [vps-deploy-cross-platform](vps-deploy-cross-platform.md) — the VPS wizard now detects the server's OS over SSH and resolves a matching `spacron-server` build (SPACRON_SERVER_PATH → triple artifact → host sidecar); musl cross-builds via `server:build --target`, macOS needs Mac/CI; no release-download yet
 - [mobile-companion-plan](mobile-companion-plan.md) — the phone app goes in a top-level `mobile/` folder (Expo, `website/`-style sibling); why not a Tauri mobile target; terminals need no server change, agents do
+
+## Build, release & repo hygiene
+
+- [release-flow](release-flow.md) — cutting a release: CHANGELOG entry first (it gates the version bump), `npm version --no-git-tag-version`, then the `cargo metadata` step that refreshes `Cargo.lock` and is the one everybody forgets; separate `Release vX.Y.Z` commit, then the tag
