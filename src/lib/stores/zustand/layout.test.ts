@@ -39,3 +39,22 @@ describe('setActiveView room focus', () => {
     expect(get(layoutControlCommand)).toBeNull();
   });
 });
+
+describe('sidebarTab projects persistence and sanitisation', () => {
+  it('validates projects as a recognized sidebar tab', async () => {
+    const { sanitiseSidebarTab } = await import('./layout');
+    expect(sanitiseSidebarTab('projects')).toBe('projects');
+  });
+
+  it('toggles projects tab and maintains visibility', () => {
+    useLayoutStore.setState({ sidebarVisible: false, sidebarTab: 'files' });
+    useLayoutStore.getState().toggleSidebarTab('projects');
+
+    expect(useLayoutStore.getState().sidebarVisible).toBe(true);
+    expect(useLayoutStore.getState().sidebarTab).toBe('projects');
+
+    // Toggling while active collapses it
+    useLayoutStore.getState().toggleSidebarTab('projects');
+    expect(useLayoutStore.getState().sidebarVisible).toBe(false);
+  });
+});

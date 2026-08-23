@@ -115,3 +115,24 @@ describe('persisted right drawer tool', () => {
     }
   });
 });
+
+describe('persisted expandedRoom state', () => {
+  it('preserves valid expanded room id', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      expandedRoom: 'terminal',
+    });
+    expect(state?.expandedRoom).toBe('terminal');
+  });
+
+  it('rejects invalid expanded room id', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      expandedRoom: 'malicious/../path',
+    });
+    expect(state?.expandedRoom).toBeNull();
+  });
+});
+

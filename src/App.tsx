@@ -12,7 +12,6 @@ import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
-import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
 import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
 import InboxPanel from '$lib/components/orchestrator/InboxPanel.tsx';
@@ -247,7 +246,6 @@ export default function App() {
 
       <CommandPalette />
       <FloatingSearch />
-      <ProjectHUD />
       <KnowledgeGraphOverlay />
       <AgentNotifications />
       <InboxPanel />

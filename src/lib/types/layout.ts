@@ -1,10 +1,10 @@
 export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settings';
 
-export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet' | 'mobile';
+export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet' | 'mobile' | 'sketch';
 
 // 'review' was removed 2026-07-26: Code Review is a full center panel now, not a
 // drawer tab. A two-column diff is unreadable at drawer width.
-export type SidebarTab = 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'problems';
+export type SidebarTab = 'projects' | 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'problems';
 
 // Sections of the Settings modal. Lives here rather than in the component so
 // callers can deep-link one (`openSettings('appearance')`) without importing the
@@ -40,6 +40,7 @@ export interface LayoutState {
   envVisible: boolean;
   youtubeVisible: boolean;
   mobileVisible: boolean;
+  sketchVisible: boolean;
   auxPanelWidth: number;
   auxEditorHeight: number; // percentage split between editor and preview panes
   leftPanelWidth: number; // width of the left utility panel (Files/Search/Git/Snapshots/Snippets/Review)

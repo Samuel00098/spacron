@@ -8,7 +8,7 @@ export type { ActiveView, SidebarTab };
 const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env', 'fleet', 'mobile']);
 // No 'review': a persisted 'review' tab from an older build fails this check and
 // falls back, which is exactly the migration we want.
-const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['files', 'search', 'git', 'snapshots', 'history', 'snippets', 'problems']);
+const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['projects', 'files', 'search', 'git', 'snapshots', 'history', 'snippets', 'problems']);
 
 export function sanitiseActiveView(v: unknown, fallback: ActiveView = 'terminal'): ActiveView {
   return VALID_ACTIVE_VIEWS.has(v as ActiveView) ? (v as ActiveView) : fallback;
@@ -40,6 +40,7 @@ const defaultLayout: LayoutState = {
   envVisible: false,
   youtubeVisible: false,
   mobileVisible: false,
+  sketchVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
   leftPanelWidth: 310,
@@ -213,6 +214,7 @@ const AUX_VIEW_FLAGS = {
   // window survives ambient mode switches. Its `youtubeVisible` flag is toggled
   // independently by `toggleYoutubeVisible`.
   mobile: 'mobileVisible',
+  sketch: 'sketchVisible',
 } as const satisfies Partial<Record<ActiveView, keyof LayoutState>>;
 
 type AuxView = keyof typeof AUX_VIEW_FLAGS;

@@ -20,7 +20,7 @@ export type LayoutCommand =
    * beforehand is overwritten (see `switchAmbientLayout`). Handing all three to
    * the shell lets it seed that per-mode entry before switching.
    */
-  | { nonce: number; type: 'arrangement'; mode: AmbientLayout; slots: string[]; focused: string | null }
+  | { nonce: number; type: 'arrangement'; mode: AmbientLayout; slots: string[]; focused: string | null; expanded?: string | null }
   | { nonce: number; type: 'room'; op: RoomOp; room: string };
 
 export interface LayoutRoomSnapshot {
@@ -39,6 +39,7 @@ export interface LayoutSnapshot {
    * as-is rather than being flattened into the rooms actually on screen.
    */
   splitSlots: string[];
+  expandedRoom?: string | null;
 }
 
 export const layoutControlCommand = writable<LayoutCommand | null>(null);
@@ -64,8 +65,9 @@ export function requestRoomArrangement(
   mode: AmbientLayout,
   slots: string[],
   focused: string | null,
+  expanded?: string | null,
 ): void {
-  layoutControlCommand.set({ nonce: ++commandNonce, type: 'arrangement', mode, slots, focused });
+  layoutControlCommand.set({ nonce: ++commandNonce, type: 'arrangement', mode, slots, focused, expanded: expanded ?? null });
 }
 
 /** Ask the workspace to focus / minimize / restore / close a room by name. */

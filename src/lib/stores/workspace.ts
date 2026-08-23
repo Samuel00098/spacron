@@ -5,7 +5,7 @@ import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
-import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, currentRightDrawerTool, applyRightDrawerTool, terminalRoomOpen, homeScreenOpen, type RightDrawerTool } from './layout';
+import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, currentRightDrawerTool, applyRightDrawerTool, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
 import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
@@ -73,7 +73,7 @@ export const cloneRepoPromptOpen = syncWritable<boolean>('cloneRepoPromptOpen', 
 export const isProjectHUDOpen = syncWritable<boolean>('isProjectHUDOpen', false);
 
 export function toggleProjectHUD() {
-  isProjectHUDOpen.update((open) => !open);
+  toggleSidebarTab('projects');
 }
 
 export const openProjectsList = derived(
@@ -114,6 +114,8 @@ interface ProjectWorkspaceState {
   splitSlots: string[];
   /** The room that was on top / primary when the project was left. */
   focusedRoom: string | null;
+  /** The room that was expanded / maximized 100% on the stage, if any. */
+  expandedRoom?: string | null;
   layout: {
     activeView: string;
     editorVisible: boolean;
@@ -246,6 +248,7 @@ interface PersistedProjectState {
    */
   splitSlots?: string[];
   focusedRoom?: string | null;
+  expandedRoom?: string | null;
   layout?: {
     activeView: string;
     editorVisible: boolean;
@@ -330,6 +333,7 @@ function saveProjectStateToStorage(projectId: string) {
     ambient: get(layoutSnapshot).ambient,
     splitSlots: get(layoutSnapshot).splitSlots.slice(0, MAX_SPLIT_SLOTS),
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
+    expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
     layout: {
       activeView: currentLayout.activeView,
       editorVisible: currentLayout.editorVisible,
@@ -460,6 +464,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     ? (r.splitSlots as unknown[]).filter(isSafeRoomId).slice(0, MAX_SPLIT_SLOTS)
     : undefined;
   const focusedRoom = isSafeRoomId(r.focusedRoom) ? r.focusedRoom : null;
+  const expandedRoom = isSafeRoomId(r.expandedRoom) ? r.expandedRoom : null;
 
   // Sanitise layout sub-object: clamp numerics, strip unknown view names
   let layout: PersistedProjectState['layout'] | undefined;
@@ -515,7 +520,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, layout, preview };
 }
 
 /**
@@ -570,6 +575,7 @@ export function saveProjectState(projectId: string) {
     ambient: get(layoutSnapshot).ambient,
     splitSlots: get(layoutSnapshot).splitSlots,
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
+    expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
     layout: {
       activeView: get(layout).activeView,
       editorVisible: get(layout).editorVisible,
@@ -691,7 +697,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         auxEditorHeight: cached.layout.auxEditorHeight,
         sidebarVisible: cached.layout.sidebarVisible,
         sidebarWidth: cached.layout.sidebarWidth,
-        sidebarTab: sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
+        sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
       }));
 
       // The right utility drawer is per-project too: a tool opened over one
@@ -710,6 +716,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         cached.ambient ?? 'focus',
         cached.splitSlots ?? [],
         cached.focusedRoom ?? null,
+        cached.expandedRoom ?? null,
       );
     } else {
       const persisted = loadProjectStateFromStorage(projectId);
@@ -778,7 +785,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           auxEditorHeight: persisted.layout!.auxEditorHeight ?? 50,
           sidebarVisible: persisted.layout!.sidebarVisible ?? true,
           sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
-          sidebarTab: sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
+          sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
         }));
       }
 
@@ -796,6 +803,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         persisted?.ambient ?? 'focus',
         persisted?.splitSlots ?? [],
         persisted?.focusedRoom ?? null,
+        persisted?.expandedRoom ?? null,
       );
 
       const existingTerminalState = getTerminalProjectState(projectId);
@@ -967,7 +975,7 @@ export function clearAllStores() {
     editorSplitPreview: false,
     auxPanelWidth: 550,
     auxEditorHeight: 50,
-    sidebarTab: 'files',
+    sidebarTab: l.sidebarTab === 'projects' ? 'projects' : 'files',
   }));
 }
 

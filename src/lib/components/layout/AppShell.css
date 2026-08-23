@@ -1263,26 +1263,36 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   overflow-x: auto;
-  scrollbar-width: none;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 25%, transparent) transparent;
   flex: 1;
+  padding: 2px 2px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
 }
 
 .app-shell .split-switcher-rooms::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.app-shell .split-switcher-rooms::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 4px;
 }
 
 .app-shell .split-switch-item {
-  min-width: 212px;
-  max-width: 280px;
-  min-height: 44px;
-  flex: 0 0 auto;
+  min-width: 140px;
+  max-width: 260px;
+  min-height: 42px;
+  flex: 1 1 210px;
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 6px 7px 6px 10px;
+  gap: 8px;
+  padding: 5px 6px 5px 9px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   /* Tinted from the shared panel tokens (`global.css`, "Panel surfaces") rather
@@ -1475,17 +1485,88 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  padding-right: 2px;
 }
 
 .app-shell .split-switcher-count {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 750;
-  line-height: 1.2;
+  line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  max-width: 52px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  display: inline-flex;
+  align-items: center;
+}
+
+.app-shell .split-switcher-count .split-count-compact {
+  display: none;
+}
+
+.app-shell .split-switcher-count .split-count-full {
+  display: inline;
+}
+
+@media (max-width: 900px) {
+  .app-shell .split-switcher {
+    gap: 6px;
+  }
+
+  .app-shell .split-switcher-count {
+    padding: 5px 7px;
+    font-size: 9px;
+  }
+
+  .app-shell .split-switcher-count .split-count-full {
+    display: none;
+  }
+
+  .app-shell .split-switcher-count .split-count-compact {
+    display: inline;
+  }
+
+  .app-shell .split-switch-item {
+    min-width: 125px;
+    max-width: 200px;
+    flex: 1 1 150px;
+    padding: 4px 5px 4px 7px;
+    gap: 6px;
+  }
+
+  .app-shell .split-switch-name {
+    font-size: 11px;
+  }
+
+  .app-shell .split-target-btn {
+    height: 22px;
+    min-width: 36px;
+    font-size: 9px;
+    padding: 0 5px;
+  }
+
+  .app-shell .split-target-btn.icon {
+    min-width: 22px;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell .split-switcher-count {
+    padding: 4px 6px;
+    font-size: 9px;
+  }
+
+  .app-shell .split-switch-item {
+    min-width: 110px;
+    flex: 0 0 auto;
+  }
+
+  .app-shell .split-switch-role {
+    display: none;
+  }
 }
 
 .app-shell .minimized-room-stack,

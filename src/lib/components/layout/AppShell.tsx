@@ -14,6 +14,7 @@ import SearchPanel from '$lib/components/explorer/SearchPanel.tsx';
 import SourceControl from '$lib/components/explorer/SourceControl.tsx';
 import SnapshotsPanel from './SnapshotsPanel.tsx';
 import TerminalSnippetsPanel from '$lib/components/explorer/TerminalSnippetsPanel.tsx';
+import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 
 import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
@@ -65,7 +66,7 @@ import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
 import { toggleCommandPalette } from '$lib/stores/commandpalette';
 import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
-import { startProxy, stopProxy, createPreviewBrowserTab, ensureProxyRunning } from '$lib/stores/preview';
+import { startProxy, stopProxy } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
@@ -107,7 +108,8 @@ type AuxPanelId =
   | 'toolbox'
   | 'youtube'
   | 'env'
-  | 'mobile';
+  | 'mobile'
+  | 'sketch';
 
 type AgentRoomId = `agent:${number}`;
 type RoomId = 'workspace' | 'terminal' | 'dev-terminal' | AuxPanelId | AgentRoomId;
@@ -137,6 +139,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   youtube: 'Media Player',
   env: 'Environment',
   mobile: 'Mobile',
+  sketch: 'Sketch',
 };
 
 function isAgentRoomId(id: RoomId): id is AgentRoomId {
@@ -185,11 +188,15 @@ function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
 }
 
-// Rooms whose live body (an xterm) must persist across focus switches: the
-// personal terminal, the dev terminal, and every running agent. They're kept
-// mounted in the stage and toggled by visibility rather than unmounted.
+// Rooms whose live body must persist across focus switches: the personal
+// terminal, the dev terminal, every running agent, and the preview browser.
+// They're kept mounted in the stage and toggled by visibility rather than
+// unmounted. For the terminals that protects the xterm's fit; for the preview
+// it protects the iframes — unmounting threw away the loaded page, so every
+// visit to another room and back reloaded whatever the user was looking at
+// (and dropped any unsaved state inside it).
 function isPersistentRoomId(id: RoomId): boolean {
-  return id === 'terminal' || id === 'dev-terminal' || isAgentRoomId(id);
+  return id === 'terminal' || id === 'dev-terminal' || id === 'preview' || isAgentRoomId(id);
 }
 
 // The layout fields AppShell reads. Kept as one named union so both the
@@ -217,6 +224,7 @@ type ShellLayoutKeys =
   | 'envVisible'
   | 'youtubeVisible'
   | 'mobileVisible'
+  | 'sketchVisible'
   | 'agentSpawnOpen'
   | 'envManagerOpen'
   | 'auxPanelWidth'
@@ -242,6 +250,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   youtube: 'youtubeVisible',
   env: 'envVisible',
   mobile: 'mobileVisible',
+  sketch: 'sketchVisible',
 };
 
 
@@ -249,6 +258,9 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
 const EditorPanel = lazy(() => import('$lib/components/editor/EditorPanel.tsx'));
 const FleetDashboard = lazy(() => import('$lib/components/orchestrator/FleetDashboard.tsx'));
 const EnvManager = lazy(() => import('$lib/components/shared/EnvManager.tsx'));
+// Code-split: the sketch canvas is a large, self-contained surface, so it
+// should not sit in the shell's initial bundle.
+const SketchPanel = lazy(() => import('$lib/components/sketch/SketchPanel.tsx'));
 
 function Icon({ children }: { children: React.ReactNode }) {
   return (
@@ -294,10 +306,11 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets'] as const;
+const LEFT_DRAWER_TOOLS = ['projects', 'files', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
-  files: { title: 'Files', icon: <Icon><path d="M3 7a2 2 0 0 1 2-2h3.586a2 2 0 0 1 1.414.586L11.414 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /></Icon> },
+  projects: { title: 'Projects', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
+  files: { title: 'Files', icon: <Icon><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
@@ -354,7 +367,7 @@ function AuxTab({
   );
 }
 
-function PanelHost({ id }: { id: AuxPanelId }) {
+function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
   if (id === 'editor') {
     return (
       <Suspense fallback={null}>
@@ -379,6 +392,13 @@ function PanelHost({ id }: { id: AuxPanelId }) {
   if (id === 'preview') return <PreviewPanel />;
   if (id === 'youtube') return <YouTubePanel />;
   if (id === 'mobile') return <MobilePanel />;
+  if (id === 'sketch') {
+    return (
+      <Suspense fallback={null}>
+        <SketchPanel onClose={onClose} />
+      </Suspense>
+    );
+  }
   if (id === 'env') {
     return (
       <Suspense fallback={null}>
@@ -391,6 +411,7 @@ function PanelHost({ id }: { id: AuxPanelId }) {
 }
 
 function SidebarContent({ tab }: { tab: SidebarTab }) {
+  if (tab === 'projects') return <ProjectHUD />;
   if (tab === 'search') return <SearchPanel />;
   if (tab === 'git') return <SourceControl />;
   if (tab === 'snapshots') return <SnapshotsPanel />;
@@ -517,6 +538,7 @@ export default function AppShell() {
         envVisible: s.envVisible,
         youtubeVisible: s.youtubeVisible,
         mobileVisible: s.mobileVisible,
+        sketchVisible: s.sketchVisible,
         agentSpawnOpen: s.agentSpawnOpen,
         envManagerOpen: s.envManagerOpen,
         auxPanelWidth: s.auxPanelWidth,
@@ -694,6 +716,7 @@ export default function AppShell() {
         { id: 'preview' as const, visible: layoutState.previewVisible },
         { id: 'review' as const, visible: layoutState.reviewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
+        { id: 'sketch' as const, visible: layoutState.sketchVisible },
         // Right utility drawer: fleet/toolbox/http/db/containers/env/mobile +
         // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
         // pop-up. None of those are rooms in the ambient grid.
@@ -889,6 +912,7 @@ export default function AppShell() {
         layoutCommand.mode,
         layoutCommand.slots.filter(isKnownRoomId),
         isKnownRoomId(layoutCommand.focused) ? layoutCommand.focused : null,
+        isKnownRoomId(layoutCommand.expanded) ? layoutCommand.expanded : null,
       );
       return;
     }
@@ -958,9 +982,10 @@ export default function AppShell() {
       // has not arranged the stage, and saving what happens to be tiled right
       // now would pin that accident as a deliberate arrangement.
       splitSlots,
+      expandedRoom,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots]);
+  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots, expandedRoom]);
 
   // Preview mode is built around the preview browser; if it gets closed (its X),
   // the mode has nothing to show, so fall back to Focus.
@@ -1456,7 +1481,7 @@ export default function AppShell() {
           </button>
         </header>
         <div className="drawer-body">
-          <PanelHost id={rightActiveTool} />
+          <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
         </div>
       </aside>
     );
@@ -1883,18 +1908,14 @@ export default function AppShell() {
     icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>,
   };
 
-  // Opens in the Preview room, so it is grouped with the room launchers.
+  // Opens the in-app Sketch room. It used to load excalidraw.com in a Preview
+  // browser tab through the embedding proxy; the drawing canvas is native now,
+  // so it is an ordinary room launcher like every other entry in this group.
   const sketchItem: ActivityItem = {
-    id: 'excalidraw',
+    id: 'sketch',
     title: 'Sketch',
-    active: false,
-    onClick: () => {
-      // Start the embedding proxy first — excalidraw.com only renders through
-      // it, so creating the tab before the proxy is up leaves a blank frame.
-      void ensureProxyRunning();
-      createPreviewBrowserTab('https://excalidraw.com');
-      setPanelRoomOpen('preview', true);
-    },
+    active: layoutState.sketchVisible,
+    onClick: () => togglePanelRoom('sketch'),
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
 
@@ -1970,15 +1991,15 @@ export default function AppShell() {
       return (
         <>
           <div className="aux-pane split-pane-third" style={{ height: '33.3%', minHeight: '10%' }}>
-            <PanelHost id={visiblePanels[0].id} />
+            <PanelHost id={visiblePanels[0].id} onClose={() => closeRoom(visiblePanels[0].id)} />
           </div>
           <div className="aux-separator-line" />
           <div className="aux-pane split-pane-third" style={{ height: '33.3%', minHeight: '10%' }}>
-            <PanelHost id={visiblePanels[1].id} />
+            <PanelHost id={visiblePanels[1].id} onClose={() => closeRoom(visiblePanels[1].id)} />
           </div>
           <div className="aux-separator-line" />
           <div className="aux-pane split-pane-third" style={{ height: '33.4%', minHeight: '10%' }}>
-            <PanelHost id={visiblePanels[2].id} />
+            <PanelHost id={visiblePanels[2].id} onClose={() => closeRoom(visiblePanels[2].id)} />
           </div>
         </>
       );
@@ -1988,7 +2009,7 @@ export default function AppShell() {
       return (
         <>
           <div className="aux-pane split-pane-top" style={{ height: `${auxEditorHeight}%`, minHeight: '10%' }}>
-            <PanelHost id={visiblePanels[0].id} />
+            <PanelHost id={visiblePanels[0].id} onClose={() => closeRoom(visiblePanels[0].id)} />
           </div>
           <div
             className={`aux-row-resize-handle${auxRowResizing ? ' resizing' : ''}`}
@@ -1997,7 +2018,7 @@ export default function AppShell() {
             aria-label="Resize panels"
           />
           <div className="aux-pane split-pane-bottom" style={{ height: `${100 - auxEditorHeight}%`, minHeight: '10%' }}>
-            <PanelHost id={visiblePanels[1].id} />
+            <PanelHost id={visiblePanels[1].id} onClose={() => closeRoom(visiblePanels[1].id)} />
           </div>
         </>
       );
@@ -2006,7 +2027,7 @@ export default function AppShell() {
     if (visiblePanels.length === 1) {
       return (
         <div className="aux-pane full-pane">
-          <PanelHost id={visiblePanels[0].id} />
+          <PanelHost id={visiblePanels[0].id} onClose={() => closeRoom(visiblePanels[0].id)} />
         </div>
       );
     }
@@ -2089,6 +2110,8 @@ export default function AppShell() {
         return <Icon><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" /></Icon>;
       case 'containers':
         return <Icon><path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" /><path d="M4 12.5 12 17l8-4.5" /><path d="M4 17.5 12 22l8-4.5" /></Icon>;
+      case 'sketch':
+        return <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>;
     case 'toolbox':
       return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
     case 'fleet':
@@ -2199,7 +2222,7 @@ export default function AppShell() {
         </div>
       );
     }
-    return <PanelHost id={id} />;
+    return <PanelHost id={id} onClose={() => closeRoom(id)} />;
   }
 
   // Rendered as a plain function call (not <RoomFrame/>), so its identity never
@@ -2352,7 +2375,12 @@ export default function AppShell() {
    * trap `focusRoomMode` works around). Seed that per-mode entry first, then let
    * the switch consume it.
    */
-  function restoreRoomArrangement(mode: AmbientLayout, slots: RoomId[], focused: RoomId | null) {
+  function restoreRoomArrangement(
+    mode: AmbientLayout,
+    slots: RoomId[],
+    focused: RoomId | null,
+    expanded: RoomId | null = null,
+  ) {
     // Collapse to the two modes that actually exist, mirroring the rule inside
     // `switchAmbientLayout`. Seeding `perLayoutState` under a name it will not
     // read back (`development`, or `vibe`, which re-tiles with the whole fleet
@@ -2367,6 +2395,7 @@ export default function AppShell() {
     // and it should still be there when they switch back to Split.
     setSplitSlots(slots);
     setFocusedRoom(focused);
+    setExpandedRoom(expanded);
     // Only when the mode is really changing — `switchAmbientLayout` early-returns
     // on an unchanged one, which would leave the two setters above as the whole
     // restore. That is exactly right in that case.
@@ -2485,9 +2514,16 @@ export default function AppShell() {
       <aside className="split-switcher" aria-label="Arrange split panes">
         <div className="split-switcher-head">
           <span className="split-switcher-count">
-            {isExpanded
-              ? `1 of ${visibleRooms.length} panes (expanded)`
-              : `${splitRooms.length} of ${SPLIT_MAX_PANES} panes`}
+            <span className="split-count-full">
+              {isExpanded
+                ? `1 of ${visibleRooms.length} (expanded)`
+                : `${splitRooms.length} of ${SPLIT_MAX_PANES} panes`}
+            </span>
+            <span className="split-count-compact">
+              {isExpanded
+                ? `1/${visibleRooms.length} exp`
+                : `${splitRooms.length}/${SPLIT_MAX_PANES}`}
+            </span>
           </span>
         </div>
         <div className="split-switcher-rooms">
@@ -2610,7 +2646,9 @@ export default function AppShell() {
     const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
 
     const persistentStageRooms: RoomId[] = [
-      ...(['terminal', 'dev-terminal'] as RoomId[]).filter((room) => openRooms.includes(room)),
+      ...(['terminal', 'dev-terminal', 'preview'] as RoomId[]).filter((room) =>
+        openRooms.includes(room),
+      ),
       ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
         (a, b) => getAgentRoomSessionId(a) - getAgentRoomSessionId(b),
       ),
