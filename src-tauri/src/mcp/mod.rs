@@ -273,6 +273,11 @@ fn load_or_create_token() -> String {
     if let Ok(t) = fs::read_to_string(&path) {
         let trimmed = t.trim().to_string();
         if !trimmed.is_empty() {
+            // Builds before 1.0 wrote this file at the umask default, so an
+            // existing install carries a world-readable token that would stay
+            // that way forever — the new file mode below only covers tokens
+            // minted from here on. Tighten in place instead.
+            restrict_existing_token_file(&path);
             return trimmed;
         }
     }
@@ -281,8 +286,51 @@ fn load_or_create_token() -> String {
         let _ = fs::create_dir_all(parent);
     }
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let _ = fs::write(&path, &token);
+    let _ = write_token_file(&path, &token);
     token
+}
+
+/// Persist the token owner-only.
+///
+/// This file *is* the credential `reject_unauthorized` checks, and the second of
+/// its two gates exists specifically to stop a local process that cannot read
+/// this user's agent config from reaching the port. A plain `fs::write` inherits
+/// the umask — 0644 on a typical Unix box — which hands that token to every
+/// other account on the machine and makes the gate decorative. Created 0o600
+/// instead, matching the preview cookie jar, which stores live session tokens
+/// under the same reasoning. On Windows the app config dir's DACL is already
+/// scoped to the user profile.
+/// Narrow an already-existing token file to 0o600. No-op on Windows (the config
+/// dir's DACL already scopes it) and whenever the mode is right, so the common
+/// path costs one stat.
+fn restrict_existing_token_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(meta) = fs::metadata(path) else { return };
+        let mode = meta.permissions().mode();
+        if mode & 0o077 == 0 {
+            return;
+        }
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+fn write_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    file.write_all(token.as_bytes())
 }
 
 /// Start the MCP HTTP+SSE server. Returns a [`McpServerHandle`] for
