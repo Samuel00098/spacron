@@ -1,0 +1,39 @@
+# The headless remote-workspace server, as its OWN crate.
+#
+# It used to be `src-tauri/src/bin/spacron-server.rs` — an auto-discovered bin
+# target of the `spacron` package — and that is precisely what broke the Windows
+# MSI. Tauri bundles every bin target of the app package *and* every
+# `bundle.externalBin` entry, so the server landed in the installer twice, from
+# two different sources:
+#
+#   binaries/spacron-server-<triple>.exe   (externalBin — the lean build)
+#   target/release/spacron-server.exe      (the package's own bin target)
+#
+# WiX rejects that with `ICE30: ... installed by two different components ...
+# This breaks component reference counting`. The .app/.deb/.AppImage bundlers
+# have no equivalent check, so they silently shipped whichever copy was written
+# last — which also meant the *fat* default-features build could end up on a VPS
+# in place of the lean one this crate exists to produce.
+#
+# As a separate crate the app package has exactly one bin, so `externalBin` is
+# the single source of the sidecar and the two copies cannot diverge.
+[package]
+name = "spacron-server"
+version = "1.0.0"
+description = "Headless Spacron remote-workspace server"
+authors = ["samue"]
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+# The app's library, WITHOUT default features: `whisper-stt` compiles
+# whisper.cpp from source and so needs cmake at build time, which is pure cost
+# for a headless server that never transcribes anything. Keeping the opt-out
+# here in the manifest (rather than as a `--no-default-features` flag the caller
+# must remember) means any way of building this crate gets the lean graph.
+# `spacron`'s lib target is named `spacron_lib`, which is how `main.rs` imports it.
+spacron = { path = "..", default-features = false }
+anyhow = "1"
+# `main` builds its own runtime with `Runtime::new()`, which is multi-thread.
+tokio = { version = "1", features = ["rt-multi-thread"] }

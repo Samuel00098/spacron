@@ -1,3 +1,17 @@
+# `src-tauri` is the workspace root; `server/` is the headless remote-workspace
+# server. It lives in its own crate rather than as `src/bin/spacron-server.rs`
+# because Tauri bundles every bin target of the app package *in addition to*
+# every `bundle.externalBin` entry — which put the server in the Windows MSI
+# twice and made WiX reject the package (ICE30). See server/Cargo.toml.
+#
+# `resolver = "2"` is explicit because a workspace does not inherit the
+# resolver its root package's edition implies, and feature unification is
+# load-bearing here: the server depends on this package with
+# `default-features = false` to keep whisper/cmake out of its graph.
+[workspace]
+members = [".", "server"]
+resolver = "2"
+
 [package]
 name = "spacron"
 version = "1.0.0"

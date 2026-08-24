@@ -9,10 +9,10 @@
  * bundling time. Tauri strips the triple when it copies the file next to the
  * app binary. This script:
  *
- *   1. compiles the server (`cargo build --release --no-default-features
- *      --bin spacron-server` — default features are dropped because the
- *      voice/whisper stack is desktop-only and would add a cmake requirement
- *      for nothing),
+ *   1. compiles the server (`cargo build --release -p spacron-server`). The
+ *      server is its own crate (`src-tauri/server`) and depends on the app's
+ *      library with `default-features = false`, so the whisper/cmake stack is
+ *      dropped by its manifest rather than by a flag a caller has to remember,
  *   2. copies `target/release/spacron-server[.exe]` to
  *      `binaries/spacron-server-<triple>[.exe]`.
  *
@@ -86,7 +86,7 @@ const ext = triple.includes('windows') ? '.exe' : '';
 
 console.log(`build-server-sidecar: building spacron-server for ${triple}…`);
 run(
-  `cargo build --release --no-default-features --bin spacron-server${
+  `cargo build --release -p spacron-server${
     requestedTarget ? ` --target ${requestedTarget}` : ''
   }`,
 );
