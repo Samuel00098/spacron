@@ -4,6 +4,7 @@ const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 import {
+  agentAttentionPhrases,
   agentExecutable,
   agentHasNativeExtras,
   agentReadsRulesFile,
@@ -34,6 +35,20 @@ describe('agentExecutable', () => {
   it('is empty for empty input', () => {
     expect(agentExecutable('')).toBe('');
     expect(agentExecutable(null)).toBe('');
+  });
+});
+
+describe('agentAttentionPhrases', () => {
+  it('resolves per-CLI phrases by executable, normalising the command', () => {
+    expect(agentAttentionPhrases('codex')).toContain('send?');
+    expect(agentAttentionPhrases('npx opencode --foo')).toEqual(agentAttentionPhrases('opencode'));
+    expect(agentAttentionPhrases('/usr/local/bin/codex.cmd')).toContain('awaiting approval');
+  });
+
+  it('returns an empty list for unknown CLIs (falls back to the universal pattern)', () => {
+    expect(agentAttentionPhrases('unknowncli')).toEqual([]);
+    expect(agentAttentionPhrases('')).toEqual([]);
+    expect(agentAttentionPhrases(null)).toEqual([]);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   countBellStream,
   createBellScanState,
 } from './agent-signals';
+import { agentAttentionPhrases } from './agent-rules-file';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
@@ -18,6 +19,13 @@ export type AgentTurnOutcome =
 export interface WatchLeasedAgentOptions {
   /** Return false to stop watching (task unlinked, session died, etc.). */
   shouldContinue: () => boolean;
+  /**
+   * The agent's launch command (e.g. "codex", "npx opencode"). Used to resolve
+   * per-CLI attention phrases so each CLI's distinctive "needs input" prompts
+   * are recognised instead of being misreported as "finished". Optional — when
+   * absent the universal pattern is used.
+   */
+  agentCommand?: string;
   /** How often to sample the output buffer. */
   pollMs?: number;
   /**
@@ -72,6 +80,32 @@ const SIGNALLED_IDLE_MS = 15 * 60 * 1000;
 export const QUIET_TURN_IDLE_MS = 10 * 60 * 1000;
 
 /**
+ * When the output first goes quiet, non-hook agents (Codex, Gemini, …) may have
+ * parked at an attention prompt that already scrolled out of the 2 KB `recent`
+ * tail the per-poll loop scans. The idle freeze is the right moment to re-scan a
+ * wider slice: the buffer is now stable, so a prompt caught here is unambiguous
+ * and cannot be a transient redraw. It deliberately stays *off* while a sentinel
+ * channel is open — hook agents report needs-input via the hook, and a wider
+ * rescan would only add latency with no accuracy gain there. 8 KB covers a
+ * parked prompt plus its surrounding context on even very verbose turns.
+ */
+const IDLE_ATTENTION_SCAN_CHARS = 8 * 1024;
+
+/**
+ * A terminal bell alone no longer ends a turn. BEL is ambiguous — it can mean
+ * "turn finished", "I want input", or just be TUI noise (a progress bar, a
+ * window-title OSC terminator) — and a mid-turn ring used to false-complete the
+ * turn instantly, severing the lease before the agent's real answer arrived.
+ * A bell now only corroborates an end: after a ring, the output must stay quiet
+ * for this grace period before we call it done. A genuine turn-end bell is
+ * followed by silence (or a stable REPL prompt); a mid-turn bell is followed by
+ * more output, so it never reaches this quiet state and is correctly ignored.
+ * The 90s idle fallback still finishes bell-less ends. Only non-hook agents use
+ * this path — hook agents keep their sentinel channel and skip bells entirely.
+ */
+const BELL_FINISH_GRACE_MS = 2500;
+
+/**
  * Watch a leased agent terminal and resolve once the current turn ends.
  *
  * CLI agents don't exit when they finish a task — they sit in a REPL — and many
@@ -79,8 +113,8 @@ export const QUIET_TURN_IDLE_MS = 10 * 60 * 1000;
  * preference order:
  *   0. a hook sentinel from the agent itself (see `agent-hook-signals.ts`) —
  *      exact, immediate, and the only signal here that isn't a guess;
- *   1. a terminal bell (`\x07`) after the agent has done some work → finished,
- *      unless the recent output is an attention prompt → blocked;
+ *   1. a terminal bell (`\x07`) that is followed by quiescence corroborates a
+ *      finished end (see `BELL_FINISH_GRACE_MS`); an attention prompt in the tail → blocked;
  *   2. an attention prompt on its own → blocked;
  *   3. as a fallback, output that stops growing for `idleMs` → finished; a turn
  *      under `minWorkChars` (a terse agent) needs the longer
@@ -130,11 +164,17 @@ async function watchTurnUntilDone(
   const idleMs = opts.idleMs ?? (signalled ? SIGNALLED_IDLE_MS : 90000);
   const tailChars = opts.tailChars ?? 2000;
   const minWorkChars = opts.minWorkChars ?? 500;
+  // Per-CLI attention phrases (resolved once; empty for unknown CLIs, which
+  // then rely on the universal pattern). Layered onto the generic matcher so
+  // each agent's distinctive "needs input" prompts are recognised.
+  const attentionPhrases = agentAttentionPhrases(opts.agentCommand);
 
   let lastLen = getSessionOutputLength(sessionId);
   let lastGrowthAt = Date.now();
   let sawActivity = false;
   let grownTotal = 0;
+  /** When the most recent terminal bell in this turn's output was seen, or null. */
+  let lastBellAt: number | null = null;
 
   // Escape state for the incremental bell scanner, threaded across polls.
   const bellState = createBellScanState();
@@ -189,14 +229,14 @@ async function watchTurnUntilDone(
 
       const buf = getSessionOutputBuffer(sessionId);
       const len = buf.length;
-      let rangNewBell = false;
 
       if (len > lastLen) {
         const added = buf.slice(lastLen);
         sawActivity = true;
         grownTotal += added.length;
         lastGrowthAt = Date.now();
-        rangNewBell = countBellStream(added, bellState) > 0;
+        const newBells = countBellStream(added, bellState);
+        if (newBells > 0) lastBellAt = Date.now();
         recent = (recent + added).slice(-tailChars);
       } else if (len < lastLen) {
         // Buffer was capped/sliced — treat as fresh activity so we don't stall.
@@ -211,22 +251,18 @@ async function watchTurnUntilDone(
       }
       lastLen = len;
 
-      // With a sentinel channel open the screen heuristics are not a second
-      // opinion — they are the thing being replaced, and running them in
-      // parallel reintroduces exactly what they get wrong. Claude Code rings the
-      // bell both when it finishes and when it wants input, so a bell racing an
-      // in-flight `Notification` sentinel would report a blocked agent as
-      // finished. Only the long idle backstop below stays armed.
-      if (!signalled) {
-        if (sawActivity && grownTotal >= minWorkChars && rangNewBell) {
-          return containsAttentionRequest(recent)
-            ? { kind: 'blocked', reason: attentionReason(recent) }
-            : { kind: 'finished' };
-        }
-
-        if (sawActivity && containsAttentionRequest(recent)) {
-          return { kind: 'blocked', reason: attentionReason(recent) };
-        }
+      // An unambiguous attention PROMPT in this turn's tail is independent
+      // evidence of "needs input" that must be honoured for every agent,
+      // signalled or not. It runs before any finish path, so a parked prompt is
+      // never mislabeled "finished".
+      //
+      // The hook is still the authority for signalled agents: a hook sentinel is
+      // returned earlier in the loop (see `if (sentinel) return sentinel`),
+      // before any buffer scan, so a genuine finished/blocked hook always wins.
+      // And because this check fires on the per-poll `recent` tail, a prompt
+      // that scrolls past it is still caught by the wider idle rescan below.
+      if (sawActivity && containsAttentionRequest(recent, attentionPhrases)) {
+        return { kind: 'blocked', reason: attentionReason(recent, attentionPhrases) };
       }
 
       // The idle fallback normally requires the work floor — a tiny burst that
@@ -238,6 +274,37 @@ async function watchTurnUntilDone(
       // sub-floor turn is always the more conservative one.
       const idleWindow = grownTotal >= minWorkChars ? idleMs : Math.max(QUIET_TURN_IDLE_MS, idleMs);
       if (sawActivity && Date.now() - lastGrowthAt >= idleWindow) {
+        return finishQuietTurn();
+      }
+
+      // Bell-corroborated fast finish, non-hook agents only. A bell is never
+      // enough on its own — that was the false-finish bug: a mid-turn ring
+      // (progress TUI, "press enter", a stray OSC terminator) ended the turn
+      // instantly and severed the lease before the agent's real answer landed.
+      // Now a bell only counts once the output has been quiet for
+      // `BELL_FINISH_GRACE_MS` since the ring; a genuine turn-end bell is
+      // followed by silence, whereas a mid-turn bell is followed by more output
+      // and never reaches this quiet state. Hook agents keep their sentinel
+      // path and skip this entirely (the `!signalled` guard below).
+      const bellQuiet =
+        !signalled &&
+        lastBellAt !== null &&
+        Date.now() - lastBellAt >= BELL_FINISH_GRACE_MS &&
+        Date.now() - lastGrowthAt >= BELL_FINISH_GRACE_MS;
+      if (sawActivity && bellQuiet) {
+        return finishQuietTurn();
+      }
+
+      // Shared tail of both quiet paths: a parked attention prompt that scrolled
+      // past the per-poll 2 KB `recent` tail must still flip the turn to
+      // "blocked", and hook agents skip the rescan (they report via sentinel).
+      function finishQuietTurn(): AgentTurnOutcome {
+        if (!signalled) {
+          const tail = getSessionOutputBuffer(sessionId).slice(-IDLE_ATTENTION_SCAN_CHARS);
+          if (containsAttentionRequest(tail, attentionPhrases)) {
+            return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases) };
+          }
+        }
         return { kind: 'finished' };
       }
     }

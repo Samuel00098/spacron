@@ -46,10 +46,13 @@
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   border-left: 2px solid var(--accent);
-  /* Opaque enough to read as a floating notification over any workspace content. */
-  background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* Solid, like every other notification (see Toasts.css). `--bg-secondary` is
+     ~20% alpha whenever transparency is on, so mixing against it made the card
+     borrow whatever was behind it — dark over the terminal, pale over the
+     wallpaper. `--bg-secondary-rgb` is the same colour at full opacity. */
+  background: rgba(var(--bg-secondary-rgb), 1);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .agent-notifs .orc-mb-handoff { border-left-color: var(--role-agent, var(--accent)); }
 .agent-notifs .orc-mb-ask { border-left-color: var(--warning, #f59e0b); }
@@ -120,10 +123,11 @@
   padding: 11px 12px;
   padding-right: 34px; /* room for the action cluster */
   border-radius: 10px;
-  background: color-mix(in srgb, var(--cc) 7%, color-mix(in srgb, var(--bg-secondary) 92%, transparent));
+  /* Status tint over a *solid* base — see the note on .orc-mb-card. */
+  background: color-mix(in srgb, var(--cc) 7%, rgba(var(--bg-secondary-rgb), 1));
   border: 1px solid color-mix(in srgb, var(--cc) 22%, var(--border));
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .agent-notifs .orc-completion-failed { --cc: var(--error, #f87171); }
 .agent-notifs .orc-completion-blocked { --cc: var(--warning, #fbbf24); }

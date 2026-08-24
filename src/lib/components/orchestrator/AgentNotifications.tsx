@@ -187,11 +187,16 @@ export default function AgentNotifications() {
     }
   }, [completionGroups, projectId]);
 
-  // When the window is hidden, a completion card is invisible — raise it as an
-  // OS notification instead (once per card). When the window is visible the
-  // floating card IS the notification, so nothing fires.
+  // Raise an OS notification when the user can't actually see the corner card:
+  // the window is hidden OR it's visible but another app is focused (so the
+  // stack is off in another workspace). When the app is focused and visible the
+  // floating card already is the notification, so nothing fires.
   useEffect(() => {
-    if (typeof document === 'undefined' || !document.hidden) return;
+    if (
+      typeof document === 'undefined' ||
+      (document.visibilityState === 'visible' && document.hasFocus())
+    )
+      return;
     for (const g of completionGroups) {
       for (const m of g.members) {
         if (systemPinged.current.has(m.id)) continue;

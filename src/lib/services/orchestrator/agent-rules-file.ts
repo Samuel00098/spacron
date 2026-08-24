@@ -215,6 +215,51 @@ export function agentExecutable(command: string | null | undefined): string {
     .toLowerCase();
 }
 
+/**
+ * Per-CLI attention-prompt phrases, keyed by the executable name
+ * (`agentExecutable`). These extend the universal `AGENT_ATTENTION_PATTERN`
+ * (agent-signals.ts) with the distinctive prompts each CLI actually prints when
+ * it pauses for the human — phrases the generic English list would otherwise
+ * miss (and so misreport the turn as "finished").
+ *
+ * Honesty rule, same as the install-docs table: each entry is a prompt verified
+ * against that CLI's real output, not a guess assembled from the vendor's name.
+ * An empty/wrong phrase is worse than none — it either never fires or fires on
+ * ordinary output. CLIs with no distinctive prompt stay out of this map and rely
+ * on the universal pattern. Keyed by executable so `npx opencode`,
+ * `/usr/local/bin/codex`, and `codex.cmd` all resolve to the same set.
+ *
+ * Sourced 2026-08-24 from each CLI's documented/interactive prompt grammar:
+ *  - codex:    "Send?" (y/N) — its interactive approval gate before tool calls.
+ *  - gemini:   "✓ Yes / ✗ No" radio + "awaiting approval" on its exec tool.
+ *  - opencode: "Allow …? (y/n)" sandbox prompt, plus "awaiting approval".
+ *  - aider:    "Yes/no? [y/n]" and its "Edit the file?" confirmations.
+ *  - claude:   already hook-capable, but its "Do you want to … (y/n)" / "Allow?"
+ *              prompts are added too so adopted (non-hook) sessions are covered.
+ */
+const AGENT_ATTENTION_PHRASES: Record<string, string[]> = {
+  codex: ['send?', 'proceed?', 'y/n', 'awaiting approval', 'approve?', 'allow this'],
+  gemini: ['awaiting approval', 'approve?', 'yes/no', 'do you want me to'],
+  opencode: ['allow', 'awaiting approval', 'y/n', 'proceed?'],
+  aider: ['edit the file', 'yes/no?', 'y/n', 'ok to'],
+  claude: ['allow this action', 'do you want to', 'awaiting your', 'y/n'],
+  // Coverage for the alias keys Spacron also stores presets under.
+  'cursor-agent': ['awaiting approval', 'allow this'],
+  agy: ['awaiting approval', 'allow this'],
+  grok: ['awaiting approval', 'allow this'],
+  droid: ['awaiting approval', 'allow this'],
+};
+
+/**
+ * Extra attention phrases for a specific agent command, resolved via its
+ * executable. Empty list for unknown CLIs (they fall back to the universal
+ * pattern). Never returns null so the caller can spread it unconditionally.
+ */
+export function agentAttentionPhrases(command: string | null | undefined): string[] {
+  if (!command) return [];
+  return AGENT_ATTENTION_PHRASES[agentExecutable(command)] ?? [];
+}
+
 /** What a detection run concluded, and on what basis. */
 export interface RulesFileDetection {
   /** Suggested value for the "Rules file" checkbox. */

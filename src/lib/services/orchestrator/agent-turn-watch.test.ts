@@ -5,6 +5,14 @@ const getSessionOutputLength = vi.hoisted(() => vi.fn(() => 0));
 vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer, getSessionOutputLength }));
 
 import { watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
+import { __registerChannelForTest, __resetTurnSignalsForTest } from './agent-hook-signals';
+
+beforeEach(() => {
+  __resetTurnSignalsForTest();
+});
+afterEach(() => {
+  __resetTurnSignalsForTest();
+});
 
 describe('watchLeasedAgentTurn', () => {
   let buf = '';
@@ -21,18 +29,25 @@ describe('watchLeasedAgentTurn', () => {
     vi.useRealTimers();
   });
 
-  it('finishes when the agent rings the bell after working', async () => {
+  it('does not finish on a lone bell — it must be corroborated by quiescence', async () => {
+    // Regression: a terminal bell used to finish the turn instantly. A mid-turn
+    // ring (progress TUI, "press enter", a stray OSC terminator) then
+    // false-completed the turn and severed the lease before the agent's real
+    // answer arrived. Now a bell only ends the turn after the output stays quiet
+    // for the grace period; a lone bell with more work to come is ignored.
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, minWorkChars: 20 });
     buf = 'working on the change...';
     await vi.advanceTimersByTimeAsync(10); // sees activity
-    buf += ' done\x07';
-    await vi.advanceTimersByTimeAsync(10); // sees new bell
-    await expect(p).resolves.toEqual({ kind: 'finished' });
+    buf += ' intermediate chime\x07';
+    await vi.advanceTimersByTimeAsync(10); // sees new bell, but more output is coming
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
   });
 
   it('does not finish on a bell before the agent has done real work', async () => {
     // Startup TUI noise: a few chars of banner + a bell must not look like a
-    // completed turn. The bell path requires grownTotal >= minWorkChars.
+    // completed turn. The bell path requires grownTotal >= minWorkChars, and a
+    // bell alone (without quiescence) never ends the turn anyway.
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, minWorkChars: 200 });
     buf = 'Welcome to Agent v1.0\x07'; // well under minWorkChars
     await vi.advanceTimersByTimeAsync(10);
@@ -40,13 +55,36 @@ describe('watchLeasedAgentTurn', () => {
     expect(settled).toBe('pending');
   });
 
-  it('finishes on a bell once the agent has produced enough output', async () => {
-    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+  it('finishes when a bell is followed by quiescence after real work', async () => {
+    // A genuine turn-end bell is followed by silence (or a stable REPL prompt).
+    // After the bell-grace quiet window, the turn resolves as finished.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, minWorkChars: 200 });
     buf = 'streamed some real work '.repeat(25); // > default minWorkChars (500)
     await vi.advanceTimersByTimeAsync(10); // sees activity
     buf += ' all done\x07';
     await vi.advanceTimersByTimeAsync(10); // sees new bell
+    // Quiescence after the bell — long past the grace window — corroborates end.
+    await vi.advanceTimersByTimeAsync(3000);
     await expect(p).resolves.toEqual({ kind: 'finished' });
+  });
+
+  it('does not finish on a bell that only appeared because the buffer slid', async () => {
+    // The session buffer is capped and drops output from the front. Re-counting
+    // bells from that moving cut point used to invent one whenever the cut
+    // landed inside an OSC sequence, promoting its terminator to a real ring.
+    const head = 'boot\x1b]0;agent title\x07'; // OSC terminator at index 20
+    buf = head + 'streamed some real work '.repeat(40);
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf += 'more work '.repeat(60);
+    await vi.advanceTimersByTimeAsync(10); // plenty of growth, no bell
+    // The cap slices the head off mid-OSC, so the buffer now *starts* with the
+    // sequence's tail and its terminator reads as a standalone BEL.
+    buf = buf.slice(10);
+    expect(buf.indexOf('\x07')).toBeGreaterThanOrEqual(0);
+    expect(buf.slice(0, buf.indexOf('\x07'))).not.toContain('\x1b');
+    await vi.advanceTimersByTimeAsync(30);
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
   });
 
   it('blocks when the agent prints an attention prompt', async () => {
@@ -80,25 +118,6 @@ describe('watchLeasedAgentTurn', () => {
     await vi.advanceTimersByTimeAsync(10);
     const outcome = await p;
     expect(outcome.kind).toBe('blocked');
-  });
-
-  it('does not finish on a bell that only appeared because the buffer slid', async () => {
-    // The session buffer is capped and drops output from the front. Re-counting
-    // bells from that moving cut point used to invent one whenever the cut
-    // landed inside an OSC sequence, promoting its terminator to a real ring.
-    const head = 'boot\x1b]0;agent title\x07'; // OSC terminator at index 20
-    buf = head + 'streamed some real work '.repeat(40);
-    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
-    buf += 'more work '.repeat(60);
-    await vi.advanceTimersByTimeAsync(10); // plenty of growth, no bell
-    // The cap slices the head off mid-OSC, so the buffer now *starts* with the
-    // sequence's tail and its terminator reads as a standalone BEL.
-    buf = buf.slice(10);
-    expect(buf.indexOf('\x07')).toBeGreaterThanOrEqual(0);
-    expect(buf.slice(0, buf.indexOf('\x07'))).not.toContain('\x1b');
-    await vi.advanceTimersByTimeAsync(30);
-    const settled = await Promise.race([p, Promise.resolve('pending')]);
-    expect(settled).toBe('pending');
   });
 
   it('finishes via quiescence when output stops growing', async () => {
@@ -144,6 +163,65 @@ describe('watchLeasedAgentTurn', () => {
     await expect(p).resolves.toEqual({ kind: 'aborted' });
   });
 
+  it('blocks on a per-CLI prompt when the agent command is supplied', async () => {
+    // A CLI phrasing its "needs input" gate outside the generic English list
+    // (e.g. Codex's "Send?" approval) used to be misreported "finished". With
+    // the agent command threaded through, the per-CLI phrase set catches it.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000, agentCommand: 'codex' });
+    buf = 'I can make that change. Send? (y/N)';
+    await vi.advanceTimersByTimeAsync(10);
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+  });
+
+  it('does NOT catch a per-CLI-only prompt when no agent command is known', async () => {
+    // Without the command, the watcher only has the universal pattern. A
+    // CLI-specific cue that is NOT in the universal set (Codex's bare "Send?"
+    // with no y/n bracket) must not block — the turn resolves via quiescence
+    // as finished. This pins the behaviour the per-CLI table is meant to
+    // improve: absent the table, that prompt would be missed.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
+    buf = 'working '.repeat(200) + 'Send?';
+    await vi.advanceTimersByTimeAsync(10); // activity
+    await vi.advanceTimersByTimeAsync(80); // idle freeze; no per-CLI phrase registered
+    const outcome = await p;
+    // No CLI-specific match → resolves via quiescence as finished, not blocked.
+    expect(outcome.kind).toBe('finished');
+  });
+
+  it('still blocks a signalled session parked at an attention prompt when the hook never fires', async () => {
+    // Regression: when a sentinel channel is open, the old code disabled every
+    // screen heuristic. If Claude Code is parked at a prompt whose
+    // `Notification` hook never emits (or failed to install), the only remaining
+    // path was the 15-minute idle backstop — which reported "finished" and
+    // severed the agent from its still-waiting terminal. The attention-prompt
+    // check must run even when signalled, so a blocked agent is never mislabeled.
+    __registerChannelForTest(1, 'deadbeef'); // session 1 now has a hook channel, but no signal ever arrives
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    buf = 'Deleting the table. Do you want to continue? [y/n]';
+    await vi.advanceTimersByTimeAsync(10); // never receives a sentinel
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+    if (outcome.kind === 'blocked') expect(outcome.reason.toLowerCase()).toContain('do you want to');
+  });
+
+  it('a signalled finished hook still overrides a coincidental prompt in the tail', async () => {
+    // The prompt check must not override a genuine hook signal. A `Notification`
+    // sentinel is returned earlier in the loop (before any buffer scan), so a
+    // real "needs input" hook wins over an old prompt still sitting in the tail.
+    const channelId = 'deadbeef';
+    __registerChannelForTest(1, channelId);
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 10_000 });
+    // Seed a stale prompt in the buffer before the hook fires.
+    buf = 'All set? Do you want to continue? [y/n]';
+    // No advanceTimers here: deliver the hook sentinel via the channel listener.
+    // Simulate the backend emitting the blocked signal.
+    const { __deliverLineForTest } = await import('./agent-hook-signals');
+    __deliverLineForTest(channelId, `SPACRON-NEEDS-INPUT:${channelId}`);
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+  });
+
   it('does not finish while output keeps growing (still working)', async () => {
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 40, minWorkChars: 200 });
     for (let i = 0; i < 6; i += 1) {
@@ -152,5 +230,56 @@ describe('watchLeasedAgentTurn', () => {
     }
     const settled = await Promise.race([p, Promise.resolve('pending')]);
     expect(settled).toBe('pending');
+  });
+
+  it('catches a parked attention prompt that scrolled past the 2KB tail on a non-hook agent', async () => {
+    // Non-hook agents (Codex, Gemini, …) have no sentinel and no bell. The
+    // per-poll loop only scans the last 2 KB (`recent`), so a prompt pushed
+    // beyond that by a verbose turn would be missed and misreported "finished".
+    // At the idle freeze the wider 8 KB rescan must catch it.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
+    // > 2 KB of filler so the prompt sits outside the per-poll tail window.
+    buf = 'working '.repeat(700);
+    buf += 'Deleting the table. Do you want to continue? [y/n]';
+    await vi.advanceTimersByTimeAsync(10); // sees activity
+    await vi.advanceTimersByTimeAsync(80); // idle freeze at idleMs=50
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+    if (outcome.kind === 'blocked') expect(outcome.reason.toLowerCase()).toContain('do you want to');
+  });
+
+  it('a signalled agent does not idle-rescan and finishes when no prompt is present', async () => {
+    // Hook agents report needs-input via the sentinel; the idle rescan stays
+    // off for them. With no attention prompt anywhere in the buffer, the idle
+    // backstop resolves the turn as finished (no hook signal here → not blocked,
+    // and nothing for the skipped rescan to find).
+    __registerChannelForTest(1, 'deadbeef');
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
+    buf = 'working '.repeat(700) + 'all tasks complete';
+    await vi.advanceTimersByTimeAsync(10); // activity
+    await vi.advanceTimersByTimeAsync(80); // idle freeze; rescan is skipped because signalled
+    const outcome = await p;
+    expect(outcome.kind).toBe('finished');
+  });
+
+  it('a non-hook agent that rings a bell then keeps working is not false-completed', async () => {
+    // End-to-end: Codex-style mid-turn bell. The watcher must ignore the ring
+    // (more output follows within the grace window) and stay alive; only once
+    // the work actually stops does quiescence finish it.
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
+    buf = 'streamed some real work '.repeat(25); // > minWorkChars
+    await vi.advanceTimersByTimeAsync(10); // activity
+    buf += ' progress\x07'; // a mid-turn chime
+    await vi.advanceTimersByTimeAsync(10); // bell seen; lastBellAt set
+    buf += ' and then the real continuation'; // more output AFTER the bell
+    await vi.advanceTimersByTimeAsync(10); // growth resets lastGrowthAt past the bell
+    // The bell is now older than the latest growth, so the bell-quiet path is
+    // blocked, and we are still inside the 50 ms idle window — the turn must be
+    // alive. This is the exact mid-turn-bell case the old code false-completed.
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+    // Now let it go quiet; quiescence finishes it (not the earlier bell).
+    await vi.advanceTimersByTimeAsync(80);
+    await expect(p).resolves.toEqual({ kind: 'finished' });
   });
 });

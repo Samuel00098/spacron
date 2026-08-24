@@ -1397,6 +1397,7 @@ function sendGoalToLeasedTask(
       if (!watchTurn) return;
       const outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(id, sessionId),
+        agentCommand,
       });
       if (outcome.kind !== 'aborted') completeLeasedTask(id, sessionId, outcome);
     } catch (err) {
@@ -2085,13 +2086,13 @@ function shouldNudgeAdopted(sessionId: number, bufLen: number): boolean {
 function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
   void (async () => {
     for (;;) {
-      const outcome = await getAgentAdapter(sessionId).watchTurn({
-        shouldContinue: () => leasedSessionLive(taskId, sessionId),
-      });
-      if (outcome.kind === 'aborted') return;
-
       const task = get(orchestratorTasks).find((t) => t.id === taskId);
       if (!task) return;
+      const outcome = await getAgentAdapter(sessionId).watchTurn({
+        shouldContinue: () => leasedSessionLive(taskId, sessionId),
+        agentCommand: task.agentPreset ?? undefined,
+      });
+      if (outcome.kind === 'aborted') return;
 
       const bufLen = getSessionOutputLength(sessionId);
       if (shouldNudgeAdopted(sessionId, bufLen)) {
@@ -2450,6 +2451,7 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
   void (async () => {
     const outcome = await getAgentAdapter(sessionId).watchTurn({
       shouldContinue: () => leasedSessionLive(task.id, sessionId),
+      agentCommand: task.agentPreset ?? undefined,
     });
     if (outcome.kind !== 'aborted') completeLeasedTask(task.id, sessionId, outcome);
   })();

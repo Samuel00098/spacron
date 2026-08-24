@@ -88,6 +88,28 @@ describe('containsAttentionRequest', () => {
   it('ignores ordinary output', () => {
     expect(containsAttentionRequest('Refactored 3 files and ran the tests.')).toBe(false);
   });
+
+  it('broadens coverage with the universal structural cues', () => {
+    // Bare (y/N) the original bracket set missed, plus the approval/paused cues.
+    expect(containsAttentionRequest('Apply this change? (y/N)')).toBe(true);
+    expect(containsAttentionRequest('Tool call awaiting approval…')).toBe(true);
+    expect(containsAttentionRequest('Paused — is this ok?')).toBe(true);
+  });
+
+  it('layers per-CLI phrases onto the universal pattern', () => {
+    // Codex prints "Send? (y/N)" at its approval gate — covered by the generic
+    // (y/N) cue now, but a phrase like its bare "send?" is CLI-specific.
+    expect(containsAttentionRequest('Send?', ['send?', 'proceed?'])).toBe(true);
+    // Gemini's "awaiting approval" only fires with the per-CLI phrase present.
+    expect(containsAttentionRequest('exec tool awaiting approval', ['awaiting approval'])).toBe(true);
+    // Without the extra phrase, a CLI-specific cue alone must NOT match.
+    expect(containsAttentionRequest('Send?')).toBe(false);
+  });
+
+  it('does not false-match ordinary prose containing a phrase fragment', () => {
+    // "allow" is a Codex/OpenCode phrase; ensure it doesn't trip on narration.
+    expect(containsAttentionRequest('I will allow the tests to run automatically.')).toBe(false);
+  });
 });
 
 describe('attentionReason', () => {
@@ -98,5 +120,24 @@ describe('attentionReason', () => {
 
   it('falls back to a generic message', () => {
     expect(attentionReason('[y/n]')).toMatch(/\[y\/n\]|waiting for your input/i);
+  });
+
+  // A TUI agent's tail is mostly escape codes; the blocked card used to print
+  // them verbatim (`[38;2;200;200;200;48;2;20;20;20m ...`).
+  it('strips ANSI/CSI noise out of the snippet', () => {
+    const raw =
+      '\x1b[10;64H\x1b[38;2;200;200;200;48;2;20;20;20m\u2502 ' +
+      'I updated the renderer. Do you want to run the tests now?' +
+      '\x1b[39m\x1b[49m\u2502\x1b[0m';
+    const reason = attentionReason(raw);
+    expect(reason.toLowerCase()).toContain('do you want to run the tests');
+    expect(reason).not.toMatch(/\x1b|\[\d+;\d+[Hm]/);
+    expect(reason).not.toContain('\u2502');
+  });
+
+  // OSC window-title strings carry the same phrases and are pure noise on a card.
+  it('drops OSC window-title sequences', () => {
+    const raw = '\x1b]0;grok - Waiting for response... - Fix Rendering\x07';
+    expect(attentionReason(raw)).toBe('Agent is waiting for your input.');
   });
 });
