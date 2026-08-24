@@ -523,7 +523,13 @@ export async function installServer(language: string): Promise<void> {
   } catch (err: any) {
     installing.delete(language);
     dismissByMessage(progress);
-    showToast(`Couldn't install ${status.command}: ${err?.message ?? err}`, 'error', 8000);
+    // The backend already names the failing program and the exact command to run
+    // by hand; only append the hint when it didn't (e.g. an unexpected IPC error).
+    const reason = String(err?.message ?? err);
+    const detail = reason.includes(status.install_hint)
+      ? reason
+      : `${reason} — install manually: ${status.install_hint}`;
+    showToast(`Couldn't install ${status.command}. ${detail}`, 'error', 12000);
     return;
   }
 

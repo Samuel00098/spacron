@@ -133,6 +133,7 @@ pub fn lsp_install_server(
         )
     })?;
 
+
     let cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
 
     let mut command = Command::new(&install.program);
@@ -150,9 +151,15 @@ pub fn lsp_install_server(
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to start installer '{}': {e}", install.program))?;
+    // If the installer itself won't launch there is nothing to stream, so fail
+    // with the command the user can paste into a terminal instead of a bare OS
+    // error. (os error 193 = the resolved path isn't a Windows executable.)
+    let mut child = command.spawn().map_err(|e| {
+        format!(
+            "Couldn't run '{}' ({e}). Run this in a terminal instead: {}",
+            install.program, def.install_hint
+        )
+    })?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();

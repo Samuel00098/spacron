@@ -126,19 +126,39 @@ fn build_command(path: PathBuf, args: &[&str]) -> Option<ResolvedCommand> {
 }
 
 /// Search the PATH for `command`, honouring Windows executable extensions.
+///
+/// Candidates are grouped into passes: every extension-bearing name is tried
+/// across the whole PATH before the extensionless fallback is tried anywhere.
+/// Without that, a directory early on PATH holding only the bare MSYS shell
+/// script (Node's `npm`, npm's `typescript-language-server`) shadows the
+/// `.cmd` shim that Windows can actually execute.
 fn find_on_path(command: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
-    let candidates = extension_candidates(command);
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path_var).collect();
 
-    for dir in std::env::split_paths(&path_var) {
-        for candidate in &candidates {
-            let full = dir.join(candidate);
-            if full.is_file() {
-                return Some(full);
+    for candidates in candidate_passes(command) {
+        for dir in &dirs {
+            for candidate in &candidates {
+                let full = dir.join(candidate);
+                if full.is_file() {
+                    return Some(full);
+                }
             }
         }
     }
     None
+}
+
+/// Split `extension_candidates` into priority passes: extension-bearing names
+/// first, the extensionless name (if any) as a separate, lower-priority pass.
+fn candidate_passes(command: &str) -> Vec<Vec<String>> {
+    let all = extension_candidates(command);
+    let (bare, with_ext): (Vec<String>, Vec<String>) =
+        all.into_iter().partition(|c| c == command);
+    [with_ext, bare]
+        .into_iter()
+        .filter(|pass| !pass.is_empty())
+        .collect()
 }
 
 #[cfg(windows)]
@@ -149,7 +169,7 @@ fn extension_candidates(command: &str) -> Vec<String> {
     }
     let pathext = std::env::var("PATHEXT")
         .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    let mut candidates = vec![command.to_string()];
+    let mut candidates = Vec::new();
     for ext in pathext.split(';') {
         let ext = ext.trim();
         if ext.is_empty() {
@@ -158,6 +178,12 @@ fn extension_candidates(command: &str) -> Vec<String> {
         // PATHEXT entries include the leading dot.
         candidates.push(format!("{command}{}", ext.to_ascii_lowercase()));
     }
+    // Extensionless LAST. Node ships both `npm` (a bash script for MSYS/Cygwin)
+    // and `npm.cmd` in the same directory, and npm's global bin does the same for
+    // `typescript-language-server` / `pyright-langserver`. CreateProcess can only
+    // run the `.cmd`; handing it the bare script fails with
+    // "%1 is not a valid Win32 application" (os error 193).
+    candidates.push(command.to_string());
     candidates
 }
 
@@ -165,3 +191,37 @@ fn extension_candidates(command: &str) -> Vec<String> {
 fn extension_candidates(command: &str) -> Vec<String> {
     vec![command.to_string()]
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executable_extensions_outrank_the_bare_name() {
+        let passes = candidate_passes("npm");
+        assert_eq!(passes.len(), 2, "expected an ext pass and a bare pass");
+        assert!(
+            passes[0].iter().any(|c| c == "npm.cmd"),
+            "npm.cmd must be in the first pass, got {:?}",
+            passes[0]
+        );
+        assert!(
+            !passes[0].iter().any(|c| c == "npm"),
+            "the extensionless MSYS script must not be in the first pass"
+        );
+        assert_eq!(passes[1], vec!["npm".to_string()]);
+    }
+
+    #[test]
+    fn an_explicit_extension_is_taken_as_given() {
+        assert_eq!(candidate_passes("npm.cmd"), vec![vec!["npm.cmd".to_string()]]);
+    }
+
+    #[test]
+    fn cmd_shims_are_wrapped_in_the_command_interpreter() {
+        let resolved = build_command(PathBuf::from(r"C:\bin\npm.cmd"), &["install"]).unwrap();
+        assert_eq!(resolved.program, "cmd");
+        assert_eq!(resolved.args, vec!["/c", r"C:\bin\npm.cmd", "install"]);
+    }
+}
+
