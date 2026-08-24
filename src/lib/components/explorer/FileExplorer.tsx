@@ -273,7 +273,7 @@ export default function FileExplorer() {
             </button>
           </>
         )}
-        <button className="header-btn add-root-btn" onClick={openProject} title="Add Folder to Workspace">
+        <button className="header-btn add-root-btn" onClick={openProject} title="Add Folder to Collection">
           <AddRootIcon />
         </button>
       </div>

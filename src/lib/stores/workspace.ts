@@ -1488,7 +1488,7 @@ export async function openProject() {
   const selected = await open({
     directory: true,
     multiple: false,
-    title: 'Add Folder to Workspace',
+    title: 'Add Folder to Collection',
   });
   if (selected) {
     await addFolderToWorkspace(selected);

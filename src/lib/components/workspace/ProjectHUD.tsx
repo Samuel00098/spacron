@@ -27,6 +27,8 @@ function shortPath(path: string) {
   return parts.length <= 2 ? normalized : `.../${parts.slice(-2).join('/')}`;
 }
 
+const COLLAPSED_KEY = 'spacron.hud.collapsedCollections';
+
 interface FlatProjectItem {
   workspaceId: string;
   workspaceName: string;
@@ -48,6 +50,14 @@ export default function ProjectHUD() {
   const [editingWsId, setEditingWsId] = useState<string | null>(null);
   const [editingWsName, setEditingWsName] = useState('');
   const [showWsMenuId, setShowWsMenuId] = useState<string | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSED_KEY);
+      return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set<string>();
+    }
+  });
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const newCollectionInputRef = useRef<HTMLInputElement | null>(null);
@@ -145,6 +155,21 @@ export default function ProjectHUD() {
       renameWorkspace(id, name);
     }
     setEditingWsId(null);
+  }
+
+  // Collapse / expand a collection (persisted across sessions)
+  function toggleCollapsed(id: string) {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Array.from(next)));
+      } catch {
+        /* storage unavailable — collapse state stays session-only */
+      }
+      return next;
+    });
   }
 
   // Keyboard navigation
@@ -341,9 +366,12 @@ export default function ProjectHUD() {
 
           if (search && wsProjects.length === 0) return null;
 
+          // While searching every group stays open so matches are never hidden
+          const isCollapsed = !search && collapsedIds.has(ws.id);
+
           return (
             <section key={ws.id} className="projects-collection-group">
-              <header className="projects-collection-header">
+              <header className={`projects-collection-header${isCollapsed ? ' collapsed' : ''}`}>
                 {editingWsId === ws.id ? (
                   <input
                     className="projects-collection-rename-input"
@@ -355,13 +383,22 @@ export default function ProjectHUD() {
                     autoFocus
                   />
                 ) : (
-                  <span className="projects-collection-title">
+                  <button
+                    type="button"
+                    className="projects-collection-title"
+                    onClick={() => toggleCollapsed(ws.id)}
+                    aria-expanded={!isCollapsed}
+                    title={isCollapsed ? 'Expand collection' : 'Collapse collection'}
+                  >
+                    <svg className="projects-collection-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
                     <svg className="projects-collection-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                     </svg>
                     <span className="projects-collection-name">{ws.name}</span>
                     <span className="projects-collection-count">({ws.project_paths?.length || 0})</span>
-                  </span>
+                  </button>
                 )}
 
                 <div className="projects-collection-actions">
@@ -434,122 +471,124 @@ export default function ProjectHUD() {
                 </div>
               </header>
 
-              <div className="projects-collection-items">
-                {wsProjects.map((p) => {
-                  const globalIdx = filteredProjects.findIndex(
-                    (item) => item.path === p.path && item.workspaceId === ws.id
-                  );
-                  const isHovered = globalIdx === hoveredIndex;
+              {!isCollapsed && (
+                <div className="projects-collection-items">
+                  {wsProjects.map((p) => {
+                    const globalIdx = filteredProjects.findIndex(
+                      (item) => item.path === p.path && item.workspaceId === ws.id
+                    );
+                    const isHovered = globalIdx === hoveredIndex;
 
-                  const gitInfo =
-                    activeWsId === ws.id && activeProjId && projectsMap.get(activeProjId)?.root_path === p.path
-                      ? branchInfo[activeProjId]
-                      : null;
+                    const gitInfo =
+                      activeWsId === ws.id && activeProjId && projectsMap.get(activeProjId)?.root_path === p.path
+                        ? branchInfo[activeProjId]
+                        : null;
 
-                  return (
-                    <div
-                      key={p.path}
-                      className={`project-sidebar-card${isHovered ? ' hovered' : ''}${p.isActive ? ' active' : ''}`}
-                      onClick={() => handleOpen(ws.id, p.path)}
-                      onMouseEnter={() => setHoveredIndex(globalIdx)}
-                    >
-                      <div className="project-sidebar-card-avatar">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="project-folder-icon">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="currentColor" fillOpacity="0.12" />
-                        </svg>
-                      </div>
-
-                      <div className="project-sidebar-card-info">
-                        <div className="project-sidebar-card-name-row">
-                          <span className="project-sidebar-card-name">{p.name}</span>
-                          {p.isActive && (
-                            <span className="project-active-badge">
-                              <span className="project-active-dot" />
-                              Active
-                            </span>
-                          )}
+                    return (
+                      <div
+                        key={p.path}
+                        className={`project-sidebar-card${isHovered ? ' hovered' : ''}${p.isActive ? ' active' : ''}`}
+                        onClick={() => handleOpen(ws.id, p.path)}
+                        onMouseEnter={() => setHoveredIndex(globalIdx)}
+                      >
+                        <div className="project-sidebar-card-avatar">
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="project-folder-icon">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="currentColor" fillOpacity="0.12" />
+                          </svg>
                         </div>
 
-                        <div className="project-sidebar-card-meta-row">
-                          <span className="project-sidebar-card-path" title={p.path}>
-                            {shortPath(p.path)}
-                          </span>
-
-                          {gitInfo && (
-                            <span className="project-sidebar-card-git" title={`Git Branch: ${gitInfo.current}`}>
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <line x1="6" y1="3" x2="6" y2="15" />
-                                <circle cx="18" cy="6" r="3" />
-                                <circle cx="6" cy="18" r="3" />
-                                <path d="M18 9a9 9 0 0 1-9 9" />
-                              </svg>
-                              <span className="git-branch-text">{gitInfo.current}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Card Hover Action Buttons */}
-                      <div className="project-card-actions" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          className="hud-card-action-btn"
-                          onClick={(e) => toggleMoveMenu(e, p.path)}
-                          title="Move to collection..."
-                          aria-label="Move to collection..."
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <circle cx="12" cy="12" r="1" />
-                            <circle cx="12" cy="5" r="1" />
-                            <circle cx="12" cy="19" r="1" />
-                          </svg>
-                        </button>
-
-                        <button
-                          type="button"
-                          className="hud-card-action-btn hover-danger"
-                          onClick={() => removeProjectFromCollection(ws.id, p.path)}
-                          title="Remove project from collection"
-                          aria-label="Remove project from collection"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        </button>
-
-                        {/* Move to another workspace popup menu */}
-                        {showWsMenuId === p.path && (
-                          <div className="hud-move-menu">
-                            <div className="hud-move-menu-label">Move to collection</div>
-                            {workspaces
-                              .filter((other) => other.id !== ws.id)
-                              .map((other) => (
-                                <button
-                                  key={other.id}
-                                  type="button"
-                                  className="hud-move-menu-item"
-                                  onClick={() => handleMoveProject(p.path, ws.id, other.id)}
-                                >
-                                  {other.name}
-                                </button>
-                              ))}
-                            {workspaces.filter((other) => other.id !== ws.id).length === 0 && (
-                              <div className="hud-move-menu-empty">No other collections</div>
+                        <div className="project-sidebar-card-info">
+                          <div className="project-sidebar-card-name-row">
+                            <span className="project-sidebar-card-name">{p.name}</span>
+                            {p.isActive && (
+                              <span className="project-active-badge">
+                                <span className="project-active-dot" />
+                                Active
+                              </span>
                             )}
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
 
-                {wsProjects.length === 0 && !search && (
-                  <div className="projects-collection-empty">
-                    <span>No projects in this collection</span>
-                  </div>
-                )}
-              </div>
+                          <div className="project-sidebar-card-meta-row">
+                            <span className="project-sidebar-card-path" title={p.path}>
+                              {shortPath(p.path)}
+                            </span>
+
+                            {gitInfo && (
+                              <span className="project-sidebar-card-git" title={`Git Branch: ${gitInfo.current}`}>
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                  <line x1="6" y1="3" x2="6" y2="15" />
+                                  <circle cx="18" cy="6" r="3" />
+                                  <circle cx="6" cy="18" r="3" />
+                                  <path d="M18 9a9 9 0 0 1-9 9" />
+                                </svg>
+                                <span className="git-branch-text">{gitInfo.current}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card Hover Action Buttons */}
+                        <div className="project-card-actions" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="hud-card-action-btn"
+                            onClick={(e) => toggleMoveMenu(e, p.path)}
+                            title="Move to collection..."
+                            aria-label="Move to collection..."
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="12" cy="12" r="1" />
+                              <circle cx="12" cy="5" r="1" />
+                              <circle cx="12" cy="19" r="1" />
+                            </svg>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="hud-card-action-btn hover-danger"
+                            onClick={() => removeProjectFromCollection(ws.id, p.path)}
+                            title="Remove project from collection"
+                            aria-label="Remove project from collection"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+
+                          {/* Move to another workspace popup menu */}
+                          {showWsMenuId === p.path && (
+                            <div className="hud-move-menu">
+                              <div className="hud-move-menu-label">Move to collection</div>
+                              {workspaces
+                                .filter((other) => other.id !== ws.id)
+                                .map((other) => (
+                                  <button
+                                    key={other.id}
+                                    type="button"
+                                    className="hud-move-menu-item"
+                                    onClick={() => handleMoveProject(p.path, ws.id, other.id)}
+                                  >
+                                    {other.name}
+                                  </button>
+                                ))}
+                              {workspaces.filter((other) => other.id !== ws.id).length === 0 && (
+                                <div className="hud-move-menu-empty">No other collections</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {wsProjects.length === 0 && !search && (
+                    <div className="projects-collection-empty">
+                      <span>No projects in this collection</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           );
         })}
@@ -584,25 +623,6 @@ export default function ProjectHUD() {
           </div>
         )}
       </div>
-
-      {/* Bottom Footer Section */}
-      <footer className="projects-sidebar-footer">
-        <form className="projects-new-collection-footer-form" onSubmit={handleCreateCollection}>
-          <input
-            type="text"
-            placeholder="New Collection name…"
-            className="projects-new-collection-footer-input"
-            value={newWsName}
-            onChange={(e) => setNewWsName(e.target.value)}
-          />
-          <button type="submit" className="projects-new-collection-footer-btn" disabled={!newWsName.trim()} title="Create collection">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-        </form>
-      </footer>
     </div>
   );
 }
