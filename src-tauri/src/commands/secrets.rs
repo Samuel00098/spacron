@@ -41,6 +41,7 @@ const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_TTS_URL: &str = "https://api.openai.com/v1/audio/speech";
 const OPENAI_STT_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+const XAI_URL: &str = "https://api.x.ai/v1/chat/completions";
 const GROQ_TTS_URL: &str = "https://api.groq.com/openai/v1/audio/speech";
 const XAI_TTS_URL: &str = "https://api.x.ai/v1/tts";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -392,18 +393,64 @@ fn safe_request_error(context: &str, err: reqwest::Error) -> String {
     format!("{context}: {}", redact_secrets(&stripped.to_string()))
 }
 
+/// Collect the reply out of a Gemini response.
+///
+/// The answer can arrive split across several parts, and a thinking model
+/// prefixes it with `thought` parts that are not the answer — so join every
+/// ordinary text part in order and skip the thoughts. Taking `parts[0]` alone
+/// returned a thought, or a fragment, depending on the model.
 fn extract_google_text(payload: &serde_json::Value) -> String {
-    payload
+    let parts = payload
         .get("candidates")
         .and_then(|c| c.get(0))
         .and_then(|cand| cand.get("content"))
         .and_then(|content| content.get("parts"))
-        .and_then(|parts| parts.get(0))
-        .and_then(|part| part.get("text"))
-        .and_then(|t| t.as_str())
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string()
+        .and_then(|parts| parts.as_array());
+    let Some(parts) = parts else {
+        return String::new();
+    };
+
+    let mut text = String::new();
+    for part in parts {
+        if part
+            .get("thought")
+            .and_then(|thought| thought.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Some(chunk) = part.get("text").and_then(|t| t.as_str()) {
+            text.push_str(chunk);
+        }
+    }
+    text.trim().to_string()
+}
+
+/// Collect the reply out of an Anthropic response.
+///
+/// Anthropic returns a list of typed blocks, and the text is not always block
+/// zero — a thinking or tool block can come first on newer models. Join every
+/// text block rather than indexing.
+fn extract_anthropic_text(payload: &serde_json::Value) -> String {
+    let Some(blocks) = payload.get("content").and_then(|c| c.as_array()) else {
+        return String::new();
+    };
+
+    let mut text = String::new();
+    for block in blocks {
+        // Older responses omit `type` on a plain text block; anything else
+        // named (thinking, tool_use, …) is not the answer.
+        if !matches!(
+            block.get("type").and_then(|t| t.as_str()),
+            None | Some("text")
+        ) {
+            continue;
+        }
+        if let Some(chunk) = block.get("text").and_then(|t| t.as_str()) {
+            text.push_str(chunk);
+        }
+    }
+    text.trim().to_string()
 }
 
 fn audio_mime_type_is_safe(mime_type: &str) -> bool {
@@ -674,6 +721,247 @@ fn resolve_api_key(provider: &str, provided_api_key: &str) -> Result<String, Str
         .ok_or_else(|| format!("{} API key is not set.", provider))
 }
 
+/// Every provider has its own way of saying "I ran out of room before I
+/// answered" — an OpenAI `finish_reason`, an Anthropic `stop_reason`, a Gemini
+/// `finishReason` — and all three surface here as the same empty reply. Name
+/// the actual cause instead of letting the callers report "empty response".
+const TOKEN_LIMIT_MESSAGE: &str =
+    "The model hit its token limit before answering. Try a shorter input or a non-reasoning model.";
+
+/// Which token-budget field an OpenAI-compatible endpoint accepts.
+///
+/// The classic Chat Completions shape is `max_tokens`, but OpenAI's reasoning
+/// models — and anything else following their newer schema — reject it and
+/// demand `max_completion_tokens`. Providers ship new models on both schemas
+/// and we list their catalogues live, so which one a given model wants cannot
+/// be hardcoded here; see [`adapt_chat_shape`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TokenBudgetField {
+    MaxTokens,
+    MaxCompletionTokens,
+}
+
+impl TokenBudgetField {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxTokens => "max_tokens",
+            Self::MaxCompletionTokens => "max_completion_tokens",
+        }
+    }
+}
+
+/// The request-parameter dialect one endpoint+model pair accepts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct ChatParamShape {
+    token_field: TokenBudgetField,
+    /// Reasoning models only allow the default temperature — any explicit value
+    /// is a 400 — so for those we drop the field instead of sending one.
+    send_temperature: bool,
+    /// Whether this model bills hidden thinking tokens against the budget we
+    /// send. Learned from a reply rather than from an error: a gateway that
+    /// accepts `max_tokens` for every model — OpenRouter — never rejects
+    /// anything, it just returns a truncated or empty answer.
+    reasoning_headroom: bool,
+}
+
+impl Default for ChatParamShape {
+    /// The classic dialect every older and local endpoint speaks. We start here
+    /// and only move once a provider tells us it wants something else.
+    fn default() -> Self {
+        Self {
+            token_field: TokenBudgetField::MaxTokens,
+            send_temperature: true,
+            reasoning_headroom: false,
+        }
+    }
+}
+
+/// Remembers the dialect each model last answered to, so the negotiation costs
+/// one extra round-trip per model per app run rather than one per call.
+fn chat_shape_cache() -> &'static Mutex<HashMap<String, ChatParamShape>> {
+    static SHAPES: OnceLock<Mutex<HashMap<String, ChatParamShape>>> = OnceLock::new();
+    SHAPES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Key a remembered dialect by endpoint as well as model: local servers reuse
+/// generic ids like `local-model` across wildly different backends.
+fn chat_shape_key(provider: &str, base_url: Option<&str>, model: &str) -> String {
+    format!("{provider}\u{1}{}\u{1}{model}", base_url.unwrap_or(""))
+}
+
+fn cached_chat_shape(key: &str) -> ChatParamShape {
+    chat_shape_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(key)
+        .copied()
+        .unwrap_or_default()
+}
+
+fn remember_chat_shape(key: &str, shape: ChatParamShape) {
+    chat_shape_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key.to_string(), shape);
+}
+
+/// Read a rejected request's error body and work out which parameter the
+/// endpoint objected to, returning the dialect to retry with — or `None` when
+/// the failure is nothing we can renegotiate (bad key, unknown model, rate
+/// limit), in which case the caller surfaces the error as-is.
+///
+/// This is driven by the provider's own complaint rather than by matching model
+/// ids, so a model released after this build still works: whatever the endpoint
+/// says it wants is what the retry sends.
+fn adapt_chat_shape(shape: ChatParamShape, body: &str) -> Option<ChatParamShape> {
+    let lower = body.to_lowercase();
+    // OpenAI-shaped errors name the offending field in `error.param`; other
+    // gateways only mention it in the message, so fall back to scanning.
+    let param = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")?
+                .get("param")?
+                .as_str()
+                .map(str::to_lowercase)
+        });
+    let blames = |field: &str| match param.as_deref() {
+        Some(p) => p == field || p.rsplit('.').next() == Some(field),
+        None => lower.contains(field),
+    };
+
+    let mut next = shape;
+    if shape.send_temperature && blames("temperature") {
+        next.send_temperature = false;
+    }
+    match shape.token_field {
+        // "Unsupported parameter: 'max_tokens' … use 'max_completion_tokens'".
+        // `max_completion_tokens` does not contain `max_tokens` as a substring,
+        // so the two checks cannot shadow each other.
+        TokenBudgetField::MaxTokens
+            if blames("max_tokens") || lower.contains("max_completion_tokens") =>
+        {
+            next.token_field = TokenBudgetField::MaxCompletionTokens;
+        }
+        // The mirror case: an endpoint that only knows the classic field.
+        TokenBudgetField::MaxCompletionTokens if blames("max_completion_tokens") => {
+            next.token_field = TokenBudgetField::MaxTokens;
+        }
+        _ => {}
+    }
+    (next != shape).then_some(next)
+}
+
+/// `max_completion_tokens` has to cover a reasoning model's hidden thinking
+/// tokens as well as the reply, so a budget sized for visible output alone
+/// comes back empty with `finish_reason: "length"`. Give those real headroom —
+/// it is a ceiling, not a spend, so nothing is wasted when the model is brief.
+fn token_budget_for(shape: ChatParamShape, requested: u32) -> u32 {
+    // `max_completion_tokens` always covers thinking tokens. The classic field
+    // only does when the provider maps a reasoning model onto it, which we can
+    // only find out by looking at what came back.
+    if shape.reasoning_headroom || shape.token_field == TokenBudgetField::MaxCompletionTokens {
+        with_reasoning_headroom(requested)
+    } else {
+        requested
+    }
+}
+
+/// Did the reply stop because it hit the output ceiling?
+fn reply_was_truncated(choice: Option<&serde_json::Value>) -> bool {
+    choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(|reason| reason.as_str())
+        == Some("length")
+}
+
+/// Every field an OpenAI-compatible server might return its thinking in.
+/// OpenRouter uses `reasoning`; llama.cpp, LM Studio, vLLM and the DeepSeek API
+/// use `reasoning_content`; Ollama uses `thinking`. None of them are the answer,
+/// but all of them prove the budget is being shared with a scratchpad.
+const REASONING_FIELDS: [&str; 3] = ["reasoning", "reasoning_content", "thinking"];
+
+/// Did the model spend hidden reasoning tokens producing this reply? Usage
+/// reports them in OpenAI's shape; most other servers echo the thinking back on
+/// the message instead, and a local one may do neither — see
+/// [`strip_inline_reasoning`].
+fn spent_reasoning_tokens(payload: &serde_json::Value, choice: Option<&serde_json::Value>) -> bool {
+    let counted = payload
+        .get("usage")
+        .and_then(|usage| usage.get("completion_tokens_details"))
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(|tokens| tokens.as_u64())
+        .unwrap_or(0)
+        > 0;
+    let message = choice.and_then(|choice| choice.get("message"));
+    let echoed = REASONING_FIELDS.iter().any(|field| {
+        message
+            .and_then(|message| message.get(field))
+            .and_then(|reasoning| reasoning.as_str())
+            .is_some_and(|reasoning| !reasoning.trim().is_empty())
+    });
+    counted || echoed
+}
+
+/// Strip a model's inline scratchpad out of its reply.
+///
+/// A local server hands back whatever the model emitted, and open reasoning
+/// models write their thinking inline as `<think>…</think>` before answering.
+/// Ollama and LM Studio only lift that into a separate field when the model's
+/// template declares it, so a raw GGUF leaks the entire monologue into what we
+/// hand back as a refined prompt or a commit message.
+///
+/// An opener with no closer means the reply was cut off mid-thought — nothing
+/// after it is answer, so nothing survives.
+fn strip_inline_reasoning(text: &str) -> String {
+    // Lowercase only the ASCII, so every index stays valid in the original.
+    fn ascii_lower(text: &str) -> String {
+        text.chars()
+            .map(|c| if c.is_ascii() { c.to_ascii_lowercase() } else { c })
+            .collect()
+    }
+
+    let mut out = text.to_string();
+    for tag in ["think", "thinking", "reasoning", "thought"] {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        loop {
+            let lower = ascii_lower(&out);
+            let Some(start) = lower.find(&open) else {
+                break;
+            };
+            match lower[start..].find(&close) {
+                Some(offset) => {
+                    let end = start + offset + close.len();
+                    out.replace_range(start..end, "");
+                }
+                None => {
+                    out.truncate(start);
+                    break;
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Some gateways answer 200 with an error object where the choices should be —
+/// an upstream provider failing, a moderation block, a mid-flight cutoff.
+/// OpenRouter does this routinely. Report it instead of an empty reply.
+fn embedded_error_message(payload: &serde_json::Value) -> Option<String> {
+    let message = payload.get("error")?.get("message")?.as_str()?.trim();
+    (!message.is_empty()).then(|| message.to_string())
+}
+
+/// Raise an output ceiling so a reasoning model's hidden thinking tokens cannot
+/// consume the entire budget. Used wherever a provider bills thinking against
+/// the same ceiling as the reply — OpenAI's `max_completion_tokens` and
+/// Gemini's `maxOutputTokens` both do.
+fn with_reasoning_headroom(requested: u32) -> u32 {
+    requested.saturating_mul(4).max(4096)
+}
+
 /// Run a single-shot system+user completion against the chosen provider and
 /// return the assistant's text. Normalises the three request/response shapes
 /// (OpenAI-compatible, Anthropic Messages, Google Gemini) behind one signature.
@@ -719,14 +1007,17 @@ async fn run_completion(
                 .await
                 .map_err(|err| format!("Anthropic returned an invalid response: {err}"))?;
 
-            let content = payload
-                .get("content")
-                .and_then(|c| c.get(0))
-                .and_then(|block| block.get("text"))
-                .and_then(|t| t.as_str())
-                .map(str::trim)
-                .unwrap_or("");
-            Ok(content.to_string())
+            let content = extract_anthropic_text(&payload);
+
+            // Anthropic bills only the reply against `max_tokens`, so this is
+            // rare — but a long preamble can still exhaust it before any text.
+            if content.is_empty()
+                && payload.get("stop_reason").and_then(|r| r.as_str()) == Some("max_tokens")
+            {
+                return Err(TOKEN_LIMIT_MESSAGE.to_string());
+            }
+
+            Ok(content)
         }
         "google" => {
             // Pass the key via the documented header, never in the URL — the URL
@@ -740,7 +1031,14 @@ async fn run_completion(
                 .json(&json!({
                     "systemInstruction": { "parts": [ { "text": system_prompt } ] },
                     "contents": [ { "role": "user", "parts": [ { "text": user_text } ] } ],
-                    "generationConfig": { "temperature": temperature, "maxOutputTokens": max_tokens },
+                    // Gemini 2.5 and newer spend thinking tokens from this same
+                    // ceiling, so a budget sized for the reply alone comes back
+                    // empty with `finishReason: MAX_TOKENS`. It is a cap, not a
+                    // spend — a brief model is billed for what it actually used.
+                    "generationConfig": {
+                        "temperature": temperature,
+                        "maxOutputTokens": with_reasoning_headroom(max_tokens),
+                    },
                 }))
                 .send()
                 .await
@@ -758,13 +1056,27 @@ async fn run_completion(
                 .await
                 .map_err(|err| format!("Google returned an invalid response: {err}"))?;
 
-            Ok(extract_google_text(&payload))
+            let content = extract_google_text(&payload);
+
+            if content.is_empty()
+                && payload
+                    .get("candidates")
+                    .and_then(|candidates| candidates.get(0))
+                    .and_then(|candidate| candidate.get("finishReason"))
+                    .and_then(|reason| reason.as_str())
+                    == Some("MAX_TOKENS")
+            {
+                return Err(TOKEN_LIMIT_MESSAGE.to_string());
+            }
+
+            Ok(content)
         }
         // OpenAI-compatible: openrouter, openai, groq, ollama, lmstudio.
         _ => {
             let url = match provider {
                 "openai" => OPENAI_URL.to_string(),
                 "groq" => GROQ_URL.to_string(),
+                "xai" => XAI_URL.to_string(),
                 // Local providers point at the user's own server.
                 p if is_local_provider(p) => {
                     let base = base_url.unwrap_or_default();
@@ -773,58 +1085,126 @@ async fn run_completion(
                 _ => OPENROUTER_URL.to_string(),
             };
 
-            let mut request = client.post(&url);
+            let shape_key = chat_shape_key(provider, base_url, model);
+            let mut shape = cached_chat_shape(&shape_key);
 
-            // Local providers default to no authentication; only send the bearer
-            // token when we actually have one.
-            if !api_key.is_empty() {
-                request =
-                    request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
-            }
+            // Send, and when the answer shows we spoke the wrong dialect, adjust
+            // and try again — whether the endpoint said so with a 400 or just
+            // returned a stunted reply. Three attempts covers the knobs (token
+            // field, temperature, reasoning headroom) from a cold start, and the
+            // result is cached, so only the first call for a model can pay.
+            const MAX_ATTEMPTS: u32 = 3;
+            let mut attempt = 0;
+            let content = loop {
+                attempt += 1;
 
-            // OpenRouter asks for attribution headers; harmless elsewhere but we
-            // only send them where they belong.
-            if provider == "openrouter" {
-                request = request
-                    .header("HTTP-Referer", "https://spacron.app")
-                    .header("X-Title", APP_TITLE);
-            }
+                let mut request = client.post(&url);
 
-            let response = request
-                .json(&json!({
+                // Local providers default to no authentication; only send the
+                // bearer token when we actually have one.
+                if !api_key.is_empty() {
+                    request = request
+                        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
+                }
+
+                // OpenRouter asks for attribution headers; harmless elsewhere
+                // but we only send them where they belong.
+                if provider == "openrouter" {
+                    request = request
+                        .header("HTTP-Referer", "https://spacron.app")
+                        .header("X-Title", APP_TITLE);
+                }
+
+                let mut body = json!({
                     "model": model,
                     "messages": [
                         { "role": "system", "content": system_prompt },
                         { "role": "user", "content": user_text },
                     ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }))
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact the model provider", err))?;
+                });
+                if let Some(fields) = body.as_object_mut() {
+                    fields.insert(
+                        shape.token_field.as_str().to_string(),
+                        json!(token_budget_for(shape, max_tokens)),
+                    );
+                    if shape.send_temperature {
+                        fields.insert("temperature".to_string(), json!(temperature));
+                    }
+                }
 
-            if !response.status().is_success() {
+                let response = request.json(&body).send().await.map_err(|err| {
+                    safe_request_error("Failed to contact the model provider", err)
+                })?;
+
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("Model request failed ({status}): {preview}"));
-            }
 
-            let payload: serde_json::Value = response
-                .json()
-                .await
-                .map_err(|err| format!("The model provider returned an invalid response: {err}"))?;
+                if !status.is_success() {
+                    let body = response.text().await.unwrap_or_default();
 
-            let content = payload
-                .get("choices")
-                .and_then(|choices| choices.get(0))
-                .and_then(|choice| choice.get("message"))
-                .and_then(|message| message.get("content"))
-                .and_then(|content| content.as_str())
-                .map(str::trim)
-                .unwrap_or("");
-            Ok(content.to_string())
+                    // Only a rejected *request* is worth renegotiating; anything
+                    // else (auth, quota, server error) is reported straight away.
+                    let rejected_request = status == reqwest::StatusCode::BAD_REQUEST
+                        || status == reqwest::StatusCode::UNPROCESSABLE_ENTITY;
+                    if rejected_request && attempt < MAX_ATTEMPTS {
+                        if let Some(next) = adapt_chat_shape(shape, &body) {
+                            shape = next;
+                            continue;
+                        }
+                    }
+
+                    let preview = redact_secrets(&body.chars().take(200).collect::<String>());
+                    return Err(format!("Model request failed ({status}): {preview}"));
+                }
+
+                let payload: serde_json::Value = response.json().await.map_err(|err| {
+                    format!("The model provider returned an invalid response: {err}")
+                })?;
+
+                if let Some(message) = embedded_error_message(&payload) {
+                    let preview = redact_secrets(&message.chars().take(200).collect::<String>());
+                    return Err(format!("The model provider returned an error: {preview}"));
+                }
+
+                let choice = payload.get("choices").and_then(|choices| choices.get(0));
+                let raw = choice
+                    .and_then(|choice| choice.get("message"))
+                    .and_then(|message| message.get("content"))
+                    .and_then(|content| content.as_str())
+                    .map(str::trim)
+                    .unwrap_or("");
+                let text = strip_inline_reasoning(raw);
+
+                let truncated = reply_was_truncated(choice);
+                // A reply that was nothing but scratchpad is the same starvation
+                // signal as a truncated one, and the only signal a bare local
+                // server gives: no usage details, no separate thinking field.
+                let all_scratchpad = text.is_empty() && !raw.is_empty();
+                let reasoned = spent_reasoning_tokens(&payload, choice) || all_scratchpad;
+
+                // Nothing rejected this request — it succeeded and came back
+                // short because the model spent the budget thinking. This is the
+                // OpenRouter and local-server case: they accept `max_tokens` for
+                // every model, so no error ever announces that a model reasons;
+                // only the reply does.
+                let starved = (truncated && (reasoned || text.is_empty())) || all_scratchpad;
+                if (reasoned || starved) && !shape.reasoning_headroom {
+                    shape.reasoning_headroom = true;
+                    remember_chat_shape(&shape_key, shape);
+                    if starved && attempt < MAX_ATTEMPTS {
+                        continue;
+                    }
+                }
+
+                if text.is_empty() && (truncated || all_scratchpad) {
+                    return Err(TOKEN_LIMIT_MESSAGE.to_string());
+                }
+
+                // Whatever finally worked is what the next call should open with.
+                remember_chat_shape(&shape_key, shape);
+                break text;
+            };
+
+            Ok(content)
         }
     }
 }
@@ -2006,13 +2386,261 @@ pub async fn check_local_provider_online(
 #[cfg(test)]
 mod tests {
     use super::{
-        audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
-        build_audio_transcription_multipart_body, is_known_provider, is_local_provider,
-        local_endpoint, model_id_is_safe, openai_is_realtime_model,
-        openrouter_audio_chat_model_is_unsupported, redact_secrets, resolve_base_url,
-        xai_is_realtime_model,
+        adapt_chat_shape, audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
+        build_audio_transcription_multipart_body, extract_anthropic_text, extract_google_text,
+        is_known_provider, is_local_provider, local_endpoint, model_id_is_safe,
+        openai_is_realtime_model, openrouter_audio_chat_model_is_unsupported, redact_secrets,
+        embedded_error_message, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
+        strip_inline_reasoning, token_budget_for, with_reasoning_headroom, xai_is_realtime_model,
+        ChatParamShape, TokenBudgetField,
     };
+    use serde_json::json;
     const MAX_TEXT_LEN: usize = 32_000;
+
+    // The verbatim 400 bodies OpenAI returns for a reasoning model. Both knobs
+    // have to be renegotiated from the provider's own complaint, because the
+    // model catalogue is fetched live and grows without a code change here.
+    const MAX_TOKENS_REJECTED: &str = r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}"#;
+    const TEMPERATURE_REJECTED: &str = r#"{"error":{"message":"Unsupported value: 'temperature' does not support 0.1 with this model. Only the default (1) is supported.","type":"invalid_request_error","param":"temperature","code":"unsupported_value"}}"#;
+
+    #[test]
+    fn swaps_in_max_completion_tokens_when_rejected() {
+        let next = adapt_chat_shape(ChatParamShape::default(), MAX_TOKENS_REJECTED)
+            .expect("should renegotiate");
+        assert_eq!(next.token_field, TokenBudgetField::MaxCompletionTokens);
+        // Only the field it complained about moves on this pass.
+        assert!(next.send_temperature);
+    }
+
+    #[test]
+    fn drops_temperature_when_rejected() {
+        let shape = ChatParamShape {
+            token_field: TokenBudgetField::MaxCompletionTokens,
+            ..ChatParamShape::default()
+        };
+        let next = adapt_chat_shape(shape, TEMPERATURE_REJECTED).expect("should renegotiate");
+        assert!(!next.send_temperature);
+        assert_eq!(next.token_field, TokenBudgetField::MaxCompletionTokens);
+    }
+
+    #[test]
+    fn converges_on_a_reasoning_model_within_the_retry_budget() {
+        // Cold start: two rejections, two adaptations, then nothing left to move.
+        let shape = ChatParamShape::default();
+        let shape = adapt_chat_shape(shape, MAX_TOKENS_REJECTED).expect("first adaptation");
+        let shape = adapt_chat_shape(shape, TEMPERATURE_REJECTED).expect("second adaptation");
+        assert_eq!(shape.token_field, TokenBudgetField::MaxCompletionTokens);
+        assert!(!shape.send_temperature);
+        // A repeat of either error now yields None, so the retry loop stops
+        // rather than flipping the same field back and forth.
+        assert_eq!(adapt_chat_shape(shape, TEMPERATURE_REJECTED), None);
+        assert_eq!(adapt_chat_shape(shape, MAX_TOKENS_REJECTED), None);
+    }
+
+    #[test]
+    fn falls_back_to_max_tokens_for_endpoints_that_only_know_it() {
+        let shape = ChatParamShape {
+            token_field: TokenBudgetField::MaxCompletionTokens,
+            ..ChatParamShape::default()
+        };
+        // An older gateway (no `error.param`) that only mentions it in the text.
+        let body = r#"{"error":{"message":"Unrecognized request argument supplied: max_completion_tokens"}}"#;
+        let next = adapt_chat_shape(shape, body).expect("should fall back");
+        assert_eq!(next.token_field, TokenBudgetField::MaxTokens);
+    }
+
+    #[test]
+    fn leaves_unrelated_failures_alone() {
+        // Nothing here is a parameter we can renegotiate, so the caller reports
+        // the provider's error instead of burning retries on it.
+        for body in [
+            r#"{"error":{"message":"Incorrect API key provided.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}"#,
+            r#"{"error":{"message":"The model `made-up-4o` does not exist.","param":"model","code":"model_not_found"}}"#,
+            "gateway timeout",
+        ] {
+            assert_eq!(adapt_chat_shape(ChatParamShape::default(), body), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn google_reply_survives_thoughts_and_split_parts() {
+        // A 2.5-series answer: a thought part first, then the reply in chunks.
+        let payload = json!({
+            "candidates": [{
+                "content": { "parts": [
+                    { "text": "Let me think about the diff…", "thought": true },
+                    { "text": "fix(auth): stop refreshing " },
+                    { "text": "an expired session\n" },
+                ] },
+                "finishReason": "STOP",
+            }]
+        });
+        assert_eq!(
+            extract_google_text(&payload),
+            "fix(auth): stop refreshing an expired session"
+        );
+    }
+
+    #[test]
+    fn google_reply_handles_the_plain_single_part_shape() {
+        let payload = json!({
+            "candidates": [{ "content": { "parts": [{ "text": "  hello  " }] } }]
+        });
+        assert_eq!(extract_google_text(&payload), "hello");
+        // A blocked or empty candidate is an empty string, not a panic.
+        assert_eq!(extract_google_text(&json!({ "candidates": [] })), "");
+        assert_eq!(extract_google_text(&json!({})), "");
+    }
+
+    #[test]
+    fn anthropic_reply_is_found_past_a_leading_non_text_block() {
+        // Block zero is not always the answer on newer models.
+        let payload = json!({
+            "content": [
+                { "type": "thinking", "thinking": "weighing the options" },
+                { "type": "text", "text": "Use the second option." },
+            ],
+            "stop_reason": "end_turn",
+        });
+        assert_eq!(extract_anthropic_text(&payload), "Use the second option.");
+        // The classic single-text-block shape still works, typed or not.
+        assert_eq!(
+            extract_anthropic_text(&json!({ "content": [{ "type": "text", "text": " hi " }] })),
+            "hi"
+        );
+        assert_eq!(
+            extract_anthropic_text(&json!({ "content": [{ "text": "hi" }] })),
+            "hi"
+        );
+        assert_eq!(extract_anthropic_text(&json!({ "content": [] })), "");
+    }
+
+    #[test]
+    fn reasoning_headroom_is_a_ceiling_not_a_shrink() {
+        // Never returns less than asked for, whatever the caller passes.
+        for requested in [0_u32, 1, 512, 1024, 8192, u32::MAX] {
+            assert!(
+                with_reasoning_headroom(requested) >= requested.max(4096),
+                "shrank {requested}"
+            );
+        }
+    }
+
+    fn shape_with(token_field: TokenBudgetField, reasoning_headroom: bool) -> ChatParamShape {
+        ChatParamShape {
+            token_field,
+            reasoning_headroom,
+            ..ChatParamShape::default()
+        }
+    }
+
+    #[test]
+    fn reasoning_budgets_get_headroom_for_hidden_thinking() {
+        // The classic field on an ordinary model is a visible-output budget:
+        // pass it through as-is so a 512-token cap still means 512.
+        assert_eq!(
+            token_budget_for(shape_with(TokenBudgetField::MaxTokens, false), 512),
+            512
+        );
+        // `max_completion_tokens` always pays for reasoning tokens too, so a
+        // 512-token budget would be spent thinking and come back empty.
+        assert!(token_budget_for(shape_with(TokenBudgetField::MaxCompletionTokens, false), 512) >= 4096);
+        // And the classic field gets the same headroom once we have learned the
+        // model reasons — the OpenRouter and local-server case, where nothing
+        // ever errors and only the reply gives it away.
+        assert!(token_budget_for(shape_with(TokenBudgetField::MaxTokens, true), 512) >= 4096);
+        assert!(
+            token_budget_for(shape_with(TokenBudgetField::MaxCompletionTokens, false), 4096)
+                > token_budget_for(shape_with(TokenBudgetField::MaxCompletionTokens, false), 512)
+        );
+        // Absurd inputs must not wrap around to a tiny budget.
+        assert!(
+            token_budget_for(shape_with(TokenBudgetField::MaxCompletionTokens, false), u32::MAX)
+                >= 4096
+        );
+    }
+
+    #[test]
+    fn reasoning_is_detected_however_the_server_reports_it() {
+        let no_choice = None;
+        // OpenAI-shaped usage accounting.
+        let usage = json!({ "usage": { "completion_tokens_details": { "reasoning_tokens": 812 } } });
+        assert!(spent_reasoning_tokens(&usage, no_choice));
+        // The same shape with nothing spent is not a reasoning model.
+        let quiet = json!({ "usage": { "completion_tokens_details": { "reasoning_tokens": 0 } } });
+        assert!(!spent_reasoning_tokens(&quiet, no_choice));
+        assert!(!spent_reasoning_tokens(&json!({}), no_choice));
+
+        // A separate thinking field, whatever the server calls it.
+        for field in ["reasoning", "reasoning_content", "thinking"] {
+            let choice = json!({ "message": { "content": "done", field: "weighing it up" } });
+            assert!(
+                spent_reasoning_tokens(&json!({}), Some(&choice)),
+                "missed {field}"
+            );
+        }
+        // An empty thinking field proves nothing.
+        let blank = json!({ "message": { "content": "done", "reasoning": "   " } });
+        assert!(!spent_reasoning_tokens(&json!({}), Some(&blank)));
+    }
+
+    #[test]
+    fn inline_scratchpad_is_stripped_from_local_model_replies() {
+        // The common raw-GGUF shape: monologue first, answer after.
+        assert_eq!(
+            strip_inline_reasoning("<think>the user wants a commit message</think>fix: clamp retries"),
+            "fix: clamp retries"
+        );
+        // Casing and surrounding whitespace vary by template.
+        assert_eq!(
+            strip_inline_reasoning("  <Think>\nhmm\n</Think>\n\nhello  "),
+            "hello"
+        );
+        // Other tag spellings, and more than one block.
+        assert_eq!(
+            strip_inline_reasoning("<reasoning>a</reasoning>x<thinking>b</thinking>y"),
+            "xy"
+        );
+        // Cut off mid-thought: everything after the opener is scratchpad, so the
+        // caller sees an empty reply and retries with more room.
+        assert_eq!(strip_inline_reasoning("<think>I should start by"), "");
+        // An ordinary reply is untouched — including one that merely talks about
+        // the tag rather than opening one.
+        assert_eq!(
+            strip_inline_reasoning("use </think> as the stop token"),
+            "use </think> as the stop token"
+        );
+        assert_eq!(strip_inline_reasoning("plain answer"), "plain answer");
+        // Non-ASCII around the tags must not shift the byte indices.
+        assert_eq!(
+            strip_inline_reasoning("İ<think>x</think>é"),
+            "İé"
+        );
+    }
+
+    #[test]
+    fn gateway_errors_inside_a_200_are_surfaced() {
+        let payload = json!({ "error": { "message": "upstream provider is down", "code": 502 } });
+        assert_eq!(
+            embedded_error_message(&payload).as_deref(),
+            Some("upstream provider is down")
+        );
+        // A normal reply has no error object, and a blank one is not an error.
+        assert_eq!(embedded_error_message(&json!({ "choices": [] })), None);
+        assert_eq!(
+            embedded_error_message(&json!({ "error": { "message": "  " } })),
+            None
+        );
+    }
+
+    #[test]
+    fn truncation_is_read_off_the_finish_reason() {
+        let cut = json!({ "finish_reason": "length" });
+        let done = json!({ "finish_reason": "stop" });
+        assert!(reply_was_truncated(Some(&cut)));
+        assert!(!reply_was_truncated(Some(&done)));
+        assert!(!reply_was_truncated(None));
+    }
 
     #[test]
     fn redacts_all_provider_key_prefixes() {
