@@ -610,6 +610,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     });
   },
 
+
   toggleTerminal: () => {
     set((l) => {
       const anyAuxVisible = AUX_FLAGS.some((flag) => l[flag]);

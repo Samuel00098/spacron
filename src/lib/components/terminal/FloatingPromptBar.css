@@ -22,7 +22,6 @@
   align-items: center;
 }
 
-.floating-prompt-shell .history-panel,
 .floating-prompt-shell .floating-prompt-bar {
   pointer-events: auto;
 }
@@ -72,115 +71,8 @@
   opacity: 1;
 }
 
-.floating-prompt-shell .history-panel,
 .floating-prompt-shell .floating-prompt-bar {
   pointer-events: auto;
-}
-
-.floating-prompt-shell .history-panel {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  border-radius: 16px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-  overflow: hidden;
-}
-
-.floating-prompt-shell .history-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px 6px;
-  flex-shrink: 0;
-}
-
-.floating-prompt-shell .history-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-muted);
-}
-
-.floating-prompt-shell .history-hint {
-  font-size: 9.5px;
-  color: var(--text-muted);
-  opacity: 0.6;
-}
-
-.floating-prompt-shell .history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 6px 8px;
-  max-height: 220px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb, rgba(128,128,128,0.2)) transparent;
-  mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
-}
-
-.floating-prompt-shell .history-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  border: 0;
-  border-radius: 9px;
-  padding: 8px 10px;
-  text-align: left;
-  color: var(--text-secondary);
-  background: transparent;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-  overflow: hidden;
-  min-width: 0;
-}
-
-.floating-prompt-shell .history-index {
-  flex-shrink: 0;
-  width: 16px;
-  font-size: 9.5px;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-align: center;
-  opacity: 0.5;
-}
-
-.floating-prompt-shell .history-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--editor-font-family, monospace);
-  font-size: 12px;
-}
-
-.floating-prompt-shell .history-insert-icon {
-  flex-shrink: 0;
-  opacity: 0;
-  color: var(--accent);
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.floating-prompt-shell .history-item:hover {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
-  color: var(--text-primary);
-}
-
-.floating-prompt-shell .history-item:hover .history-insert-icon {
-  opacity: 1;
-}
-
-.floating-prompt-shell .history-item:hover .history-index {
-  opacity: 1;
-  color: var(--accent);
 }
 
 .floating-prompt-shell .floating-prompt-bar {
@@ -253,8 +145,7 @@
 
 .floating-prompt-shell .spawn-toggle,
 .floating-prompt-shell .attach-toggle,
-.floating-prompt-shell .voice-toggle,
-.floating-prompt-shell .send-btn {
+.floating-prompt-shell .voice-toggle{
   flex-shrink: 0;
   border: 0;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
@@ -366,104 +257,105 @@
   padding-inline: 1px 3px;
 }
 
+/* A column now: the staged prompt sits above the transcript, both full width.
+   It used to be a row holding the target-terminal button beside the transcript,
+   which is why the narrow breakpoints below already switch it to a column —
+   those overrides are now the same as the default and only set the gap. */
 .floating-prompt-shell .prompt-meta {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   min-width: 0;
 }
 
-.floating-prompt-shell .prompt-target {
+/* ── Staged prompt ────────────────────────────────────────────────────────
+   Text handed to the bar by another part of the app. Read-only: the bar has no
+   text box, so this is the whole of its "here is what will be sent" surface.
+   One line, ellipsised, with the full text on hover. */
+.floating-prompt-shell .staged-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.floating-prompt-shell .staged-prompt-label {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.floating-prompt-shell .staged-prompt-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 650;
-  color: var(--text-primary);
 }
 
-.floating-prompt-shell .prompt-target-btn {
+.floating-prompt-shell .staged-prompt-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.floating-prompt-shell .staged-prompt-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  border: 0;
-  background: transparent;
-  padding: 0;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
   cursor: pointer;
-  border-radius: 4px;
-  transition: color var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.floating-prompt-shell .prompt-target-btn:hover {
-  color: var(--accent);
+.floating-prompt-shell .staged-prompt-btn.send {
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
 }
 
-.floating-prompt-shell .prompt-target-btn.pinned {
-  color: var(--accent);
+.floating-prompt-shell .staged-prompt-btn.send:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.floating-prompt-shell .staged-prompt-btn.send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.floating-prompt-shell .staged-prompt-btn.clear {
+  width: 22px;
+  height: 22px;
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.floating-prompt-shell .staged-prompt-btn.clear:hover {
+  color: var(--text);
+  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
 }
 
 .floating-prompt-shell .chevron-icon {
   flex-shrink: 0;
   opacity: 0.6;
-}
-
-.floating-prompt-shell .target-picker {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  border-radius: 14px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.26);
-  z-index: 10;
-}
-
-.floating-prompt-shell .target-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-
-.floating-prompt-shell .target-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.floating-prompt-shell .target-item.active {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-primary));
-  color: var(--text-primary);
-}
-
-.floating-prompt-shell .target-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.floating-prompt-shell .target-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
 }
 
 .floating-prompt-shell .spawn-picker {
@@ -619,22 +511,6 @@
   cursor: not-allowed;
 }
 
-.floating-prompt-shell .target-auto-badge {
-  font-size: 9px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-}
-
-.floating-prompt-shell .prompt-hint {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: normal;
-}
-
 .floating-prompt-shell .image-chips {
   display: flex;
   flex-wrap: wrap;
@@ -757,104 +633,6 @@
   color: var(--error);
 }
 
-.mention-dropdown {
-  position: absolute;
-  bottom: 100%;
-  left: 8px;
-  right: 8px;
-  max-height: 280px;
-  overflow-y: auto;
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  z-index: 100;
-  margin-bottom: 4px;
-}
-
-.mention-loading,
-.mention-empty {
-  padding: 10px 14px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.mention-list {
-  padding: 4px 0;
-}
-
-.mention-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.mention-item.selected {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-}
-
-.mention-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 0 1 auto;
-}
-
-.mention-path {
-  color: var(--text-muted);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0;
-  direction: rtl;
-  text-align: right;
-}
-
-.floating-prompt-shell .prompt-input {
-  width: 100%;
-  min-height: 28px;
-  /* ~3 lines (font-size 14px × line-height 1.5); JS caps the live height to
-     three lines and this is the backstop before it scrolls internally. */
-  max-height: 72px;
-  resize: none;
-  overflow-y: auto;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-family: var(--editor-font-family, monospace);
-  font-size: 14px;
-  line-height: 1.5;
-  height: 28px;
-  scrollbar-gutter: stable;
-}
-
-.floating-prompt-shell .prompt-input::placeholder {
-  color: var(--text-muted);
-}
-
-.floating-prompt-shell .send-btn {
-  height: 40px;
-  min-width: 64px;
-  padding: 0 18px;
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), transparent),
-    var(--button-bg, var(--accent));
-  color: var(--button-text, #fff);
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 18%, transparent),
-    0 8px 18px -14px color-mix(in srgb, var(--button-bg, var(--accent)) 70%, black);
-}
-
 @container center-panel (max-width: 860px) {
   .floating-prompt-shell {
     width: calc(100% - 24px);
@@ -870,29 +648,21 @@
     height: 18px;
   }
 
-
   .floating-prompt-shell .floating-prompt-bar {
     gap: 10px;
     padding: 12px 14px;
     border-radius: 20px;
   }
 
-  .floating-prompt-shell .history-panel {
-    border-radius: 14px;
-  }
+  
 
-  .floating-prompt-shell .history-item {
-    padding: 7px 8px;
-  }
+  
 
-  .floating-prompt-shell .history-text {
-    font-size: 11px;
-  }
+  
 
   .floating-prompt-shell .spawn-toggle,
   .floating-prompt-shell .attach-toggle,
-  .floating-prompt-shell .voice-toggle,
-  .floating-prompt-shell .send-btn {
+  .floating-prompt-shell .voice-toggle{
     height: 38px;
   }
 
@@ -911,25 +681,13 @@
     gap: 8px;
   }
 
-  .floating-prompt-shell .prompt-target {
-    font-size: 11px;
-  }
+  
 
-  .floating-prompt-shell .prompt-hint {
-    font-size: 10px;
-  }
+  
 
-  .floating-prompt-shell .prompt-input {
-    font-size: 13px;
-    min-height: 26px;
-    height: 26px;
-  }
+  
 
-  .floating-prompt-shell .send-btn {
-    padding: 0 14px;
-    border-radius: 11px;
-    font-size: 12px;
-  }
+  
 }
 
 @container center-panel (max-width: 620px) {
@@ -947,30 +705,19 @@
     height: 16px;
   }
 
-
   .floating-prompt-shell .floating-prompt-bar {
     gap: 8px;
     padding: 10px 12px;
     border-radius: 18px;
   }
 
-  .floating-prompt-shell .history-panel {
-    border-radius: 12px;
-  }
+  
 
-  .floating-prompt-shell .history-list {
-    max-height: 160px;
-    padding: 3px 4px 6px;
-  }
+  
 
-  .floating-prompt-shell .history-item {
-    padding: 6px 7px;
-    border-radius: 8px;
-  }
+  
 
-  .floating-prompt-shell .history-text {
-    font-size: 10px;
-  }
+  
 
   .floating-prompt-shell .spawn-toggle,
   .floating-prompt-shell .attach-toggle,
@@ -997,39 +744,13 @@
     gap: 3px;
   }
 
-  .floating-prompt-shell .prompt-target {
-    font-size: 10px;
-    max-width: 100%;
-  }
+  
 
-  .floating-prompt-shell .prompt-hint {
-    display: none;
-  }
+  
 
-  .floating-prompt-shell .prompt-input {
-    font-size: 12px;
-    line-height: 1.4;
-    min-height: 24px;
-    height: 24px;
-  }
+  
 
-  .floating-prompt-shell .send-btn {
-    height: 34px;
-    min-width: 50px;
-    padding: 0 12px;
-    border-radius: 10px;
-    font-size: 11px;
-  }
-}
-
-.floating-prompt-shell .send-btn:hover:not(:disabled) {
-  background: var(--button-hover-bg, var(--accent-hover));
-  transform: translateY(-1px);
-}
-
-.floating-prompt-shell .send-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  
 }
 
 @media (max-width: 720px) {
@@ -1037,60 +758,6 @@
     width: calc(100% - 20px);
     bottom: 12px;
   }
-}
-
-/* ── Agent mode ─────────────────────────────────────────────────────────── */
-
-.floating-prompt-shell .agent-toggle {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent),
-    color-mix(in srgb, var(--bg-primary) 82%, transparent);
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  border: 0;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
-  position: relative;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-.floating-prompt-shell .agent-toggle:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-primary));
-  color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.floating-prompt-shell .agent-toggle.active {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg-primary));
-  color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-.floating-prompt-shell .agent-toggle-badge {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--button-text, #fff);
-  font-size: 8.5px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  pointer-events: none;
-  box-shadow: 0 0 0 2px var(--bg-primary);
 }
 
 /* Agent mode glow on the bar */
@@ -1448,7 +1115,6 @@
     height: 15px;
   }
 
-
   .floating-prompt-shell .floating-prompt-bar {
     gap: 6px;
     padding: 8px 10px;
@@ -1470,19 +1136,9 @@
     height: 12px;
   }
 
-  .floating-prompt-shell .send-btn {
-    height: 30px;
-    min-width: 44px;
-    padding: 0 10px;
-    border-radius: 9px;
-    font-size: 10px;
-  }
+  
 
-  .floating-prompt-shell .prompt-input {
-    font-size: 12px;
-    min-height: 22px;
-    height: 22px;
-  }
+  
 
   .floating-prompt-shell .prompt-meta {
     flex-direction: column;
@@ -1490,19 +1146,9 @@
     gap: 2px;
   }
 
-  .floating-prompt-shell .prompt-hint {
-    display: none;
-  }
+  
 
-  .floating-prompt-shell .prompt-target {
-    font-size: 9px;
-  }
-}
-
-@media (max-width: 760px) {
-  .floating-prompt-shell .prompt-hint {
-    max-width: 160px;
-  }
+  
 }
 
 /* Image preview pop-up modal styles */

@@ -63,7 +63,7 @@ import {
   homeScreenOpen,
 } from '$lib/stores/layout';
 import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
-import { toggleCommandPalette } from '$lib/stores/commandpalette';
+import { toggleCommandPalette, registerCommand } from '$lib/stores/commandpalette';
 import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy } from '$lib/stores/preview';
@@ -89,7 +89,7 @@ import TranscriptionIndicator from '$lib/components/terminal/TranscriptionIndica
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
-import type { ActiveView, LayoutState, SidebarTab } from '$lib/types/layout';
+import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 // openDailyNote removed
@@ -834,6 +834,33 @@ export default function AppShell() {
     const withActive = arranged.includes(activeRoom) ? arranged : [activeRoom, ...arranged];
     return withActive.slice(0, SPLIT_MAX_PANES);
   }, [activeRoom, sideRooms, splitSlots, visibleRooms]);
+
+  /**
+   * The pane that is actually zoomed to the full stage, or null.
+   *
+   * Same test four render paths were each spelling out for themselves — the
+   * stage, the switcher, the prompt-bar Split button and the pane header. They
+   * agreed, but nothing made them agree, and every new read of `expandedRoom`
+   * was a chance to check it without the "is that room still on stage?" half.
+   */
+  const stageExpandedRoom =
+    expandedRoom !== null && visibleRooms.includes(expandedRoom) ? expandedRoom : null;
+
+  /**
+   * Every "zoom this pane / go back to the grid" path.
+   *
+   * Goes through `withStageRetile` for the same reason adding or removing a pane
+   * does: expanding hides every other pane and stretches this one across the
+   * whole stage, which is the largest geometry change the stage can make. The
+   * bare `setExpandedRoom` this replaces left it to each xterm's debounced
+   * ResizeObserver, and per the atlas note in TerminalPane's `onResizeEnd` that
+   * fit re-renders straight from a stale glyph atlas — so expanding a terminal
+   * and dropping it back into the grid painted garbled leftovers of the size it
+   * used to be until something else happened to resize it.
+   */
+  function setStageExpansion(next: RoomId | null) {
+    withStageRetile(() => setExpandedRoom(next));
+  }
 
   // What the stage looked like before "Tile all agents" took it over, so a
   // second press puts it back instead of stranding the user in a tiling they
@@ -1599,6 +1626,13 @@ export default function AppShell() {
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
       if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
+      // While a pane is zoomed the stage shows exactly one room, so focusing a
+      // different one used to change nothing you could see: the switcher pill
+      // moved, a spawning agent took a slot, the orchestrator's "show me the
+      // terminal" landed — and the stage kept the pane that was already there.
+      // Carry the zoom to whatever just took focus instead; the way back to the
+      // grid is the restore button, not a room that silently refuses to appear.
+      if (stageExpandedRoom !== null && stageExpandedRoom !== id) setExpandedRoom(id);
       if (claimSplitSlot(id)) setFocusedRoom(id);
     });
   }
@@ -1642,6 +1676,10 @@ export default function AppShell() {
   // switcher's "show this too" path. Outside Split it behaves as a plain focus.
   function addRoomToSplit(id: RoomId) {
     withStageRetile(() => {
+      // "Show this too" is a request to see two panes, so it takes the stage
+      // out of zoom. Without this the room joined the tiling underneath a pane
+      // still filling the stage, and the button read as broken.
+      setExpandedRoom(null);
       setMinimizedRooms((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -1771,7 +1809,7 @@ export default function AppShell() {
   function focusRoomMode(id: RoomId) {
     if (id === 'terminal') setTerminalRoomOpen(true);
     if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
-    setExpandedRoom(id);
+    setStageExpansion(id);
     setFocusedRoom(id);
   }
 
@@ -1885,15 +1923,20 @@ export default function AppShell() {
       onClick: () => toggleToolboxVisible(),
       icon: <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>,
     },
-    {
-      id: 'youtube',
-      title: 'Media Player',
-      active: layoutState.youtubeVisible,
-      // Pops up the free-floating window rather than opening a tiled room.
-      onClick: () => toggleYoutubeVisible(),
-      icon: <Icon><rect x="2" y="5" width="20" height="14" rx="4" /><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" /></Icon>,
-    },
   ];
+
+  // The Media Player is NOT a room — it is a free-floating pop-up window that
+  // collapses to a bar at the bottom-right. Its launcher therefore lives in the
+  // Utilities group with the other summoned tools, not in Rooms. Toggling it
+  // while it sits collapsed restores it rather than closing it.
+  const mediaPlayerItem: ActivityItem = {
+    id: 'youtube',
+    title: 'Media Player',
+    active: layoutState.youtubeVisible,
+    onClick: () => toggleYoutubeVisible(),
+    icon: <Icon><rect x="2" y="5" width="20" height="14" rx="4" /><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" /></Icon>,
+  };
+
 
   // Stays inline in the prompt bar rather than going into the Tools menu — it
   // is a one-press action, not a panel you toggle.
@@ -1950,22 +1993,36 @@ export default function AppShell() {
   const toolMenuGroups: ToolMenuGroup[] = [
     { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
     { id: 'rooms', label: 'Rooms', items: [...roomLauncherItems, sketchItem] },
-    { id: 'utilities', label: 'Utilities', items: drawerToolItems },
+    { id: 'utilities', label: 'Utilities', items: [...drawerToolItems, mediaPlayerItem] },
   ].filter((group) => group.items.length > 0);
 
   // Layout actions stay as bare icons next to the Tools menu: they are pressed
   // constantly while arranging panes, so a popover round-trip would cost more
   // than the chrome they take up.
-  const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
+  const isExpanded = stageExpandedRoom !== null;
+  const inSplit = ambientLayout === 'gallery';
   const layoutActionItems: ActivityItem[] = [
     spawnAgentItem,
     {
       id: 'split',
-      title: isExpanded ? 'Restore split grid' : 'Split — add a pane',
-      active: !isExpanded && splitRooms.length > 1,
+      title: isExpanded
+        ? 'Restore split grid'
+        : inSplit
+          ? 'Split — add a pane'
+          : 'Split — tile panels',
+      active: inSplit && !isExpanded,
       onClick: () => {
+        // Three states, and the button has to tell them apart. It used to
+        // conflate the last two: it only ever edited `splitSlots`, and Focus
+        // renders the active room alone and ignores that list entirely — so
+        // pressing Split outside Split re-tiled a stage nobody was looking at
+        // and the screen did not move. Entering the mode is what makes it
+        // "actually go to split", and it is what the old room dock did before
+        // the Tools menu replaced it.
         if (isExpanded) {
-          setExpandedRoom(null);
+          setStageExpansion(null);
+        } else if (!inSplit) {
+          switchAmbientLayout('gallery');
         } else {
           addNextRoomToSplit();
         }
@@ -1979,12 +2036,79 @@ export default function AppShell() {
         : 'Tile all agents',
       active: fleetArrangementActive && !isExpanded,
       onClick: () => {
-        if (isExpanded) setExpandedRoom(null);
+        if (isExpanded) setStageExpansion(null);
         toggleFleetArrangement();
       },
       icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
     },
   ];
+
+  // Every Tools-menu entry and layout action is also a command-palette command,
+  // so the palette can launch anything the menu can. The registered actions
+  // delegate through a ref that the first effect below refreshes on *every*
+  // render: several of these onClicks read "is it open" from render scope, so
+  // invoking a command must always run the closure the current render produced,
+  // never one captured at registration time.
+  const paletteBridgeRef = useRef<Record<string, () => void>>({});
+
+  useEffect(() => {
+    const bridge = paletteBridgeRef.current;
+    for (const group of toolMenuGroups) {
+      for (const item of group.items) bridge[`tools.${group.id}.${item.id}`] = item.onClick;
+    }
+    for (const item of layoutActionItems) bridge[`layout.${item.id}`] = item.onClick;
+  });
+
+  // Re-register only when an id, title, or category actually changes — these
+  // arrays are rebuilt every render, and rewriting the store each time would
+  // churn every palette subscriber.
+  const paletteSignature = [
+    ...toolMenuGroups.flatMap((g) => g.items.map((i) => `${g.id}.${i.id}:${i.title}`)),
+    ...layoutActionItems.map((i) => `layout.${i.id}:${i.title}`),
+  ].join('|');
+
+  useEffect(() => {
+    for (const group of toolMenuGroups) {
+      for (const item of group.items) {
+        registerCommand({
+          id: `tools.${group.id}.${item.id}`,
+          name: item.title,
+          category: group.label,
+          action: () => paletteBridgeRef.current[`tools.${group.id}.${item.id}`]?.(),
+        });
+      }
+    }
+    for (const item of layoutActionItems) {
+      registerCommand({
+        id: `layout.${item.id}`,
+        name: item.title,
+        category: 'Layout',
+        action: () => paletteBridgeRef.current[`layout.${item.id}`]?.(),
+      });
+    }
+    // Settings sections deep-link straight into their tab; no bridge needed —
+    // openSettings is a pure store call.
+    const settingsSections: { tab: SettingsTab; name: string }[] = [
+      { tab: 'general', name: 'Settings: General' },
+      { tab: 'appearance', name: 'Settings: Appearance' },
+      { tab: 'models', name: 'Settings: AI Models' },
+      { tab: 'voice', name: 'Settings: Voice' },
+      { tab: 'terminal', name: 'Settings: Terminal' },
+      { tab: 'agents', name: 'Settings: Agents' },
+      { tab: 'stats', name: 'Settings: Stats' },
+      { tab: 'shortcuts', name: 'Settings: Shortcuts' },
+      { tab: 'about', name: 'Settings: About' },
+    ];
+    for (const section of settingsSections) {
+      registerCommand({
+        id: `settings.${section.tab}`,
+        name: section.name,
+        category: 'Settings',
+        action: () => openSettings(section.tab),
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paletteSignature]);
 
   function renderAuxPanes() {
     if (visiblePanels.length === 3) {
@@ -2239,7 +2363,7 @@ export default function AppShell() {
   // stays clickable.
   function renderRoomFrame(id: RoomId, featured = false) {
     const title = roomTitle(id);
-    const isThisExpanded = expandedRoom === id;
+    const isThisExpanded = stageExpandedRoom === id;
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
     // Every other room gets its own glyph in that same slot — the one the dock,
@@ -2291,7 +2415,7 @@ export default function AppShell() {
             {isThisExpanded ? (
               <button
                 className="room-action"
-                onClick={() => setExpandedRoom(null)}
+                onClick={() => setStageExpansion(null)}
                 title={`Restore ${title} — back to split`}
                 aria-label={`Restore ${title} — back to split`}
               >
@@ -2305,7 +2429,7 @@ export default function AppShell() {
             ) : (
               <button
                 className="room-action"
-                onClick={() => setExpandedRoom(id)}
+                onClick={() => setStageExpansion(id)}
                 title={`Expand ${title} — full stage`}
                 aria-label={`Expand ${title} — full stage`}
               >
@@ -2395,11 +2519,14 @@ export default function AppShell() {
     // and it should still be there when they switch back to Split.
     setSplitSlots(slots);
     setFocusedRoom(focused);
-    setExpandedRoom(expanded);
     // Only when the mode is really changing — `switchAmbientLayout` early-returns
     // on an unchanged one, which would leave the two setters above as the whole
     // restore. That is exactly right in that case.
     if (target !== ambientLayout) switchAmbientLayout(target);
+    // AFTER the switch, never before: a mode change drops whatever pane was
+    // zoomed (see the note there), and this project's saved zoom is the one
+    // thing in the arrangement that must survive it.
+    setExpandedRoom(expanded);
   }
 
   function switchAmbientLayout(requested: AmbientLayout) {
@@ -2432,6 +2559,14 @@ export default function AppShell() {
     // A Fleet request re-tiles the stage even when already in Split, so it must
     // not early-return on an unchanged mode the way a plain toggle does.
     if (nextLayout === ambientLayout && !fleetRequested) return;
+
+    // A zoomed pane belongs to the arrangement it was zoomed out of. Leaving it
+    // set across a mode change is what stranded the shell in the state this
+    // whole path exists to avoid: Focus pinned to a room that was no longer
+    // active, and coming back to Split landing full-screen on a pane instead of
+    // the grid the user left. A Fleet re-tile clears it for the same reason —
+    // it is a brand new arrangement, and it has panes to show.
+    setExpandedRoom(null);
 
     // Save current mode's state before switching
     perLayoutState.current[ambientLayout] = { focused: focusedRoom, minimized: minimizedRooms };
@@ -2508,7 +2643,7 @@ export default function AppShell() {
   }
 
   function renderSplitSwitcher() {
-    const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
+    const isExpanded = stageExpandedRoom !== null;
     const atCap = splitRooms.length >= SPLIT_MAX_PANES;
     return (
       <aside className="split-switcher" aria-label="Arrange split panes">
@@ -2530,7 +2665,7 @@ export default function AppShell() {
           {visibleRooms.map((room) => {
             const slot = splitRooms.indexOf(room);
             const onStage = slot >= 0;
-            const isPrimary = isExpanded ? room === expandedRoom : room === activeRoom;
+            const isPrimary = isExpanded ? room === stageExpandedRoom : room === activeRoom;
             return (
               <div
                 key={room}
@@ -2541,10 +2676,12 @@ export default function AppShell() {
                   className="split-switch-summary"
                   onClick={() => {
                     if (isExpanded) {
-                      if (room === expandedRoom) {
-                        setExpandedRoom(null);
+                      if (room === stageExpandedRoom) {
+                        setStageExpansion(null);
                       } else {
-                        setExpandedRoom(room);
+                        // `focusRoom` carries the expansion across on its own
+                        // now, so this is a plain focus — setting both here
+                        // would fight it (and refit every pane twice).
                         focusRoom(room);
                       }
                     } else {
@@ -2610,7 +2747,7 @@ export default function AppShell() {
                         type="button"
                         className="split-target-btn icon danger"
                         onClick={() => {
-                          if (expandedRoom === room) setExpandedRoom(null);
+                          if (expandedRoom === room) setStageExpansion(null);
                           removeRoomFromSplit(room);
                         }}
                         disabled={splitRooms.length <= 1}
@@ -2643,7 +2780,7 @@ export default function AppShell() {
 
   function renderAmbientLayout() {
     const isSplit = ambientLayout === 'gallery';
-    const isExpanded = expandedRoom !== null && visibleRooms.includes(expandedRoom);
+    const isExpanded = stageExpandedRoom !== null;
 
     const persistentStageRooms: RoomId[] = [
       ...(['terminal', 'dev-terminal', 'preview'] as RoomId[]).filter((room) =>
@@ -2654,8 +2791,8 @@ export default function AppShell() {
       ),
     ];
 
-    const stageRooms: RoomId[] = isExpanded
-      ? [expandedRoom]
+    const stageRooms: RoomId[] = stageExpandedRoom
+      ? [stageExpandedRoom]
       : isSplit
         ? splitRooms
         : activeRoom
@@ -2797,6 +2934,9 @@ export default function AppShell() {
             ambient rooms grid) so it overlays any page and survives Focus /
             Split / Canvas switches without unmounting. */}
         {layoutState.youtubeVisible && <FloatingYouTube onClose={() => toggleYoutubeVisible()} />}
+
+        {/* The Memory Graph, on exactly the same contract: a free-floating
+            window driven by its own layout flag, surviving mode switches. */}
 
         <TranscriptionIndicator />
       </div>

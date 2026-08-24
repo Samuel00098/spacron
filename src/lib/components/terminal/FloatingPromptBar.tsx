@@ -3,26 +3,10 @@ import { get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
-  activeSessionId,
-  devActiveSessionId,
-  manualPromptTargetId,
-  sessions,
-  devSessions,
-  commandHistory,
-  addHistoryEntry,
-  setSessionExecuting,
-  setSessionTaskSummary,
-  summarizeTerminalTask,
-  startCommandBlock,
   promptBarInput,
   promptBarImage,
   promptBarFocusRequest,
   promptBarVoiceModeRequest,
-  activateSessionInPane,
-  sendPromptToSession,
-  getSessionLabel,
-  getSessionPromptTargetLabel,
-  isAgentSession,
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
@@ -40,7 +24,6 @@ import {
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { isTauriRuntime, isWebkitGtk, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
-import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
   orchestratorTasks,
   sendChatMessage,
@@ -52,22 +35,10 @@ import {
 } from '$lib/stores/orchestrator';
 import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { openSettings } from '$lib/stores/layout';
-import { requestRoomControl } from '$lib/stores/layoutControl';
-import { addRunEntry } from '$lib/stores/runHistory';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
-import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
-import MentionDropdown from './MentionDropdown.tsx';
-import type { FileEntry } from '$lib/types/explorer';
 import { useStore } from '$lib/react/useStore';
-import { useLayoutStore } from '$lib/stores/zustand/layout';
 import '$lib/components/orchestrator/VoiceConversationOverlay.css';
 import './FloatingPromptBar.css';
-
-// WebKitGTK (Linux) gives our textarea no usable native right-click menu and
-// blocks clipboard writes, so the prompt box needs its own copy/paste there.
-// Windows/macOS keep their native menu untouched.
-const isLinuxHost = typeof navigator !== 'undefined' &&
-  navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
 
 // Spoken commands that pause / resume the conversational voice loop. Listed in
 // NORMALIZED form (lowercase, no punctuation) — matchVoiceCommand() normalizes
@@ -104,7 +75,7 @@ const REALTIME_VOICE_INSTRUCTIONS = [
 ].join('\n');
 
 // Per-project state cache
-const barProjectCache = new Map<string, { inputValue: string; manualTargetId: number | null }>();
+const barProjectCache = new Map<string, { inputValue: string }>();
 
 // `diskPath` is set when the image already exists on disk (attached via the
 // file picker) so submitPrompt can reference it directly instead of re-saving
@@ -114,25 +85,6 @@ type PastedImage = { objectUrl: string; dataUrl: string; name: string; diskPath?
 // Map a clipboard image MIME type to a clean file extension. Splitting on "/"
 // alone mangles compound subtypes (e.g. "image/svg+xml" -> "svgxml"), which
 // would write a file with a bogus extension the agent can't open.
-function extensionForMime(mime: string): string {
-  switch (mime) {
-    case 'image/png': return 'png';
-    case 'image/apng': return 'apng';
-    case 'image/jpeg': return 'jpg';
-    case 'image/gif': return 'gif';
-    case 'image/webp': return 'webp';
-    case 'image/bmp': return 'bmp';
-    case 'image/x-icon':
-    case 'image/vnd.microsoft.icon': return 'ico';
-    case 'image/svg+xml': return 'svg';
-    case 'image/avif': return 'avif';
-    case 'image/tiff': return 'tif';
-    default: {
-      const sub = (mime.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase();
-      return sub || 'png';
-    }
-  }
-}
 
 // Decode a data: URL into raw bytes locally. We deliberately avoid
 // `fetch(dataUrl)` here: Chromium routes fetches of data: URLs through the
@@ -152,18 +104,6 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
 // Encode raw clipboard RGBA into a PNG data URL via a canvas. Used for the Linux
 // clipboard-image paste path, where the native plugin hands us raw pixels rather
 // than an encoded image.
-function rgbaToPngDataUrl(bytes: Uint8Array, width: number, height: number): string | null {
-  if (typeof document === 'undefined') return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  const imageData = ctx.createImageData(width, height);
-  imageData.data.set(bytes.subarray(0, imageData.data.length));
-  ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL('image/png');
-}
 
 function stripMarkdown(text: string): string {
   return text
@@ -223,11 +163,6 @@ interface FloatingPromptBarProps {
 }
 
 export default function FloatingPromptBar({ trailingControls }: FloatingPromptBarProps = {}) {
-  const isDev = useStore(layoutSnapshot).ambient === 'development';
-  const $activeSessionId = useStore(isDev ? devActiveSessionId : activeSessionId);
-  const $manualPromptTargetId = useStore(manualPromptTargetId);
-  const $sessions = useStore(isDev ? devSessions : sessions);
-  const $commandHistory = useStore(commandHistory);
   const $activeProject = useStore(activeProject);
   const $orchestratorTasks = useStore(orchestratorTasks);
   const $chatMessages = useStore(chatMessages);
@@ -238,11 +173,13 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
 
   const lastBarProjectIdRef = useRef<string | null>(null);
 
+  // The staged prompt. There is no text box any more — this holds text handed to
+  // the bar from elsewhere (Preview's "add element to prompt", a spawned agent's
+  // goal), plus attachment paths dragged onto it, and it is shown read-only in
+  // the agent-mode strip. Speaking merges the transcript onto it and sends the
+  // pair as one message; `mergeVoiceTranscript` in the voice pipeline is what
+  // made keeping this a plain string worth doing.
   const [inputValue, setInputValue, inputValueRef] = useSyncedState('');
-  const inputElRef = useRef<HTMLTextAreaElement | null>(null);
-  const [, setHistoryIndex] = useState(-1);
-  const draftBeforeHistoryRef = useRef('');
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
   const [voiceLocked, setVoiceLocked, voiceLockedRef] = useSyncedState(false);
@@ -268,10 +205,8 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isGlobalFileDrag, setIsGlobalFileDrag] = useState(false);
-  const [targetPickerOpen, setTargetPickerOpen] = useState(false);
   const voiceDraftBaseRef = useRef('');
   const [voiceDraftText, setVoiceDraftText, voiceDraftTextRef] = useSyncedState('');
-  const [isAgentMode, setIsAgentMode] = useState(true);
   const [agentSending, setAgentSending, agentSendingRef] = useSyncedState(false);
   const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] = useSyncedState(false);
   const [isTtsSpeaking, setIsTtsSpeaking, isTtsSpeakingRef] = useSyncedState(false);
@@ -280,12 +215,16 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const lastSpokenMessageKeyRef = useRef<string | null>(null);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
   const [pastedFiles, setPastedFiles] = useState<Array<{ name: string; path: string }>>([]);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const transcriptElRef = useRef<HTMLDivElement | null>(null);
 
   const hasPromptText = inputValue.trim().length > 0;
+  // Attachments can arrive on their own — Preview sends an element screenshot
+  // with no accompanying text when the element has nothing worth describing —
+  // so the staged strip keys off content, not text, or that screenshot would
+  // sit in a chip with no way to send it.
+  const attachmentCount = pastedImages.length + pastedFiles.length;
+  const hasStagedContent = hasPromptText || attachmentCount > 0;
   const isActive = true;
 
   const waitingTaskCount = useMemo(
@@ -300,166 +239,32 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     [$chatMessages, $activeProject]
   );
 
-  const isVoiceActive = isAgentMode && voiceModeActive;
+  const isVoiceActive = voiceModeActive;
 
-  // Agent task cards for CNVS-like running/waiting/done state visualization
-  const activeTerminal = useMemo(
-    () => $sessions.find((session) => session.id === $activeSessionId) ?? null,
-    [$sessions, $activeSessionId]
-  );
-  const preferredAgentTerminal = useMemo(
-    () => (
-      isAgentSession(activeTerminal)
-        ? activeTerminal
-        : ($sessions
-            .filter((session) => session.isRunning && isAgentSession(session))
-            .sort((a, b) => (b.lastActivatedAt ?? 0) - (a.lastActivatedAt ?? 0))[0] ?? null)
-    ),
-    [activeTerminal, $sessions]
-  );
-  // Prefer a running agent as the target so a terminal-mode prompt reaches an
-  // agent for a response (routing it through the auto-submitting paste path)
-  // instead of running as a command in whatever shell pane happens to be focused.
-  // `preferredAgentTerminal` already returns the focused pane when it's itself an
-  // agent, so this still respects "the agent I'm looking at"; it only overrides a
-  // non-agent active pane, and falls back to that shell when no agent is running.
-  const autoTarget = preferredAgentTerminal ?? activeTerminal;
-  const manualTarget = useMemo(
-    () => {
-      if ($manualPromptTargetId === null) return null;
-      return ($sessions.find((s) => s.id === $manualPromptTargetId && s.isRunning) ?? null);
-    },
-    [$manualPromptTargetId, $sessions]
-  );
-  const promptTarget = manualTarget ?? autoTarget;
-  // "Pinned" only when the user deliberately targets a terminal other than the
-  // active one (via the picker). Focusing a pane keeps target === active = auto.
-  const isPinned = $manualPromptTargetId !== null && $manualPromptTargetId !== $activeSessionId;
-  const runningSessions = useMemo(() => $sessions.filter((s) => s.isRunning), [$sessions]);
-  const historyItems = useMemo(() => ($commandHistory || []).slice(0, 12), [$commandHistory]);
-  const canSend = isAgentMode
-    ? Boolean($activeProject) && !agentSending
-    : Boolean(promptTarget?.isRunning);
+  const canSend = Boolean($activeProject) && !agentSending;
 
-  const focusInput = useCallback(() => {
-    requestAnimationFrame(() => inputElRef.current?.focus());
-  }, []);
-
-  const adjustInputHeight = useCallback(() => {
-    const inputEl = inputElRef.current;
-    if (!inputEl) return;
-    // Grow the box with typed content up to three lines; past that it stops
-    // growing and scrolls internally (overflow-y: auto in the CSS). The cap is
-    // derived from the live computed line-height so it stays correct across the
-    // responsive font-size breakpoints instead of a hard-coded pixel count.
-    const cs = window.getComputedStyle(inputEl);
-    const lineHeight = parseFloat(cs.lineHeight) || 21;
-    const padding = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-    const oneLine = lineHeight + padding;
-    const maxHeight = lineHeight * 3 + padding;
-    if (!inputEl.value) {
-      inputEl.style.height = `${oneLine}px`;
-      return;
-    }
-    inputEl.style.height = '0px';
-    const nextHeight = Math.min(inputEl.scrollHeight, maxHeight);
-    inputEl.style.height = `${Math.max(nextHeight, oneLine)}px`;
-  }, []);
-
-  const resetHistoryCursor = useCallback(() => {
-    setHistoryIndex(-1);
-    draftBeforeHistoryRef.current = '';
-  }, []);
-
-  // Per-project state: save/restore inputValue and pinned target when project changes
+  // Per-project state: the staged prompt follows the project it was staged for.
   useEffect(() => {
     const projectId = $activeProject?.id ?? null;
     if (projectId === lastBarProjectIdRef.current) return;
 
     if (lastBarProjectIdRef.current !== null) {
-      barProjectCache.set(lastBarProjectIdRef.current, { inputValue, manualTargetId: get(manualPromptTargetId) });
+      barProjectCache.set(lastBarProjectIdRef.current, { inputValue });
     }
 
-    if (projectId !== null) {
-      const cached = barProjectCache.get(projectId);
-      setInputValue(cached?.inputValue ?? '');
-      const sessionAlive = cached?.manualTargetId != null &&
-        get(sessions).some((s) => s.id === cached.manualTargetId && s.isRunning);
-      manualPromptTargetId.set(sessionAlive ? (cached?.manualTargetId ?? null) : null);
-    } else {
-      setInputValue('');
-      manualPromptTargetId.set(null);
-    }
-
+    setInputValue(projectId !== null ? (barProjectCache.get(projectId)?.inputValue ?? '') : '');
     lastBarProjectIdRef.current = projectId;
-    setHistoryIndex(-1);
-    draftBeforeHistoryRef.current = '';
-    setHistoryOpen(false);
-    setTargetPickerOpen(false);
-    requestAnimationFrame(adjustInputHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [$activeProject]);
-
-  // Clear manual pin if the session dies
-  useEffect(() => {
-    if ($manualPromptTargetId !== null && !$sessions.find((s) => s.id === $manualPromptTargetId && s.isRunning)) {
-      manualPromptTargetId.set(null);
-    }
-  }, [$manualPromptTargetId, $sessions]);
-
-  const selectTarget = useCallback((id: number) => {
-    manualPromptTargetId.set(id);
-    setTargetPickerOpen(false);
-    focusInput();
-  }, [focusInput]);
-
-  const toggleTargetPicker = useCallback(() => {
-    setTargetPickerOpen((v) => !v);
-    setHistoryOpen(false);
-  }, []);
-
-  const resolvePromptTarget = useCallback(() => {
-    const isDevLayout = get(layoutSnapshot).ambient === 'development';
-    const allSessions = get(isDevLayout ? devSessions : sessions);
-    const pinnedId = get(manualPromptTargetId);
-    if (pinnedId !== null) {
-      const manual = allSessions.find((s) => s.id === pinnedId && s.isRunning);
-      if (manual) return manual;
-    }
-    const currentActiveSessionId = get(isDevLayout ? devActiveSessionId : activeSessionId);
-    const currentActiveTerminal = allSessions.find((session) => session.id === currentActiveSessionId) ?? null;
-    // The focused pane wins only when it's itself an agent (the one you're looking
-    // at). Otherwise prefer the most recently used running agent over a non-agent
-    // active pane, so the prompt actually reaches an agent for a response (and
-    // takes the auto-submitting paste path) instead of running as a shell command.
-    // Falls back to the focused shell only when no agent is running.
-    if (currentActiveTerminal && isAgentSession(currentActiveTerminal)) return currentActiveTerminal;
-    const runningAgent = allSessions
-      .filter((session) => session.isRunning && isAgentSession(session))
-      .sort((a, b) => (b.lastActivatedAt ?? 0) - (a.lastActivatedAt ?? 0))[0] ?? null;
-    return runningAgent ?? currentActiveTerminal;
-  }, []);
 
   const openPromptBar = useCallback(() => {
     setIsExpanded(true);
     setIsFocused(true);
-    focusInput();
-  }, [focusInput]);
+  }, []);
 
   const canStayOpen = useCallback(() => {
-    return hasPromptText || historyOpen || targetPickerOpen || isListening || isRefining || isDragOver || (!draggedExplorerPath && isGlobalFileDrag) || voiceModeActive;
-  }, [hasPromptText, historyOpen, targetPickerOpen, isListening, isRefining, isDragOver, draggedExplorerPath, isGlobalFileDrag, voiceModeActive]);
-
-  const enterAgentMode = useCallback(() => {
-    if (isAgentMode) {
-      focusInput();
-      return;
-    }
-    setIsAgentMode(true);
-    setHistoryOpen(false);
-    setTargetPickerOpen(false);
-    focusInput();
-  }, [isAgentMode, focusInput]);
+    return hasStagedContent || isListening || isRefining || isDragOver || (!draggedExplorerPath && isGlobalFileDrag) || voiceModeActive;
+  }, [hasStagedContent, isListening, isRefining, isDragOver, draggedExplorerPath, isGlobalFileDrag, voiceModeActive]);
 
   const handleShellFocusOut = useCallback((event: React.FocusEvent) => {
     setIsFocused(false);
@@ -467,10 +272,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     if (shellElRef.current && next && shellElRef.current.contains(next)) return;
     if (!canStayOpen()) setIsExpanded(false);
   }, [canStayOpen]);
-
-  const sendPromptToTarget = useCallback((sessionId: number, text: string, agentPreset?: string | null) => {
-    sendPromptToSession(sessionId, text, agentPreset);
-  }, []);
 
 
 
@@ -513,51 +314,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const removeFile = useCallback((index: number) => {
     setPastedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
-
-  // Pull an image off the native clipboard (Linux/WebKitGTK fallback) and add it
-  // as a preview chip. Returns true when an image was found and attached.
-  const addNativeClipboardImage = useCallback(async (): Promise<boolean> => {
-    const img = await readImageFromClipboard();
-    if (!img) return false;
-    const dataUrl = rgbaToPngDataUrl(img.bytes, img.width, img.height);
-    if (!dataUrl) return false;
-    const blob = new Blob([dataUrlToBytes(dataUrl)], { type: 'image/png' });
-    const objectUrl = URL.createObjectURL(blob);
-    const name = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
-    setPastedImages((prev) => [...prev, { objectUrl, dataUrl, name }]);
-    return true;
-  }, []);
-
-  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItems = items.filter((item) => item.type.startsWith('image/'));
-    if (!imageItems.length) {
-      // WebKitGTK never exposes clipboard images through the paste event, so fall
-      // back to reading them natively. Only do this when the clipboard carried no
-      // text/files to paste — otherwise let the default text paste run untouched.
-      const hasOther = items.some((item) => item.kind !== 'image');
-      if (!hasOther && isTauriRuntime()) {
-        void addNativeClipboardImage();
-      }
-      return;
-    }
-    e.preventDefault();
-    for (const item of imageItems) {
-      const blob = item.getAsFile();
-      if (!blob) continue;
-      // Unique name (timestamp + random) so two images pasted at once never
-      // collide; keep the real extension so the agent reads the right format.
-      const ext = extensionForMime(item.type);
-      const name = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const objectUrl = URL.createObjectURL(blob);
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
-      });
-      setPastedImages((prev) => [...prev, { objectUrl, dataUrl, name }]);
-    }
-  }, [addNativeClipboardImage]);
 
   // Write any attached/pasted images to disk and return their on-disk paths,
   // so both the agent-chat path and the terminal path can fold attachments into
@@ -642,7 +398,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       if (
         !realtimeActiveRef.current &&
         voiceModeActiveRef.current &&
-        isAgentModeRef.current &&
         !voiceStoppingRef.current &&
         !isListeningRef.current &&
         !isRefiningRef.current &&
@@ -704,13 +459,11 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     realtimeActiveRef.current = false;
     if (realtimeSession) {
       realtimeSession.stop();
-      focusInput();
       return;
     }
     voiceInput.setConversationMode(false);
     voiceInput.stop();
-    focusInput();
-  }, [focusInput]);
+  }, []);
 
   useEffect(() => {
     stopAgentVoiceRef.current = stopAgentVoice;
@@ -864,22 +617,10 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
 
   const launchAgentVoiceMode = useCallback(() => {
     openPromptBar();
-    enterAgentMode();
     if (!voiceModeActive) {
       toggleAgentVoiceMode();
     }
-  }, [openPromptBar, enterAgentMode, voiceModeActive, toggleAgentVoiceMode]);
-
-  const toggleAgentMode = useCallback(() => {
-    if (isAgentMode) {
-      if (voiceModeActive) stopAgentVoice();
-      setIsAgentMode(false);
-      focusInput();
-      return;
-    }
-    enterAgentMode();
-    toggleAgentVoiceMode();
-  }, [isAgentMode, voiceModeActive, stopAgentVoice, focusInput, enterAgentMode, toggleAgentVoiceMode]);
+  }, [openPromptBar, voiceModeActive, toggleAgentVoiceMode]);
 
   const submitAgentMessage = useCallback(async (textOverride?: string) => {
     if (!$activeProject) return;
@@ -925,10 +666,23 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
         resumeVoiceLoopRef.current();
       }
     }
-    resetHistoryCursor();
-      requestAnimationFrame(adjustInputHeight);
-      focusInput();
-  }, [$activeProject, materializeAttachments, appendAttachmentPaths, inputValueRef, resetHistoryCursor, adjustInputHeight, focusInput]);
+  }, [$activeProject, materializeAttachments, appendAttachmentPaths, inputValueRef]);
+
+  // The staged prompt's two buttons. Sending takes no argument on purpose:
+  // submitAgentMessage falls back to the staged text and folds the attachment
+  // chips in, so this is the same dispatch a spoken turn makes.
+  const sendStagedPrompt = useCallback(() => {
+    void submitAgentMessage();
+  }, [submitAgentMessage]);
+
+  const clearStagedPrompt = useCallback(() => {
+    setInputValue('');
+    setPastedFiles([]);
+    setPastedImages((prev) => {
+      for (const img of prev) URL.revokeObjectURL(img.objectUrl);
+      return [];
+    });
+  }, [setInputValue]);
 
   useEffect(() => {
     submitAgentMessageRef.current = submitAgentMessage;
@@ -941,7 +695,7 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // keeps running while TTS plays; the mic resumes when dispatch finishes
   // (see submitAgentMessage's finally) or when TTS ends (see speakResponse).
   useEffect(() => {
-    if (!voiceModeActive || !isAgentMode || isTtsSpeaking) return;
+    if (!voiceModeActive || isTtsSpeaking) return;
     // The GPT Realtime engine speaks for itself; assistant messages it logs to
     // the chat must not ALSO be synthesized by the pipeline TTS.
     if (realtimeActiveRef.current) return;
@@ -952,12 +706,12 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     lastSpokenMessageKeyRef.current = speechKey;
     setIsTtsSpeaking(true);
     void speakResponse(speechTextForAssistantMessage(lastMsg));
-  }, [voiceModeActive, isAgentMode, isTtsSpeaking, projectChatMessages, speakResponse]);
+  }, [voiceModeActive, isTtsSpeaking, projectChatMessages, speakResponse]);
 
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
   useEffect(() => {
     void waitingTaskCount; // subscribe but don't open panel — orchestrator panel removed
-  }, [isAgentMode, voiceModeActive, waitingTaskCount]);
+  }, [voiceModeActive, waitingTaskCount]);
 
   // Clean up pasted-image object URLs on unmount to prevent blob: URL leaks.
   useEffect(() => {
@@ -982,222 +736,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       el.scrollTop = 0;
     }
   }, [projectChatMessages.length, voiceDraftText, isListening, isRefining, agentSending]);
-
-  const submitPrompt = useCallback(async () => {
-    if (isAgentMode) { await submitAgentMessage(); return; }
-    if (!inputValue.trim() && pastedImages.length === 0) return;
-
-    const { paths, ok } = await materializeAttachments();
-    if (!ok) return;
-    const finalText = appendAttachmentPaths(inputValue.trim(), paths);
-    if (!finalText) return;
-
-    const target = resolvePromptTarget();
-    if (!target) {
-      showToast('No active terminal available', 'warning');
-      return;
-    }
-
-    activateSessionInPane(target.id);
-    if (!target.agentPreset) {
-      const isDevLayout = get(layoutSnapshot).ambient === 'development';
-      requestRoomControl('focus', isDevLayout ? 'dev-terminal' : 'terminal');
-    }
-    const taskSummary = target.agentPreset ? summarizeTerminalTask(finalText) : '';
-    sendPromptToTarget(target.id, finalText, target.agentPreset);
-    setSessionExecuting(target.id, true);
-    if (target.agentPreset) {
-      setSessionTaskSummary(target.id, taskSummary || null);
-    } else {
-      setSessionTaskSummary(target.id, null);
-    }
-    startCommandBlock(target.id, finalText);
-    addRunEntry({
-      command: finalText,
-      sessionId: target.id,
-      sessionRole: target.role ?? null,
-      sessionLabel: getSessionLabel(target, $sessions),
-      agentPreset: target.agentPreset ?? null,
-      projectId: $activeProject?.id ?? '',
-      startedAt: Date.now(),
-    });
-    addHistoryEntry(finalText);
-
-    setInputValue('');
-    setIsExpanded(false);
-    setHistoryOpen(false);
-    resetHistoryCursor();
-    requestAnimationFrame(adjustInputHeight);
-    focusInput();
-    showToast(
-      `Sent to ${getSessionPromptTargetLabel(target, $sessions)}`,
-      'info',
-      undefined,
-      true
-    );
-  }, [isAgentMode, submitAgentMessage, inputValue, pastedImages, materializeAttachments, appendAttachmentPaths, resolvePromptTarget, sendPromptToTarget, $sessions, $activeProject, resetHistoryCursor, adjustInputHeight, focusInput]);
-
-  const selectHistoryItem = useCallback((text: string) => {
-    setInputValue(text);
-    setHistoryOpen(false);
-    resetHistoryCursor();
-    focusInput();
-  }, [resetHistoryCursor, focusInput]);
-
-  const stepHistory = useCallback((direction: 1 | -1) => {
-    const items = get(commandHistory);
-    if (!items.length) return;
-
-    setHistoryIndex((prevIndex) => {
-      if (prevIndex === -1) {
-        draftBeforeHistoryRef.current = inputValue;
-      }
-      const nextIndex = Math.max(-1, Math.min(items.length - 1, prevIndex + direction));
-      setInputValue(nextIndex === -1 ? draftBeforeHistoryRef.current : items[nextIndex]);
-      return nextIndex;
-    });
-  }, [inputValue]);
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // When the @-mention dropdown is open, intercept keyboard events and let
-    // the MentionDropdown's window-level listener handle them.
-    if (mentionQuery !== null) {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape') {
-        event.preventDefault();
-        return;
-      }
-    }
-
-    // Copy / cut for the prompt box. navigator.clipboard writes are permission-
-    // blocked on WebKitGTK (Linux), so a plain Ctrl+C in this textarea never
-    // reached the system clipboard there — route the selection through the native
-    // clipboard plugin instead. Only intercept when text is actually selected, so
-    // Ctrl+C with no selection keeps its default behaviour. (Paste keeps working
-    // through the onPaste handler / native paste, which WebKitGTK does allow.)
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && isTauriRuntime()) {
-      const key = event.key.toLowerCase();
-      const el = inputElRef.current;
-      if ((key === 'c' || key === 'x') && el) {
-        const start = el.selectionStart ?? 0;
-        const end = el.selectionEnd ?? 0;
-        if (start !== end) {
-          event.preventDefault();
-          void copyTextToClipboard(el.value.slice(start, end));
-          if (key === 'x') {
-            const next = el.value.slice(0, start) + el.value.slice(end);
-            setInputValue(next);
-            requestAnimationFrame(() => {
-              adjustInputHeight();
-              el.focus();
-              el.setSelectionRange(start, start);
-            });
-          }
-          return;
-        }
-      }
-    }
-
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void submitPrompt();
-      return;
-    }
-
-    if (event.key === 'ArrowUp') {
-      const cursorPos = inputElRef.current?.selectionStart ?? 0;
-      const onFirstLine = !inputValue.substring(0, cursorPos).includes('\n');
-      if (onFirstLine) {
-        event.preventDefault();
-        stepHistory(1);
-        return;
-      }
-    }
-
-    if (event.key === 'ArrowDown') {
-      const cursorPos = inputElRef.current?.selectionStart ?? inputValue.length;
-      const onLastLine = !inputValue.substring(cursorPos).includes('\n');
-      if (onLastLine) {
-        event.preventDefault();
-        stepHistory(-1);
-        return;
-      }
-    }
-
-    if (event.key === 'Escape') {
-      setHistoryOpen(false);
-      resetHistoryCursor();
-    }
-  }, [submitPrompt, inputValue, stepHistory, resetHistoryCursor, adjustInputHeight]);
-
-  // Right-click copy/paste for the prompt box on Linux (touchpad-friendly, and the
-  // only reliable copy path there). Selection → copy; no selection → paste at the
-  // cursor. Mirrors the terminal's context-menu behaviour. Left untouched on
-  // Windows/macOS so their native menu keeps working.
-  const handleInputContextMenu = useCallback(async (event: React.MouseEvent<HTMLTextAreaElement>) => {
-    if (!isLinuxHost || !isTauriRuntime()) return;
-    event.preventDefault();
-    const el = inputElRef.current;
-    if (!el) return;
-    const start = el.selectionStart ?? 0;
-    const end = el.selectionEnd ?? 0;
-    if (start !== end) {
-      await copyTextToClipboard(el.value.slice(start, end));
-      showToast('Copied to clipboard', 'info', undefined, true);
-      return;
-    }
-    const text = await readTextFromClipboard();
-    if (!text) return;
-    const next = el.value.slice(0, start) + text + el.value.slice(end);
-    setInputValue(next);
-    requestAnimationFrame(() => {
-      adjustInputHeight();
-      el.focus();
-      const pos = start + text.length;
-      el.setSelectionRange(pos, pos);
-    });
-  }, [adjustInputHeight]);
-
-  const handleMentionSelect = useCallback((entry: FileEntry) => {
-    const el = inputElRef.current;
-    const value = inputValueRef.current;
-    const cursorPos = el?.selectionStart ?? value.length;
-    const atIndex = value.lastIndexOf('@', cursorPos - 1);
-    if (atIndex !== -1) {
-      setInputValue(value.slice(0, atIndex) + value.slice(cursorPos));
-    }
-    addFileChip(entry.path);
-    setMentionQuery(null);
-    requestAnimationFrame(() => {
-      adjustInputHeight();
-      inputElRef.current?.focus();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjustInputHeight]);
-
-  const handleInput = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = event.target.value;
-    setInputValue(value);
-    setHistoryOpen(false);
-    adjustInputHeight();
-    setHistoryIndex((prev) => (prev !== -1 ? -1 : prev));
-    if (value.trim()) setIsExpanded(true);
-
-    // Check for @-mention trigger
-    const el = event.target;
-    const cursorPos = el.selectionStart;
-    if ($activeProject) {
-      const textBefore = value.slice(0, cursorPos);
-      const atIndex = textBefore.lastIndexOf('@');
-      if (atIndex !== -1 && (atIndex === 0 || value[atIndex - 1] === ' ' || value[atIndex - 1] === '\n')) {
-        const afterAt = value.slice(atIndex + 1, cursorPos);
-        if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
-          setMentionQuery(afterAt);
-          return;
-        }
-      }
-    }
-    setMentionQuery(null);
-  }, [adjustInputHeight, $activeProject]);
 
   // Clean up the voice input session on unmount to release AudioContext,
   // MediaStream, and ScriptProcessorNode resources.
@@ -1234,7 +772,7 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
         const wasLocked = voiceLockedRef.current;
         const held = voiceHeldRef.current;
         const shouldRestart = !wasStopping && (wasLocked || held);
-        const shouldResumeAgentVoice = isAgentModeRef.current && voiceModeActiveRef.current;
+        const shouldResumeAgentVoice = voiceModeActiveRef.current;
         const transcript = voiceDraftTextRef.current.trim();
         // Whatever was already in the prompt bar when this turn started. Captured
         // BEFORE the reset below, because the merge that uses it happens after an
@@ -1281,18 +819,15 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
 
         void (async () => {
           try {
-            const result = await refineVoicePrompt(transcript, { aiRefinement: !(isAgentModeRef.current && voiceModeActiveRef.current) });
+            const result = await refineVoicePrompt(transcript, { aiRefinement: !voiceModeActiveRef.current });
             if (result.text) {
+              // Speaking folds the transcript onto whatever is staged, so a goal
+              // handed over from Preview or a spawned agent is sent together with
+              // what the user just said rather than being replaced by it.
               const merged = mergeVoiceTranscript(draftBase, result.text);
               setInputValue(merged);
-              requestAnimationFrame(adjustInputHeight);
-              if (isAgentModeRef.current && voiceModeActiveRef.current) {
+              if (voiceModeActiveRef.current) {
                 await submitAgentMessageRef.current(merged);
-              } else {
-                focusInput();
-                if (result.aiRefined) {
-                  showToast('Prompt refined by AI', 'success', undefined, true);
-                }
               }
             }
           } catch (error) {
@@ -1325,18 +860,13 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
         // In the hands-free agent voice loop a start/transcription error would
         // otherwise leave the overlay wedged on the idle orb with a dead mic.
         // Tear voice mode down so the error toast is the clear signal.
-        if (isAgentModeRef.current && voiceModeActiveRef.current) {
+        if (voiceModeActiveRef.current) {
           stopAgentVoiceRef.current();
         }
       },
     })
   );
   const voiceInput = voiceInputRef.current;
-
-  // Mirror frequently-read state into refs so the voiceInput callbacks (created
-  // once via useRef above) always see current values without being recreated.
-  const isAgentModeRef = useRef(isAgentMode);
-  useEffect(() => { isAgentModeRef.current = isAgentMode; }, [isAgentMode]);
 
   const toggleVoiceInput = useCallback(async () => {
     if (isRefining) return;
@@ -1381,16 +911,8 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     if (!formatted) return;
 
     setInputValue((prev) => (prev ? `${prev} ${formatted}` : formatted));
-    setHistoryOpen(false);
-    setTargetPickerOpen(false);
-    resetHistoryCursor();
-    requestAnimationFrame(() => {
-      adjustInputHeight();
-      const el = inputElRef.current;
-      el?.focus();
-      el?.setSelectionRange(el.value.length, el.value.length);
-    });
-  }, [resetHistoryCursor, adjustInputHeight]);
+    setIsExpanded(true);
+  }, []);
 
   const isPointInsideBar = useCallback((clientX: number, clientY: number) => {
     const barEl = barElRef.current;
@@ -1471,22 +993,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     }
   }, [$promptBarVoiceModeRequest, launchAgentVoiceMode]);
 
+  // Text handed to the bar from elsewhere — Preview's "add element to prompt",
+  // the goal of an agent spawned without auto-run. There is no text box for it
+  // to land in any more, so it becomes the staged prompt and is shown in the
+  // agent strip, where it can be sent as-is or spoken over.
   useEffect(() => {
     const text = $promptBarInput;
-    if (text) {
-      // Append the injected text to any existing input rather than overwriting it
-      setInputValue((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
-      promptBarInput.set(null);
-      setHistoryOpen(false);
-      resetHistoryCursor();
-      requestAnimationFrame(() => {
-        adjustInputHeight();
-        const el = inputElRef.current;
-        el?.focus();
-        if (el) el.setSelectionRange(el.value.length, el.value.length);
-      });
-    }
-  }, [$promptBarInput, resetHistoryCursor, adjustInputHeight]);
+    if (!text) return;
+    setInputValue((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+    promptBarInput.set(null);
+    setIsExpanded(true);
+  }, [$promptBarInput, setInputValue]);
 
   // Watch for element screenshots injected from the Preview panel inspector
   useEffect(() => {
@@ -1500,43 +1017,9 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       const blob = new Blob([dataUrlToBytes(img.dataUrl)], { type: mime });
       const objectUrl = URL.createObjectURL(blob);
       setPastedImages((prev) => [...prev, { objectUrl, dataUrl: img.dataUrl, name: img.name }]);
-      requestAnimationFrame(() => {
-        inputElRef.current?.focus();
-      });
+      setIsExpanded(true);
     } catch {/* silently ignore */}
   }, [$promptBarImage]);
-
-  // Run once on mount — NOT on every session/active-session change. These mirror
-  // Svelte `$effect`s that read the prompt target via `resolvePromptTarget()`,
-  // which uses the non-reactive `get(store)`; Svelte therefore tracked no
-  // dependencies and ran them exactly once. Listing $sessions/$activeSessionId/
-  // $manualPromptTargetId as React deps (the original port) made the second
-  // effect re-focus the prompt bar input on every active-session change, which
-  // fights the terminal pane's own focus handler — a focus war that repaints the
-  // whole view every frame (the flicker; it pauses only while DevTools holds
-  // focus). See focusTerminalPane → focusPane → activateSessionInPane.
-  useEffect(() => {
-    if (!resolvePromptTarget()?.id) {
-      setHistoryOpen(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const sessionId = resolvePromptTarget()?.id;
-    if (!sessionId) return;
-    setHistoryOpen(false);
-    resetHistoryCursor();
-    requestAnimationFrame(() => {
-      adjustInputHeight();
-      inputElRef.current?.focus();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    requestAnimationFrame(adjustInputHeight);
-  }, [inputValue, adjustInputHeight]);
 
   const handleDocumentPointerDown = useCallback((event: MouseEvent) => {
     const target = event.target as Node | null;
@@ -1547,17 +1030,13 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     // any outside click disarms it. This runs before the early return below so
     // a click on the collapsed pill arms it even though nothing else is open.
     voiceShortcutArmedRef.current = insideShell;
-    if (!historyOpen && !targetPickerOpen && !isExpanded) return;
-    if (!insideShell) {
-      if (!canStayOpen()) setIsExpanded(false);
-      setHistoryOpen(false);
-      setTargetPickerOpen(false);
-    }
-  }, [historyOpen, targetPickerOpen, isExpanded, canStayOpen]);
+    if (!isExpanded) return;
+    if (!insideShell && !canStayOpen()) setIsExpanded(false);
+  }, [isExpanded, canStayOpen]);
 
   const handleGlobalVoiceShortcut = useCallback((event: KeyboardEvent) => {
-    // 1. If voice mode is active, Escape or Alt exits voice mode
-    if (voiceModeActive && isAgentMode) {
+    // Voice mode is on: Escape or left-Alt ends it.
+    if (voiceModeActive) {
       if (event.key === 'Escape' || (event.key === 'Alt' && event.location === KeyboardEvent.DOM_KEY_LOCATION_LEFT)) {
         event.preventDefault();
         stopAgentVoice();
@@ -1565,36 +1044,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       return;
     }
 
-    // 2. If voice input is listening (non-agent mode), Alt stops it
-    if (isListening && !isAgentMode) {
-      if (event.key === 'Alt' && event.location === KeyboardEvent.DOM_KEY_LOCATION_LEFT) {
-        event.preventDefault();
-        void toggleVoiceInput();
-        return;
-      }
-    }
-
     if (event.key !== 'Alt' || event.location !== KeyboardEvent.DOM_KEY_LOCATION_LEFT || event.repeat || isRefining) return;
 
-    // In agent mode, Alt only toggles voice once the user has clicked the
-    // floating bar (see `voiceShortcutArmedRef`). A focus guard can't do this
-    // job — the voice transcript area doesn't hold keyboard focus, so the old
+    // Alt only toggles voice once the user has clicked the floating bar (see
+    // `voiceShortcutArmedRef`). A focus guard can't do this job — the bar holds
+    // no keyboard focus of its own now that the text box is gone, so a
     // focus-based check could never fire. Arming on click is what makes the
     // shortcut both reachable and deliberate.
-    if (isAgentMode) {
-      if (!voiceShortcutArmedRef.current) return;
-      event.preventDefault();
-      toggleAgentVoiceMode();
-      return;
-    }
-
-    // In non-agent mode, require focus to be within the prompt bar
-    const activeElement = document.activeElement;
-    if (!shellElRef.current || !activeElement || !shellElRef.current.contains(activeElement)) return;
-
+    if (!voiceShortcutArmedRef.current) return;
     event.preventDefault();
-    void toggleVoiceInput();
-  }, [voiceModeActive, isAgentMode, isListening, isRefining, stopAgentVoice, toggleAgentVoiceMode, toggleVoiceInput]);
+    toggleAgentVoiceMode();
+  }, [voiceModeActive, isRefining, stopAgentVoice, toggleAgentVoiceMode]);
 
   const handleExplorerDragStart = useCallback((event: Event) => {
     const custom = event as CustomEvent<{ path?: string }>;
@@ -1801,33 +1261,8 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     >
       {isActive && (
         <>
-          {historyOpen && historyItems.length > 0 && (
-            <div
-              className="history-panel"
-              onMouseEnter={() => setIsHovered(true)}
-              onMouseLeave={() => setIsHovered(false)}
-            >
-              <div className="history-header">
-                <span className="history-label">Recent prompts</span>
-                <span className="history-hint">Click to re-use</span>
-              </div>
-              <div className="history-list">
-                {historyItems.map((item, i) => (
-                  <button key={i} className="history-item" onClick={() => selectHistoryItem(item)} title={item}>
-                    <span className="history-index">{i + 1}</span>
-                    <span className="history-text">{item}</span>
-                    <svg className="history-insert-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="9 10 4 15 9 20" />
-                      <path d="M20 4v7a4 4 0 0 1-4 4H4" />
-                    </svg>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div
-            className={`floating-prompt-bar${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isAgentMode ? ' agent-mode' : ''}${isVoiceActive ? ' voice-active' : ''}${promptTarget?.agentPreset ? ` target-${promptTarget.agentPreset}` : ''}`}
+            className={`floating-prompt-bar agent-mode${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isVoiceActive ? ' voice-active' : ''}`}
             id="floating-prompt-bar"
             ref={barElRef}
             onDragEnter={handleInternalDragEnter}
@@ -1948,30 +1383,10 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
             {!voiceModeActive && (
               <>
                 <button
-                  className={`agent-toggle${isAgentMode ? ' active' : ''}`}
-                  onClick={toggleAgentMode}
-                  title={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
-                  aria-label={isAgentMode ? 'Exit agent mode' : 'Enter agent mode'}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="10" rx="2" />
-                    <path d="M12 7v4" />
-                    <circle cx="12" cy="5" r="2" />
-                    <path d="M8 16h.01M16 16h.01" />
-                    <path d="M5 11V9a7 7 0 0 1 14 0v2" />
-                  </svg>
-                  {waitingTaskCount > 0 && !isAgentMode && (
-                    <span className="agent-toggle-badge">{waitingTaskCount}</span>
-                  )}
-                </button>
-
-
-
-                <button
-                  className={`voice-toggle${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}${isAgentMode ? ' agent-voice' : ''}`}
+                  className={`voice-toggle agent-voice${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}`}
                   onClick={toggleVoiceInput}
-                  title={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
-                  aria-label={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : (isAgentMode ? 'Speak to agent' : 'Start voice input')}
+                  title={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : 'Speak to agent'}
+                  aria-label={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : 'Speak to agent'}
                 >
                   {isRefining ? (
                     <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
@@ -1992,139 +1407,132 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
             <div className="prompt-copy">
 
               <div className="prompt-meta">
-                {isAgentMode ? (
-                  <>
-                    {/* "Now playing" — one moment at a time, no history */}
-                    <div className="voice-transcript" ref={transcriptElRef}>
-                      {(() => {
-                        // Only show content while voice mode is active;
-                        // clears to the idle hint as soon as voice ends.
-                        if (!voiceModeActive) {
-                          return (
-                            <div className="transcript-empty">
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
-                                <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
-                              </svg>
-                              <span>Press <kbd>Alt</kbd> or tap the mic to speak</span>
-                            </div>
-                          );
-                        }
-                        // 1. Voice is sleeping — show moon icon and hint
-                        if (voiceSleeping) {
-                          return (
-                            <div className="transcript-now sleeping">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                              </svg>
-                              <span>Sleeping — say &ldquo;wake up&rdquo; to resume</span>
-                            </div>
-                          );
-                        }
-                        // 2. User is speaking and we have a live draft (Web Speech
-                        //    interim results) — show it. With raw-audio STT there is
-                        //    no interim transcript, and with barge-in the mic is open
-                        //    the whole time the reply plays, so an unconditional
-                        //    "Listening…" here would hide every assistant response.
-                        //    Instead fall through and keep the last reply on screen
-                        //    until the user actually says something.
-                        if (isListening && voiceDraftText) {
-                          return (
-                            <p className="transcript-now user draft">
-                              {voiceDraftText}…
-                            </p>
-                          );
-                        }
-                        // 3. Transition: user done, agent thinking/processing — show the
-                        //    user's last spoken words with a thinking indicator instead of
-                        //    the previous assistant reply, so the bar never goes blank or
-                        //    shows stale text from an earlier turn.
-                        if ((isRefining || agentSending) && voiceDraftText) {
-                          return (
-                            <p className="transcript-now user draft">
-                              {voiceDraftText}
-                              <span className="orc-typing"><span /><span /><span /></span>
-                            </p>
-                          );
-                        }
-                        // 4. Assistant message exists — show it (also reached while
-                        //    the mic listens with no draft yet, so the reply stays
-                        //    readable until the user starts the next turn)
-                        const lastMsg = projectChatMessages.at(-1);
-                        if (lastMsg?.role === 'assistant') {
-                          if (lastMsg.pending) {
-                            return (
-                              <span className="orc-typing"><span /><span /><span /></span>
-                            );
-                          }
-                          if (lastMsg.completion) {
-                            const icon = lastMsg.completion.status === 'done' ? '✅' : lastMsg.completion.status === 'failed' ? '❌' : '⚠️';
-                            const verb = lastMsg.completion.status === 'done' ? 'finished' : lastMsg.completion.status === 'failed' ? 'failed' : 'needs input';
-                            return (
-                              <p className="transcript-now assistant">
-                                {icon} {lastMsg.completion.agentName} {verb}: {lastMsg.completion.taskTitle}
-                              </p>
-                            );
-                          }
-                          const displayText = stripMarkdown(speechTextForAssistantMessage(lastMsg).split('\n\n🔍')[0]);
-                          return (
-                            <p className="transcript-now assistant">{displayText}</p>
-                          );
-                        }
-                        // 5. Mic is open but nothing has been said yet and there is
-                        //    no reply to keep on screen (first turn of the session).
-                        if (isListening) {
-                          return <p className="transcript-now user draft">Listening…</p>;
-                        }
-                        // 6. Voice mode on but no message yet
+                {/* Text handed over from elsewhere in the app (Preview's "add
+                    element to prompt", a spawned agent's goal). It has no text
+                    box to sit in, so it is shown here — send it as it stands, or
+                    speak and the transcript is merged onto it. */}
+                {hasStagedContent && (
+                  <div className="staged-prompt">
+                    <span className="staged-prompt-label">Staged</span>
+                    <p className="staged-prompt-text" title={inputValue || undefined}>
+                      {hasPromptText
+                        ? inputValue
+                        : `${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}`}
+                    </p>
+                    <div className="staged-prompt-actions">
+                      <button
+                        type="button"
+                        className="staged-prompt-btn send"
+                        onClick={sendStagedPrompt}
+                        disabled={!canSend}
+                        title={canSend ? 'Send to the agent' : 'Open a project to send'}
+                      >
+                        Send
+                      </button>
+                      <button
+                        type="button"
+                        className="staged-prompt-btn clear"
+                        onClick={clearStagedPrompt}
+                        title="Discard"
+                        aria-label="Discard staged prompt"
+                      >
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {/* "Now playing" — one moment at a time, no history */}
+                <div className="voice-transcript" ref={transcriptElRef}>
+                  {(() => {
+                    // Only show content while voice mode is active;
+                    // clears to the idle hint as soon as voice ends.
+                    if (!voiceModeActive) {
+                      return (
+                        <div className="transcript-empty">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
+                            <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                          </svg>
+                          <span>Press <kbd>Alt</kbd> or tap the mic to speak</span>
+                        </div>
+                      );
+                    }
+                    // 1. Voice is sleeping — show moon icon and hint
+                    if (voiceSleeping) {
+                      return (
+                        <div className="transcript-now sleeping">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                          </svg>
+                          <span>Sleeping — say &ldquo;wake up&rdquo; to resume</span>
+                        </div>
+                      );
+                    }
+                    // 2. User is speaking and we have a live draft (Web Speech
+                    //    interim results) — show it. With raw-audio STT there is
+                    //    no interim transcript, and with barge-in the mic is open
+                    //    the whole time the reply plays, so an unconditional
+                    //    "Listening…" here would hide every assistant response.
+                    //    Instead fall through and keep the last reply on screen
+                    //    until the user actually says something.
+                    if (isListening && voiceDraftText) {
+                      return (
+                        <p className="transcript-now user draft">
+                          {voiceDraftText}…
+                        </p>
+                      );
+                    }
+                    // 3. Transition: user done, agent thinking/processing — show the
+                    //    user's last spoken words with a thinking indicator instead of
+                    //    the previous assistant reply, so the bar never goes blank or
+                    //    shows stale text from an earlier turn.
+                    if ((isRefining || agentSending) && voiceDraftText) {
+                      return (
+                        <p className="transcript-now user draft">
+                          {voiceDraftText}
+                          <span className="orc-typing"><span /><span /><span /></span>
+                        </p>
+                      );
+                    }
+                    // 4. Assistant message exists — show it (also reached while
+                    //    the mic listens with no draft yet, so the reply stays
+                    //    readable until the user starts the next turn)
+                    const lastMsg = projectChatMessages.at(-1);
+                    if (lastMsg?.role === 'assistant') {
+                      if (lastMsg.pending) {
                         return (
                           <span className="orc-typing"><span /><span /><span /></span>
                         );
-                      })()}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className={`prompt-target prompt-target-btn${isPinned ? ' pinned' : ''}`}
-                      onClick={toggleTargetPicker}
-                      title="Click to choose target terminal"
-                    >
-                      {promptTarget ? getSessionPromptTargetLabel(promptTarget, $sessions) : 'No active terminal'}
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="chevron-icon">
-                        <polyline points="6 9 12 15 18 9" />
-                      </svg>
-                    </button>
-                    <span className="prompt-hint">Enter to send · Up/Down history · mic to dictate · drag file to attach</span>
-                  </>
-                )}
-              </div>
-
-              {targetPickerOpen && runningSessions.length > 0 && (
-                <div className="target-picker">
-                  {runningSessions.map((s) => (
-                    <button
-                      key={s.id}
-                      className={`target-item${promptTarget?.id === s.id ? ' active' : ''}`}
-                      onClick={() => selectTarget(s.id)}
-                    >
-                      {s.role ? (
-                        <span
-                          className="target-dot"
-                          style={{
-                            background: s.role === 'Server' ? 'var(--role-server)' : s.role === 'Tests' ? 'var(--role-tests)' : s.role === 'Build' ? 'var(--role-build)' : s.role === 'Agent' ? 'var(--role-agent)' : s.role === 'Git' ? 'var(--role-git)' : 'var(--text-muted)',
-                          }}
-                        />
-                      ) : null}
-                      <span className="target-label">{getSessionPromptTargetLabel(s, $sessions)}</span>
-                      {s.id === promptTarget?.id && !isPinned && (
-                        <span className="target-auto-badge">auto</span>
-                      )}
-                    </button>
-                  ))}
+                      }
+                      if (lastMsg.completion) {
+                        const icon = lastMsg.completion.status === 'done' ? '✅' : lastMsg.completion.status === 'failed' ? '❌' : '⚠️';
+                        const verb = lastMsg.completion.status === 'done' ? 'finished' : lastMsg.completion.status === 'failed' ? 'failed' : 'needs input';
+                        return (
+                          <p className="transcript-now assistant">
+                            {icon} {lastMsg.completion.agentName} {verb}: {lastMsg.completion.taskTitle}
+                          </p>
+                        );
+                      }
+                      const displayText = stripMarkdown(speechTextForAssistantMessage(lastMsg).split('\n\n🔍')[0]);
+                      return (
+                        <p className="transcript-now assistant">{displayText}</p>
+                      );
+                    }
+                    // 5. Mic is open but nothing has been said yet and there is
+                    //    no reply to keep on screen (first turn of the session).
+                    if (isListening) {
+                      return <p className="transcript-now user draft">Listening…</p>;
+                    }
+                    // 6. Voice mode on but no message yet
+                    return (
+                      <span className="orc-typing"><span /><span /><span /></span>
+                    );
+                  })()}
                 </div>
-              )}
+              </div>
 
               {pastedImages.length > 0 && (
                 <div className="image-chips">
@@ -2166,31 +1574,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                 </div>
               )}
 
-              {/* Input: hidden in agent mode (voice-only), shown in terminal mode */}
-              {mentionQuery !== null && $activeProject && (
-                <MentionDropdown
-                  projectRoot={$activeProject.root_path}
-                  query={mentionQuery}
-                  selectedIndex={mentionSelectedIndex}
-                  onSelect={handleMentionSelect}
-                  onSetSelectedIndex={setMentionSelectedIndex}
-                  onClose={() => setMentionQuery(null)}
-                />
-              )}
-              {!isAgentMode && (
-                <textarea
-                  ref={inputElRef}
-                  value={inputValue}
-                  className="prompt-input"
-                  placeholder={canSend ? 'Prompt the active terminal...' : 'Open or focus a terminal to send prompts'}
-                  rows={1}
-                  onChange={handleInput}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
-                  onContextMenu={handleInputContextMenu}
-                  onMouseDown={() => { setTargetPickerOpen(false); setHistoryOpen(false); }}
-                />
-              )}
             </div>
 
             {/* Layout / spawn / Tools stay put in voice mode: they sit at the
@@ -2198,17 +1581,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                 them. */}
             {trailingControls}
 
-            {/* Send button is hidden in agent mode — voice is the primary input there */}
-            {!isAgentMode && (
-              <button
-                className="send-btn"
-                onClick={submitPrompt}
-                disabled={!canSend || (!inputValue.trim() && pastedImages.length === 0 && pastedFiles.length === 0)}
-                title={preferredAgentTerminal ? 'Send prompt to AI agent terminal' : 'Send prompt to active terminal'}
-              >
-                Send
-              </button>
-            )}
           </div>
         </>
       )}
