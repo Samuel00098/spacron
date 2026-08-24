@@ -212,6 +212,16 @@ function TerminalPane({
   const openProjects = useStore(projects);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Zero-padding host INSIDE the styled container. xterm is opened into this,
+  // not into the container itself: FitAddon measures the terminal element's
+  // PARENT and subtracts only that element's own padding — it never subtracts
+  // our container's 6/6/8px padding (and the container is box-sizing:
+  // border-box, so its computed size includes it). Opening straight into the
+  // container made fit believe there was ~12px more width and ~14px more
+  // height than really existed: one phantom column + row beyond the padded
+  // box, sheared away by the container's overflow:hidden — the "letters cut
+  // off" artifact. Measuring against a padding-free host restores exact fit.
+  const fitHostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const canvasAddonRef = useRef<CanvasAddon | null>(null);
@@ -533,33 +543,125 @@ function TerminalPane({
         if (target.clientWidth > 0 && target.clientHeight > 0) finish();
       });
       observer.observe(target);
-      setTimeout(finish, 250);
+      // Opening into a 0x0 element makes xterm measure a zero-wide character
+      // cell, and nothing in xterm ever re-measures on its own — the pane then
+      // stays wedged at the 80x24 default and clips instead of wrapping (see
+      // measuredCell below, which recovers from it). A pane behind a room
+      // transition or a tiling split can legitimately take longer than the old
+      // 250 ms to gain size, so wait meaningfully longer before giving up.
+      setTimeout(finish, 2000);
     });
+  }
+
+  // FitAddon's proposal, pixel-proven against the fit host. The addon floors
+  // cols/rows from cell size, but cell size itself is device pixels divided
+  // back down by DPR — on fractional-DPR WebViews the CSS cell can round UP
+  // past the host edge, so the last column/row gets sheared by overflow:hidden
+  // while the PTY is told a grid wider/taller than the user can see (its line
+  // wraps then land at invisible columns — text "in random places"). Walk
+  // columns/rows back until cols*cellW and rows*cellH fit the host's real box.
+  // Renderer-agnostic: this runs before any renderer draws, so DOM, canvas and
+  // WebGL all inherit the same guarantee.
+  // The CSS size of one character cell, re-measuring if xterm's cached value is
+  // unusable.
+  //
+  // xterm measures the cell exactly once, off the element it was opened into.
+  // `waitForOpenDimensions` gives up after 250 ms and opens anyway, so a pane
+  // that mounts behind a layout transition (a fresh split, a room that is still
+  // animating in, a project layer being revealed) can be opened at 0x0 — and a
+  // zero-sized element measures a zero-wide cell. Nothing in xterm ever re-runs
+  // that measurement on its own, and FitAddon.proposeDimensions() returns
+  // `undefined` whenever the cell is zero. So every later fit for that pane
+  // bailed at the dimensions guard, the grid stayed at xterm's 80x24 default
+  // while the pane was far narrower, and the shell kept emitting lines wider
+  // than the pane could show: they were clipped at the pane edge instead of
+  // wrapping. Re-measuring now that the host has a real size is what un-sticks
+  // it — and it is why only panes created into an already-settled layout (the
+  // most recent one) rendered correctly.
+  function measuredCell(): { width: number; height: number } | null {
+    const core = (termRef.current as any)?._core;
+    const usable = (c: any) => !!c && c.width > 0 && c.height > 0;
+    let cell = core?._renderService?.dimensions?.css?.cell;
+    if (!usable(cell)) {
+      try {
+        core?._charSizeService?.measure?.();
+      } catch {}
+      cell = core?._renderService?.dimensions?.css?.cell;
+    }
+    return usable(cell) ? { width: cell.width, height: cell.height } : null;
+  }
+
+  function clampedProposal(
+    fa: FitAddon,
+    host: HTMLDivElement,
+  ): { cols: number; rows: number } {
+    const cell = measuredCell();
+    let proposed: { cols?: number; rows?: number } | undefined;
+    try {
+      proposed = fa.proposeDimensions();
+    } catch {
+      proposed = undefined;
+    }
+    let { cols = 0, rows = 0 } = proposed ?? {};
+    if (cell) {
+      // The addon still declines to propose whenever it measured the cell as
+      // zero before our re-measure above landed. Now that we have a real cell,
+      // derive the grid ourselves rather than bailing and leaving the pane
+      // stuck at the default 80x24.
+      if (!cols || !rows) {
+        cols = Math.floor(host.clientWidth / cell.width);
+        rows = Math.floor(host.clientHeight / cell.height);
+      }
+      while (
+        cols > MIN_COLS &&
+        cols * cell.width > host.clientWidth + 0.5
+      ) cols -= 1;
+      while (
+        rows > MIN_ROWS &&
+        rows * cell.height > host.clientHeight + 0.5
+      ) rows -= 1;
+    }
+    return { cols: Math.max(0, cols), rows: Math.max(0, rows) };
   }
 
   function doFit() {
     const container = containerRef.current;
+    const fitHost = fitHostRef.current;
     const fitAddon = fitAddonRef.current;
     const term = termRef.current;
-    if (!container || !fitAddon || !term) return;
-    if (container.clientWidth <= 0 || container.clientHeight <= 0) return;
+    if (!container || !fitHost || !fitAddon || !term) return;
+    // Measure the host (the box FitAddon actually uses), not the padded
+    // container — a degenerate host must skip the same way the old
+    // container guard did.
+    if (fitHost.clientWidth <= 0 || fitHost.clientHeight <= 0) return;
     try {
-      // Check proposed dimensions BEFORE resizing — skip if pane is too small to produce a
-      // valid atlas. This prevents the degenerate small→large texture corruption.
-      const dims = fitAddon.proposeDimensions();
-      if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) return;
+      // Pixel-proofed proposal — see clampedProposal for why the raw addon
+      // proposal can overshoot the visible box on fractional-DPR WebViews.
+      // Checked BEFORE resizing, and the degenerate-atlas guard still skips
+      // panes too small to produce a valid atlas.
+      const { cols, rows } = clampedProposal(fitAddon, fitHost);
+      if (!cols || !rows || cols < MIN_COLS || rows < MIN_ROWS) return;
 
-      const sizeChanged = dims.cols !== term.cols || dims.rows !== term.rows;
+      const sizeChanged = cols !== term.cols || rows !== term.rows;
       if (sizeChanged) {
-        fitAddon.fit();
+        // FitAddon.fit() always clears the render service before resizing —
+        // it drops the stale painted frame so the new grid renders from
+        // scratch. Skipping it (as a plain term.resize does) leaves the old
+        // frame in place; the resized pane then keeps painting from stale
+        // state and text clips at the old grid edge on EVERY renderer, since
+        // DOM/canvas/WebGL share the render service. The freshly-opened pane
+        // has no stale frame, which is why only pre-existing panes clipped.
+        ((term as any)._core as any)?._renderService?.clear?.();
+        term.resize(cols, rows);
         (term as any).clearTextureAtlas?.();
         canvasAddonRef.current?.clearTextureAtlas();
         term.refresh(0, term.rows - 1);
       }
 
+
       // Teach the next spawn what a real pane measures, so a new PTY opens at
       // this grid instead of the 120x34 placeholder and never has to reflow.
-      recordTerminalGeometry(dims.cols, dims.rows);
+      recordTerminalGeometry(cols, rows);
 
       // Second pass after layout settles — the first fit can run before the
       // pane's flex/grid layout has stabilised (especially in vibe mode where
@@ -570,14 +672,23 @@ function TerminalPane({
       setTimeout(() => {
         const t = termRef.current;
         const fa = fitAddonRef.current;
-        if (!t || !fa) return;
-        const settled = fa.proposeDimensions();
-        if (!settled || settled.cols < MIN_COLS || settled.rows < MIN_ROWS) return;
+        const host = fitHostRef.current;
+        if (!t || !fa || !host) return;
+        if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+        const settled = clampedProposal(fa, host);
+        // Same validity guard as the first pass. Without it a pane that is
+        // hidden or mid-transition at this moment proposes nothing, and the
+        // resize below runs with 0x0 — which xterm silently clamps to its 2x1
+        // minimum and then reports through onResize, shrinking the *PTY* to
+        // two columns and scrambling everything the shell draws afterwards.
+        if (!settled.cols || !settled.rows || settled.cols < MIN_COLS || settled.rows < MIN_ROWS) return;
         // The settled pass is the authoritative measurement — record it even
         // when nothing changed, since that is the steady-state pane size.
         recordTerminalGeometry(settled.cols, settled.rows);
         if (settled.cols !== t.cols || settled.rows !== t.rows) {
-          fa.fit();
+          // Same render-service clear as the first pass — see the comment there.
+          ((t as any)._core as any)?._renderService?.clear?.();
+          t.resize(settled.cols, settled.rows);
           (t as any).clearTextureAtlas?.();
           canvasAddonRef.current?.clearTextureAtlas();
           t.refresh(0, t.rows - 1);
@@ -683,7 +794,7 @@ function TerminalPane({
     const term = termRef.current;
     if (!term) return;
     void readTextFromClipboard().then((text) => {
-      if (text) term.paste(text);
+      pasteIntoTerminal(text);
     });
   }
 
@@ -766,6 +877,19 @@ function TerminalPane({
     termRef.current?.focus();
   }
 
+  // Route every user-visible paste through xterm rather than writing directly
+  // to the PTY. xterm normalizes line endings and, when the running program
+  // enables it, wraps the payload in bracketed-paste markers. Direct PTY writes
+  // make multiline clipboard text act like a stream of separate Enter presses
+  // and can insert it at a surprising cursor position in a TUI composer.
+  function pasteIntoTerminal(text: string) {
+    if (!text) return;
+    const term = termRef.current;
+    if (!term) return;
+    term.focus();
+    term.paste(text);
+  }
+
 
   async function restartSession() {
     const paneIdx = get(paneAssignments).indexOf(sessionId);
@@ -788,7 +912,7 @@ function TerminalPane({
     } else {
       try {
         const text = await readTextFromClipboard();
-        if (text) writeToSession(sessionId, text);
+        pasteIntoTerminal(text);
       } catch {}
     }
   }
@@ -869,7 +993,7 @@ function TerminalPane({
       }
       if (endedPath && overPane && !overBar) {
         const text = endedPath.replace(/\\/g, '/');
-        writeToSession(sessionId, text);
+        pasteIntoTerminal(text);
       }
       explorerDragPathRef.current = null;
       setIsDragOver(false);
@@ -890,7 +1014,12 @@ function TerminalPane({
   // everything down on unmount.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    // FitAddon measures the element xterm is opened into and subtracts that
+    // element's own padding — nothing else. The styled `.xterm-container`
+    // carries the pane's 6/6/8px padding, so we open xterm into a dedicated
+    // zero-padding host inside it; the host's full box IS the usable area.
+    const fitHost = fitHostRef.current;
+    if (!container || !fitHost) return;
 
     const term = new Terminal({
       cursorBlink: true,
@@ -941,7 +1070,7 @@ function TerminalPane({
     };
     const pasteClipboard = () => {
       void readTextFromClipboard().then((text) => {
-        if (text) term.paste(text);
+        pasteIntoTerminal(text);
       });
     };
     term.attachCustomKeyEventHandler((event) => {
@@ -1014,10 +1143,10 @@ function TerminalPane({
     let resizeObserver: ResizeObserver | null = null;
 
     void (async () => {
-      await waitForOpenDimensions(container);
+      await waitForOpenDimensions(fitHost);
       if (disposed) return;
 
-      term.open(container);
+      term.open(fitHost);
       applyTerminalRenderer();
       // Nudge a repaint whenever the shell enters/leaves a full-screen TUI
       // (alternate screen buffer).
@@ -1127,8 +1256,10 @@ function TerminalPane({
         }
       });
 
+      // Observe the fit host, not the padded container: it is the exact box
+      // FitAddon measures, so every resize it reports is one fit can honor.
       resizeObserver = new ResizeObserver(scheduleFit);
-      resizeObserver.observe(container);
+      resizeObserver.observe(fitHost);
     })();
 
     // After drag ends, cancel any pending debounce and fit immediately
@@ -1207,7 +1338,7 @@ function TerminalPane({
     // Paste element context from the web preview inspector into this terminal pane
     const unsubInput = terminalInputRequest.subscribe((req) => {
       if (req && req.sessionId === sessionId && termRef.current) {
-        termRef.current.paste(req.text);
+        pasteIntoTerminal(req.text);
         terminalInputRequest.set(null);
       }
     });
@@ -1263,7 +1394,7 @@ function TerminalPane({
             .map((p) => p.replace(/\\/g, '/'))
             .map((p) => (p.includes(' ') ? `"${p}"` : p))
             .join(' ');
-          writeToSession(sessionId, text);
+          pasteIntoTerminal(text);
         });
       }).then((u) => {
         if (disposed) u();
@@ -1499,7 +1630,9 @@ function TerminalPane({
           outer div's onClick + term.onKey. An onFocus/onMouseDown handler here
           that both activates AND calls term.focus() created a focus→activate→
           refocus loop that repainted every frame (the flicker). */}
-      <div className="xterm-container" ref={containerRef}></div>
+      <div className="xterm-container" ref={containerRef}>
+        <div className="xterm-fit-host" ref={fitHostRef}></div>
+      </div>
     </div>
   );
 }

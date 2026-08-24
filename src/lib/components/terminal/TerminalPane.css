@@ -314,6 +314,25 @@
   font-family: var(--terminal-font-family, monospace) !important;
 }
 
+/* Zero-padding fit host — xterm is opened into this, not into the padded
+   container. FitAddon measures a terminal element's PARENT and subtracts only
+   that element's OWN padding (verified in addon-fit 0.10 source); it cannot
+   see our container's 6/6/8px padding. With the host as parent, its full box
+   is exactly the usable area, so fit() can no longer produce a phantom extra
+   column/row that overflow:hidden shears off ("letters cut off"). */
+.terminal-pane .xterm-container .xterm-fit-host {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: none;
+  box-sizing: border-box;
+  /* xterm's own CSS sets .xterm { position:relative }; keep the host from
+     collapsing around absolutely-positioned children before open(). */
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Safety net: ensure xterm content renders above glass overlay pseudo-elements */
 .terminal-pane .xterm-container .xterm {
   position: relative;

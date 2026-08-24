@@ -839,6 +839,19 @@ export function getSessionOutputLength(id: number): number {
   return sessionOutputBuffers.get(id)?.len ?? 0;
 }
 
+// Label a session carried at the moment it was closed, kept only until its pty
+// actually exits.
+//
+// `killSession` removes the session from its project state synchronously and
+// only *then* closes the pty, so by the time the exit event reaches
+// `handlePtyExit` there is nothing left to look up. The toast used to fall back
+// to `Terminal ${id}` — but `id` is the pty manager's process-wide counter, not
+// the per-project number on the tab. Closing the first terminal of the day's
+// tenth project announced "Terminal 31 closed" while the tab said "Terminal 1".
+// Capturing the label at close time keeps the message saying what the user was
+// actually looking at, in every project.
+const closingSessionLabels = new Map<number, string>();
+
 function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const isDev = devSessionIds.has(id);
   const sessionProjectId = terminalSessionProjects.get(id) ?? owningProjectId;
@@ -858,7 +871,15 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
     catch (err) { console.error('Session exit listener failed:', err); }
   }
   const visibleSessions = sessionProjectId === (isDev ? activeDevTerminalProjectId : activeTerminalProjectId) ? get(isDev ? devSessions : sessions) : state.sessions;
-  const label = session ? getSessionLabel(session, visibleSessions) : `Terminal ${id}`;
+  const label = session
+    ? getSessionLabel(session, visibleSessions)
+    : closingSessionLabels.get(id) ?? 'Terminal';
+  // `delete` returns whether the key existed — i.e. `killSession` ran for this
+  // session before its exit event landed, which is what separates a terminal the
+  // user closed from one that quit by itself. A killed pty frequently reports a
+  // non-zero exit code, so classifying by code alone announced every deliberate
+  // close as "process died".
+  const wasClosedByUser = closingSessionLabels.delete(id);
   const isAgent = isAgentSession(session);
   const clean = code === 0;
 
@@ -877,16 +898,18 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
     // card in the inbox on exit — the card is the notification. Only untracked
     // agent terminals — a CLI run by hand and never adopted — get the toast.
     if (!isOrchestratorTrackedSession(id)) {
-      if (clean) {
+      if (wasClosedByUser) {
+        showToast(`${label} closed`, 'info', 3000, true);
+      } else if (clean) {
         showToast(`${label} finished its work`, 'success', 6000, true);
       } else {
         showToast(`${label} exited with errors (code ${code})`, 'error', 8000, true);
       }
     }
-  } else if (!clean) {
-    showToast(`${label} process died (exit ${code})`, 'error', 6000, true);
-  } else {
+  } else if (wasClosedByUser || clean) {
     showToast(`${label} closed`, 'info', 3000, true);
+  } else {
+    showToast(`${label} process died (exit ${code})`, 'error', 6000, true);
   }
 
   // Unregister from MCP server so other agents stop seeing it
@@ -2236,6 +2259,7 @@ export async function killAllSessions() {
   agentLaunchStartLengths.clear();
   terminalSessionProjects.clear();
   suppressAgentDetection.clear();
+  closingSessionLabels.clear();
   autoBriefInFlight.clear();
   devSessionIds.clear();
   commandBlocks.set(new Map());
@@ -2254,8 +2278,15 @@ export async function killSession(id: number) {
     ? getProjectState(projectId, isDev).paneAssignments.indexOf(id)
     : get(isDev ? devPaneAssignments : paneAssignments).indexOf(id);
 
+  const siblings = projectId
+    ? getProjectState(projectId, isDev).sessions
+    : get(isDev ? devSessions : sessions);
+  const closing = siblings.find((s) => s.id === id);
+  // Remember what this terminal was called before we drop it from state — the
+  // pty's exit event arrives after, and that is what names the toast.
+  if (closing) closingSessionLabels.set(id, getSessionLabel(closing, siblings));
+
   if (projectId) {
-    const closing = getProjectState(projectId, isDev).sessions.find((s) => s.id === id);
     // Closing the pane is where a worktree's disk space comes back, but it used to
     // remove the checkout outright — destroying any edits the agent had not
     // committed. Reclaim instead: stage what's outstanding (which snapshots

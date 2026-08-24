@@ -3,13 +3,15 @@ import { get } from '$lib/stores/storeCompat';
 
 const ptyDataHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
 const ptyReplayHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
+const ptyExitHandlers = vi.hoisted(() => new Map<number, (code: number) => void>());
 
 vi.mock('$lib/services/pty-bridge', () => {
   let nextId = 1;
   return {
-    openPty: vi.fn(async (_cols: number, _rows: number, opts?: { onData?: (bytes: Uint8Array) => void }) => {
+    openPty: vi.fn(async (_cols: number, _rows: number, opts?: { onData?: (bytes: Uint8Array) => void; onExit?: (code: number) => void }) => {
       const id = nextId++;
       if (opts?.onData) ptyDataHandlers.set(id, opts.onData);
+      if (opts?.onExit) ptyExitHandlers.set(id, opts.onExit);
       return {
         id,
         write: vi.fn(async () => {}),
@@ -29,6 +31,14 @@ vi.mock('$lib/services/pty-bridge', () => {
     }),
   };
 });
+
+/**
+ * Simulate the session's process exiting. The pty mock's `close` is a no-op, so
+ * the exit event that fires after `killSession` has to be raised by hand.
+ */
+function firePtyExit(sessionId: number, code = 0) {
+  ptyExitHandlers.get(sessionId)?.(code);
+}
 
 /** Simulate the shell/CLI printing to a session's terminal. */
 function feedPtyOutput(sessionId: number, text: string) {
@@ -60,6 +70,7 @@ import {
   unregisterDataCallback,
   finalizeCommandBlockWithExit,
   killAllSessions,
+  killSession,
   markSessionAgentPreset,
   normalizeForEchoMatch,
   pasteEchoLanded,
@@ -84,6 +95,7 @@ import {
   __resetTerminalGeometry,
 } from './terminal';
 import { openPty } from '$lib/services/pty-bridge';
+import { showToast } from './notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 
 describe('sessionHasRunningProcess', () => {
@@ -1077,6 +1089,86 @@ describe('shell / agent separation', () => {
     // With the agent gone, the next shell is numbered against shells only.
     const next = await createTerminalSession(undefined, undefined, projectId);
     expect(titleOf(next!)).toBe('Terminal 2');
+  });
+});
+
+describe('close notifications', () => {
+  const projectId = 'project-close-toast';
+
+  beforeEach(() => {
+    setActiveTerminalProject(projectId);
+    vi.mocked(showToast).mockClear();
+  });
+
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+  });
+
+  const toastMessages = () =>
+    vi.mocked(showToast).mock.calls.map((call: unknown[]) => String(call[0]));
+
+  it('names a closed terminal by its per-project number, not the pty id', async () => {
+    // Burn a pty id in another project first: pty ids come from a process-wide
+    // counter, so without this the counter and the per-project number could
+    // agree by accident and the regression would pass unnoticed.
+    await createTerminalSession(undefined, undefined, 'project-close-toast-other');
+    setActiveTerminalProject(projectId);
+
+    const id = await createTerminalSession(undefined, undefined, projectId);
+    expect(get(sessions).find((s) => s.id === id)?.title).toBe('Terminal 1');
+    expect(id).toBeGreaterThan(1);
+
+    await killSession(id!);
+    firePtyExit(id!, 0);
+
+    expect(toastMessages()).toContain('Terminal 1 closed');
+    expect(toastMessages().join(' ')).not.toContain(`Terminal ${id}`);
+  });
+
+  it('gives each project its own terminal numbers when closing', async () => {
+    const projectA = 'project-close-toast-a';
+    const projectB = 'project-close-toast-b';
+
+    setActiveTerminalProject(projectA);
+    const inA = await createTerminalSession(undefined, undefined, projectA);
+    setActiveTerminalProject(projectB);
+    const inB = await createTerminalSession(undefined, undefined, projectB);
+
+    // Both are the first terminal of their own project, whatever their pty ids.
+    expect(get(sessions).find((s) => s.id === inB)?.title).toBe('Terminal 1');
+
+    await killSession(inA!);
+    firePtyExit(inA!, 0);
+    await killSession(inB!);
+    firePtyExit(inB!, 0);
+
+    expect(toastMessages().filter((m) => m === 'Terminal 1 closed')).toHaveLength(2);
+  });
+
+  it('reports a terminal the user closed as closed, never as an error', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+
+    await killSession(id!);
+    // A killed pty does not always exit cleanly — on Windows the kill often
+    // surfaces as a non-zero code. The close was still deliberate.
+    firePtyExit(id!, 1);
+
+    expect(toastMessages()).toContain('Terminal 1 closed');
+    const severities = vi.mocked(showToast).mock.calls.map((call: unknown[]) => String(call[1]));
+    expect(severities).not.toContain('error');
+  });
+
+  it('still reports a process that quit by itself as an error', async () => {
+    const id = await createTerminalSession(undefined, undefined, projectId);
+
+    // No killSession first: nobody asked this terminal to leave, so a non-zero
+    // exit really is a death and must stay an error.
+    firePtyExit(id!, 137);
+
+    expect(toastMessages()).toContain('Terminal 1 process died (exit 137)');
+    const severities = vi.mocked(showToast).mock.calls.map((call: unknown[]) => String(call[1]));
+    expect(severities).toContain('error');
   });
 });
 
