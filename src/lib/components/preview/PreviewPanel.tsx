@@ -35,6 +35,19 @@ import {
   closePreviewBrowserTab,
 } from '$lib/stores/preview';
 import { previewConsoleLogs, pushConsoleLog, clearConsoleLogs as clearConsoleLogsStore } from '$lib/stores/previewConsole';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
+import {
+  VIEWPORT_PRESETS,
+  CUSTOM_PRESET_ID,
+  DEFAULT_PHONE_PRESET,
+  DEFAULT_TABLET_PRESET,
+  ZOOM_LEVELS,
+  MIN_VIEWPORT,
+  MAX_VIEWPORT,
+  clampViewportEdge,
+  findPreset,
+  matchPreset,
+} from './viewportPresets';
 import { showToast } from '$lib/stores/notification';
 import {
   browsingHistory,
@@ -51,13 +64,16 @@ import { activeProject } from '$lib/stores/workspace';
 
 import './PreviewPanel.css';
 
-type ViewportMode = 'responsive' | 'tablet' | 'mobile';
+/** Explicit percentage, or 'fit' to auto-scale the viewport into the pane. */
+type ViewportZoom = 'fit' | number;
 
-const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
-  responsive: null,
-  tablet: 768,
-  mobile: 375,
-};
+/** Which rows the console shows. 'log' means "everything that isn't an issue". */
+type ConsoleFilter = 'all' | 'error' | 'warn' | 'log';
+
+const DEFAULT_VIEWPORT = findPreset(DEFAULT_PHONE_PRESET) ?? VIEWPORT_PRESETS[0];
+
+/** How close to the bottom the console must be scrolled to keep auto-following. */
+const CONSOLE_STICK_SLACK = 24;
 
 type PreviewConsoleLog = {
   id: number;
@@ -311,17 +327,35 @@ export default function PreviewPanel() {
 
   const iframeElementsRef = useRef<Record<string, HTMLIFrameElement | undefined>>({});
   const previewContentRef = useRef<HTMLDivElement>(null);
-  const deviceShellRef = useRef<HTMLDivElement>(null);
+  const viewportFrameRef = useRef<HTMLDivElement>(null);
+  const consoleBodyRef = useRef<HTMLDivElement>(null);
   const [screenshotting, setScreenshotting] = useState(false);
   const [clearingData, setClearingData] = useState(false);
   const [tempPort, setTempPort] = useState(port);
   const [inputUrl, setInputUrl] = useState(currentUrlValue);
   const [inspectMode, setInspectMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [viewportMode, setViewportMode] = useState<ViewportMode>('responsive');
+  // Responsive/device mode. The viewport is a plain rectangle of an exact
+  // CSS-pixel size (what every browser's responsive mode does) — the page sees a
+  // real 390px-wide viewport, so its media queries and vh units behave for real.
+  const [deviceMode, setDeviceMode] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: DEFAULT_VIEWPORT.width, height: DEFAULT_VIEWPORT.height });
+  const [zoomMode, setZoomMode] = useState<ViewportZoom>('fit');
+  const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  // Scale is frozen for the duration of a hand-resize: with 'fit' active,
+  // re-fitting on every pointer move makes the frame fight the pointer.
+  const [dragScale, setDragScale] = useState<number | null>(null);
+  // The size boxes are edited as text and committed on Enter/blur; clamping
+  // every keystroke turns a half-typed "3" into the 200px minimum.
+  const [widthDraft, setWidthDraft] = useState<string | null>(null);
+  const [heightDraft, setHeightDraft] = useState<string | null>(null);
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo | null>(null);
   const consoleLogs = useStore(previewConsoleLogs);
   const [showConsole, setShowConsole] = useState(false);
+  const [consoleFilter, setConsoleFilter] = useState<ConsoleFilter>('all');
+  const [consoleQuery, setConsoleQuery] = useState('');
+  const [preserveConsoleLog, setPreserveConsoleLog] = useState(false);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
 
   // One slow-load timer per tab: a single shared timer meant navigating in one
@@ -559,6 +593,13 @@ export default function PreviewPanel() {
   const startLoadFeedback = useCallback(
     (tabId: string | undefined = activeTabRef.current?.id) => {
       if (!tabId) return;
+      // Browsers drop console output on a document navigation unless "preserve
+      // log" is on; without this the panel mixes the old page's errors into the
+      // new one's. Only the active tab's output is ever captured, so only its
+      // navigations clear.
+      if (tabId === activeTabRef.current?.id && !preserveConsoleLogRef.current) {
+        clearConsoleLogsStore();
+      }
       updateTabLoadState(tabId, { isLoading: true, iframeError: false, slowLoad: false });
       clearLoadFeedbackTimer(tabId);
       loadFeedbackTimersRef.current[tabId] = setTimeout(() => {
@@ -786,12 +827,18 @@ export default function PreviewPanel() {
         const iframeRect = activeIframe.getBoundingClientRect();
         const scale = window.devicePixelRatio || 1;
 
+        // In device mode the frame is CSS-scaled to fit the pane, so a rect the
+        // page reports in its own pixels is not the size it occupies on screen.
+        // getBoundingClientRect() is post-transform while offsetWidth is not, so
+        // their ratio is exactly the applied scale (1 outside device mode).
+        const frameScale = activeIframe.offsetWidth > 0 ? iframeRect.width / activeIframe.offsetWidth : 1;
+
         // The element rect from the inspector is relative to the iframe's viewport.
         // Offset it by the iframe's position on screen to get absolute screen coords.
-        const x = Math.round((iframeRect.left + info.rect.x) * scale) / scale;
-        const y = Math.round((iframeRect.top + info.rect.y) * scale) / scale;
-        const width = Math.max(4, Math.round(info.rect.width));
-        const height = Math.max(4, Math.round(info.rect.height));
+        const x = Math.round((iframeRect.left + info.rect.x * frameScale) * scale) / scale;
+        const y = Math.round((iframeRect.top + info.rect.y * frameScale) * scale) / scale;
+        const width = Math.max(4, Math.round(info.rect.width * frameScale));
+        const height = Math.max(4, Math.round(info.rect.height * frameScale));
 
         // Clamp to the iframe's visible area so we never request out-of-bounds pixels
         const clampedX = Math.max(iframeRect.left, x);
@@ -983,9 +1030,10 @@ export default function PreviewPanel() {
             timestamp: payload.timestamp || new Date().toISOString(),
           });
         }
-        if ((level === 'error' || level === 'warn') && activeTabRef.current?.id === sourceTabId) {
-          setShowConsole(true);
-        }
+        // Deliberately no auto-open: a single warning used to yank the console
+        // panel back over the page every time, even right after the user closed
+        // it. The toolbar button carries an error/warning badge instead, which
+        // is what a browser does.
         return;
       }
 
@@ -1067,7 +1115,7 @@ export default function PreviewPanel() {
 
   const takeScreenshot = useCallback(async () => {
     if (screenshotting) return;
-    const target = viewportMode !== 'responsive' ? deviceShellRef.current : previewContentRef.current;
+    const target = deviceMode ? viewportFrameRef.current : previewContentRef.current;
     if (!target) return;
     setScreenshotting(true);
     try {
@@ -1089,7 +1137,7 @@ export default function PreviewPanel() {
         await copyPngToClipboard(pngBytes);
         showToast('Screenshot copied to clipboard', 'success');
       } catch {
-        const label = viewportMode === 'mobile' ? 'mobile' : viewportMode === 'tablet' ? 'tablet' : 'preview';
+        const label = deviceMode ? `${viewportSize.width}x${viewportSize.height}` : 'preview';
         const name = `spacron-${label}-${Date.now()}.png`;
         try {
           const link = document.createElement('a');
@@ -1109,7 +1157,227 @@ export default function PreviewPanel() {
     } finally {
       setScreenshotting(false);
     }
-  }, [screenshotting, viewportMode, addImageToPrompt, revealPromptBar]);
+  }, [screenshotting, deviceMode, viewportSize, addImageToPrompt, revealPromptBar]);
+
+
+  // -------------------------------------------------------------------------
+  // Responsive viewport
+  //
+  // Modelled on Chrome/Edge device mode, Firefox's Responsive Design Mode and
+  // Safari's: pick a size (or drag the edges) and the page is rendered into a
+  // bare rectangle of exactly that many CSS pixels, scaled to fit the pane when
+  // it does not fit. There is no device chassis - a bezel only steals room from
+  // the frame, and nothing inside the page can observe it.
+  // -------------------------------------------------------------------------
+
+  const activePreset = useMemo(
+    () => matchPreset(viewportSize.width, viewportSize.height),
+    [viewportSize],
+  );
+  const presetValue = activePreset?.id ?? CUSTOM_PRESET_ID;
+
+  const presetOptions = useMemo<DropdownOption[]>(() => {
+    const options: DropdownOption[] = VIEWPORT_PRESETS.map((preset) => ({
+      value: preset.id,
+      label: preset.label,
+      sublabel: `${preset.width} x ${preset.height}`,
+    }));
+    if (!activePreset) {
+      options.unshift({
+        value: CUSTOM_PRESET_ID,
+        label: 'Custom',
+        sublabel: `${viewportSize.width} x ${viewportSize.height}`,
+      });
+    }
+    return options;
+  }, [activePreset, viewportSize]);
+
+  const zoomOptions = useMemo<DropdownOption[]>(
+    () => [
+      { value: 'fit', label: 'Fit' },
+      ...ZOOM_LEVELS.map((level) => ({ value: String(level), label: `${Math.round(level * 100)}%` })),
+    ],
+    [],
+  );
+
+  /** Apply a preset, keeping the orientation the user is currently in. */
+  const applyPreset = useCallback(
+    (id: string) => {
+      const preset = findPreset(id);
+      if (!preset) return;
+      const landscape = viewportSize.width > viewportSize.height;
+      setViewportSize(
+        landscape
+          ? { width: preset.height, height: preset.width }
+          : { width: preset.width, height: preset.height },
+      );
+      setDeviceMode(true);
+    },
+    [viewportSize],
+  );
+
+  const setViewportEdge = useCallback((edge: 'width' | 'height', raw: number) => {
+    const value = clampViewportEdge(raw);
+    setViewportSize((prev) => (prev[edge] === value ? prev : { ...prev, [edge]: value }));
+  }, []);
+
+  /** Phone/tablet quick-pick. Clicking the category you are already in exits,
+   *  the way a browser's device-mode button toggles. */
+  const chooseViewportCategory = useCallback(
+    (category: 'phone' | 'tablet') => {
+      if (deviceMode && activePreset?.category === category) {
+        setDeviceMode(false);
+        return;
+      }
+      applyPreset(category === 'phone' ? DEFAULT_PHONE_PRESET : DEFAULT_TABLET_PRESET);
+    },
+    [deviceMode, activePreset, applyPreset],
+  );
+
+  const commitSizeDraft = useCallback(
+    (edge: 'width' | 'height', draft: string | null) => {
+      if (draft === null) return;
+      const parsed = Number(draft);
+      if (Number.isFinite(parsed) && parsed > 0) setViewportEdge(edge, parsed);
+      if (edge === 'width') setWidthDraft(null);
+      else setHeightDraft(null);
+    },
+    [setViewportEdge],
+  );
+
+  const rotateViewport = useCallback(() => {
+    setViewportSize((prev) => ({ width: prev.height, height: prev.width }));
+  }, []);
+
+  // Auto-fit: the largest scale (never above 1:1) that keeps the whole frame in
+  // the pane. Driven by a ResizeObserver so splitting or resizing the panel
+  // re-fits without reloading the page.
+  const fitScale = useMemo(() => {
+    if (!deviceMode || stageSize.width <= 0 || stageSize.height <= 0) return 1;
+    return Math.min(1, stageSize.width / viewportSize.width, stageSize.height / viewportSize.height);
+  }, [deviceMode, stageSize, viewportSize]);
+
+  const viewportScale = dragScale ?? (zoomMode === 'fit' ? fitScale : zoomMode);
+
+  useEffect(() => {
+    if (!stageEl) return;
+    const measure = () => {
+      // clientWidth/Height include padding, and the stage is padded so the drag
+      // handles have room to sit outside the frame. Fitting against the padded
+      // box would let the frame overhang by exactly that padding.
+      const style = window.getComputedStyle(stageEl);
+      const padX = parseFloat(style.paddingLeft || '0') + parseFloat(style.paddingRight || '0');
+      const padY = parseFloat(style.paddingTop || '0') + parseFloat(style.paddingBottom || '0');
+      setStageSize({
+        width: Math.max(0, stageEl.clientWidth - padX),
+        height: Math.max(0, stageEl.clientHeight - padY),
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stageEl);
+    return () => observer.disconnect();
+  }, [stageEl]);
+
+  // Edge/corner drag, in the page's own pixels: the pointer moves in screen
+  // pixels, so the delta is divided by the scale the frame is drawn at.
+  const resizeDragRef = useRef<{
+    axis: 'x' | 'y' | 'xy';
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    scale: number;
+  } | null>(null);
+  const [resizingViewport, setResizingViewport] = useState(false);
+
+  const beginViewportResize = useCallback(
+    (axis: 'x' | 'y' | 'xy') => (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      resizeDragRef.current = {
+        axis,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: viewportSize.width,
+        startHeight: viewportSize.height,
+        scale: viewportScale || 1,
+      };
+      // Freeze the scale for the drag: with Fit active, re-fitting on every
+      // pointer move makes the frame fight the pointer instead of following it.
+      setDragScale(viewportScale || 1);
+      setResizingViewport(true);
+    },
+    [viewportSize, viewportScale],
+  );
+
+  const handleViewportResizeMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    const next = { width: drag.startWidth, height: drag.startHeight };
+    if (drag.axis !== 'y') {
+      next.width = clampViewportEdge(drag.startWidth + (event.clientX - drag.startX) / drag.scale);
+    }
+    if (drag.axis !== 'x') {
+      next.height = clampViewportEdge(drag.startHeight + (event.clientY - drag.startY) / drag.scale);
+    }
+    setViewportSize((prev) => (prev.width === next.width && prev.height === next.height ? prev : next));
+  }, []);
+
+  const endViewportResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current) return;
+    resizeDragRef.current = null;
+    setResizingViewport(false);
+    // Release the frozen scale so Fit re-fits to whatever size we ended on.
+    setDragScale(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  // -- Console ---------------------------------------------------------------
+
+  const consoleCounts = useMemo(() => {
+    let errors = 0;
+    let warnings = 0;
+    for (const log of consoleLogs) {
+      if (log.level === 'error') errors += log.count;
+      else if (log.level === 'warn') warnings += log.count;
+    }
+    return { errors, warnings };
+  }, [consoleLogs]);
+
+  const filteredConsoleLogs = useMemo(() => {
+    const query = consoleQuery.trim().toLowerCase();
+    return consoleLogs.filter((log) => {
+      if (consoleFilter === 'error' && log.level !== 'error') return false;
+      if (consoleFilter === 'warn' && log.level !== 'warn') return false;
+      if (consoleFilter === 'log' && (log.level === 'error' || log.level === 'warn')) return false;
+      if (query && !log.message.toLowerCase().includes(query)) return false;
+      return true;
+    });
+  }, [consoleLogs, consoleFilter, consoleQuery]);
+
+  // Follow new output while the user is at the bottom; scrolling up to read
+  // something pins the view there, exactly like a browser console.
+  const consoleStickRef = useRef(true);
+  const handleConsoleScroll = useCallback(() => {
+    const el = consoleBodyRef.current;
+    if (!el) return;
+    consoleStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= CONSOLE_STICK_SLACK;
+  }, []);
+
+  useEffect(() => {
+    if (!showConsole) return;
+    const el = consoleBodyRef.current;
+    if (!el || !consoleStickRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [filteredConsoleLogs, showConsole]);
+
+  const preserveConsoleLogRef = useRef(preserveConsoleLog);
+  useEffect(() => {
+    preserveConsoleLogRef.current = preserveConsoleLog;
+  }, [preserveConsoleLog]);
 
   const openNewTab = useCallback(() => {
     createBlankPreviewBrowserTab();
@@ -1117,8 +1385,12 @@ export default function PreviewPanel() {
   }, []);
 
   const activateTab = useCallback((tabId: string) => {
+    if (tabId === activeTabRef.current?.id) return;
     selectPreviewBrowserTab(tabId);
     setSelectedElementInfo(null);
+    // Only the active tab's output is captured, so anything still on screen
+    // belongs to the tab being left.
+    clearConsoleLogsStore();
   }, []);
 
   const closeTab = useCallback((event: React.MouseEvent, tabId: string) => {
@@ -1352,12 +1624,21 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn console-btn${showConsole ? ' active' : ''}`}
             onClick={() => setShowConsole((prev) => !prev)}
-            title="Toggle preview console"
+            title={
+              consoleCounts.errors || consoleCounts.warnings
+                ? `Preview console — ${consoleCounts.errors} error(s), ${consoleCounts.warnings} warning(s)`
+                : 'Toggle preview console'
+            }
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
+            {(consoleCounts.errors > 0 || consoleCounts.warnings > 0) && (
+              <span className={`console-badge${consoleCounts.errors > 0 ? ' has-errors' : ''}`}>
+                {consoleCounts.errors > 0 ? consoleCounts.errors : consoleCounts.warnings}
+              </span>
+            )}
           </button>
 
           {/* Screenshot */}
@@ -1365,7 +1646,11 @@ export default function PreviewPanel() {
             className={`nav-btn screenshot-btn${screenshotting ? ' screenshotting' : ''}`}
             onClick={takeScreenshot}
             disabled={screenshotting}
-            title={viewportMode !== 'responsive' ? `Screenshot ${viewportMode} frame` : 'Screenshot preview'}
+            title={
+              deviceMode
+                ? `Screenshot the ${viewportSize.width} x ${viewportSize.height} viewport`
+                : 'Screenshot preview'
+            }
           >
             {screenshotting ? (
               <svg className="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -1402,11 +1687,12 @@ export default function PreviewPanel() {
         </div>
 
         <div className="nav-group viewport-nav">
-          {/* Viewport: Responsive (desktop) */}
+          {/* Fill the pane (no viewport emulation) */}
           <button
-            className={`nav-btn viewport-btn${viewportMode === 'responsive' ? ' active' : ''}`}
-            onClick={() => setViewportMode('responsive')}
-            title="Responsive (full width)"
+            className={`nav-btn viewport-btn${!deviceMode ? ' active' : ''}`}
+            onClick={() => setDeviceMode(false)}
+            title="Responsive - fill the pane"
+            aria-pressed={!deviceMode}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="4" width="20" height="14" rx="2" />
@@ -1414,28 +1700,29 @@ export default function PreviewPanel() {
             </svg>
           </button>
 
-          {/* Viewport: Tablet */}
+          {/* Phone */}
           <button
-            className={`nav-btn viewport-btn${viewportMode === 'tablet' ? ' active' : ''}`}
-            onClick={() => setViewportMode('tablet')}
-            title="Tablet (768px)"
-          >
-            <svg width="13" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="2" width="16" height="20" rx="2" />
-              <circle cx="12" cy="18" r="1" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-
-          {/* Viewport: Mobile */}
-          <button
-            className={`nav-btn viewport-btn${viewportMode === 'mobile' ? ' active' : ''}`}
-            onClick={() => setViewportMode('mobile')}
-            title="Mobile (375px)"
+            className={`nav-btn viewport-btn${deviceMode && activePreset?.category === 'phone' ? ' active' : ''}`}
+            onClick={() => chooseViewportCategory('phone')}
+            title="Phone viewport"
+            aria-pressed={deviceMode && activePreset?.category === 'phone'}
           >
             <svg width="10" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="5" y="2" width="14" height="20" rx="2" />
-              <circle cx="12" cy="18" r="1" fill="currentColor" stroke="none" />
               <line x1="9" y1="6" x2="15" y2="6" />
+            </svg>
+          </button>
+
+          {/* Tablet */}
+          <button
+            className={`nav-btn viewport-btn${deviceMode && activePreset?.category === 'tablet' ? ' active' : ''}`}
+            onClick={() => chooseViewportCategory('tablet')}
+            title="Tablet viewport"
+            aria-pressed={deviceMode && activePreset?.category === 'tablet'}
+          >
+            <svg width="13" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="2" width="16" height="20" rx="2" />
+              <line x1="9" y1="5" x2="15" y2="5" />
             </svg>
           </button>
         </div>
@@ -1540,6 +1827,92 @@ export default function PreviewPanel() {
         </div>
       </div>
 
+      {deviceMode && (
+        <div className="device-bar">
+          <div className="device-bar-preset">
+            <Dropdown
+              options={presetOptions}
+              value={presetValue}
+              onChange={(id) => {
+                if (id !== CUSTOM_PRESET_ID) applyPreset(id);
+              }}
+              ariaLabel="Device preset"
+              boundarySelector=".preview-panel"
+            />
+          </div>
+
+          <div className="device-size">
+            <input
+              type="number"
+              className="device-size-input"
+              value={widthDraft ?? String(viewportSize.width)}
+              min={MIN_VIEWPORT}
+              max={MAX_VIEWPORT}
+              onChange={(event) => setWidthDraft(event.target.value)}
+              onBlur={() => commitSizeDraft('width', widthDraft)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitSizeDraft('width', widthDraft);
+                  (event.target as HTMLInputElement).blur();
+                } else if (event.key === 'Escape') {
+                  setWidthDraft(null);
+                }
+              }}
+              aria-label="Viewport width in CSS pixels"
+              title="Viewport width (CSS px)"
+            />
+            <span className="device-size-x">x</span>
+            <input
+              type="number"
+              className="device-size-input"
+              value={heightDraft ?? String(viewportSize.height)}
+              min={MIN_VIEWPORT}
+              max={MAX_VIEWPORT}
+              onChange={(event) => setHeightDraft(event.target.value)}
+              onBlur={() => commitSizeDraft('height', heightDraft)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitSizeDraft('height', heightDraft);
+                  (event.target as HTMLInputElement).blur();
+                } else if (event.key === 'Escape') {
+                  setHeightDraft(null);
+                }
+              }}
+              aria-label="Viewport height in CSS pixels"
+              title="Viewport height (CSS px)"
+            />
+          </div>
+
+          <button className="nav-btn device-rotate" onClick={rotateViewport} title="Rotate" aria-label="Rotate viewport">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14.5 3.5a9 9 0 0 1 6 6" />
+              <polyline points="20.5 4.5 20.5 9.5 15.5 9.5" />
+              <rect x="3" y="9" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+
+          <div className="device-zoom">
+            <Dropdown
+              options={zoomOptions}
+              value={zoomMode === 'fit' ? 'fit' : String(zoomMode)}
+              onChange={(value) => setZoomMode(value === 'fit' ? 'fit' : Number(value))}
+              ariaLabel="Viewport zoom"
+              boundarySelector=".preview-panel"
+            />
+          </div>
+
+          <span className="device-scale-readout" title="Scale the viewport is drawn at">
+            {Math.round(viewportScale * 100)}%
+          </span>
+
+          <button className="device-bar-exit" onClick={() => setDeviceMode(false)} title="Back to full-pane preview">
+            Exit
+          </button>
+        </div>
+      )}
+
       {getActiveTabLoadState().isLoading && (
         <div className="loading-bar">
           <div className="loading-progress"></div>
@@ -1627,18 +2000,33 @@ export default function PreviewPanel() {
           </div>
         )}
 
-      <div
-        className={`preview-content${viewportMode !== 'responsive' ? ' viewport-constrained' : ''}`}
-        ref={previewContentRef}
-      >
+      <div className={`preview-content${deviceMode ? ' is-device' : ''}`} ref={previewContentRef}>
         {activeIframeSrc ? (
-          viewportMode !== 'responsive' ? (
+          // One tree for both modes: keeping the iframe stack at the same
+          // position means switching in and out of device mode re-lays-out the
+          // page instead of remounting (and reloading) every tab.
+          <div className="viewport-stage" ref={setStageEl}>
             <div
-              className={`device-shell${viewportMode === 'mobile' ? ' is-mobile' : ''}${viewportMode === 'tablet' ? ' is-tablet' : ''}`}
-              ref={deviceShellRef}
+              className={`viewport-sizer${resizingViewport ? ' is-resizing' : ''}`}
+              style={
+                deviceMode
+                  ? { width: viewportSize.width * viewportScale, height: viewportSize.height * viewportScale }
+                  : undefined
+              }
             >
-              <div className="device-notch"></div>
-              <div className="device-screen">
+              <div
+                className="viewport-frame"
+                ref={viewportFrameRef}
+                style={
+                  deviceMode
+                    ? {
+                        width: viewportSize.width,
+                        height: viewportSize.height,
+                        transform: `scale(${viewportScale})`,
+                      }
+                    : undefined
+                }
+              >
                 <div className="preview-frame-stack">
                   {(tabs || []).map((tab) => {
                     const tabSrc = srcForTab(tab);
@@ -1660,31 +2048,46 @@ export default function PreviewPanel() {
                   })}
                 </div>
               </div>
-              <div className="device-home"></div>
-              <span className="device-label">{viewportMode === 'mobile' ? '375px · iPhone' : '768px · iPad'}</span>
+
+              {deviceMode && (
+                <>
+                  <div
+                    className="viewport-handle handle-e"
+                    onPointerDown={beginViewportResize('x')}
+                    onPointerMove={handleViewportResizeMove}
+                    onPointerUp={endViewportResize}
+                    onPointerCancel={endViewportResize}
+                    role="separator"
+                    aria-label="Drag to resize viewport width"
+                  />
+                  <div
+                    className="viewport-handle handle-s"
+                    onPointerDown={beginViewportResize('y')}
+                    onPointerMove={handleViewportResizeMove}
+                    onPointerUp={endViewportResize}
+                    onPointerCancel={endViewportResize}
+                    role="separator"
+                    aria-label="Drag to resize viewport height"
+                  />
+                  <div
+                    className="viewport-handle handle-se"
+                    onPointerDown={beginViewportResize('xy')}
+                    onPointerMove={handleViewportResizeMove}
+                    onPointerUp={endViewportResize}
+                    onPointerCancel={endViewportResize}
+                    role="separator"
+                    aria-label="Drag to resize viewport"
+                  />
+                </>
+              )}
             </div>
-          ) : (
-            <div className="preview-frame-stack">
-              {(tabs || []).map((tab) => {
-                const tabSrc = srcForTab(tab);
-                if (!tabSrc) return null;
-                return (
-                  <iframe
-                    key={tab.id}
-                    ref={(node) => setIframeElement(tab.id, node)}
-                    src={tabSrc}
-                    aria-label="Web Preview"
-                    className={`preview-iframe${tab.id === activeTabId ? ' is-active' : ''}`}
-                    onLoad={() => handleIframeLoad(tab.id)}
-                    onError={() => handleIframeError(tab.id)}
-                    allow="accelerometer; camera; clipboard-read; clipboard-write; encrypted-media; geolocation; gyroscope; microphone; payment; usb"
-                    sandbox={buildIframeSandbox(tab.url)}
-                    allowFullScreen
-                  ></iframe>
-                );
-              })}
-            </div>
-          )
+
+            {deviceMode && resizingViewport && (
+              <div className="viewport-size-chip">
+                {viewportSize.width} x {viewportSize.height}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="proxy-placeholder">
             <div className="placeholder-globe">
@@ -1736,23 +2139,77 @@ export default function PreviewPanel() {
         {showConsole && (
           <div className="preview-console">
             <div className="console-header">
-              <span>Console</span>
+              <span className="console-title">Console</span>
+
+              <div className="console-filters" role="group" aria-label="Filter console output">
+                {(
+                  [
+                    ['all', 'All', consoleLogs.length],
+                    ['error', 'Errors', consoleCounts.errors],
+                    ['warn', 'Warnings', consoleCounts.warnings],
+                    ['log', 'Logs', consoleLogs.length - consoleCounts.errors - consoleCounts.warnings],
+                  ] as [ConsoleFilter, string, number][]
+                ).map(([value, label, count]) => (
+                  <button
+                    key={value}
+                    className={`console-filter${consoleFilter === value ? ' active' : ''}${
+                      value === 'error' && count > 0 ? ' has-errors' : ''
+                    }`}
+                    onClick={() => setConsoleFilter(value)}
+                    aria-pressed={consoleFilter === value}
+                  >
+                    {label}
+                    {count > 0 && <span className="console-filter-count">{count}</span>}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                className="console-search"
+                value={consoleQuery}
+                onChange={(event) => setConsoleQuery(event.target.value)}
+                placeholder="Filter"
+                aria-label="Filter console messages"
+                spellCheck={false}
+              />
+
               <div className="console-actions">
-                <span>{consoleLogs.length} logs</span>
+                <label className="console-preserve" title="Keep output across page loads (browsers clear it by default)">
+                  <input
+                    type="checkbox"
+                    checked={preserveConsoleLog}
+                    onChange={(event) => setPreserveConsoleLog(event.target.checked)}
+                  />
+                  Preserve log
+                </label>
                 <button onClick={clearConsoleLogs}>Clear</button>
                 <button onClick={() => setShowConsole(false)} aria-label="Close console">
                   Close
                 </button>
               </div>
             </div>
-            <div className="console-body">
-              {consoleLogs.length === 0 ? (
-                <div className="console-empty">No preview console output yet.</div>
+            <div className="console-body" ref={consoleBodyRef} onScroll={handleConsoleScroll}>
+              {filteredConsoleLogs.length === 0 ? (
+                <div className="console-empty">
+                  {consoleLogs.length === 0
+                    ? 'No console output yet. Pages served from your local dev server report here; external sites do not.'
+                    : 'Nothing matches this filter.'}
+                </div>
               ) : (
-                consoleLogs.map((log) => (
+                filteredConsoleLogs.map((log) => (
                   <div className={`console-row ${log.level}`} key={log.id}>
                     <span className="console-level">{log.level}</span>
                     <span className="console-message">{log.message}</span>
+                    {log.count > 1 && (
+                      <span className="console-count" title={`Repeated ${log.count} times`}>
+                        {log.count}
+                      </span>
+                    )}
+                    {log.url && (
+                      <span className="console-source" title={`${log.url} - ${log.timestamp}`}>
+                        {shortConsoleSource(log.url)}
+                      </span>
+                    )}
                   </div>
                 ))
               )}
@@ -1762,6 +2219,17 @@ export default function PreviewPanel() {
       </div>
     </div>
   );
+}
+
+/** Last path segment of a console entry's source URL, or its host. */
+function shortConsoleSource(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split('/').filter(Boolean).pop();
+    return last || parsed.host;
+  } catch {
+    return url;
+  }
 }
 
 function buildIframeSandbox(url: string) {
