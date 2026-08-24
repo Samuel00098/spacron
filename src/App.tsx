@@ -12,7 +12,6 @@ import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
-import KnowledgeGraphOverlay from '$lib/components/orchestrator/KnowledgeGraphOverlay.tsx';
 import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
 import InboxPanel from '$lib/components/orchestrator/InboxPanel.tsx';
 import UsageCounter from '$lib/components/usage/UsageCounter.tsx';
@@ -246,7 +245,6 @@ export default function App() {
 
       <CommandPalette />
       <FloatingSearch />
-      <KnowledgeGraphOverlay />
       <AgentNotifications />
       <InboxPanel />
       {/* Bottom-left corner dock + the popover it opens above itself. Both are

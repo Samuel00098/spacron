@@ -67,9 +67,8 @@ export function toggleCommandPalette() {
 }
 
 import { newWorkspacePromptOpen, newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
-import { knowledgeGraphOpen } from '$lib/services/orchestrator/knowledge';
 import { saveActiveFile, formatActiveFile } from './editor';
-import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings } from './layout';
+import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings, toggleYoutubeVisible } from './layout';
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
@@ -118,18 +117,20 @@ export function initDefaultCommands() {
       action: () => toggleFloatingSearch(),
     },
     {
+      id: 'view.media_player',
+      name: 'Open Media Player',
+      category: 'View',
+      action: () => toggleYoutubeVisible(),
+    },
+    {
       id: 'workspace.env',
       name: 'Environment Manager',
       category: 'Workspace',
       shortcut: 'Ctrl+Shift+E',
       action: () => openEnvManager(),
     },
-    {
-      id: 'orchestrator.memory_graph',
-      name: 'Memory Graph…',
-      category: 'View',
-      action: () => knowledgeGraphOpen.set(true),
-    },
+    // ('Memory Graph' needs no entry here — it is a Tools-menu room now, so the
+    // AppShell bridge registers it under Rooms automatically.)
     {
       id: 'view.editor',
       name: 'Go to Editor',
@@ -208,7 +209,14 @@ export function initDefaultCommands() {
     },
   ];
 
-  commands.set(defaultCmds);
+  // Merge rather than replace: commands registered elsewhere (Tools-menu items
+  // from AppShell, dynamically discovered themes) must survive a palette
+  // remount, which re-runs this function. Defaults win on id collisions.
+  commands.update((existing) => {
+    const defaults = new Set(defaultCmds.map((c: any) => c.id));
+    const extras = existing.filter((c: any) => !defaults.has(c.id));
+    return [...defaultCmds, ...extras];
+  });
 }
 
 export function registerCommand(command: any) {

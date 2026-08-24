@@ -6,8 +6,9 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: var(--bg-glass, rgba(4, 4, 6, 0.65));
-  backdrop-filter: blur(var(--glass-blur, 35px));
+  /* Click-outside catcher only: no tint, no backdrop blur — the workspace stays
+     fully visible behind the floating card. */
+  background: transparent;
   display: flex;
   justify-content: center;
   align-items: flex-start;

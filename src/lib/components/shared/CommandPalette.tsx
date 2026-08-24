@@ -3,6 +3,7 @@ import { isOpen, search, commands, initDefaultCommands } from '$lib/stores/comma
 import { useCommandPaletteStore } from '$lib/stores/zustand/commandpalette';
 import { switchTheme } from '$lib/stores/theme';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { showToast } from '$lib/stores/notification';
 import './CommandPalette.css';
 
 export default function CommandPalette() {
@@ -69,21 +70,93 @@ export default function CommandPalette() {
     [cmds, query],
   );
 
+  // Typing shrinks the list; keep the selection inside it.
+  const resultCount = filteredCommands.length;
+  useEffect(() => {
+    setSelectedIndex((i) => Math.min(i, Math.max(0, resultCount - 1)));
+  }, [resultCount]);
+
   function executeCommand(cmd: (typeof filteredCommands)[number]) {
-    cmd.action();
+    // Close FIRST, then run. The overlay sits above the surfaces commands open
+    // (the settings modal is z-index 9000, this overlay 9999), so the palette
+    // must be gone before the thing it launched becomes visible — and a
+    // throwing action below must never leave the palette stuck on screen.
     isOpen.set(false);
+    const fail = (err: unknown) => {
+      console.error(`Command '${cmd.id}' failed:`, err);
+      showToast(`${cmd.name} failed — see the console for details`, 'error', 8000, true);
+    };
+    try {
+      Promise.resolve(cmd.action()).catch(fail);
+    } catch (err) {
+      fail(err);
+    }
   }
+
+  // Keep the highlighted row visible as the selection moves with the arrow
+  // keys. Done by adjusting the container's scrollTop directly —
+  // scrollIntoView() also scrolls every other scrollable ancestor and can be
+  // suppressed by CSS scroll behavior, which made it unreliable here.
+  const resultsEl = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const box = resultsEl.current;
+    if (!box) return;
+    const el = box.querySelector<HTMLElement>('.command-item.selected');
+    if (!el) return;
+    const er = el.getBoundingClientRect();
+    const br = box.getBoundingClientRect();
+    const pad = 4;
+    if (er.top < br.top + pad) {
+      box.scrollTop += er.top - br.top - pad;
+    } else if (er.bottom > br.bottom - pad) {
+      box.scrollTop += er.bottom - br.bottom + pad;
+    }
+  }, [selectedIndex, filteredCommands]);
+
+  // Hovering a row selects it — but only when the pointer actually moved.
+  // Without this guard, scrolling the list with the arrow keys slides rows
+  // under the stationary cursor, each firing mouseenter and yanking the
+  // selection back: the classic "arrow keys don't work" palette bug.
+  const pointerMovedRef = useRef(false);
+  useEffect(() => {
+    if (!open) return;
+    const onMove = () => { pointerMovedRef.current = true; };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [open]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (!open) return;
+      if (filteredCommands.length === 0) {
+        if (e.key === 'Escape') { e.preventDefault(); isOpen.set(false); }
+        return;
+      }
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        pointerMovedRef.current = false;
         setSelectedIndex((i) => (i + 1) % filteredCommands.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        pointerMovedRef.current = false;
         setSelectedIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+      } else if (e.key === 'PageDown') {
+        e.preventDefault();
+        pointerMovedRef.current = false;
+        setSelectedIndex((i) => Math.min(filteredCommands.length - 1, i + 5));
+      } else if (e.key === 'PageUp') {
+        e.preventDefault();
+        pointerMovedRef.current = false;
+        setSelectedIndex((i) => Math.max(0, i - 5));
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        pointerMovedRef.current = false;
+        setSelectedIndex(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        pointerMovedRef.current = false;
+        setSelectedIndex(filteredCommands.length - 1);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (filteredCommands[selectedIndex]) {
@@ -118,7 +191,7 @@ export default function CommandPalette() {
           />
         </div>
 
-        <div className="results-container">
+        <div className="results-container" ref={resultsEl}>
           {filteredCommands.length === 0 ? (
             <div className="no-results">No commands found matching "{query}"</div>
           ) : (
@@ -127,7 +200,7 @@ export default function CommandPalette() {
                 key={cmd.id}
                 className={`command-item${i === selectedIndex ? ' selected' : ''}`}
                 onClick={() => executeCommand(cmd)}
-                onMouseEnter={() => setSelectedIndex(i)}
+                onMouseEnter={() => { if (pointerMovedRef.current) setSelectedIndex(i); }}
               >
                 <div className="command-details">
                   <span className="command-category">{cmd.category}</span>
