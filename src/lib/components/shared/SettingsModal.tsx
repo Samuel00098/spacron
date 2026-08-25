@@ -23,9 +23,6 @@ import {
   columnSelection,
   currentAiModel,
   currentVoiceAiModel,
-  currentVoiceConversationAiModel,
-  currentVoiceConversationTtsModel,
-  currentVoiceConversationTtsVoice,
   currentVoiceInputModel,
   defaultShortcuts,
   enableLsp,
@@ -34,8 +31,6 @@ import {
   formatOnSave,
   getProviderBaseUrl,
   getProviderDef,
-  getTtsModelOptions,
-  getTtsVoiceOptionsForModel,
   getVoiceInputModelOptions,
   interfaceTransparency,
   isLocalProvider,
@@ -47,9 +42,6 @@ import {
   setAiModel,
   setProviderBaseUrl,
   setVoiceAiModel,
-  setVoiceConversationAiModel,
-  setVoiceConversationTtsModel,
-  setVoiceConversationTtsVoice,
   setVoiceInputModel,
   showHidden,
   showSnapshotsTab,
@@ -64,7 +56,6 @@ import {
   vimMode,
   voiceAiProvider,
   voiceConversationEngine,
-  voiceReplyProvider,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceRefinementEnabled,
@@ -89,7 +80,6 @@ import { ADD_CURSOR_GESTURE, COLUMN_SELECT_GESTURE } from '$lib/services/editor/
 import { openChangelogPage } from '$lib/services/changelog';
 import { resetAllApplicationState } from '$lib/stores/workspace';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
-import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { requestNotificationPermission, showToast } from '$lib/stores/notification';
 import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDownloading, updateProgress } from '$lib/stores/updater';
 import { get } from '$lib/stores/storeCompat';
@@ -139,7 +129,7 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'general', label: 'General', kicker: 'Editor and app' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media' },
   { id: 'models', label: 'AI Models', kicker: 'Providers and keys' },
-  { id: 'voice', label: 'Voice', kicker: 'Input, reply, TTS' },
+  { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
   { id: 'stats', label: 'Stats', kicker: 'Usage and cost' },
@@ -702,7 +692,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [completionLiveModels]);
 
   const [providerSttModels, setProviderSttModels] = useState<Record<string, AiModelOption[]>>({});
-  const [providerTtsModels, setProviderTtsModels] = useState<Record<string, AiModelOption[]>>({});
   const [providerRealtimeModels, setProviderRealtimeModels] = useState<Record<string, AiModelOption[]>>({});
   const [realtimeModelLoading, setRealtimeModelLoading] = useState(false);
   const providerRealtimeModelsRef = useRef<Record<string, AiModelOption[]>>({});
@@ -711,13 +700,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     providerRealtimeModelsRef.current = providerRealtimeModels;
   }, [providerRealtimeModels]);
 
-  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      stopSpeaking();
-    };
-  }, []);
   const [updateMessage, setUpdateMessage] = useState('');
   const [availableShells, setAvailableShells] = useState<ShellInfo[]>([]);
 
@@ -786,15 +768,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const transcriptionSend = useStore(transcriptionAutoSend);
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
-  const voiceBrainModel = useStore(currentVoiceConversationAiModel);
   const conversationEngine = useStore(voiceConversationEngine);
   const realtimeModel = useStore(openaiRealtimeModel);
   const realtimeVoice = useStore(openaiRealtimeVoice);
   const grokRealtimeModel = useStore(xaiRealtimeModel);
   const grokRealtimeVoice = useStore(xaiRealtimeVoice);
-  const replyProvider = useStore(voiceReplyProvider);
-  const ttsModel = useStore(currentVoiceConversationTtsModel);
-  const ttsVoice = useStore(currentVoiceConversationTtsVoice);
   const announceCompletions = useStore(announceAgentCompletions);
   const baseUrls = useStore(aiBaseUrlByProvider);
 
@@ -820,10 +798,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     return merged;
   }, [voiceInput, providerSttModels]);
 
-  const voiceBrainModels = useMemo(() => {
-    return providerLiveModels[replyProvider] ?? getProviderDef(replyProvider).models;
-  }, [replyProvider, providerLiveModels]);
-
   const refinementModels = useMemo(() => {
     return providerLiveModels[refinementProvider] ?? getProviderDef(refinementProvider).models;
   }, [refinementProvider, providerLiveModels]);
@@ -844,26 +818,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     const curated = new Map(xaiRealtimeModelOptions.map((m) => [m.id, m]));
     return live.map((m) => curated.get(m.id) ?? m);
   }, [providerRealtimeModels]);
-
-  const liveTtsModels = providerTtsModels[replyProvider];
-  const ttsModels = useMemo(() => {
-    if (liveTtsModels && liveTtsModels.length > 0) {
-      return liveTtsModels.map((m) => {
-        const curated = getTtsModelOptions(replyProvider).find((d) => d.id === m.id);
-        return {
-          id: m.id,
-          label: curated?.label ?? m.label ?? m.id,
-          description: curated?.description ?? m.description ?? '',
-          voices: curated?.voices ?? getTtsVoiceOptionsForModel(replyProvider, m.id),
-        };
-      });
-    }
-    return getTtsModelOptions(replyProvider);
-  }, [replyProvider, liveTtsModels]);
-
-  const ttsVoices = useMemo(() => {
-    return getTtsVoiceOptionsForModel(replyProvider, ttsModel);
-  }, [replyProvider, ttsModel]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0 });
@@ -1072,34 +1026,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
         }
       } catch { /* ignore */ }
     };
-    const loadTtsModels = async (prov: string) => {
-      const pid = prov as AiProviderId;
-      const isLocal = isLocalProvider(pid);
-      const hasKey = isLocal ? true : await providerApiKeyExists(pid).catch(() => false);
-      if (!hasKey) return;
-      try {
-        const remote = await listProviderModels(pid, 'tts');
-        const merged: AiModelOption[] = remote.map((r) => ({
-          id: r.id,
-          label: r.label ?? r.id,
-          description: r.description ?? '',
-        }));
-        if (merged.length) {
-          setProviderTtsModels((prev) => ({ ...prev, [pid]: merged }));
-        }
-      } catch { /* ignore */ }
-    };
     if (refinementProvider) void loadChatModels(refinementProvider);
-    if (replyProvider) {
-      void loadChatModels(replyProvider);
-      void loadTtsModels(replyProvider);
-    }
     if (voiceInput && voiceInput !== 'webspeech') {
       void loadSttModels(voiceInput);
     }
     void loadRealtimeModels('openai');
     void loadRealtimeModels('xai');
-  }, [activeTab, refinementProvider, replyProvider, voiceInput, loadLiveModels, loadRealtimeModels]);
+  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels]);
 
   useEffect(() => {
     setLocalUrlInput(getProviderBaseUrl(provider, baseUrls) || '');
@@ -1165,37 +1098,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     await loadCompletionLiveModels(completionProvider, true);
     showToast('Model list refreshed', 'success');
   }
-
-  const previewVoiceOption = useCallback(async (voiceId: string) => {
-    if (previewingVoiceId === voiceId) {
-      stopSpeaking();
-      setPreviewingVoiceId(null);
-      return;
-    }
-
-    const configError = getVoiceReplyConfigError({
-      provider: replyProvider,
-      model: ttsModel,
-      voice: voiceId,
-    });
-    if (configError) {
-      showToast(configError, 'warning');
-      return;
-    }
-
-    setPreviewingVoiceId(voiceId);
-    try {
-      await speak('Hello, this is a quick preview of my voice in Spacron.', {
-        provider: replyProvider,
-        model: ttsModel,
-        voice: voiceId,
-      });
-    } catch (error) {
-      showToast(describeTtsError(error), 'error');
-    } finally {
-      setPreviewingVoiceId(null);
-    }
-  }, [replyProvider, ttsModel, previewingVoiceId]);
 
   async function checkUpdates() {
     setUpdateMessage('');
@@ -1846,7 +1748,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Hotkey"
                     detail="Speak one command and it goes straight into the active terminal. Press the hotkey again to send, Esc to cancel."
                   >
-                    <kbd>{shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'Ctrl+Alt+M'}</kbd>
+                    <kbd>{shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9'}</kbd>
                   </SettingRow>
                   <SettingRow
                     title="Send after transcribing"
@@ -1871,16 +1773,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Conversation engine">
                   <SettingRow
                     title="Engine"
-                    detail={conversationEngine === 'openai-realtime'
-                      ? 'One live speech-to-speech call to OpenAI — replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'
-                      : conversationEngine === 'xai-realtime'
-                        ? 'One live speech-to-speech call to xAI Grok — same sub-second replies and barge-in as GPT Realtime, billed flat at ~$0.05 per minute.'
-                        : 'Transcribe → think → speak, one step at a time. Works with any provider combination below.'}
+                    detail={conversationEngine === 'xai-realtime'
+                      ? 'One live speech-to-speech call to xAI Grok — sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
+                      : 'One live speech-to-speech call to OpenAI — replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'}
                   >
                     <SelectField
                       value={conversationEngine}
                       options={[
-                        { id: 'pipeline', label: 'Standard (STT + brain + TTS)' },
                         { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
                         { id: 'xai-realtime', label: 'Grok Realtime (xAI)' },
                       ]}
@@ -1974,61 +1873,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   )}
                 </Section>
 
-                <Section title="Voice replies">
-                  <SettingRow
-                    title="Provider"
-                    detail="One provider for both the brain (generating reply content) and speech synthesis (TTS). Keeps it simple."
-                  >
-                    <SelectField value={replyProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceReplyProvider.set} ariaLabel="Voice replies provider" />
-                  </SettingRow>
-                  <SettingRow title="Brain model">
-                    <ModelSelect value={voiceBrainModel} models={voiceBrainModels} onChange={(value) => setVoiceConversationAiModel(replyProvider, value)} label="Voice brain model" />
-                  </SettingRow>
-                  {ttsModels.length > 0 && (
-                    <SettingRow title="Speech model">
-                      <ModelSelect value={ttsModel} models={ttsModels} onChange={(value) => setVoiceConversationTtsModel(replyProvider, value)} label="TTS model" />
-                    </SettingRow>
-                  )}
-                  {ttsVoices.length > 0 && (
-                    <SettingRow title="Voice">
-                      <div className="voice-selector-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', width: '100%' }}>
-                        <div style={{ flex: 1 }}>
-                          <StyledSelect
-                            value={ttsVoice}
-                            options={ttsVoices.map((v) => ({ id: v.id, label: v.label }))}
-                            onChange={(value) => setVoiceConversationTtsVoice(replyProvider, value)}
-                            ariaLabel="TTS voice"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          className={`voice-preview-btn${previewingVoiceId === ttsVoice ? ' playing' : ''}`}
-                          onClick={() => void previewVoiceOption(ttsVoice)}
-                          title={previewingVoiceId === ttsVoice ? 'Stop preview' : 'Play preview'}
-                        >
-                          {previewingVoiceId === ttsVoice ? (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                              <rect x="4" y="4" width="16" height="16" rx="2" />
-                            </svg>
-                          ) : (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                              <polygon points="5 3 19 12 5 21" />
-                            </svg>
-                          )}
-                        </button>
-                      </div>
-                    </SettingRow>
-                  )}
-                  {replyProvider === 'groq' && !groqKeyExists && (
-                    <SettingRow title="Groq API key" detail="Groq requires an API key for speech synthesis.">
-                      <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
-                        <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No Groq API key configured</span>
-                        <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
-                          Add API key
-                        </button>
-                      </div>
-                    </SettingRow>
-                  )}
+                <Section title="Notifications">
                   <SettingRow
                     title="Agent result nudge"
                     detail="Play a soft chime when an agent finishes, blocks, or fails — even when voice mode is closed. The recap lands in the chat card."

@@ -36,14 +36,10 @@ fn shared_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
 
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_AUDIO_TRANSCRIPT_URL: &str = "https://openrouter.ai/api/v1/audio/transcriptions";
-const OPENROUTER_TTS_URL: &str = "https://openrouter.ai/api/v1/audio/speech";
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_TTS_URL: &str = "https://api.openai.com/v1/audio/speech";
 const OPENAI_STT_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const XAI_URL: &str = "https://api.x.ai/v1/chat/completions";
-const GROQ_TTS_URL: &str = "https://api.groq.com/openai/v1/audio/speech";
-const XAI_TTS_URL: &str = "https://api.x.ai/v1/tts";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const GOOGLE_AUDIO_TRANSCRIPTION_PROMPT: &str = "Transcribe this speech into clean, accurate text. Keep the speaker's exact technical terms, code words, file paths, flags, package names, and URLs. Use natural punctuation and paragraph breaks when they are obvious from the audio. Return only the transcript.";
@@ -188,18 +184,12 @@ fn truncate_desc(s: &str) -> String {
 pub(crate) enum ModelPurpose {
     Chat,
     Stt,
-    Tts,
     Realtime,
 }
 
 fn openai_is_stt_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("whisper") || id.contains("transcribe") || id.contains("transcription")
-}
-
-fn openai_is_tts_model(id: &str) -> bool {
-    let id = id.to_ascii_lowercase();
-    id.contains("tts") || id.contains("speech")
 }
 
 /// OpenAI's realtime (speech-to-speech) models are excluded from the regular
@@ -220,11 +210,6 @@ fn xai_is_realtime_model(id: &str) -> bool {
 fn groq_is_stt_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("whisper") || id.contains("transcribe") || id.contains("asr")
-}
-
-fn groq_is_tts_model(id: &str) -> bool {
-    let id = id.to_ascii_lowercase();
-    id.contains("tts") || id.contains("orpheus") || id.contains("playai") || id.contains("speech")
 }
 
 fn text_matches_any(value: &str, needles: &[&str]) -> bool {
@@ -279,22 +264,6 @@ fn openrouter_model_matches_purpose(item: &serde_json::Value, id: &str, purpose:
                         "parakeet",
                     ],
                 )
-        }
-        ModelPurpose::Tts => {
-            output_audio
-                || text_matches_any(
-                    &haystack,
-                    &[
-                        "tts",
-                        "text-to-speech",
-                        "voice",
-                        "speech",
-                        "kokoro",
-                        "zonos",
-                        "orpheus",
-                        "csm",
-                    ],
-                ) && !text_matches_any(&haystack, &["whisper", "transcribe", "asr"])
         }
         ModelPurpose::Chat => true,
         ModelPurpose::Realtime => text_matches_any(&haystack, &["realtime"]),
@@ -1654,12 +1623,6 @@ pub async fn list_provider_models(
                 match purpose {
                     ModelPurpose::Chat if !supports_generate => continue,
                     ModelPurpose::Stt if !id.to_ascii_lowercase().contains("chirp") => continue,
-                    ModelPurpose::Tts
-                        if !id.to_ascii_lowercase().contains("tts")
-                            && !id.to_ascii_lowercase().contains("speech") =>
-                    {
-                        continue
-                    }
                     _ => {}
                 }
                 let label = item
@@ -1730,11 +1693,6 @@ pub async fn list_provider_models(
                                 continue;
                             }
                         }
-                        ModelPurpose::Tts => {
-                            if !openai_is_tts_model(&id) {
-                                continue;
-                            }
-                        }
                         ModelPurpose::Realtime => {
                             if !openai_is_realtime_model(&id) {
                                 continue;
@@ -1749,11 +1707,6 @@ pub async fn list_provider_models(
                     "groq" => match purpose {
                         ModelPurpose::Stt => {
                             if !groq_is_stt_model(&id) {
-                                continue;
-                            }
-                        }
-                        ModelPurpose::Tts => {
-                            if !groq_is_tts_model(&id) {
                                 continue;
                             }
                         }
@@ -1772,7 +1725,7 @@ pub async fn list_provider_models(
                             }
                         }
                         // xAI has no separate STT/TTS models today.
-                        ModelPurpose::Stt | ModelPurpose::Tts => continue,
+                        ModelPurpose::Stt => continue,
                         ModelPurpose::Chat => {
                             if xai_is_realtime_model(&id) {
                                 continue;
@@ -1810,373 +1763,6 @@ pub async fn list_provider_models(
 
     models.sort_by_key(|a| a.label.to_lowercase());
     Ok(models)
-}
-
-fn tts_voice_is_safe(voice: &str) -> bool {
-    !voice.is_empty()
-        && voice.len() <= 64
-        && voice
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' || c == '.')
-}
-
-const GROQ_TTS_MODEL_ENGLISH: &str = "canopylabs/orpheus-v1-english";
-const OPENAI_TTS_MODEL: &str = "gpt-4o-mini-tts";
-const GOOGLE_TTS_MODEL: &str = "gemini-2.5-flash-preview-tts";
-const OPENROUTER_TTS_MODEL: &str = "openai/gpt-4o-mini-tts-2025-12-15";
-
-/// Apply pacing/tone controls to an OpenAI-compatible `/audio/speech` request
-/// body, gated by model exactly as OpenAI's API requires: `gpt-4o-mini-tts`
-/// takes free-text `instructions` (and rejects `speed`), while the classic
-/// `tts-1`/`tts-1-hd` models take a numeric `speed` (0.25–4.0). Anything else is
-/// left untouched so unsupported providers/models never receive a bad field.
-fn apply_openai_speech_controls(
-    body: &mut serde_json::Value,
-    model: &str,
-    speed: Option<f64>,
-    instructions: Option<String>,
-) {
-    if model.contains("gpt-4o-mini-tts") {
-        if let Some(instr) = instructions {
-            let instr: String = instr.trim().chars().take(1_000).collect();
-            if !instr.is_empty() {
-                body["instructions"] = json!(instr);
-            }
-        }
-    } else if let Some(sp) = speed {
-        body["speed"] = json!(sp.clamp(0.25, 4.0));
-    }
-}
-
-#[derive(Serialize)]
-pub struct TtsAudioPayload {
-    pub bytes: Vec<u8>,
-    pub mime_type: String,
-}
-
-fn pcm_s16le_to_wav_bytes(
-    pcm: &[u8],
-    channels: u16,
-    sample_rate: u32,
-    bits_per_sample: u16,
-) -> Vec<u8> {
-    let byte_rate = sample_rate * channels as u32 * bits_per_sample as u32 / 8;
-    let block_align = channels * bits_per_sample / 8;
-    let data_len = pcm.len() as u32;
-    let chunk_size = 36 + data_len;
-
-    let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&chunk_size.to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&channels.to_le_bytes());
-    out.extend_from_slice(&sample_rate.to_le_bytes());
-    out.extend_from_slice(&byte_rate.to_le_bytes());
-    out.extend_from_slice(&block_align.to_le_bytes());
-    out.extend_from_slice(&bits_per_sample.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
-    out.extend_from_slice(pcm);
-    out
-}
-
-/// Synthesise speech from text using the selected provider's TTS endpoint.
-/// Returns WAV bytes so the frontend can play them without a disk write.
-#[tauri::command]
-pub async fn tts_speak(
-    text: String,
-    provider: String,
-    model: String,
-    voice: String,
-    api_key: String,
-    base_url: Option<String>,
-    speed: Option<f64>,
-    instructions: Option<String>,
-) -> Result<TtsAudioPayload, String> {
-    if !is_known_provider(&provider) {
-        return Err("Unknown provider".to_string());
-    }
-    let api_key = resolve_api_key(&provider, &api_key)?;
-    let base_url = resolve_base_url(&provider, &base_url)?;
-    let model = model.trim().to_string();
-    if !model_id_is_safe(&model) {
-        return Err("Invalid TTS model id".to_string());
-    }
-    if !tts_voice_is_safe(&voice) {
-        return Err("Invalid voice id".to_string());
-    }
-
-    const MAX_TTS_LEN: usize = 4_096;
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Ok(TtsAudioPayload {
-            bytes: Vec::new(),
-            mime_type: "audio/wav".to_string(),
-        });
-    }
-    let text: String = text.chars().take(MAX_TTS_LEN).collect();
-
-    let client = shared_http_client(Duration::from_secs(30))?;
-
-    match provider.as_str() {
-        "openrouter" => {
-            let response = client
-                .post(OPENROUTER_TTS_URL)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .header("HTTP-Referer", "https://spacron.app")
-                .header("X-Title", APP_TITLE)
-                .json(&{
-                    let effective_model =
-                        if model.is_empty() { OPENROUTER_TTS_MODEL } else { model.as_str() };
-                    let mut body = json!({
-                        "model": effective_model,
-                        "input": text,
-                        "voice": voice,
-                        "response_format": "mp3",
-                    });
-                    apply_openai_speech_controls(&mut body, effective_model, speed, instructions);
-                    body
-                })
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact OpenRouter TTS", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("OpenRouter TTS failed ({status}): {preview}"));
-            }
-
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|err| format!("Failed to read TTS audio: {err}"))?;
-            Ok(TtsAudioPayload {
-                bytes: bytes.to_vec(),
-                mime_type: "audio/mpeg".to_string(),
-            })
-        }
-        "groq" => {
-            let response = client
-                .post(GROQ_TTS_URL)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .json(&json!({
-                    "model": if model.is_empty() { GROQ_TTS_MODEL_ENGLISH } else { &model },
-                    "input": text,
-                    "voice": voice,
-                    "response_format": "wav",
-                }))
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact Groq TTS", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("Groq TTS failed ({status}): {preview}"));
-            }
-
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|err| format!("Failed to read TTS audio: {err}"))?;
-            Ok(TtsAudioPayload {
-                bytes: bytes.to_vec(),
-                mime_type: "audio/wav".to_string(),
-            })
-        }
-        "openai" => {
-            let response = client
-                .post(OPENAI_TTS_URL)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .json(&{
-                    let effective_model =
-                        if model.is_empty() { OPENAI_TTS_MODEL } else { model.as_str() };
-                    let mut body = json!({
-                        "model": effective_model,
-                        "input": text,
-                        "voice": voice,
-                        "response_format": "wav",
-                    });
-                    apply_openai_speech_controls(&mut body, effective_model, speed, instructions);
-                    body
-                })
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact OpenAI TTS", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("OpenAI TTS failed ({status}): {preview}"));
-            }
-
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|err| format!("Failed to read TTS audio: {err}"))?;
-            Ok(TtsAudioPayload {
-                bytes: bytes.to_vec(),
-                mime_type: "audio/wav".to_string(),
-            })
-        }
-        "google" => {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-                if model.is_empty() {
-                    GOOGLE_TTS_MODEL
-                } else {
-                    &model
-                }
-            );
-            let response = client
-                .post(url)
-                .header("x-goog-api-key", api_key)
-                .json(&json!({
-                    "contents": [{ "parts": [{ "text": text }] }],
-                    "generationConfig": {
-                        "responseModalities": ["AUDIO"],
-                        "speechConfig": {
-                            "voiceConfig": {
-                                "prebuiltVoiceConfig": {
-                                    "voiceName": voice
-                                }
-                            }
-                        }
-                    },
-                    "model": if model.is_empty() { GOOGLE_TTS_MODEL } else { &model },
-                }))
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact Google TTS", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("Google TTS failed ({status}): {preview}"));
-            }
-
-            let payload: serde_json::Value = response
-                .json()
-                .await
-                .map_err(|err| format!("Google TTS returned an invalid response: {err}"))?;
-
-            let audio_b64 = payload
-                .get("candidates")
-                .and_then(|c| c.get(0))
-                .and_then(|cand| cand.get("content"))
-                .and_then(|content| content.get("parts"))
-                .and_then(|parts| parts.get(0))
-                .and_then(|part| part.get("inlineData"))
-                .and_then(|data| data.get("data"))
-                .and_then(|data| data.as_str())
-                .unwrap_or("");
-
-            if audio_b64.is_empty() {
-                return Err("Google TTS returned no audio.".to_string());
-            }
-
-            let pcm = STANDARD
-                .decode(audio_b64)
-                .map_err(|err| format!("Failed to decode Google TTS audio: {err}"))?;
-            Ok(TtsAudioPayload {
-                bytes: pcm_s16le_to_wav_bytes(&pcm, 1, 24_000, 16),
-                mime_type: "audio/wav".to_string(),
-            })
-        }
-        "xai" => {
-            let response = client
-                .post(XAI_TTS_URL)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .json(&json!({
-                    "text": text,
-                    "voice_id": voice,
-                    "language": "en",
-                    "output_format": {
-                        "codec": "wav",
-                        "sample_rate": 24000,
-                    },
-                }))
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact xAI TTS", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("xAI TTS failed ({status}): {preview}"));
-            }
-
-            let payload: serde_json::Value = response
-                .json()
-                .await
-                .map_err(|err| format!("xAI TTS returned an invalid response: {err}"))?;
-
-            let audio_b64 = payload
-                .get("audio")
-                .and_then(|a| a.as_str())
-                .unwrap_or("");
-
-            let content_type = payload
-                .get("content_type")
-                .and_then(|c| c.as_str())
-                .unwrap_or("audio/wav");
-
-            if audio_b64.is_empty() {
-                return Err("xAI TTS returned no audio.".to_string());
-            }
-
-            let bytes = STANDARD
-                .decode(audio_b64)
-                .map_err(|err| format!("Failed to decode xAI TTS audio: {err}"))?;
-
-            Ok(TtsAudioPayload {
-                bytes,
-                mime_type: content_type.to_string(),
-            })
-        }
-        p if is_local_provider(p) => {
-            let Some(base) = base_url.as_deref() else {
-                return Err("Server URL is not set.".to_string());
-            };
-            let response = client
-                .post(local_endpoint(base, "/audio/speech"))
-                .json(&json!({
-                    "model": model,
-                    "input": text,
-                    "voice": voice,
-                    "response_format": "wav",
-                }))
-                .send()
-                .await
-                .map_err(|err| safe_request_error("Failed to contact local TTS provider", err))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("Local TTS failed ({status}): {preview}"));
-            }
-
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|err| format!("Failed to read TTS audio: {err}"))?;
-            Ok(TtsAudioPayload {
-                bytes: bytes.to_vec(),
-                mime_type: "audio/wav".to_string(),
-            })
-        }
-        _ => Err("Selected provider does not support voice replies yet.".to_string()),
-    }
 }
 
 /// Allowed voices for the OpenAI Realtime speech-to-speech API.

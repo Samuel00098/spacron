@@ -9,20 +9,26 @@ import {
   promptBarVoiceModeRequest,
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
-import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
-import { isRealtimeVoiceSupported, startRealtimeVoiceSession, type RealtimeVoiceSession } from '$lib/services/realtime-voice';
+import {
+  startBarTranscription,
+  transcriptionState,
+} from '$lib/services/transcription-hotkey';
+import { createAltTapGesture } from '$lib/services/alt-tap-gesture';
+import {
+  isRealtimeVoiceSupported,
+  startRealtimeVoiceSession,
+  type RealtimeVoiceSession,
+} from '$lib/services/realtime-voice';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import {
   openaiRealtimeModel,
   openaiRealtimeVoice,
+  userShortcuts,
   voiceConversationEngine,
-  voiceInputProvider,
-  voiceInputUsesModelTranscription,
   xaiRealtimeModel,
   xaiRealtimeVoice,
 } from '$lib/stores/settings';
-import { refineVoicePrompt } from '$lib/services/voice-refinement';
-import { isTauriRuntime, isWebkitGtk, dropPositionToCss } from '$lib/utils/tauri';
+import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
 import {
   orchestratorTasks,
@@ -33,31 +39,10 @@ import {
   appendVoiceExchangeMessage,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
-import { describeTtsError, getVoiceReplyConfigError, speak, stopSpeaking } from '$lib/services/tts';
 import { openSettings } from '$lib/stores/layout';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
-import '$lib/components/orchestrator/VoiceConversationOverlay.css';
 import './FloatingPromptBar.css';
-
-// Spoken commands that pause / resume the conversational voice loop. Listed in
-// NORMALIZED form (lowercase, no punctuation) — matchVoiceCommand() normalizes
-// the transcript the same way and matches on whole-word boundaries, so "ready"
-// wakes on "ready" but not "already", and punctuation / apostrophes / trailing
-// words don't defeat a match. Extra variants cover common STT mishearings.
-const SLEEP_KEYWORDS = ['go to sleep', 'goto sleep', 'stop listening', 'take a break', 'pause listening', 'sleep now', 'go to bed'];
-const WAKE_KEYWORDS = ['wake up', 'wake', 'come back', 'resume listening', 'resume', 'listen up', 'ready', 'im back', 'i m back'];
-
-/** Lowercase, strip punctuation, and collapse whitespace for command matching. */
-function normalizeSpeech(s: string): string {
-  return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-}
-
-/** True if any normalized `phrase` appears as a whole word/phrase in `transcript`. */
-function matchVoiceCommand(transcript: string, phrases: string[]): boolean {
-  const padded = ` ${normalizeSpeech(transcript)} `;
-  return phrases.some((p) => padded.includes(` ${p} `));
-}
 
 // System instructions for the GPT Realtime speech-to-speech engine. The model
 // converses on its own and delegates real work to the orchestrator via the
@@ -80,7 +65,12 @@ const barProjectCache = new Map<string, { inputValue: string }>();
 // `diskPath` is set when the image already exists on disk (attached via the
 // file picker) so submitPrompt can reference it directly instead of re-saving
 // a fresh copy — the agent then reads the exact file the user picked.
-type PastedImage = { objectUrl: string; dataUrl: string; name: string; diskPath?: string };
+type PastedImage = {
+  objectUrl: string;
+  dataUrl: string;
+  name: string;
+  diskPath?: string;
+};
 
 // Map a clipboard image MIME type to a clean file extension. Splitting on "/"
 // alone mangles compound subtypes (e.g. "image/svg+xml" -> "svgxml"), which
@@ -112,41 +102,20 @@ function stripMarkdown(text: string): string {
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/#+\s+/g, '')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
     .replace(/^[-*+]\s+/gm, '')
     .replace(/\n+/g, ' ')
     .trim();
-}
-
-function speechTextForAssistantMessage(message: ChatMessage): string {
-  if (message.completion) {
-    const c = message.completion;
-    const status =
-      c.status === 'done' ? 'finished' :
-      c.status === 'failed' ? 'failed' :
-      'needs your input';
-    const pieces = [
-      `${c.agentName} ${status}: ${c.taskTitle}.`,
-      c.reason ? `Reason: ${c.reason}.` : '',
-      c.summary ? c.summary : c.summaryPending ? 'I am still summarizing the terminal output.' : '',
-    ];
-    return pieces.filter(Boolean).join(' ');
-  }
-  return message.text;
-}
-
-function speechKeyForAssistantMessage(message: ChatMessage): string {
-  const spoken = stripMarkdown(speechTextForAssistantMessage(message).split('\n\n🔍')[0]);
-  return `${message.id}:${spoken}`;
 }
 
 function useSyncedState<T>(initialValue: T) {
   const [value, setValueState] = useState(initialValue);
   const valueRef = useRef(value);
   const setValue = useCallback((next: T | ((current: T) => T)) => {
-    const resolved = typeof next === 'function'
-      ? (next as (current: T) => T)(valueRef.current)
-      : next;
+    const resolved =
+      typeof next === 'function'
+        ? (next as (current: T) => T)(valueRef.current)
+        : next;
     valueRef.current = resolved;
     setValueState(resolved);
   }, []);
@@ -162,7 +131,9 @@ interface FloatingPromptBarProps {
   trailingControls?: React.ReactNode;
 }
 
-export default function FloatingPromptBar({ trailingControls }: FloatingPromptBarProps = {}) {
+export default function FloatingPromptBar({
+  trailingControls,
+}: FloatingPromptBarProps = {}) {
   const $activeProject = useStore(activeProject);
   const $orchestratorTasks = useStore(orchestratorTasks);
   const $chatMessages = useStore(chatMessages);
@@ -170,6 +141,19 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const $promptBarImage = useStore(promptBarImage);
   const $promptBarFocusRequest = useStore(promptBarFocusRequest);
   const $promptBarVoiceModeRequest = useStore(promptBarVoiceModeRequest);
+  // Read the live binding rather than hardcoding "F9" — the hint has to follow
+  // whatever the user rebinds the dictation key to in Settings.
+  const $shortcuts = useStore(userShortcuts);
+  const transcribeKey = useMemo(() => {
+    const binding = ($shortcuts || []).find((shortcut) => {
+      if (!shortcut) return false;
+      const actionId = shortcut.id.startsWith('custom_')
+        ? shortcut.action
+        : shortcut.id;
+      return actionId === 'transcribeToTerminal';
+    });
+    return binding?.keys || 'F9';
+  }, [$shortcuts]);
 
   const lastBarProjectIdRef = useRef<string | null>(null);
 
@@ -180,11 +164,19 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // pair as one message; `mergeVoiceTranscript` in the voice pipeline is what
   // made keeping this a plain string worth doing.
   const [inputValue, setInputValue, inputValueRef] = useSyncedState('');
+  // Transcription mode: the mic button runs the shared single-shot
+  // speech-to-text service (same engine as Ctrl+Alt+M) — text lands at the
+  // cursor, nothing is spoken back. `listening` mirrors its phase store so
+  // the bar can show a recording state.
+  const [transcribing, setTranscribing] = useState(false);
+  useEffect(() => {
+    const unsub = transcriptionState.subscribe((phase) =>
+      setTranscribing(phase !== 'idle')
+    );
+    return () => unsub();
+  }, []);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
-  const [voiceLocked, setVoiceLocked, voiceLockedRef] = useSyncedState(false);
-  const [, setVoiceHeld, voiceHeldRef] = useSyncedState(false);
-  const [, setVoiceStopping, voiceStoppingRef] = useSyncedState(false);
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
   // Alt-to-voice is a deliberate act: the shortcut only fires once the user has
@@ -195,9 +187,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // places (mount, session change, after send…), and those focus events would
   // arm the shortcut without the user ever touching the bar — the exact bug
   // this ref exists to prevent.
-  const voiceShortcutArmedRef = useRef(false);
-  const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(null);
-  const [lastExplorerDragPoint, setLastExplorerDragPoint] = useState<{ x: number; y: number } | null>(null);
+  // Bare-tap-of-left-Alt detector. Lives in its own module so the rule is
+  // unit-tested (`alt-tap-gesture.test.ts`) — getting it wrong is what made
+  // Ctrl+Alt+M open voice mode instead of transcribing.
+  const altTapRef = useRef(createAltTapGesture());
+  const [draggedExplorerPath, setDraggedExplorerPath] = useState<string | null>(
+    null
+  );
+  const [lastExplorerDragPoint, setLastExplorerDragPoint] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   // Guard: when the React drop handler fires first, suppress the document-level handler
   const internalDropHandledRef = useRef(false);
   const [, setIsHovered] = useState(false);
@@ -205,16 +205,18 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isGlobalFileDrag, setIsGlobalFileDrag] = useState(false);
-  const voiceDraftBaseRef = useRef('');
-  const [voiceDraftText, setVoiceDraftText, voiceDraftTextRef] = useSyncedState('');
-  const [agentSending, setAgentSending, agentSendingRef] = useSyncedState(false);
-  const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] = useSyncedState(false);
-  const [isTtsSpeaking, setIsTtsSpeaking, isTtsSpeakingRef] = useSyncedState(false);
-  const [voiceSleeping, setVoiceSleeping, voiceSleepingRef] = useSyncedState(false);
-  const [audioRms, setAudioRms] = useState(0);
-  const lastSpokenMessageKeyRef = useRef<string | null>(null);
+  // True while the spacron_orchestrator tool runs inside the live realtime
+  // call (brain working on a spoken request) — drives the "thinking" orb.
+  const [agentSending, setAgentSending, agentSendingRef] =
+    useSyncedState(false);
+  const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] =
+    useSyncedState(false);
+  const [voiceSleeping, setVoiceSleeping, voiceSleepingRef] =
+    useSyncedState(false);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
-  const [pastedFiles, setPastedFiles] = useState<Array<{ name: string; path: string }>>([]);
+  const [pastedFiles, setPastedFiles] = useState<
+    Array<{ name: string; path: string }>
+  >([]);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const transcriptElRef = useRef<HTMLDivElement | null>(null);
 
@@ -228,9 +230,11 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const isActive = true;
 
   const waitingTaskCount = useMemo(
-    () => $orchestratorTasks.filter(
-      (t) => t.projectId === ($activeProject?.id ?? '') && t.status === 'blocked'
-    ).length,
+    () =>
+      $orchestratorTasks.filter(
+        (t) =>
+          t.projectId === ($activeProject?.id ?? '') && t.status === 'blocked'
+      ).length,
     [$orchestratorTasks, $activeProject]
   );
 
@@ -252,7 +256,11 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       barProjectCache.set(lastBarProjectIdRef.current, { inputValue });
     }
 
-    setInputValue(projectId !== null ? (barProjectCache.get(projectId)?.inputValue ?? '') : '');
+    setInputValue(
+      projectId !== null
+        ? (barProjectCache.get(projectId)?.inputValue ?? '')
+        : ''
+    );
     lastBarProjectIdRef.current = projectId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [$activeProject]);
@@ -263,36 +271,59 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   }, []);
 
   const canStayOpen = useCallback(() => {
-    return hasStagedContent || isListening || isRefining || isDragOver || (!draggedExplorerPath && isGlobalFileDrag) || voiceModeActive;
-  }, [hasStagedContent, isListening, isRefining, isDragOver, draggedExplorerPath, isGlobalFileDrag, voiceModeActive]);
+    return (
+      hasStagedContent ||
+      isListening ||
+      isRefining ||
+      isDragOver ||
+      (!draggedExplorerPath && isGlobalFileDrag) ||
+      voiceModeActive
+    );
+  }, [
+    hasStagedContent,
+    isListening,
+    isRefining,
+    isDragOver,
+    draggedExplorerPath,
+    isGlobalFileDrag,
+    voiceModeActive,
+  ]);
 
-  const handleShellFocusOut = useCallback((event: React.FocusEvent) => {
-    setIsFocused(false);
-    const next = event.relatedTarget as Node | null;
-    if (shellElRef.current && next && shellElRef.current.contains(next)) return;
-    if (!canStayOpen()) setIsExpanded(false);
-  }, [canStayOpen]);
+  const handleShellFocusOut = useCallback(
+    (event: React.FocusEvent) => {
+      setIsFocused(false);
+      const next = event.relatedTarget as Node | null;
+      if (shellElRef.current && next && shellElRef.current.contains(next))
+        return;
+      if (!canStayOpen()) setIsExpanded(false);
+    },
+    [canStayOpen]
+  );
 
-
-
-  const saveImageToDisk = useCallback(async (img: PastedImage): Promise<string | null> => {
-    // A pasted image is raw clipboard pixels with no source file to reference, so
-    // the bytes must be written somewhere. `save_pasted_image` writes them to an
-    // app-owned scratch dir OUTSIDE the project (the OS temp dir) and returns the
-    // absolute path — so pastes never bloat the codebase. This is what terminal
-    // agents like Claude Code / Cursor do: treat a paste as ephemeral. (The old
-    // path wrote into `<project>/.spacron/paste`, piling screenshots up in the
-    // working tree.) The scratch dir is wiped on app exit. File-picked/dragged
-    // images take the diskPath branch in materializeAttachments and skip this.
-    try {
-      const data = Array.from(dataUrlToBytes(img.dataUrl));
-      const savePath = await invoke<string>('save_pasted_image', { name: img.name, data });
-      return savePath.replace(/\\/g, '/');
-    } catch (error) {
-      console.error('Failed to save pasted image to disk:', error);
-      return null;
-    }
-  }, []);
+  const saveImageToDisk = useCallback(
+    async (img: PastedImage): Promise<string | null> => {
+      // A pasted image is raw clipboard pixels with no source file to reference, so
+      // the bytes must be written somewhere. `save_pasted_image` writes them to an
+      // app-owned scratch dir OUTSIDE the project (the OS temp dir) and returns the
+      // absolute path — so pastes never bloat the codebase. This is what terminal
+      // agents like Claude Code / Cursor do: treat a paste as ephemeral. (The old
+      // path wrote into `<project>/.spacron/paste`, piling screenshots up in the
+      // working tree.) The scratch dir is wiped on app exit. File-picked/dragged
+      // images take the diskPath branch in materializeAttachments and skip this.
+      try {
+        const data = Array.from(dataUrlToBytes(img.dataUrl));
+        const savePath = await invoke<string>('save_pasted_image', {
+          name: img.name,
+          data,
+        });
+        return savePath.replace(/\\/g, '/');
+      } catch (error) {
+        console.error('Failed to save pasted image to disk:', error);
+        return null;
+      }
+    },
+    []
+  );
 
   const removeImage = useCallback((index: number) => {
     setPastedImages((prev) => {
@@ -308,7 +339,9 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     // Dedup by path: chips are keyed by file.path, so attaching the same file
     // twice (e.g. drag then @-mention) would produce duplicate React keys and
     // make removeFile(index) target the wrong chip.
-    setPastedFiles((prev) => (prev.some((f) => f.path === path) ? prev : [...prev, { name, path }]));
+    setPastedFiles((prev) =>
+      prev.some((f) => f.path === path) ? prev : [...prev, { name, path }]
+    );
   }, []);
 
   const removeFile = useCallback((index: number) => {
@@ -321,7 +354,10 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // temp directory (so they never bloat the project); file-picked images already
   // have a diskPath and are referenced in-place. Non-image files are collected
   // from pastedFiles chips and appended as raw paths.
-  const materializeAttachments = useCallback(async (): Promise<{ paths: string[]; ok: boolean }> => {
+  const materializeAttachments = useCallback(async (): Promise<{
+    paths: string[];
+    ok: boolean;
+  }> => {
     const filePaths = pastedFiles.map((f) => f.path);
     setPastedFiles([]);
     if (pastedImages.length === 0) return { paths: filePaths, ok: true };
@@ -351,118 +387,41 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // Quote only paths with spaces — matches attachPathsToInput and is friendlier
   // to agent TUIs than always-single-quoting (which leaves literal quotes the
   // CLI then can't open).
-  const appendAttachmentPaths = useCallback((text: string, paths: string[]): string => {
-    if (!paths.length) return text;
-    const quoted = paths.map((p) => (p.includes(' ') ? `"${p}"` : p)).join(' ');
-    return text ? `${text} ${quoted}` : quoted;
-  }, []);
+  const appendAttachmentPaths = useCallback(
+    (text: string, paths: string[]): string => {
+      if (!paths.length) return text;
+      const quoted = paths
+        .map((p) => (p.includes(' ') ? `"${p}"` : p))
+        .join(' ');
+      return text ? `${text} ${quoted}` : quoted;
+    },
+    []
+  );
 
-  // Single source of truth for "should the mic come back on now?" in the
-  // conversational voice loop. Every terminal point of a turn (dispatch done,
-  // speech done, a transcript that errored out) funnels through here instead of
-  // repeating the guard, so the loop can never get wedged with the mic off while
-  // nothing else is running. The internal guards in voiceInput.start() make a
-  // redundant call from two racing finalizers a harmless no-op.
-  const resumeVoiceLoopRef = useRef<() => void>(() => {});
-
-  // Late-bound handle to stopAgentVoice so the once-created voiceInput callbacks
-  // (onError) can tear voice mode down without depending on definition order.
+  // Late-bound handle to stopAgentVoice so callbacks created before its
+  // definition (keyboard handler, session onEnded) can tear voice mode down
+  // without depending on definition order.
   const stopAgentVoiceRef = useRef<() => void>(() => {});
 
-  const submitAgentMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
-
-  // A spoken turn that arrived while a dispatch was still in flight, held until
-  // that dispatch settles. See submitAgentMessage for why dropping it is wrong.
-  const pendingVoiceUtteranceRef = useRef<string | null>(null);
-
-  // Live GPT Realtime session (speech-to-speech engine). When it's active the
-  // classic pipeline (voiceInput loop + auto-speak TTS) must stay dormant: the
-  // realtime call owns the mic and speaks for itself.
+  // Live GPT Realtime session (speech-to-speech engine). Voice conversation is
+  // realtime-only now — the call owns the mic and speaks for itself; there is
+  // no local STT→brain→TTS loop any more.
   const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const realtimeActiveRef = useRef(false);
 
-  // Barge-in (interrupt the assistant mid-sentence, like the GPT Realtime
-  // engine): keep the mic live while the reply TTS plays, so onSpeechStart can
-  // cut playback and the utterance becomes the next turn. Only where it's safe:
-  // - not on WebKitGTK, whose echoCancellation is a no-op — the mic would hear
-  //   the reply audio and the assistant would cut itself off;
-  // - only for raw-audio input providers. Web Speech runs its own recognizer,
-  //   which would transcribe the assistant's reply as user input.
-  // The raised VAD playback gate (voiceInput.setPlaybackActive) filters out the
-  // echo residue that survives cancellation.
-  const bargeInSupported = () =>
-    !isWebkitGtk() && voiceInputUsesModelTranscription(get(voiceInputProvider));
-
-  useEffect(() => {
-    resumeVoiceLoopRef.current = () => {
-      if (
-        !realtimeActiveRef.current &&
-        voiceModeActiveRef.current &&
-        !voiceStoppingRef.current &&
-        !isListeningRef.current &&
-        !isRefiningRef.current &&
-        !agentSendingRef.current &&
-        // With barge-in support the mic listens straight through TTS playback.
-        // Otherwise don't reopen it while TTS is speaking; speakResponse()'s
-        // finally re-invokes this the instant TTS ends.
-        (!isTtsSpeakingRef.current || bargeInSupported())
-      ) {
-        // When sleeping, still keep the mic on so the wake word can be heard
-        void voiceInput.start();
-      }
-    };
-  });
-
-  const speakResponse = useCallback(async (text: string) => {
-    // Drop the transient "🔍 Analyzing codebase…" status the orchestrator appends
-    // to the reply while reconnaissance runs — we only want to speak the reply.
-    const clean = stripMarkdown(text.split('\n\n🔍')[0]);
-    if (!clean || clean.length < 3) {
-      setIsTtsSpeaking(false);
-      resumeVoiceLoopRef.current();
-      return;
-    }
-    try {
-      // Raise the VAD's speech-onset gate for the duration of playback so the
-      // live barge-in mic isn't tripped by the reply's own echo.
-      voiceInput.setPlaybackActive(true);
-      await speak(clean);
-    } catch (error) {
-      if (voiceModeActive) showToast(describeTtsError(error), 'error');
-    } finally {
-      voiceInput.setPlaybackActive(false);
-      setIsTtsSpeaking(false);
-      resumeVoiceLoopRef.current();
-    }
-  }, [voiceModeActive]);
-
   const stopAgentVoice = useCallback(() => {
-    // Common cleanup — must run for BOTH realtime and pipeline paths.
+    // Realtime-only teardown: end the call, release the mic, reset the bar.
     setVoiceModeActive(false);
     agentVoiceModeActive.set(false);
-    setIsTtsSpeaking(false);
     setVoiceSleeping(false);
-    lastSpokenMessageKeyRef.current = null;
-    stopSpeaking();
-    setVoiceLocked(false);
-    setVoiceHeld(false);
     setIsListening(false);
     setIsRefining(false);
-    setVoiceStopping(false);
-    voiceDraftBaseRef.current = '';
-    setVoiceDraftText('');
-    pendingVoiceUtteranceRef.current = null;
     // Null the session ref BEFORE stopping so the session's onEnded callback
     // (which fires from stop()) sees it gone and doesn't re-enter this teardown.
     const realtimeSession = realtimeSessionRef.current;
     realtimeSessionRef.current = null;
     realtimeActiveRef.current = false;
-    if (realtimeSession) {
-      realtimeSession.stop();
-      return;
-    }
-    voiceInput.setConversationMode(false);
-    voiceInput.stop();
+    realtimeSession?.stop();
   }, []);
 
   useEffect(() => {
@@ -473,147 +432,153 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // calls its spacron_orchestrator tool, we run the request through the same
   // sendChatMessage path the pipeline uses, and hand back the brain's reply for
   // the model to speak. Chat logging comes for free from sendChatMessage.
-  const runRealtimeOrchestratorCommand = useCallback(async (request: string): Promise<string> => {
-    const project = get(activeProject);
-    if (!project) return 'No project is open right now.';
-    setAgentSending(true);
-    try {
-      await sendChatMessage(project.id, project.root_path, request, {
-        forcedAgent: get(agentForcedAgent),
-        voiceConversation: true,
-      });
-    } finally {
-      setAgentSending(false);
-    }
-    const messages = get(chatMessages)[project.id] ?? [];
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message.role === 'assistant' && !message.pending && message.text?.trim()) {
-        return message.text.trim();
-      }
-      if (message.role === 'user') break;
-    }
-    return 'The orchestrator accepted the request.';
-  }, [setAgentSending]);
-
-  const startRealtimeVoiceMode = useCallback((engine: 'openai-realtime' | 'xai-realtime') => {
-    const provider = engine === 'xai-realtime' ? ('xai' as const) : ('openai' as const);
-    const label = provider === 'xai' ? 'Grok Realtime' : 'GPT Realtime';
-    if (!isRealtimeVoiceSupported(provider)) {
-      showToast(`${label} voice isn't supported in this runtime. Pick the standard engine in Settings → Voice.`, 'warning');
-      openSettings();
-      return;
-    }
-    if (!isProviderApiKeyConfiguredLocal(provider)) {
-      showToast(`${label} needs an ${provider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`, 'warning');
-      openSettings();
-      return;
-    }
-    // Tear down any lingering realtime session from a previous attempt so the
-    // old session's onEnded callback can't fire on this new session's state.
-    const prevSession = realtimeSessionRef.current;
-    realtimeSessionRef.current = null;
-    realtimeActiveRef.current = false;
-    if (prevSession) {
-      try { prevSession.stop(); } catch { /* already stopped */ }
-    }
-    setVoiceModeActive(true);
-    agentVoiceModeActive.set(true);
-    realtimeActiveRef.current = true;
-    setIsRefining(true); // "thinking" orb while the call connects
-
-    void (async () => {
+  const runRealtimeOrchestratorCommand = useCallback(
+    async (request: string): Promise<string> => {
+      const project = get(activeProject);
+      if (!project) return 'No project is open right now.';
+      setAgentSending(true);
       try {
-        const session = await startRealtimeVoiceSession({
-          provider,
-          model: get(provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel),
-          voice: get(provider === 'xai' ? xaiRealtimeVoice : openaiRealtimeVoice),
-          instructions: REALTIME_VOICE_INSTRUCTIONS,
-          callbacks: {
-            onStateChange: (state) => {
-              setIsRefining(state === 'connecting' || state === 'thinking');
-              setIsListening(state === 'listening');
-              setIsTtsSpeaking(state === 'speaking');
-            },
-            onUserTranscript: (text) => {
-              const project = get(activeProject);
-              if (project) appendVoiceExchangeMessage(project.id, 'user', text);
-            },
-            onAssistantTranscript: (text, final) => {
-              if (!final) return;
-              const project = get(activeProject);
-              if (project) appendVoiceExchangeMessage(project.id, 'assistant', text);
-            },
-            onOrchestratorCommand: runRealtimeOrchestratorCommand,
-            onError: (message) => showToast(message, 'error'),
-            onEnded: () => {
-              // Fires for a spontaneous transport failure as well as stop().
-              // A user-initiated stop already nulled the ref, so this only acts
-              // when the connection died on its own.
-              if (realtimeSessionRef.current) {
-                realtimeSessionRef.current = null;
-                realtimeActiveRef.current = false;
-                if (voiceModeActiveRef.current) stopAgentVoiceRef.current();
-              }
-            },
-          },
+        await sendChatMessage(project.id, project.root_path, request, {
+          forcedAgent: get(agentForcedAgent),
+          voiceConversation: true,
         });
-        if (!realtimeActiveRef.current) {
-          // The user exited voice mode while the call was still connecting.
-          session.stop();
-          return;
-        }
-        realtimeSessionRef.current = session;
-      } catch (error) {
-        realtimeActiveRef.current = false;
-        setIsRefining(false);
-        showToast(error instanceof Error ? error.message : `Could not start ${label} voice.`, 'error');
-        stopAgentVoiceRef.current();
+      } finally {
+        setAgentSending(false);
       }
-    })();
-  }, [runRealtimeOrchestratorCommand, setIsListening, setIsRefining, setIsTtsSpeaking, setVoiceModeActive]);
+      const messages = get(chatMessages)[project.id] ?? [];
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (
+          message.role === 'assistant' &&
+          !message.pending &&
+          message.text?.trim()
+        ) {
+          return message.text.trim();
+        }
+        if (message.role === 'user') break;
+      }
+      return 'The orchestrator accepted the request.';
+    },
+    [setAgentSending]
+  );
+
+  const startRealtimeVoiceMode = useCallback(
+    (engine: 'openai-realtime' | 'xai-realtime') => {
+      const provider =
+        engine === 'xai-realtime' ? ('xai' as const) : ('openai' as const);
+      const label = provider === 'xai' ? 'Grok Realtime' : 'GPT Realtime';
+      if (!isRealtimeVoiceSupported(provider)) {
+        showToast(
+          `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or use Ctrl+Alt+M to dictate instead.`,
+          'warning'
+        );
+        openSettings();
+        return;
+      }
+      if (!isProviderApiKeyConfiguredLocal(provider)) {
+        showToast(
+          `${label} needs an ${provider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`,
+          'warning'
+        );
+        openSettings();
+        return;
+      }
+      // Tear down any lingering realtime session from a previous attempt so the
+      // old session's onEnded callback can't fire on this new session's state.
+      const prevSession = realtimeSessionRef.current;
+      realtimeSessionRef.current = null;
+      realtimeActiveRef.current = false;
+      if (prevSession) {
+        try {
+          prevSession.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      setVoiceModeActive(true);
+      agentVoiceModeActive.set(true);
+      realtimeActiveRef.current = true;
+      setIsRefining(true); // "thinking" orb while the call connects
+
+      void (async () => {
+        try {
+          const session = await startRealtimeVoiceSession({
+            provider,
+            model: get(
+              provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel
+            ),
+            voice: get(
+              provider === 'xai' ? xaiRealtimeVoice : openaiRealtimeVoice
+            ),
+            instructions: REALTIME_VOICE_INSTRUCTIONS,
+            callbacks: {
+              onStateChange: (state) => {
+                setIsRefining(state === 'connecting' || state === 'thinking');
+                setIsListening(state === 'listening');
+              },
+              onUserTranscript: (text) => {
+                const project = get(activeProject);
+                if (project)
+                  appendVoiceExchangeMessage(project.id, 'user', text);
+              },
+              onAssistantTranscript: (text, final) => {
+                if (!final) return;
+                const project = get(activeProject);
+                if (project)
+                  appendVoiceExchangeMessage(project.id, 'assistant', text);
+              },
+              onOrchestratorCommand: runRealtimeOrchestratorCommand,
+              onError: (message) => showToast(message, 'error'),
+              onEnded: () => {
+                // Fires for a spontaneous transport failure as well as stop().
+                // A user-initiated stop already nulled the ref, so this only acts
+                // when the connection died on its own.
+                if (realtimeSessionRef.current) {
+                  realtimeSessionRef.current = null;
+                  realtimeActiveRef.current = false;
+                  if (voiceModeActiveRef.current) stopAgentVoiceRef.current();
+                }
+              },
+            },
+          });
+          if (!realtimeActiveRef.current) {
+            // The user exited voice mode while the call was still connecting.
+            session.stop();
+            return;
+          }
+          realtimeSessionRef.current = session;
+        } catch (error) {
+          realtimeActiveRef.current = false;
+          setIsRefining(false);
+          showToast(
+            error instanceof Error
+              ? error.message
+              : `Could not start ${label} voice.`,
+            'error'
+          );
+          stopAgentVoiceRef.current();
+        }
+      })();
+    },
+    [
+      runRealtimeOrchestratorCommand,
+      setIsListening,
+      setIsRefining,
+      setVoiceModeActive,
+    ]
+  );
 
   const toggleAgentVoiceMode = useCallback(() => {
-    if (voiceModeActive) { stopAgentVoice(); return; }
-    // The realtime engines (GPT Realtime / Grok Realtime) replace the whole
-    // STT → brain → TTS loop with one speech-to-speech call; none of the
-    // pipeline validation below applies.
-    const engine = get(voiceConversationEngine);
-    if (engine === 'openai-realtime' || engine === 'xai-realtime') {
-      startRealtimeVoiceMode(engine);
+    if (voiceModeActive) {
+      stopAgentVoice();
       return;
     }
-    // Validate voice *input* first: entering with an unsupported input provider
-    // (e.g. the default Web Speech provider on Linux/WebKitGTK, whose recognizer
-    // doesn't exist) would open the overlay on the idle orb with a mic that never
-    // engages — the "headphone icon that never picks anything up" wedge.
-    if (!voiceInput.isSupported()) {
-      showToast(
-        isWebkitGtk()
-          ? "Web Speech voice input isn't available on Linux. Pick a local or cloud voice provider in Settings → Voice."
-          : 'Voice input is not supported in this runtime. Pick a voice provider in Settings → Voice.',
-        'warning',
-      );
-      openSettings();
-      return;
-    }
-    const replyVoiceError = getVoiceReplyConfigError();
-    if (replyVoiceError) {
-      showToast(replyVoiceError, 'warning');
-      openSettings();
-      return;
-    }
-    // Seed with the current last assistant message so entering voice mode opens
-    // straight into listening instead of re-speaking the reply already on screen.
-    const lastMsg = projectChatMessages.at(-1);
-    lastSpokenMessageKeyRef.current = lastMsg && lastMsg.role === 'assistant' && !lastMsg.pending ? speechKeyForAssistantMessage(lastMsg) : null;
-    setVoiceModeActive(true);
-    agentVoiceModeActive.set(true);
-    // Keep the mic warm between turns so each turn re-arms instantly instead of
-    // re-acquiring the mic (getUserMedia + AudioContext + warmup) every time.
-    voiceInput.setConversationMode(true);
-    void voiceInput.start();
-  }, [voiceModeActive, stopAgentVoice, projectChatMessages, startRealtimeVoiceMode]);
+    // Voice conversation is realtime-only: the whole conversation is one live
+    // speech-to-speech call. There is no local STT -> brain -> TTS loop, and
+    // `VoiceConversationEngine` has no non-realtime member left to fall back
+    // from, so the setting maps straight through.
+    startRealtimeVoiceMode(get(voiceConversationEngine));
+  }, [voiceModeActive, stopAgentVoice, startRealtimeVoiceMode]);
 
   const launchAgentVoiceMode = useCallback(() => {
     openPromptBar();
@@ -622,55 +587,40 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     }
   }, [openPromptBar, voiceModeActive, toggleAgentVoiceMode]);
 
-  const submitAgentMessage = useCallback(async (textOverride?: string) => {
-    if (!$activeProject) return;
-    if (agentSendingRef.current) {
-      // A dispatch is still running. On the typed path the text stays in the
-      // box, so the user can see it didn't send — but a *spoken* turn has no
-      // such feedback, and simply returning here is how voice mode silently ate
-      // every reply the user gave while the orchestrator was still working.
-      // (The reply TTS deliberately starts before dispatch finishes, so this
-      // window is the common case, not the rare one.) Hold the utterance and
-      // flush it the moment the in-flight send settles.
-      if (textOverride !== undefined && voiceModeActiveRef.current) {
-        const queued = textOverride.trim();
-        if (queued) {
-          pendingVoiceUtteranceRef.current = pendingVoiceUtteranceRef.current
-            ? `${pendingVoiceUtteranceRef.current} ${queued}`
-            : queued;
-        }
+  const submitAgentMessage = useCallback(
+    async (textOverride?: string) => {
+      if (!$activeProject) return;
+      const { paths, ok } = await materializeAttachments();
+      if (!ok) return;
+      const promptText = (textOverride ?? inputValueRef.current).trim();
+      const finalText = appendAttachmentPaths(promptText, paths);
+      if (!finalText) return;
+      setInputValue('');
+      setAgentSending(true);
+      try {
+        await sendChatMessage(
+          $activeProject.id,
+          $activeProject.root_path,
+          finalText,
+          {
+            forcedAgent: get(agentForcedAgent),
+          }
+        );
+      } finally {
+        setAgentSending(false);
       }
-      return;
-    }
-    const { paths, ok } = await materializeAttachments();
-    if (!ok) return;
-    const promptText = (textOverride ?? inputValueRef.current).trim();
-    const finalText = appendAttachmentPaths(promptText, paths);
-    if (!finalText) return;
-    setInputValue('');
-    setAgentSending(true);
-    try {
-      await sendChatMessage($activeProject.id, $activeProject.root_path, finalText, {
-        forcedAgent: get(agentForcedAgent),
-        voiceConversation: voiceModeActiveRef.current,
-      });
-    } finally {
-      setAgentSending(false);
-      // Flush anything the user said while this dispatch was running before
-      // re-arming the mic; that call's own finally resumes the loop.
-      const queued = pendingVoiceUtteranceRef.current;
-      pendingVoiceUtteranceRef.current = null;
-      if (queued && voiceModeActiveRef.current) {
-        void submitAgentMessageRef.current(queued);
-      } else {
-        resumeVoiceLoopRef.current();
-      }
-    }
-  }, [$activeProject, materializeAttachments, appendAttachmentPaths, inputValueRef]);
+    },
+    [
+      $activeProject,
+      materializeAttachments,
+      appendAttachmentPaths,
+      inputValueRef,
+    ]
+  );
 
   // The staged prompt's two buttons. Sending takes no argument on purpose:
   // submitAgentMessage falls back to the staged text and folds the attachment
-  // chips in, so this is the same dispatch a spoken turn makes.
+  // chips in.
   const sendStagedPrompt = useCallback(() => {
     void submitAgentMessage();
   }, [submitAgentMessage]);
@@ -683,30 +633,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       return [];
     });
   }, [setInputValue]);
-
-  useEffect(() => {
-    submitAgentMessageRef.current = submitAgentMessage;
-  }, [submitAgentMessage]);
-
-  // Auto-speak new assistant messages in agent voice mode.
-  // Deliberately NOT gated on `agentSending`: the conversational reply is ready
-  // the moment routing finishes (well before recon + spawn + dispatch complete),
-  // so speaking it immediately removes seconds of dead air. Background dispatch
-  // keeps running while TTS plays; the mic resumes when dispatch finishes
-  // (see submitAgentMessage's finally) or when TTS ends (see speakResponse).
-  useEffect(() => {
-    if (!voiceModeActive || isTtsSpeaking) return;
-    // The GPT Realtime engine speaks for itself; assistant messages it logs to
-    // the chat must not ALSO be synthesized by the pipeline TTS.
-    if (realtimeActiveRef.current) return;
-    const lastMsg = projectChatMessages.at(-1);
-    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.pending) return;
-    const speechKey = speechKeyForAssistantMessage(lastMsg);
-    if (speechKey === lastSpokenMessageKeyRef.current) return;
-    lastSpokenMessageKeyRef.current = speechKey;
-    setIsTtsSpeaking(true);
-    void speakResponse(speechTextForAssistantMessage(lastMsg));
-  }, [voiceModeActive, isTtsSpeaking, projectChatMessages, speakResponse]);
 
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
   useEffect(() => {
@@ -723,6 +649,10 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     };
   }, []);
 
+  // Read an on-disk image into a preview chip. Returns true when the chip was
+  // added; false (e.g. file outside the project) lets the caller fall back to a
+  // plain path so the image is still sent, just without a thumbnail.
+
   // The voice transcript grows up to three lines and then scrolls vertically.
   // While the user is speaking (or the turn is being processed) keep the newest
   // words in view by pinning to the bottom; for a settled assistant reply reset
@@ -735,169 +665,43 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     } else {
       el.scrollTop = 0;
     }
-  }, [projectChatMessages.length, voiceDraftText, isListening, isRefining, agentSending]);
+  }, [projectChatMessages.length, isListening, isRefining, agentSending]);
 
-  // Clean up the voice input session on unmount to release AudioContext,
-  // MediaStream, and ScriptProcessorNode resources.
-  useEffect(() => {
-    return () => {
-      voiceInputRef.current.stop();
-      voiceInputRef.current.setConversationMode(false);
-    };
-  }, []);
-
-  const voiceInputRef = useRef(
-    createVoiceInputSession({
-      onAudioLevel: (rms) => setAudioRms(rms),
-      onStart: () => {
-        setIsListening(true);
-        setIsRefining(false);
-        voiceDraftBaseRef.current = inputValueRef.current;
-        setVoiceDraftText('');
-      },
-      onSpeechStart: () => {
-        stopSpeaking();
-        setIsTtsSpeaking(false);
-      },
-      onResult: (transcript) => {
-        setVoiceDraftText(transcript);
-      },
-      onProcessingStart: () => {
-        setIsListening(false);
-        setIsRefining(true);
-      },
-      onEnd: () => {
-        // Read current state from refs (avoid nested setState callbacks).
-        const wasStopping = voiceStoppingRef.current;
-        const wasLocked = voiceLockedRef.current;
-        const held = voiceHeldRef.current;
-        const shouldRestart = !wasStopping && (wasLocked || held);
-        const shouldResumeAgentVoice = voiceModeActiveRef.current;
-        const transcript = voiceDraftTextRef.current.trim();
-        // Whatever was already in the prompt bar when this turn started. Captured
-        // BEFORE the reset below, because the merge that uses it happens after an
-        // await — reading the ref there would always see the cleared value and
-        // dictation would overwrite typed text instead of appending to it.
-        const draftBase = voiceDraftBaseRef.current;
-
-        // Reset all voice state in one pass.
-        setIsListening(false);
-        setIsRefining(false);
-        setVoiceStopping(false);
-        voiceDraftBaseRef.current = '';
-        setVoiceDraftText('');
-
-        if (!transcript) {
-          queueMicrotask(() => {
-            if (shouldRestart) {
-              if (wasLocked || held) void voiceInputRef.current.start();
-              return;
-            }
-            resumeVoiceLoopRef.current();
-          });
-          return;
-        }
-
-        // Check for sleep/wake keywords in voice mode.
-        if (shouldResumeAgentVoice) {
-          if (voiceSleepingRef.current) {
-            if (matchVoiceCommand(transcript, WAKE_KEYWORDS)) {
-              setVoiceSleeping(false);
-            }
-            // Whether wake matched or still sleeping — ignore everything else and re-arm.
-            queueMicrotask(() => resumeVoiceLoopRef.current());
-            return;
-          }
-          if (matchVoiceCommand(transcript, SLEEP_KEYWORDS)) {
-            setVoiceSleeping(true);
-            queueMicrotask(() => resumeVoiceLoopRef.current());
-            return;
-          }
-        }
-
-        setIsRefining(true);
-
-        void (async () => {
-          try {
-            const result = await refineVoicePrompt(transcript, { aiRefinement: !voiceModeActiveRef.current });
-            if (result.text) {
-              // Speaking folds the transcript onto whatever is staged, so a goal
-              // handed over from Preview or a spawned agent is sent together with
-              // what the user just said rather than being replaced by it.
-              const merged = mergeVoiceTranscript(draftBase, result.text);
-              setInputValue(merged);
-              if (voiceModeActiveRef.current) {
-                await submitAgentMessageRef.current(merged);
-              }
-            }
-          } catch (error) {
-            console.error('Failed to refine voice prompt:', error);
-            if (shouldResumeAgentVoice) showToast('Could not process that — listening again.', 'warning', 3000);
-          } finally {
-            setIsRefining(false);
-            setVoiceStopping(false);
-            voiceDraftBaseRef.current = '';
-            setVoiceDraftText('');
-            if (shouldRestart) {
-              queueMicrotask(() => {
-                if (wasLocked || held) void voiceInputRef.current.start();
-              });
-            } else {
-              queueMicrotask(() => resumeVoiceLoopRef.current());
-            }
-          }
-        })();
-      },
-      onError: (message) => {
-        setIsListening(false);
-        setIsRefining(false);
-        setVoiceLocked(false);
-        setVoiceHeld(false);
-        setVoiceStopping(false);
-        voiceDraftBaseRef.current = '';
-        setVoiceDraftText('');
-        showToast(message, 'error');
-        // In the hands-free agent voice loop a start/transcription error would
-        // otherwise leave the overlay wedged on the idle orb with a dead mic.
-        // Tear voice mode down so the error toast is the clear signal.
-        if (voiceModeActiveRef.current) {
-          stopAgentVoiceRef.current();
-        }
-      },
-    })
-  );
-  const voiceInput = voiceInputRef.current;
-
-  const toggleVoiceInput = useCallback(async () => {
-    if (isRefining) return;
-    if (isListening && voiceLocked) {
-      setVoiceLocked(false);
-      setVoiceStopping(true);
-      voiceInput.stop();
-      voiceDraftBaseRef.current = '';
-      return;
+  // The bar's mic button: transcription mode. Same single-shot speech-to-text
+  // service as Ctrl+Alt+M — one utterance, typed straight into whatever field
+  // or terminal held the cursor when it started. No reply is synthesized.
+  const toggleTranscriptionMode = useCallback(() => {
+    if (!startBarTranscription()) {
+      showToast(
+        'A transcription is already running — finish or press Escape first.',
+        'warning'
+      );
     }
-    setVoiceLocked(true);
-    await voiceInput.start();
-  }, [isRefining, isListening, voiceLocked, voiceInput]);
+  }, []);
 
   // Read an on-disk image into a preview chip. Returns true when the chip was
   // added; false (e.g. file outside the project) lets the caller fall back to a
   // plain path so the image is still sent, just without a thumbnail.
-  const addDiskImageChip = useCallback(async (path: string): Promise<boolean> => {
-    try {
-      const bytes = await invoke<number[]>('fs_read_binary', { path });
-      const mimeType = getImageMimeType(path);
-      const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
-      const objectUrl = URL.createObjectURL(blob);
-      const name = path.split(/[\\/]/).pop() || 'image';
-      setPastedImages((prev) => [...prev, { objectUrl, dataUrl: '', name, diskPath: path }]);
-      return true;
-    } catch (error) {
-      console.error('Failed to preview attached image:', error);
-      return false;
-    }
-  }, []);
+  const addDiskImageChip = useCallback(
+    async (path: string): Promise<boolean> => {
+      try {
+        const bytes = await invoke<number[]>('fs_read_binary', { path });
+        const mimeType = getImageMimeType(path);
+        const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
+        const objectUrl = URL.createObjectURL(blob);
+        const name = path.split(/[\\/]/).pop() || 'image';
+        setPastedImages((prev) => [
+          ...prev,
+          { objectUrl, dataUrl: '', name, diskPath: path },
+        ]);
+        return true;
+      } catch (error) {
+        console.error('Failed to preview attached image:', error);
+        return false;
+      }
+    },
+    []
+  );
 
   const attachPathsToInput = useCallback((paths: string[]) => {
     if (!paths.length) return;
@@ -917,63 +721,91 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   const isPointInsideBar = useCallback((clientX: number, clientY: number) => {
     const barEl = barElRef.current;
     if (!barEl || typeof document === 'undefined') return false;
-    const hovered = document.elementsFromPoint(clientX, clientY) as HTMLElement[];
-    return hovered.some((el) => el === barEl || el.closest('.floating-prompt-bar') === barEl);
+    const hovered = document.elementsFromPoint(
+      clientX,
+      clientY
+    ) as HTMLElement[];
+    return hovered.some(
+      (el) => el === barEl || el.closest('.floating-prompt-bar') === barEl
+    );
   }, []);
 
-  const updateExplorerDragPoint = useCallback((clientX: number, clientY: number) => {
-    if (clientX < 0 || clientY < 0) return false;
-    setLastExplorerDragPoint({ x: clientX, y: clientY });
-    const overBar = isPointInsideBar(clientX, clientY);
-    setIsDragOver(overBar);
-    return overBar;
-  }, [isPointInsideBar]);
+  const updateExplorerDragPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      if (clientX < 0 || clientY < 0) return false;
+      setLastExplorerDragPoint({ x: clientX, y: clientY });
+      const overBar = isPointInsideBar(clientX, clientY);
+      setIsDragOver(overBar);
+      return overBar;
+    },
+    [isPointInsideBar]
+  );
 
-  const handleInternalDragOver = useCallback((event: React.DragEvent) => {
-    if (!draggedExplorerPath) return;
-    event.preventDefault();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'copy';
-    }
-    updateExplorerDragPoint(event.clientX, event.clientY);
-  }, [draggedExplorerPath, updateExplorerDragPoint]);
+  const handleInternalDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (!draggedExplorerPath) return;
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy';
+      }
+      updateExplorerDragPoint(event.clientX, event.clientY);
+    },
+    [draggedExplorerPath, updateExplorerDragPoint]
+  );
 
-  const handleInternalDragEnter = useCallback((event: React.DragEvent) => {
-    if (!draggedExplorerPath) return;
-    event.preventDefault();
-    updateExplorerDragPoint(event.clientX, event.clientY);
-  }, [draggedExplorerPath, updateExplorerDragPoint]);
+  const handleInternalDragEnter = useCallback(
+    (event: React.DragEvent) => {
+      if (!draggedExplorerPath) return;
+      event.preventDefault();
+      updateExplorerDragPoint(event.clientX, event.clientY);
+    },
+    [draggedExplorerPath, updateExplorerDragPoint]
+  );
 
-  const handleInternalDragLeave = useCallback((event: React.DragEvent) => {
-    if (!draggedExplorerPath) return;
-    event.preventDefault();
-  }, [draggedExplorerPath]);
+  const handleInternalDragLeave = useCallback(
+    (event: React.DragEvent) => {
+      if (!draggedExplorerPath) return;
+      event.preventDefault();
+    },
+    [draggedExplorerPath]
+  );
 
-  const handleInternalDrop = useCallback((event: React.DragEvent) => {
-    const droppedPath =
-      draggedExplorerPath ||
-      event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
-      event.dataTransfer?.getData('text/plain')?.trim() ||
-      null;
+  const handleInternalDrop = useCallback(
+    (event: React.DragEvent) => {
+      const droppedPath =
+        draggedExplorerPath ||
+        event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
+        event.dataTransfer?.getData('text/plain')?.trim() ||
+        null;
 
-    if (!droppedPath) return;
+      if (!droppedPath) return;
 
-    event.preventDefault();
-    event.stopPropagation();
-    // Signal to the document-level handler (which fires after React's synthetic
-    // event) that this drop was already handled — prevents the path being added twice.
-    internalDropHandledRef.current = true;
-    queueMicrotask(() => { internalDropHandledRef.current = false; });
-    updateExplorerDragPoint(event.clientX, event.clientY);
-    setIsDragOver(false);
-    if (isImagePath(droppedPath)) {
-      void addDiskImageChip(droppedPath);
-    } else {
-      addFileChip(droppedPath);
-    }
-    setDraggedExplorerPath(null);
-    setLastExplorerDragPoint(null);
-  }, [draggedExplorerPath, updateExplorerDragPoint, addDiskImageChip, addFileChip, isImagePath]);
+      event.preventDefault();
+      event.stopPropagation();
+      // Signal to the document-level handler (which fires after React's synthetic
+      // event) that this drop was already handled — prevents the path being added twice.
+      internalDropHandledRef.current = true;
+      queueMicrotask(() => {
+        internalDropHandledRef.current = false;
+      });
+      updateExplorerDragPoint(event.clientX, event.clientY);
+      setIsDragOver(false);
+      if (isImagePath(droppedPath)) {
+        void addDiskImageChip(droppedPath);
+      } else {
+        addFileChip(droppedPath);
+      }
+      setDraggedExplorerPath(null);
+      setLastExplorerDragPoint(null);
+    },
+    [
+      draggedExplorerPath,
+      updateExplorerDragPoint,
+      addDiskImageChip,
+      addFileChip,
+      isImagePath,
+    ]
+  );
 
   const lastFocusRequestRef = useRef(0);
   useEffect(() => {
@@ -1013,48 +845,75 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     // Convert the dataUrl into an objectUrl so it renders in the chip. Decode
     // locally rather than fetch(dataUrl) — the CSP connect-src blocks data: URLs.
     try {
-      const mime = img.dataUrl.slice(5, img.dataUrl.indexOf(';')) || 'image/png';
+      const mime =
+        img.dataUrl.slice(5, img.dataUrl.indexOf(';')) || 'image/png';
       const blob = new Blob([dataUrlToBytes(img.dataUrl)], { type: mime });
       const objectUrl = URL.createObjectURL(blob);
-      setPastedImages((prev) => [...prev, { objectUrl, dataUrl: img.dataUrl, name: img.name }]);
+      setPastedImages((prev) => [
+        ...prev,
+        { objectUrl, dataUrl: img.dataUrl, name: img.name },
+      ]);
       setIsExpanded(true);
-    } catch {/* silently ignore */}
+    } catch {
+      /* silently ignore */
+    }
   }, [$promptBarImage]);
 
-  const handleDocumentPointerDown = useCallback((event: MouseEvent) => {
-    const target = event.target as Node | null;
-    const insideShell = Boolean(
-      shellElRef.current && target && shellElRef.current.contains(target)
-    );
-    // Clicking the bar (or anywhere inside it) arms the Alt→voice shortcut;
-    // any outside click disarms it. This runs before the early return below so
-    // a click on the collapsed pill arms it even though nothing else is open.
-    voiceShortcutArmedRef.current = insideShell;
-    if (!isExpanded) return;
-    if (!insideShell && !canStayOpen()) setIsExpanded(false);
-  }, [isExpanded, canStayOpen]);
+  const handleDocumentPointerDown = useCallback(
+    (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      const insideShell = Boolean(
+        shellElRef.current && target && shellElRef.current.contains(target)
+      );
+      if (!isExpanded) return;
+      if (!insideShell && !canStayOpen()) setIsExpanded(false);
+    },
+    [isExpanded, canStayOpen]
+  );
 
-  const handleGlobalVoiceShortcut = useCallback((event: KeyboardEvent) => {
-    // Voice mode is on: Escape or left-Alt ends it.
-    if (voiceModeActive) {
-      if (event.key === 'Escape' || (event.key === 'Alt' && event.location === KeyboardEvent.DOM_KEY_LOCATION_LEFT)) {
+  /**
+   * Voice mode is toggled by a BARE TAP of left Alt — pressed and released with
+   * nothing else in between.
+   *
+   * It fires on keyup, not keydown, and that is the whole point. Firing on
+   * keydown meant every chord containing Alt opened voice mode as soon as Alt
+   * went down: `Ctrl+Alt+M` (transcribe to the caret) toggled the voice call
+   * before the `M` was ever delivered, which read as "the transcription hotkey
+   * randomly opens voice mode" — randomly only because the gesture is armed by
+   * clicking the bar. A modifier check on keydown alone would not be enough
+   * either, since holding Alt *first* and adding Ctrl after produces a bare-Alt
+   * keydown too.
+   */
+  const handleGlobalVoiceShortcut = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.type === 'keydown') {
+        if (voiceModeActive && event.key === 'Escape') {
+          event.preventDefault();
+          stopAgentVoice();
+          return;
+        }
+        altTapRef.current.keydown(event);
+        return;
+      }
+
+      if (!altTapRef.current.keyup(event) || isRefining) return;
+
+      if (voiceModeActive) {
         event.preventDefault();
         stopAgentVoice();
+        return;
       }
-      return;
-    }
 
-    if (event.key !== 'Alt' || event.location !== KeyboardEvent.DOM_KEY_LOCATION_LEFT || event.repeat || isRefining) return;
-
-    // Alt only toggles voice once the user has clicked the floating bar (see
-    // `voiceShortcutArmedRef`). A focus guard can't do this job — the bar holds
-    // no keyboard focus of its own now that the text box is gone, so a
-    // focus-based check could never fire. Arming on click is what makes the
-    // shortcut both reachable and deliberate.
-    if (!voiceShortcutArmedRef.current) return;
-    event.preventDefault();
-    toggleAgentVoiceMode();
-  }, [voiceModeActive, isRefining, stopAgentVoice, toggleAgentVoiceMode]);
+      // No arming: a bare left-Alt tap toggles voice from anywhere in the app,
+      // including while the caret sits in a text input or a dialog. This was an
+      // explicit product call — the tradeoff is that a stray tap opens the mic and
+      // starts a realtime call, which is why the gesture is a deliberate bare tap
+      // (see `alt-tap-gesture.ts`) and not merely "Alt was involved".
+      event.preventDefault();
+      toggleAgentVoiceMode();
+    },
+    [voiceModeActive, isRefining, stopAgentVoice, toggleAgentVoiceMode]
+  );
 
   const handleExplorerDragStart = useCallback((event: Event) => {
     const custom = event as CustomEvent<{ path?: string }>;
@@ -1069,16 +928,30 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
 
   useEffect(() => {
     handleExplorerDragMoveRef.current = (event: Event) => {
-      const custom = event as CustomEvent<{ clientX?: number; clientY?: number }>;
+      const custom = event as CustomEvent<{
+        clientX?: number;
+        clientY?: number;
+      }>;
       if (!draggedExplorerPath) return;
-      updateExplorerDragPoint(custom.detail?.clientX ?? -1, custom.detail?.clientY ?? -1);
+      updateExplorerDragPoint(
+        custom.detail?.clientX ?? -1,
+        custom.detail?.clientY ?? -1
+      );
     };
     handleExplorerDragEndRef.current = (event: Event) => {
-      const custom = event as CustomEvent<{ path?: string; clientX?: number; clientY?: number }>;
+      const custom = event as CustomEvent<{
+        path?: string;
+        clientX?: number;
+        clientY?: number;
+      }>;
       const endedPath = custom.detail?.path?.trim() || draggedExplorerPath;
       const droppedOverBar =
-        typeof custom.detail?.clientX === 'number' && typeof custom.detail?.clientY === 'number'
-          ? updateExplorerDragPoint(custom.detail.clientX, custom.detail.clientY)
+        typeof custom.detail?.clientX === 'number' &&
+        typeof custom.detail?.clientY === 'number'
+          ? updateExplorerDragPoint(
+              custom.detail.clientX,
+              custom.detail.clientY
+            )
           : lastExplorerDragPoint
             ? isPointInsideBar(lastExplorerDragPoint.x, lastExplorerDragPoint.y)
             : isDragOver;
@@ -1091,53 +964,69 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       setLastExplorerDragPoint(null);
       setIsDragOver(false);
     };
-  }, [draggedExplorerPath, updateExplorerDragPoint, lastExplorerDragPoint, isPointInsideBar, isDragOver, attachPathsToInput]);
+  }, [
+    draggedExplorerPath,
+    updateExplorerDragPoint,
+    lastExplorerDragPoint,
+    isPointInsideBar,
+    isDragOver,
+    attachPathsToInput,
+  ]);
 
-  const handleDocumentDragOver = useCallback((event: DragEvent) => {
-    if (!draggedExplorerPath) return;
-    const overBar = updateExplorerDragPoint(event.clientX, event.clientY);
-    if (overBar) {
-      event.preventDefault();
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'copy';
+  const handleDocumentDragOver = useCallback(
+    (event: DragEvent) => {
+      if (!draggedExplorerPath) return;
+      const overBar = updateExplorerDragPoint(event.clientX, event.clientY);
+      if (overBar) {
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'copy';
+        }
       }
-    }
-  }, [draggedExplorerPath, updateExplorerDragPoint]);
+    },
+    [draggedExplorerPath, updateExplorerDragPoint]
+  );
 
-  const handleDocumentDrop = useCallback((event: DragEvent) => {
-    // Skip if the React synthetic handler already processed this drop (prevents duplicates).
-    if (internalDropHandledRef.current) {
+  const handleDocumentDrop = useCallback(
+    (event: DragEvent) => {
+      // Skip if the React synthetic handler already processed this drop (prevents duplicates).
+      if (internalDropHandledRef.current) {
+        setDraggedExplorerPath(null);
+        setLastExplorerDragPoint(null);
+        setIsDragOver(false);
+        return;
+      }
+      const droppedPath =
+        draggedExplorerPath ||
+        event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
+        event.dataTransfer?.getData('text/plain')?.trim() ||
+        null;
+
+      if (!droppedPath) return;
+      const overBar = updateExplorerDragPoint(event.clientX, event.clientY);
+      if (overBar) {
+        event.preventDefault();
+        event.stopPropagation();
+        attachPathsToInput([droppedPath]);
+      }
       setDraggedExplorerPath(null);
       setLastExplorerDragPoint(null);
       setIsDragOver(false);
-      return;
-    }
-    const droppedPath =
-      draggedExplorerPath ||
-      event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
-      event.dataTransfer?.getData('text/plain')?.trim() ||
-      null;
-
-    if (!droppedPath) return;
-    const overBar = updateExplorerDragPoint(event.clientX, event.clientY);
-    if (overBar) {
-      event.preventDefault();
-      event.stopPropagation();
-      attachPathsToInput([droppedPath]);
-    }
-    setDraggedExplorerPath(null);
-    setLastExplorerDragPoint(null);
-    setIsDragOver(false);
-  }, [draggedExplorerPath, updateExplorerDragPoint, attachPathsToInput]);
+    },
+    [draggedExplorerPath, updateExplorerDragPoint, attachPathsToInput]
+  );
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const dragStartHandler = handleExplorerDragStart as EventListener;
-    const dragMoveHandler = ((event: Event) => handleExplorerDragMoveRef.current(event)) as EventListener;
-    const dragEndHandler = ((event: Event) => handleExplorerDragEndRef.current(event)) as EventListener;
+    const dragMoveHandler = ((event: Event) =>
+      handleExplorerDragMoveRef.current(event)) as EventListener;
+    const dragEndHandler = ((event: Event) =>
+      handleExplorerDragEndRef.current(event)) as EventListener;
 
     document.addEventListener('mousedown', handleDocumentPointerDown);
     document.addEventListener('keydown', handleGlobalVoiceShortcut);
+    document.addEventListener('keyup', handleGlobalVoiceShortcut);
     document.addEventListener('dragover', handleDocumentDragOver);
     document.addEventListener('drop', handleDocumentDrop);
     window.addEventListener('spacron-explorer-drag-start', dragStartHandler);
@@ -1147,9 +1036,13 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     return () => {
       document.removeEventListener('mousedown', handleDocumentPointerDown);
       document.removeEventListener('keydown', handleGlobalVoiceShortcut);
+      document.removeEventListener('keyup', handleGlobalVoiceShortcut);
       document.removeEventListener('dragover', handleDocumentDragOver);
       document.removeEventListener('drop', handleDocumentDrop);
-      window.removeEventListener('spacron-explorer-drag-start', dragStartHandler);
+      window.removeEventListener(
+        'spacron-explorer-drag-start',
+        dragStartHandler
+      );
       window.removeEventListener('spacron-explorer-drag-move', dragMoveHandler);
       window.removeEventListener('spacron-explorer-drag-end', dragEndHandler);
     };
@@ -1172,7 +1065,9 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
   // OS drop fired all of them — the "file path shows four times" bug. Mutable
   // state is read through refs so this listener never needs to re-subscribe.
   const draggedExplorerPathRef = useRef(draggedExplorerPath);
-  useEffect(() => { draggedExplorerPathRef.current = draggedExplorerPath; }, [draggedExplorerPath]);
+  useEffect(() => {
+    draggedExplorerPathRef.current = draggedExplorerPath;
+  }, [draggedExplorerPath]);
   const addChipsForPathsRef = useRef<(paths: string[]) => void>(() => {});
   useEffect(() => {
     addChipsForPathsRef.current = (paths: string[]) => {
@@ -1191,60 +1086,80 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
-    getCurrentWindow().onDragDropEvent((event) => {
-      // Internal explorer drags are handled by their own pointer-based path.
-      if (draggedExplorerPathRef.current) return;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        // Internal explorer drags are handled by their own pointer-based path.
+        if (draggedExplorerPathRef.current) return;
 
-      const type = event.payload.type;
+        const type = event.payload.type;
 
-      if (type === 'enter') {
-        setIsGlobalFileDrag(true);
-        return;
-      }
-      if (type === 'leave') {
-        setIsGlobalFileDrag(false);
-        setIsDragOver(false);
-        return;
-      }
-      if (type === 'over') {
-        const barEl = barElRef.current;
-        if (!barEl) return;
-        const pos = (event.payload as any).position as { x: number; y: number };
-        void dropPositionToCss(pos).then((css) => {
-          const el = barElRef.current;
-          if (!css || !el) return;
-          const rect = el.getBoundingClientRect();
-          setIsDragOver(css.x >= rect.left && css.x <= rect.right && css.y >= rect.top && css.y <= rect.bottom);
-        });
-        return;
-      }
-      if (type === 'drop') {
-        setIsGlobalFileDrag(false);
-        const payload = event.payload as any;
-        const paths: string[] = payload.paths ?? [];
-
-        const barEl = barElRef.current;
-        if (!barEl || !paths.length) { setIsDragOver(false); return; }
-
-        const pos = payload.position as { x: number; y: number };
-        void dropPositionToCss(pos).then((css) => {
-          const el = barElRef.current;
-          if (!css || !el) { setIsDragOver(false); return; }
-          const rect = el.getBoundingClientRect();
-          const isOverBar = css.x >= rect.left && css.x <= rect.right && css.y >= rect.top && css.y <= rect.bottom;
-
+        if (type === 'enter') {
+          setIsGlobalFileDrag(true);
+          return;
+        }
+        if (type === 'leave') {
+          setIsGlobalFileDrag(false);
           setIsDragOver(false);
-          if (!isOverBar) return;
+          return;
+        }
+        if (type === 'over') {
+          const barEl = barElRef.current;
+          if (!barEl) return;
+          const pos = (event.payload as any).position as {
+            x: number;
+            y: number;
+          };
+          void dropPositionToCss(pos).then((css) => {
+            const el = barElRef.current;
+            if (!css || !el) return;
+            const rect = el.getBoundingClientRect();
+            setIsDragOver(
+              css.x >= rect.left &&
+                css.x <= rect.right &&
+                css.y >= rect.top &&
+                css.y <= rect.bottom
+            );
+          });
+          return;
+        }
+        if (type === 'drop') {
+          setIsGlobalFileDrag(false);
+          const payload = event.payload as any;
+          const paths: string[] = payload.paths ?? [];
 
-          addChipsForPathsRef.current(paths);
-        });
-      }
-    }).then((u) => {
-      // If the component unmounted before this resolved, unlisten immediately so
-      // the listener never leaks past the component's life.
-      if (cancelled) u();
-      else unlisten = u;
-    });
+          const barEl = barElRef.current;
+          if (!barEl || !paths.length) {
+            setIsDragOver(false);
+            return;
+          }
+
+          const pos = payload.position as { x: number; y: number };
+          void dropPositionToCss(pos).then((css) => {
+            const el = barElRef.current;
+            if (!css || !el) {
+              setIsDragOver(false);
+              return;
+            }
+            const rect = el.getBoundingClientRect();
+            const isOverBar =
+              css.x >= rect.left &&
+              css.x <= rect.right &&
+              css.y >= rect.top &&
+              css.y <= rect.bottom;
+
+            setIsDragOver(false);
+            if (!isOverBar) return;
+
+            addChipsForPathsRef.current(paths);
+          });
+        }
+      })
+      .then((u) => {
+        // If the component unmounted before this resolved, unlisten immediately so
+        // the listener never leaks past the component's life.
+        if (cancelled) u();
+        else unlisten = u;
+      });
 
     return () => {
       cancelled = true;
@@ -1252,7 +1167,9 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
     };
   }, []);
 
-  const showDropOverlay = draggedExplorerPath ? isDragOver : (isGlobalFileDrag || isDragOver);
+  const showDropOverlay = draggedExplorerPath
+    ? isDragOver
+    : isGlobalFileDrag || isDragOver;
 
   return (
     <div
@@ -1276,7 +1193,16 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
           >
             {showDropOverlay && (
               <div className="drop-overlay">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="17 8 12 3 7 8" />
                   <line x1="12" x2="12" y1="3" y2="15" />
@@ -1287,17 +1213,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
             {isVoiceActive && (
               <div className="voice-mode-inner">
                 <div className="voice-mode-row">
-                  <div className={`orb-wrap ${
-                    voiceSleeping
-                      ? 'sleeping'
-                      : isTtsSpeaking
-                        ? 'speaking'
+                  <div
+                    className={`orb-wrap ${
+                      voiceSleeping
+                        ? 'sleeping'
                         : isListening
                           ? 'listening'
                           : isRefining || agentSending
                             ? 'thinking'
                             : 'idle'
-                  }`}>
+                    }`}
+                  >
                     {isListening && (
                       <>
                         <div className="voice-ring voice-ring-a"></div>
@@ -1306,27 +1232,57 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                     )}
                     <div className="orb">
                       {voiceSleeping ? (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                         </svg>
-                      ) : isTtsSpeaking ? (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                        </svg>
                       ) : isListening ? (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                           <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
                           <line x1="12" x2="12" y1="19" y2="22" />
                         </svg>
                       ) : isRefining || agentSending ? (
-                        <svg className="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                        <svg
+                          className="spin"
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                        >
                           <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                         </svg>
                       ) : (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
                           <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
                           <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
@@ -1335,11 +1291,15 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                     </div>
                   </div>
 
-                  <div className={`voice-eq ${
-                    isListening ? 'listening' :
-                    isTtsSpeaking ? 'speaking' :
-                    isRefining || agentSending ? 'thinking' : 'idle'
-                  }`}>
+                  <div
+                    className={`voice-eq ${
+                      isListening
+                        ? 'listening'
+                        : isRefining || agentSending
+                          ? 'thinking'
+                          : 'idle'
+                    }`}
+                  >
                     {Array.from({ length: 16 }).map((_, i) => {
                       const c = (16 - 1) / 2;
                       const d = Math.abs(i - c) / c;
@@ -1347,24 +1307,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                         <div
                           key={i}
                           className="voice-eq-bar"
-                          style={{
-                            '--dur': `${280 + ((i * 137) % 420)}ms`,
-                            '--dly': `${(i * 83) % 360}ms`,
-                            '--max': (0.22 + (1 - d * d) * 0.78).toFixed(2),
-                          } as React.CSSProperties}
+                          style={
+                            {
+                              '--dur': `${280 + ((i * 137) % 420)}ms`,
+                              '--dly': `${(i * 83) % 360}ms`,
+                              '--max': (0.22 + (1 - d * d) * 0.78).toFixed(2),
+                            } as React.CSSProperties
+                          }
                         />
                       );
                     })}
                   </div>
-
-                  {isListening && audioRms > 0.01 && (
-                    <div className="voice-waveform">
-                      <div
-                        className="voice-waveform-fill"
-                        style={{ width: `${Math.min(100, audioRms * 120)}%` }}
-                      />
-                    </div>
-                  )}
 
                   <button
                     className="voice-close-btn"
@@ -1372,7 +1325,15 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                     aria-label="End voice mode"
                     title="End voice mode"
                   >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    >
                       <line x1="18" y1="6" x2="6" y2="18" />
                       <line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
@@ -1383,18 +1344,43 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
             {!voiceModeActive && (
               <>
                 <button
-                  className={`voice-toggle agent-voice${isListening ? ' listening' : ''}${isRefining ? ' refining' : ''}`}
-                  onClick={toggleVoiceInput}
-                  title={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : 'Speak to agent'}
-                  aria-label={isRefining ? 'Refining with AI…' : isListening ? 'Stop listening' : 'Speak to agent'}
+                  className={`voice-toggle agent-voice${transcribing ? ' listening' : ''}`}
+                  onClick={toggleTranscriptionMode}
+                  title={
+                    transcribing
+                      ? 'Stop transcribing'
+                      : 'Transcribe — speech to text at the cursor'
+                  }
+                  aria-label={
+                    transcribing
+                      ? 'Stop transcribing'
+                      : 'Transcribe — speech to text at the cursor'
+                  }
                 >
-                  {isRefining ? (
-                    <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-                      <polyline points="21 3 21 8 16 8" />
+                  {transcribing ? (
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
                     </svg>
                   ) : (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
                       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                       <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
                       <line x1="12" x2="12" y1="19" y2="22" />
@@ -1405,7 +1391,6 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
             )}
 
             <div className="prompt-copy">
-
               <div className="prompt-meta">
                 {/* Text handed over from elsewhere in the app (Preview's "add
                     element to prompt", a spawned agent's goal). It has no text
@@ -1414,7 +1399,10 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                 {hasStagedContent && (
                   <div className="staged-prompt">
                     <span className="staged-prompt-label">Staged</span>
-                    <p className="staged-prompt-text" title={inputValue || undefined}>
+                    <p
+                      className="staged-prompt-text"
+                      title={inputValue || undefined}
+                    >
                       {hasPromptText
                         ? inputValue
                         : `${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}`}
@@ -1425,7 +1413,11 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                         className="staged-prompt-btn send"
                         onClick={sendStagedPrompt}
                         disabled={!canSend}
-                        title={canSend ? 'Send to the agent' : 'Open a project to send'}
+                        title={
+                          canSend
+                            ? 'Send to the agent'
+                            : 'Open a project to send'
+                        }
                       >
                         Send
                       </button>
@@ -1436,8 +1428,17 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                         title="Discard"
                         aria-label="Discard staged prompt"
                       >
-                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        <svg
+                          width="9"
+                          height="9"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
                       </button>
                     </div>
@@ -1449,14 +1450,41 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                     // Only show content while voice mode is active;
                     // clears to the idle hint as soon as voice ends.
                     if (!voiceModeActive) {
+                      // Transcription mode's live state shows here too: the
+                      // service owns the capture, the bar just mirrors it.
+                      if (transcribing) {
+                        return (
+                          <p className="transcript-now user draft">
+                            Listening… <kbd>{transcribeKey}</kbd> or{' '}
+                            <kbd>Esc</kbd> to finish
+                            {' · '}
+                            <kbd>Ctrl</kbd>+<kbd>Esc</kbd> to discard
+                          </p>
+                        );
+                      }
                       return (
                         <div className="transcript-empty">
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
                             <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
                             <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
                             <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
                           </svg>
-                          <span>Press <kbd>Alt</kbd> or tap the mic to speak</span>
+                          <span>
+                            <kbd>{transcribeKey}</kbd> or mic = dictate into the
+                            text input
+                            {' · '}
+                            <kbd>Alt</kbd> = voice conversation
+                          </span>
                         </div>
                       );
                     }
@@ -1464,71 +1492,79 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                     if (voiceSleeping) {
                       return (
                         <div className="transcript-now sleeping">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
                             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                           </svg>
-                          <span>Sleeping — say &ldquo;wake up&rdquo; to resume</span>
+                          <span>
+                            Sleeping — say &ldquo;wake up&rdquo; to resume
+                          </span>
                         </div>
                       );
                     }
-                    // 2. User is speaking and we have a live draft (Web Speech
-                    //    interim results) — show it. With raw-audio STT there is
-                    //    no interim transcript, and with barge-in the mic is open
-                    //    the whole time the reply plays, so an unconditional
-                    //    "Listening…" here would hide every assistant response.
-                    //    Instead fall through and keep the last reply on screen
-                    //    until the user actually says something.
-                    if (isListening && voiceDraftText) {
-                      return (
-                        <p className="transcript-now user draft">
-                          {voiceDraftText}…
-                        </p>
-                      );
-                    }
-                    // 3. Transition: user done, agent thinking/processing — show the
-                    //    user's last spoken words with a thinking indicator instead of
-                    //    the previous assistant reply, so the bar never goes blank or
-                    //    shows stale text from an earlier turn.
-                    if ((isRefining || agentSending) && voiceDraftText) {
-                      return (
-                        <p className="transcript-now user draft">
-                          {voiceDraftText}
-                          <span className="orc-typing"><span /><span /><span /></span>
-                        </p>
-                      );
-                    }
-                    // 4. Assistant message exists — show it (also reached while
-                    //    the mic listens with no draft yet, so the reply stays
-                    //    readable until the user starts the next turn)
+                    // 2. Assistant message exists — show it (also reached while
+                    //    the call listens, so the reply stays readable until the
+                    //    user starts the next turn)
                     const lastMsg = projectChatMessages.at(-1);
                     if (lastMsg?.role === 'assistant') {
                       if (lastMsg.pending) {
                         return (
-                          <span className="orc-typing"><span /><span /><span /></span>
+                          <span className="orc-typing">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
                         );
                       }
                       if (lastMsg.completion) {
-                        const icon = lastMsg.completion.status === 'done' ? '✅' : lastMsg.completion.status === 'failed' ? '❌' : '⚠️';
-                        const verb = lastMsg.completion.status === 'done' ? 'finished' : lastMsg.completion.status === 'failed' ? 'failed' : 'needs input';
+                        const icon =
+                          lastMsg.completion.status === 'done'
+                            ? '✅'
+                            : lastMsg.completion.status === 'failed'
+                              ? '❌'
+                              : '⚠️';
+                        const verb =
+                          lastMsg.completion.status === 'done'
+                            ? 'finished'
+                            : lastMsg.completion.status === 'failed'
+                              ? 'failed'
+                              : 'needs input';
                         return (
                           <p className="transcript-now assistant">
-                            {icon} {lastMsg.completion.agentName} {verb}: {lastMsg.completion.taskTitle}
+                            {icon} {lastMsg.completion.agentName} {verb}:{' '}
+                            {lastMsg.completion.taskTitle}
                           </p>
                         );
                       }
-                      const displayText = stripMarkdown(speechTextForAssistantMessage(lastMsg).split('\n\n🔍')[0]);
+                      const displayText = stripMarkdown(
+                        lastMsg.text.split('\n\n🔍')[0]
+                      );
                       return (
-                        <p className="transcript-now assistant">{displayText}</p>
+                        <p className="transcript-now assistant">
+                          {displayText}
+                        </p>
                       );
                     }
-                    // 5. Mic is open but nothing has been said yet and there is
-                    //    no reply to keep on screen (first turn of the session).
+                    // 3. Mic open but nothing said yet / no message yet
                     if (isListening) {
-                      return <p className="transcript-now user draft">Listening…</p>;
+                      return (
+                        <p className="transcript-now user draft">Listening…</p>
+                      );
                     }
-                    // 6. Voice mode on but no message yet
                     return (
-                      <span className="orc-typing"><span /><span /><span /></span>
+                      <span className="orc-typing">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
                     );
                   })()}
                 </div>
@@ -1545,9 +1581,23 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                         onClick={() => setExpandedImage(img.objectUrl)}
                         title="Click to view full size"
                       />
-                      <button className="chip-remove" onClick={() => removeImage(i)} title="Remove image" aria-label="Remove image">
-                        <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round">
-                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                      <button
+                        className="chip-remove"
+                        onClick={() => removeImage(i)}
+                        title="Remove image"
+                        aria-label="Remove image"
+                      >
+                        <svg
+                          width="7"
+                          height="7"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
                       </button>
                     </div>
@@ -1559,28 +1609,52 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
                 <div className="file-chips">
                   {pastedFiles.map((file, i) => (
                     <div className="file-chip" key={file.path}>
-                      <svg className="file-chip-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        className="file-chip-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                         <polyline points="14 2 14 8 20 8" />
                       </svg>
-                      <span className="file-chip-name" title={file.path}>{file.name}</span>
-                      <button className="chip-remove" onClick={() => removeFile(i)} title="Remove file" aria-label="Remove file">
-                        <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round">
-                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                      <span className="file-chip-name" title={file.path}>
+                        {file.name}
+                      </span>
+                      <button
+                        className="chip-remove"
+                        onClick={() => removeFile(i)}
+                        title="Remove file"
+                        aria-label="Remove file"
+                      >
+                        <svg
+                          width="7"
+                          height="7"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
                       </button>
                     </div>
                   ))}
                 </div>
               )}
-
             </div>
 
             {/* Layout / spawn / Tools stay put in voice mode: they sit at the
                 tail of the bar either way, so switching modes never shuffles
                 them. */}
             {trailingControls}
-
           </div>
         </>
       )}
@@ -1594,7 +1668,16 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
           aria-controls="floating-prompt-bar"
           aria-expanded={isActive}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="m8 8 4 4-4 4" />
             <path d="M13 16h3.5" />
           </svg>
@@ -1605,10 +1688,25 @@ export default function FloatingPromptBar({ trailingControls }: FloatingPromptBa
       )}
 
       {expandedImage && (
-        <div className="image-preview-overlay" onClick={() => setExpandedImage(null)}>
-          <div className="image-preview-content" onClick={(e) => e.stopPropagation()}>
-            <img src={expandedImage} alt="Expanded preview" className="image-preview-img" />
-            <button className="image-preview-close" onClick={() => setExpandedImage(null)}>✕</button>
+        <div
+          className="image-preview-overlay"
+          onClick={() => setExpandedImage(null)}
+        >
+          <div
+            className="image-preview-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={expandedImage}
+              alt="Expanded preview"
+              className="image-preview-img"
+            />
+            <button
+              className="image-preview-close"
+              onClick={() => setExpandedImage(null)}
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}

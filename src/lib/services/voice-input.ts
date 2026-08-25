@@ -29,12 +29,6 @@ export type VoiceInputSession = {
   isSupported: () => boolean;
   /** Keep the mic warm between turns for the conversational loop (see impl). */
   setConversationMode: (enabled: boolean) => void;
-  /**
-   * Tell the VAD the assistant's TTS reply is playing. While set, the speech
-   * onset gate is raised (see VAD_PLAYBACK_*) so echo residue doesn't trigger a
-   * false barge-in, and pre-speech audio is trimmed to a short lead-in.
-   */
-  setPlaybackActive: (active: boolean) => void;
 };
 
 export type VoiceRefineOptions = {
@@ -104,16 +98,6 @@ const VAD_HARD_MAX_UTTERANCE_MS = 120_000;
 // between the assistant finishing and the mic re-arming is simply gone — which
 // is why replies that began the instant the reply ended lost their first word.
 const PRE_ROLL_CHUNKS = 16;
-// Barge-in gate: while the assistant's TTS reply is playing the mic stays live
-// so the user can interrupt, but echo-cancellation residue can still leak the
-// reply into the capture. Require a clearly louder onset before treating audio
-// as user speech during playback — a real interruption easily clears it.
-const VAD_PLAYBACK_ONSET_MULT = 2.5;
-const VAD_PLAYBACK_ABS_FLOOR = 0.025;
-// While playback is active and no speech has been detected, keep only this many
-// trailing buffers (~0.5 s) so a barge-in turn starts with a clean lead-in
-// instead of dragging the whole reply's echo into the transcript.
-const PLAYBACK_TAIL_CHUNKS = 6;
 
 function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
@@ -320,7 +304,7 @@ export async function requestMicrophoneStream(): Promise<MediaStream | string> {
   }
 
   try {
-    // Enable the browser's DSP: echo cancellation stops the assistant's own TTS
+    // Enable the browser's DSP: echo cancellation stops speaker output
     // playback from being heard back by the mic (which, in hands-free voice mode,
     // kept the VAD from ever registering silence), and noise suppression lowers
     // the ambient floor so the silence detector actually fires.
@@ -471,8 +455,6 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   // Set when stop() arrives mid-transcription: the in-flight finalizer releases
   // the mic in its `finally` instead of parking the graph warm.
   let teardownRequested = false;
-  // True while the assistant's TTS reply is playing (see setPlaybackActive).
-  let playbackActive = false;
 
   function clearSilenceTimer() {
     if (silenceTimer) {
@@ -487,9 +469,8 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   function softResetVad() {
     clearSilenceTimer();
     // Seed the new turn with the pre-roll so speech that started in the gap
-    // between turns is still in the audio we transcribe. Skipped while the
-    // assistant is talking — there the pre-roll is its own echo, not the user.
-    capturedChunks = playbackActive ? [] : preRoll;
+    // between turns is still in the audio we transcribe.
+    capturedChunks = preRoll;
     preRoll = [];
     speechDetected = false;
     speechStartedAt = 0;
@@ -695,7 +676,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
             // rolling pre-roll so a turn that starts before the mic re-arms
             // isn't missing its opening syllable (see PRE_ROLL_CHUNKS).
             if (stopRequested || !listening) {
-              if (!stopRequested && !playbackActive) {
+              if (!stopRequested) {
                 preRoll.push(new Float32Array(event.inputBuffer.getChannelData(0)));
                 if (preRoll.length > PRE_ROLL_CHUNKS) {
                   preRoll.splice(0, preRoll.length - PRE_ROLL_CHUNKS);
@@ -730,20 +711,11 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
               return;
             }
 
-            // Waiting for a barge-in: drop all but a short rolling lead-in so
-            // the eventual turn doesn't start with the assistant's own reply.
-            if (playbackActive && !speechDetected && capturedChunks.length > PLAYBACK_TAIL_CHUNKS) {
-              capturedChunks.splice(0, capturedChunks.length - PLAYBACK_TAIL_CHUNKS);
-            }
-
             // Simple gate: speech if RMS exceeds threshold, silence if below.
-            // Onset has a higher bar than release (hysteresis) to avoid chatter,
-            // and a higher bar still while the assistant's reply is playing.
+            // Onset has a higher bar than release (hysteresis) to avoid chatter.
             const threshold = speechDetected
               ? Math.max(VAD_ABS_FLOOR, noiseFloor * VAD_RELEASE_MULT)
-              : playbackActive
-                ? Math.max(VAD_PLAYBACK_ABS_FLOOR, noiseFloor * VAD_PLAYBACK_ONSET_MULT)
-                : Math.max(VAD_ONSET_MIN_RMS, noiseFloor * VAD_ONSET_MULT);
+              : Math.max(VAD_ONSET_MIN_RMS, noiseFloor * VAD_ONSET_MULT);
 
             if (rms >= threshold) {
               if (!speechDetected) {
@@ -898,10 +870,6 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     // re-acquiring the mic. Disable (and call stop()) when leaving voice mode.
     setConversationMode(enabled: boolean) {
       keepWarm = enabled;
-    },
-
-    setPlaybackActive(active: boolean) {
-      playbackActive = active;
     },
   };
 }

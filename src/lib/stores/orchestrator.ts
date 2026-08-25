@@ -38,8 +38,6 @@ import { reconnoiter } from '$lib/services/orchestrator/recon';
 import {
   aiProvider,
   currentAiModel,
-  currentVoiceConversationAiModel,
-  voiceReplyProvider,
   isLocalProvider,
   getProviderBaseUrl,
   announceAgentCompletions,
@@ -479,20 +477,20 @@ function isAiAvailable(): boolean {
 }
 
 /**
- * The LLM that powers the orchestrator brain. By default uses the main AI
- * provider/model (configured under AI / Models). During a voice conversation
- * it uses the voice reply provider as the brain so both brain and speech
- * share the same provider — except when the reply provider is `'local'`
- * (offline Kokoro TTS), which has no LLM, so we fall back to the main AI
- * provider.
+ * The LLM that powers the orchestrator brain — always the main AI provider and
+ * model configured under AI / Models.
+ *
+ * Voice used to select its own provider/model here. It no longer does: a
+ * realtime call brings its own brain, and the work it delegates through the
+ * `spacron_orchestrator` tool is the SAME orchestrator every other surface
+ * talks to, so giving spoken turns a second brain only meant two things to
+ * configure and two ways for them to disagree.
  */
-function getConversationLlmConfig(voiceConversation?: boolean): RouteLlmConfig {
-  const useReplyProvider = voiceConversation && get(voiceReplyProvider) !== 'local';
-  const provider = useReplyProvider ? get(voiceReplyProvider) : get(aiProvider);
+function getConversationLlmConfig(): RouteLlmConfig {
+  const provider = get(aiProvider);
   const local = isLocalProvider(provider);
   const baseUrl = local ? getProviderBaseUrl(provider) : '';
-  const model = useReplyProvider ? get(currentVoiceConversationAiModel) : get(currentAiModel);
-  return { provider, model, hasApiKey: isProviderApiKeyConfiguredLocal(provider), baseUrl };
+  return { provider, model: get(currentAiModel), hasApiKey: isProviderApiKeyConfiguredLocal(provider), baseUrl };
 }
 
 const SUMMARY_TRANSCRIPT_CHARS = 3000;
@@ -528,7 +526,7 @@ async function generateTranscriptSummary(
 /**
  * Give a light audible nudge when an agent turn ends — enough to pull the
  * user's attention, not a spoken report. Outside voice mode this is a soft
- * status-flavored chime (no TTS provider needed); during a live realtime voice
+ * status-flavored chime; during a live realtime voice
  * call the model drops a short one-liner instead, since a chime would be odd
  * mid-conversation. The recap lives in the chat completion card, not the audio.
  */
@@ -543,10 +541,9 @@ function announceCompletionAloud(
       status === 'blocked' ? `${name} needs your input: ${title}.` :
       status === 'failed' ? `${name} failed: ${title}.` :
       `${name} finished: ${title}.`;
-    // With a realtime engine, inject the update into the live call so the model
-    // mentions it in its own voice. With the pipeline engine
-    // (announceViaRealtimeVoice returns false), also play a nudge so the user
-    // gets an audible signal even though the auto-speak effect handles the reply.
+    // Inject the update into the live call so the model mentions it in its own
+    // voice. If no call is actually up (announceViaRealtimeVoice returns false)
+    // fall back to the chime rather than letting the update pass unheard.
     if (!announceViaRealtimeVoice(line)) {
       playNudge(status);
     }
@@ -1879,7 +1876,7 @@ function scheduleChatCompact(projectId: string) {
 }
 
 async function compactProjectChat(projectId: string) {
-  const config = getConversationLlmConfig(false);
+  const config = getConversationLlmConfig();
   if (!config.hasApiKey) return;
 
   const msgs = get(chatMessages)[projectId];
@@ -2599,7 +2596,7 @@ export async function sendChatMessage(
   const taskPanel = getProjectTaskPanelLines(projectId);
   const mailboxLines = getMailboxLines(projectId);
   const knowledgeLines = getKnowledgeLines(projectId);
-  const llmConfig = getConversationLlmConfig(opts?.voiceConversation);
+  const llmConfig = getConversationLlmConfig();
 
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() });
   const assistantId = msgId();

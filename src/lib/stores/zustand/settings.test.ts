@@ -69,3 +69,58 @@ describe('zustand settings boot rehydration', () => {
     expect(globalThis.localStorage.getItem('forge_setting_agentWorktrees')).toBe('false');
   });
 });
+
+/**
+ * "Send after transcribing" is opt-in: auto-send presses Enter on a half-heard
+ * sentence in a live shell before the user can read it, so off is the safe
+ * landing and on is a deliberate click that has to stick.
+ *
+ * It was one of the undeclared wrapper-only keys above, which is why a plain
+ * default change would not have been enough — the stored value was inert, and
+ * declaring the key resurrects it. Hence the one-time migration.
+ */
+describe('transcriptionAutoSend defaults to off', () => {
+  const KEY = 'forge_setting_transcriptionAutoSend';
+  const FLAG = 'forge_migration_transcriptionAutoSendOff_v1';
+
+  it('is off on a fresh install', async () => {
+    stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().transcriptionAutoSend).toBe(false);
+  });
+
+  it('clears a stale persisted `true` once, so existing installs land on off', async () => {
+    const storage = stubWebStorage();
+    storage.set(KEY, JSON.stringify(true));
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().transcriptionAutoSend).toBe(false);
+    expect(storage.get(KEY)).toBe('false');
+    expect(storage.get(FLAG)).toBe('1');
+  });
+
+  it('leaves a deliberate turn-on alone — the migration only ever runs once', async () => {
+    const storage = stubWebStorage();
+    // The user switched it back on after the migration had already run.
+    storage.set(FLAG, '1');
+    storage.set(KEY, JSON.stringify(true));
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().transcriptionAutoSend).toBe(true);
+  });
+
+  it('keeps a turn-on across a restart', async () => {
+    const storage = stubWebStorage();
+    storage.set(FLAG, '1');
+
+    const first = await import('./settings');
+    first.useSettingsStore.getState().__set('transcriptionAutoSend', true);
+    expect(storage.get(KEY)).toBe('true');
+
+    // Boot again against the same storage.
+    vi.resetModules();
+    const second = await import('./settings');
+    expect(second.useSettingsStore.getState().transcriptionAutoSend).toBe(true);
+  });
+});

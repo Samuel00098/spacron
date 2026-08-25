@@ -31,6 +31,8 @@ const h = vi.hoisted(() => {
     makeWritable,
     activeSessionId: makeWritable<number | null>(7),
     devActiveSessionId: makeWritable<number | null>(null),
+    sessions: makeWritable<{ id: number; lastActivatedAt?: number }[]>([]),
+    devSessions: makeWritable<{ id: number; lastActivatedAt?: number }[]>([]),
     sendAgentPromptDirect: vi.fn<(text?: unknown, sessionId?: number) => Promise<boolean>>(),
     requestTerminalInput: vi.fn(),
     transcriptionAutoSend: makeWritable<boolean>(true),
@@ -53,6 +55,8 @@ let capturedCallbacks: CapturedCallbacks | null = null;
 vi.mock('$lib/stores/terminal', () => ({
   activeSessionId: h.activeSessionId,
   devActiveSessionId: h.devActiveSessionId,
+  sessions: h.sessions,
+  devSessions: h.devSessions,
   sendAgentPromptDirect: h.sendAgentPromptDirect,
   requestTerminalInput: h.requestTerminalInput,
 }));
@@ -72,7 +76,11 @@ vi.mock('$lib/services/voice-input', () => ({
       start: vi.fn(async () => {
         callbacks.onStart?.();
       }),
-      stop: h.sessionStop,
+      stop: vi.fn(() => {
+        h.sessionStop();
+        // Mirrors the real session: releasing the mic always ends with onEnd.
+        callbacks.onEnd?.();
+      }),
       isSupported: () => h.supported.value,
       setConversationMode: vi.fn(),
       setPlaybackActive: vi.fn(),
@@ -100,6 +108,15 @@ function currentState(): string {
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/**
+ * End the dictation. Utterances accumulate until the user says stop (hotkey
+ * again or Escape), so every delivery assertion has to do this first.
+ */
+async function finish() {
+  toggleTerminalTranscription();
+  await flush();
+}
+
 describe('transcription-hotkey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,11 +124,13 @@ describe('transcription-hotkey', () => {
     h.supported.value = true;
     h.activeSessionId.set(7);
     h.devActiveSessionId.set(null);
+    h.sessions.set([]);
+    h.devSessions.set([]);
     h.transcriptionAutoSend.set(true);
     h.sendAgentPromptDirect.mockResolvedValue(true);
   });
 
-  it('delivers the first finalized utterance via auto-send', async () => {
+  it('delivers the dictation via auto-send once the user ends it', async () => {
     toggleTerminalTranscription();
     expect(capturedCallbacks).not.toBeNull();
     expect(currentState()).toBe('listening');
@@ -119,9 +138,36 @@ describe('transcription-hotkey', () => {
     capturedCallbacks!.onResult('run  the\ntests   now');
     await flush();
 
+    // Still listening — one pause must not end the dictation.
+    expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
+    expect(currentState()).toBe('listening');
+
+    await finish();
+
     expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'run the tests now');
     expect(h.requestTerminalInput).not.toHaveBeenCalled();
     expect(currentState()).toBe('idle');
+  });
+
+  /**
+   * The WhisperFlow behaviour: the VAD ends an utterance after ~800 ms of
+   * silence, which is shorter than an ordinary thinking pause. Those pieces
+   * have to be joined, not raced against each other.
+   */
+  it('joins utterances spoken across pauses into one transcript', async () => {
+    toggleTerminalTranscription();
+
+    capturedCallbacks!.onResult('git commit');
+    await flush();
+    capturedCallbacks!.onResult('dash m');
+    await flush();
+    capturedCallbacks!.onResult('fix the parser');
+    await flush();
+
+    expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
+    await finish();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'git commit dash m fix the parser');
   });
 
   it('types into the terminal without submitting when auto-send is off', async () => {
@@ -130,6 +176,7 @@ describe('transcription-hotkey', () => {
     toggleTerminalTranscription();
     capturedCallbacks!.onResult('git status');
     await flush();
+    await finish();
 
     expect(h.requestTerminalInput).toHaveBeenCalledWith(7, 'git status');
     expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
@@ -145,6 +192,7 @@ describe('transcription-hotkey', () => {
     toggleTerminalTranscription();
     capturedCallbacks!.onResult('first command');
     await flush();
+    await finish();
     expect(currentState()).toBe('processing');
 
     capturedCallbacks!.onResult('second command');
@@ -173,11 +221,47 @@ describe('transcription-hotkey', () => {
     toggleTerminalTranscription();
 
     expect(h.showToast).toHaveBeenCalledWith(
-      'No active terminal — open a terminal tab first.',
+      'Click into a terminal or text field first, then speak.',
       'error',
     );
     expect(currentState()).toBe('idle');
     expect(h.sessionStop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Both terminal worlds hold an active session. The agent room used to win
+   * unconditionally (`activeSessionId ?? devActiveSessionId`), so dictating
+   * into the dev terminal went to an off-screen session and looked like
+   * "transcription does nothing".
+   */
+  it('delivers to whichever terminal world was activated most recently', async () => {
+    h.activeSessionId.set(7);
+    h.devActiveSessionId.set(99);
+    h.sessions.set([{ id: 7, lastActivatedAt: 1_000 }]);
+    h.devSessions.set([{ id: 99, lastActivatedAt: 2_000 }]);
+
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks?.onResult('npm test');
+    await flush();
+    await finish();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(99, 'npm test');
+  });
+
+  it('keeps the agent terminal when it is the more recent one', async () => {
+    h.activeSessionId.set(7);
+    h.devActiveSessionId.set(99);
+    h.sessions.set([{ id: 7, lastActivatedAt: 3_000 }]);
+    h.devSessions.set([{ id: 99, lastActivatedAt: 2_000 }]);
+
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks?.onResult('npm test');
+    await flush();
+    await finish();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'npm test');
   });
 
   it('surfaces provider errors and resets to idle', () => {

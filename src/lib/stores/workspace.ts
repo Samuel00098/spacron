@@ -126,6 +126,10 @@ interface ProjectWorkspaceState {
     orchestratorVisible: boolean;
     dbVisible: boolean;
     toolboxVisible: boolean;
+    /** The Terminal room's own open/closed state. Not part of `LayoutState` —
+     *  it is its own store — but it is a room like any other, so it has to be
+     *  saved per project or closing it can't survive a switch. */
+    terminalRoomOpen: boolean;
     /** Which right-drawer tool this project had open, or null for closed. */
     rightDrawerTool: RightDrawerTool | null;
     lastAuxView: string;
@@ -259,6 +263,10 @@ interface PersistedProjectState {
     orchestratorVisible?: boolean;
     dbVisible?: boolean;
     toolboxVisible?: boolean;
+    /** The Terminal room's open/closed state — see the note on the cache type.
+     *  Absent in state saved before it was per-project; treated as open then,
+     *  which is what that build always did. */
+    terminalRoomOpen?: boolean;
     /**
      * The right utility drawer's open tool, or null/absent for closed. Stored as
      * the tool NAME rather than as its backing booleans: the drawer is one body
@@ -344,6 +352,7 @@ function saveProjectStateToStorage(projectId: string) {
       orchestratorVisible: currentLayout.orchestratorVisible,
       dbVisible: currentLayout.dbVisible,
       toolboxVisible: currentLayout.toolboxVisible,
+      terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: currentLayout.lastAuxView,
       editorSplitPreview: currentLayout.editorSplitPreview,
@@ -480,6 +489,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       orchestratorVisible: Boolean(l.orchestratorVisible),
       dbVisible: Boolean(l.dbVisible),
       toolboxVisible: Boolean(l.toolboxVisible),
+      terminalRoomOpen: l.terminalRoomOpen === undefined ? true : Boolean(l.terminalRoomOpen),
       rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
       lastAuxView: typeof l.lastAuxView === 'string' ? l.lastAuxView : undefined,
       editorSplitPreview: Boolean(l.editorSplitPreview),
@@ -586,6 +596,7 @@ export function saveProjectState(projectId: string) {
       orchestratorVisible: get(layout).orchestratorVisible,
       dbVisible: get(layout).dbVisible,
       toolboxVisible: get(layout).toolboxVisible,
+      terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: get(layout).lastAuxView,
       editorSplitPreview: get(layout).editorSplitPreview,
@@ -631,6 +642,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
     // Write each CLI's MCP config immediately so any MCP-capable agent opened in
     // this project (even manually typed) discovers the Spacron MCP server.
     import('./mcpBridge').then(({ ensureMcpConfigs }) => ensureMcpConfigs(rootPath)).catch(() => {});
+
+    // Whether this project actually had a saved layout to put back. A project
+    // that did keeps exactly what it was left with; only one that did NOT falls
+    // through to the default stage at the end of this function.
+    let restoredLayout = false;
 
     const cached = projectStateCache.get(projectId);
     if (cached) {
@@ -706,6 +722,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       // `applyRightDrawerTool` (not `setRightDrawerTool`) so closing the drawer
       // doesn't drag `activeView` back to the terminal.
       applyRightDrawerTool(cached.layout.rightDrawerTool ?? null);
+
+      // The Terminal room is not a `LayoutState` flag, so the patch above can't
+      // carry it — restore it on its own or closing it leaks across projects.
+      terminalRoomOpen.set(cached.layout.terminalRoomOpen ?? true);
+      restoredLayout = true;
 
       // Restore the workspace's stage for this project via the AppShell command
       // bus — mode, Split tiling and the primary room together, so switching
@@ -787,6 +808,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
           sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
         }));
+        terminalRoomOpen.set(persisted.layout.terminalRoomOpen ?? true);
+        restoredLayout = true;
       }
 
       // Unconditional, unlike the layout patch above: a project with no saved
@@ -927,9 +950,15 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       console.error('Failed to load orchestrator state for project:', e);
     }
 
-    // Always show terminal focused with editor alongside
-    terminalRoomOpen.set(true);
-    layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
+    // Default stage for a project with NO saved layout: terminal focused, editor
+    // alongside. Gated on `restoredLayout` because this used to run
+    // unconditionally, after the restore above — which force-reopened the
+    // Terminal and Editor rooms on every switch, so closing either of them never
+    // survived leaving the project and coming back.
+    if (!restoredLayout) {
+      terminalRoomOpen.set(true);
+      layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
+    }
   } finally {
     isRestoringProjectState = false;
     isProjectSwitching.set(false);

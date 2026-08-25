@@ -111,11 +111,11 @@ export interface ProviderModelInfo {
 
 /**
  * Ask the backend to fetch the live model catalogue for a provider using its
- * stored key. Optionally filter by purpose ("chat", "stt", "tts", "realtime")
+ * stored key. Optionally filter by purpose ("chat", "stt", "realtime")
  * so the picker shows only usable options. Throws if no key is configured or
  * the provider rejects the call.
  */
-export async function listProviderModels(provider: AiProviderId, purpose?: 'chat' | 'stt' | 'tts' | 'realtime'): Promise<ProviderModelInfo[]> {
+export async function listProviderModels(provider: AiProviderId, purpose?: 'chat' | 'stt' | 'realtime'): Promise<ProviderModelInfo[]> {
   if (isLocalProvider(provider)) {
     const baseUrl = getProviderBaseUrl(provider);
     if (!baseUrl) throw new Error('No server URL configured for this provider.');

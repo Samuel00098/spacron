@@ -85,7 +85,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', keys: 'Ctrl+Alt+M' },
+    { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
     // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
     // they drove no longer exists, so they were unbound keys occupying Alt+=,
     // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
@@ -118,42 +118,11 @@ function migrateLegacySettings() {
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
 
-  // Seed the reply provider from the main AI provider if not yet set.
-  if (persistentValue('voiceReplyProvider', '') === '') {
-    const existing = localStorage.getItem('forge_setting_aiProvider');
-    if (existing) {
-      try {
-        const p = JSON.parse(existing);
-        if (typeof p === 'string' && p) persistValue('voiceReplyProvider', p);
-      } catch {}
-    }
-  }
-
-  if (persistentValue('voiceConversationAiModelByProvider', null) === null) {
-    const legacyMap = localStorage.getItem('forge_setting_aiModelByProvider');
-    if (legacyMap) {
-      try {
-        const m = JSON.parse(legacyMap);
-        if (m && typeof m === 'object' && !Array.isArray(m)) persistValue('voiceConversationAiModelByProvider', m);
-      } catch {}
-    }
-  }
-
-  const legacyTts = localStorage.getItem('forge_setting_ttsVoice');
-  if (legacyTts) {
-    try {
-      const voice = JSON.parse(legacyTts);
-      if (!localStorage.getItem('forge_setting_voiceConversationTtsVoiceByProvider')) {
-        const next = voice === 'Arista-PlayAI' ? 'austin' : voice;
-        if (typeof next === 'string' && next) persistValue('voiceConversationTtsVoiceByProvider', { groq: next });
-      }
-      if (voice === 'Arista-PlayAI') persistValue('ttsVoice', 'austin');
-    } catch {}
-  }
-
-  const ttsModelMap = persistentValue('voiceConversationTtsModelByProvider', {}) as Record<string, string>;
-  if (ttsModelMap.google === 'gemini-3.1-flash-tts-preview') {
-    persistValue('voiceConversationTtsModelByProvider', { ...ttsModelMap, google: 'gemini-2.5-flash-preview-tts' });
+  // The STT -> brain -> TTS 'pipeline' engine is gone; it silently routed to
+  // OpenAI Realtime anyway, so make that explicit rather than leaving a value
+  // no branch handles.
+  if (persistentValue<string>('voiceConversationEngine', '') === 'pipeline') {
+    persistValue('voiceConversationEngine', 'openai-realtime');
   }
 
   // Move webgl users to canvas once. WebGL has unreliable font-glyph atlas
@@ -171,6 +140,47 @@ function migrateLegacySettings() {
       persistValue('terminalRenderer', 'canvas');
     }
     localStorage.setItem('forge_terminalRendererMigrated', '1');
+  }
+
+  // Ctrl+Alt+M never fired reliably: on Windows Ctrl+Alt IS AltGr, and the
+  // chord also reaches xterm, which forwards it to the shell. The default moved
+  // to F9 (a bare key nothing else claims). `mergeDefaultShortcuts` is
+  // additive-only, so an existing install keeps its persisted binding forever
+  // unless it is rewritten here. Guarded, so a later deliberate rebind sticks.
+  if (!localStorage.getItem('forge_migration_transcribeF9_v1')) {
+    try {
+      const raw = localStorage.getItem('forge_setting_userShortcuts');
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          let changed = false;
+          for (const item of list) {
+            if (item && item.id === 'transcribeToTerminal' && item.keys === 'Ctrl+Alt+M') {
+              item.keys = 'F9';
+              item.label = 'Transcribe (speech to text)';
+              changed = true;
+            }
+          }
+          if (changed) persistValue('userShortcuts', list);
+        }
+      }
+    } catch {}
+    localStorage.setItem('forge_migration_transcribeF9_v1', '1');
+  }
+
+  // "Send after transcribing" is opt-in now: auto-send fires a half-heard
+  // sentence at a live shell before you can read it. Two things made a plain
+  // default change insufficient. The key was never declared in
+  // `createSettingsState`, so `persistentWritable`'s boot-time read hit
+  // undefined and took its own default every launch — meaning a stored `true`
+  // has been inert, and declaring the key (below) would suddenly resurrect it.
+  // Clear that stale `true` once so every install lands on off; the guard means
+  // a deliberate turn-on afterwards is never touched again.
+  if (!localStorage.getItem('forge_migration_transcriptionAutoSendOff_v1')) {
+    if (localStorage.getItem('forge_setting_transcriptionAutoSend') === 'true') {
+      persistValue('transcriptionAutoSend', false);
+    }
+    localStorage.setItem('forge_migration_transcriptionAutoSendOff_v1', '1');
   }
 }
 
@@ -202,11 +212,10 @@ function createSettingsState() {
     voiceInputModelByProvider: persistentValue<Record<string, string>>('voiceInputModelByProvider', {}),
     voiceAiProvider: persistentValue<AiProviderId>('voiceAiProvider', 'groq'),
     voiceAiModelByProvider: persistentValue<Record<string, string>>('voiceAiModelByProvider', {}),
-    voiceConversationAiModelByProvider: persistentValue<Record<string, string>>('voiceConversationAiModelByProvider', {}),
-    voiceConversationTtsModelByProvider: persistentValue<Record<string, string>>('voiceConversationTtsModelByProvider', {}),
-    voiceConversationTtsVoiceByProvider: persistentValue<Record<string, string>>('voiceConversationTtsVoiceByProvider', {}),
-    voiceReplyProvider: persistentValue<AiProviderId>('voiceReplyProvider', 'groq'),
-    ttsVoice: persistentValue('ttsVoice', 'austin'),
+    // Off by default, and declared HERE on purpose — see the note in
+    // stores/settings.ts. Undeclared, the wrapper's boot read hit undefined and
+    // the toggle reset every launch, so turning it on could never stick.
+    transcriptionAutoSend: persistentValue('transcriptionAutoSend', false),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
     uiZoom: persistentValue('uiZoom', 100),
     swipeNavigationEnabled: persistentValue('swipeNavigationEnabled', true),
@@ -284,11 +293,7 @@ const defaults: SettingsValues = {
   voiceInputModelByProvider: {},
   voiceAiProvider: 'groq',
   voiceAiModelByProvider: {},
-  voiceConversationAiModelByProvider: {},
-  voiceConversationTtsModelByProvider: {},
-  voiceConversationTtsVoiceByProvider: {},
-  voiceReplyProvider: 'groq',
-  ttsVoice: 'austin',
+  transcriptionAutoSend: false,
   announceAgentCompletions: true,
   uiZoom: 100,
   swipeNavigationEnabled: true,
@@ -328,7 +333,7 @@ const defaults: SettingsValues = {
     // openDailyNote removed
     // toggleSketch removed
     { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'transcribeToTerminal', label: 'Transcribe to Terminal', keys: 'Ctrl+Alt+M' },
+    { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
     // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
     // they drove no longer exists, so they were unbound keys occupying Alt+=,
     // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
@@ -391,10 +396,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       voiceInputModelByProvider: 'voiceInputModelByProvider',
       voiceAiProvider: 'voiceAiProvider',
       voiceAiModelByProvider: 'voiceAiModelByProvider',
-      voiceConversationAiModelByProvider: 'voiceConversationAiModelByProvider',
-      voiceConversationTtsModelByProvider: 'voiceConversationTtsModelByProvider',
-      voiceConversationTtsVoiceByProvider: 'voiceConversationTtsVoiceByProvider',
-      voiceReplyProvider: 'voiceReplyProvider',
+      transcriptionAutoSend: 'transcriptionAutoSend',
       announceAgentCompletions: 'announceAgentCompletions',
       aiProvider: 'aiProvider',
       aiModelByProvider: 'aiModelByProvider',

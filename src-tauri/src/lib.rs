@@ -238,7 +238,6 @@ pub fn run() {
             commands::secrets::ai_generate_commit_message,
             commands::secrets::list_provider_models,
             commands::secrets::check_local_provider_online,
-            commands::secrets::tts_speak,
             commands::secrets::openai_realtime_connect,
             commands::secrets::xai_realtime_client_secret,
             commands::models::list_downloadable_models,

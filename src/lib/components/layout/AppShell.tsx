@@ -1348,9 +1348,6 @@ export default function AppShell() {
         case 'launchVoiceMode':
           launchPromptBarVoiceMode();
           break;
-        case 'transcribeToTerminal':
-          toggleTerminalTranscription();
-          break;
         case 'cycleAmbientLayout': {
           // Two reachable arrangements now that Fleet is an action rather than a
           // mode: Focus ↔ Split.
@@ -1360,8 +1357,45 @@ export default function AppShell() {
       }
     }
 
+    /**
+     * The transcription hotkey gets its own CAPTURE-phase listener.
+     *
+     * `handleKeyDown` below runs in the bubble phase, which is too late when a
+     * terminal has focus: xterm sees the key first and forwards anything it
+     * doesn't claim straight to the shell, so the dictation key would also be
+     * typed into whatever is running. Capturing at the window means we see it
+     * before xterm and can stop it there — the whole point of a dictation key
+     * is that it works from anywhere in the app, terminals included.
+     *
+     * Only this one action is handled here; everything else keeps the bubble
+     * path so panes can still claim their own keys first.
+     *
+     * It also deliberately does NOT stand down for `isModalOpen()`. Every other
+     * shortcut should: a dialog owns its keys. But dictation is an input method,
+     * not navigation, and the modals ARE text-entry surfaces — Quick Capture,
+     * Task Editor, Clone Repo, New Folder, Workspace Name, Agent Spawn,
+     * Settings. Gating on the modal counter made the key dead in exactly the
+     * places you most want to dictate into, leaving the terminal as the only
+     * thing that ever worked.
+     */
+    function handleTranscriptionKeyDown(event: KeyboardEvent) {
+      const binding = (shortcuts || []).find((shortcut) => {
+        if (!shortcut) return false;
+        const actionId = shortcut.id.startsWith('custom_') ? shortcut.action : shortcut.id;
+        return actionId === 'transcribeToTerminal';
+      });
+      if (!binding || !matchShortcut(event, binding.keys)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleTerminalTranscription();
+    }
+
+    window.addEventListener('keydown', handleTranscriptionKeyDown, true);
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleTranscriptionKeyDown, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [project, shortcuts, ambientLayout]);
 
   function startSidebarResize(event: React.MouseEvent) {

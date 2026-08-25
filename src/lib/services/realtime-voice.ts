@@ -4,8 +4,7 @@ import { downsamplePcmChunks, requestMicrophoneStream } from '$lib/services/voic
 /**
  * Realtime (speech-to-speech) voice engines.
  *
- * Unlike the classic pipeline (VAD → STT upload → brain LLM → TTS chunks),
- * a realtime session is one live call: the mic streams straight to the model,
+ * A realtime session is one live call: the mic streams straight to the model,
  * the model's voice streams straight back, and turn-taking/barge-in are handled
  * server-side. First audio typically lands well under a second after the user
  * stops speaking — the whole point of offering these engines.
@@ -60,7 +59,7 @@ let activeAnnouncer: ((text: string) => void) | null = null;
 
 /**
  * Speak `text` through the live realtime session, if one exists.
- * Returns false when no session is active (caller falls back to pipeline TTS).
+ * Returns false when no session is active (caller falls back to the chime).
  */
 export function announceViaRealtimeVoice(text: string): boolean {
   if (!activeAnnouncer) return false;

@@ -11,8 +11,8 @@
  *   failed  — two falling notes
  *
  * Synthesized with Web Audio rather than shipped as audio files: no asset
- * loading, no decode latency, and no TTS provider needed, so the cue works
- * offline and on every completion path.
+ * loading and no decode latency, so the cue works offline and on every
+ * completion path.
  */
 
 export type NudgeKind = 'done' | 'blocked' | 'failed';
