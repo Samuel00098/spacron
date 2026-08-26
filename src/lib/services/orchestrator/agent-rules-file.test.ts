@@ -262,13 +262,37 @@ describe('buildStandingBriefBody', () => {
     // brief must send it to the index first and have it maintain that index.
     const body = buildStandingBriefBody();
     expect(body).toContain('.spacron/memory/INDEX.md');
-    expect(body).toContain('open only the notes your task actually touches');
-    expect(body).toContain("add its line to `INDEX.md`");
+    expect(body).toContain('open only the ones your task actually touches');
+    expect(body).toContain('add a one-line entry to `INDEX.md`');
     // A brand-new project has no index yet — the first note author creates it.
     expect(body).toContain('create the index if it does not exist yet');
     // One topic per file is load-bearing for concurrent writes; keep the reason
     // in the brief so a later agent doesn't "tidy" the notes into one file.
     expect(body).toContain('one topic per file');
+  });
+
+  it('tells the agent a note is a lead rather than an answer', () => {
+    // The anchoring failure this guards: a note describing how something works
+    // reads as a diagnosis already done, so the agent stops investigating and
+    // "fixes" what the note said instead of what is actually broken. The brief
+    // has to rank the code above the note explicitly — a note that merely says
+    // it "may be outdated" still gets believed.
+    const body = buildStandingBriefBody();
+    expect(body).toContain('Treat a note as a lead, never as truth');
+    expect(body).toMatch(/never conclude you understand a bug because a note describes it/i);
+    expect(body).toMatch(/the code wins and the note is the thing that needs fixing/i);
+  });
+
+  it('keeps the note bar high enough that the index stays cheap to read', () => {
+    // The index is read on EVERY task, so it is the only memory cost paid
+    // unconditionally, and a criterion of "anything durable" grows it without
+    // limit. Notes are restricted to what the code cannot say; everything else
+    // belongs in a comment at the site, where it cannot drift out of step.
+    const body = buildStandingBriefBody();
+    expect(body).toContain('Write a new note only for what the code cannot tell the next agent');
+    expect(body).toMatch(/tried and does not work here/i);
+    expect(body).toMatch(/only fires in CI or packaging/i);
+    expect(body).toMatch(/comment next to the code would carry it, write that comment instead/i);
   });
 });
 
