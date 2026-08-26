@@ -46,7 +46,8 @@ liked.
 2. **A delivered report must not also toast.** `handleAgentReport` returns as
    soon as `deliverTurnSignal` succeeds, because the orchestrator's completion
    card is then the single visual surface. Toasting as well re-creates the
-   double-notification the inbox work removed ([[agent-inbox-unread]]).
+   double-notification the inbox work removed ([[agent-inbox-unread]]). The
+   undelivered case now follows the same rule — see the fallback section below.
 3. **`working` is not a turn boundary.** It is dropped. An agent pinging
    progress every few minutes must not produce a notification each time.
 4. **One reported state, one outcome kind.** `failed` maps to
@@ -194,6 +195,44 @@ report as somebody else by passing their token. `mcpBridge` keeps
 `channelsBySession` so the env var and the `--mcp-config` URL carry the SAME
 token for one agent rather than two.
 
+## A report nobody was watching still has to survive (2026-08-26)
+
+The failure users actually saw as "it works, but not really": a report reaches
+`handleAgentReport` and `deliverTurnSignal` returns **false**, so it ends no
+turn. Two ordinary ways in:
+
+- **Unattributed** (`sessionId: null`). The agent never passed `agent_token`,
+  or it was launched by hand and never had one — a CLI typed into a plain
+  terminal gets no `SPACRON_AGENT_TOKEN`, because `createTerminalSession` only
+  builds that env when it is *told* the session is an agent (`agentPreset`).
+  The detector adopts it afterwards, which is too late for the env.
+- **Nobody armed.** The session is known, but no watcher is listening. A leased
+  task's watcher resolves when its turn ends, so **every follow-up the user
+  types straight into the agent's terminal runs unwatched**. Spawn-modal and
+  detected agents are fine here — `watchAdoptedAgentTurns` re-arms in a loop.
+
+Both used to produce an eight-second toast and nothing else: no card, no inbox
+row, no trace once you looked away. `recordUnwatchedAgentReport`
+(`stores/orchestrator.ts`) now files them as a normal completion card —
+`endedBy: 'declared'`, `silent: false` — so the inbox row, the corner card, the
+chime and the OS notification all come from the one object every other turn end
+already uses. It resolves the project from the owning task, then the session,
+then the open project, and returns `null` when there is none.
+
+The toast survives for exactly one case: a card filed under a project the user
+is **not** looking at. They cannot see that card, and a missed "needs input"
+strands them — the same asymmetry the silence rule keeps.
+
+Do not give this its own notification surface. The reason it goes through a
+completion card rather than a mailbox post is that the mailbox is the
+agent-to-agent bus, and `InboxPanel` reads it with `actionableOnly: true`, so a
+plain `done` would never have appeared there anyway.
+
+**What this does not fix:** those reports still cannot *end a turn*. A
+hand-typed agent has no per-launch token at all, and no card can substitute for
+one. Closing that means minting the channel for every terminal session rather
+than only for `agentPreset` ones.
+
 ## What the inbox row says
 
 `completionBody()` (inbox.ts) never returns an empty string. Order: AI summary →
@@ -210,8 +249,8 @@ per-launch token can only ride a config surface that is itself per-launch, and
 `--mcp-config` is the only one we have: codex/gemini/opencode/cursor/droid
 discover the server from a shared config file, so they present the app-wide
 token and their reports arrive with `sessionId: null`. Those still notify —
-`handleAgentReport` shows them unattributed — but they cannot *end a turn*,
-because there is no way to know whose turn it was.
+`handleAgentReport` files them unattributed (see the fallback section above) —
+but they cannot *end a turn*, because there is no way to know whose turn it was.
 
 Widening it means giving those CLIs a per-launch config of their own. Codex is
 the tractable one: `agent_accounts.rs` already builds a per-account `CODEX_HOME`,

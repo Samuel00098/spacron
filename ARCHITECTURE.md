@@ -30,138 +30,123 @@
 spacron/
 ├── src-tauri/                          # Rust backend (Tauri 2)
 │   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   ├── build.rs
+│   ├── tauri.conf.json                 # CSP, bundle config, asset protocol scope
+│   ├── build.rs                        # Stamps a placeholder sidecar; see the memory note
 │   ├── capabilities/
-│   │   └── default.json                # Tauri capabilities
+│   │   └── default.json                # Tauri capabilities (the IPC allowlist)
 │   ├── src/
 │   │   ├── main.rs                     # Entry point
-│   │   ├── lib.rs                      # Tauri invoke setup & init
+│   │   ├── lib.rs                      # Tauri invoke setup, command registration, init
 │   │   ├── state.rs                    # AppState (managed via tauri::State)
-│   │   ├── error.rs                    # Unified error types
-│   │   ├── commands/                   # Tauri command handlers
-│   │   │   ├── mod.rs
+│   │   ├── error/                      # Unified error types
+│   │   ├── commands/                   # ~40 command modules. The load-bearing ones:
 │   │   │   ├── terminal.rs             # PTY session management
-│   │   │   ├── file_system.rs          # File/directory operations
+│   │   │   ├── file_system.rs          # File ops + the two-layer path confinement
+│   │   │   ├── fs_watch.rs             # Debounced watching for the file explorer
 │   │   │   ├── workspace.rs            # Git operations, worktree isolation, search
+│   │   │   ├── project_state.rs        # App-private per-project state (config dir)
+│   │   │   ├── agent_signals.rs        # Turn-signal channels (the sentinel files)
 │   │   │   ├── preview.rs              # Web preview proxy management
+│   │   │   ├── remote_deploy.rs        # Provisioning/deploying a remote workspace
+│   │   │   ├── remote_relay.rs         # Relay transport for remote workspaces
+│   │   │   ├── usage_stats.rs          # Token/usage accounting across CLIs
+│   │   │   ├── whisper.rs, parakeet.rs, vad.rs         # Local speech models (ONNX)
+│   │   │   ├── mobile.rs, ios_sim.rs, emulator_grpc.rs # Device panes
 │   │   │   └── theme.rs                # Theme loading & switching
 │   │   ├── pty/                        # PTY backend
-│   │   │   ├── mod.rs
 │   │   │   ├── session.rs              # PTY session lifecycle
 │   │   │   ├── manager.rs              # Session registry
 │   │   │   └── shell.rs                # Shell detection & config
 │   │   ├── workspace/                  # Workspace domain logic
-│   │   │   ├── mod.rs
 │   │   │   ├── project.rs              # Project model
-│   │   │   ├── manager.rs              # Multi-project orchestration
-│   │   │   └── settings.rs             # Per-project settings
-│   │   ├── preview/                    # Web preview subsystem
+│   │   │   └── manager.rs              # Multi-project orchestration
+│   │   ├── preview/                    # Web preview subsystem (Axum HTTP/WS proxy)
 │   │   │   ├── mod.rs
-│   │   │   ├── server.rs               # Axum HTTP/WS proxy
-│   │   │   └── browser.rs              # Embedded preview state
-│   │   ├── theme/                      # Theme system
-│   │   │   ├── mod.rs
-│   │   │   ├── models.rs
-│   │   │   ├── loader.rs
-│   │   │   └── registry.rs
-│   │   ├── lsp/                        # LSP client (Rust side)
-│   │   │   ├── mod.rs
-│   │   │   └── ...
-│   │   └── preview/                    # Shared preview state
-│   │       ├── mod.rs
-│   │       └── ...
+│   │   │   └── cookies.rs
+│   │   ├── remote/                     # spacron-server: WS protocol + invoke dispatch
+│   │   ├── mcp/                        # MCP server (report_status, agent tools)
+│   │   ├── theme/                      # Theme system (models, loader, registry)
+│   │   └── lsp/                        # LSP client (bridge, registry, server)
 │   ├── icons/
 │   └── themes/
 ├── src/                                # React + TypeScript frontend
 │   ├── main.tsx                        # React entry point
-│   ├── main.ts                         # Generic init
 │   ├── App.tsx                         # Root component
-│   ├── pilot.tsx                       # Isolated component harness for migration checks
 │   ├── styles/
 │   │   ├── global.css                  # CSS custom properties, glass system, themes
 │   │   └── themes/                     # Theme style files
-│   ├── lib/
-│   │   ├── components/                 # UI components
-│   │   │   ├── layout/                 # AppShell, StatusBar, TitleBar, ActivityBar
-│   │   │   ├── terminal/               # TerminalPane, TerminalPanel, FloatingPromptBar
-│   │   │   ├── editor/                 # CodeEditor, EditorPanel, EditorTabs
-│   │   │   ├── explorer/               # FileExplorer, FileTree, SourceControl, SearchPanel
-│   │   │   ├── preview/                # PreviewPanel, MarkdownPreview
-│   │   │   ├── review/                 # ReviewPanel (diff viewer)
-│   │   │   ├── orchestrator/           # AgentActivity, VoiceConversation, AgentWorktreeBadge
-│   │   │   ├── shared/                 # SettingsModal, CommandPalette, Dropdown, Toasts
-│   │   │   ├── workspace/              # WorkspaceSwitcher, TasksPanel, WelcomeScreen
-│   │   │   ├── db/                     # DbExplorerPanel
-│   │   │   ├── http/                   # HttpClientPanel
-│   │   │   ├── toolbox/                # ToolboxPanel, EmbeddedPanel
-│   │   │   ├── youtube/                # YouTubePanel, FloatingYouTube
-│   │   │   ├── containers/             # ContainersPanel
-│   │   │   ├── theme/                  # ThemeCustomizer
-│   │   │   └── conductor/              # Conductor components
-│   │   ├── stores/                     # State management
-│   │   │   ├── storeCompat.ts           # Svelte-compatible writable/derived/get (vanilla TS)
-│   │   │   ├── orchestrator.ts         # Main orchestrator (76KB, being decomposed)
-│   │   │   ├── terminal.ts             # PTY session state (90KB)
-│   │   │   ├── workspace.ts            # Active projects state
-│   │   │   ├── settings.ts             # App settings
-│   │   │   ├── editor.ts               # Open files, active file, content cache
-│   │   │   ├── preview.ts              # Web preview proxy state
-│   │   │   ├── theme.ts                # UI colors, syntax styles
-│   │   │   ├── layout.ts               # Panel visibility, sidebar state
-│   │   │   ├── explorer.ts             # File tree expanded state
-│   │   │   ├── notification.ts          # Toast alerts
-│   │   │   ├── *test.ts                # Per-store tests
-│   │   │   └── zustand/                # Zustand store alternatives (migration target)
-│   │   │       ├── orchestrator.ts     # Thin Zustand wrapper
-│   │   │       ├── settings.ts
-│   │   │       ├── layout.ts
-│   │   │       └── ... (15+ stores)
-│   │   ├── services/                   # Business logic, not UI state
-│   │   │   ├── orchestrator/           # Orchestrator service modules
-│   │   │   │   ├── task-lifecycle.ts   # Task types, state machine, transitions
-│   │   │   │   ├── terminal-lease.ts   # Terminal session leasing
-│   │   │   │   ├── worktree-manager.ts # Git worktree isolation per task
-│   │   │   │   ├── review-gate.ts      # Human review gate for agent output
-│   │   │   │   ├── activity-log.ts     # Structured per-task event timeline
-│   │   │   │   ├── agent-adapter.ts    # Agent I/O channel abstraction
-│   │   │   │   ├── agent-turn-watch.ts # Detect agent turn completion
-│   │   │   │   ├── agent-signals.ts    # Agent lifecycle signals
-│   │   │   │   ├── agent-names.ts      # Agent naming/labeling
-│   │   │   │   ├── agent-charter.ts    # Agent standing brief/instructions
-│   │   │   │   ├── agent-rules-file.ts # Agent rules file management
-│   │   │   │   ├── app-context.ts      # App context snapshot for agents
-│   │   │   │   ├── evolve.ts           # Task evolution/rephrasing
-│   │   │   │   ├── memory.ts           # Agent/orchestrator memory
-│   │   │   │   ├── recon.ts            # Project reconnaissance before dispatch
-│   │   │   │   ├── app-settings.ts     # Settings for orchestrator behavior
-│   │   │   │   └── *test.ts            # Per-service tests
-│   │   │   ├── orchestrator-brain.ts   # LLM brain routing user messages → actions
-│   │   │   ├── voice-input.ts          # Voice capture & STT pipeline
-│   │   │   ├── parakeet-local.ts       # Local STT (WASM, Parakeet)
-│   │   │   ├── kokoro-local.ts         # Local TTS (WASM, Kokoro)
-│   │   │   ├── tts.ts                  # TTS abstraction
-│   │   │   ├── ai-keychain.ts          # AI provider key management
-│   │   │   ├── agent-access.ts         # Agent availability detection
-│   │   │   ├── voice-refinement.ts     # Voice recognition refinement
-│   │   │   ├── pty-bridge.ts           # PTY IPC helpers
-│   │   │   ├── github.ts               # GitHub integration helpers
-│   │   │   ├── changelog.ts            # Changelog generation
-│   │   │   ├── app-flags.ts            # Feature flags
-│   │   │   ├── lsp/                    # LSP client (frontend side)
-│   │   │   └── completion/             # Ghost text / autocomplete
-│   │   ├── types/                      # TypeScript type definitions
-│   │   ├── utils/                      # Shared utilities (path, storage, etc.)
-│   │   └── actions/                    # App action dispatchers
+│   └── lib/
+│       ├── components/                 # UI components
+│       │   ├── layout/                 # AppShell, StatusBar, TitleBar, ActivityBar
+│       │   ├── terminal/               # TerminalPane, TerminalPanel, FloatingPromptBar
+│       │   ├── editor/                 # CodeEditor, EditorPanel, EditorTabs
+│       │   ├── explorer/               # FileExplorer, FileTree, SourceControl, SearchPanel
+│       │   ├── preview/                # PreviewPanel, MarkdownPreview
+│       │   ├── review/                 # ReviewPanel (diff viewer)
+│       │   ├── orchestrator/           # FleetDashboard, agent cards, completion copy
+│       │   ├── agents/                 # AgentsPane
+│       │   ├── shared/                 # SettingsModal, CommandPalette, Dropdown, Toasts
+│       │   ├── workspace/              # ProjectHUD, TasksPanel, WelcomeScreen
+│       │   ├── sketch/                 # SketchPanel
+│       │   ├── mobile/                 # MobilePanel (emulator / device streaming)
+│       │   ├── stats/, usage/          # UsageStatsPane and friends
+│       │   ├── db/, http/              # DbExplorerPanel, HttpClientPanel
+│       │   ├── problems/               # Diagnostics list
+│       │   ├── toolbox/                # ToolboxPanel, EmbeddedPanel
+│       │   ├── containers/             # ContainersPanel
+│       │   └── youtube/                # YouTubePanel, FloatingYouTube
+│       ├── stores/                     # State management
+│       │   ├── storeCompat.ts          # Svelte-compatible writable/derived/get (vanilla TS)
+│       │   ├── orchestrator.ts         # Main orchestrator store (being decomposed)
+│       │   ├── terminal.ts             # PTY session state
+│       │   ├── workspace.ts            # Active projects state
+│       │   ├── remoteWorkspace.ts      # Remote connections; `remoteTarget` is the seam
+│       │   ├── mcpBridge.ts            # MCP config injection per agent CLI
+│       │   ├── settings.ts, editor.ts, preview.ts, theme.ts, layout.ts, ...
+│       │   └── zustand/                # Zustand stores (migration target)
+│       ├── services/                   # Business logic, not UI state
+│       │   ├── backend.ts              # `backendInvoke` - the local/remote transport seam
+│       │   ├── project-state.ts        # App-private state accessors (bare `invoke`)
+│       │   ├── pty-bridge.ts           # PTY IPC helpers
+│       │   ├── pty-bridge-remote.ts    # The same over the remote WebSocket
+│       │   ├── orchestrator-brain.ts   # LLM brain routing user messages -> actions
+│       │   ├── orchestrator/           # Orchestrator service modules
+│       │   │   ├── task-lifecycle.ts     # Task types, state machine, transitions
+│       │   │   ├── terminal-lease.ts     # Terminal session leasing
+│       │   │   ├── worktree-manager.ts   # Git worktree isolation per task
+│       │   │   ├── agent-hook-signals.ts # Declared turn ends (hooks + shell sentinel)
+│       │   │   ├── agent-capabilities.ts # Whether an agent had a way to report
+│       │   │   ├── agent-turn-watch.ts   # Detect agent turn completion
+│       │   │   ├── agent-charter.ts      # Agent standing brief/instructions
+│       │   │   ├── inbox.ts, mailbox.ts, memory.ts, evolve.ts, recon.ts
+│       │   │   └── review-gate.ts        # Human review gate for agent output
+│       │   ├── voice-input.ts          # Voice capture & STT pipeline
+│       │   ├── realtime-voice.ts       # Speech-to-speech realtime engines
+│       │   ├── voice-refinement.ts     # Dictation polish pass
+│       │   ├── transcription-hotkey.ts # F9 dictation lifecycle
+│       │   ├── ai-keychain.ts          # AI provider key management
+│       │   ├── github.ts               # GitHub integration helpers
+│       │   ├── lsp/                    # LSP client (frontend side)
+│       │   ├── completion/             # Ghost text / autocomplete
+│       │   ├── editor/, git/           # Editor and git helpers
+│       │   └── app-flags.ts            # Feature flags
+│       ├── types/                      # TypeScript type definitions
+│       ├── utils/                      # Shared utilities (path, storage, etc.)
+│       └── actions/                    # App action dispatchers
+├── .spacron/memory/                    # Shared agent notes (INDEX.md + one file per topic)
 ├── docs/                               # Design specs, plans, research
+│   ├── BUILDING.md                     # Build instructions
+│   ├── SECURITY.md                     # Threat model, IPC boundary, audit procedure
+│   ├── FEATURES.md
+│   ├── remote-workspace.md             # The remote workspace design
 │   ├── redesign-spec.md                # "The Flow" visual redesign spec
 │   ├── redesign-mockup-*.html          # Interactive HTML mockups
-│   ├── market-research-2026.md         # Competitive analysis
-│   ├── BUILDING.md                     # Build instructions
 │   └── superpowers/                    # Feature specs and plans
-├── site/                               # Marketing site (Next.js)
+├── website/                            # Marketing site (Next.js App Router)
+├── scripts/                            # Build/release scripts (ESM)
+├── CHANGELOG.md                        # Rendered by the site's /changelog route
 ├── package.json
-├── vite.config.js                      # Vite config (React plugin only)
+├── vite.config.js
 ├── tsconfig.json
 └── README.md
 ```
@@ -250,25 +235,36 @@ The LLM-powered routing layer. Takes a user's natural language message and decid
 - Whether any app-control action needs to run first (open file, switch view, etc.)
 - How to summarize completed work for the user
 
-Uses the AI provider configured in the app (BYO-key or local models via Parakeet/Kokoro).
+Uses the AI provider configured in the app (BYO-key).
 
 ### 4.3 Voice Pipeline
 
+Voice is two separate paths, and they deliberately do not share an engine.
+
+**Dictation (F9)** — speech into the focused field, editor or terminal.
+
 | Module | Role |
 |--------|------|
-| `voice-input.ts` | Microphone capture, VAD (voice activity detection), orchestration |
-| `parakeet-local.ts` | Local speech-to-text via Parakeet WASM (offline-capable) |
-| `kokoro-local.ts` | Local text-to-speech via Kokoro WASM (offline-capable) |
-| `tts.ts` | TTS abstraction layer (local or cloud fallback) |
-| `voice-refinement.ts` | STT result refinement and correction |
+| `services/transcription-hotkey.ts` | F9 lifecycle: caret capture, retargeting, pause/end semantics |
+| `services/voice-input.ts` | Microphone capture, voice activity detection, turn orchestration |
+| `services/voice-refinement.ts` | The polish pass over dictated prose (never over terminal payloads) |
+| `commands/whisper.rs`, `commands/parakeet.rs` | Local STT models, run natively through ONNX Runtime |
+| `commands/vad.rs` | Silero neural voice detection, in place of the RMS level gate |
+| `commands/onnx_runtime.rs` | Shared ONNX session management for the above |
 
-**Design principle:** Voice works fully offline. Kokoro TTS and Parakeet STT run as WASM in the webview. No cloud dependency.
+**Conversation** — speech-to-speech, handled by `services/realtime-voice.ts`, which
+talks to a provider's realtime engine directly.
+
+**Design principle:** local STT runs *natively* (ONNX in Rust), not as WASM in the
+webview. There is no TTS anywhere in the app: the old STT -> brain -> TTS pipeline
+was removed in v2.0, and spoken replies exist only inside a realtime
+speech-to-speech session. See `.spacron/memory/voice-is-realtime-only.md`.
 
 ### 4.4 AI Provider System (`ai-keychain.ts`, `agent-access.ts`)
 
 Manages API keys for AI providers (OpenRouter, Anthropic, Google, OpenAI, etc.) and detects agent availability. Supports:
 - BYO-key (user provides their own API key)
-- Local models (Parakeet/Kokoro WASM for offline voice)
+- Local speech models (Whisper/Parakeet via ONNX) for offline dictation
 - Hybrid: cloud LLM + local voice
 
 ---
@@ -384,7 +380,7 @@ The redesign is driven by the market wedge: **voice-driven + multi-agent + nativ
 | **React 19 over Svelte 5** | Ecosystem maturity, type-safe TSX, wider hiring pool (migrated v0.4.4) |
 | **Dual store system (storeCompat + Zustand)** | Gradual migration from Svelte-flavored stores to Zustand; both coexist |
 | **Service modules over monolithic store** | Decomposed orchestrator into 20+ focused services with individual tests |
-| **Local-first voice (WASM)** | Kokoro TTS + Parakeet STT run as WASM — fully offline, no cloud dependency |
+| **Local-first dictation (native ONNX)** | Whisper/Parakeet STT and Silero VAD run natively in Rust, so dictation works offline with no cloud dependency. TTS was removed in v2.0; spoken replies exist only inside a realtime speech-to-speech session |
 | **Git worktree isolation per agent** | Multiple agents edit same repo without conflict (Rust backend + TS service) |
 | **BYO-key architecture** | Users bring their own API keys or run local models; no meter, no subscription |
 | **`storeCompat.ts` custom implementation** | Avoids shipping Svelte runtime just for reactive stores; ~100 LOC vanilla TS |

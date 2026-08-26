@@ -68,15 +68,19 @@ fn state_path(state: &State<AppState>, project_id: &str, key: &str) -> Result<Pa
     Ok(project_dir(state, project_id)?.join(key))
 }
 
-/// Every command below touches the disk, so all four are `#[tauri::command(async)]`
-/// — a plain `#[tauri::command]` runs on the main thread, which is the window's
-/// message pump, and a stalled write (or the `remove_dir_all` in
-/// `project_state_clear`) freezes the whole window while it waits. Same reasoning
-/// and same fix as `commands::file_system`; these were missed for the same reason.
-///
-/// Concurrency is safe: each command re-validates its own segments and the paths
-/// are per-project and per-key, so two of them never contend for one file that
-/// they could not already have contended for from the frontend.
+// Every command below touches the disk, so all three are `#[tauri::command(async)]`
+// — a plain `#[tauri::command]` runs on the main thread, which is the window's
+// message pump, and a stalled write (or the `remove_dir_all` in
+// `project_state_clear`) freezes the whole window while it waits. Same reasoning
+// and same fix as `commands::file_system`; these were missed for the same reason.
+//
+// Concurrency is safe: each command re-validates its own segments and the paths
+// are per-project and per-key, so two of them never contend for one file that
+// they could not already have contended for from the frontend.
+//
+// Written with `//` rather than `///`: this is commentary about all three
+// commands, but a doc comment is an outer attribute, so as `///` Rust bound the
+// whole block to `project_state_read` alone as its rustdoc.
 
 /// Read one app-private state file. `None` when it has never been written —
 /// callers treat that as "no saved state" and fall back to their defaults.
@@ -108,23 +112,6 @@ pub fn project_state_write(
             .map_err(|e| format!("Failed to create project state dir: {e}"))?;
     }
     std::fs::write(&path, content).map_err(|e| format!("Failed to write project state: {e}"))
-}
-
-/// Absolute path to one state file, for the cases that must hand a real path to
-/// an external process — notably the generated MCP config, which reaches the CLI
-/// as `--mcp-config <path>`. Creates the directory so the caller can write there.
-#[tauri::command(async)]
-pub fn project_state_path(
-    project_id: String,
-    key: String,
-    state: State<AppState>,
-) -> Result<String, String> {
-    let path = state_path(&state, &project_id, &key)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create project state dir: {e}"))?;
-    }
-    Ok(super::clean_path_buf(path).to_string_lossy().to_string())
 }
 
 /// Drop every app-private file for a project. Called when the user removes a

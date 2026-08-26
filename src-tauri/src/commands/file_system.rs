@@ -177,7 +177,7 @@ fn resolve_path(path: &str) -> Result<PathBuf, String> {
     Ok(crate::commands::clean_path_buf(resolved))
 }
 
-fn require_path(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn require_path(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     if !p.exists() {
         return Err("Path does not exist".to_string());

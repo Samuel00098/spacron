@@ -67,6 +67,7 @@ import {
   type TurnEndPresentation,
 } from '$lib/services/orchestrator/agent-turn-watch';
 import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
+import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -138,6 +139,8 @@ import {
   setActiveSession,
   getSessionOutputBuffer,
   getSessionOutputLength,
+  getActiveTerminalProjectId,
+  allProjectSessions,
 } from '$lib/stores/terminal';
 
 export type {
@@ -2302,6 +2305,108 @@ function appendAdoptedTurnCard(
       silent,
     },
   });
+}
+
+/**
+ * File a `report_status` call that no turn watcher took.
+ *
+ * A report only reaches here when it could not end a turn, which happens two
+ * ways and both are ordinary:
+ *
+ * - **Unattributed.** The report arrived with no session behind it — the agent
+ *   never passed `agent_token`, or it was launched by hand and so never had
+ *   one. Spacron cannot tell whose turn it was, so it cannot end one.
+ * - **Nobody watching.** The session is known, but no watcher is armed. A
+ *   leased task's watcher resolves when its turn ends, so every follow-up the
+ *   user types straight into the agent's terminal runs unwatched.
+ *
+ * Either way the agent said something the user asked to be told, and until now
+ * the whole trace was an eight-second toast — invisible to anyone who looked
+ * away, which is the exact miss the inbox exists to prevent. So it lands as a
+ * normal completion card: the inbox row, the corner card and the OS
+ * notification all come from that one object, rather than from a second
+ * notification surface running alongside the first.
+ *
+ * `endedBy: 'declared'` because the agent reported this itself. Only a declared
+ * end may interrupt — see `notifyAdoptedTurnEnd` for the other half of that rule.
+ *
+ * Returns the project the card was filed under, or null when there is no
+ * project to file it under; the caller falls back to a toast rather than
+ * dropping the report.
+ */
+export function recordUnwatchedAgentReport(
+  sessionId: number | null,
+  signal: HookSignal,
+  /** The agent's display name, resolved by the caller from its session. */
+  fallbackName: string,
+): string | null {
+  // Reuse the watcher's own mapping so a report cannot be worded one way here
+  // and another way when a watcher happens to be armed for it.
+  const told = describeTurnEnd({ ...signal, via: 'declared' } as AgentTurnOutcome);
+  if (!told) return null;
+
+  const task =
+    sessionId == null
+      ? undefined
+      : get(orchestratorTasks).find(
+          (t) =>
+            t.assignedSessionId === sessionId &&
+            (t.status === 'in-progress' || t.status === 'todo'),
+        );
+  const session =
+    sessionId == null ? undefined : get(allProjectSessions).find((s) => s.id === sessionId);
+  const projectId = task?.projectId ?? session?.projectId ?? getActiveTerminalProjectId();
+  if (!projectId) return null;
+
+  const name =
+    task?.name?.trim()
+    || session?.agentName?.trim()
+    || fallbackName;
+
+  if (task) {
+    logTaskActivity(
+      task.id,
+      told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
+      told.reason ?? 'Reported its status.',
+    );
+  }
+
+  appendChat(projectId, {
+    id: msgId(),
+    role: 'assistant',
+    text: '',
+    ts: Date.now(),
+    completion: {
+      status: told.status,
+      agentName: name,
+      // The card's second line. A report outside a task has no title to show,
+      // and a blank line there reads as a rendering bug rather than as absence.
+      taskTitle:
+        task?.title
+        || session?.taskSummary?.trim()
+        || session?.paneTitle?.trim()
+        || 'Status report',
+      elapsedSec: null,
+      reason: told.reason,
+      summary: null,
+      summaryPending: false,
+      taskId: task?.id ?? null,
+      endedBy: told.endedBy,
+      silent: false,
+    },
+  });
+
+  // The same audio cue every other declared turn end gets. The card above is
+  // the only visual one — see the dedupe note on `notifyAdoptedTurnEnd`.
+  if (get(announceAgentCompletions)) {
+    if (get(agentVoiceModeActive)) {
+      announceViaRealtimeVoice(spokenTurnEnd(name, told));
+    } else {
+      playNudge(told.status === 'done' ? 'done' : 'blocked');
+    }
+  }
+
+  return projectId;
 }
 
 function matchesLiveAgentTarget(session: LiveTerminalSession, wanted: string): boolean {

@@ -11,6 +11,7 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Agents, delegation & review
 
+- [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
 - [agent-turn-detection](agent-turn-detection.md) — how a turn is judged to have ended, and why a guess may not say "finished"
 - [agent-report-status](agent-report-status.md) — the `report_status` tool and per-launch agent tokens; only a declared end may interrupt
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
@@ -44,7 +45,7 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Remote workspace & mobile
 
-- [remote-invoke-seam-gap](remote-invoke-seam-gap.md) — which commands the remote `invoke` allowlist does **not** cover
+- [remote-invoke-seam-gap](remote-invoke-seam-gap.md) — how to decide whether a command routes to the box or stays local, and what the allowlist covers
 - [server-artifact-download](server-artifact-download.md) — how the wizard downloads a server build for another OS
 - [vps-deploy-cross-platform](vps-deploy-cross-platform.md) — how a matching `spacron-server` build is resolved for the target OS
 - [mobile-companion-plan](mobile-companion-plan.md) — where the phone app goes, and why not a Tauri mobile target

@@ -24,8 +24,30 @@
  * mailbox and task board across the move. The legacy file is deleted once its
  * contents are safely rewritten to the new location — never before, so an
  * interrupted migration re-runs harmlessly on the next launch.
+ *
+ * ## Which transport, and why the two differ here
+ *
+ * The `project_state_*` commands go through a bare Tauri `invoke`, never
+ * `backendInvoke`. These files are app-private bookkeeping in *this machine's*
+ * config dir: the orchestrator that reads and writes them is entirely frontend
+ * TypeScript, so nothing on a remote box ever opens them. They are app data, and
+ * `backendInvoke`'s own contract says app data stays on Tauri `invoke` — only
+ * work that belongs to the workspace moves when the workspace moves.
+ *
+ * Routing them through `backendInvoke` is not a no-op that merely looks untidy;
+ * it is silent data loss. `spacron-server`'s `dispatch_invoke` has no
+ * `project_state_*` arm, so with a remote workspace active every read returned
+ * "unsupported remote command" into a `catch` that logs and yields null, and
+ * every write failed the same way. The whole orchestrator — tasks, inbox,
+ * mailbox, chat, memory, profile — came up empty against a remote and could not
+ * save, with nothing shown to the user.
+ *
+ * The legacy migration below is the deliberate exception: it reads and deletes a
+ * file *inside the repository*, which is workspace state and does move with the
+ * workspace, so those two calls stay on `backendInvoke`.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { backendInvoke } from '$lib/services/backend';
 
 /** State keys. These are filenames under the project's state directory. */
@@ -71,7 +93,7 @@ export async function readProjectState(
 ): Promise<string | null> {
   let current: string | null = null;
   try {
-    current = await backendInvoke<string | null>('project_state_read', { projectId, key });
+    current = await invoke<string | null>('project_state_read', { projectId, key });
   } catch (err) {
     console.error(`Failed to read ${key}:`, err);
   }
@@ -93,7 +115,7 @@ export async function readProjectState(
   }
 
   try {
-    await backendInvoke('project_state_write', { projectId, key, content: legacy });
+    await invoke('project_state_write', { projectId, key, content: legacy });
     // Only now is it safe to drop the in-repo copy. An interrupted migration
     // leaves the legacy file in place and simply re-runs next launch.
     await backendInvoke('fs_delete', { path: legacyPath });
@@ -110,25 +132,16 @@ export async function writeProjectState(
   content: string,
 ): Promise<void> {
   try {
-    await backendInvoke('project_state_write', { projectId, key, content });
+    await invoke('project_state_write', { projectId, key, content });
   } catch (err) {
     console.error(`Failed to save ${key}:`, err);
   }
 }
 
-/**
- * Absolute path to a state file, for the one case that must hand a real path to
- * an external process: the generated MCP config, which reaches the CLI as
- * `--mcp-config <path>`.
- */
-export async function projectStatePath(projectId: string, key: string): Promise<string> {
-  return backendInvoke<string>('project_state_path', { projectId, key });
-}
-
 /** Drop every app-private file for a project (called when it's removed). */
 export async function clearProjectState(projectId: string): Promise<void> {
   try {
-    await backendInvoke('project_state_clear', { projectId });
+    await invoke('project_state_clear', { projectId });
   } catch (err) {
     console.error('Failed to clear project state:', err);
   }

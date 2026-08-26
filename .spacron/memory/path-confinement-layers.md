@@ -24,12 +24,21 @@ Known direct caller: `ClientMsg::StartWatch` in `src-tauri/src/remote/mod.rs`
 passes the raw path. It is safe in practice only because a watch target must
 exist (so `canonicalize` resolves the `..`), not because the check normalizes.
 
-**Asymmetry worth knowing:** the remote `StartWatch` confines the watch root to
-the workspace, but the local `start_fs_watch` command
-(`src-tauri/src/commands/fs_watch.rs`) takes no `AppState` and confines nothing —
-it will recursively watch any path it is handed. Low impact today (the emitted
-`fs-change` payload is the watch root, not the changed file, and reaching the
-command needs script execution inside the shell), but it is the one place where
-the two transports disagree about confinement.
+**The transports agree again (2026-08-26).** The local `start_fs_watch`
+(`src-tauri/src/commands/fs_watch.rs`) used to take no `AppState` and confine
+nothing, while the remote `StartWatch` confined its root — the one place the two
+disagreed. It now takes `State<AppState>` and goes through `require_watchable`,
+which is `require_path` (canonicalize) then `require_in_roots`.
+
+`require_path` rather than `resolve_path` is deliberate and is the part to keep:
+a watch target has to exist for the OS to watch it, so canonicalizing is both
+available and stronger — it resolves `..` and symlinks *before* the
+component-wise `starts_with`, which normalizes neither. `require_path` is
+`pub(crate)` for this.
+
+`require_watchable` is split out from the command so it can be tested against
+explicit roots without a Tauri `State`, the same shape as `read_dir` vs
+`fs_read_dir`. Its tests are the regression guard; the command itself is still
+untestable here.
 
 Related: [[remote-invoke-seam-gap]]

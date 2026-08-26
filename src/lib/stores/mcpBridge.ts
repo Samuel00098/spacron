@@ -125,6 +125,23 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   }
 
   const who = report.sessionId === null ? 'An agent' : agentLabel(report.sessionId);
+
+  // No watcher took it, so this report ends no turn — but the agent still said
+  // something the user asked to be told, and a toast is gone in eight seconds.
+  // Filing it as a completion card puts it in the inbox, where it waits.
+  //
+  // Imported lazily because `stores/orchestrator` imports `stores/terminal`,
+  // which imports this module: a static import would close that cycle.
+  const { recordUnwatchedAgentReport } = await import('./orchestrator');
+  const filedUnder = recordUnwatchedAgentReport(report.sessionId, signal, who);
+
+  // The card is the notification whenever the user is looking at the project it
+  // was filed under — raising a toast as well is the double-notification the
+  // inbox work removed. A report belonging to a *background* project would
+  // otherwise be silent until the user switched to it, which is the wrong
+  // failure for a "needs input", so that one still interrupts.
+  if (filedUnder && filedUnder === getActiveTerminalProjectId()) return;
+
   const what =
     report.state === 'done'
       ? 'finished'

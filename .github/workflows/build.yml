@@ -118,6 +118,7 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable branch
         with:
           targets: ${{ matrix.rust-targets }}
+          components: clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
@@ -138,6 +139,19 @@ jobs:
 
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Scoped to the two groups that indicate a defect rather than a taste:
+      # `correctness` (code that is outright wrong) and `suspicious` (code that
+      # very likely does not do what it reads as — an attribute separated from
+      # its item, a comparison that cannot vary). Clippy's `style`, `complexity`
+      # and `perf` groups stay warnings: there is an existing backlog of ~58 of
+      # them, and denying those here would mean either a mass rewrite or an
+      # allow-list long enough to make the gate decorative. Tightening the scope
+      # as that backlog is worked down is the intended direction.
+      - name: Lint Rust backend
+        run: >
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --
+          -D clippy::correctness -D clippy::suspicious
 
       # Runs on all three platforms deliberately. A large part of the backend is
       # platform-conditional — path canonicalisation and the Windows `\\?\`

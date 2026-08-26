@@ -21,6 +21,8 @@
 
 import { agentExecutable } from './agent-rules-file';
 import { hasAnyTurnSignalChannel } from './agent-hook-signals';
+import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
 
 /**
  * Executables Spacron writes an MCP server config for.
@@ -57,6 +59,15 @@ export function agentCanReport(
   presetOrCommand: string | null | undefined,
   sessionId?: number | null,
 ): boolean {
+  // Neither channel crosses to a remote workspace, so no agent can report from
+  // one and the executable list below stops being a fair rule. The shell
+  // sentinel is a file `agent_signal_channel_open` creates on *this* machine
+  // (see `signalChannelsReachAgent`), and the MCP route hands the agent
+  // `http://127.0.0.1:<port>` — which, from the box, is the box's own loopback
+  // and not the laptop's server. An agent over there is silent because we gave
+  // it no way to speak, so its turn must read as a guess ("went quiet") rather
+  // than be swallowed as a report it chose not to make.
+  if (get(remoteTarget)) return false;
   // The shell status channel reaches every agent Spacron spawned, whatever its
   // CLI — so in practice this is the branch that answers true for the ~30 CLIs
   // with no MCP config surface. Checked first because it is the specific fact

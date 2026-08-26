@@ -243,9 +243,20 @@ export default function ReviewPanel() {
     }
   }, []);
 
-  const cardBodyRef = useCallback((node: HTMLDivElement | null) => {
-    if (node) node.addEventListener('wheel', handleNativeWheel, { passive: false });
-  }, [handleNativeWheel]);
+  // The listener has to be attached by hand rather than through onWheel: React's
+  // synthetic wheel handler is passive, so it cannot `preventDefault`.
+  //
+  // Returning the detach is what keeps it symmetric. React 19 calls a ref
+  // callback's returned cleanup when the node goes away or the callback's
+  // identity changes; without one, a re-attach would stack a second listener on
+  // a reused node and scroll the diff twice per notch.
+  const cardBodyRef = useCallback(
+    (node: HTMLDivElement) => {
+      node.addEventListener('wheel', handleNativeWheel, { passive: false });
+      return () => node.removeEventListener('wheel', handleNativeWheel);
+    },
+    [handleNativeWheel],
+  );
 
   const genRef = useRef(0);
   const projectIdRef = useRef<string | null>(projectId);

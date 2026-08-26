@@ -1,4 +1,4 @@
-# The remote `invoke` seam does not carry project state
+# What crosses the remote `invoke` seam, and what must not
 
 `src/lib/services/backend.ts` routes every `backendInvoke(cmd)` to
 `spacron-server` whenever a remote workspace is active. The server's allowlist
@@ -9,54 +9,74 @@ above it) covers only:
 - `workspace_git_*` (log, status, diff, worktree ops)
 - `lsp_check_server`, `lsp_start`, `workspace_info`
 
-**Not covered: `project_state_read | _write | _path | _clear`.**
+Anything else routed here returns `unsupported remote command: <name>`.
 
-That matters because `src/lib/services/project-state.ts` — which owns the
-orchestrator's durable state (`orchestrator.json`, `tasks.json`, `inbox.json`,
-`mailbox.json`, `orchestrator-memory.json`, `orchestrator-profile.json`) — calls
-those four through `backendInvoke`. In remote mode they hit the server, get
-"unknown command", and `readProjectState` swallows the error (`catch` →
-`console.error` → returns `null`). **The failure is silent:** the orchestrator
-just comes up empty against a remote, as if the project had never been used.
+## The rule for deciding a transport
 
-Consequences to know before you touch this area:
+`backendInvoke` is for work that belongs to the **workspace** — the things that
+move when the workspace moves. App data and OS/UI-local state call Tauri
+`invoke` directly. When a command is on the wrong side, the failure is silent,
+because callers on this path overwhelmingly catch-and-log.
 
-- Fixing it means adding `project_state_*` to the server's dispatch (the state
-  dir derivation lives in `src-tauri/src/commands/project_state.rs`) **or**
-  deciding project state is client-local and routing it past `backendInvoke` to
-  a bare Tauri `invoke`. Those are opposite answers — pick deliberately: whose
-  machine owns the task list, the box or the laptop?
-- Anything that wants agent/task state *from the server* (the phone companion's
-  agents view, see [[mobile-companion-plan]]) is blocked on this. Terminals are
-  not — the PTY protocol is complete and needs no server change.
-- The orchestrator itself is 100% frontend TypeScript
-  (`src/lib/services/orchestrator/`). Nothing drives agents server-side, so a
-  client that is not the desktop app sees no agents at all today.
+`backendInvoke` now logs a pointed error when the server answers `unsupported
+remote command`, naming both fixes. If you are reading that line, the question
+to answer first is which side the command belongs on, not how to make the error
+go away.
 
-## 2026-08-25: `agent_signal_*` is on the wrong side of the same seam
+## 2026-08-26: `project_state_*` was on the wrong side, and is fixed
 
-`prepareTurnSignals` (`services/orchestrator/agent-hook-signals.ts`) mixes the
-two transports in one function:
+`project_state_read | _write | _path | _clear` used to go through
+`backendInvoke`, so with a remote active every read hit the server, missed, and
+came back through a `catch` that returned `null`; every write failed the same
+way. The whole orchestrator — `orchestrator.json`, `tasks.json`, `inbox.json`,
+`mailbox.json`, `orchestrator-memory.json`, `orchestrator-profile.json` — came
+up empty against a remote and could not save, with nothing shown to the user.
 
-- `invoke('agent_signal_channel_open')` — a **bare Tauri invoke**, so the
-  append-only file and its `notify` watcher are always opened on the *laptop*
-  (`commands/agent_signals.rs`; the server's `dispatch_invoke` has no
-  `agent_signal_*` arm).
-- `backendInvoke('fs_write_file', { path: `${path}.settings.json` })` — routed,
-  so with a remote workspace active the Claude settings file is written on the
-  **box**, carrying a path that only exists on the laptop.
+They are bare `invoke` now. The deciding argument, if it ever comes up again:
+these files live in *this machine's* config dir and the orchestrator that owns
+them is entirely frontend TypeScript, so nothing on the box ever opens them.
+The legacy migration inside `readProjectState` is the deliberate exception — it
+reads and deletes a file **inside the repo**, which really is workspace state,
+so those two calls stay routed. `project-state.test.ts` pins both halves.
 
-With a remote workspace, the agent then runs on the box, its `Stop` /
-`Notification` hooks append the sentinel to that path *there*, and the local
-watcher never sees a line. Nothing errors: `hasTurnSignalChannel` is true, so
-`agent-turn-watch` treats the session as `signalled`, skips the bell path, and
-sits on the 15-minute `SIGNALLED_IDLE_MS` backstop. **Remote turns silently lose
-the one deterministic signal we have and get worse than the heuristic path.**
+`project_state_path` was dead (the MCP config went back to `<root>/.mcp.json`),
+so it is gone from the frontend, from `commands/project_state.rs` and from the
+`lib.rs` registration.
 
-Fixing it means picking a side, same choice as `project_state_*` above: either
-add `agent_signal_channel_open/close` to the server dispatch and stream the
-tail back over the WS, or write the settings file locally too (which only works
-when the agent also runs locally). Until then, treat "hooks + remote" as
-unsupported rather than working.
+## 2026-08-26: turn signals decline to open rather than open uselessly
 
-Related: [[agent-turn-detection]]
+`prepareTurnSignals` / `prepareStatusChannel` mixed transports: the channel was
+opened with a bare `invoke` (so the file and its watcher are on the laptop)
+while the Claude settings file was written with `backendInvoke` (so it landed on
+the box, carrying a laptop path). The agent's hooks appended their sentinel over
+there and the watcher here never saw a line — and because `hasTurnSignalChannel`
+was true, `agent-turn-watch` treated the session as `signalled`, skipped the
+BEL/regex path and sat on the 15-minute `SIGNALLED_IDLE_MS` backstop. Strictly
+worse than the heuristic it displaced.
+
+Both now return `null` when `get(remoteTarget)` is set, which puts those sessions
+back on the heuristic fallback at its normal window.
+
+**`agentCanReport` had to move with it**, and this is the non-obvious half. It
+answered true for `claude`/`codex`/etc. off `MCP_CONFIGURABLE_EXECUTABLES`, which
+would have silenced their inferred ends — "an agent that could report and didn't
+gets silence". But MCP does not cross the seam either: agents are handed
+`http://127.0.0.1:<port>`, and from the box that is the box's own loopback, not
+the laptop's MCP server. So **no** channel reaches an agent on a remote, and
+`agentCanReport` returns false there, so those turns read as "went quiet"
+instead of vanishing. `remote-turn-signals.test.ts` covers both.
+
+## Still open
+
+Making hooks genuinely work remotely means giving the server its own
+`agent_signal_channel_open`/`_close` and streaming the tail back over the
+existing WebSocket. Until then hooks-plus-remote is *declined*, which is at
+least honest, rather than silently broken.
+
+Also still true: nothing drives agents server-side — the orchestrator is 100%
+frontend TypeScript — so a client that is not the desktop app sees no agents at
+all. The phone companion's agents view is blocked on that, not on this seam
+(see [[mobile-companion-plan]]). Terminals are unaffected; the PTY protocol is
+complete and needs no server change.
+
+Related: [[agent-turn-detection]], [[path-confinement-layers]]

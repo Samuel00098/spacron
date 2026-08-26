@@ -5,13 +5,16 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
+
+use crate::commands::file_system::{project_roots, require_in_roots, require_path};
+use crate::state::AppState;
 
 /// Live watchers keyed by the watched root path. Keeping the `RecommendedWatcher`
 /// alive here is what keeps watching active; dropping it stops the OS watch and
@@ -114,8 +117,31 @@ where
     Ok(watcher)
 }
 
+/// Confine a watch target to one of `roots`.
+///
+/// Split out from the command the way `file_system`'s `read_dir` is split from
+/// `fs_read_dir`, so the check can be tested against explicit roots without a
+/// Tauri `State`.
+///
+/// `require_path` is the right resolver here rather than `resolve_path`: a watch
+/// target has to exist for the OS to watch it, so canonicalizing is both
+/// available and stronger — it resolves `..` and symlinks before the
+/// component-wise `starts_with` in `require_in_roots`, which normalizes neither
+/// on its own.
+fn require_watchable(path: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let resolved = require_path(path)?;
+    require_in_roots(&resolved, roots)
+}
+
 #[tauri::command]
-pub fn start_fs_watch(app: AppHandle, path: String) -> Result<(), String> {
+pub fn start_fs_watch(app: AppHandle, path: String, state: State<AppState>) -> Result<(), String> {
+    // Confine the watch to an open project, the way every `fs_*` command
+    // confines its target. Without this the command watched whatever string it
+    // was handed, recursively — the one place the local and remote transports
+    // disagreed, since the remote `ClientMsg::StartWatch` has always run its
+    // path through `require_in_roots`.
+    require_watchable(&path, &project_roots(&state))?;
+
     let mut map = watchers()
         .lock()
         .map_err(|_| "watch registry lock poisoned".to_string())?;
@@ -146,6 +172,69 @@ mod tests {
     use super::*;
     use notify::event::{EventKind, ModifyKind};
     use std::path::PathBuf;
+
+    /// The watch command used to take any string it was handed and watch it
+    /// recursively — no `AppState`, no root check — while the remote transport's
+    /// `StartWatch` confined the same operation. These pin the local side to the
+    /// same rule.
+    mod confinement {
+        use super::super::require_watchable;
+        use std::path::PathBuf;
+
+        #[test]
+        fn accepts_a_path_inside_an_open_project() {
+            let root = tempfile::tempdir().unwrap();
+            let nested = root.path().join("src");
+            std::fs::create_dir(&nested).unwrap();
+            let roots = vec![root.path().to_path_buf()];
+
+            assert!(require_watchable(root.path().to_str().unwrap(), &roots).is_ok());
+            assert!(require_watchable(nested.to_str().unwrap(), &roots).is_ok());
+        }
+
+        #[test]
+        fn rejects_a_path_outside_every_open_project() {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let roots = vec![root.path().to_path_buf()];
+
+            assert!(require_watchable(outside.path().to_str().unwrap(), &roots).is_err());
+        }
+
+        /// `require_in_roots` compares components and does not normalize `..` on
+        /// its own; canonicalizing first is what closes the climb.
+        #[test]
+        fn rejects_a_traversal_out_of_the_project() {
+            let parent = tempfile::tempdir().unwrap();
+            let root = parent.path().join("project");
+            let sibling = parent.path().join("secrets");
+            std::fs::create_dir(&root).unwrap();
+            std::fs::create_dir(&sibling).unwrap();
+            let roots = vec![root.clone()];
+
+            let climb = root.join("..").join("secrets");
+            assert!(require_watchable(climb.to_str().unwrap(), &roots).is_err());
+        }
+
+        #[test]
+        fn rejects_a_path_that_does_not_exist() {
+            let root = tempfile::tempdir().unwrap();
+            let roots = vec![root.path().to_path_buf()];
+            let missing = root.path().join("nope");
+
+            assert!(require_watchable(missing.to_str().unwrap(), &roots).is_err());
+        }
+
+        /// With nothing open there is no root to be inside of, so every target
+        /// is out of bounds.
+        #[test]
+        fn rejects_everything_when_no_project_is_open() {
+            let root = tempfile::tempdir().unwrap();
+            let roots: Vec<PathBuf> = Vec::new();
+
+            assert!(require_watchable(root.path().to_str().unwrap(), &roots).is_err());
+        }
+    }
 
     fn event(paths: &[&str]) -> notify::Result<notify::Event> {
         Ok(notify::Event {

@@ -230,7 +230,6 @@ pub fn run() {
             commands::app_flags::app_flag_set,
             commands::project_state::project_state_read,
             commands::project_state::project_state_write,
-            commands::project_state::project_state_path,
             commands::project_state::project_state_clear,
             commands::audio::check_audio_safe,
             commands::audio::check_gstreamer_codecs,

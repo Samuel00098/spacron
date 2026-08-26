@@ -33,6 +33,37 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { backendInvoke } from '$lib/services/backend';
+import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
+
+/**
+ * Whether a signal channel opened here can actually be reached by the agent.
+ *
+ * A channel is a file. `agent_signal_channel_open` is a bare Tauri `invoke`, so
+ * the file and its watcher are always created on **this** machine. That is
+ * correct only while the agent runs on this machine too.
+ *
+ * With a remote workspace active the agent runs on the box, so the path we hand
+ * it — in a `--settings` hook command, or in `$SPACRON_TURN_FILE` — names a
+ * location that only exists on the laptop. The agent writes its sentinel over
+ * there and the watcher over here never sees a line.
+ *
+ * Silently opening one anyway is worse than opening none. `hasTurnSignalChannel`
+ * would report true, so `agent-turn-watch` treats the session as `signalled`,
+ * skips the BEL/regex path entirely and waits out the 15-minute
+ * `SIGNALLED_IDLE_MS` backstop — every remote turn hanging for a quarter of an
+ * hour, on the strength of a channel nothing can write to. Declining here puts
+ * those sessions back on the heuristic fallback at its normal window, which is
+ * merely imprecise rather than broken.
+ *
+ * Making this actually work remotely means giving `spacron-server` its own
+ * `agent_signal_channel_open`/`_close` and streaming the tail back over the
+ * existing WebSocket; see `.spacron/memory/remote-invoke-seam-gap.md`. Until
+ * then hooks-plus-remote is unsupported, and this is what says so out loud.
+ */
+function signalChannelsReachAgent(): boolean {
+  return !get(remoteTarget);
+}
 
 /**
  * Outcome a declared signal can carry. Mirrors `AgentTurnOutcome`'s useful
@@ -214,6 +245,12 @@ export function buildClaudeHookSettings(nonce: string, path: string): unknown {
  */
 export async function prepareTurnSignals(command: string): Promise<PreparedTurnSignals | null> {
   if (!supportsHookSignals(command)) return null;
+  if (!signalChannelsReachAgent()) {
+    console.info(
+      'Remote workspace active: skipping turn-signal hooks (the channel file would be on the laptop, the agent is on the box). Falling back to output scanning.',
+    );
+    return null;
+  }
 
   const channelId = mintNonce();
   try {
@@ -263,6 +300,13 @@ export async function prepareStatusChannel(): Promise<{
   channelId: string;
   path: string;
 } | null> {
+  if (!signalChannelsReachAgent()) {
+    console.info(
+      'Remote workspace active: skipping the agent status channel (the sentinel file would be on the laptop, the agent is on the box).',
+    );
+    return null;
+  }
+
   const channelId = mintNonce();
   try {
     const path = await invoke<string>('agent_signal_channel_open', { channelId });

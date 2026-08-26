@@ -55,6 +55,17 @@ const getTerminalProjectState = vi.hoisted(() =>
   vi.fn((_projectId?: string, _isDev?: boolean): { sessions: MockLiveSession[] } => ({ sessions: [] }))
 );
 const sessionSubscribers = vi.hoisted(() => [] as Array<(value: MockLiveSession[]) => void>);
+/** Every session in every project — the reverse lookup from session to project. */
+const allSessionsValue = vi.hoisted(
+  () => [] as Array<{ id: number; projectId: string; agentName?: string | null; taskSummary?: string | null; paneTitle?: string | null }>,
+);
+const allProjectSessions = vi.hoisted(() => ({
+  subscribe: (cb: (value: unknown[]) => void) => {
+    cb(allSessionsValue);
+    return () => {};
+  },
+}));
+const getActiveTerminalProjectId = vi.hoisted(() => vi.fn((): string | null => null));
 const sessions = vi.hoisted(() => ({
   subscribe: vi.fn((cb: (value: MockLiveSession[]) => void) => {
     sessionSubscribers.push(cb);
@@ -153,9 +164,11 @@ vi.mock('$lib/stores/terminal', () => ({
   setSessionExecuting,
   markOrchestratorTrackedSession: vi.fn(),
   unmarkOrchestratorTrackedSession: vi.fn(),
+  allProjectSessions,
+  getActiveTerminalProjectId,
 }));
 
-import { trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage } from './orchestrator';
+import { trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, recordUnwatchedAgentReport } from './orchestrator';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
@@ -223,6 +236,9 @@ function resetMocks() {
     };
   });
   sessionSubscribers.length = 0;
+  allSessionsValue.length = 0;
+  getActiveTerminalProjectId.mockReset();
+  getActiveTerminalProjectId.mockReturnValue(null);
 }
 
 describe('orchestrator terminal leasing', () => {
@@ -1739,5 +1755,84 @@ describe('reclaimProjectWorktrees', () => {
     const outcome = await reclaimProjectWorktrees('project-1');
 
     expect(outcome).toMatchObject({ removed: 0, kept: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// report_status calls that no turn watcher took
+// ---------------------------------------------------------------------------
+
+describe('recordUnwatchedAgentReport', () => {
+  beforeEach(() => {
+    orchestratorTasks.set([]);
+    chatMessages.set({});
+    resetMocks();
+  });
+
+  afterEach(() => {
+    orchestratorTasks.set([]);
+    chatMessages.set({});
+  });
+
+  it('files the report as a completion card under the task that owns the session', () => {
+    const task = createOrchestratorTask('project-1', 'Ship the retry backoff', 'claude');
+    orchestratorTasks.update((all) =>
+      all.map((t) => (t.id === task.id ? { ...t, status: 'in-progress' as const, assignedSessionId: 7, name: 'Iris' } : t)),
+    );
+    chatMessages.set({});
+
+    const filedUnder = recordUnwatchedAgentReport(7, { kind: 'finished', detail: 'Tests pass.' }, 'Agent');
+
+    expect(filedUnder).toBe('project-1');
+    const card = get(chatMessages)['project-1']?.at(-1)?.completion;
+    expect(card).toMatchObject({
+      status: 'done',
+      agentName: 'Iris',
+      taskTitle: task.title,
+      reason: 'Tests pass.',
+      taskId: task.id,
+      // The agent said this itself, so it is allowed to interrupt — the whole
+      // point of the report is that it is not a guess.
+      endedBy: 'declared',
+      silent: false,
+    });
+  });
+
+  it('files an unattributed report under the open project', () => {
+    getActiveTerminalProjectId.mockReturnValue('project-9');
+
+    const filedUnder = recordUnwatchedAgentReport(
+      null,
+      { kind: 'blocked', reason: 'Which database?' },
+      'An agent',
+    );
+
+    expect(filedUnder).toBe('project-9');
+    expect(get(chatMessages)['project-9']?.at(-1)?.completion).toMatchObject({
+      status: 'blocked',
+      agentName: 'An agent',
+      reason: 'Which database?',
+    });
+  });
+
+  it('uses the session to find the project when no task owns it', () => {
+    allSessionsValue.push({ id: 12, projectId: 'project-3', agentName: 'Vale', taskSummary: 'Refactor the parser' });
+
+    const filedUnder = recordUnwatchedAgentReport(12, { kind: 'failed', reason: 'Build broke.' }, 'Agent');
+
+    expect(filedUnder).toBe('project-3');
+    expect(get(chatMessages)['project-3']?.at(-1)?.completion).toMatchObject({
+      status: 'failed',
+      agentName: 'Vale',
+      taskTitle: 'Refactor the parser',
+      reason: 'Build broke.',
+    });
+  });
+
+  it('declines rather than filing a report with nowhere to put it', () => {
+    // No task, no session, no open project. Returning null lets the caller fall
+    // back to a toast instead of dropping the report on the floor.
+    expect(recordUnwatchedAgentReport(null, { kind: 'finished' }, 'An agent')).toBeNull();
+    expect(get(chatMessages)).toEqual({});
   });
 });

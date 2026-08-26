@@ -11,6 +11,10 @@ const listenMock = vi.hoisted(() =>
 );
 const deliverTurnSignalMock = vi.hoisted(() => vi.fn((_id: number, _s: unknown) => false));
 const showToastMock = vi.hoisted(() => vi.fn());
+/** Returns the project the report was filed under, or null when there is none. */
+const recordReportMock = vi.hoisted(() =>
+  vi.fn((_id: number | null, _s: unknown, _name: string): string | null => null),
+);
 // Spread the real modules: `terminal.ts` imports both of these too, and a
 // partial mock would leave its other imports undefined at module init.
 vi.mock('$lib/services/orchestrator/agent-hook-signals', async (orig) => ({
@@ -21,6 +25,10 @@ vi.mock('./notification', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   showToast: showToastMock,
 }));
+// `mcpBridge` reaches the orchestrator store only through a dynamic import (the
+// static one would close a cycle through `terminal.ts`), so a bare factory is
+// enough — nothing else in this module's graph imports it.
+vi.mock('./orchestrator', () => ({ recordUnwatchedAgentReport: recordReportMock }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: vi.fn(async () => 'C:/Users/test') }));
@@ -741,6 +749,7 @@ describe('handleAgentReport', () => {
   beforeEach(() => {
     deliverTurnSignalMock.mockReset().mockReturnValue(false);
     showToastMock.mockReset();
+    recordReportMock.mockReset().mockReturnValue(null);
   });
 
   it('ends the turn of the session the token identified', async () => {
@@ -818,6 +827,60 @@ describe('handleAgentReport', () => {
     // An agent that says "still going" every few minutes must not notify.
     expect(deliverTurnSignalMock).not.toHaveBeenCalled();
     expect(showToastMock).not.toHaveBeenCalled();
+    expect(recordReportMock).not.toHaveBeenCalled();
+  });
+
+  it('files a report no watcher took into the inbox', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 4, state: 'needs_input', detail: 'Need a key.' });
+
+    // A toast is gone in eight seconds. The durable card is what survives the
+    // user looking away, which is the whole reason the inbox exists.
+    expect(recordReportMock).toHaveBeenCalledWith(
+      4,
+      { kind: 'blocked', reason: 'Need a key.' },
+      expect.any(String),
+    );
+  });
+
+  it('files an unattributed report too', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: null, state: 'failed', detail: 'Build broke.' });
+
+    expect(recordReportMock).toHaveBeenCalledWith(
+      null,
+      { kind: 'failed', reason: 'Build broke.' },
+      'An agent',
+    );
+  });
+
+  it('does not also toast when the card is on screen', async () => {
+    // The card and a toast for one event is the double-notification the inbox
+    // work removed — so the toast is only for a card the user cannot see.
+    const { handleAgentReport } = await mockModule();
+    // Imported after the module reset, so this is the same instance the bridge
+    // reads the active project from.
+    const { setActiveTerminalProject } = await import('./terminal');
+    setActiveTerminalProject('proj-1');
+    recordReportMock.mockReturnValue('proj-1');
+
+    await handleAgentReport({ sessionId: 4, state: 'done', detail: 'Shipped.' });
+
+    expect(showToastMock).not.toHaveBeenCalled();
+    setActiveTerminalProject(null);
+  });
+
+  it('still toasts a report filed under a project the user is not looking at', async () => {
+    const { handleAgentReport } = await mockModule();
+    recordReportMock.mockReturnValue('some-other-project');
+
+    await handleAgentReport({ sessionId: 4, state: 'needs_input', detail: 'Need a key.' });
+
+    // A missed "needs input" strands the user waiting on an agent that is
+    // waiting on them, so a card they cannot see is not enough on its own.
+    expect(showToastMock).toHaveBeenCalledTimes(1);
   });
 });
 
