@@ -9,7 +9,13 @@
   right: 12px;
   z-index: 1400;
   width: min(380px, calc(100vw - 24px));
-  max-height: min(560px, calc(100vh - 80px));
+  /* Two independent caps, and the smaller always wins. 420px is the design
+     ceiling: roughly six rows, enough to read the queue without the popover
+     becoming a second window. The calc is the safety rail, derived from the
+     panel's own `top` plus a 12px bottom gap, so the panel physically cannot
+     reach the bottom of the window however short it gets. A long queue is the
+     list's problem to scroll, never the panel's to grow into. */
+  max-height: min(420px, calc(100vh - 56px));
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.09));
@@ -373,4 +379,51 @@
   opacity: 1 !important;
   background: rgba(255, 255, 255, 0.12);
   color: var(--text-primary);
+}
+
+/* Constrained viewports. Same shape as the usage popover's rules: the panel
+   gives up its fixed width and its design ceiling before it gives up the gap
+   to the window edge, and the list absorbs the loss by scrolling sooner. */
+@media (max-width: 480px) {
+  .inbox-panel {
+    top: 40px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: calc(100vh - 48px);
+    border-radius: 10px;
+  }
+
+  .inbox-head {
+    padding: 8px 11px;
+  }
+
+  .inbox-empty {
+    padding: 18px 14px;
+  }
+
+  .inbox-row {
+    padding: 8px 20px 8px 8px;
+  }
+}
+
+@media (max-height: 520px) {
+  .inbox-panel {
+    top: 38px;
+    max-height: calc(100vh - 46px);
+  }
+
+  .inbox-head {
+    padding: 7px 11px 6px;
+  }
+
+  .inbox-row {
+    padding: 7px 20px 7px 8px;
+  }
+
+  /* One line of recap instead of two: on a short window the row count matters
+     more than the depth of any single row. */
+  .inbox-row-text {
+    -webkit-line-clamp: 1;
+  }
 }
