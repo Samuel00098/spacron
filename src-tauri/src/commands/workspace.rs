@@ -49,7 +49,7 @@ pub(crate) fn classify_push_error(stderr: &str) -> String {
         || lower.contains("invalid username or password")
         || lower.contains("403")
     {
-        return "Authentication failed — your changes were NOT pushed. Sign in to GitHub (Git Credential Manager) or check that your saved credentials / access token are still valid, then push again.".to_string();
+        return "Authentication failed and your changes were NOT pushed. Sign in to GitHub (Git Credential Manager) or check that your saved credentials / access token are still valid, then push again.".to_string();
     }
 
     if lower.contains("non-fast-forward")
@@ -57,7 +57,7 @@ pub(crate) fn classify_push_error(stderr: &str) -> String {
         || lower.contains("[rejected]")
         || lower.contains("tip of your current branch is behind")
     {
-        return "Push rejected — the remote has commits you don't have locally. Fetch and merge (or pull) first, then push again.".to_string();
+        return "Push rejected. The remote has commits you don't have locally. Fetch and merge (or pull) first, then push again.".to_string();
     }
 
     if lower.contains("no configured push destination")
@@ -65,14 +65,14 @@ pub(crate) fn classify_push_error(stderr: &str) -> String {
         || lower.contains("no such remote")
         || lower.contains("repository not found")
     {
-        return "No remote to push to — check that an 'origin' remote is configured for this project.".to_string();
+        return "No remote to push to. Check that an 'origin' remote is configured for this project.".to_string();
     }
 
     if lower.contains("could not resolve host")
         || lower.contains("failed to connect")
         || lower.contains("connection timed out")
     {
-        return "Couldn't reach GitHub — check your internet connection and try again.".to_string();
+        return "Couldn't reach GitHub. Check your internet connection and try again.".to_string();
     }
 
     format!("Git push failed:\n{}", sanitize_git_error(stderr))
@@ -453,7 +453,7 @@ pub fn workspace_git_push(project_id: String, state: State<AppState>) -> Result<
     if output.status.success() {
         // git reports a no-op push ("Everything up-to-date") on stderr.
         if stderr.to_lowercase().contains("everything up-to-date") {
-            Ok("Already up to date — nothing new to push.".to_string())
+            Ok("Already up to date, with nothing new to push.".to_string())
         } else {
             Ok(format!(
                 "Successfully pushed to GitHub!\n{}{}",
@@ -1288,7 +1288,7 @@ pub fn workspace_git_create_worktree(
     let base_branch =
         git_capture(root_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".to_string());
     let base_commit = git_capture(root_path, &["rev-parse", "HEAD"])
-        .ok_or_else(|| "Could not resolve HEAD — the repository has no commits yet.".to_string())?;
+        .ok_or_else(|| "Could not resolve HEAD. The repository has no commits yet.".to_string())?;
 
     let safe_branch = branch.replace('/', "-");
     let worktree_path =
@@ -1468,7 +1468,7 @@ pub fn workspace_git_rename_worktree(
         .unwrap_or_default();
     if !branch.trim().is_empty() && current != branch.trim() {
         return Err(format!(
-            "Worktree is on '{current}', not '{branch}' — rename refused."
+            "Worktree is on '{current}', not '{branch}', so the rename was refused."
         ));
     }
 
@@ -1786,7 +1786,7 @@ fn sweep_agent_branches_at(
         }
     }
     if bases.is_empty() {
-        return Err("No branch to compare against — the repository has no commits yet.".to_string());
+        return Err("No branch to compare against. The repository has no commits yet.".to_string());
     }
     let primary = bases[0].clone();
 
@@ -2079,9 +2079,9 @@ pub fn workspace_git_merge_worktree(
         }
 
         let msg = if already_up_to_date {
-            format!("Nothing to merge — '{}' holds nothing your checkout doesn't already have.", branch)
+            format!("Nothing to merge. '{}' holds nothing your checkout doesn't already have.", branch)
         } else if no_commit {
-            format!("Changes from '{}' staged for review in Source Control — worktree kept for reference.", branch)
+            format!("Changes from '{}' staged for review in Source Control, and the worktree was kept for reference.", branch)
         } else if delete_after.unwrap_or(true) {
             format!("Branch '{}' merged and cleaned up successfully.", branch)
         } else {
@@ -2102,7 +2102,7 @@ pub fn workspace_git_merge_worktree(
             Ok(MergeWorktreeResult {
                 success: false,
                 message: format!(
-                    "Merge conflict — resolve conflicts in the main checkout, then commit.\n{} {}.",
+                    "Merge conflict. Resolve the conflicts in the main checkout, then commit.\n{} {}.",
                     sanitize_git_error(&stderr),
                     sanitize_git_error(&stdout)
                 ),
@@ -2476,7 +2476,7 @@ pub fn workspace_git_stage_worktree(
     if diff.stdout.is_empty() {
         return Ok(StageWorktreeResult {
             success: true,
-            message: "Already up to date — nothing new to stage.".to_string(),
+            message: "Already up to date, with nothing new to stage.".to_string(),
             conflicted: false,
             conflicted_files: Vec::new(),
             staged_commit: head,
@@ -2571,7 +2571,7 @@ pub fn workspace_git_stage_worktree(
         Ok(StageWorktreeResult {
             success: false,
             message: format!(
-                "Your own uncommitted changes to {} block bringing in '{}'. Commit, stash or discard them in Source Control, then bring the agent's work in again — nothing was lost, it is still on the branch.",
+                "Your own uncommitted changes to {} block bringing in '{}'. Commit, stash or discard them in Source Control, then bring the agent's work in again. Nothing was lost; it is still on the branch.",
                 blocked.join(", "),
                 branch
             ),

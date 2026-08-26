@@ -182,7 +182,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             name: "NVIDIA Parakeet TDT v3 (Multilingual)".to_string(),
             category: "stt".to_string(),
             size: "640 MB".to_string(),
-            description: "Latest NVIDIA Parakeet — top-tier accuracy, very fast, ~25 languages. Runs locally via native ONNX. Needs ample RAM.".to_string(),
+            description: "Latest NVIDIA Parakeet, with top-tier accuracy, very fast, ~25 languages. Runs locally via native ONNX. Needs ample RAM.".to_string(),
             url: PARAKEET_FILES[0].0.to_string(),
             filename: PARAKEET_FILES[0].1.to_string(),
             downloaded: false,
@@ -193,7 +193,7 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             name: "Silero VAD (Smart voice detection)".to_string(),
             category: "stt".to_string(),
             size: "~2 MB".to_string(),
-            description: "Neural voice-activity detector. Powers the optional Smart VAD mode: far better speech vs. noise separation than the built-in level gate — fewer false turns from clicks, fans and background chatter. Tiny download.".to_string(),
+            description: "Neural voice-activity detector. Powers the optional Smart VAD mode: far better speech vs. noise separation than the built-in level gate, with fewer false turns from clicks, fans and background chatter. Tiny download.".to_string(),
             url: "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx".to_string(),
             filename: crate::commands::vad::SILERO_VAD_FILENAME.to_string(),
             downloaded: false,
@@ -511,7 +511,7 @@ async fn download_file_inner(
                 .and_then(|n| n.to_str())
                 .unwrap_or("file");
             return Err(format!(
-                "Integrity check failed for {name}: the downloaded file's SHA-256 did not match the expected value. The file was discarded — please try again."
+                "Integrity check failed for {name}: the downloaded file's SHA-256 did not match the expected value. The file was discarded. Please try again."
             ));
         }
     }

@@ -313,12 +313,12 @@ export default function VoiceHistoryPanel() {
 
   const emptyMessage = (() => {
     if (retention === 'off') {
-      return 'History is turned off — nothing is being saved. Pick a retention period below to start keeping it.';
+      return 'History is turned off, so nothing is being saved. Pick a retention period below to start keeping it.';
     }
     if (total === 0) {
       return showingTranscriptions
-        ? 'No dictations yet. Press the transcription hotkey and speak — everything you dictate lands here.'
-        : 'No conversations yet. Tap left Alt (or press Ctrl+Shift+M) to start a voice call — each one is logged here.';
+        ? 'No dictations yet. Press the transcription hotkey and speak, and everything you dictate lands here.'
+        : 'No conversations yet. Tap left Alt (or press Ctrl+Shift+M) to start a voice call, and each one is logged here.';
     }
     return query.trim()
       ? 'Nothing matches that search in this time period.'

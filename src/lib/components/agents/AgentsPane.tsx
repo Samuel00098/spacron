@@ -337,7 +337,7 @@ function AgentRowView({
               <span
                 className="agents-row-brief"
                 data-brief="rules"
-                title="Briefed through the instruction file(s) this CLI reads at startup — Spacron writes its standing brief there instead of pasting it into the terminal."
+                title="Briefed through the instruction file(s) this CLI reads at startup. Spacron writes its standing brief there instead of pasting it into the terminal."
               >
                 Rules file
               </span>
@@ -345,7 +345,7 @@ function AgentRowView({
               <span
                 className="agents-row-brief"
                 data-brief="paste"
-                title="Briefed by pasting the standing charter into the terminal when it spawns — this CLI has no native rules file."
+                title="Briefed by pasting the standing charter into the terminal when it spawns, because this CLI has no native rules file."
               >
                 Pasted brief
               </span>
@@ -392,7 +392,7 @@ function AgentRowView({
             <span
               className="agents-row-badge"
               data-tone="partial"
-              title={`Installed but no sign-in detected — run \`${row.command}\` once to sign in, then hit Rescan if you already did.`}
+              title={`Installed but no sign-in detected. Run \`${row.command}\` once to sign in, then hit Rescan if you already did.`}
             >
               Installed
             </span>
@@ -414,7 +414,7 @@ function AgentRowView({
               title={
                 installDocs.known
                   ? `Open ${row.name}'s documentation to install it`
-                  : `Spacron has no verified docs URL for ${row.name} — this searches the web for its install steps`
+                  : `Spacron has no verified docs URL for ${row.name}, so this searches the web for its install steps`
               }
             >
               <svg
@@ -630,7 +630,7 @@ function LaunchEditor({
     .map(([k, v]) => `${k}=${v}`)
     .join(', ');
   const launchNote = !yoloCapable ? (
-    "This CLI doesn't expose a skip-permissions flag — it launches bare either way."
+    "This CLI doesn't expose a skip-permissions flag, so it launches bare either way."
   ) : effectiveArgs ? (
     <>
       Launches as: <code>

@@ -166,7 +166,7 @@ export default function HunkDiffView({
   if (file.binary) {
     return (
       <div className="hdv-message">
-        {effectiveReadOnly ? 'Binary file changed.' : 'Binary file — stage or unstage it whole.'}
+        {effectiveReadOnly ? 'Binary file changed.' : 'Binary file. Stage or unstage it whole.'}
       </div>
     );
   }
@@ -178,7 +178,7 @@ export default function HunkDiffView({
       <div className="hdv-summary">
         <span className="hdv-add">+{totals.additions}</span>
         <span className="hdv-del">&minus;{totals.deletions}</span>
-        {loaded.untracked && <span className="hdv-note">untracked — new file</span>}
+        {loaded.untracked && <span className="hdv-note">untracked, new file</span>}
       </div>
 
       {file.hunks.map((hunk, hunkIndex) => {

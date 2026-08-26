@@ -520,13 +520,13 @@ async function deliver(): Promise<void> {
     }
 
     if (sessionId == null) {
-      showToast('Click into a terminal or text field first — nowhere to put the transcript.', 'error');
+      showToast('Click into a terminal or text field first, because there is nowhere to put the transcript.', 'error');
       return;
     }
     if (get(transcriptionAutoSend)) {
       const sent = await sendAgentPromptDirect(sessionId, finalText);
       if (!sent) {
-        showToast('Could not reach the terminal session — transcript discarded.', 'error');
+        showToast('Could not reach the terminal session, so the transcript was discarded.', 'error');
       }
     } else {
       requestTerminalInput(sessionId, finalText);

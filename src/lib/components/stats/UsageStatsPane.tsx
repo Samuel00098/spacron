@@ -240,7 +240,7 @@ function IntensityGrid({ days }: { days: HeatmapDay[] }) {
               <span
                 key={d.day}
                 className={`stats-heat-cell level-${d.level}`}
-                title={`${shortDayLabel(d.day)} — ${formatTokens(d.totalTokens)} tokens`}
+                title={`${shortDayLabel(d.day)}: ${formatTokens(d.totalTokens)} tokens`}
               />
             ))}
           </div>
@@ -386,7 +386,7 @@ function ActivitySection({ summary }: { summary: ActivitySummary | null }) {
         </div>
         <p className="shell-hint stats-empty-hint">
           Nothing recorded yet. Spawn an agent and its turns will be counted
-          here — unlike the token figures below, this is measured live rather
+          here. Unlike the token figures below, this is measured live rather
           than read back from CLI logs.
         </p>
       </>
@@ -697,7 +697,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
     return (
       <p className="shell-hint stats-empty-hint">
         No usage found for this provider in this range. Widen the range, or
-        come back after running a session — this pane re-scans by itself.
+        come back after running a session. This pane re-scans by itself.
       </p>
     );
   }
@@ -759,7 +759,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
                 <div className="stats-chart-col" key={d.day}>
                   <div
                     className="stats-chart-bar"
-                    title={`${shortDayLabel(d.day)} — in ${formatTokens(d.inputTokens)}, out ${formatTokens(d.outputTokens)}, cache ${formatTokens(d.cacheReadTokens + d.cacheWriteTokens)}`}
+                    title={`${shortDayLabel(d.day)}: in ${formatTokens(d.inputTokens)}, out ${formatTokens(d.outputTokens)}, cache ${formatTokens(d.cacheReadTokens + d.cacheWriteTokens)}`}
                   >
                     <div
                       className="stats-chart-seg stats-chart-input"
@@ -939,7 +939,7 @@ export default function UsageStatsPane() {
           <p className="shell-hint" style={{ marginTop: 0 }}>
             Spacron can tally tokens and cost across your Claude Code, Codex and
             OpenCode sessions by scanning the transcript files those CLIs write
-            to disk. Stats are estimates — no API key is used, and nothing is
+            to disk. Stats are estimates. No API key is used, and nothing is
             sent anywhere.
           </p>
           <div className="settings-control-row">

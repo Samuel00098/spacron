@@ -26,7 +26,7 @@ pub fn project_roots(state: &AppState) -> Vec<PathBuf> {
 /// server (roots = the served workspace).
 pub fn require_in_roots(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
     if roots.is_empty() {
-        return Err("No project is open — open a project folder first".to_string());
+        return Err("No project is open. Open a project folder first.".to_string());
     }
     // Get the best canonical path we can for a possibly-new file.
     let canonical: PathBuf = if path.exists() {

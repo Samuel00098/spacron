@@ -68,7 +68,7 @@ export default function AgentWorktreeBadge({ sessionId }: Props) {
   // If running with skipWorktree (admin/release task), show "Main repo" badge.
   if (isSkipWorktree) {
     return (
-      <div className="wt-badge main-repo" title="Running directly in the project root — no worktree isolation">
+      <div className="wt-badge main-repo" title="Running directly in the project root, with no worktree isolation">
         <span className="wt-icon" aria-hidden="true">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
@@ -109,7 +109,7 @@ export default function AgentWorktreeBadge({ sessionId }: Props) {
   // No worktree and no skipWorktree — running in the project root (non-git or
   // spawned without worktree). Show "Main repo" badge.
   return (
-    <div className="wt-badge main-repo" title="Running in the project root — no worktree isolation">
+    <div className="wt-badge main-repo" title="Running in the project root, with no worktree isolation">
       <span className="wt-icon" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />

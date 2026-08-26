@@ -182,7 +182,7 @@ function getAudio(): HTMLAudioElement | null {
     musicLibraryState.update((st) => ({
       ...st,
       playing: false,
-      status: `Could not play ${name} — the file may be missing or in an unsupported format.`,
+      status: `Could not play ${name}. The file may be missing or in an unsupported format.`,
     }));
   });
 
@@ -232,7 +232,7 @@ export async function scanFolder(folder: string): Promise<void> {
       currentPath: keepCurrent ? s.currentPath : null,
       status: res.tracks.length
         ? res.truncated
-          ? `Loaded the first ${res.tracks.length} tracks — the folder holds more.`
+          ? `Loaded the first ${res.tracks.length} tracks. The folder holds more.`
           : ''
         : 'No audio files found in that folder.',
       };

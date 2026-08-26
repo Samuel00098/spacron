@@ -73,7 +73,7 @@ export async function initBackground(): Promise<void> {
     // once so the user gets their theme back rather than a blank pane.
     if (storedBackground !== null && isLegacyVideoBackground(storedBackground)) {
       await removeBackgroundImage();
-      showToast('Video wallpapers are no longer supported — pick an image instead', 'info', 8000);
+      showToast('Video wallpapers are no longer supported. Pick an image instead.', 'info', 8000);
       return;
     }
     setCurrent(storedBackground);

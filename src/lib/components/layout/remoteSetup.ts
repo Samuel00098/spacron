@@ -80,7 +80,7 @@ export function binaryNotice(
   if (status.downloadable) {
     return {
       kind: 'download',
-      text: `This app ships the ${hostOs ? platformLabel(hostOs) : 'host'} build of the server. Deploying to ${os} needs the ${os} build — download it once and it stays on this machine.`,
+      text: `This app ships the ${hostOs ? platformLabel(hostOs) : 'host'} build of the server. Deploying to ${os} needs the ${os} build. Download it once and it stays on this machine.`,
       action: `Get the ${os} server`,
     };
   }

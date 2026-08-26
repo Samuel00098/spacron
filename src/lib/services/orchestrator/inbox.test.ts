@@ -139,7 +139,7 @@ describe('completionEntry', () => {
       }),
       false,
     );
-    expect(quiet?.body).toBe('Went quiet — no completion reported.');
+    expect(quiet?.body).toBe('Went quiet, with no completion reported.');
 
     // A process that exits cleanly has ended, but that is not evidence the
     // work was finished — `/exit` and Ctrl-D exit cleanly too.

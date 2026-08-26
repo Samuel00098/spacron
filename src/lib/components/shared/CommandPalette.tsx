@@ -84,7 +84,7 @@ export default function CommandPalette() {
     isOpen.set(false);
     const fail = (err: unknown) => {
       console.error(`Command '${cmd.id}' failed:`, err);
-      showToast(`${cmd.name} failed — see the console for details`, 'error', 8000, true);
+      showToast(`${cmd.name} failed. See the console for details.`, 'error', 8000, true);
     };
     try {
       Promise.resolve(cmd.action()).catch(fail);

@@ -398,7 +398,7 @@ async function flush(projectId: string): Promise<void> {
     });
   } catch (err) {
     console.error('Failed to save orchestrator tasks:', err);
-    showToast('Task state could not be saved — changes may be lost on restart', 'error', 8000);
+    showToast('Task state could not be saved, so changes may be lost on restart', 'error', 8000);
   }
 }
 
@@ -649,7 +649,7 @@ async function handleBounceBack(task: OrchestratorTask): Promise<boolean> {
     to: handoff.from,
     kind: 'note',
     taskId: handoff.taskId,
-    text: `Bounced back — ${feedback}`,
+    text: `Bounced back. ${feedback}`,
   });
 
   logTaskActivity(task.id, 'info', `Bounced back to ${handoff.from}: ${feedback.slice(0, 120)}`);
@@ -676,7 +676,7 @@ async function handleBounceBack(task: OrchestratorTask): Promise<boolean> {
             completedAt: null,
             assignedSessionId: builderSid,
           }));
-          logTaskActivity(handoff.taskId, 'info', 'Bounced back by Reviewer — redoing work');
+          logTaskActivity(handoff.taskId, 'info', 'Bounced back by Reviewer, redoing work');
           redelivered = true;
         } catch (err) {
           console.warn('Failed to re-engage Builder after bounce-back:', err);
@@ -687,8 +687,8 @@ async function handleBounceBack(task: OrchestratorTask): Promise<boolean> {
 
   showToast(
     redelivered
-      ? `Reviewer bounced back to ${handoff.from} — redoing work now`
-      : `Reviewer bounced back to ${handoff.from} — ${feedback.slice(0, 80)}`,
+      ? `Reviewer bounced back to ${handoff.from}, redoing work now`
+      : `Reviewer bounced back to ${handoff.from}: ${feedback.slice(0, 80)}`,
     redelivered ? 'success' : 'info',
     8000, true,
   );
@@ -724,7 +724,7 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
   const builderTask = get(orchestratorTasks).find((t) => t.id === handoff.taskId);
   const worktree = builderTask?.worktree ?? null;
   if (!worktree) {
-    showToast(`Reviewer approved but ${handoff.from} had no worktree — nothing to merge`, 'info', 6000);
+    showToast(`Reviewer approved, but ${handoff.from} had no worktree, so there is nothing to merge`, 'info', 6000);
     return;
   }
 
@@ -735,10 +735,10 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
     logTaskActivity(
       task.id,
       'blocked',
-      `Approval named branch '${approvedBranch}' but the handoff's worktree is '${worktree.branch}' — not merging.`,
+      `Approval named branch '${approvedBranch}' but the handoff's worktree is '${worktree.branch}', so nothing was merged.`,
     );
     showToast(
-      `Reviewer approved '${approvedBranch}' but ${handoff.from} is on '${worktree.branch}' — merge skipped, review manually`,
+      `Reviewer approved '${approvedBranch}' but ${handoff.from} is on '${worktree.branch}', so the merge was skipped. Review it manually.`,
       'warning',
       10000, true,
     );
@@ -752,22 +752,22 @@ async function handleApproved(task: OrchestratorTask): Promise<void> {
       forgetWorktree(worktree.path);
       patchTask(handoff.taskId, (t) => ({ ...t, worktree: null }));
       const what = result.alreadyUpToDate
-        ? `Branch ${worktree.branch} held nothing new — approved, worktree cleaned up`
+        ? `Branch ${worktree.branch} held nothing new, so it was approved and the worktree cleaned up`
         : `Auto-merged branch ${worktree.branch} after approval`;
       logTaskActivity(task.id, 'info', what);
       logTaskActivity(handoff.taskId, 'info', what);
       showToast(
         result.alreadyUpToDate
-          ? `Approved — ${handoff.from}'s branch held nothing to merge`
-          : `Approved & merged — ${handoff.from}'s branch merged into main`,
+          ? `Approved. ${handoff.from}'s branch held nothing to merge.`
+          : `Approved and merged ${handoff.from}'s branch into main`,
         result.alreadyUpToDate ? 'info' : 'success',
         8000,
         !result.alreadyUpToDate,
       );
     } else if (result.conflicted) {
-      showToast(`Merge conflict on approval — ${result.message}`, 'warning', 10000, true);
+      showToast(`Merge conflict on approval: ${result.message}`, 'warning', 10000, true);
     } else {
-      showToast(`Merge failed on approval — ${result.message}`, 'error', 8000, true);
+      showToast(`Merge failed on approval: ${result.message}`, 'error', 8000, true);
     }
   } catch (err) {
     showToast(`Auto-merge failed: ${err}`, 'error', 8000);
@@ -841,14 +841,14 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
       from,
       kind: 'note',
       taskId: task.id,
-      text: `Blocked on ${label} — ${outcome.kind === 'blocked' ? outcome.reason : 'needs input'}`,
+      text: `Blocked on ${label}: ${outcome.kind === 'blocked' ? outcome.reason : 'needs input'}`,
     });
   } else if (task.status === 'failed') {
     await postMailboxMessage(task.projectId, projectPaths.get(task.projectId), {
       from,
       kind: 'note',
       taskId: task.id,
-      text: `Failed on ${label} — ${task.failureReason ?? 'exited with errors'}`,
+      text: `Failed on ${label}: ${task.failureReason ?? 'exited with errors'}`,
     });
   }
 }
@@ -904,7 +904,7 @@ export async function replyToMailboxCard(
 ): Promise<void> {
   const delivered = await deliverMailboxReply(projectId, card, text, rootPath);
   showToast(
-    delivered ? `Sent to ${card.from}` : `Noted — ${card.from} isn't live right now`,
+    delivered ? `Sent to ${card.from}` : `Noted, but ${card.from} isn't live right now`,
     delivered ? 'info' : 'warning',
     3000,
   );
@@ -916,9 +916,9 @@ export async function approveMailboxCard(
   card: MailboxCard,
   rootPath: string | null | undefined,
 ): Promise<void> {
-  const delivered = await deliverMailboxReply(projectId, card, 'Approved — please proceed.', rootPath);
+  const delivered = await deliverMailboxReply(projectId, card, 'Approved, please proceed.', rootPath);
   showToast(
-    delivered ? `Approved · told ${card.from} to proceed` : `Approved — ${card.from} isn't live right now`,
+    delivered ? `Approved · told ${card.from} to proceed` : `Approved, but ${card.from} isn't live right now`,
     delivered ? 'success' : 'info',
     3000,
   );
@@ -954,10 +954,10 @@ export async function mergeAndApproveMailboxCard(
             4000,
           );
         } else if (result.conflicted) {
-          showToast(`Merge conflict — resolve then approve: ${result.message}`, 'warning', 10000);
+          showToast(`Merge conflict. Resolve it, then approve: ${result.message}`, 'warning', 10000);
           return; // Don't approve if there's a conflict
         } else {
-          showToast(`Merge failed — ${result.message}`, 'error', 8000);
+          showToast(`Merge failed: ${result.message}`, 'error', 8000);
           return; // Don't approve if merge failed
         }
       } catch (err) {
@@ -968,13 +968,13 @@ export async function mergeAndApproveMailboxCard(
   }
 
   // 2. Send the approval to the agent.
-  const delivered = await deliverMailboxReply(projectId, card, 'Approved — please proceed.', rootPath);
+  const delivered = await deliverMailboxReply(projectId, card, 'Approved, please proceed.', rootPath);
   showToast(
     merged
       ? `Merged & approved · told ${card.from} to proceed`
       : delivered
         ? `Approved · told ${card.from} to proceed`
-        : `Approved — ${card.from} isn't live right now`,
+        : `Approved, but ${card.from} isn't live right now`,
     merged || delivered ? 'success' : 'info',
     3000,
   );
@@ -1219,7 +1219,7 @@ async function completeLeasedTask(
     const panelTask = get(tasks).find((t) => t.id === panelTaskId);
     if (panelTask && panelTask.status !== 'done') {
       showToast(
-        `"${panelTask.title}" — ${name} finished its turn.`,
+        `"${panelTask.title}": ${name} finished its turn.`,
         'info',
         12000,
         false,
@@ -1498,7 +1498,7 @@ function sendBriefToLeasedTask(id: string, sessionId: number, agentCommand: stri
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
       if (!success) {
-        showToast('Could not brief the spawned agent — session was lost', 'warning', 4000);
+        showToast('Could not brief the spawned agent, because the session was lost', 'warning', 4000);
       }
     } catch (err) {
       console.error('Failed to send agent brief:', err);
@@ -2222,7 +2222,7 @@ function notifyAdoptedTurnEnd(
   logTaskActivity(
     task.id,
     told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
-    told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet — assumed finished.'),
+    told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet, so it is assumed finished.'),
   );
 
   // A hand-launched agent gets the same rule as a leased one: only a turn end
@@ -2675,7 +2675,7 @@ function describeActionsInProgress(actions: OrchestratorAction[]): string {
 function declarativeReply(actions: OrchestratorAction[], reply: string): string {
   const trimmedReply = reply.trim();
   if (!/\?\s*$/.test(trimmedReply) || !PERMISSION_QUESTION_RE.test(trimmedReply)) return reply;
-  return `On it — ${describeActionsInProgress(actions)}.`;
+  return `On it, ${describeActionsInProgress(actions)}.`;
 }
 
 /**
@@ -2813,7 +2813,7 @@ export async function sendChatMessage(
         ? agentLabel(undecidedSpawns[0])
         : `${undecidedSpawns.length} agents`;
     patchChat(projectId, assistantId, {
-      text: `Where should ${who} run — an isolated worktree, or the main repo?`,
+      text: `Where should ${who} run: an isolated worktree, or the main repo?`,
     });
   } else if (undecidedSpawns.length) {
     // The admin/release heuristic no longer decides — it only pre-selects "Main
@@ -2826,13 +2826,13 @@ export async function sendChatMessage(
       source: 'orchestrator',
       suggested: adminSpawn ? 'main' : undefined,
       suggestionReason: adminSpawn
-        ? 'This reads like a release or admin task (tagging, pushing, version bumps). Those need the main branch — git tag and push do not work from a worktree.'
+        ? 'This reads like a release or admin task (tagging, pushing, version bumps). Those need the main branch, because git tag and push do not work from a worktree.'
         : null,
     });
     if (!askedPlacements) {
       spawnsAllowed = false;
       patchChat(projectId, assistantId, {
-        text: `${result.reply}\n\n_Cancelled — no agent was started._`,
+        text: `${result.reply}\n\n_Cancelled. No agent was started._`,
       });
       showToast('Spawn cancelled', 'info', 2500);
     }
@@ -2950,7 +2950,7 @@ export async function sendChatMessage(
           kind: 'note',
           text: `Held ${name}: ${files} still claimed by ${owners}. Will dispatch once released.`,
         });
-        showToast(`Holding ${name} — ${files} is still owned by ${owners}`, 'warning', 6000, true);
+        showToast(`Holding ${name}, because ${files} is still owned by ${owners}`, 'warning', 6000, true);
         continue;
       }
     }
@@ -2994,7 +2994,7 @@ export async function sendChatMessage(
     if (sessionId == null) {
       // Launch failed (no free terminal pane) — remove the orphaned task record.
       deleteOrchestratorTask(task.id);
-      showToast(`Could not start ${getAgentDisplayName(action.agent) ?? action.agent} — no terminal available`, 'error', 5000);
+      showToast(`Could not start ${getAgentDisplayName(action.agent) ?? action.agent}, because no terminal is available`, 'error', 5000);
     }
 
     spawnEntries.push({ task, sessionId, rawPrompt: action.prompt ?? '', agent: action.agent, persistent, watchTurn: !persistent, name });
@@ -3251,7 +3251,7 @@ export async function stageAgentWorktree(projectId: string, worktree: WorktreeIn
   if (result.ok && result.upToDate) {
     // Nothing moved. A green "success" here read as "your changes have arrived"
     // when in fact the press did nothing, so say so plainly and quietly instead.
-    showToast(`Nothing new to bring in — ${worktree.branch} is already in your working tree.`, 'info', 4000);
+    showToast(`Nothing new to bring in. ${worktree.branch} is already in your working tree.`, 'info', 4000);
   } else if (result.ok) {
     showToast(result.message, 'success', 6000);
   } else if (result.conflicted) {
@@ -3311,7 +3311,7 @@ if (typeof window !== 'undefined') {
     },
     onStaged: (work, stagedFiles) => {
       showToast(
-        `${work.agentName}'s ${stagedFiles} file change${stagedFiles === 1 ? '' : 's'} are in Source Control — ready to test`,
+        `${work.agentName}'s ${stagedFiles} file change${stagedFiles === 1 ? '' : 's'} are in Source Control and ready to test`,
         'success',
         6000,
       );

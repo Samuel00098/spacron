@@ -36,7 +36,7 @@ const STATUS_NOTE: Record<Exclude<UsageStatus, 'ok'>, string> = {
   // the list entirely (see usage.ts).
   notInstalled: 'Not installed',
   signedOut: 'Not signed in',
-  expired: 'Session expired — run the CLI once to sign back in',
+  expired: 'Session expired. Run the CLI once to sign back in.',
   // Web-session providers get their own wording below: "run the CLI once" would
   // send the user somewhere that cannot fix it.
   notConnected: 'Connect your account to read its limits',
@@ -44,7 +44,7 @@ const STATUS_NOTE: Record<Exclude<UsageStatus, 'ok'>, string> = {
   // wording ("this CLI doesn't publish a usage endpoint") was a claim about the
   // provider, and it was false for Grok and Gemini — both publish one and both
   // are now read. Never assert absence on the vendor's behalf.
-  unsupported: "Signed in — Spacron doesn't read usage for this CLI yet",
+  unsupported: "Signed in, but Spacron doesn't read usage for this CLI yet",
   error: 'Could not read usage',
 };
 
@@ -243,7 +243,7 @@ export default function UsagePanel() {
 
       {reporting.length === 0 && providers.length > 0 && (
         <p className="usage-empty">
-          Nothing is reporting numbers right now — see each row above for why.
+          Nothing is reporting numbers right now. See each row above for why.
         </p>
       )}
     </div>

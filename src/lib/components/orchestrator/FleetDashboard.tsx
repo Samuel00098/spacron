@@ -365,7 +365,7 @@ export default function FleetDashboard() {
         const result = await mergeTaskWorktree(row.projectId, worktree, false);
         if (result.conflicted) {
           showToast(
-            `${row.agentName}: merge hit conflicts — resolve them in Source Control.`,
+            `${row.agentName}: merge hit conflicts. Resolve them in Source Control.`,
             'warning',
             14000,
             true,
@@ -375,7 +375,7 @@ export default function FleetDashboard() {
           // notification guaranteed to be false: it fired precisely when the
           // press had no effect.
           showToast(
-            `Nothing to merge — ${worktree.branch} holds nothing ${worktree.baseBranch} doesn't already have.`,
+            `Nothing to merge. ${worktree.branch} holds nothing ${worktree.baseBranch} doesn't already have.`,
             'info',
             6000,
           );
@@ -415,7 +415,7 @@ export default function FleetDashboard() {
         if (outcome.removed) {
           showToast(
             outcome.staged > 0
-              ? `Discarded ${worktree.branch} — ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} were staged into Source Control first.`
+              ? `Discarded ${worktree.branch}. ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} were staged into Source Control first.`
               : `Discarded ${worktree.branch}.`,
             'success',
             8000,
@@ -423,14 +423,14 @@ export default function FleetDashboard() {
           setExpanded((current) => (current === row.key ? null : current));
         } else if (outcome.reason === 'conflict') {
           showToast(
-            `${row.agentName}: can't discard — staging its work conflicts with your edits. Resolve in Source Control, then try again.`,
+            `${row.agentName}: can't discard. Staging its work conflicts with your edits. Resolve in Source Control, then try again.`,
             'warning',
             14000,
             true,
           );
         } else if (outcome.reason === 'pending') {
           showToast(
-            `${row.agentName}: kept the worktree — ${outcome.pendingFiles} file change${outcome.pendingFiles === 1 ? '' : 's'} still hadn't reached your working tree.`,
+            `${row.agentName}: kept the worktree. ${outcome.pendingFiles} file change${outcome.pendingFiles === 1 ? '' : 's'} still hadn't reached your working tree.`,
             'warning',
             12000,
           );
@@ -467,7 +467,7 @@ export default function FleetDashboard() {
         <strong>No agents running in this project.</strong>
         <span>
           Spawn agents and they show up here whether they take their own branch
-          and checkout or work directly in the main repo — isolated ones ready to
+          and checkout or work directly in the main repo. Isolated ones ready to
           review, merge, or throw away; main-repo ones ready to read.
         </span>
       </div>
@@ -561,7 +561,7 @@ export default function FleetDashboard() {
                      agent had somewhere of its own to merge back from. */
                   <span
                     className="fc-branch"
-                    title={`Running in the project root — no worktree isolation.\nIts edits go straight into your checkout${mainBranch ? ` on ${mainBranch}` : ''}.`}
+                    title={`Running in the project root, with no worktree isolation.\nIts edits go straight into your checkout${mainBranch ? ` on ${mainBranch}` : ''}.`}
                   >
                     <span className="fc-placement">main repo</span>
                     {mainBranch && <span className="fc-branch-name">{mainBranch}</span>}
@@ -579,7 +579,7 @@ export default function FleetDashboard() {
 
               {worktree?.stageConflict && (
                 <div className="fc-warning">
-                  Staging is paused — this worktree conflicts with edits already in
+                  Staging is paused. This worktree conflicts with edits already in
                   your working tree. Resolve them in Source Control, then stage again.
                 </div>
               )}
@@ -594,7 +594,7 @@ export default function FleetDashboard() {
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   <span>
-                    Ready to review — {stat.files.length} file{stat.files.length === 1 ? '' : 's'}, isolated on{' '}
+                    Ready to review: {stat.files.length} file{stat.files.length === 1 ? '' : 's'}, isolated on{' '}
                     <code>{worktree?.branch}</code>
                   </span>
                 </div>
@@ -630,7 +630,7 @@ export default function FleetDashboard() {
                    main-repo agent's. Isolated cards need no such note — there
                    the diff really is that one agent's. */
                 <div className="fc-note">
-                  Everything uncommitted in your checkout — this agent shares it
+                  Everything uncommitted in your checkout, which this agent shares
                   with you and with any other agent running in the main repo.
                 </div>
               )}
@@ -732,7 +732,7 @@ export default function FleetDashboard() {
                         className="fc-btn"
                         onClick={() => doStage(row)}
                         disabled={isBusy}
-                        title="Copy this agent's changes into your working tree so you can run and review them. This is not `git add` — nothing is committed, and this worktree is kept."
+                        title="Copy this agent's changes into your working tree so you can run and review them. This is not `git add`. Nothing is committed, and this worktree is kept."
                       >
                         Bring in
                       </button>
@@ -803,7 +803,7 @@ export default function FleetDashboard() {
                         disabled={isBusy || row.live}
                         title={
                           row.live
-                            ? 'Close this agent first — discarding a worktree while it is still writing is unrecoverable'
+                            ? 'Close this agent first. Discarding a worktree while it is still writing is unrecoverable.'
                             : `Delete the worktree and branch ${worktree.branch}`
                         }
                       >

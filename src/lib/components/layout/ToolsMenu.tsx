@@ -142,7 +142,7 @@ export default function ToolsMenu({ groups }: ToolsMenuProps) {
         ref={triggerEl}
         className={`tools-trigger${open ? ' open' : ''}${anyActive ? ' has-active' : ''}`}
         onClick={() => setOpen((v) => !v)}
-        title="Tools — rooms, panels and utilities"
+        title="Tools: rooms, panels and utilities"
         aria-label="Tools"
         aria-haspopup="menu"
         aria-expanded={open}

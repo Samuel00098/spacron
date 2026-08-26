@@ -30,7 +30,7 @@ import './RemoteSetupWizard.css';
  */
 
 const PLATFORM_HINTS: Record<DeployPlatform, string> = {
-  linux: 'Ubuntu/Debian — runtime libraries install automatically when passwordless sudo is available.',
+  linux: 'Ubuntu and Debian install the runtime libraries automatically when passwordless sudo is available.',
   macos: 'Enable Remote Login on the Mac (System Settings → General → Sharing). Runs as a launchd agent.',
   windows: 'Enable OpenSSH Server on the box; admin SSH access is needed for the boot task and firewall rule.',
 };
@@ -279,7 +279,7 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
       <form className="rsw-card" onSubmit={deploy} ref={formRef}>
         <div className="rsw-title">Set up a remote VPS</div>
         <p className="rsw-desc">
-          Deploys the bundled Spacron server to your box over SSH, starts it, and connects — no
+          Deploys the bundled Spacron server to your box over SSH, starts it, and connects, with no
           terminal needed. Requires SSH key access (or an ssh-agent); password login isn&apos;t
           supported.
         </p>
@@ -306,12 +306,12 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
               >
                 {detected === platform
                   ? `Server confirmed ${platformLabel(detected)}.`
-                  : `The server reports ${platformLabel(detected)} — switch the picker so the right build is uploaded.`}
+                  : `The server reports ${platformLabel(detected)}. Switch the picker so the right build is uploaded.`}
               </span>
             )}
             {!detecting && !detected && detectNote && (
               <span className="rsw-hint" title={detectNote}>
-                Couldn&apos;t auto-detect the server&apos;s OS — pick it manually.
+                Couldn&apos;t auto-detect the server&apos;s OS. Pick it manually.
               </span>
             )}
           </label>
@@ -427,7 +427,7 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
             decision rather than only in the server's stdout and the docs. */}
         <p className="rsw-desc rsw-warn">
           The connection is unencrypted (<code>ws://</code>) and its token grants shell access to
-          this box. Reach it over Tailscale, a VPN, or an SSH tunnel — not the open internet. For a
+          this box. Reach it over Tailscale, a VPN, or an SSH tunnel, never the open internet. For a
           publicly reachable server, restart it with <code>--cert</code>/<code>--key</code> and save
           the remote as <code>wss://</code>.
         </p>

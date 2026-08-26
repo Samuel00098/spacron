@@ -200,7 +200,7 @@ export default function TaskEditorModal({
               scheduleDescSave();
             }}
             onBlur={saveDesc}
-            placeholder="Notes — what should the agent do?"
+            placeholder="Notes: what should the agent do?"
             rows={4}
             aria-label="Task notes"
           />

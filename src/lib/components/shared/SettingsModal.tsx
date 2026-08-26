@@ -1179,7 +1179,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     setRulesDetection(null);
     rulesTouched.current = false;
     setAgentFormError('');
-    showToast(`Added "${created.name}" — it's now in the spawn picker.`, 'success');
+    showToast(`Added "${created.name}". It's now in the spawn picker.`, 'success');
   }
 
   function handleRemoveCustomAgent(id: string, name: string) {
@@ -1439,7 +1439,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           {!github.options?.oauth_available &&
                             !github.options?.gh_cli_available && (
                               <small className="settings-github-note">
-                                OAuth sign-in isn't configured for this build — paste a personal
+                                OAuth sign-in isn't configured for this build, so paste a personal
                                 access token in the Clone dialog instead.
                               </small>
                             )}
@@ -1685,7 +1685,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     Download Speech-to-Text models to enable 100% private, offline voice typing in Spacron.
                   </div>
                   <div style={{ fontSize: '12px', background: 'rgba(78, 201, 176, 0.08)', color: 'var(--text-secondary)', padding: '8px 12px', borderRadius: '6px', marginTop: '8px', marginBottom: '12px', lineHeight: '1.5', border: '1px solid rgba(78, 201, 176, 0.15)' }}>
-                    ⚡ Parakeet now runs natively in the app process (ONNX Runtime) instead of WASM in the renderer, eliminating the OOM crash on long speech. Memory usage is capped via 30-second windowed inference — short utterances stay single-pass.
+                    ⚡ Parakeet now runs natively in the app process (ONNX Runtime) instead of WASM in the renderer, eliminating the OOM crash on long speech. Memory usage is capped via 30-second windowed inference, and short utterances stay single-pass.
                   </div>
                   <div className="local-models-list">
                     {localModelsLoading && localModels.length === 0 ? (
@@ -1779,7 +1779,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   )}
                   <SettingRow
                     title="Smart voice detection"
-                    detail="Uses a small Silero model to decide when you start and stop speaking — far better at ignoring clicks, fans and chatter than the built-in level gate. Download “Silero VAD” under Settings → Models → Local Speech-to-Text; until then dictation uses the level gate."
+                    detail="Uses a small Silero model to decide when you start and stop speaking. It is far better at ignoring clicks, fans and chatter than the built-in level gate. Download “Silero VAD” under Settings → Models → Local Speech-to-Text; until then dictation uses the level gate."
                   >
                     <Toggle label="Toggle smart voice detection" checked={smartVad} onChange={smartVadEnabled.set} />
                   </SettingRow>
@@ -1806,7 +1806,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow
                     title="Custom vocabulary"
-                    detail="Comma-separated terms the polish pass must spell exactly — project names, libraries, APIs, coworkers' names. Uses your refinement provider's key."
+                    detail="Comma-separated terms the polish pass must spell exactly: project names, libraries, APIs, coworkers' names. Uses your refinement provider's key."
                   >
                     <input
                       value={vocabulary}
@@ -1827,8 +1827,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow
                     title="Engine"
                     detail={conversationEngine === 'xai-realtime'
-                      ? 'One live speech-to-speech call to xAI Grok — sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
-                      : 'One live speech-to-speech call to OpenAI — replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'}
+                      ? 'One live speech-to-speech call to xAI Grok, with sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
+                      : 'One live speech-to-speech call to OpenAI. Replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'}
                   >
                     <SelectField
                       value={conversationEngine}
@@ -1929,7 +1929,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Notifications">
                   <SettingRow
                     title="Agent result nudge"
-                    detail="Play a soft chime when an agent finishes, blocks, or fails — even when voice mode is closed. The recap lands in the chat card."
+                    detail="Play a soft chime when an agent finishes, blocks, or fails, even when voice mode is closed. The recap lands in the chat card."
                   >
                     <Toggle label="Toggle agent result nudge" checked={announceCompletions} onChange={announceAgentCompletions.set} />
                   </SettingRow>
@@ -2000,7 +2000,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       ariaLabel="Terminal cursor"
                     />
                   </SettingRow>
-                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest, but it makes the terminal solid instead of see-through — it cannot draw dim or underlined text over a transparent surface — and a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
+                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest, but it makes the terminal solid instead of see-through, because it cannot draw dim or underlined text over a transparent surface, and a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
                     <SelectField
                       value={renderer}
                       options={[
@@ -2029,7 +2029,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Each agent works on its own git branch in a private checkout, so several can edit
                     the project at once without colliding. Work stays quarantined there until you review
-                    it — the fleet dashboard shows every agent's changes with per-file diffs, and you
+                    it. The fleet dashboard shows every agent's changes with per-file diffs, and you
                     bring the work in or merge it when it's ready. A branch is only removed once
                     everything in it has been brought across.
                   </p>
@@ -2045,7 +2045,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow
                     title="Auto-stage agent changes"
-                    detail="Off (the default) keeps each agent's work in its private checkout until you review and bring it in — the Orca-style review wall. On moves changes across on their own as agents finish, so the app can be run and tested against them without pressing anything."
+                    detail="Off (the default) keeps each agent's work in its private checkout until you review and bring it in, the Orca-style review wall. On moves changes across on their own as agents finish, so the app can be run and tested against them without pressing anything."
                   >
                     <Toggle
                       label="Toggle automatic staging of agent changes"
@@ -2057,14 +2057,14 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Power">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    A long agent run is unattended by design — which is exactly what your machine
+                    A long agent run is unattended by design, which is exactly what your machine
                     reads as idle before it suspends, taking every agent down mid-turn. Spacron can
                     hold the system awake for as long as agents are actually working, and let go the
                     moment the last one finishes.
                   </p>
                   <SettingRow
                     title="Stay awake while agents work"
-                    detail="Blocks idle sleep only while at least one agent is mid-turn — the display still turns off, and asking your machine to sleep still works. Nothing is held once every agent is idle."
+                    detail="Blocks idle sleep only while at least one agent is mid-turn. The display still turns off, and asking your machine to sleep still works. Nothing is held once every agent is idle."
                   >
                     <Toggle
                       label="Toggle keeping the system awake while agents work"
@@ -2090,10 +2090,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         : !keepAwake.supported
                         ? 'This platform has no sleep inhibitor Spacron can use.'
                         : keepAwake.holding
-                        ? `Holding the system awake — ${keepAwake.workingAgents} agent${
+                        ? `Holding the system awake for ${keepAwake.workingAgents} agent${
                             keepAwake.workingAgents === 1 ? '' : 's'
                           } working.`
-                        : 'Idle — nothing held. The hold is taken when an agent starts a turn.'}
+                        : 'Idle, with nothing held. The hold is taken when an agent starts a turn.'}
                     </p>
                   )}
                 </Section>
@@ -2101,14 +2101,14 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Browser">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Give agents a real browser so they can open what they just built, read the page
-                    and fix what's wrong — instead of guessing from the dev-server log. Spacron adds
+                    and fix what's wrong, instead of guessing from the dev-server log. Spacron adds
                     Microsoft's Playwright MCP server to each agent's config alongside its own tools.
-                    Each agent drives its own Chromium window, separate from the preview panel here —
+                    Each agent drives its own Chromium window, separate from the preview panel here,
                     that stays yours.
                   </p>
                   <SettingRow
                     title="Let agents use a browser"
-                    detail="Runs `npx @playwright/mcp@latest --isolated` per agent, so it needs Node on your PATH and downloads a browser the first time. Sessions are isolated because agents run concurrently and a shared browser profile can only be held by one of them. Adds a spacron-playwright entry to agent config files — including the global ones for Codex and droid — and removes it again when you turn this off."
+                    detail="Runs `npx @playwright/mcp@latest --isolated` per agent, so it needs Node on your PATH and downloads a browser the first time. Sessions are isolated because agents run concurrently and a shared browser profile can only be held by one of them. Adds a spacron-playwright entry to agent config files, including the global ones for Codex and droid, and removes it again when you turn this off."
                   >
                     <Toggle
                       label="Toggle agent browser tools"
@@ -2135,7 +2135,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     spawn picker, panes running it show its name, and typing its command in any shell is
                     recognized as that agent. Agents that read a <code>CLAUDE.md</code> / <code>AGENTS.md</code>
                     rules file are briefed automatically. The built-in agents are managed in the list
-                    above — hide one from there and it comes back the same way.
+                    above. Hide one from there and it comes back the same way.
                   </p>
 
                   <div className="agent-list">
@@ -2230,7 +2230,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           </>
                         ) : (
                           <>
-                            Couldn&apos;t check ({rulesDetection?.error}) — left unticked, so the brief gets
+                            Couldn&apos;t check ({rulesDetection?.error}), so it is left unticked and the brief gets
                             pasted. Tick the box if this CLI reads a rules file.
                           </>
                         )}

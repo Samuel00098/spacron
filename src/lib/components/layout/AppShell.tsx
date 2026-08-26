@@ -2042,8 +2042,8 @@ export default function AppShell() {
       title: isExpanded
         ? 'Restore split grid'
         : inSplit
-          ? 'Split — add a pane'
-          : 'Split — tile panels',
+          ? 'Split: add a pane'
+          : 'Split: tile panels',
       active: inSplit && !isExpanded,
       onClick: () => {
         // Three states, and the button has to tell them apart. It used to
@@ -2066,7 +2066,7 @@ export default function AppShell() {
     {
       id: 'fleet',
       title: fleetArrangementActive
-        ? 'Untile agents — back to your layout'
+        ? 'Untile agents and go back to your layout'
         : 'Tile all agents',
       active: fleetArrangementActive && !isExpanded,
       onClick: () => {
@@ -2450,8 +2450,8 @@ export default function AppShell() {
               <button
                 className="room-action"
                 onClick={() => setStageExpansion(null)}
-                title={`Restore ${title} — back to split`}
-                aria-label={`Restore ${title} — back to split`}
+                title={`Restore ${title} to the split grid`}
+                aria-label={`Restore ${title} to the split grid`}
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="4 14 10 14 10 20" />
@@ -2464,8 +2464,8 @@ export default function AppShell() {
               <button
                 className="room-action"
                 onClick={() => setStageExpansion(id)}
-                title={`Expand ${title} — full stage`}
-                aria-label={`Expand ${title} — full stage`}
+                title={`Expand ${title} to the full stage`}
+                aria-label={`Expand ${title} to the full stage`}
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="15 3 21 3 21 9" />
@@ -2726,7 +2726,7 @@ export default function AppShell() {
                   title={
                     isExpanded
                       ? isPrimary
-                        ? `${roomTitle(room)} is currently expanded — click to restore split grid`
+                        ? `${roomTitle(room)} is currently expanded. Click to restore the split grid.`
                         : `Show ${roomTitle(room)} full stage`
                       : !onStage
                         ? `Add ${roomTitle(room)} to the split`

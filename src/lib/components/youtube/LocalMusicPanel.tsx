@@ -103,7 +103,7 @@ export default function LocalMusicPanel() {
           </svg>
           <h3>Play music from your own folder</h3>
           <p>
-            Point Spacron at a folder of audio files and it plays them straight off disk — no ads,
+            Point Spacron at a folder of audio files and it plays them straight off disk, with no ads,
             no network, nothing that can drop out mid-stream.
           </p>
           <div className="lm-empty-actions">
@@ -122,7 +122,7 @@ export default function LocalMusicPanel() {
 
           <div className="lm-tip">
             <strong>No music yet?</strong> StreamBeats is free, needs no credit in your
-            description, and is cleared with Content ID — so it won't get claimed. Download
+            description, and is cleared with Content ID, so it won't get claimed. Download
             the genres you want, then pick that folder above.
           </div>
 
@@ -157,7 +157,7 @@ export default function LocalMusicPanel() {
           <button
             type="button"
             className={`lm-icon-btn${showLicenses ? ' active' : ''}`}
-            title={`${state.licenseFiles.length} licence file(s) found — keep these for Content ID disputes`}
+            title={`${state.licenseFiles.length} licence file(s) found. Keep these for Content ID disputes.`}
             aria-label="Show licence files"
             aria-pressed={showLicenses}
             onClick={() => setShowLicenses((v) => !v)}
@@ -288,7 +288,7 @@ export default function LocalMusicPanel() {
       {showLicenses && state.licenseFiles.length > 0 && (
         <div className="lm-licenses">
           <div className="lm-licenses-head">
-            Licence files — proof of rights if a track is ever claimed
+            Licence files: proof of rights if a track is ever claimed
           </div>
           {state.licenseFiles.map((path) => (
             <button

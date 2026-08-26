@@ -1105,7 +1105,7 @@ export default function MobilePanel() {
               className="mobile-quality"
               title={
                 streamMode !== 'stream'
-                  ? 'Resolution applies to the live stream — switch back from Snapshot to change it'
+                  ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
                   : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
               }
             >
@@ -1132,8 +1132,8 @@ export default function MobilePanel() {
               disabled={!selectedSerial}
               title={
                 streamMode === 'stream'
-                  ? 'Live streaming is on — switch to snapshot polling'
-                  : 'Live streaming is off — switch to the live stream'
+                  ? 'Live streaming is on. Click to switch to snapshot polling.'
+                  : 'Live streaming is off. Click to switch to the live stream.'
               }
             >
               {streamMode === 'stream' ? 'Live' : 'Snapshot'}
@@ -1148,7 +1148,7 @@ export default function MobilePanel() {
               with the rest of the toolbar's optional chrome. */}
           {tools?.emulator && avds.length > 0 && (
             <p className="mobile-hint">
-              For the best experience, use the <strong>Medium Phone</strong> AVD — Android Studio's
+              For the best experience, use the <strong>Medium Phone</strong> AVD, which is Android Studio's
               default device.
             </p>
           )}
@@ -1263,7 +1263,7 @@ export default function MobilePanel() {
                   ? `${frameError} · retrying the live stream…`
                   : frameError
                 : deviceOffline
-                  ? `${selectedDevice?.label} is ${selectedDevice?.state} — unlock the device and authorize USB debugging.`
+                  ? `${selectedDevice?.label} is ${selectedDevice?.state}. Unlock the device and authorize USB debugging.`
                   : streamMode === 'stream' && streamState.phase === 'starting'
                     ? `${selectedDevice?.label ?? 'Device'} · ${streamState.message ?? 'starting stream…'}`
                     : androidStreaming
@@ -1378,8 +1378,8 @@ export default function MobilePanel() {
                       onClick={toggleIosStreamMode}
                       title={
                         iosStreamMode === 'stream'
-                          ? 'Live streaming is on — switch to snapshot polling'
-                          : 'Live streaming is off — switch to the live stream'
+                          ? 'Live streaming is on. Click to switch to snapshot polling.'
+                          : 'Live streaming is off. Click to switch to the live stream.'
                       }
                     >
                       {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}

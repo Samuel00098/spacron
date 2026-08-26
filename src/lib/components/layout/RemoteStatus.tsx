@@ -197,7 +197,7 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
                   <button
                     type="button"
                     className={`rs-icon-btn${conn.reconnectOnStartup ? ' rs-on' : ''}`}
-                    title={conn.reconnectOnStartup ? 'Reconnecting on startup — agents come back on their own' : 'Reconnect on startup'}
+                    title={conn.reconnectOnStartup ? 'Reconnecting on startup, so agents come back on their own' : 'Reconnect on startup'}
                     aria-pressed={!!conn.reconnectOnStartup}
                     onClick={() => setReconnectOnStartup(conn.id, !conn.reconnectOnStartup)}
                   >
@@ -224,7 +224,7 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
                   <button
                     type="button"
                     className={`rs-icon-btn rs-danger${confirmRemoveId === conn.id ? ' rs-armed' : ''}`}
-                    title={confirmRemoveId === conn.id ? 'Click again to remove — deletes the saved token too' : 'Remove'}
+                    title={confirmRemoveId === conn.id ? 'Click again to remove. This deletes the saved token too.' : 'Remove'}
                     aria-label={confirmRemoveId === conn.id ? `Confirm removing ${conn.name}` : `Remove ${conn.name}`}
                     onClick={() => {
                       if (confirmRemoveId !== conn.id) {

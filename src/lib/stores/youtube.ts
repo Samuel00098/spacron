@@ -721,7 +721,7 @@ export async function playMusicResult(result: YouTubeResult): Promise<void> {
     if (result.videoId) {
       playVideo({ ...result, type: 'song' });
     } else {
-      youtubeState.update((s) => ({ ...s, status: 'Could not load this album — try another result.' }));
+      youtubeState.update((s) => ({ ...s, status: 'Could not load this album. Try another result.' }));
     }
     return;
   }

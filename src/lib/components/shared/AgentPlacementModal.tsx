@@ -39,7 +39,7 @@ const OPTIONS: Array<{
     label: 'Isolated worktree',
     short: 'Isolated',
     detail:
-      'Its own branch off HEAD, in a separate folder. Safe for parallel agents — but its edits will not show up in your main checkout until you merge them.',
+      'Its own branch off HEAD, in a separate folder. Safe for parallel agents, but its edits will not show up in your main checkout until you merge them.',
     icon: WorktreeIcon,
   },
   {
@@ -47,7 +47,7 @@ const OPTIONS: Array<{
     label: 'Main repo',
     short: 'Main repo',
     detail:
-      'Runs directly in the project root on your current branch. You see every edit immediately, and git tag / push work — but concurrent agents can collide.',
+      'Runs directly in the project root on your current branch. You see every edit immediately, and git tag and push work, but concurrent agents can collide.',
     icon: MainRepoIcon,
   },
 ];

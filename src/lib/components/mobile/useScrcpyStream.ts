@@ -207,7 +207,7 @@ export function useScrcpyStream() {
                 phase: 'error',
                 fatal: true,
                 message:
-                  'This device streams H.264, which this webview cannot decode (WebCodecs unavailable) — falling back to snapshots.',
+                  'This device streams H.264, which this webview cannot decode (WebCodecs unavailable), so it is falling back to snapshots.',
               },
         );
         return;
@@ -453,13 +453,13 @@ export function useScrcpyStream() {
             // encoder is quiet. Re-arm the timer rather than drop the stream.
             lastFrameAtRef.current = Date.now();
           } else {
-            setState({ phase: 'error', message: 'The device disconnected — falling back to snapshots.' });
+            setState({ phase: 'error', message: 'The device disconnected, so it is falling back to snapshots.' });
             void cleanup();
           }
         })
         .catch(() => {
           if (probeGeneration !== generationRef.current || !activeRef.current) return;
-          setState({ phase: 'error', message: 'Lost contact with adb — falling back to snapshots.' });
+          setState({ phase: 'error', message: 'Lost contact with adb, so it is falling back to snapshots.' });
           void cleanup();
         })
         .finally(() => {

@@ -652,7 +652,7 @@ export default function PreviewPanel() {
   const autoDetectPort = useCallback(async () => {
     const projectPath = project?.root_path;
     if (!projectPath) {
-      showToast('No active project — open a project folder first', 'info');
+      showToast('No active project. Open a project folder first.', 'info');
       return;
     }
     try {
@@ -1626,7 +1626,7 @@ export default function PreviewPanel() {
             onClick={() => setShowConsole((prev) => !prev)}
             title={
               consoleCounts.errors || consoleCounts.warnings
-                ? `Preview console — ${consoleCounts.errors} error(s), ${consoleCounts.warnings} warning(s)`
+                ? `Preview console: ${consoleCounts.errors} error(s), ${consoleCounts.warnings} warning(s)`
                 : 'Toggle preview console'
             }
           >
@@ -1691,7 +1691,7 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn viewport-btn${!deviceMode ? ' active' : ''}`}
             onClick={() => setDeviceMode(false)}
-            title="Responsive - fill the pane"
+            title="Responsive: fill the pane"
             aria-pressed={!deviceMode}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2099,7 +2099,7 @@ export default function PreviewPanel() {
             <h3>Web Preview</h3>
             <p>
               Built for previewing your <strong>local dev server</strong> (port {port}). You can also open external pages, but many full
-              websites block embedding and won't load here — this isn't a full web browser.
+              websites block embedding and won't load here, because this isn't a full web browser.
             </p>
             <div className="placeholder-actions">
               <button

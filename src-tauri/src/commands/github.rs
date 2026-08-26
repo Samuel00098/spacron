@@ -27,7 +27,7 @@ const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_OAUTH_SCOPES: &str = "repo read:user workflow";
 /// Shown whenever GitHub rejects our credentials with a 401 — the keychain
 /// entries are cleared and the user signs in again.
-const SIGN_IN_EXPIRED: &str = "Your GitHub sign-in has expired — sign in again.";
+const SIGN_IN_EXPIRED: &str = "Your GitHub sign-in has expired. Sign in again.";
 
 /// OAuth App client id for "Sign in with GitHub" (device flow).
 ///

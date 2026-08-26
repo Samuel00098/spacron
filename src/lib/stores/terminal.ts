@@ -1673,7 +1673,7 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
     if (!mustSeeMarker || tuiMarkerSeen() || !launchFailedSince(sessionId, launchFailureStartLen)) return false;
     logAgentSend(sessionId, 'launch-failed', { preset: session?.agentPreset ?? null });
     showToast(
-      `${display} isn't installed — the shell doesn't recognize the command. Install it (or fix PATH), then relaunch.`,
+      `${display} isn't installed. The shell doesn't recognize the command. Install it (or fix PATH), then relaunch.`,
       'error',
       9000
     );
@@ -1683,7 +1683,7 @@ export async function waitForAgentReady(sessionId: number): Promise<AgentReadine
   if (Boolean(session?.agentPreset) && !markerAlreadyVisible && launchFailedSince(sessionId, launchFailureStartLen)) {
     logAgentSend(sessionId, 'launch-failed', { preset: session?.agentPreset ?? null, beforeReadyWait: true });
     showToast(
-      `${display} isn't installed — the shell doesn't recognize the command. Install it (or fix PATH), then relaunch.`,
+      `${display} isn't installed. The shell doesn't recognize the command. Install it (or fix PATH), then relaunch.`,
       'error',
       9000
     );
@@ -2352,7 +2352,7 @@ export async function killSession(id: number) {
           forgetWorktree(worktree.path);
           if (outcome.staged > 0) {
             showToast(
-              `Staged ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} from the closed agent — review in Source Control`,
+              `Staged ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} from the closed agent. Review it in Source Control.`,
               'info',
               7000,
             );
@@ -2360,8 +2360,8 @@ export async function killSession(id: number) {
         } else {
           showToast(
             outcome.reason === 'conflict'
-              ? `Kept branch '${worktree.branch}' — its changes conflict with your working tree and need resolving`
-              : `Kept branch '${worktree.branch}' — it still holds ${outcome.pendingFiles} unstaged file change${outcome.pendingFiles === 1 ? '' : 's'}`,
+              ? `Kept branch '${worktree.branch}'. Its changes conflict with your working tree and need resolving.`
+              : `Kept branch '${worktree.branch}'. It still holds ${outcome.pendingFiles} unstaged file change${outcome.pendingFiles === 1 ? '' : 's'}`,
             'warning',
             10000,
           );

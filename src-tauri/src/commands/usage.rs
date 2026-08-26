@@ -2219,7 +2219,7 @@ async fn opencode_workspace_ids(
         return Err(|spec| {
             let mut usage = ProviderUsage::blank(spec, UsageStatus::Ok);
             usage.note = Some(
-                "No OpenCode plan on this account — usage is only metered for Zen/Go subscribers"
+                "No OpenCode plan on this account. Usage is only metered for Zen and Go subscribers."
                     .to_string(),
             );
             usage
@@ -2736,7 +2736,7 @@ fn describe_network_error(error: &reqwest::Error) -> String {
     if error.is_timeout() {
         "The usage request timed out".to_string()
     } else if error.is_connect() {
-        "Could not reach the provider — check your connection".to_string()
+        "Could not reach the provider. Check your connection.".to_string()
     } else {
         "The usage request failed".to_string()
     }

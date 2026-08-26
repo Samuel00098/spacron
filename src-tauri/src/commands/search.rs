@@ -69,7 +69,7 @@ pub async fn search_in_project(
 
     let projects = state.workspace_manager.list_projects();
     if projects.is_empty() {
-        return Err("No project is open — open a project folder first".to_string());
+        return Err("No project is open. Open a project folder first.".to_string());
     }
 
     // Build the matcher: escape the query unless the user opted into regex,

@@ -183,7 +183,7 @@ export function completionBody(c: NonNullable<CompletionLike['completion']>): st
   if (c.summaryPending) return 'Summarising what it did…';
   if (c.status === 'failed') return 'The agent stopped without finishing.';
   if (c.status === 'blocked') return 'The agent is waiting for you.';
-  if (c.endedBy === 'inferred') return 'Went quiet — no completion reported.';
+  if (c.endedBy === 'inferred') return 'Went quiet, with no completion reported.';
   if (c.endedBy === 'exit') return 'The agent process exited.';
   return 'Finished its turn.';
 }

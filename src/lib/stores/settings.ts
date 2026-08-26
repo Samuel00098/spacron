@@ -261,7 +261,7 @@ export const aiProviders: AiProviderDef[] = [
     keyUrl: 'https://console.anthropic.com/settings/keys',
     defaultModel: 'claude-3-5-haiku-latest',
     models: [
-      { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku', description: 'Fast and cheap — great for refinement.' },
+      { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku', description: 'Fast and cheap, great for refinement.' },
       { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Newest fast Claude.' },
       { id: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet', description: 'Higher quality, pricier.' },
     ],
@@ -313,7 +313,7 @@ export const aiProviders: AiProviderDef[] = [
     keyUrl: 'https://console.x.ai/team/default/api-keys',
     defaultModel: 'grok-4.3',
     models: [
-      { id: 'grok-4.3', label: 'Grok 4.3', description: 'Flagship — most intelligent, fastest, 1M context.' },
+      { id: 'grok-4.3', label: 'Grok 4.3', description: 'Flagship: most intelligent, fastest, 1M context.' },
       { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: 'Deep reasoning, 1M context.' },
       { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning', description: 'Fast responses, 1M context.' },
       { id: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi-Agent', description: 'Multi-agent orchestration, 1M context.' },

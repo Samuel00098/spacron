@@ -61,7 +61,7 @@ function describePlayerError(code: number): string {
     case 2:
       return 'This video link looks invalid.';
     case 100:
-      return 'Video not found — it may be private or removed.';
+      return 'Video not found. It may be private or removed.';
     case 101:
     case 150:
       return 'This video does not allow embedded playback. Try another result.';
@@ -70,9 +70,9 @@ function describePlayerError(code: number): string {
         navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
       if (onLinuxDesktop && gstreamerCodecsChecked && !gstreamerCodecsOk) {
         return (
-          'Playback failed. On Linux, video playback needs the GStreamer codecs — ' +
+          'Playback failed. On Linux, video playback needs the GStreamer codecs: ' +
           'e.g. on Ubuntu/Debian run: sudo apt install gstreamer1.0-plugins-good ' +
-          'gstreamer1.0-plugins-bad gstreamer1.0-libav — then restart Spacron.'
+          'gstreamer1.0-plugins-bad gstreamer1.0-libav. Then restart Spacron.'
         );
       }
       return `Playback failed (error ${code}).`;
@@ -249,7 +249,7 @@ export default function YouTubePanel() {
         } catch {
           youtubeState.update((s) => ({
             ...s,
-            status: 'Could not start playback for this track — try another result.',
+            status: 'Could not start playback for this track. Try another result.',
           }));
           return;
         }
@@ -319,7 +319,7 @@ export default function YouTubePanel() {
                   } else {
                     youtubeState.update((s) => ({
                       ...s,
-                      status: 'Stream stopped — it may have ended. Search again to retry.',
+                      status: 'Stream stopped. It may have ended. Search again to retry.',
                     }));
                   }
                 }
@@ -853,7 +853,7 @@ export default function YouTubePanel() {
             )}
             <p>
               {isMusic
-                ? 'Search for songs, albums, or playlists — or paste a YouTube Music link.'
+                ? 'Search for songs, albums, or playlists, or paste a YouTube Music link.'
                 : 'Search for something or paste a YouTube link to start watching.'}
             </p>
           </div>

@@ -915,7 +915,7 @@ fn git_create_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     let base_branch = git_capture(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|| "HEAD".to_string());
     let base_commit = git_capture(workspace, &["rev-parse", "HEAD"])
-        .ok_or_else(|| "Could not resolve HEAD — the repository has no commits yet.".to_string())?;
+        .ok_or_else(|| "Could not resolve HEAD. The repository has no commits yet.".to_string())?;
 
     let safe_branch = branch.replace('/', "-");
     let worktree_path = crate::commands::clean_path_buf(
@@ -1091,11 +1091,11 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
             || stderr.contains("Already up-to-date");
 
         let msg = if already_up_to_date {
-            format!("Nothing to merge — '{branch}' holds nothing your checkout doesn't already have.")
+            format!("Nothing to merge. '{branch}' holds nothing your checkout doesn't already have.")
         } else if no_commit && delete_after {
-            format!("Changes from '{branch}' staged for review in Source Control — worktree and branch removed.")
+            format!("Changes from '{branch}' staged for review in Source Control, and the worktree and branch were removed.")
         } else if no_commit {
-            format!("Changes from '{branch}' staged for review in Source Control — worktree kept for reference.")
+            format!("Changes from '{branch}' staged for review in Source Control, and the worktree was kept for reference.")
         } else if delete_after {
             format!("Branch '{branch}' merged and cleaned up successfully.")
         } else {
@@ -1118,7 +1118,7 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         Ok(json!({
             "success": false,
             "message": if has_conflicts {
-                format!("Merge conflict — resolve conflicts in the main checkout, then commit.\n{}{}", err_out, std_out)
+                format!("Merge conflict. Resolve the conflicts in the main checkout, then commit.\n{}{}", err_out, std_out)
             } else {
                 format!("Merge failed:\n{}{}", err_out, std_out)
             },
@@ -1323,7 +1323,7 @@ fn git_rename_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
 
     let current = git_capture(&cleaned, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     if !branch.is_empty() && current != branch {
-        return Err(format!("Worktree is on '{current}', not '{branch}' — rename refused."));
+        return Err(format!("Worktree is on '{current}', not '{branch}', so the rename was refused."));
     }
 
     let out = std::process::Command::new("git")
@@ -1406,7 +1406,7 @@ fn git_stage_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     if diff.stdout.is_empty() {
         return Ok(json!({
             "success": true,
-            "message": "Already up to date — nothing new to stage.",
+            "message": "Already up to date, with nothing new to stage.",
             "conflicted": false,
             "conflicted_files": Vec::<String>::new(),
             "staged_commit": head,

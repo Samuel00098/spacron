@@ -281,7 +281,7 @@ export default function CloneRepoModal() {
             <div className="cr-repos">
               <div className="cr-repos-head">
                 <span className="cr-label">
-                  Your repositories — signed in as <b>{signedIn.login}</b>
+                  Your repositories, signed in as <b>{signedIn.login}</b>
                 </span>
                 <button
                   type="button"

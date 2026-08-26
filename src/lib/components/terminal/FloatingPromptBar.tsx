@@ -710,7 +710,7 @@ export default function FloatingPromptBar({
   const toggleTranscriptionMode = useCallback(() => {
     if (!startBarTranscription()) {
       showToast(
-        'A transcription is already running — finish or press Escape first.',
+        'A transcription is already running. Finish it or press Escape first.',
         'warning'
       );
     }
@@ -1386,12 +1386,12 @@ export default function FloatingPromptBar({
                   title={
                     transcribing
                       ? 'Stop transcribing'
-                      : 'Transcribe — speech to text at the cursor'
+                      : 'Transcribe: speech to text at the cursor'
                   }
                   aria-label={
                     transcribing
                       ? 'Stop transcribing'
-                      : 'Transcribe — speech to text at the cursor'
+                      : 'Transcribe: speech to text at the cursor'
                   }
                 >
                   {transcribing ? (
@@ -1542,7 +1542,7 @@ export default function FloatingPromptBar({
                             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                           </svg>
                           <span>
-                            Sleeping — say &ldquo;wake up&rdquo; to resume
+                            Sleeping. Say &ldquo;wake up&rdquo; to resume.
                           </span>
                         </div>
                       );

@@ -268,7 +268,7 @@ export default function SourceControl() {
       if (!restored) return;
       setCommitMessage(restored);
       commitMessageRef.current = restored;
-      showToast('No commit message typed — put the previous one back.', 'info');
+      showToast('No commit message typed, so the previous one is back.', 'info');
     }, COMMIT_MESSAGE_GRACE_MS);
   }
 
@@ -323,13 +323,13 @@ export default function SourceControl() {
     setIsPublishing(true);
     try {
       if (!github.identity) {
-        setPublishError('Sign in to GitHub first — the form above shows the sign-in options.');
+        setPublishError('Sign in to GitHub first. The form above shows the sign-in options.');
         return;
       }
 
       const result = await createGithubRepo(id, name, publishDesc.trim(), publishPrivate);
       showToast(
-        result.pushed ? `Published to ${result.full_name}!` : `Created ${result.full_name} - commit some files, then push.`,
+        result.pushed ? `Published to ${result.full_name}!` : `Created ${result.full_name}. Commit some files, then push.`,
         'success',
       );
       setPublishOpen(false);

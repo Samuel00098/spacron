@@ -395,7 +395,7 @@ async function deliverMcpPrompt(payload: DeliverPromptRequest): Promise<void> {
       // rejected send is worth retrying.
       const alive = get(sessions).some((s) => s.id === session_id && s.isRunning);
       error = alive
-        ? 'The agent did not accept the message — its CLI may be busy or not at a prompt.'
+        ? 'The agent did not accept the message. Its CLI may be busy or not at a prompt.'
         : 'That agent is no longer running.';
     }
   } catch (e) {
@@ -753,7 +753,7 @@ export async function injectMcpConfigForAgent(
       // `SPACRON_MCP_URL` comment in `stores/terminal.ts`), and it is
       // indistinguishable from an agent that simply chose not to use them.
       console.warn(
-        `[mcp] No MCP config surface known for "${agentExecutable(preset) || preset}" — ` +
+        `[mcp] No MCP config surface known for "${agentExecutable(preset) || preset}". ` +
           `it launches without Spacron tools (no list_agents / send_to_agent / delegate_task). ` +
           `Supported: claude, codex, gemini, opencode, droid, cursor.`,
       );
@@ -947,7 +947,7 @@ export async function ensureMcpConfigsIgnored(projectRoot: string): Promise<void
     const missing = TOKEN_BEARING_PATHS.filter((p) => !present.has(p));
     if (!missing.length) return;
 
-    const header = '# Spacron: local MCP configs — these carry the MCP server token.';
+    const header = '# Spacron: local MCP configs. These carry the MCP server token.';
     const body = current.includes(header) ? missing.join('\n') : [header, ...missing].join('\n');
     const separator = current.length && !current.endsWith('\n') ? '\n' : '';
 
@@ -1173,7 +1173,7 @@ async function warnIfGlobalConfigPortIsEphemeral(agent: string): Promise<void> {
     if (port === DEFAULT_MCP_PORT) return;
     console.warn(
       `[mcp] Writing ${agent}'s GLOBAL config with ephemeral port ${port} ` +
-        `(default ${DEFAULT_MCP_PORT} was taken — most likely another Spacron instance ` +
+        `(default ${DEFAULT_MCP_PORT} was taken, most likely by another Spacron instance ` +
         `already has it). This URL dies with this instance, and because the config is ` +
         `machine-wide it will leave every ${agent} session on this machine without Spacron ` +
         `tools once it does. Running a single Spacron instance keeps the port stable.`,

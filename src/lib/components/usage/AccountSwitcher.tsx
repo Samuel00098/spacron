@@ -126,8 +126,8 @@ export default function AccountSwitcher({
       extraEnv: env,
       toast:
         accountId === DEFAULT_ACCOUNT_ID
-          ? `Signing in to ${providerName} — complete the login in the terminal.`
-          : `Signing in to ${providerName} as this account — the login writes into its own directory, not your default one.`,
+          ? `Signing in to ${providerName}. Complete the login in the terminal.`
+          : `Signing in to ${providerName} as this account. The login writes into its own directory, not your default one.`,
     });
     // No refresh here on purpose: `runAgentSignIn` re-scans when the sign-in
     // session exits. Refreshing now would only read the empty directory the
@@ -225,7 +225,7 @@ export default function AccountSwitcher({
 
           <p className="account-switch-hint">
             Adding one opens {providerName}'s own login in a terminal, pointed at
-            a fresh config directory — Spacron never writes your credentials, it
+            a fresh config directory. Spacron never writes your credentials, it
             only decides which directory the CLI writes them to.
           </p>
         </div>

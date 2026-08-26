@@ -125,7 +125,7 @@ export default function ShareUsageButton({ data }: { data: ShareCardData }) {
 
           <div className="share-usage-foot">
             <p className="share-usage-note">
-              Includes your totals — check it before posting.
+              Includes your totals, so check it before posting.
             </p>
             <button type="button" className="stats-action-btn" onClick={() => void copy()}>
               {copyState === 'copied'

@@ -97,7 +97,7 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
                 <h1 className="ob-title">Welcome to Spacron</h1>
                 <p className="ob-desc">
                   A keyboard-driven developer workspace with a code editor, terminal,
-                  AI agents, HTTP client, database explorer, and dev tools — all in one window.
+                  AI agents, HTTP client, database explorer, and dev tools, all in one window.
                 </p>
               </div>
               <div className="ob-welcome-features">
@@ -263,7 +263,7 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
               <div className="ob-features-list">
                 {[
                   { icon: '>', title: 'AI Agents', desc: 'Spawn coding agents that read your project, run terminal commands, and edit files.' },
-                  { icon: '~', title: 'Voice Mode', desc: 'Dictate code, control the terminal, and converse with AI — hands-free.' },
+                  { icon: '~', title: 'Voice Mode', desc: 'Dictate code, control the terminal, and converse with AI, hands-free.' },
                   { icon: '#', title: 'Git Integration', desc: 'Stage, commit, push, pull, and manage branches from the sidebar.' },
                   { icon: '%', title: 'Dev Toolbox', desc: 'JWT decoder, JSON formatter, regex tester, epoch converter, URL coder.' },
                   { icon: '&', title: 'HTTP Client', desc: 'Compose and test REST API requests with full response viewer and history.' },

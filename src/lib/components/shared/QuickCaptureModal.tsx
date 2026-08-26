@@ -30,7 +30,7 @@ export default function QuickCaptureModal({ onclose }: { onclose: () => void }) 
     setSaving(true);
 
     if (!project) {
-      showToast('No active project — thought not saved', 'warning');
+      showToast('No active project, so the thought was not saved', 'warning');
       onclose();
       return;
     }
@@ -62,7 +62,7 @@ export default function QuickCaptureModal({ onclose }: { onclose: () => void }) 
       await invoke('fs_write_file', { path: inboxPath, content: existing + entry });
       showToast('Captured!', 'success');
     } catch {
-      showToast('Failed to save — check console', 'error');
+      showToast('Failed to save. Check the console.', 'error');
     }
 
     onclose();

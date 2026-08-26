@@ -101,7 +101,7 @@ export default function UsageCounter() {
   const hidden = headlines.length - shown.length;
 
   const label = peak
-    ? `Agent usage — ${peak.provider.name} at ${Math.round(peak.window.usedPercent)}% of its ${peak.window.label} limit`
+    ? `Agent usage: ${peak.provider.name} at ${Math.round(peak.window.usedPercent)}% of its ${peak.window.label} limit`
     : 'Agent usage';
 
   return (

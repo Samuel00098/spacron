@@ -39,7 +39,7 @@ impl Dependency {
     /// since most of these are resolved on the next launch.
     pub fn missing_message(&self) -> String {
         format!(
-            "{} isn't installed or isn't on your PATH. {}\n\nTo fix it — {}\n\nThen restart Spacron.",
+            "{} isn't installed or isn't on your PATH. {}\n\nTo fix it: {}\n\nThen restart Spacron.",
             self.name,
             self.purpose,
             self.install_hint()
@@ -63,18 +63,18 @@ pub const GIT: Dependency = Dependency {
 pub const XCODE: Dependency = Dependency {
     name: "Xcode's command-line tools (xcrun/simctl)",
     purpose: "Spacron's iOS panel drives simulators through Apple's `xcrun simctl`.",
-    linux: "iOS simulators only run on macOS — there's no way to run them on Linux. Use the Android panel here, or switch to a Mac for iOS.",
+    linux: "iOS simulators only run on macOS, and there's no way to run them on Linux. Use the Android panel here, or switch to a Mac for iOS.",
     macos: "install Xcode from the App Store, then run `xcode-select --install` so `xcrun` is on your PATH.",
-    windows: "iOS simulators only run on macOS — there's no way to run them on Windows. Use the Android panel here, or switch to a Mac for iOS.",
+    windows: "iOS simulators only run on macOS, and there's no way to run them on Windows. Use the Android panel here, or switch to a Mac for iOS.",
 };
 
 /// The Android SDK platform-tools / emulator — required for the mobile panel.
 pub const ANDROID_SDK: Dependency = Dependency {
     name: "The Android SDK command-line tools",
     purpose: "Spacron's mobile tools drive your devices and emulators through `adb` and `emulator`.",
-    linux: "install Android Studio (which bundles the SDK), or the standalone command-line tools from https://developer.android.com/tools, then add `platform-tools` and `emulator` to your PATH — or set ANDROID_HOME.",
+    linux: "install Android Studio (which bundles the SDK), or the standalone command-line tools from https://developer.android.com/tools, then add `platform-tools` and `emulator` to your PATH, or set ANDROID_HOME.",
     macos: "run `brew install --cask android-platform-tools` (or install Android Studio), then set ANDROID_HOME if the tools aren't on your PATH.",
-    windows: "install Android Studio or the standalone SDK command-line tools from https://developer.android.com/tools, then add `platform-tools` and `emulator` to your PATH — or set ANDROID_HOME.",
+    windows: "install Android Studio or the standalone SDK command-line tools from https://developer.android.com/tools, then add `platform-tools` and `emulator` to your PATH, or set ANDROID_HOME.",
 };
 
 #[cfg(test)]

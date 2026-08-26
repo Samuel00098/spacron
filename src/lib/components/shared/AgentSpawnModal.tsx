@@ -235,7 +235,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     if (!total) {
       showToast(
         projectId
-          ? "Couldn't start the agent — see the console for details"
+          ? "Couldn't start the agent. See the console for details."
           : 'Open a project first to spawn an agent',
         'warning'
       );
@@ -298,7 +298,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             </span>
             <div className="asm-title-text">
               <span className="asm-title">Spawn Agents</span>
-              <span className="asm-subtitle">Pick a coding CLI — you'll choose where it runs next</span>
+              <span className="asm-subtitle">Pick a coding CLI. You'll choose where it runs next.</span>
             </div>
           </div>
           <button className="asm-close-btn" onClick={onclose} aria-label="Close dialog">
@@ -314,7 +314,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             <div className="asm-empty">
               {scanning
                 ? 'Scanning for installed agents…'
-                : 'No agent CLIs detected on this machine — install one, then hit Rescan below, or add a custom agent in Settings → Agents.'}
+                : 'No agent CLIs detected on this machine. Install one, then hit Rescan below, or add a custom agent in Settings → Agents.'}
             </div>
           ) : (
             spawnPresets.map((preset) => {
@@ -452,7 +452,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                 {yolo ? <path d="m4 3 16 18" /> : <path d="m9 12 2 2 4-4" />}
               </svg>
               <span className="asm-perm-label">
-                {yolo ? 'Yolo — permission prompts bypassed' : 'Manual — agents ask first'}
+                {yolo ? 'Yolo: permission prompts bypassed' : 'Manual: agents ask first'}
               </span>
               {somePinned && <span className="asm-perm-note">· some pinned</span>}
             </span>
@@ -525,7 +525,7 @@ function renderStateBadge(
     return (
       <span
         className="asm-badge custom"
-        title="Custom agent — added by you in Settings → Agents. Spacron can't auto-detect it, so it's always shown here."
+        title="Custom agent, added by you in Settings → Agents. Spacron can't auto-detect it, so it's always shown here."
       >
         Custom
       </span>
@@ -536,7 +536,7 @@ function renderStateBadge(
       <span
         className="asm-badge"
         data-tone="ready"
-        title={`${name} is signed in — ready to spawn.`}
+        title={`${name} is signed in and ready to spawn.`}
       >
         Signed in
       </span>
@@ -559,7 +559,7 @@ function renderStateBadge(
       <span
         className="asm-badge"
         data-tone="partial"
-        title={`Installed but no sign-in detected — run \`${det.command}\` once to sign in, then hit Rescan if you already did.`}
+        title={`Installed but no sign-in detected. Run \`${det.command}\` once to sign in, then hit Rescan if you already did.`}
       >
         Installed
       </span>

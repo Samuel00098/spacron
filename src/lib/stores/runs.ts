@@ -90,12 +90,12 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
 // back to a shorter alias another CLI also owns (see the Cursor row).
 const PRESET_NOTES: Record<string, string> = {
   'cursor-agent':
-    'Not the shorter “agent” alias — the Grok CLI installs an “agent” command too, and whichever comes first on your PATH wins.',
+    'Not the shorter “agent” alias. The Grok CLI installs an “agent” command too, and whichever comes first on your PATH wins.',
   aider: 'Aider has no auto-loaded rules file, so Spacron writes the brief into CONVENTIONS.md and points at it via `read:` in .aider.conf.yml (skipped, with a terminal paste instead, when your config already declares a read list).',
   traecli:
-    'Not the shorter “trae-cli” — the unrelated bytedance/trae-agent installs that binary, and whichever lands first on PATH wins.',
-  auggie: 'Augment ships “auggie”, not the shorter “aug” — that is a different tool\'s name.',
-  cn: 'Continue\'s CLI binary is “cn” — “continue” is a shell builtin and would resolve to the shell keyword.',
+    'Not the shorter “trae-cli”. The unrelated bytedance/trae-agent installs that binary, and whichever lands first on PATH wins.',
+  auggie: 'Augment ships “auggie”, not the shorter “aug”, which is a different tool\'s name.',
+  cn: 'Continue\'s CLI binary is “cn”, because “continue” is a shell builtin and would resolve to the shell keyword.',
   'kiro-cli': 'Kiro\'s installer ships “kiro-cli”, not “kiro”.',
   'command-code':
     'Command Code ships the full name; its “cmd” alias collides with Windows\' built-in cmd.exe.',

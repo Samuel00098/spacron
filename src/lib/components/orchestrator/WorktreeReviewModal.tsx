@@ -192,14 +192,14 @@ export default function WorktreeReviewModal({
       const result = await mergeTaskWorktree(projectId, worktree, false);
       if (result.conflicted) {
         showToast(
-          `${agentName}: merge hit conflicts — resolve them in Source Control.`,
+          `${agentName}: merge hit conflicts. Resolve them in Source Control.`,
           'warning',
           14000,
           true,
         );
       } else if (result.alreadyUpToDate) {
         showToast(
-          `Nothing to merge — ${worktree.branch} holds nothing ${worktree.baseBranch} doesn't already have.`,
+          `Nothing to merge. ${worktree.branch} holds nothing ${worktree.baseBranch} doesn't already have.`,
           'info',
           6000,
         );
@@ -228,7 +228,7 @@ export default function WorktreeReviewModal({
       if (outcome.removed) {
         showToast(
           outcome.staged > 0
-            ? `Discarded ${worktree.branch} — ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} were staged into Source Control first.`
+            ? `Discarded ${worktree.branch}. ${outcome.staged} file change${outcome.staged === 1 ? '' : 's'} were staged into Source Control first.`
             : `Discarded ${worktree.branch}.`,
           'success',
           8000,
@@ -238,14 +238,14 @@ export default function WorktreeReviewModal({
         return;
       } else if (outcome.reason === 'conflict') {
         showToast(
-          `${agentName}: can't discard — staging its work conflicts with your edits. Resolve in Source Control, then try again.`,
+          `${agentName}: can't discard. Staging its work conflicts with your edits. Resolve in Source Control, then try again.`,
           'warning',
           14000,
           true,
         );
       } else if (outcome.reason === 'pending') {
         showToast(
-          `${agentName}: kept the worktree — ${outcome.pendingFiles} file change${outcome.pendingFiles === 1 ? '' : 's'} still hadn't reached your working tree.`,
+          `${agentName}: kept the worktree. ${outcome.pendingFiles} file change${outcome.pendingFiles === 1 ? '' : 's'} still hadn't reached your working tree.`,
           'warning',
           12000,
         );
@@ -283,7 +283,7 @@ export default function WorktreeReviewModal({
             <span className="wrm-agent" title={agentName}>
               {agentName}
             </span>
-            <span className="wrm-branch" title={`${worktree.branch} — forked from ${worktree.baseBranch}`}>
+            <span className="wrm-branch" title={`${worktree.branch}, forked from ${worktree.baseBranch}`}>
               <span className="wrm-branch-name">{worktree.branch}</span>
               <span className="wrm-branch-arrow">→</span>
               <span className="wrm-branch-base">{worktree.baseBranch}</span>
@@ -312,7 +312,7 @@ export default function WorktreeReviewModal({
             ) : loading && !stat ? (
               <div className="wrm-empty">Reading changes…</div>
             ) : files.length === 0 ? (
-              <div className="wrm-empty">Nothing to review — no changes on this branch beyond its base.</div>
+              <div className="wrm-empty">Nothing to review. This branch has no changes beyond its base.</div>
             ) : (
               files.map((file, index) => {
                 const isSelected = file.path === selected;
@@ -374,7 +374,7 @@ export default function WorktreeReviewModal({
 
         <footer className="wrm-foot">
           <span className="wrm-hint">
-            Review the diff — nothing moves until you bring it in, merge it, or discard it.
+            Review the diff. Nothing moves until you bring it in, merge it, or discard it.
           </span>
           {confirming ? (
             <div className="wrm-confirm">
@@ -410,7 +410,7 @@ export default function WorktreeReviewModal({
                 className="wrm-btn"
                 onClick={() => void doBringIn()}
                 disabled={busy}
-                title="Copy this agent's changes into your working tree so you can run and review them. Not `git add` — nothing is committed, and this worktree is kept."
+                title="Copy this agent's changes into your working tree so you can run and review them. Not `git add`. Nothing is committed, and this worktree is kept."
               >
                 Bring in
               </button>

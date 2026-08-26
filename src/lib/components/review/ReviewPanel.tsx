@@ -414,7 +414,7 @@ export default function ReviewPanel() {
             style={{ flexShrink: 0 }}
             onClick={() => setWrapLines((on) => !on)}
             aria-pressed={wrapLines}
-            title={wrapLines ? 'Wrapping long lines to the panel — click to scroll instead' : 'Wrap long lines to the panel width instead of scrolling sideways'}
+            title={wrapLines ? 'Wrapping long lines to the panel. Click to scroll instead.' : 'Wrap long lines to the panel width instead of scrolling sideways'}
             aria-label="Wrap long lines"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

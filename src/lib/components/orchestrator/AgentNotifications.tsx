@@ -223,7 +223,7 @@ export default function AgentNotifications() {
         const c = m.completion;
         if (!c) continue;
         showSystemNotification(
-          `${completionHeadline(c)} — ${c.agentName}: ${c.taskTitle}`,
+          `${completionHeadline(c)} · ${c.agentName}: ${c.taskTitle}`,
           c.status === 'done' ? 'success' : c.status === 'failed' ? 'error' : 'warning',
         );
       }

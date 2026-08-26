@@ -987,7 +987,7 @@ pub async fn remote_detect_platform(
             Err(win_err) => Ok(DetectPlatformResult {
                 platform: None,
                 detail: format!(
-                    "Could not reach the server to detect its OS — {uname_err}; {win_err}"
+                    "Could not reach the server to detect its OS: {uname_err}; {win_err}"
                 ),
             }),
         },

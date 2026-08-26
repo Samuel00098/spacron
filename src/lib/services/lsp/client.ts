@@ -528,7 +528,7 @@ export async function installServer(language: string): Promise<void> {
     const reason = String(err?.message ?? err);
     const detail = reason.includes(status.install_hint)
       ? reason
-      : `${reason} — install manually: ${status.install_hint}`;
+      : `${reason}. Install manually: ${status.install_hint}`;
     showToast(`Couldn't install ${status.command}. ${detail}`, 'error', 12000);
     return;
   }
@@ -544,7 +544,7 @@ export async function installServer(language: string): Promise<void> {
     statusCache.clear();
     warned.clear();
     lspStatus.set(new Map());
-    showToast(`${status.command} installed — autocomplete is now active.`, 'success');
+    showToast(`${status.command} installed, so autocomplete is now active.`, 'success');
     lspReload.update((n) => n + 1);
   } else {
     const tail = recent.slice(-2).join(' ').slice(0, 200);

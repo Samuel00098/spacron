@@ -124,7 +124,7 @@ export async function runAgentSignIn(opts: {
   requestRoomControl('focus', 'terminal');
   showToast(
     opts.toast ??
-      `Taking you to a terminal running \`${launchLine}\` — complete the sign-in there; the list refreshes automatically when it closes.`,
+      `Taking you to a terminal running \`${launchLine}\`. Complete the sign-in there; the list refreshes automatically when it closes.`,
     'info',
     6000
   );
