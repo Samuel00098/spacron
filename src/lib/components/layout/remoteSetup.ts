@@ -33,6 +33,65 @@ export interface DeployResult {
   token: string;
 }
 
+/** Result of `remote_server_binary_status` — can we deploy to this OS at all? */
+export interface ServerBinaryStatus {
+  available: boolean;
+  path: string | null;
+  detail: string | null;
+  downloadable: boolean;
+}
+
+/** Result of `remote_download_server`. */
+export interface ServerDownloadResult {
+  path: string;
+  bytes: number;
+  source: string;
+}
+
+/**
+ * What the wizard should say about the server binary for `platform`.
+ *
+ * Kept pure and separate from the component because it is the one piece of
+ * this flow with real branching: four states, and the wrong one either hides a
+ * blocker until the deploy fails or nags about a binary that is already there.
+ * `null` status = not checked yet (or checking), which deliberately renders
+ * nothing rather than a scary placeholder.
+ */
+export type BinaryNotice =
+  | { kind: 'none' }
+  | { kind: 'ready'; text: string }
+  | { kind: 'download'; text: string; action: string }
+  | { kind: 'blocked'; text: string };
+
+export function binaryNotice(
+  platform: DeployPlatform,
+  status: ServerBinaryStatus | null,
+  hostOs: DeployPlatform | null,
+): BinaryNotice {
+  if (!status) return { kind: 'none' };
+  const os = platformLabel(platform);
+  if (status.available) {
+    // Deploying to the OS you are running is the ordinary case and needs no
+    // commentary; a cross-OS deploy that *is* ready is worth confirming,
+    // because the user was probably just told it wasn't.
+    if (hostOs && hostOs === platform) return { kind: 'none' };
+    return { kind: 'ready', text: `A ${os} server build is ready on this machine.` };
+  }
+  if (status.downloadable) {
+    return {
+      kind: 'download',
+      text: `This app ships the ${hostOs ? platformLabel(hostOs) : 'host'} build of the server. Deploying to ${os} needs the ${os} build — download it once and it stays on this machine.`,
+      action: `Get the ${os} server`,
+    };
+  }
+  return {
+    kind: 'blocked',
+    text:
+      status.detail ??
+      `No ${os} server build is available on this machine, and there is no published build to download.`,
+  };
+}
+
 /** Returns an error message, or null when the input is safe to send. */
 export function validateDeployInput(input: DeployInput): string | null {
   const host = input.host.trim();

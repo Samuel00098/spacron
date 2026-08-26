@@ -1781,3 +1781,43 @@
 }
 
 
+
+/* ── Sub-navigation inside a tab ──
+   Used by the Voice tab to switch between its settings and its history. A tab
+   with two distinct views gets this pill switch rather than a tenth entry in
+   the left rail — the rail is for areas of the app, not for views of one. */
+.settings-subnav {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+}
+
+.settings-subnav-btn {
+  padding: 6px 18px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.settings-subnav-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Painting --accent owes the label --on-accent; the dark theme's accent is
+   near-white, so white ink would vanish here. */
+.settings-subnav-btn.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}

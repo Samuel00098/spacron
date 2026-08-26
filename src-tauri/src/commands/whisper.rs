@@ -35,7 +35,16 @@ pub fn reset_whisper() {
 }
 
 /// Transcribe s16le WAV bytes with a Whisper GGML model.
-pub fn transcribe_wav(wav_bytes: &[u8], model_path: PathBuf) -> Result<String, String> {
+///
+/// `initial_prompt` is the hotword-biasing hint (the developer's custom
+/// vocabulary, one comma-separated line): whisper.cpp conditions its decoding
+/// on it, which steers the spelling of unusual names and API terms. Capped —
+/// the prompt shares the model's context window with the actual audio.
+pub fn transcribe_wav(
+    wav_bytes: &[u8],
+    model_path: PathBuf,
+    initial_prompt: Option<&str>,
+) -> Result<String, String> {
     let (pcm, rate) = wav_to_f32(wav_bytes)?;
     let audio = resample_to_16k(&pcm, rate);
     // Guard against near-empty capture (< 200 ms) — whisper hallucinates on it.
@@ -74,6 +83,9 @@ pub fn transcribe_wav(wav_bytes: &[u8], model_path: PathBuf) -> Result<String, S
         params.set_language(Some("en"));
     } else {
         params.set_language(Some("auto"));
+    }
+    if let Some(prompt) = initial_prompt.map(str::trim).filter(|p| !p.is_empty()) {
+        params.set_initial_prompt(&prompt.chars().take(600).collect::<String>());
     }
 
     state

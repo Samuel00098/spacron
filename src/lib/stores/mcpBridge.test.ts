@@ -9,6 +9,18 @@ const listenMock = vi.hoisted(() =>
       () => {},
   ),
 );
+const deliverTurnSignalMock = vi.hoisted(() => vi.fn((_id: number, _s: unknown) => false));
+const showToastMock = vi.hoisted(() => vi.fn());
+// Spread the real modules: `terminal.ts` imports both of these too, and a
+// partial mock would leave its other imports undefined at module init.
+vi.mock('$lib/services/orchestrator/agent-hook-signals', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  deliverTurnSignal: deliverTurnSignalMock,
+}));
+vi.mock('./notification', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  showToast: showToastMock,
+}));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: vi.fn(async () => 'C:/Users/test') }));
@@ -718,5 +730,215 @@ describe('MCP prompt delivery', () => {
     const verdict = lastVerdict()!;
     expect(verdict.success).toBe(false);
     expect(verdict.error).toContain('pty exploded');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// report_status — an agent telling Spacron about its own turn
+// ---------------------------------------------------------------------------
+
+describe('handleAgentReport', () => {
+  beforeEach(() => {
+    deliverTurnSignalMock.mockReset().mockReturnValue(false);
+    showToastMock.mockReset();
+  });
+
+  it('ends the turn of the session the token identified', async () => {
+    deliverTurnSignalMock.mockReturnValue(true);
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 4, state: 'done', detail: 'Tests pass.' });
+
+    // The agent's own sentence rides along, so the card and the inbox row have
+    // something to say beyond the agent's name.
+    expect(deliverTurnSignalMock).toHaveBeenCalledWith(4, {
+      kind: 'finished',
+      detail: 'Tests pass.',
+    });
+    // The orchestrator's completion card is the single visual surface for a
+    // turn that ended; a toast here would double-notify.
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+
+  it('carries the agent\'s own words as the blocked reason', async () => {
+    deliverTurnSignalMock.mockReturnValue(true);
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({
+      sessionId: 4,
+      state: 'needs_input',
+      detail: 'Which database should I migrate?',
+    });
+
+    expect(deliverTurnSignalMock).toHaveBeenCalledWith(4, {
+      kind: 'blocked',
+      reason: 'Which database should I migrate?',
+    });
+  });
+
+  it('falls back to a generic reason when the agent said nothing', async () => {
+    deliverTurnSignalMock.mockReturnValue(true);
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 4, state: 'needs_input', detail: '' });
+
+    expect(deliverTurnSignalMock).toHaveBeenCalledWith(4, {
+      kind: 'blocked',
+      reason: 'The agent is waiting for your input.',
+    });
+  });
+
+  it('notifies instead when no watcher is armed for that session', async () => {
+    deliverTurnSignalMock.mockReturnValue(false);
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 4, state: 'needs_input', detail: 'Need a key.' });
+
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock.mock.calls[0][0]).toContain('Need a key.');
+    expect(showToastMock.mock.calls[0][1]).toBe('warning');
+  });
+
+  it('shows an unattributed report without pretending to know who sent it', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: null, state: 'failed', detail: 'Build broke.' });
+
+    // No session means no turn to end — the report is still worth showing.
+    expect(deliverTurnSignalMock).not.toHaveBeenCalled();
+    expect(showToastMock.mock.calls[0][0]).toBe('An agent failed: Build broke.');
+    expect(showToastMock.mock.calls[0][1]).toBe('error');
+  });
+
+  it('ignores progress pings', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 4, state: 'working', detail: 'Still going.' });
+
+    // An agent that says "still going" every few minutes must not notify.
+    expect(deliverTurnSignalMock).not.toHaveBeenCalled();
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('per-agent MCP identity', () => {
+  /** Backend where minting works; records what was bound. */
+  async function mockWithChannels(opts: { mintFails?: boolean; bound?: boolean } = {}) {
+    const binds: { token: string; sessionId: number }[] = [];
+    // Reset the call log too: `launchConfig()` reads it back, and a previous
+    // case's write would otherwise be the one it found.
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'mcp_server_url') return URL;
+      if (cmd === 'mcp_server_http_url') return HTTP_URL;
+      if (cmd === 'mcp_write_launch_config') return LAUNCH_CONFIG_PATH;
+      if (cmd === 'mcp_open_agent_channel') {
+        if (opts.mintFails) throw new Error('server not running');
+        return {
+          url: 'http://127.0.0.1:51234/sse?token=per-launch-token',
+          httpUrl: 'http://127.0.0.1:51234/mcp?token=per-launch-token',
+          token: 'per-launch-token',
+        };
+      }
+      if (cmd === 'mcp_bind_agent_channel') {
+        binds.push({
+          token: args?.token as string,
+          sessionId: args?.sessionId as number,
+        });
+        return opts.bound !== false;
+      }
+      return undefined;
+    });
+    vi.resetModules();
+    const mod = await import('./mcpBridge');
+    return { mod, binds };
+  }
+
+  /** The config JSON `mcpLaunchFlags` handed to `mcp_write_launch_config`. */
+  function launchConfig(): { mcpServers: Record<string, { url?: string }> } {
+    const writes = invokeMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'mcp_write_launch_config',
+    );
+    const call = writes[writes.length - 1];
+    return JSON.parse((call?.[1] as { content: string }).content);
+  }
+
+  it('writes the per-launch token into the agent config and binds it', async () => {
+    const { mod, binds } = await mockWithChannels();
+
+    await mod.mcpLaunchFlags('claude', 'C:/work/repo', 77);
+
+    expect(launchConfig().mcpServers['spacron-mcp'].url).toContain('per-launch-token');
+    expect(binds).toEqual([{ token: 'per-launch-token', sessionId: 77 }]);
+  });
+
+  it('falls back to the shared token when the session is unknown', async () => {
+    const { mod, binds } = await mockWithChannels();
+
+    await mod.mcpLaunchFlags('claude', 'C:/work/repo');
+
+    expect(launchConfig().mcpServers['spacron-mcp'].url).toBe(URL);
+    expect(binds).toEqual([]);
+  });
+
+  it('still launches the agent when minting fails', async () => {
+    // Losing attribution is a downgrade; failing to launch is not acceptable.
+    const { mod } = await mockWithChannels({ mintFails: true });
+
+    const flags = await mod.mcpLaunchFlags('claude', 'C:/work/repo', 77);
+
+    expect(flags).toContain('--mcp-config');
+    expect(launchConfig().mcpServers['spacron-mcp'].url).toBe(URL);
+  });
+
+  it('uses the token even if the server declines to bind it', async () => {
+    // A refused bind means reports arrive unattributed, which the report
+    // handler already covers — it is not a reason to hand out no config.
+    const { mod } = await mockWithChannels({ bound: false });
+
+    const flags = await mod.mcpLaunchFlags('claude', 'C:/work/repo', 77);
+
+    expect(flags).toContain('--mcp-config');
+    expect(launchConfig().mcpServers['spacron-mcp'].url).toContain('per-launch-token');
+  });
+});
+
+describe('each reported state maps to its own outcome', () => {
+  beforeEach(() => {
+    deliverTurnSignalMock.mockReset().mockReturnValue(true);
+    showToastMock.mockReset();
+  });
+
+  it('reports a failure as a failure, not as needs-input', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 2, state: 'failed', detail: 'Migration conflict.' });
+
+    expect(deliverTurnSignalMock).toHaveBeenCalledWith(2, {
+      kind: 'failed',
+      reason: 'Migration conflict.',
+    });
+  });
+
+  it('gives a bare failure its own wording', async () => {
+    const { handleAgentReport } = await mockModule();
+
+    await handleAgentReport({ sessionId: 2, state: 'failed', detail: '' });
+
+    expect(deliverTurnSignalMock).toHaveBeenCalledWith(2, {
+      kind: 'failed',
+      reason: 'The agent reported that it could not finish.',
+    });
+  });
+
+  it('keeps the three states on three different outcome kinds', async () => {
+    const { handleAgentReport } = await mockModule();
+    for (const state of ['done', 'needs_input', 'failed'] as const) {
+      await handleAgentReport({ sessionId: 2, state, detail: '' });
+    }
+    const kinds = deliverTurnSignalMock.mock.calls.map(
+      ([, signal]) => (signal as { kind: string }).kind,
+    );
+    expect(kinds).toEqual(['finished', 'blocked', 'failed']);
   });
 });

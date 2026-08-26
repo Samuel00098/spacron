@@ -514,11 +514,21 @@ html.has-bg-media body::after {
      blur), so this global wash no longer has to carry readability. Pull it well
      back from the old near-opaque 0.68 so the wallpaper reads brightly through
      the gaps between panels while text over glass stays legible.
-     0.40 → 0.28 → 0.16: dark themes were veiling the wallpaper far harder than
-     light ones (which use the tint below), so the images read as washed out.
+     0.40 → 0.28 → 0.16 → 0.10: dark themes were veiling the wallpaper far
+     harder than light ones (which use the tint below), so the images read as
+     washed out. Lightened again 2026-08-26 at the user's request — they want
+     the images to show through more.
      Readability now rests on the panels' own backdrop blur and the text halo
      rules further down, not on this wash. */
-  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.16) !important;
+  background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.10) !important;
+  /* The accent "halo" blooms from the base rule above wash big soft circles of
+     theme colour across the wallpaper. With an image active they read as a
+     coloured haze over it, so cut them to about a third here — the no-image
+     liquid-glass look keeps its full-strength blooms. */
+  background-image:
+    radial-gradient(135% 115% at 10% -12%, color-mix(in srgb, var(--accent) 6%, transparent) 0%, transparent 50%),
+    radial-gradient(120% 100% at 100% 0%, color-mix(in srgb, var(--accent-hover, var(--accent)) 4%, transparent) 0%, transparent 48%),
+    radial-gradient(110% 130% at 50% 118%, color-mix(in srgb, var(--accent) 3%, transparent) 0%, transparent 60%);
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -535,13 +545,14 @@ html.has-bg-media:not(.light-theme) #app::before {
   inset: 0;
   z-index: -1;
   /* Layered dark gradient: darker at bottom edges, slightly lighter center
-     so the image mood still comes through while text is always readable. */
+     so the image mood still comes through while text is always readable.
+     Lightened 2026-08-26 (was 0.10/0.14/0.20) — wallpaper reads through more. */
   background:
     linear-gradient(
       180deg,
-      rgba(0, 0, 0, 0.10) 0%,
-      rgba(0, 0, 0, 0.14) 40%,
-      rgba(0, 0, 0, 0.20) 100%
+      rgba(0, 0, 0, 0.06) 0%,
+      rgba(0, 0, 0, 0.09) 40%,
+      rgba(0, 0, 0, 0.13) 100%
     );
   pointer-events: none;
 }

@@ -50,6 +50,44 @@ pub type SpawnFn = Arc<dyn Fn(SpawnRequest) + Send + Sync>;
 /// Arguments: (request_id, session_id, message).
 pub type DeliverEmitFn = Arc<dyn Fn(&str, u32, &str) + Send + Sync>;
 
+/// Callback for a `report_status` call — an agent saying something about
+/// *itself*, as opposed to every other tool here, which acts on someone else.
+pub type ReportFn = Arc<dyn Fn(AgentReport) + Send + Sync>;
+
+/// One agent's report about its own turn.
+///
+/// `session_id` is the whole point: it comes from the token the caller
+/// presented, not from anything the caller said, so a report either is
+/// attributable to a specific PTY session or is explicitly not. The frontend
+/// treats the two differently — see `agent-report` in `mcpBridge.ts`.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReport {
+    /// The session whose per-launch token was presented, or `None` when the
+    /// caller authenticated with the app-wide token and could be any agent.
+    pub session_id: Option<u32>,
+    /// "working" | "needs_input" | "done" | "failed" — validated before this
+    /// struct is built, so the frontend can match exhaustively.
+    pub state: String,
+    /// The agent's own words. Empty when it said nothing.
+    pub detail: String,
+}
+
+/// Who is calling, as established by the presented token.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Caller {
+    /// The PTY session this token was bound to. `None` for the app-wide token,
+    /// which every agent shares and which therefore identifies nobody.
+    pub session_id: Option<u32>,
+}
+
+/// Per-launch agent tokens: token → the session it is bound to.
+///
+/// A `std::sync::Mutex` rather than the tokio one every other shared map here
+/// uses, because the authorization check that reads it is synchronous and
+/// holds the lock for a single map lookup with no await in between.
+pub type AgentTokens = Arc<std::sync::Mutex<HashMap<String, Option<u32>>>>;
+
 /// A pending prompt delivery awaiting the frontend's verdict.
 ///
 /// A delivery may legitimately sit for half a minute waiting for a booting CLI
@@ -183,7 +221,17 @@ pub struct McpServerHandle {
     pub port: u16,
     /// Shared secret agents must include as `?token=…` when connecting. Handed
     /// to the frontend so it can write the full URL into each agent's MCP config.
+    ///
+    /// It authenticates but does not *identify*: every agent on this machine
+    /// presents the same string, so a tool call made with it proves only that
+    /// the caller could read this user's config. [`agent_tokens`] is the
+    /// narrower credential that answers "which agent".
     pub token: String,
+    /// Per-launch tokens, keyed by token. The value is the PTY session the
+    /// token was bound to, or `None` while the agent is still starting (the
+    /// token has to exist *before* the session does, because it goes into the
+    /// launch command — the same two-step as `prepareTurnSignals`).
+    pub agent_tokens: AgentTokens,
     /// In-flight prompt deliveries awaiting frontend responses.
     pub pending_sends: PendingSends,
     /// Active project's main checkout, shared with the server. See `ServerState`.
@@ -227,7 +275,56 @@ impl McpServerHandle {
     pub async fn unregister_agent(&self, session_id: u32) {
         let mut map = self.registry.lock().await;
         map.retain(|_, v| v.session_id != session_id);
+        drop(map);
+        // A dead session's token must stop authenticating: it was written into
+        // a config file that outlives the launch, and nothing else revokes it.
+        self.forget_agent_session(session_id);
         let _ = self.notify_tx.send(());
+    }
+
+    /// Mint a per-launch token, not yet bound to any session.
+    ///
+    /// Called *before* the agent is spawned, because the token has to be inside
+    /// the launch command. Until [`bind_agent_token`] runs it authenticates as
+    /// "some agent this app started" — strictly better than the app-wide token,
+    /// which authenticates as "someone who can read this user's config".
+    pub fn mint_agent_token(&self) -> String {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        if let Ok(mut map) = self.agent_tokens.lock() {
+            map.insert(token.clone(), None);
+        }
+        token
+    }
+
+    /// Bind a minted token to the session that was launched with it.
+    ///
+    /// Returns false for a token this server never minted (or already forgot),
+    /// so a caller cannot bind an arbitrary string to a session.
+    pub fn bind_agent_token(&self, token: &str, session_id: u32) -> bool {
+        match self.agent_tokens.lock() {
+            Ok(mut map) => match map.get_mut(token) {
+                Some(slot) => {
+                    *slot = Some(session_id);
+                    true
+                }
+                None => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Drop one token — the launch it was minted for never happened.
+    pub fn close_agent_token(&self, token: &str) {
+        if let Ok(mut map) = self.agent_tokens.lock() {
+            map.remove(token);
+        }
+    }
+
+    /// Drop every token bound to a session that is gone.
+    pub fn forget_agent_session(&self, session_id: u32) {
+        if let Ok(mut map) = self.agent_tokens.lock() {
+            map.retain(|_, bound| *bound != Some(session_id));
+        }
     }
 
     /// Ping connected clients to re-read `tools/list`.
@@ -341,6 +438,8 @@ fn write_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> 
 /// - `read_cb`: callback to read output from a PTY session.
 /// - `spawn_fn`: callback to forward a spawn-agent request to the frontend.
 /// - `deliver_emit_fn`: callback to have the frontend type a prompt into an agent.
+/// - `report_fn`: callback for an agent reporting on its own turn, carrying the
+///   session identity the presented token proves (see [`AgentReport`]).
 ///
 /// There is deliberately no "write to a PTY" callback. Every tool that puts text
 /// into an agent goes through `deliver_emit_fn`, because a raw write lands in a
@@ -356,6 +455,7 @@ pub fn start(
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
     deliver_emit_fn: DeliverEmitFn,
+    report_fn: ReportFn,
 ) -> Result<(McpServerHandle, u16), String> {
     // Bind now, synchronously, and *keep* the socket. This used to probe with a
     // throwaway listener, drop it, and rebind for real inside the spawned task
@@ -383,6 +483,10 @@ pub fn start(
     // dir on every start so that external config files (.mcp.json, opencode.json)
     // can be written once and survive app restarts.
     let token = load_or_create_token();
+    // Never persisted, unlike `token`: a per-launch credential that outlived the
+    // launch would be a config file authenticating as an agent that no longer
+    // exists. These die with the process, and every agent gets a fresh one.
+    let agent_tokens: AgentTokens = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     let server_state = Arc::new(ServerState {
         registry: registry.clone(),
@@ -392,9 +496,11 @@ pub fn start(
         spawn_tx,
         port: actual_port,
         token: token.clone(),
+        agent_tokens: agent_tokens.clone(),
         read_cb,
         spawn_fn,
         deliver_emit_fn,
+        report_fn,
         pending_sends: pending_sends.clone(),
         project_root: project_root.clone(),
         agent_presets: agent_presets.clone(),
@@ -476,6 +582,7 @@ pub fn start(
         _shutdown_tx: shutdown_tx,
         port: actual_port,
         token,
+        agent_tokens,
         pending_sends,
         project_root,
         agent_presets,
@@ -499,11 +606,16 @@ struct ServerState {
     port: u16,
     /// Shared secret every request must present as `?token=…`. See [`authorize`].
     token: String,
+    /// Per-launch tokens that additionally identify *which* agent is calling.
+    /// See [`McpServerHandle::mint_agent_token`].
+    agent_tokens: AgentTokens,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
     /// Asks the frontend to type a prompt into an agent's TUI. See
     /// [`deliver_to_session`] for why this cannot be a direct PTY write.
     deliver_emit_fn: DeliverEmitFn,
+    /// Hands a `report_status` call to the frontend.
+    report_fn: ReportFn,
     pending_sends: PendingSends,
     /// Absolute path of the active project's main checkout, set by the frontend
     /// on project open. `delegate_task` needs it to locate the reports directory
@@ -586,6 +698,39 @@ impl JsonRpcResponse {
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
+
+/// The one tool here an agent uses to talk about *itself*.
+///
+/// Everything else in this file acts on some other agent; this reports the
+/// caller's own turn. That makes it the only tool whose value depends on the
+/// caller being identified, which is why the per-launch token exists — see
+/// [`authorize`]. The wording is deliberately imperative: a description that
+/// merely permits reporting gets used once and then forgotten mid-task.
+fn tool_report_status() -> serde_json::Value {
+    serde_json::json!({
+        "name": "report_status",
+        "description": "Tell Spacron what you are doing. Call this when you finish your turn ('done'), when you are blocked and need the user ('needs_input'), or when you fail ('failed'). Spacron notifies the user from this call and from nothing else — if you do not call it, your turn ends silently and they are never told. Call it once per state change, not continuously.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["working", "needs_input", "done", "failed"],
+                    "description": "'working' = started or still going; 'needs_input' = stopped, waiting on the user; 'done' = turn finished; 'failed' = could not complete."
+                },
+                "detail": {
+                    "type": "string",
+                    "description": "One sentence for the user, in your own words: what you need, what you finished, or what went wrong. This is the text they see in the notification and the inbox, so write it for them, not for a log."
+                },
+                "agent_token": {
+                    "type": "string",
+                    "description": "The value of the SPACRON_AGENT_TOKEN environment variable in your shell. Pass it so Spacron knows which agent this report is about — without it the report cannot be tied to your terminal and cannot end your turn."
+                }
+            },
+            "required": ["state"]
+        }
+    })
+}
 
 fn tool_list_agents() -> serde_json::Value {
     serde_json::json!({
@@ -1415,6 +1560,7 @@ fn tool_emulator_logcat() -> serde_json::Value {
 
 fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
     vec![
+        tool_report_status(),
         tool_list_agents(),
         tool_send_to_agent(),
         tool_read_agent_output(),
@@ -1483,7 +1629,7 @@ async fn sse_handler(
     headers: HeaderMap,
     Query(query): Query<AuthQuery>,
 ) -> Response {
-    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
+    if let Err(rejection) = authorize(&state, &headers, &query) {
         return rejection;
     }
 
@@ -1600,20 +1746,21 @@ async fn streamable_handler(
     Query(query): Query<AuthQuery>,
     Json(req): Json<JsonRpcRequest>,
 ) -> Response {
-    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
-        return rejection;
-    }
+    let caller = match authorize(&state, &headers, &query) {
+        Ok(caller) => caller,
+        Err(rejection) => return rejection,
+    };
 
     // A notification carries no `id` and must not be answered. Streamable HTTP
     // says to acknowledge it with `202 Accepted` and an empty body; replying
     // with a JSON-RPC object (which this used to do, `id` set to null) is a
     // protocol error the stricter clients reject outright.
     if req.id.is_none() {
-        let _ = dispatch_message(state, req).await;
+        let _ = dispatch_message(state, req, caller).await;
         return StatusCode::ACCEPTED.into_response();
     }
 
-    dispatch_message(state, req).await.into_response()
+    dispatch_message(state, req, caller).await.into_response()
 }
 
 /// `GET`/`DELETE` on the Streamable HTTP endpoint.
@@ -1647,9 +1794,10 @@ async fn message_handler(
     Query(query): Query<AuthQuery>,
     Json(req): Json<JsonRpcRequest>,
 ) -> Response {
-    if let Some(rejection) = reject_unauthorized(&state, &headers, &query) {
-        return rejection;
-    }
+    let caller = match authorize(&state, &headers, &query) {
+        Ok(caller) => caller,
+        Err(rejection) => return rejection,
+    };
 
     let sse_tx = query
         .session_id
@@ -1657,7 +1805,7 @@ async fn message_handler(
         .and_then(|sid| state.sse_sessions.get(sid).map(|e| e.value().clone()));
 
     let Some(tx) = sse_tx else {
-        return dispatch_message(state, req).await.into_response();
+        return dispatch_message(state, req, caller).await.into_response();
     };
 
     // A JSON-RPC notification (no `id`) must not be answered at all — a client
@@ -1665,7 +1813,7 @@ async fn message_handler(
     let is_notification = req.id.is_none();
 
     tokio::spawn(async move {
-        let Json(resp) = dispatch_message(state, req).await;
+        let Json(resp) = dispatch_message(state, req, caller).await;
         if is_notification {
             return;
         }
@@ -1684,6 +1832,7 @@ async fn message_handler(
 async fn dispatch_message(
     state: Arc<ServerState>,
     req: JsonRpcRequest,
+    caller: Caller,
 ) -> Json<JsonRpcResponse> {
     let id = req.id.clone();
 
@@ -1721,7 +1870,7 @@ async fn dispatch_message(
         }
 
         "tools/call" => {
-            handle_tool_call(id, req.params, &state).await
+            handle_tool_call(id, req.params, &state, caller).await
         }
 
         // ── Sampling ─────────────────────────────────────────────────────
@@ -1743,11 +1892,97 @@ async fn handle_tool_call(
     id: Option<serde_json::Value>,
     params: Option<serde_json::Value>,
     state: &ServerState,
+    caller: Caller,
 ) -> Json<JsonRpcResponse> {
     let params = params.unwrap_or_default();
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
     match tool_name {
+        "report_status" => {
+            let args = params.get("arguments").and_then(|a| a.as_object());
+            let state_arg = args
+                .and_then(|a| a.get("state"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            // Validated against the enum rather than passed through, so the
+            // frontend can match on a closed set. An unknown value is a caller
+            // bug worth reporting — silently coercing it to "working" would
+            // turn a finished turn into one that never ends.
+            if !matches!(
+                state_arg.as_str(),
+                "working" | "needs_input" | "done" | "failed"
+            ) {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Parameter 'state' must be one of: working, needs_input, done, failed",
+                ));
+            }
+            let detail = args
+                .and_then(|a| a.get("detail"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                // Long enough for a sentence, short enough that a card cannot
+                // be used to paste a wall of text into the user's UI.
+                .chars()
+                .take(500)
+                .collect::<String>();
+
+            // Identity, in order of strength:
+            //
+            //  1. The token the caller *presented on the connection* — proof,
+            //     and the only option for a CLI whose MCP config we write
+            //     per launch (Claude Code, via `--mcp-config`).
+            //  2. A token passed as an argument, matched against the ones this
+            //     server minted. Every other CLI discovers the server from a
+            //     shared config file, so its connection carries the app-wide
+            //     token and cannot identify it. The per-launch token is instead
+            //     put in that agent's PTY environment as SPACRON_AGENT_TOKEN,
+            //     which only its own process tree can read — a shared secret
+            //     rather than transport auth, but a real boundary, and the
+            //     difference between "every agent works" and "one agent works".
+            //
+            // An unrecognised argument token resolves to None rather than
+            // erroring: it means the report is unattributed, not invalid.
+            let session_id = caller.session_id.or_else(|| {
+                let claimed = args
+                    .and_then(|a| a.get("agent_token"))
+                    .and_then(|v| v.as_str())?
+                    .trim();
+                if claimed.is_empty() {
+                    return None;
+                }
+                state.agent_tokens.lock().ok()?.get(claimed).copied().flatten()
+            });
+
+            (state.report_fn)(AgentReport {
+                session_id,
+                state: state_arg.clone(),
+                detail: detail.clone(),
+            });
+
+            // The reply tells the agent whether the report was attributable.
+            // An agent launched by Spacron always has its own token, so
+            // "not attributed" means something is wrong with the launch path
+            // and this is the only place it would ever be visible.
+            let text = if session_id.is_some() {
+                format!("Reported '{state_arg}' to Spacron; the user has been notified.")
+            } else {
+                format!(
+                    "Reported '{state_arg}', but Spacron could not tell which agent sent it, \
+                     so it cannot end your turn. Pass agent_token with the value of the \
+                     SPACRON_AGENT_TOKEN environment variable."
+                )
+            };
+            Json(JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
+            ))
+        }
+
         "list_agents" => {
             let registry = state.registry.lock().await;
             let agents: Vec<serde_json::Value> = registry
@@ -2782,19 +3017,32 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 ///
 /// Returns `Some(response)` when the request must be refused, `None` when it may
 /// proceed.
-fn reject_unauthorized(
+/// Authenticate a request and establish *who* made it.
+///
+/// Two credentials are accepted, and the difference between them is the whole
+/// point of this function:
+///
+/// - The app-wide `token`, written into every agent's MCP config. It proves the
+///   caller could read this user's configuration. It identifies nobody, so the
+///   caller comes back with `session_id: None`.
+/// - A per-launch agent token ([`McpServerHandle::mint_agent_token`]), minted
+///   for one spawn and bound to that spawn's PTY session. A call carrying one
+///   is attributable to exactly that agent.
+///
+/// Returning the identity rather than just "ok" is what lets a tool record who
+/// called it. Anything derived from the *arguments* would be self-asserted —
+/// an agent could name any session it liked.
+fn authorize(
     state: &ServerState,
     headers: &HeaderMap,
     query: &AuthQuery,
-) -> Option<Response> {
+) -> Result<Caller, Response> {
     if headers.contains_key(header::ORIGIN) {
-        return Some(
-            (
-                StatusCode::FORBIDDEN,
-                "browser origins are not permitted to reach the Spacron MCP server",
-            )
-                .into_response(),
-        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            "browser origins are not permitted to reach the Spacron MCP server",
+        )
+            .into_response());
     }
 
     let presented = query
@@ -2802,11 +3050,24 @@ fn reject_unauthorized(
         .as_deref()
         .or_else(|| bearer_token(headers))
         .unwrap_or("");
-    if !ct_eq(presented.as_bytes(), state.token.as_bytes()) {
-        return Some((StatusCode::UNAUTHORIZED, "invalid or missing token").into_response());
+
+    // The app-wide token first, in constant time — it is the common path and
+    // the one an attacker would try to guess.
+    if ct_eq(presented.as_bytes(), state.token.as_bytes()) {
+        return Ok(Caller { session_id: None });
     }
 
-    None
+    // Then the per-launch tokens. A plain map lookup: these are 128-bit random
+    // values that live only in memory for the life of one agent, and a
+    // timing oracle over "is this key present" leaks nothing an attacker who
+    // already has to guess the key can use.
+    if let Ok(map) = state.agent_tokens.lock() {
+        if let Some(bound) = map.get(presented) {
+            return Ok(Caller { session_id: *bound });
+        }
+    }
+
+    Err((StatusCode::UNAUTHORIZED, "invalid or missing token").into_response())
 }
 
 /// The `?token=…` every route requires, plus the `?sessionId=…` that
@@ -3054,9 +3315,11 @@ mod tests {
             spawn_tx,
             port: 1234,
             token: token.to_string(),
+            agent_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
             read_cb: Arc::new(|_| Vec::new()),
             spawn_fn: Arc::new(|_| {}),
             deliver_emit_fn: Arc::new(|_, _, _| {}),
+            report_fn: Arc::new(|_| {}),
             pending_sends: Arc::new(DashMap::new()),
             project_root: Arc::new(Mutex::new(None)),
             agent_presets: Arc::new(Mutex::new(Vec::new())),
@@ -3307,25 +3570,25 @@ mod tests {
     #[test]
     fn authorize_accepts_a_matching_token_with_no_origin() {
         let state = state_with_token("good-token");
-        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("good-token"))).is_none());
+        assert!(authorize(&state, &HeaderMap::new(), &q(Some("good-token"))).is_ok());
     }
 
     #[test]
     fn authorize_rejects_a_wrong_token() {
         let state = state_with_token("good-token");
-        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("bad-token"))).is_some());
+        assert!(authorize(&state, &HeaderMap::new(), &q(Some("bad-token"))).is_err());
     }
 
     #[test]
     fn authorize_rejects_a_missing_token() {
         let state = state_with_token("good-token");
-        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(None)).is_some());
+        assert!(authorize(&state, &HeaderMap::new(), &q(None)).is_err());
     }
 
     #[test]
     fn authorize_rejects_a_token_that_is_a_prefix_of_the_real_one() {
         let state = state_with_token("good-token");
-        assert!(reject_unauthorized(&state, &HeaderMap::new(), &q(Some("good"))).is_some());
+        assert!(authorize(&state, &HeaderMap::new(), &q(Some("good"))).is_err());
     }
 
     #[test]
@@ -3336,7 +3599,7 @@ mod tests {
         let state = state_with_token("good-token");
         let mut headers = HeaderMap::new();
         headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
-        assert!(reject_unauthorized(&state, &headers, &q(Some("good-token"))).is_some());
+        assert!(authorize(&state, &headers, &q(Some("good-token"))).is_err());
     }
 
     #[test]
@@ -3344,7 +3607,277 @@ mod tests {
         let state = state_with_token("good-token");
         let mut headers = HeaderMap::new();
         headers.insert(header::ORIGIN, "null".parse().unwrap());
-        assert!(reject_unauthorized(&state, &headers, &q(Some("good-token"))).is_some());
+        assert!(authorize(&state, &headers, &q(Some("good-token"))).is_err());
+    }
+
+    // --- per-agent identity -------------------------------------------------
+
+    /// A state plus a recorder for whatever `report_status` emits.
+    fn state_with_reports(token: &str) -> (ServerState, Arc<std::sync::Mutex<Vec<AgentReport>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<AgentReport>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        let mut state = state_with_token(token);
+        state.report_fn = Arc::new(move |report| recorder.lock().unwrap().push(report));
+        (state, seen)
+    }
+
+    /// Mint a token straight into a state's map, as `mint_agent_token` does.
+    fn mint_into(state: &ServerState, token: &str, bound: Option<u32>) {
+        state
+            .agent_tokens
+            .lock()
+            .unwrap()
+            .insert(token.to_string(), bound);
+    }
+
+    #[test]
+    fn the_app_wide_token_authenticates_but_identifies_nobody() {
+        let state = state_with_token("shared");
+        let caller = authorize(&state, &HeaderMap::new(), &q(Some("shared"))).unwrap();
+        assert_eq!(caller.session_id, None);
+    }
+
+    #[test]
+    fn a_bound_agent_token_identifies_its_session() {
+        let state = state_with_token("shared");
+        mint_into(&state, "per-launch", Some(42));
+        let caller = authorize(&state, &HeaderMap::new(), &q(Some("per-launch"))).unwrap();
+        assert_eq!(caller.session_id, Some(42));
+    }
+
+    #[test]
+    fn an_unbound_agent_token_authenticates_without_a_session() {
+        // The window between minting and the PTY existing. It must not be
+        // rejected — the agent may connect before `bind` runs — but it also
+        // must not be attributed to a session it has not been bound to.
+        let state = state_with_token("shared");
+        mint_into(&state, "not-yet", None);
+        let caller = authorize(&state, &HeaderMap::new(), &q(Some("not-yet"))).unwrap();
+        assert_eq!(caller.session_id, None);
+    }
+
+    #[test]
+    fn a_forgotten_agent_token_stops_authenticating() {
+        let state = state_with_token("shared");
+        mint_into(&state, "dead", Some(7));
+        state.agent_tokens.lock().unwrap().retain(|_, b| *b != Some(7));
+        assert!(authorize(&state, &HeaderMap::new(), &q(Some("dead"))).is_err());
+    }
+
+    #[test]
+    fn an_origin_header_still_wins_over_a_valid_agent_token() {
+        // The per-launch path must not become a way around the rebinding guard.
+        let state = state_with_token("shared");
+        mint_into(&state, "per-launch", Some(1));
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        assert!(authorize(&state, &headers, &q(Some("per-launch"))).is_err());
+    }
+
+    // --- report_status ------------------------------------------------------
+
+    fn report_call(state_arg: &str, detail: Option<&str>) -> Option<serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        args.insert("state".into(), serde_json::json!(state_arg));
+        if let Some(d) = detail {
+            args.insert("detail".into(), serde_json::json!(d));
+        }
+        Some(serde_json::json!({ "name": "report_status", "arguments": args }))
+    }
+
+    /// A `report_status` call carrying the token an agent read from its
+    /// SPACRON_AGENT_TOKEN environment variable.
+    fn report_call_with_token(state_arg: &str, token: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "name": "report_status",
+            "arguments": { "state": state_arg, "agent_token": token },
+        }))
+    }
+
+    #[tokio::test]
+    async fn an_env_token_identifies_an_agent_whose_connection_cannot() {
+        // Every CLI except Claude Code reads a shared MCP config, so its
+        // connection carries the app-wide token and identifies nobody. The
+        // per-launch token in its environment is what closes that gap.
+        let (state, seen) = state_with_reports("shared");
+        mint_into(&state, "env-token", Some(12));
+
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call_with_token("done", "env-token"),
+            &state,
+            Caller::default(), // authenticated with the shared token
+        )
+        .await;
+
+        assert!(resp.error.is_none());
+        assert_eq!(seen.lock().unwrap()[0].session_id, Some(12));
+    }
+
+    #[tokio::test]
+    async fn the_connection_token_outranks_a_claimed_one() {
+        // An agent cannot report as somebody else by passing their token: the
+        // identity its own connection proves wins.
+        let (state, seen) = state_with_reports("shared");
+        mint_into(&state, "someone-elses", Some(2));
+
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call_with_token("done", "someone-elses"),
+            &state,
+            Caller {
+                session_id: Some(1),
+            },
+        )
+        .await;
+
+        assert_eq!(seen.lock().unwrap()[0].session_id, Some(1));
+    }
+
+    #[tokio::test]
+    async fn an_invented_token_leaves_the_report_unattributed() {
+        // Not an error — the report is still worth showing. It just cannot end
+        // anyone's turn, and the reply says so.
+        let (state, seen) = state_with_reports("shared");
+
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call_with_token("done", "made-up"),
+            &state,
+            Caller::default(),
+        )
+        .await;
+
+        assert!(resp.error.is_none());
+        assert_eq!(seen.lock().unwrap()[0].session_id, None);
+    }
+
+    #[tokio::test]
+    async fn an_unbound_env_token_does_not_invent_a_session() {
+        // Minted but not yet bound: the agent connected before its PTY was
+        // registered. Authenticates, identifies nobody.
+        let (state, seen) = state_with_reports("shared");
+        mint_into(&state, "not-yet", None);
+
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call_with_token("done", "not-yet"),
+            &state,
+            Caller::default(),
+        )
+        .await;
+
+        assert_eq!(seen.lock().unwrap()[0].session_id, None);
+    }
+
+    #[test]
+    fn report_status_asks_for_the_env_token_by_name() {
+        // The agent has to be told where to find it, or the argument is never
+        // filled and every non-Claude agent stays unattributed.
+        let tools = all_tools(&[]);
+        let tool = tools.iter().find(|t| t["name"] == "report_status").unwrap();
+        let described = tool["inputSchema"]["properties"]["agent_token"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(described.contains("SPACRON_AGENT_TOKEN"), "{described}");
+    }
+
+    #[tokio::test]
+    async fn report_status_carries_the_session_the_token_proved() {
+        let (state, seen) = state_with_reports("shared");
+        let caller = Caller {
+            session_id: Some(9),
+        };
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("needs_input", Some("Which database?")),
+            &state,
+            caller,
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        let reports = seen.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].session_id, Some(9));
+        assert_eq!(reports[0].state, "needs_input");
+        assert_eq!(reports[0].detail, "Which database?");
+    }
+
+    #[tokio::test]
+    async fn report_status_says_so_when_it_cannot_attribute_the_caller() {
+        let (state, seen) = state_with_reports("shared");
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("done", None),
+            &state,
+            Caller::default(),
+        )
+        .await;
+        // Still recorded — an unattributed report is worth showing — but the
+        // agent is told, because for a Spacron-launched agent it means the
+        // launch path failed to hand it its own token.
+        assert_eq!(seen.lock().unwrap()[0].session_id, None);
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // …and tells it how to fix that, since a Spacron-launched agent always
+        // has the token in its environment.
+        assert!(text.contains("could not tell which agent"), "{text}");
+        assert!(text.contains("SPACRON_AGENT_TOKEN"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn report_status_rejects_a_state_outside_the_enum() {
+        let (state, seen) = state_with_reports("shared");
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("pondering", None),
+            &state,
+            Caller {
+                session_id: Some(3),
+            },
+        )
+        .await;
+        assert_eq!(resp.error.unwrap().code, -32602);
+        // Nothing reached the frontend: a turn state it cannot match on is
+        // worse than no report at all.
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn report_status_caps_the_detail_it_will_pass_on() {
+        let (state, seen) = state_with_reports("shared");
+        let long = "x".repeat(2000);
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("working", Some(&long)),
+            &state,
+            Caller {
+                session_id: Some(1),
+            },
+        )
+        .await;
+        assert_eq!(seen.lock().unwrap()[0].detail.chars().count(), 500);
+    }
+
+    #[test]
+    fn report_status_is_advertised_to_every_agent() {
+        let tools = all_tools(&[]);
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "report_status")
+            .expect("report_status must be in tools/list");
+        let states: Vec<&str> = tool["inputSchema"]["properties"]["state"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // The frontend matches on exactly these four.
+        assert_eq!(states, vec!["working", "needs_input", "done", "failed"]);
     }
 
     // --- ct_eq --------------------------------------------------------------
@@ -3391,6 +3924,7 @@ mod tests {
                     .push((session_id, message.to_string()));
                 let _ = tx.send(request_id.to_string());
             }),
+            Arc::new(|_| {}),
         )
         .expect("server should start");
 

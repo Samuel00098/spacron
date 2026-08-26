@@ -288,43 +288,81 @@
   border-color: color-mix(in srgb, var(--error) 30%, transparent);
 }
 
-/* The shared run menu, re-anchored below the modal footer button. */
+/* The shared run menu, re-anchored ABOVE the modal footer button — the trigger
+   sits on the footer row, so opening downward would grow past the modal's
+   `overflow: hidden` edge and clip. Up is always safe from down here. */
 .task-editor .te-run-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  bottom: calc(100% + 6px);
   left: 0;
   z-index: 40;
-  min-width: 170px;
-  max-width: 240px;
-  padding: 4px;
-  background: var(--bg-secondary);
+  min-width: 176px;
+  max-width: min(240px, calc(100vw - 64px));
+  /* Small by design: cap the height and scroll inside, matching the card's
+     run menu; `overscroll-behavior` keeps the wheel off the page behind it. */
+  max-height: 176px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  padding: 5px;
+  /* Solid, not --bg-secondary: that token is ~20% alpha when transparency is
+     active, which left the agent list see-through. */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   animation: te-run-in 0.14s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 @keyframes te-run-in {
-  from { opacity: 0; transform: translateY(-3px); }
+  from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: none; }
 }
 
 .task-editor .te-run-menu .task-run-opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   text-align: left;
   font-size: 11.5px;
   font-weight: 550;
-  padding: 6px 9px;
-  border-radius: 6px;
+  line-height: 1.35;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 7px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* Truncate the label, never the icon. */
+.task-editor .te-run-menu .task-run-opt > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.task-editor .te-run-menu .task-run-opt .agent-brand-mark {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-editor .te-run-menu .task-run-opt .agent-brand-mark svg,
+.task-editor .te-run-menu .task-run-opt .agent-brand-mark img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
 }
 
 .task-editor .te-run-menu .task-run-opt:hover {

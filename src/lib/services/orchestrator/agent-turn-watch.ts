@@ -10,11 +10,82 @@ import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
 
+/**
+ * How we came to believe a turn ended. Three genuinely different kinds of
+ * evidence, and the card is only allowed to claim what each one supports.
+ *
+ * - `declared` — the agent said so, through a channel it cannot fake: a hook
+ *   sentinel carrying this launch's nonce, or a `report_status` MCP call
+ *   attributed by its per-launch token. Only this licenses the word
+ *   **finished**.
+ * - `exit` — the agent's process ended. A fact we observed, but not evidence
+ *   the work is done: `/exit`, Ctrl-D and a completed session all exit 0. The
+ *   card says **exited**, and still interrupts, because a process ending is
+ *   something the user should know about.
+ * - `inferred` — we worked it out from the screen: an attention phrase, a bell
+ *   followed by quiet, or output that simply stopped growing. A guess, so the
+ *   card says **went quiet** and does not interrupt at all.
+ *
+ * This is not bookkeeping. Announcing a guess (or a bare exit) as "finished" is
+ * exactly how a user ends up being told an agent completed work it never did.
+ */
+export type TurnEndSource = 'declared' | 'exit' | 'inferred';
+
 /** Outcome of watching one agent turn on a leased terminal. */
 export type AgentTurnOutcome =
-  | { kind: 'finished' }
-  | { kind: 'blocked'; reason: string }
+  | { kind: 'finished'; via: TurnEndSource; detail?: string }
+  | { kind: 'blocked'; reason: string; via: TurnEndSource }
+  | { kind: 'failed'; reason: string; via: TurnEndSource }
   | { kind: 'aborted' };
+
+/** How one turn end should be presented to the user. */
+export interface TurnEndPresentation {
+  /** The three states a card, a chime and an OS notification distinguish. */
+  status: 'done' | 'blocked' | 'failed';
+  /** The agent's own words, when it gave any. */
+  reason: string | null;
+  /**
+   * Whether the agent said this itself. `false` means we inferred it from the
+   * screen, and the copy must not claim more than that.
+   */
+  declared: boolean;
+  /** The value a completion card should carry as `endedBy`. */
+  endedBy: TurnEndSource;
+}
+
+/**
+ * Map a turn outcome to what the user should be told.
+ *
+ * One function so the leased and adopted paths cannot drift apart: they used to
+ * carry their own `outcome.kind === 'blocked' ? … : …` ternaries, which is how
+ * a crash ended up announced as "needs your input" on one path and as
+ * "finished" on the other. Returns null for `aborted` — a torn-down watch is
+ * not an event the user did anything to cause, and has nothing to report.
+ */
+/** The two provenance fields, always set together and never contradicting. */
+function src(via: TurnEndSource): Pick<TurnEndPresentation, 'declared' | 'endedBy'> {
+  return { declared: via === 'declared', endedBy: via };
+}
+
+export function describeTurnEnd(outcome: AgentTurnOutcome): TurnEndPresentation | null {
+  switch (outcome.kind) {
+    case 'aborted':
+      return null;
+    case 'blocked':
+      return { status: 'blocked', ...src(outcome.via), reason: outcome.reason };
+    case 'failed':
+      return { status: 'failed', ...src(outcome.via), reason: outcome.reason };
+    case 'finished':
+      // An agent that said what it did gets that sentence carried through to
+      // the card and the inbox row. Dropping it (which this used to do) is why
+      // a finished turn showed up as a name and a title with no message.
+      return {
+        status: 'done',
+        ...src(outcome.via),
+        reason: outcome.detail?.trim() || null,
+      };
+  }
+}
 
 export interface WatchLeasedAgentOptions {
   /** Return false to stop watching (task unlinked, session died, etc.). */
@@ -209,8 +280,12 @@ async function watchTurnUntilDone(
       };
     });
 
+  // Everything arriving on this channel came from the agent itself — a hook
+  // sentinel carrying this launch's nonce, or a `report_status` call the MCP
+  // server attributed by token — so it is stamped `declared` here rather than
+  // at each source. The screen-derived paths below stamp `inferred`.
   const unsubscribe = onTurnSignal(sessionId, (signal) => {
-    sentinel = signal;
+    sentinel = { ...signal, via: 'declared' };
     wake?.();
   });
 
@@ -262,7 +337,7 @@ async function watchTurnUntilDone(
       // And because this check fires on the per-poll `recent` tail, a prompt
       // that scrolls past it is still caught by the wider idle rescan below.
       if (sawActivity && containsAttentionRequest(recent, attentionPhrases)) {
-        return { kind: 'blocked', reason: attentionReason(recent, attentionPhrases) };
+        return { kind: 'blocked', reason: attentionReason(recent, attentionPhrases), via: 'inferred' };
       }
 
       // The idle fallback normally requires the work floor — a tiny burst that
@@ -302,10 +377,10 @@ async function watchTurnUntilDone(
         if (!signalled) {
           const tail = getSessionOutputBuffer(sessionId).slice(-IDLE_ATTENTION_SCAN_CHARS);
           if (containsAttentionRequest(tail, attentionPhrases)) {
-            return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases) };
+            return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases), via: 'inferred' };
           }
         }
-        return { kind: 'finished' };
+        return { kind: 'finished', via: 'inferred' };
       }
     }
   }

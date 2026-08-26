@@ -39,6 +39,11 @@ import {
   appendVoiceExchangeMessage,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
+import {
+  appendConversationTurn,
+  endConversationRecord,
+  startConversationRecord,
+} from '$lib/stores/voiceHistory';
 import { openSettings } from '$lib/stores/layout';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
@@ -408,6 +413,13 @@ export default function FloatingPromptBar({
   // no local STT→brain→TTS loop any more.
   const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const realtimeActiveRef = useRef(false);
+  /**
+   * Voice-history record for the call in flight (Settings → Voice → History).
+   * Separate from the project chat: the chat card is a live view that gets
+   * compacted and summarized away, while this is the durable log of what was
+   * actually said, kept for as long as the retention setting says.
+   */
+  const conversationRecordRef = useRef<string | null>(null);
 
   const stopAgentVoice = useCallback(() => {
     // Realtime-only teardown: end the call, release the mic, reset the bar.
@@ -421,6 +433,8 @@ export default function FloatingPromptBar({
     const realtimeSession = realtimeSessionRef.current;
     realtimeSessionRef.current = null;
     realtimeActiveRef.current = false;
+    endConversationRecord(conversationRecordRef.current);
+    conversationRecordRef.current = null;
     realtimeSession?.stop();
   }, []);
 
@@ -500,13 +514,28 @@ export default function FloatingPromptBar({
       realtimeActiveRef.current = true;
       setIsRefining(true); // "thinking" orb while the call connects
 
+      const model = get(
+        provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel
+      );
+      // Opened BEFORE the call connects so the transcript callbacks always have
+      // somewhere to land. A call that connects and says nothing is dropped
+      // when the record closes, so a failed handshake leaves no empty row.
+      // Close any record left open by the session torn down just above, so a
+      // re-entry can't strand it without an end time.
+      endConversationRecord(conversationRecordRef.current);
+      const startedProject = get(activeProject);
+      conversationRecordRef.current = startConversationRecord({
+        engine,
+        model,
+        projectId: startedProject?.id,
+        projectName: startedProject?.name,
+      });
+
       void (async () => {
         try {
           const session = await startRealtimeVoiceSession({
             provider,
-            model: get(
-              provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel
-            ),
+            model,
             voice: get(
               provider === 'xai' ? xaiRealtimeVoice : openaiRealtimeVoice
             ),
@@ -517,12 +546,14 @@ export default function FloatingPromptBar({
                 setIsListening(state === 'listening');
               },
               onUserTranscript: (text) => {
+                appendConversationTurn(conversationRecordRef.current, 'user', text);
                 const project = get(activeProject);
                 if (project)
                   appendVoiceExchangeMessage(project.id, 'user', text);
               },
               onAssistantTranscript: (text, final) => {
                 if (!final) return;
+                appendConversationTurn(conversationRecordRef.current, 'assistant', text);
                 const project = get(activeProject);
                 if (project)
                   appendVoiceExchangeMessage(project.id, 'assistant', text);
@@ -536,6 +567,8 @@ export default function FloatingPromptBar({
                 if (realtimeSessionRef.current) {
                   realtimeSessionRef.current = null;
                   realtimeActiveRef.current = false;
+                  endConversationRecord(conversationRecordRef.current);
+                  conversationRecordRef.current = null;
                   if (voiceModeActiveRef.current) stopAgentVoiceRef.current();
                 }
               },
@@ -543,12 +576,16 @@ export default function FloatingPromptBar({
           });
           if (!realtimeActiveRef.current) {
             // The user exited voice mode while the call was still connecting.
+            endConversationRecord(conversationRecordRef.current);
+            conversationRecordRef.current = null;
             session.stop();
             return;
           }
           realtimeSessionRef.current = session;
         } catch (error) {
           realtimeActiveRef.current = false;
+          endConversationRecord(conversationRecordRef.current);
+          conversationRecordRef.current = null;
           setIsRefining(false);
           showToast(
             error instanceof Error

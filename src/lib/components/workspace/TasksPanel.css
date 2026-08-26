@@ -410,19 +410,30 @@
 /* The agent picker a Run click opens (card + editor modal share these rules). */
 .tasks-panel .task-run-menu {
   position: absolute;
-  top: 30px;
+  top: 32px;
   right: 8px;
   z-index: 30;
-  min-width: 160px;
-  max-width: 220px;
-  padding: 4px;
-  background: var(--bg-secondary);
+  min-width: 168px;
+  /* Never wider than the card it hangs from, so narrow columns can't clip it. */
+  max-width: min(240px, calc(100% - 16px));
+  /* Small by design: cap the height and scroll inside, so a long agent list
+     never spills past the column (which clips it) — the menu scrolls itself.
+     `overscroll-behavior` keeps that wheel from chaining into the board. */
+  max-height: 176px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  padding: 5px;
+  /* Solid, not --bg-secondary: that token is ~20% alpha when transparency is
+     active, which left the agent list see-through. */
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   animation: run-menu-in 0.14s var(--ease-out);
 }
 
@@ -431,20 +442,42 @@
   to   { opacity: 1; transform: none; }
 }
 
+/* Not enough room below the run button (card near the column bottom): the
+   panel flips the menu above the button instead of letting it clip. */
+.tasks-panel .task-run-menu.run-up {
+  top: auto;
+  bottom: 32px;
+  animation-name: run-menu-in-up;
+}
+
+@keyframes run-menu-in-up {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+
 .tasks-panel .task-run-opt {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   text-align: left;
   font-size: 11.5px;
   font-weight: 550;
-  padding: 6px 9px;
-  border-radius: 6px;
+  line-height: 1.35;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 7px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* Truncate the label, never the icon — text-overflow lives on the span (a
+   flex container's own ellipsis does nothing for its children). */
+.tasks-panel .task-run-opt > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }

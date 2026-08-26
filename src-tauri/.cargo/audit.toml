@@ -1,0 +1,61 @@
+# cargo-audit policy for the Spacron workspace.
+#
+# CI runs `cargo audit --deny warnings` (see .github/workflows/build.yml), so an
+# advisory of ANY kind — vulnerability, unmaintained, unsound, yanked — fails the
+# build unless it is listed here with a reason. The point of denying warnings
+# rather than only vulnerabilities is that a *new* unmaintained crate entering
+# the tree is a signal worth seeing; the entries below are the ones already
+# triaged.
+#
+# Rule for this list: an entry is only allowed when the advisory is (a) reached
+# purely transitively, and (b) not fixable by any version bump available to us.
+# Anything we depend on directly gets migrated instead — `rustls-pemfile`
+# (RUSTSEC-2025-0134) was moved to `rustls-pki-types` rather than ignored, and
+# `event-listener` (RUSTSEC-2026-0221) was fixed by a lockfile bump to 5.4.2.
+#
+# Re-triage on every Tauri upgrade: most of this list disappears when Tauri/wry
+# move off GTK3.
+
+[advisories]
+ignore = [
+  # ── gtk-rs GTK3 bindings: "no longer maintained" ────────────────────────────
+  # Linux-only, reached via tauri -> muda/tray-icon -> gtk 0.18, and via our own
+  # `webkit2gtk`/`cairo-rs` deps which are themselves pinned to the GTK3
+  # generation wry builds against. The upstream fix is GTK4, which Tauri 2 does
+  # not target, so there is no version of this we can pick. No known exploitable
+  # defect — the advisories flag maintenance status, not a vulnerability.
+  "RUSTSEC-2024-0411", # gdkwayland-sys
+  "RUSTSEC-2024-0412", # gdk
+  "RUSTSEC-2024-0413", # atk
+  "RUSTSEC-2024-0414", # gdkx11-sys
+  "RUSTSEC-2024-0415", # gtk
+  "RUSTSEC-2024-0416", # atk-sys
+  "RUSTSEC-2024-0417", # gdkx11
+  "RUSTSEC-2024-0418", # gdk-sys
+  "RUSTSEC-2024-0419", # gtk3-macros
+  "RUSTSEC-2024-0420", # gtk-sys
+
+  # glib 0.18 `VariantStrIter` unsoundness. Same GTK3 stack as above (gtk ->
+  # glib), Linux-only. Spacron never constructs a `glib::Variant` itself, so the
+  # unsound iterator is not reachable from our code — it would have to be hit
+  # from inside gtk/tauri's own event handling.
+  "RUSTSEC-2024-0429", # glib
+
+  # proc-macro-error, unmaintained. Build-time only (a proc-macro dependency of
+  # glib-macros), so nothing from it ships in the binary.
+  "RUSTSEC-2024-0370", # proc-macro-error
+
+  # `serial`, unmaintained. Reached only through portable-pty 0.8, which is the
+  # current release. Used for its serial-port support, which the PTY layer never
+  # opens — Spacron only ever spawns local shells.
+  "RUSTSEC-2017-0008", # serial
+
+  # unic-* crates, unmaintained. Build-time only: tauri-build -> tauri-utils ->
+  # urlpattern -> unic-ucd-*. Unicode table lookups with no untrusted input at
+  # runtime.
+  "RUSTSEC-2025-0075", # unic-char-range
+  "RUSTSEC-2025-0080", # unic-common
+  "RUSTSEC-2025-0081", # unic-char-property
+  "RUSTSEC-2025-0098", # unic-ucd-version
+  "RUSTSEC-2025-0100", # unic-ucd-ident
+]

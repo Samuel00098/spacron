@@ -29,3 +29,37 @@ describe('classifyTaskAfterExecution', () => {
     expect(next.failureReason).toContain('1');
   });
 });
+
+describe('a failure the agent declares itself', () => {
+  const task = started('Fix auth bug');
+
+  it('is failed, not complete, even on a clean exit', () => {
+    // A CLI agent sits in a REPL: it reports an error and goes back to its
+    // prompt, so the process is alive and will exit 0 whenever it does exit.
+    // Exit code alone cannot see this, which is how a broken run got announced
+    // as "Agent finished".
+    const out = classifyTaskAfterExecution(task, {
+      exitCode: 0,
+      failed: true,
+      note: 'Could not resolve the migration conflict.',
+    });
+    expect(out.status).toBe('failed');
+    expect(out.failureReason).toBe('Could not resolve the migration conflict.');
+    expect(out.blockedReason).toBeNull();
+  });
+
+  it('outranks needs-input, which is a different question', () => {
+    const out = classifyTaskAfterExecution(task, {
+      exitCode: 0,
+      failed: true,
+      needsHumanInput: true,
+      note: 'Ran out of retries.',
+    });
+    expect(out.status).toBe('failed');
+  });
+
+  it('leaves the ordinary clean finish alone', () => {
+    const out = classifyTaskAfterExecution(task, { exitCode: 0, failed: false });
+    expect(out.status).toBe('complete');
+  });
+});

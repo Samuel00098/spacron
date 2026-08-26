@@ -459,6 +459,20 @@ export function getDefaultVoiceInputModel(provider: VoiceInputProviderId): strin
 }
 
 export const voiceRefinementEnabled = persistentWritable('voiceRefinementEnabled', true);
+/**
+ * Custom vocabulary for the AI polish pass, comma-separated ("Spacron,
+ * Parakeet, zustand, onnxruntime"). WhisperFlow's accuracy trick: speech
+ * models mangle exactly the names that matter most to a developer, and no
+ * generic prompt can know them. Injected into the refinement system prompt so
+ * those terms are spelled exactly as written.
+ */
+export const dictationVocabulary = persistentWritable('dictationVocabulary', '');
+/**
+ * Smart VAD (Silero, native ONNX) for dictation turn detection. OFF by
+ * default: it needs the ~2 MB Silero model downloaded, and until then (or on
+ * any error) dictation falls back to the built-in level gate transparently.
+ */
+export const smartVadEnabled = persistentWritable('smartVadEnabled', false);
 export const voiceInputProvider = persistentWritable<VoiceInputProviderId>('voiceInputProvider', 'local');
 /**
  * Terminal transcription (Transcribe-to-Terminal hotkey): when on, the
@@ -953,6 +967,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'aiCompletionModelByProvider': aiCompletionModelByProvider.set(value as Record<string, string>); break;
     case 'showHidden':       showHidden.set(value as boolean); break;
     case 'voiceRefinementEnabled': voiceRefinementEnabled.set(value as boolean); break;
+    case 'dictationVocabulary': dictationVocabulary.set(value as string); break;
+    case 'smartVadEnabled': smartVadEnabled.set(value as boolean); break;
     case 'voiceInputProvider': voiceInputProvider.set(value as VoiceInputProviderId); break;
     case 'voiceInputModelByProvider': voiceInputModelByProvider.set(value as Record<string, string>); break;
     case 'voiceAiProvider': voiceAiProvider.set(value as AiProviderId); break;

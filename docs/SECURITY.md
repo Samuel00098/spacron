@@ -16,6 +16,7 @@ This document explains what Spacron can and cannot do on your system, how it iso
 8. [Content Security Policy](#8-content-security-policy)
 9. [Remote Workspaces](#9-remote-workspaces)
 10. [The MCP Server](#10-the-mcp-server)
+11. [Auditing a Release](#11-auditing-a-release)
 
 ---
 
@@ -470,3 +471,83 @@ in place on first read.
 There is deliberately **no "write raw bytes to a PTY" tool.** Every tool that
 puts text into an agent goes through the delivery path that submits it, because
 a raw write lands unsubmitted in a TUI's composer.
+
+---
+
+## 11. Auditing a Release
+
+Everything in this section runs in CI on every push and pull request (the
+`security` job in `.github/workflows/build.yml`), so the normal case is that it
+is already green before a release. The commands are here so they can be run
+locally, and so the parts that CI *cannot* check have somewhere to live.
+
+### Automated — enforced by CI
+
+| Check | Command | Fails on |
+|---|---|---|
+| JS/TS dependencies | `npm audit --omit=dev --audit-level=high` | any high/critical advisory in shipped deps |
+| Rust dependencies | `cargo audit --deny warnings` (from `src-tauri/`) | any advisory — vulnerability, unmaintained, unsound, or yanked |
+| Licences & crate bans | `cargo deny check` (from `src-tauri/`) | a copyleft licence, an unknown licence, or a crate from an unvetted source |
+| Types | `npm run check` | — |
+| Tests | `npm test`, `cargo test` | — |
+
+`cargo audit` runs with `--deny warnings` rather than the default, so a crate
+merely going unmaintained trips the build. The already-triaged exceptions live in
+`src-tauri/.cargo/audit.toml`, each with the reason it cannot be fixed from here.
+**An advisory is only allowed onto that list if it is reached transitively and no
+available version bump resolves it** — anything we depend on directly gets
+migrated instead. Re-triage the list on every Tauri upgrade; most of it is the
+GTK3 stack and disappears when wry moves to GTK4.
+
+`cargo deny check` exists mainly for licences: Spacron ships closed-source under
+a paid licence, so a GPL/AGPL crate entering the tree is a legal problem, not
+just a style one. The policy is in `src-tauri/deny.toml`.
+
+### Manual — the parts tooling cannot answer
+
+Run these when the surface they cover has changed, and at minimum before a
+release that touches the backend.
+
+1. **The IPC boundary.** `lib.rs` exposes ~216 commands through
+   `generate_handler!`. For each one added or changed since the last release, ask:
+   *if the WebView were fully attacker-controlled, what does this let it do?*
+   The ones that matter take a path or spawn a process — `file_system`,
+   `workspace`, `terminal`/`pty`, `remote_deploy`, `github`, `mcp`. A new command
+   taking a path must go through `require_in_project` (section 2); there is no
+   second confinement layer behind it.
+
+2. **`capabilities/default.json`.** Confirm it still grants no `fs:` or `shell:`
+   permissions. Tauri plugins being *loaded* is not the same as the frontend
+   being able to *call* them, and this file is the only thing keeping that true.
+
+3. **Local listeners.** The app binds several loopback sockets — the MCP server,
+   the LSP bridge, the preview proxy, the remote relay, the mobile stream. Each
+   new one needs all three of: bound to `127.0.0.1` (never `0.0.0.0`),
+   authenticated, and rejecting requests that carry an `Origin` header
+   (section 10). The preview proxy is the largest and most exposed of these.
+
+4. **Secrets.** API keys, the GitHub token and remote-workspace tokens all belong
+   in the OS keychain, with no plaintext fallback path. Check that no new error
+   string or log line carries a token — errors returned to the frontend are
+   rendered in the UI.
+
+5. **The update channel.** This is the highest-severity single point in the
+   product: whoever holds `TAURI_SIGNING_PRIVATE_KEY` can ship arbitrary code to
+   every install. Confirm the key exists only as a GitHub Actions secret, that
+   `RELEASE_TOKEN` is fine-grained and scoped to the releases repo alone, and
+   that the repo still requires review on `main`.
+
+6. **Secret history.** `gitleaks detect` over the full history, plus
+   `gitleaks detect --no-git` on the working tree. Not in CI because it needs the
+   full clone; worth a run whenever the release process changes.
+
+### Known accepted risks
+
+- **The GTK3 dependency stack** (Linux only) is unmaintained upstream and cannot
+  be replaced until Tauri moves to GTK4. Tracked in `src-tauri/.cargo/audit.toml`.
+- **`script-src` trusts `https://www.youtube.com` and `https://s.ytimg.com`.**
+  The music panel loads YouTube's IFrame Player API into the app's own document,
+  which is the realm that can reach Tauri IPC. This is a deliberate trust
+  delegation to Google, not a defect, but it is the only remote origin permitted
+  to execute code in the privileged realm — so it belongs on this list rather
+  than being invisible.

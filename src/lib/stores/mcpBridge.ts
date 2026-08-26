@@ -20,6 +20,8 @@ import {
   spawnAgentPreset,
 } from './terminal';
 import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
+import { deliverTurnSignal } from '$lib/services/orchestrator/agent-hook-signals';
+import { showToast } from './notification';
 import { ASSISTANT_NAMES, pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import {
   applyOrchestratorAgentName,
@@ -43,6 +45,168 @@ let serverPort: number | null = null;
 let serverUrl: string | null = null;
 let serverHttpUrl: string | null = null;
 let initialized = false;
+
+// ---------------------------------------------------------------------------
+// Per-agent identity — the credential that makes a tool call attributable
+// ---------------------------------------------------------------------------
+
+/**
+ * A per-launch MCP credential, minted before the agent starts.
+ *
+ * The app-wide token in every other URL here authenticates but identifies
+ * nobody: every agent presents the same string, so a `report_status` call made
+ * with it proves only that *something* on this machine could read the user's
+ * config. This is the narrower one — bound to a single PTY session, so a report
+ * carrying it is attributable to exactly that agent.
+ *
+ * The two-step (mint, then bind once the session exists) is forced by the same
+ * ordering that shapes `prepareTurnSignals`: the token has to be inside the
+ * launch command, which is built before there is a session to bind it to.
+ */
+export interface AgentChannel {
+  /** SSE URL carrying this agent's token. */
+  url: string;
+  /** Streamable HTTP URL carrying this agent's token. */
+  httpUrl: string;
+  /** The bare token, for `bindAgentChannel`. */
+  token: string;
+}
+
+/**
+ * A `report_status` call, as it reaches the frontend.
+ *
+ * `sessionId` comes from the token the caller presented, so it is evidence
+ * rather than testimony; `state` is validated against the tool's enum in Rust,
+ * so this really is a closed set.
+ */
+export interface AgentReportEvent {
+  sessionId: number | null;
+  state: 'working' | 'needs_input' | 'done' | 'failed';
+  detail: string;
+}
+
+/**
+ * Turn one report into a turn signal, a notification, or both.
+ *
+ * The split matters and is the same "one notification per event" rule the
+ * inbox already follows: when the report ends a watched turn, the orchestrator's
+ * own completion card is what the user sees, so raising a toast here as well
+ * would double-notify. A toast is only for reports the turn machinery cannot
+ * act on — an unattributed one, or an agent nobody is watching.
+ *
+ * Exported for tests; `initMcpBridge` is the only caller in the app.
+ */
+export async function handleAgentReport(report: AgentReportEvent): Promise<void> {
+  // "working" is a progress ping, not a turn boundary. It is deliberately not
+  // surfaced: an agent that says "still going" every few minutes must not
+  // produce a notification each time.
+  if (report.state === 'working') return;
+
+  // One state, one outcome. Collapsing `failed` into `blocked` here (which an
+  // earlier cut of this did) makes an error arrive as "needs your input" — the
+  // user goes looking for a question that was never asked.
+  const signal =
+    report.state === 'done'
+      ? ({ kind: 'finished', detail: report.detail } as const)
+      : report.state === 'failed'
+        ? ({
+            kind: 'failed',
+            reason: report.detail || 'The agent reported that it could not finish.',
+          } as const)
+        : ({
+            kind: 'blocked',
+            reason: report.detail || 'The agent is waiting for your input.',
+          } as const);
+
+  if (report.sessionId !== null && deliverTurnSignal(report.sessionId, signal)) {
+    // A watcher took it: the turn ends now instead of after the idle timeout,
+    // and the completion card is raised by the orchestrator as usual.
+    return;
+  }
+
+  const who = report.sessionId === null ? 'An agent' : agentLabel(report.sessionId);
+  const what =
+    report.state === 'done'
+      ? 'finished'
+      : report.state === 'failed'
+        ? 'failed'
+        : 'needs your input';
+  const text = report.detail ? `${who} ${what}: ${report.detail}` : `${who} ${what}`;
+  const tone = report.state === 'failed' ? 'error' : report.state === 'done' ? 'success' : 'warning';
+
+  showToast(text, tone, 8000);
+  // The toast is invisible to a user who is looking elsewhere, which is the
+  // whole case a "needs input" report exists for.
+  if (typeof document !== 'undefined' && document.hidden) {
+    const { showSystemNotification } = await import('$lib/stores/zustand/notification');
+    showSystemNotification(text, tone);
+  }
+}
+
+/** The agent's display name, or a neutral fallback if it has already gone. */
+function agentLabel(sessionId: number): string {
+  const all = get(sessions);
+  const session = all.find((s) => s.id === sessionId);
+  return session ? getSessionLabel(session, all) : 'An agent';
+}
+
+/**
+ * Channels already bound to a live session, so the launch path and the config
+ * writer hand one agent ONE token rather than minting a second for the same
+ * terminal.
+ */
+const channelsBySession = new Map<number, AgentChannel>();
+
+/** The channel bound to this session, if it has one. */
+export function agentChannelForSession(sessionId: number): AgentChannel | null {
+  return channelsBySession.get(sessionId) ?? null;
+}
+
+/** Forget a session's channel when its terminal goes away. */
+export function forgetAgentChannel(sessionId: number): void {
+  channelsBySession.delete(sessionId);
+}
+
+/** Mint a per-launch channel, or null when the MCP server isn't running. */
+export async function prepareAgentChannel(): Promise<AgentChannel | null> {
+  try {
+    return await invoke<AgentChannel>('mcp_open_agent_channel');
+  } catch (e) {
+    // Never fatal: an agent without its own token still gets the shared one and
+    // every tool keeps working — its reports just arrive unattributed.
+    console.warn('[mcp] Could not mint a per-agent token; reports will be unattributed:', e);
+    return null;
+  }
+}
+
+/** Bind a minted channel to the session that was launched with it. */
+export async function bindAgentChannel(
+  channel: AgentChannel,
+  sessionId: number,
+): Promise<void> {
+  try {
+    const bound = await invoke<boolean>('mcp_bind_agent_channel', {
+      token: channel.token,
+      sessionId,
+    });
+    if (!bound) {
+      console.warn('[mcp] The MCP server did not recognise this agent token; not bound.');
+      return;
+    }
+    channelsBySession.set(sessionId, channel);
+  } catch (e) {
+    console.warn('[mcp] Could not bind the per-agent token:', e);
+  }
+}
+
+/** Drop a channel whose launch never happened. */
+export async function discardAgentChannel(channel: AgentChannel): Promise<void> {
+  try {
+    await invoke('mcp_close_agent_channel', { token: channel.token });
+  } catch {
+    /* the server is gone; the token died with it */
+  }
+}
 
 /** Get the port the MCP server is listening on. */
 export async function getMcpPort(): Promise<number> {
@@ -162,6 +326,10 @@ export async function registerAgent(
 
 /** Unregister an agent by session id. */
 export async function unregisterAgent(sessionId: number): Promise<void> {
+  // The server drops this session's per-launch tokens inside `unregister_agent`
+  // (a dead session's token must stop authenticating), so the local mirror is
+  // cleared here rather than at every caller.
+  forgetAgentChannel(sessionId);
   try {
     await invoke('mcp_unregister_agent', { sessionId });
   } catch (e) {
@@ -274,6 +442,20 @@ export function initMcpBridge(): void {
   // those names match the ones the app gives agents the user spawns. Fixed at
   // build time, so one push at startup is all it needs.
   void setMcpAssistantNames(ASSISTANT_NAMES);
+
+  // An agent reporting on its own turn. This is the deterministic counterpart
+  // to the screen-scraping in `agent-turn-watch.ts`: instead of matching an
+  // English phrase against the PTY tail and hoping, the agent says what it is
+  // doing, and the MCP server attaches the session identity its *token* proved
+  // (never anything the agent claimed — see `authorize` in mcp/mod.rs).
+  //
+  // `sessionId` is null when the caller authenticated with the app-wide token,
+  // which every agent shares. Such a report is still shown, because "an agent
+  // needs you" beats silence — but it cannot end a turn, since there is no way
+  // to know whose turn it was.
+  listen<AgentReportEvent>('mcp:agent-report', (event) => {
+    void handleAgentReport(event.payload);
+  });
 
   listen<SpawnRequest>('mcp:spawn-agent', async (event) => {
     const { preset, prompt, name: requestedName } = event.payload;
@@ -610,14 +792,38 @@ const CLAUDE_EXECUTABLES = new Set(['claude']);
 export async function mcpLaunchFlags(
   preset: string,
   projectRoot?: string,
+  sessionId?: number,
 ): Promise<string> {
   if (!CLAUDE_EXECUTABLES.has(agentExecutable(preset))) return '';
   if (!projectRoot) return '';
 
   try {
+    // A per-launch token when we know which session this launch belongs to, so
+    // this agent's `report_status` calls are attributable to it rather than to
+    // "some agent on this machine". This is the one config surface that is
+    // genuinely per-launch — every other CLI here discovers the server from a
+    // shared config file, so their reports arrive unattributed. Widening that
+    // means giving those CLIs a per-launch config of their own.
+    //
+    // Bound immediately rather than in a second step, because unlike the hook
+    // channel the PTY session already exists here: the agent is launched by
+    // typing into a terminal that is already open.
+    let url: string | null = null;
+    if (sessionId !== undefined) {
+      // Reuse the channel the spawn path already bound for this terminal —
+      // one agent, one token. Minting a second here would work but would leave
+      // the env var and the transport disagreeing about which token is "this
+      // agent's", which is exactly the kind of thing that reads as a bug later.
+      let channel = agentChannelForSession(sessionId);
+      if (!channel) {
+        channel = await prepareAgentChannel();
+        if (channel) await bindAgentChannel(channel, sessionId);
+      }
+      if (channel) url = channel.url;
+    }
     // No URL means the MCP server never came up. Writing a config pointing at
     // nothing would leave the agent retrying a dead endpoint on every tool call.
-    const url = await getMcpUrl();
+    url = url ?? (await getMcpUrl());
     if (!url) return '';
 
     // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`

@@ -2,25 +2,56 @@ import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import {
   currentVoiceInputModel,
+  dictationVocabulary,
   getDefaultVoiceInputModel,
   getProviderBaseUrl,
   getProviderDef,
   isLocalProvider,
+  smartVadEnabled,
   type AiProviderId,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import { getActiveEditorVocabulary } from '$lib/services/editor-symbols';
 import { isWebkitGtk } from '$lib/utils/tauri';
 
 export type VoiceInputCallbacks = {
   onStart?: () => void;
   onSpeechStart?: () => void;
   onResult: (transcript: string) => void;
+  /**
+   * Every finalized turn, fired exactly once per turn — whether the capture
+   * graph was parked warm for the next one or torn down.
+   *
+   * `onEnd` deliberately does NOT do that job any more. It used to fire after
+   * every finalized turn, so for any consumer that treats `onEnd` as "the mic
+   * is gone" (the F9 dictation service does), an ordinary thinking pause
+   * looked identical to the graph dying, and the dictation delivered itself
+   * halfway through. Now: `onTurnComplete` = a turn finished; `onEnd` = the
+   * capture graph really ended (user stop, teardown, fatal error).
+   */
+  onTurnComplete?: () => void;
   onEnd?: () => void;
   onError?: (message: string) => void;
   onProcessingStart?: (message: string) => void;
   onAudioLevel?: (rms: number) => void;
+};
+
+/**
+ * How the webspeech engine hands transcripts to `onResult`. The two consumer
+ * shapes genuinely disagree:
+ *
+ * - 'cumulative' (default): every `onresult` event carries the WHOLE
+ *   transcript so far (finals + interim). What a live-preview/conversation
+ *   consumer expects — it just replaces its draft each time.
+ * - 'utterances': each event emits ONLY segments finalized since the previous
+ *   event. What an accumulating consumer (dictation banking) needs — feeding
+ *   it cumulative payloads duplicates every earlier word on every event, the
+ *   reported "it writes what I say twice" bug.
+ */
+export type VoiceInputSessionOptions = {
+  mode?: 'cumulative' | 'utterances';
 };
 
 export type VoiceInputSession = {
@@ -34,6 +65,13 @@ export type VoiceInputSession = {
 export type VoiceRefineOptions = {
   allowNewLines?: boolean;
   spokenPunctuation?: boolean;
+  /**
+   * Strip hesitation words ("um", "uh", …) — the WhisperFlow/Typeless cleanup
+   * everyone expects from a dictation bar. On by default: it is a mechanical,
+   * word-bounded edit, safe even for terminal payloads (nobody dictates a bare
+   * "um" as a shell command, and \b keeps it away from volume/urban).
+   */
+  removeFillers?: boolean;
 };
 
 type BrowserSpeechRecognition = {
@@ -221,8 +259,15 @@ const SPOKEN_PUNCTUATION_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bapostrophe\b/gi, "'"],
 ];
 
+// Hesitations dictation engines faithfully write down and nobody wants to keep.
+// Word boundaries are what make this safe next to real vocabulary — "volume",
+// "urban" and "here" never match; an optional trailing punctuation mark is
+// swept up too so "wait um , okay" doesn't leave a dangling comma behind (the
+// whitespace rules below clean up whatever spacing remains).
+const FILLER_WORD_RE = /\b(?:umm?|uhh?|uhm|erm|ahh?)\b[.,;:!?]?\s*/gi;
+
 export function refineVoiceTranscript(input: string, options: VoiceRefineOptions = {}) {
-  const { allowNewLines = false, spokenPunctuation = true } = options;
+  const { allowNewLines = false, spokenPunctuation = true, removeFillers = true } = options;
   let text = input.replace(/\r\n?/g, '\n').trim();
 
   if (!text) return '';
@@ -231,6 +276,10 @@ export function refineVoiceTranscript(input: string, options: VoiceRefineOptions
     for (const [pattern, replacement] of SPOKEN_PUNCTUATION_REPLACEMENTS) {
       text = text.replace(pattern, replacement);
     }
+  }
+
+  if (removeFillers) {
+    text = text.replace(FILLER_WORD_RE, '');
   }
 
   if (!allowNewLines) {
@@ -415,8 +464,16 @@ function mapRecognitionError(code: string | undefined) {
   }
 }
 
-export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceInputSession {
+export function createVoiceInputSession(
+  callbacks: VoiceInputCallbacks,
+  options: VoiceInputSessionOptions = {},
+): VoiceInputSession {
+  const { mode = 'cumulative' } = options;
   let recognition: BrowserSpeechRecognition | null = null;
+  // Results already handed to onResult in 'utterances' mode (webspeech only).
+  // The engine re-sends every result on each event; anything before this index
+  // is history we've already delivered.
+  let finalsEmitted = 0;
   let starting = false;
   let stopRequested = false;
   let transcriptionPending = false;
@@ -455,6 +512,79 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
   // Set when stop() arrives mid-transcription: the in-flight finalizer releases
   // the mic in its `finally` instead of parking the graph warm.
   let teardownRequested = false;
+
+  // ── Smart VAD (Silero, native) ────────────────────────────────────────────
+  // When enabled AND the model is downloaded, raw PCM batches go to Rust and
+  // the turn decision runs on Silero's speech probability instead of the RMS
+  // gate. ANY failure here silently reverts to the level gate — smart VAD is
+  // an upgrade, never a dependency. Hysteresis mirrors the gate: higher bar to
+  // START a turn than to KEEP it.
+  let vadSessionId: number | null = null;
+  let vadProb = 0;
+  let vadQueue: Float32Array[] = [];
+  // ~4 processor buffers (~85 ms each at 48 kHz) per IPC batch keeps traffic
+  // around 3 calls/second without adding perceptible endpointing lag.
+  const VAD_FLUSH_FRAMES = 4;
+  const VAD_ONSET_PROB = 0.55;
+  const VAD_RELEASE_PROB = 0.35;
+
+  function ensureVad(): void {
+    if (!get(smartVadEnabled) || vadSessionId != null) return;
+    invoke<number>('vad_session_start')
+      .then((id) => {
+        // A stop() may already have torn things down while we were starting.
+        if (!get(smartVadEnabled)) {
+          void invoke('vad_session_end', { sessionId: id }).catch(() => undefined);
+          return;
+        }
+        vadSessionId = id;
+        vadProb = 0;
+      })
+      .catch(() => {
+        // Model missing, ORT absent, whatever — level gate carries on.
+        vadSessionId = null;
+      });
+  }
+
+  function stopVad(): void {
+    if (vadSessionId != null) {
+      const id = vadSessionId;
+      void invoke('vad_session_end', { sessionId: id }).catch(() => undefined);
+    }
+    vadSessionId = null;
+    vadProb = 0;
+    vadQueue = [];
+  }
+
+  function flushVadQueue(): void {
+    if (vadSessionId == null || vadQueue.length === 0) return;
+    const batch = vadQueue;
+    vadQueue = [];
+    const total = batch.reduce((sum, chunk) => sum + chunk.length, 0);
+    const pcm = new Int16Array(total);
+    let offset = 0;
+    for (const chunk of batch) {
+      for (let i = 0; i < chunk.length; i += 1) {
+        const s = Math.max(-1, Math.min(1, chunk[i]));
+        pcm[offset + i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      offset += chunk.length;
+    }
+    invoke<number>('vad_session_feed', {
+      sessionId: vadSessionId,
+      samples: Array.from(pcm),
+      sampleRate: captureSampleRate,
+    })
+      .then((prob) => {
+        if (typeof prob === 'number') vadProb = prob;
+      })
+      .catch(() => {
+        // The backend gave up on this session (model removed mid-dictation,
+        // ORT failure): revert to the level gate for the rest of the capture.
+        vadSessionId = null;
+        vadProb = 0;
+      });
+  }
 
   function clearSilenceTimer() {
     if (silenceTimer) {
@@ -497,6 +627,8 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     onsetRun = 0;
     noiseFloor = 0;
     listening = false;
+    // The Rust VAD session belongs to this capture graph — release it with it.
+    stopVad();
   }
 
   function autoStopAfterSilence() {
@@ -528,11 +660,16 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     callbacks.onProcessingStart?.('Transcribing with Google…');
 
     if (capturedChunks.length === 0 || !speechDetected) {
+      // Decide from the flags BEFORE anything mutates them: does this finalize
+      // end the capture graph, or park it warm for the next turn?
+      const graphEnded = !keepWarm || stopRequested || teardownRequested;
       releaseOrParkGraph();
       transcriptionPending = false;
       stopRequested = false;
+      teardownRequested = false;
       callbacks.onResult('');
-      callbacks.onEnd?.();
+      if (graphEnded) callbacks.onEnd?.();
+      callbacks.onTurnComplete?.();
       return;
     }
 
@@ -548,12 +685,24 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
     try {
       const provider = get(voiceInputProvider);
       let transcript = '';
+      // Hotword biasing at the SOURCE: the developer's custom terms go into
+      // the transcription request itself (Whisper initial-prompt conditioning,
+      // Gemini/OpenAI prompt hints), so names come out right before any
+      // polish pass — including the mechanical-only terminal path. The user's
+      // own list ranks first; the active editor's identifiers ride along after
+      // it (STT spelling hints only — never fed to the prose rewriter).
+      const customTerms = get(dictationVocabulary).trim();
+      const vocabulary = [customTerms, ...getActiveEditorVocabulary()]
+        .filter(Boolean)
+        .join(', ')
+        .trim() || undefined;
       if (provider === 'local') {
         callbacks.onProcessingStart?.('Transcribing locally…');
         const model = get(currentVoiceInputModel) || getDefaultVoiceInputModel(provider);
         transcript = await invoke<string>('local_stt_transcribe', {
           audioBytes: Array.from(bytes),
           modelId: model,
+          initialPrompt: vocabulary,
         });
       } else {
         const providerId = (provider === 'webspeech' ? 'google' : provider) as AiProviderId;
@@ -575,6 +724,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           model,
           apiKey: '',
           baseUrl: baseUrl || undefined,
+          vocabulary,
         });
       }
       callbacks.onResult(transcript.trim());
@@ -583,6 +733,10 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       callbacks.onError?.(message || 'Transcription failed.');
     } finally {
       transcriptionPending = false;
+      // Read while the flags still describe this finalize: a warm park keeps
+      // the graph (keepWarm, nothing requested a stop); anything else — user
+      // stop, teardown-while-busy, conversation mode off — ends it.
+      const graphEnded = !keepWarm || stopRequested || teardownRequested;
       // A stop() that arrived while this transcription was in flight parked the
       // graph warm (it couldn't tear down mid-finalize) — release the mic now.
       if (teardownRequested) {
@@ -590,7 +744,12 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
         clearCaptureState();
       }
       stopRequested = false;
-      callbacks.onEnd?.();
+      // onEnd is reserved for "the capture graph is gone". A warm-parked turn
+      // fires onTurnComplete only — firing onEnd here as well made every
+      // end-of-turn pause indistinguishable from the mic dying, which is how
+      // dictations delivered themselves at the first thinking pause.
+      if (graphEnded) callbacks.onEnd?.();
+      callbacks.onTurnComplete?.();
     }
   }
 
@@ -621,6 +780,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           // so the processor keeps firing on this turn.
           if (captureContext.state === 'suspended') void captureContext.resume().catch(() => undefined);
           softResetVad();
+          ensureVad();
           listening = true;
           callbacks.onStart?.();
           return;
@@ -686,6 +846,11 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
             }
             const input = event.inputBuffer.getChannelData(0);
             capturedChunks.push(new Float32Array(input));
+            // Smart VAD: every listening buffer also queues for the native
+            // detector. The RMS work below stays — it still drives the level
+            // meter and the fallback gate.
+            vadQueue.push(new Float32Array(input));
+            if (vadQueue.length >= VAD_FLUSH_FRAMES) flushVadQueue();
 
             let sumSquares = 0;
             for (let i = 0; i < input.length; i += 1) {
@@ -711,13 +876,21 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
               return;
             }
 
-            // Simple gate: speech if RMS exceeds threshold, silence if below.
-            // Onset has a higher bar than release (hysteresis) to avoid chatter.
+            // Simple gate: speech if above threshold, silence if below. Onset
+            // has a higher bar than release (hysteresis) to avoid chatter.
             const threshold = speechDetected
               ? Math.max(VAD_ABS_FLOOR, noiseFloor * VAD_RELEASE_MULT)
               : Math.max(VAD_ONSET_MIN_RMS, noiseFloor * VAD_ONSET_MULT);
 
-            if (rms >= threshold) {
+            // When the native detector is live it OWNS the decision: Silero's
+            // speech probability with hysteresis replaces the loudness compare,
+            // which is what makes clicks/fans/fans-of-noise stop counting as
+            // turns. The level gate remains as instant fallback.
+            const active = vadSessionId != null
+              ? vadProb >= (speechDetected ? VAD_RELEASE_PROB : VAD_ONSET_PROB)
+              : rms >= threshold;
+
+            if (active) {
               if (!speechDetected) {
                 // Confirm onset only after several consecutive loud buffers so
                 // a lone transient (keyboard click, cough, door slam) neither
@@ -763,6 +936,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
           // (required by many browser implementations).
           captureProcessor.connect(captureContext.destination);
           starting = false;
+          ensureVad();
           callbacks.onStart?.();
         } catch {
           starting = false;
@@ -798,6 +972,7 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
       const recognizer: BrowserSpeechRecognition = new SpeechRecognition();
       recognition = recognizer;
       speechDetected = false;
+      finalsEmitted = 0;
       recognizer.continuous = true;
       recognizer.interimResults = true;
       recognizer.maxAlternatives = 3;
@@ -817,6 +992,26 @@ export function createVoiceInputSession(callbacks: VoiceInputCallbacks): VoiceIn
         if (!speechDetected && event?.results?.length > 0) {
           speechDetected = true;
           callbacks.onSpeechStart?.();
+        }
+        if (mode === 'utterances') {
+          // Emit ONLY what finalized since the last event. The engine re-sends
+          // the whole result list every time; banking cumulative payloads was
+          // duplicating each earlier word on every event ("hello", then
+          // "hello world" → delivered "hello hello world"). Scanning stops at
+          // the first non-final entry — results finalize left to right, and an
+          // interim slot may still be rewritten in place by the next event.
+          const pieces: string[] = [];
+          let consumed = finalsEmitted;
+          for (let i = finalsEmitted; i < (event?.results?.length ?? 0); i += 1) {
+            const result = event.results[i];
+            if (!result?.isFinal) break;
+            const transcript = getBestAlternative(result);
+            if (transcript) pieces.push(transcript);
+            consumed = i + 1;
+          }
+          finalsEmitted = consumed;
+          if (pieces.length > 0) callbacks.onResult(pieces.join(' ').trim());
+          return;
         }
         const transcript = buildTranscript(event?.results ?? []);
         callbacks.onResult(transcript);

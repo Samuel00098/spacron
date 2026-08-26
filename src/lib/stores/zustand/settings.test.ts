@@ -124,3 +124,62 @@ describe('transcriptionAutoSend defaults to off', () => {
     expect(second.useSettingsStore.getState().transcriptionAutoSend).toBe(true);
   });
 });
+
+/**
+ * The dictation polish pass's custom vocabulary (WhisperFlow-style hotwords).
+ * A brand-new key, so no migration is needed — but it must be declared here in
+ * all three places, or the boot read resets it like the wrapper-only keys.
+ */
+describe('dictationVocabulary custom terms', () => {
+  it('is empty on a fresh install', async () => {
+    stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().dictationVocabulary).toBe('');
+  });
+
+  it('round-trips an edited list into persisted storage', async () => {
+    const storage = stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    useSettingsStore.getState().__set('dictationVocabulary', 'Spacron, Parakeet');
+
+    expect(useSettingsStore.getState().dictationVocabulary).toBe('Spacron, Parakeet');
+    expect(storage.get('forge_setting_dictationVocabulary')).toBe(
+      JSON.stringify('Spacron, Parakeet'),
+    );
+  });
+
+  it('rehydrates a saved list at boot', async () => {
+    const storage = stubWebStorage();
+    storage.set('forge_setting_dictationVocabulary', JSON.stringify('onnxruntime'));
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().dictationVocabulary).toBe('onnxruntime');
+  });
+});
+
+/**
+ * Smart VAD is opt-in: it needs the Silero model downloaded, and until then
+ * dictation must run exactly as before (level gate).
+ */
+describe('smartVadEnabled defaults to off', () => {
+  it('is off on a fresh install', async () => {
+    stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().smartVadEnabled).toBe(false);
+  });
+
+  it('round-trips a turn-on into persisted storage and back', async () => {
+    const storage = stubWebStorage();
+
+    const first = await import('./settings');
+    first.useSettingsStore.getState().__set('smartVadEnabled', true);
+    expect(storage.get('forge_setting_smartVadEnabled')).toBe('true');
+
+    vi.resetModules();
+    const second = await import('./settings');
+    expect(second.useSettingsStore.getState().smartVadEnabled).toBe(true);
+  });
+});

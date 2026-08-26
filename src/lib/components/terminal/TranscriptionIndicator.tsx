@@ -15,7 +15,10 @@ export default function TranscriptionIndicator() {
   return (
     <div className={`transcription-indicator ${state}`} role="status" aria-live="polite">
       <span className="dot" />
-      <span className="label">{listening ? 'Listening' : 'Sending to terminal'}</span>
+      {/* Processing covers the final STT drain (and the optional AI polish), so
+        * "Sending to terminal" was a promise the label couldn't keep — it also
+        * showed while dictating into a text field. */}
+      <span className="label">{listening ? 'Listening' : 'Transcribing…'}</span>
       {listening && (
         <span className="hint">
           again to send · <kbd className="key">Esc</kbd> to cancel

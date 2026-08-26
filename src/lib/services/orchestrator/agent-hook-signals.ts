@@ -34,11 +34,24 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { backendInvoke } from '$lib/services/backend';
 
-/** Outcome a sentinel line can carry. Mirrors `AgentTurnOutcome`'s useful cases. */
-export type HookSignal = { kind: 'finished' } | { kind: 'blocked'; reason: string };
+/**
+ * Outcome a declared signal can carry. Mirrors `AgentTurnOutcome`'s useful
+ * cases minus its `via` field, which the watcher stamps — everything on this
+ * channel is `declared` by definition.
+ *
+ * `failed` cannot come from a hook (Claude's `Stop`/`Notification` hooks have
+ * no failure variant); it exists for `report_status`, where an agent can say
+ * outright that it could not finish.
+ */
+export type HookSignal =
+  /** `detail` is the agent's own summary of what it just did, when it gave one. */
+  | { kind: 'finished'; detail?: string }
+  | { kind: 'blocked'; reason: string }
+  | { kind: 'failed'; reason: string };
 
 const DONE_PREFIX = 'SPACRON-TURN-DONE:';
 const INPUT_PREFIX = 'SPACRON-NEEDS-INPUT:';
+const FAILED_PREFIX = 'SPACRON-TURN-FAILED:';
 
 /**
  * Agent presets whose CLI can emit turn hooks. Everything else keeps the
@@ -55,7 +68,32 @@ export type PreparedTurnSignals = {
 };
 
 type ChannelState = {
-  channelId: string;
+  /**
+   * The sentinel nonce, or **null** for a session that has no hook channel and
+   * only ever receives signals pushed in from elsewhere (today: an agent's own
+   * `report_status` MCP call — see `mcpBridge.ts`).
+   *
+   * The distinction is load-bearing, not bookkeeping. `hasTurnSignalChannel`
+   * tests it rather than mere map membership, because a true answer moves the
+   * watcher's idle fallback from 90 seconds to 15 minutes. That trade is right
+   * for a hook agent, whose sentinel is guaranteed to arrive; it would be a
+   * silent regression for every other CLI, which might report once and never
+   * again — or never report at all.
+   */
+  channelId: string | null;
+  /**
+   * Every nonce bound to this session. A Claude agent can hold two at once —
+   * the hook channel installed at launch and the shell channel every agent
+   * gets — and both feed the same listeners, so whichever fires first ends the
+   * turn and the other is ignored.
+   */
+  channelIds: Set<string>;
+  /**
+   * True only for a channel whose sentinel is *guaranteed* to arrive: Claude's
+   * `Stop` hook. A shell channel depends on the agent remembering to echo, so
+   * it must not buy the 15-minute idle window — see `hasTurnSignalChannel`.
+   */
+  guaranteed: boolean;
   listeners: Set<(signal: HookSignal) => void>;
 };
 
@@ -84,11 +122,23 @@ export function supportsHookSignals(presetOrCommand: string | null | undefined):
  */
 export function parseSignalLine(line: string, nonce: string): HookSignal | null {
   const trimmed = line.trim();
-  if (trimmed === `${DONE_PREFIX}${nonce}`) return { kind: 'finished' };
+  /** Everything the agent wrote after the nonce — its own words, verbatim. */
+  const detailAfter = (prefix: string) =>
+    trimmed.slice(prefix.length + nonce.length).replace(/^[\s:]+/, '').trim();
+
+  if (trimmed.startsWith(`${DONE_PREFIX}${nonce}`)) {
+    // Claude's `Stop` hook writes the bare sentinel; an agent echoing this by
+    // hand may add a sentence, and that sentence is what the inbox row shows.
+    const detail = detailAfter(DONE_PREFIX);
+    return detail ? { kind: 'finished', detail } : { kind: 'finished' };
+  }
   if (trimmed.startsWith(`${INPUT_PREFIX}${nonce}`)) {
-    // Anything after the nonce is the CLI's own "why", passed through verbatim.
-    const detail = trimmed.slice(INPUT_PREFIX.length + nonce.length).replace(/^[\s:]+/, '').trim();
+    const detail = detailAfter(INPUT_PREFIX);
     return { kind: 'blocked', reason: detail || 'Agent is waiting for your input.' };
+  }
+  if (trimmed.startsWith(`${FAILED_PREFIX}${nonce}`)) {
+    const detail = detailAfter(FAILED_PREFIX);
+    return { kind: 'failed', reason: detail || 'The agent reported that it could not finish.' };
   }
   return null;
 }
@@ -108,15 +158,11 @@ async function ensureListening(): Promise<void> {
     if (sessionId === undefined) return;
     const channel = channels.get(sessionId);
     if (!channel) return;
-    const signal = parseSignalLine(line, channel.channelId);
+    // Parse against the nonce of the channel the line actually arrived on —
+    // a session can have two, and the entry's `channelId` is only one of them.
+    const signal = parseSignalLine(line, channelId);
     if (!signal) return;
-    for (const listener of [...channel.listeners]) {
-      try {
-        listener(signal);
-      } catch (err) {
-        console.error('Agent signal listener failed:', err);
-      }
-    }
+    emitToListeners(channel, signal);
   }).then((fn) => {
     unlisten = fn;
   });
@@ -195,12 +241,62 @@ export async function prepareTurnSignals(command: string): Promise<PreparedTurnS
 }
 
 /**
+ * Open a status channel for an agent that has no hooks and no MCP tools.
+ *
+ * This is what makes turn reporting available to *every* CLI rather than the
+ * handful Spacron can write an MCP config for. The agent is handed a file path
+ * and a nonce in its environment and told, in its standing brief, to append one
+ * line when it stops:
+ *
+ *     echo SPACRON-TURN-DONE:$SPACRON_TURN_TOKEN done here >> $SPACRON_TURN_FILE
+ *
+ * Every coding CLI can run a shell command — that is the one capability they
+ * all share — so this reaches the ~30 agents that `injectMcpConfigForAgent` has
+ * no branch for. The nonce is what makes it trustworthy: it exists only in that
+ * session's environment, so no other agent (and no quoted documentation) can
+ * produce a line that ends this turn.
+ *
+ * Best-effort by design, hence `guaranteed: false` when attached — an agent may
+ * simply forget, and the idle fallback must stay at its normal window for it.
+ */
+export async function prepareStatusChannel(): Promise<{
+  channelId: string;
+  path: string;
+} | null> {
+  const channelId = mintNonce();
+  try {
+    const path = await invoke<string>('agent_signal_channel_open', { channelId });
+    await ensureListening();
+    return { channelId, path };
+  } catch (err) {
+    console.error('Could not open an agent status channel:', err);
+    return null;
+  }
+}
+
+/**
  * Bind a prepared channel to the session that was launched with it. Until this
  * runs, sentinels arriving on the channel have nowhere to go — which is fine,
  * since the agent cannot have finished a turn before its terminal exists.
  */
-export function attachTurnSignals(sessionId: number, prepared: PreparedTurnSignals): void {
-  channels.set(sessionId, { channelId: prepared.channelId, listeners: new Set() });
+export function attachTurnSignals(
+  sessionId: number,
+  prepared: PreparedTurnSignals,
+  opts: { guaranteed?: boolean } = {},
+): void {
+  const existing = channels.get(sessionId);
+  const channel: ChannelState = existing ?? {
+    channelId: null,
+    channelIds: new Set(),
+    guaranteed: false,
+    listeners: new Set(),
+  };
+  channel.channelId = prepared.channelId;
+  channel.channelIds.add(prepared.channelId);
+  // Additive: a session that already has a guaranteed channel keeps that
+  // standing when a best-effort one is added alongside it.
+  channel.guaranteed = channel.guaranteed || opts.guaranteed === true;
+  channels.set(sessionId, channel);
   sessionByChannel.set(prepared.channelId, sessionId);
 }
 
@@ -216,22 +312,82 @@ export async function discardPreparedTurnSignals(prepared: PreparedTurnSignals):
   }
 }
 
-/** Whether this session has a live sentinel channel. */
-export function hasTurnSignalChannel(sessionId: number): boolean {
-  return channels.has(sessionId);
+/** Deliver one signal to everything watching this session. */
+function emitToListeners(channel: ChannelState, signal: HookSignal): void {
+  for (const listener of [...channel.listeners]) {
+    try {
+      listener(signal);
+    } catch (err) {
+      console.error('Agent signal listener failed:', err);
+    }
+  }
 }
 
-/** Subscribe to this session's sentinels. Returns an unsubscribe function. */
+/**
+ * Whether this session has a live **hook** sentinel channel.
+ *
+ * Deliberately not `channels.has(sessionId)`: `onTurnSignal` now creates an
+ * entry for any watched session so a signal arriving later has somewhere to go,
+ * and treating those as hook channels would move every non-hook agent onto the
+ * 15-minute idle fallback. See the `channelId` doc on `ChannelState`.
+ */
+export function hasTurnSignalChannel(sessionId: number): boolean {
+  return channels.get(sessionId)?.guaranteed === true;
+}
+
+/**
+ * Whether this session has *any* way for its agent to declare a turn end —
+ * a hook channel, or the shell channel every spawned agent gets.
+ *
+ * This is the question "was its silence a choice?", which is what decides
+ * whether an inferred finish is allowed to stay quiet.
+ */
+export function hasAnyTurnSignalChannel(sessionId: number): boolean {
+  return (channels.get(sessionId)?.channelIds.size ?? 0) > 0;
+}
+
+/**
+ * Subscribe to this session's turn signals. Returns an unsubscribe function.
+ *
+ * Registers even when the session has no channel yet. A hook channel is opened
+ * before launch, but an MCP report can arrive from a session that never had
+ * one — and the watcher subscribes once, at the start of the turn, so a
+ * no-op subscription would drop every signal that arrived afterwards.
+ */
 export function onTurnSignal(
   sessionId: number,
   listener: (signal: HookSignal) => void,
 ): () => void {
-  const channel = channels.get(sessionId);
-  if (!channel) return () => {};
+  let channel = channels.get(sessionId);
+  if (!channel) {
+    channel = { channelId: null, channelIds: new Set(), guaranteed: false, listeners: new Set() };
+    channels.set(sessionId, channel);
+  }
   channel.listeners.add(listener);
   return () => {
     channel.listeners.delete(listener);
+    // A listener-only entry exists solely for its listeners. Dropping it keeps
+    // `channels` from growing one entry per session for the life of the app.
+    if (channel.channelIds.size === 0 && channel.listeners.size === 0) {
+      channels.delete(sessionId);
+    }
   };
+}
+
+/**
+ * Push a signal in from outside the hook path — an agent's own `report_status`
+ * MCP call, which carries the same "the agent said so" trust as a sentinel
+ * because the MCP server attributed it by token, not by anything the agent
+ * claimed (see `authorize` in `src-tauri/src/mcp/mod.rs`).
+ *
+ * Returns whether anything was listening: a report for a session with no armed
+ * watcher is still worth showing the user, but it did not end a turn.
+ */
+export function deliverTurnSignal(sessionId: number, signal: HookSignal): boolean {
+  const channel = channels.get(sessionId);
+  if (!channel || channel.listeners.size === 0) return false;
+  emitToListeners(channel, signal);
+  return true;
 }
 
 /** Tear down a session's channel. Safe to call for sessions that never had one. */
@@ -239,12 +395,16 @@ export async function closeTurnSignalChannel(sessionId: number): Promise<void> {
   const channel = channels.get(sessionId);
   if (!channel) return;
   channels.delete(sessionId);
-  sessionByChannel.delete(channel.channelId);
   channel.listeners.clear();
-  try {
-    await invoke('agent_signal_channel_close', { channelId: channel.channelId });
-  } catch (err) {
-    console.error('Failed to close agent signal channel:', err);
+  // Nothing was opened for a listener-only entry, so there is nothing to close.
+  if (channel.channelIds.size === 0) return;
+  for (const channelId of channel.channelIds) {
+    sessionByChannel.delete(channelId);
+    try {
+      await invoke('agent_signal_channel_close', { channelId });
+    } catch (err) {
+      console.error('Failed to close agent signal channel:', err);
+    }
   }
   if (channels.size === 0 && unlisten) {
     unlisten();
@@ -261,8 +421,13 @@ export function __resetTurnSignalsForTest(): void {
   listening = null;
 }
 
-/** Test seam: bind a channel without a backend round trip. */
+/** Test seam: bind a hook (guaranteed) channel without a backend round trip. */
 export function __registerChannelForTest(sessionId: number, channelId: string): void {
+  attachTurnSignals(sessionId, { command: '', channelId }, { guaranteed: true });
+}
+
+/** Test seam: bind a shell status channel — a real channel, but best-effort. */
+export function __registerStatusChannelForTest(sessionId: number, channelId: string): void {
   attachTurnSignals(sessionId, { command: '', channelId });
 }
 
@@ -272,7 +437,9 @@ export function __deliverLineForTest(channelId: string, line: string): void {
   if (sessionId === undefined) return;
   const channel = channels.get(sessionId);
   if (!channel) return;
-  const signal = parseSignalLine(line, channel.channelId);
+  // Parse against the incoming nonce, exactly as `ensureListening` does — a
+  // session can hold two channels and the entry's `channelId` is only one.
+  const signal = parseSignalLine(line, channelId);
   if (!signal) return;
-  for (const listener of [...channel.listeners]) listener(signal);
+  emitToListeners(channel, signal);
 }

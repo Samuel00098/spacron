@@ -5,6 +5,9 @@ import {
   supportsHookSignals,
   onTurnSignal,
   hasTurnSignalChannel,
+  hasAnyTurnSignalChannel,
+  __registerStatusChannelForTest,
+  deliverTurnSignal,
   __registerChannelForTest,
   __deliverLineForTest,
   __resetTurnSignalsForTest,
@@ -131,5 +134,123 @@ describe('channel routing', () => {
     off();
     __deliverLineForTest(NONCE, `SPACRON-TURN-DONE:${NONCE}`);
     expect(seen).toEqual([]);
+  });
+});
+
+describe('deliverTurnSignal (reports pushed in from the MCP path)', () => {
+  it('reaches a watcher on a session that never had a hook channel', () => {
+    const seen: HookSignal[] = [];
+    const stop = onTurnSignal(7, (s) => seen.push(s));
+
+    expect(deliverTurnSignal(7, { kind: 'finished' })).toBe(true);
+    expect(seen).toEqual([{ kind: 'finished' }]);
+    stop();
+  });
+
+  it('does not make a watched session look hook-capable', () => {
+    // A true answer here moves the watcher's idle fallback from 90s to 15
+    // minutes, which is only right for an agent whose sentinel is guaranteed.
+    const stop = onTurnSignal(7, () => {});
+    expect(hasTurnSignalChannel(7)).toBe(false);
+    stop();
+
+    __registerChannelForTest(8, NONCE);
+    expect(hasTurnSignalChannel(8)).toBe(true);
+  });
+
+  it('reports it delivered nothing when no watcher is armed', () => {
+    expect(deliverTurnSignal(99, { kind: 'finished' })).toBe(false);
+  });
+
+  it('stops delivering once the watcher unsubscribes', () => {
+    const seen: HookSignal[] = [];
+    const stop = onTurnSignal(7, (s) => seen.push(s));
+    stop();
+    expect(deliverTurnSignal(7, { kind: 'finished' })).toBe(false);
+    expect(seen).toEqual([]);
+  });
+
+  it('still delivers hook sentinels to a listener registered before the channel', () => {
+    // Ordering guard: the watcher subscribes first, and attaching the channel
+    // afterwards must not replace the entry holding its listener.
+    const seen: HookSignal[] = [];
+    const stop = onTurnSignal(5, (s) => seen.push(s));
+    deliverTurnSignal(5, { kind: 'blocked', reason: 'which db?' });
+    expect(seen).toEqual([{ kind: 'blocked', reason: 'which db?' }]);
+    stop();
+  });
+});
+
+describe('the shell status channel (every CLI, not just the eight)', () => {
+  it('reads a done sentinel an agent echoed by hand, with its sentence', () => {
+    const seen: HookSignal[] = [];
+    __registerStatusChannelForTest(3, NONCE);
+    const stop = onTurnSignal(3, (s) => seen.push(s));
+
+    __deliverLineForTest(NONCE, `SPACRON-TURN-DONE:${NONCE} Added the retry backoff; 12 tests pass.`);
+
+    expect(seen).toEqual([
+      { kind: 'finished', detail: 'Added the retry backoff; 12 tests pass.' },
+    ]);
+    stop();
+  });
+
+  it('reads needs-input and failure sentinels', () => {
+    const seen: HookSignal[] = [];
+    __registerStatusChannelForTest(3, NONCE);
+    const stop = onTurnSignal(3, (s) => seen.push(s));
+
+    __deliverLineForTest(NONCE, `SPACRON-NEEDS-INPUT:${NONCE} Which database?`);
+    __deliverLineForTest(NONCE, `SPACRON-TURN-FAILED:${NONCE} Dependency conflict.`);
+
+    expect(seen).toEqual([
+      { kind: 'blocked', reason: 'Which database?' },
+      { kind: 'failed', reason: 'Dependency conflict.' },
+    ]);
+    stop();
+  });
+
+  it('still accepts the bare sentinel Claude\'s hook writes', () => {
+    const seen: HookSignal[] = [];
+    __registerStatusChannelForTest(3, NONCE);
+    const stop = onTurnSignal(3, (s) => seen.push(s));
+    __deliverLineForTest(NONCE, `SPACRON-TURN-DONE:${NONCE}`);
+    expect(seen).toEqual([{ kind: 'finished' }]);
+    stop();
+  });
+
+  it('does not buy the long idle window a hook does', () => {
+    // A shell channel depends on the agent remembering to echo. Treating it as
+    // guaranteed would move every CLI to the 15-minute fallback.
+    __registerStatusChannelForTest(3, NONCE);
+    expect(hasTurnSignalChannel(3)).toBe(false);
+    expect(hasAnyTurnSignalChannel(3)).toBe(true);
+  });
+
+  it('lets one session hold both a hook and a shell channel', () => {
+    // Claude gets both. Whichever line lands first ends the turn.
+    const other = 'ffffeeeeddddcccc';
+    const seen: HookSignal[] = [];
+    __registerChannelForTest(4, NONCE);
+    __registerStatusChannelForTest(4, other);
+    const stop = onTurnSignal(4, (s) => seen.push(s));
+
+    __deliverLineForTest(other, `SPACRON-TURN-DONE:${other} via the shell`);
+    __deliverLineForTest(NONCE, `SPACRON-TURN-DONE:${NONCE}`);
+
+    expect(seen).toHaveLength(2);
+    // Guaranteed standing survives the second, best-effort channel.
+    expect(hasTurnSignalChannel(4)).toBe(true);
+    stop();
+  });
+
+  it('ignores a sentinel carrying another session\'s nonce', () => {
+    const seen: HookSignal[] = [];
+    __registerStatusChannelForTest(3, NONCE);
+    const stop = onTurnSignal(3, (s) => seen.push(s));
+    // The nonce is the whole guard: it lives only in that session's env.
+    __deliverLineForTest(NONCE, 'SPACRON-TURN-DONE:someone-elses-nonce');
+    expect(seen).toEqual([]);
+    stop();
   });
 });

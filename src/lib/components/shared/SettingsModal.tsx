@@ -59,6 +59,8 @@ import {
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceRefinementEnabled,
+  dictationVocabulary,
+  smartVadEnabled,
   transcriptionAutoSend,
   announceAgentCompletions,
   openaiRealtimeModel,
@@ -88,6 +90,7 @@ import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
 import { AgentBrandMark } from './useAgentBrand';
 import AgentsPane from '$lib/components/agents/AgentsPane';
+import VoiceHistoryPanel from './VoiceHistoryPanel';
 import UsageStatsPane from '$lib/components/stats/UsageStatsPane';
 import {
   customAgents,
@@ -493,6 +496,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     () => useLayoutStore.getState().settingsInitialTab ?? 'general',
   );
 
+  // Which half of the Voice tab is showing. History lives INSIDE that tab
+  // rather than as a tenth top-level tab — it is voice output, not its own
+  // area of the app — and the choice sticks while the modal is open.
+  const [voiceView, setVoiceView] = useState<'settings' | 'history'>('settings');
+
   // Local models downloader state
   const [localModels, setLocalModels] = useState<any[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, { progress: number; phase: string }>>({});
@@ -765,6 +773,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const voiceInput = useStore(voiceInputProvider);
   const voiceInputModel = useStore(currentVoiceInputModel);
   const voiceRefinement = useStore(voiceRefinementEnabled);
+  const vocabulary = useStore(dictationVocabulary);
+  const smartVad = useStore(smartVadEnabled);
   const transcriptionSend = useStore(transcriptionAutoSend);
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
@@ -1727,6 +1737,32 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'voice' && (
               <>
+                {/* Voice settings and voice history are two views of the SAME
+                    tab — history is not a top-level tab of its own. */}
+                <div className="settings-subnav" role="tablist" aria-label="Voice section">
+                  {([
+                    { id: 'settings' as const, label: 'Settings' },
+                    { id: 'history' as const, label: 'History' },
+                  ]).map((view) => (
+                    <button
+                      key={view.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={voiceView === view.id}
+                      className={classNames('settings-subnav-btn', voiceView === view.id && 'active')}
+                      onClick={() => setVoiceView(view.id)}
+                    >
+                      {view.label}
+                    </button>
+                  ))}
+                </div>
+
+                {voiceView === 'history' && <VoiceHistoryPanel />}
+              </>
+            )}
+
+            {activeTab === 'voice' && voiceView === 'settings' && (
+              <>
                 <Section title="Voice input">
                   <SettingRow title="Provider">
                     <SelectField value={voiceInput} options={voiceInputProviders} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" />
@@ -1741,6 +1777,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       />
                     </SettingRow>
                   )}
+                  <SettingRow
+                    title="Smart voice detection"
+                    detail="Uses a small Silero model to decide when you start and stop speaking — far better at ignoring clicks, fans and chatter than the built-in level gate. Download “Silero VAD” under Settings → Models → Local Speech-to-Text; until then dictation uses the level gate."
+                  >
+                    <Toggle label="Toggle smart voice detection" checked={smartVad} onChange={smartVadEnabled.set} />
+                  </SettingRow>
                 </Section>
 
                 <Section title="Terminal transcription">
@@ -1761,6 +1803,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Voice refinement">
                   <SettingRow title="Refinement">
                     <Toggle label="Toggle voice refinement" checked={voiceRefinement} onChange={voiceRefinementEnabled.set} />
+                  </SettingRow>
+                  <SettingRow
+                    title="Custom vocabulary"
+                    detail="Comma-separated terms the polish pass must spell exactly — project names, libraries, APIs, coworkers' names. Uses your refinement provider's key."
+                  >
+                    <input
+                      value={vocabulary}
+                      onChange={(event) => dictationVocabulary.set(event.target.value)}
+                      placeholder="Spacron, Parakeet, onnxruntime, zustand"
+                      spellCheck={false}
+                    />
                   </SettingRow>
                   <SettingRow title="Provider">
                     <SelectField value={refinementProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceAiProvider.set} ariaLabel="Voice refinement provider" />

@@ -194,7 +194,18 @@ pub fn run() {
                 })
             };
 
-            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn) {
+            // An agent reporting on its own turn. The event carries the session
+            // the *token* proved, never anything the agent claimed, so the
+            // frontend can tell "Iris says she's done" from "an agent on this
+            // machine says it's done" — see `report_status` in mcp/mod.rs.
+            let report_fn: mcp::ReportFn = {
+                let ah = app_handle.clone();
+                Arc::new(move |report| {
+                    let _ = ah.emit("mcp:agent-report", &report);
+                })
+            };
+
+            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn, report_fn) {
                 Ok((handle, port)) => {
                     app.manage(mcp::McpServer(Some(handle)));
                     eprintln!("MCP server started on port {}", port);
@@ -249,12 +260,17 @@ pub fn run() {
             commands::onnx_runtime::onnx_runtime_download,
             commands::onnx_runtime::onnx_runtime_remove,
             commands::models::local_stt_transcribe,
+            commands::vad::vad_session_start,
+            commands::vad::vad_session_feed,
+            commands::vad::vad_session_end,
             commands::fs_watch::start_fs_watch,
             commands::fs_watch::stop_fs_watch,
             commands::http::http_send_request,
             commands::remote_relay::remote_relay_start,
             commands::remote_deploy::remote_deploy_vps,
             commands::remote_deploy::remote_detect_platform,
+            commands::remote_deploy::remote_server_binary_status,
+            commands::remote_deploy::remote_download_server,
             commands::http::fetch_agent_logo,
             commands::music_library::music_library_scan,
             commands::music_library::music_library_reveal,
@@ -411,6 +427,9 @@ pub fn run() {
             commands::mcp::mcp_register_agent,
             commands::mcp::mcp_unregister_agent,
             commands::mcp::mcp_server_port,
+            commands::mcp::mcp_open_agent_channel,
+            commands::mcp::mcp_bind_agent_channel,
+            commands::mcp::mcp_close_agent_channel,
             commands::mcp::mcp_server_url,
             commands::mcp::mcp_server_http_url,
             commands::mcp::mcp_read_global_agent_config,

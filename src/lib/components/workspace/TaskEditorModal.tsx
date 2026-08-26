@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import {
   updateTaskFields,
@@ -11,6 +11,7 @@ import {
 } from '$lib/stores/tasks';
 import { showToast } from '$lib/stores/notification';
 import { getAgentDisplayName } from '$lib/stores/terminal';
+import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import './TaskEditorModal.css';
 
 const PRIORITIES: { id: TaskPriority; label: string }[] = [
@@ -24,6 +25,9 @@ const STATUSES: { id: TaskStatus; label: string }[] = [
   { id: 'doing', label: 'In Progress' },
   { id: 'done', label: 'Done' },
 ];
+
+// Keystroke-to-store delay for the title/notes autosave.
+const AUTO_SAVE_DELAY_MS = 500;
 
 function RocketGlyph() {
   return (
@@ -59,18 +63,65 @@ export default function TaskEditorModal({
   const [desc, setDesc] = useState(task.description ?? '');
   const [showRunMenu, setShowRunMenu] = useState(false);
 
-  function commitTitle() {
-    const trimmed = title.trim();
-    if (!trimmed) {
-      setTitle(task.title);
-      return;
+  // Title and notes auto-save: each keystroke (re)arms a short debounce that
+  // writes straight to the store (which persists), so nothing is left unsaved
+  // if the modal is dismissed mid-typing. Blur and unmount flush any pending
+  // write synchronously. Everything reads through refs so the callbacks never
+  // see stale text — `taskRef` in particular, since the `task` prop updates as
+  // each save lands.
+  const taskRef = useRef(task);
+  taskRef.current = task;
+  const titleRef = useRef(title);
+  titleRef.current = title;
+  const descRef = useRef(desc);
+  descRef.current = desc;
+  const titleTimerRef = useRef<number | null>(null);
+  const descTimerRef = useRef<number | null>(null);
+
+  function saveTitle() {
+    if (titleTimerRef.current != null) {
+      window.clearTimeout(titleTimerRef.current);
+      titleTimerRef.current = null;
     }
-    if (trimmed !== task.title) updateTaskFields(task.id, { title: trimmed });
+    const trimmed = titleRef.current.trim();
+    // Never save an emptied title — the blur handler snaps it back instead.
+    if (!trimmed || trimmed === taskRef.current.title) return;
+    updateTaskFields(task.id, { title: trimmed });
   }
 
-  function commitDesc() {
-    if (desc !== (task.description ?? '')) updateTaskFields(task.id, { description: desc });
+  function saveDesc() {
+    if (descTimerRef.current != null) {
+      window.clearTimeout(descTimerRef.current);
+      descTimerRef.current = null;
+    }
+    if (descRef.current !== (taskRef.current.description ?? '')) {
+      updateTaskFields(task.id, { description: descRef.current });
+    }
   }
+
+  function scheduleTitleSave() {
+    if (titleTimerRef.current != null) window.clearTimeout(titleTimerRef.current);
+    titleTimerRef.current = window.setTimeout(saveTitle, AUTO_SAVE_DELAY_MS);
+  }
+
+  function scheduleDescSave() {
+    if (descTimerRef.current != null) window.clearTimeout(descTimerRef.current);
+    descTimerRef.current = window.setTimeout(saveDesc, AUTO_SAVE_DELAY_MS);
+  }
+
+  // Blur keeps the original empty-title semantics on top of the flush.
+  function commitTitle() {
+    saveTitle();
+    if (!titleRef.current.trim()) setTitle(taskRef.current.title);
+  }
+
+  useEffect(
+    () => () => {
+      saveTitle();
+      saveDesc();
+    },
+    [],
+  );
 
   function setDueDate(value: string) {
     if (!value) {
@@ -130,7 +181,10 @@ export default function TaskEditorModal({
           <input
             className="te-field te-title-input"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              scheduleTitleSave();
+            }}
             onBlur={commitTitle}
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -141,8 +195,11 @@ export default function TaskEditorModal({
           <textarea
             className="te-field te-desc"
             value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            onBlur={commitDesc}
+            onChange={(e) => {
+              setDesc(e.target.value);
+              scheduleDescSave();
+            }}
+            onBlur={saveDesc}
             placeholder="Notes — what should the agent do?"
             rows={4}
             aria-label="Task notes"
@@ -219,7 +276,8 @@ export default function TaskEditorModal({
                     className="task-run-opt"
                     onClick={() => run(a.command)}
                   >
-                    {getAgentDisplayName(a.command) ?? a.name ?? a.command}
+                    <AgentBrandMark command={a.command} name={a.name} />
+                    <span>{getAgentDisplayName(a.command) ?? a.name ?? a.command}</span>
                   </button>
                 ))}
               </div>

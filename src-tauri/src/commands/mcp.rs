@@ -125,6 +125,63 @@ pub fn mcp_server_port(handle: State<'_, McpServer>) -> Result<u16, String> {
     Ok(handle.get()?.port)
 }
 
+// ── Per-agent identity ───────────────────────────────────────────────────────
+//
+// Three commands mirroring `agent-hook-signals.ts`'s prepare → attach →
+// discard, for the same reason: the credential has to exist before the PTY
+// does, because it goes into the launch command.
+
+/// Mint a per-launch MCP token and return the SSE URL carrying it.
+///
+/// Returned as a whole URL, like [`mcp_server_url`], so a caller cannot
+/// assemble it wrongly — and returned *with* the bare token so the caller can
+/// bind it once the session exists.
+#[tauri::command]
+pub fn mcp_open_agent_channel(handle: State<'_, McpServer>) -> Result<AgentChannel, String> {
+    let handle = handle.get()?;
+    let token = handle.mint_agent_token();
+    Ok(AgentChannel {
+        url: format!("http://127.0.0.1:{}/sse?token={}", handle.port, token),
+        http_url: format!("http://127.0.0.1:{}/mcp?token={}", handle.port, token),
+        token,
+    })
+}
+
+/// A per-launch MCP credential, in the two transport flavours agents use.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChannel {
+    /// SSE URL (Claude Code).
+    pub url: String,
+    /// Streamable HTTP URL (Codex and friends).
+    pub http_url: String,
+    /// The bare token, to hand back to [`mcp_bind_agent_channel`].
+    pub token: String,
+}
+
+/// Bind a minted token to the PTY session that was launched with it.
+///
+/// Returns `false` for a token this server did not mint, which is the guard
+/// that stops an arbitrary string being claimed as an agent's identity.
+#[tauri::command]
+pub fn mcp_bind_agent_channel(
+    handle: State<'_, McpServer>,
+    token: String,
+    session_id: u32,
+) -> Result<bool, String> {
+    Ok(handle.get()?.bind_agent_token(&token, session_id))
+}
+
+/// Drop a token whose launch never happened.
+#[tauri::command]
+pub fn mcp_close_agent_channel(
+    handle: State<'_, McpServer>,
+    token: String,
+) -> Result<(), String> {
+    handle.get()?.close_agent_token(&token);
+    Ok(())
+}
+
 /// The full authenticated SSE URL to write into an agent's MCP config.
 ///
 /// Returned whole rather than as port + token so callers can't assemble it

@@ -44,8 +44,14 @@ const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const GOOGLE_AUDIO_TRANSCRIPTION_PROMPT: &str = "Transcribe this speech into clean, accurate text. Keep the speaker's exact technical terms, code words, file paths, flags, package names, and URLs. Use natural punctuation and paragraph breaks when they are obvious from the audio. Return only the transcript.";
 
-const OPENROUTER_SYSTEM_PROMPT: &str = "Hey! You're a voice-to-text helper living inside a developer's productivity app. The person talking to you is a developer — they might be firing off a quick prompt to an AI coding agent, describing a bug, jotting down a task, or just thinking out loud while their hands are busy.\n\nYour job is to take their raw spoken words and turn them into clean, natural text — the kind of thing they'd have typed themselves if they weren't busy being a developer. Keep it human, keep it theirs.\n\nHere's how to do it well:\n\n1. DROP THE FILLER — quietly remove \"um\", \"uh\", \"like\", \"you know\", \"basically\", \"kind of\", \"sort of\", \"I mean\", false starts, and repeated words. Don't mention you did it, just clean it up.\n\n2. SPOKEN SYMBOLS → REAL SYMBOLS — when the developer says punctuation out loud, swap it in:\n   comma → ,   period / full stop → .   colon → :   semicolon → ;   exclamation / bang → !   question mark → ?   open paren / left paren → (   close paren / right paren → )   open bracket → [   close bracket → ]   open brace / left curly → {   close brace / right curly → }   equals → =   double equals → ==   triple equals → ===   fat arrow / arrow → =>   pipe → |   double pipe → ||   ampersand → &   double ampersand → &&   bang equals → !=   less than → <   greater than → >   slash → /   backslash → \\   dot → .   underscore → _   dash / hyphen → -   hash / pound → #   at sign → @   backtick → `   tilde → ~   star / asterisk → *   double star → **   caret → ^   percent → %   new line / next line → line break.\n\n3. DON'T TOUCH THE TECH STUFF — variable names, function names, file paths, CLI flags, package names, API names, URLs, config keys, environment variables — leave all of that exactly as spoken. When in doubt, keep it verbatim.\n\n4. TIDY UP THE SPEECH — casual, run-on spoken sentences should become clean written ones. Keep the developer's natural voice and directness though — don't make it stiff or formal. \"can you make it so that the button kind of changes colour when you hover over it\" → \"Make the button change colour on hover.\"\n\n5. KEEP THEIR VIBE — if they sound urgent, keep that urgency. If they're being casual, stay casual. If they're frustrated, that's fine too. Don't sanitise their personality out of the text.\n\n6. NUMBERS — use digits in technical contexts (port 8000, version 3, 12 files). Keep words for conversational mentions.\n\n7. STRUCTURE IT IF THEY SIGNAL IT — if they say \"first\", \"second\", \"also\", \"next\", \"new line\", shape it into a list or use line breaks naturally.\n\n8. NOTHING LOST, NOTHING ADDED — every idea they expressed should survive. Don't summarise, don't expand, don't add your own thoughts.\n\nJust output the cleaned-up text — no intro, no explanation, no quotes around it.";
+const OPENROUTER_SYSTEM_PROMPT: &str = "Hey! You're a voice-to-text helper living inside a developer's productivity app. The person talking to you is a developer — they might be firing off a quick prompt to an AI coding agent, describing a bug, jotting down a task, or just thinking out loud while their hands are busy.\n\nYour job is to take their raw spoken words and turn them into clean, natural text — the kind of thing they'd have typed themselves if they weren't busy being a developer. Keep it human, keep it theirs.\n\nHere's how to do it well:\n\n1. DROP THE FILLER — quietly remove \"um\", \"uh\", \"like\", \"you know\", \"basically\", \"kind of\", \"sort of\", \"I mean\", false starts, and repeated words. Don't mention you did it, just clean it up.\n\n2. SPOKEN SYMBOLS → REAL SYMBOLS — when the developer says punctuation out loud, swap it in:\n   comma → ,   period / full stop → .   colon → :   semicolon → ;   exclamation / bang → !   question mark → ?   open paren / left paren → (   close paren / right paren → )   open bracket → [   close bracket → ]   open brace / left curly → {   close brace / right curly → }   equals → =   double equals → ==   triple equals → ===   fat arrow / arrow → =>   pipe → |   double pipe → ||   ampersand → &   double ampersand → &&   bang equals → !=   less than → <   greater than → >   slash → /   backslash → \\   dot → .   underscore → _   dash / hyphen → -   hash / pound → #   at sign → @   backtick → `   tilde → ~   star / asterisk → *   double star → **   caret → ^   percent → %   new line / next line → line break.\n\n3. DON'T TOUCH THE TECH STUFF — variable names, function names, file paths, CLI flags, package names, API names, URLs, config keys, environment variables — leave all of that exactly as spoken. When in doubt, keep it verbatim.\n\n4. TIDY UP THE SPEECH — casual, run-on spoken sentences should become clean written ones. Keep the developer's natural voice and directness though — don't make it stiff or formal. \"can you make it so that the button kind of changes colour when you hover over it\" → \"Make the button change colour on hover.\"\n\n5. KEEP THEIR VIBE — if they sound urgent, keep that urgency. If they're being casual, stay casual. If they're frustrated, that's fine too. Don't sanitise their personality out of the text.\n\n6. NUMBERS — use digits in technical contexts (port 8000, version 3, 12 files). Keep words for conversational mentions.\n\n7. STRUCTURE IT IF THEY SIGNAL IT — if they say \"first\", \"second\", \"also\", \"next\", \"new line\", shape it into a list or use line breaks naturally.\n\n8. NOTHING LOST, NOTHING ADDED — every idea they expressed should survive. Don't summarise, don't expand, don't add your own thoughts.\n\n9. THEY CHANGE THEIR MIND - if the developer starts something then corrects themselves mid-speech (\"meet at 5pm, actually 6pm\", \"use fetch, no wait, axios\"), keep ONLY the version they settled on. The abandoned attempt disappears completely - that is what they meant to say.\n\n10. SHAPE IT IF IT RAMBLES - a long breathless thought that is obviously steps, a list, or a message should come out laid out like one (short paragraphs, dashes or numbers), not one wall of text.\n\nJust output the cleaned-up text — no intro, no explanation, no quotes around it.";
 const COMMIT_SYSTEM_PROMPT: &str = "You are an expert software engineer writing a git commit message. Analyse the diff thoroughly and write a high-quality commit message that clearly explains WHAT changed and WHY. Follow this structure:\n\n1. A short subject line (50–72 chars) using conventional commits when the type is clear (feat, fix, refactor, chore, docs, style, test, perf).\n2. A blank line.\n3. A body (one or more paragraphs) that describes the changes in detail — what was added, removed, or modified, and the reasoning or motivation behind the change. Mention any non-obvious decisions, trade-offs, or context a future reader would benefit from.\n\nOutput only the commit message — no preamble, no explanation, no markdown fences, no quotes.";
+
+// Appended to the refinement system prompt when the user maintains a custom
+// vocabulary (Settings → Voice refinement). This is the WhisperFlow trick:
+// speech models mangle the names that matter most — projects, libraries,
+// teammates — and no generic prompt can know them. Spelled exactly.
+const CUSTOM_VOCABULARY_RULE: &str = "CUSTOM VOCABULARY — the developer relies on these terms. When what they said sounds like any of them, transcribe it exactly as written here, even if the raw audio sounded like something else. These override normal spelling:\n\n";
 
 // Endpoints used to list each provider's live model catalogue. The frontend
 // shows whatever these return so users can pick any model their key unlocks —
@@ -475,6 +481,7 @@ fn build_audio_transcription_multipart_body(
     mime_type: &str,
     audio_format: &str,
     audio_bytes: &[u8],
+    prompt: Option<&str>,
 ) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(
@@ -483,6 +490,17 @@ fn build_audio_transcription_multipart_body(
         )
         .as_bytes(),
     );
+    // OpenAI's transcription `prompt`: a biasing hint the model conditions on.
+    // It steers spelling of unusual terms without being echoed into the output
+    // (most of the time — hence trimming it to just the vocabulary list).
+    if let Some(prompt) = prompt {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{prompt}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
     body.extend_from_slice(
         format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n"
@@ -1185,6 +1203,7 @@ pub async fn ai_refine_prompt(
     model: String,
     api_key: String,
     base_url: Option<String>,
+    vocabulary: Option<String>,
 ) -> Result<String, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
@@ -1196,6 +1215,9 @@ pub async fn ai_refine_prompt(
     }
 
     const MAX_TEXT_LEN: usize = 32_000;
+    // A vocabulary list is user-authored and bounded — a paste accident should
+    // not ship a megabyte of text into every refinement request.
+    const MAX_VOCABULARY_LEN: usize = 4_000;
 
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -1205,12 +1227,26 @@ pub async fn ai_refine_prompt(
         return Err("Input text exceeds maximum length".to_string());
     }
 
+    let system_prompt = match vocabulary {
+        Some(list) => {
+            let list = list.trim();
+            if list.is_empty() {
+                OPENROUTER_SYSTEM_PROMPT.to_string()
+            } else if list.chars().count() > MAX_VOCABULARY_LEN {
+                return Err("Custom vocabulary exceeds maximum length".to_string());
+            } else {
+                format!("{OPENROUTER_SYSTEM_PROMPT}\n\n{CUSTOM_VOCABULARY_RULE}{list}")
+            }
+        }
+        None => OPENROUTER_SYSTEM_PROMPT.to_string(),
+    };
+
     let content = run_completion(
         &provider,
         &model,
         &api_key,
         base_url.as_deref(),
-        OPENROUTER_SYSTEM_PROMPT,
+        &system_prompt,
         &text,
         0.1,
         512,
@@ -1231,6 +1267,7 @@ pub async fn ai_transcribe_audio(
     model: String,
     api_key: String,
     base_url: Option<String>,
+    vocabulary: Option<String>,
 ) -> Result<String, String> {
     if provider != "google" && provider != "openai" && provider != "openrouter" && !is_local_provider(&provider) {
         return Err("Selected provider does not support transcription yet.".to_string());
@@ -1259,8 +1296,28 @@ pub async fn ai_transcribe_audio(
 
     let audio_b64 = STANDARD.encode(&audio_bytes);
 
+    // Hotword biasing at the STT layer (the Wispr Flow "Variable Recognition"
+    // trick): bias the TRANSCRIPTION with the developer's own terms so the
+    // words come out right before any polish pass runs. Each provider takes
+    // the hint differently; OpenRouter's audio endpoint and arbitrary local
+    // servers have no standard slot, so they simply skip it and rely on the
+    // polish pass instead.
+    let vocabulary = vocabulary
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    // OpenAI's `prompt` field is capped at 224 tokens; stay well under it.
+    let openai_prompt = vocabulary
+        .as_deref()
+        .map(|v| v.chars().take(600).collect::<String>());
+
     match provider.as_str() {
         "google" => {
+            let transcription_prompt = match &vocabulary {
+                Some(list) => format!(
+                    "{GOOGLE_AUDIO_TRANSCRIPTION_PROMPT} The speaker customarily uses these exact terms - spell them exactly as written whenever they are heard: {list}"
+                ),
+                None => GOOGLE_AUDIO_TRANSCRIPTION_PROMPT.to_string(),
+            };
             let url = format!(
                 "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             );
@@ -1272,7 +1329,7 @@ pub async fn ai_transcribe_audio(
                     "contents": [{
                         "role": "user",
                         "parts": [
-                            { "text": GOOGLE_AUDIO_TRANSCRIPTION_PROMPT },
+                            { "text": transcription_prompt },
                             {
                                 "inlineData": {
                                     "mimeType": mime_type,
@@ -1314,6 +1371,7 @@ pub async fn ai_transcribe_audio(
                     &mime_type,
                     audio_format,
                     &audio_bytes,
+                    openai_prompt.as_deref(),
                 ))
                 .send()
                 .await
@@ -1397,6 +1455,7 @@ pub async fn ai_transcribe_audio(
                     &mime_type,
                     audio_format,
                     &audio_bytes,
+                    None,
                 ))
                 .send()
                 .await
@@ -2399,6 +2458,7 @@ mod tests {
             "audio/wav",
             "wav",
             b"RIFFaudio",
+            None,
         );
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("name=\"model\""));
@@ -2428,6 +2488,31 @@ mod tests {
     #[test]
     fn text_length_limit_is_sane() {
         assert_eq!(MAX_TEXT_LEN, 32_000);
+    }
+
+    #[test]
+    fn transcription_prompt_part_is_included_only_when_supplied() {
+        let with_prompt = build_audio_transcription_multipart_body(
+            "b",
+            "whisper-1",
+            "audio/wav",
+            "wav",
+            b"RIFF",
+            Some("Spacron, Parakeet"),
+        );
+        let text = String::from_utf8_lossy(&with_prompt);
+        assert!(text.contains("name=\"prompt\""));
+        assert!(text.contains("Spacron, Parakeet"));
+
+        let without_prompt = build_audio_transcription_multipart_body(
+            "b",
+            "whisper-1",
+            "audio/wav",
+            "wav",
+            b"RIFF",
+            None,
+        );
+        assert!(!String::from_utf8_lossy(&without_prompt).contains("name=\"prompt\""));
     }
 
     #[test]

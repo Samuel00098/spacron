@@ -426,6 +426,9 @@ fn triple_artifact_name(triple: &str) -> String {
 /// 1. `src-tauri/binaries` — where `server:build --target=…`, CI jobs and
 ///    hand-built copies land (dev machines).
 /// 2. Next to the running app binary.
+/// 3. The download cache — where [`remote_download_server`] puts a build
+///    fetched from the releases repo, which is how a packaged install deploys
+///    to an OS it was never built for.
 fn artifact_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
@@ -437,7 +440,17 @@ fn artifact_dirs() -> Vec<PathBuf> {
     {
         dirs.push(dir);
     }
+    if let Some(dir) = download_cache_dir() {
+        dirs.push(dir);
+    }
     dirs
+}
+
+/// Where a downloaded server build is cached. Under the app's config dir, not
+/// next to the exe: an installed app's program directory is not user-writable
+/// on Windows or macOS.
+fn download_cache_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("spacron").join("servers"))
 }
 
 /// Find a spacron-server build that runs on `platform`. Priority:
@@ -499,14 +512,228 @@ pub fn resolve_server_binary_for(platform: DeployPlatform) -> Result<PathBuf, St
     }
 
     Err(format!(
-        "No spacron-server build for {} was found on this machine. Build one with \
-         `npm run server:build -- --target={first}` and re-run the wizard, or set \
-         SPACRON_SERVER_PATH to point at a {os} build. (macOS binaries must be \
-         built on a Mac or by CI.)",
-        platform.label(),
+        "No spacron-server build for {os} was found on this machine. Use the wizard's \
+         \"Get the {os} server\" button to download the published build, or build one \
+         locally with `npm run server:build -- --target={first}` and re-run the wizard \
+         (SPACRON_SERVER_PATH always wins if you have a build elsewhere).",
         first = platform.triples()[0],
         os = platform.label(),
     ))
+}
+
+// ── Downloading a server build for another OS ────────────────────────────────
+//
+// A packaged installer only ever carries its own OS's sidecar, so a Windows
+// install had no way to deploy to a Linux box without a local cross-build —
+// a Rust toolchain and a zig linker, for a user whose only goal was "run my
+// workspace on a VPS". The release workflow now publishes each leg's
+// `spacron-server` next to the installers, and this fetches the one that
+// matches the target OS into the cache dir `artifact_dirs()` already searches.
+
+/// Where release assets live. Public repo, one asset per platform per tag.
+const RELEASES_BASE: &str = "https://github.com/Samuel00098/spacron-releases/releases";
+
+/// The triple this app knows how to download for each platform — the one the
+/// release matrix actually publishes, which is deliberately narrower than
+/// [`DeployPlatform::triples`] (that list also covers builds a developer may
+/// have staged by hand). Linux is the gnu build, not musl: the server links
+/// the same GTK/WebKit stack as the desktop app, so it cannot be statically
+/// linked — the install script installs those runtime libraries instead.
+fn published_triple(platform: DeployPlatform) -> &'static str {
+    match platform {
+        DeployPlatform::Linux => "x86_64-unknown-linux-gnu",
+        DeployPlatform::Macos => "aarch64-apple-darwin",
+        DeployPlatform::Windows => "x86_64-pc-windows-msvc",
+    }
+}
+
+/// Release asset name for a platform, matching what the workflow uploads.
+fn published_asset_name(platform: DeployPlatform) -> String {
+    triple_artifact_name(published_triple(platform))
+}
+
+/// The two URLs tried, in order: this app version's tag, then whatever the
+/// releases repo currently calls latest.
+///
+/// The version-pinned URL first is the point — a client should run the server
+/// build it was released with. `latest` is the fallback for an app built from
+/// a tag that never shipped an asset (a local build, a yanked release), and it
+/// is better than refusing to deploy at all.
+fn server_download_urls(platform: DeployPlatform) -> Vec<String> {
+    let asset = published_asset_name(platform);
+    vec![
+        format!("{RELEASES_BASE}/download/v{}/{asset}", env!("CARGO_PKG_VERSION")),
+        format!("{RELEASES_BASE}/latest/download/{asset}"),
+    ]
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerBinaryStatus {
+    /// Whether a build for this platform is already usable on this machine.
+    pub available: bool,
+    /// Absolute path when available — shown as a hint, never as a promise.
+    pub path: Option<String>,
+    /// Why it is unavailable, verbatim from the resolver, when it is not.
+    pub detail: Option<String>,
+    /// Whether [`remote_download_server`] can fetch one.
+    pub downloadable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerDownloadResult {
+    pub path: String,
+    pub bytes: u64,
+    /// Which of the candidate URLs actually served the file.
+    pub source: String,
+}
+
+/// Whether this machine can already deploy to `platform`, and if not, whether
+/// downloading would fix it. Pure query — never touches the network.
+#[tauri::command]
+pub fn remote_server_binary_status(platform: String) -> Result<ServerBinaryStatus, String> {
+    let platform = DeployPlatform::parse(&platform)?;
+    match resolve_server_binary_for(platform) {
+        Ok(path) => Ok(ServerBinaryStatus {
+            available: true,
+            path: Some(path.to_string_lossy().to_string()),
+            detail: None,
+            downloadable: true,
+        }),
+        Err(detail) => Ok(ServerBinaryStatus {
+            available: false,
+            path: None,
+            detail: Some(detail),
+            downloadable: true,
+        }),
+    }
+}
+
+/// Download the published `spacron-server` for `platform` into the cache dir.
+///
+/// Mirrors the scrcpy-jar cache in `mobile_stream.rs`: verify before anything
+/// touches the disk, write to a temp name and rename, and treat a corrupted
+/// cache as a re-download rather than an error. The checksum comes from a
+/// `.sha256` sidecar published by the same workflow run — it is not a pinned
+/// constant (the artifact changes every release), so it proves the bytes
+/// arrived intact from that release, not that the release itself is
+/// trustworthy. Both files come from the same TLS origin as the installer the
+/// user already ran, which is the same trust boundary.
+#[tauri::command]
+pub async fn remote_download_server(platform: String) -> Result<ServerDownloadResult, String> {
+    let platform = DeployPlatform::parse(&platform)?;
+    let dir = download_cache_dir()
+        .ok_or_else(|| "Could not locate a config directory to cache the download in.".to_string())?;
+    let asset = published_asset_name(platform);
+    let dest = dir.join(&asset);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        // A redirect chain is how a pinned URL stops pointing at the pinned
+        // bytes; the checksum is the real guarantee, this keeps it boring.
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut last_error = String::new();
+    for url in server_download_urls(platform) {
+        match download_verified(&client, &url).await {
+            Ok(bytes) => {
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| format!("Failed to create the download cache: {e}"))?;
+                let tmp = dir.join(format!("{asset}.part"));
+                std::fs::write(&tmp, &bytes)
+                    .map_err(|e| format!("Failed to write the download: {e}"))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+                }
+                std::fs::rename(&tmp, &dest)
+                    .map_err(|e| format!("Failed to store the download: {e}"))?;
+                return Ok(ServerDownloadResult {
+                    path: dest.to_string_lossy().to_string(),
+                    bytes: bytes.len() as u64,
+                    source: url,
+                });
+            }
+            Err(e) => last_error = e,
+        }
+    }
+
+    Err(format!(
+        "Could not download the {} server. {last_error}",
+        platform.label()
+    ))
+}
+
+/// Fetch `url` and its `.sha256` sidecar, and return the bytes only if they
+/// match. Nothing is written to disk here — the caller decides where verified
+/// bytes go.
+async fn download_verified(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    let sum_url = format!("{url}.sha256");
+    let sum_resp = client
+        .get(&sum_url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {sum_url}: {e}"))?;
+    if !sum_resp.status().is_success() {
+        return Err(format!(
+            "No checksum published at {sum_url} (HTTP {}).",
+            sum_resp.status()
+        ));
+    }
+    let expected = sum_resp
+        .text()
+        .await
+        .map_err(|e| format!("Could not read the checksum: {e}"))?;
+    let expected = parse_sha256_file(&expected)
+        .ok_or_else(|| format!("The checksum published at {sum_url} is not a SHA-256 digest."))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("{url} returned HTTP {}.", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("The download was interrupted: {e}"))?
+        .to_vec();
+
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "The downloaded server does not match its published checksum \
+             (got {actual}, expected {expected}). Refusing to deploy it."
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Read a digest out of a `sha256sum`-style file: the hash is the first field,
+/// optionally followed by the file name. Returns None for anything that is not
+/// 64 hex characters, so a 404 page or an error string can never be mistaken
+/// for a checksum that happens to match nothing.
+pub fn parse_sha256_file(raw: &str) -> Option<String> {
+    let first = raw.split_whitespace().next()?.trim().to_ascii_lowercase();
+    if first.len() == 64 && first.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+/// Lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ── SSH plumbing ─────────────────────────────────────────────────────────────
@@ -794,6 +1021,82 @@ fn temp_script_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_assets_are_named_per_target_os() {
+        assert_eq!(
+            published_asset_name(DeployPlatform::Linux),
+            "spacron-server-x86_64-unknown-linux-gnu"
+        );
+        assert_eq!(
+            published_asset_name(DeployPlatform::Macos),
+            "spacron-server-aarch64-apple-darwin"
+        );
+        // The `.exe` follows the TARGET triple even when the host is not Windows.
+        assert_eq!(
+            published_asset_name(DeployPlatform::Windows),
+            "spacron-server-x86_64-pc-windows-msvc.exe"
+        );
+    }
+
+    #[test]
+    fn every_published_triple_is_one_the_resolver_looks_for() {
+        // Downloading into the cache dir is only useful if the resolver then
+        // finds the file by that exact name.
+        for platform in [
+            DeployPlatform::Linux,
+            DeployPlatform::Macos,
+            DeployPlatform::Windows,
+        ] {
+            assert!(
+                platform.triples().contains(&published_triple(platform)),
+                "{} publishes a triple the resolver never checks",
+                platform.label()
+            );
+        }
+    }
+
+    #[test]
+    fn download_tries_the_pinned_version_before_latest() {
+        let urls = server_download_urls(DeployPlatform::Linux);
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains(&format!("download/v{}/", env!("CARGO_PKG_VERSION"))));
+        assert!(urls[1].contains("latest/download/"));
+        assert!(urls.iter().all(|u| u.starts_with("https://")));
+        assert!(urls
+            .iter()
+            .all(|u| u.ends_with("spacron-server-x86_64-unknown-linux-gnu")));
+    }
+
+    #[test]
+    fn checksum_parsing_accepts_sha256sum_output_and_rejects_junk() {
+        assert_eq!(
+            parse_sha256_file(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  spacron-server\n"
+            )
+            .unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // Bare digest, uppercase, trailing newline.
+        assert_eq!(
+            parse_sha256_file("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD\n")
+                .unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // A 404 page, an error string, or a truncated digest is not a checksum.
+        assert!(parse_sha256_file("<!DOCTYPE html><html>Not Found</html>").is_none());
+        assert!(parse_sha256_file("").is_none());
+        assert!(parse_sha256_file("deadbeef").is_none());
+        assert!(parse_sha256_file(&"z".repeat(64)).is_none());
+    }
+
+    #[test]
+    fn sha256_hex_matches_a_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn platform_parsing() {

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
   voiceRefinementEnabled,
+  dictationVocabulary,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceAiProvider,
@@ -50,24 +51,36 @@ async function requestRefinement(provider: string, model: string, baseUrl: strin
     model,
     apiKey: '',
     baseUrl: baseUrl || undefined,
+    // The developer's own terms (project names, libraries, coworkers) — the
+    // backend appends them to the system prompt so they are spelled exactly.
+    // Empty list simply means no extra instruction.
+    vocabulary: get(dictationVocabulary).trim() || undefined,
   });
 }
 
 export type RefinementResult = { text: string; aiRefined: boolean };
 export type RefineVoicePromptOptions = {
   aiRefinement?: boolean;
+  /**
+   * The default gate refuses AI refinement whenever voice INPUT runs through a
+   * model provider (the old assumption: model STT output is already clean, and
+   * the conversational loop must stay fast). Dictation quality work wants
+   * polish regardless of which STT engine produced the text, so the F9 path
+   * passes this flag; nothing else changes for existing callers.
+   */
+  allowForModelProviders?: boolean;
 };
 
 export async function refineVoicePrompt(
   rawText: string,
   options: RefineVoicePromptOptions = {}
 ): Promise<RefinementResult> {
-  const { aiRefinement = true } = options;
+  const { aiRefinement = true, allowForModelProviders = false } = options;
   const preserveNewLines = getPreserveNewLines(rawText);
   const locallyCleaned = refineVoiceTranscript(rawText, { allowNewLines: preserveNewLines });
 
   if (!locallyCleaned) return { text: '', aiRefined: false };
-  if (voiceInputUsesModelTranscription(get(voiceInputProvider))) {
+  if (!allowForModelProviders && voiceInputUsesModelTranscription(get(voiceInputProvider))) {
     return { text: locallyCleaned, aiRefined: false };
   }
   if (!aiRefinement || !get(voiceRefinementEnabled)) {

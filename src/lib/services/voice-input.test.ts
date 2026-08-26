@@ -2,12 +2,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invoke = vi.hoisted(() => vi.fn());
 const isProviderApiKeyConfiguredLocal = vi.hoisted(() => vi.fn((_provider: string): boolean => false));
+/** Controllable stand-in for the active editor's extracted symbols. */
+const editorSymbols = vi.hoisted(() => ({ value: [] as string[] }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('$lib/services/ai-keychain', () => ({ isProviderApiKeyConfiguredLocal }));
+vi.mock('$lib/services/editor-symbols', () => ({
+  getActiveEditorVocabulary: () => editorSymbols.value,
+}));
 
-import { createVoiceInputSession, downsamplePcmChunks } from './voice-input';
-import { aiBaseUrlByProvider, voiceInputModelByProvider, voiceInputProvider } from '$lib/stores/settings';
+import { createVoiceInputSession, downsamplePcmChunks, refineVoiceTranscript } from './voice-input';
+import {
+  aiBaseUrlByProvider,
+  dictationVocabulary,
+  smartVadEnabled,
+  voiceInputModelByProvider,
+  voiceInputProvider,
+} from '$lib/stores/settings';
 
 type MockTrack = { stop: ReturnType<typeof vi.fn> };
 type MockStream = { getTracks: () => MockTrack[] };
@@ -135,6 +146,9 @@ beforeEach(() => {
   voiceInputProvider.set('webspeech');
   voiceInputModelByProvider.set({});
   aiBaseUrlByProvider.set({});
+  dictationVocabulary.set('');
+  editorSymbols.value = [];
+  smartVadEnabled.set(false);
   permissionsQuery.mockReset();
   permissionsQuery.mockResolvedValue({ state: 'granted' });
   getUserMedia.mockReset();
@@ -209,12 +223,14 @@ describe('createVoiceInputSession', () => {
     const onResult = vi.fn();
     const onProcessingStart = vi.fn();
     const onEnd = vi.fn();
+    const onTurnComplete = vi.fn();
 
     const session = createVoiceInputSession({
       onStart,
       onResult,
       onProcessingStart,
       onEnd,
+      onTurnComplete,
     });
 
     await session.start();
@@ -240,7 +256,9 @@ describe('createVoiceInputSession', () => {
       mimeType: 'audio/wav',
     }));
     expect(onResult).toHaveBeenCalledWith('open the terminal');
+    // A cold (non-conversation) turn both ends the graph and completes a turn.
     expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
   });
@@ -471,7 +489,13 @@ describe('createVoiceInputSession', () => {
     getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: trackStop }] });
 
     const onEnd = vi.fn();
-    const session = createVoiceInputSession({ onResult: vi.fn(), onProcessingStart: vi.fn(), onEnd });
+    const onTurnComplete = vi.fn();
+    const session = createVoiceInputSession({
+      onResult: vi.fn(),
+      onProcessingStart: vi.fn(),
+      onEnd,
+      onTurnComplete,
+    });
     session.setConversationMode(true);
 
     const speakOneTurn = async () => {
@@ -490,7 +514,11 @@ describe('createVoiceInputSession', () => {
     const ctx = audioContexts[0];
 
     await speakOneTurn();
-    expect(onEnd).toHaveBeenCalledTimes(1);
+    // A warm-parked turn completes, but does NOT end the graph — onEnd must
+    // stay quiet (that equivalence is what made every thinking pause look like
+    // "the mic died" to the dictation service). onTurnComplete is the signal.
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
     // Mic parked WARM: context not closed, tracks not stopped.
     expect(ctx.close).not.toHaveBeenCalled();
     expect(ctx.state).toBe('running');
@@ -503,14 +531,309 @@ describe('createVoiceInputSession', () => {
     expect(audioProcessors).toHaveLength(1);
 
     await speakOneTurn();
-    expect(onEnd).toHaveBeenCalledTimes(2);
+    expect(onTurnComplete).toHaveBeenCalledTimes(2);
+    expect(onEnd).not.toHaveBeenCalled();
 
-    // --- stop() finally releases the mic ---
+    // --- stop() finally releases the mic — and that alone fires onEnd ---
     session.stop();
     await Promise.resolve();
     await Promise.resolve();
     expect(ctx.close).toHaveBeenCalled();
     expect(trackStop).toHaveBeenCalled();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  /**
+   * An empty drain (nothing was ever spoken) fires BOTH signals exactly once:
+   * onTurnComplete because a turn completed, onEnd because the user-driven
+   * stop that triggered the drain also ended the capture graph.
+   */
+  it('fires each end-of-session signal once for an empty drain', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+
+    const onEnd = vi.fn();
+    const onTurnComplete = vi.fn();
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult, onEnd, onTurnComplete });
+    session.setConversationMode(true);
+
+    // Silence only — nothing to transcribe, then the user ends the dictation.
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSilence(audioProcessors[0]);
+    session.stop();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onResult).toHaveBeenCalledWith('');
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  /**
+   * The reported "it writes what I say twice" bug. We Speech engines re-send
+   * the ENTIRE result list on every event; banking those cumulative payloads
+   * duplicated every earlier word. Utterances mode (the dictation path) emits
+   * only what finalized since the previous event.
+   */
+  it('emits only newly finalized segments in utterances mode', async () => {
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult }, { mode: 'utterances' });
+
+    await session.start();
+    const recognizer = recognizers[0];
+    recognizer.onstart?.();
+
+    // Array-like result list, as the engine presents it.
+    const results = (...items: any[]) => ({ length: items.length, ...Object.fromEntries(items.map((r, i) => [i, r])) });
+    const res = (isFinal: boolean, transcript: string) => ({
+      isFinal,
+      length: 1,
+      0: { transcript, confidence: 0.9 },
+    });
+
+    // Interim only — nothing finalized yet, nothing emitted.
+    recognizer.onresult?.({ results: results(res(false, 'hello')) });
+    expect(onResult).not.toHaveBeenCalled();
+
+    // "hello" finalized, "world" still interim → emit just "hello".
+    recognizer.onresult?.({ results: results(res(true, 'hello'), res(false, 'world')) });
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenLastCalledWith('hello');
+
+    // Same event shape re-sent with "world" final → emit just "world", NOT
+    // "hello world" again.
+    recognizer.onresult?.({ results: results(res(true, 'hello'), res(true, 'world'), res(false, 'today')) });
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(onResult).toHaveBeenLastCalledWith('world');
+
+    recognizer.onresult?.({ results: results(res(true, 'hello'), res(true, 'world'), res(true, 'today')) });
+    expect(onResult.mock.calls.map(([t]) => t)).toEqual(['hello', 'world', 'today']);
+  });
+
+  /** The conversational default keeps its full-draft-per-event shape. */
+  it('keeps emitting cumulative transcripts by default', async () => {
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult });
+
+    await session.start();
+    const recognizer = recognizers[0];
+    recognizer.onstart?.();
+
+    const results = (...items: any[]) => ({ length: items.length, ...Object.fromEntries(items.map((r, i) => [i, r])) });
+    const res = (isFinal: boolean, transcript: string) => ({
+      isFinal,
+      length: 1,
+      0: { transcript, confidence: 0.9 },
+    });
+
+    recognizer.onresult?.({ results: results(res(false, 'hello')) });
+    recognizer.onresult?.({ results: results(res(true, 'hello'), res(false, 'world')) });
+
+    expect(onResult.mock.calls.map(([t]) => t)).toEqual(['hello', 'hello world']);
+  });
+
+  /**
+   * WhisperFlow-style cleanup: hesitations are stripped word-bounded (never
+   * touching real words that merely contain them), and opting out restores
+   * verbatim text.
+   */
+  describe('refineVoiceTranscript fillers', () => {
+    it('strips standalone hesitation words by default', () => {
+      expect(refineVoiceTranscript('um okay so uh let us start')).toBe('okay so let us start');
+      expect(refineVoiceTranscript('Um, hello there')).toBe('hello there');
+      expect(refineVoiceTranscript('wait uh , okay')).toBe('wait, okay');
+    });
+
+    it('never touches words that merely contain a filler', () => {
+      expect(refineVoiceTranscript('turn up the volume in the urban area')).toBe(
+        'turn up the volume in the urban area',
+      );
+    });
+
+    it('collapses to empty when nothing but fillers was said', () => {
+      expect(refineVoiceTranscript('um uh ah')).toBe('');
+    });
+
+    it('can be opted out for verbatim output', () => {
+      expect(refineVoiceTranscript('um okay', { removeFillers: false })).toBe('um okay');
+    });
+  });
+
+  /**
+   * Hotword biasing at the source: the custom vocabulary must reach the
+   * transcription request itself, so terms are spelled right before any
+   * polish pass — including the mechanical-only terminal path.
+   */
+  it('sends the vocabulary list as the cloud transcription bias', async () => {
+    vi.useFakeTimers();
+    dictationVocabulary.set('Spacron, Parakeet');
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0]);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    expect(invoke).toHaveBeenCalledWith(
+      'ai_transcribe_audio',
+      expect.objectContaining({ vocabulary: 'Spacron, Parakeet' }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('sends the vocabulary list as the local whisper initial prompt', async () => {
+    vi.useFakeTimers();
+    dictationVocabulary.set('onnxruntime');
+    voiceInputProvider.set('local');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0]);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    expect(invoke).toHaveBeenCalledWith(
+      'local_stt_transcribe',
+      expect.objectContaining({ initialPrompt: 'onnxruntime' }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('omits the bias when the vocabulary list is empty', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0]);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    const call = invoke.mock.calls.find(([cmd]) => cmd === 'ai_transcribe_audio')!;
+    expect((call[1] as Record<string, unknown>).vocabulary).toBeUndefined();
+
+    vi.useRealTimers();
+  });
+
+  /** The active editor's identifiers ride along after the user's own terms. */
+  it('merges editor symbols into the bias after the custom list', async () => {
+    vi.useFakeTimers();
+    dictationVocabulary.set('Spacron');
+    editorSymbols.value = ['collectEditorSymbols', 'fileCache'];
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession({ onResult: vi.fn(), onEnd: vi.fn() });
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0]);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    expect(invoke).toHaveBeenCalledWith(
+      'ai_transcribe_audio',
+      expect.objectContaining({
+        vocabulary: 'Spacron, collectEditorSymbols, fileCache',
+      }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  /**
+   * Smart VAD (Silero): when enabled and the native detector answers, its
+   * speech probability — not loudness — decides a turn. A QUIET buffer that
+   * the RMS gate would never trigger on must still start speech.
+   */
+  it('lets the native VAD drive the turn decision when it is live', async () => {
+    vi.useFakeTimers();
+    smartVadEnabled.set(true);
+    invoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'vad_session_start') return 42;
+      if (cmd === 'vad_session_feed') {
+        expect(args).toMatchObject({ sessionId: 42 });
+        return 0.9; // Silero says: definitely speech
+      }
+      return undefined;
+    });
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+
+    const onSpeechStart = vi.fn();
+    const session = createVoiceInputSession({ onResult: vi.fn(), onSpeechStart, onEnd: vi.fn() });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200); // past the mic-warmup swallow
+    const processor = audioProcessors[0];
+
+    // Four quiet frames fill the first IPC batch…
+    for (let i = 0; i < 4; i += 1) feedSilence(processor);
+    // …let Silero's verdict (0.9) land…
+    await Promise.resolve();
+    await Promise.resolve();
+    // …and three quiet frames — inaudible to the RMS gate — open the turn,
+    // because every one of them now counts as ACTIVE via the probability bar.
+    // (The anti-chatter onset run is deliberately shared with the level gate.)
+    feedSilence(processor);
+    feedSilence(processor);
+    feedSilence(processor);
+
+    expect(onSpeechStart).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  /** Any backend failure reverts dictation to the level gate silently. */
+  it('falls back to the level gate when the VAD backend fails', async () => {
+    vi.useFakeTimers();
+    smartVadEnabled.set(true);
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'vad_session_start') throw new Error('model missing');
+      return undefined;
+    });
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'vad_session_start') throw new Error('model missing');
+      if (cmd === 'ai_transcribe_audio') return 'still works';
+      return undefined;
+    });
+
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult, onProcessingStart: vi.fn(), onEnd: vi.fn() });
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0]);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    // The ordinary loudness flow ran untouched: transcription happened.
+    expect(onResult).toHaveBeenCalledWith('still works');
 
     vi.useRealTimers();
   });

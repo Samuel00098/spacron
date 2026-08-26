@@ -69,6 +69,13 @@ export interface OrchestratorTask {
    * isolation to skip.
    */
   skipWorktree?: boolean;
+  /**
+   * The task-panel card this agent was launched from ("Run with agent"). Set
+   * only for panel-dispatched runs; when such an agent finishes cleanly, the
+   * user is offered a one-click move of that card to Done rather than having
+   * it moved for them.
+   */
+  panelTaskId?: string | null;
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;

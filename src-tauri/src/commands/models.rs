@@ -50,7 +50,7 @@ fn active_cancel_tokens() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE_CANCEL_TOKENS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn get_models_dir() -> PathBuf {
+pub(crate) fn get_models_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("spacron")
@@ -188,6 +188,17 @@ pub async fn list_downloadable_models() -> Result<Vec<ModelInfo>, String> {
             downloaded: false,
             downloaded_size_bytes: None,
         },
+        ModelInfo {
+            id: "silero-vad".to_string(),
+            name: "Silero VAD (Smart voice detection)".to_string(),
+            category: "stt".to_string(),
+            size: "~2 MB".to_string(),
+            description: "Neural voice-activity detector. Powers the optional Smart VAD mode: far better speech vs. noise separation than the built-in level gate — fewer false turns from clicks, fans and background chatter. Tiny download.".to_string(),
+            url: "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx".to_string(),
+            filename: crate::commands::vad::SILERO_VAD_FILENAME.to_string(),
+            downloaded: false,
+            downloaded_size_bytes: None,
+        },
     ];
 
     for model in &mut list {
@@ -255,6 +266,10 @@ pub async fn download_model(app_handle: AppHandle, model_id: String) -> Result<(
             "ggml-large-v3-turbo.bin".to_string()
         ),
         "parakeet-tdt-v3" => (PARAKEET_FILES[0].0.to_string(), PARAKEET_FILES[0].1.to_string()),
+        "silero-vad" => (
+            "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx".to_string(),
+            crate::commands::vad::SILERO_VAD_FILENAME.to_string()
+        ),
         _ => {
             active_downloads().lock().unwrap().remove(&model_id);
             return Err("Unknown model ID".to_string());
@@ -547,6 +562,15 @@ pub async fn delete_model(model_id: String) -> Result<(), String> {
             }
             return Ok(());
         }
+        "silero-vad" => {
+            // Drop live VAD sessions — the model file they were built from is going away.
+            crate::commands::vad::reset_vad();
+            let p = models_dir.join(crate::commands::vad::SILERO_VAD_FILENAME);
+            if p.exists() {
+                fs::remove_file(p).map_err(|e| format!("Failed to remove model file: {}", e))?;
+            }
+            return Ok(());
+        }
         _ => return Err("Unknown model ID".to_string()),
     };
 
@@ -607,6 +631,10 @@ fn wav_to_f32_pcm(wav_bytes: &[u8]) -> Result<Vec<f32>, String> {
 pub async fn local_stt_transcribe(
     audio_bytes: Vec<u8>,
     model_id: String,
+    // Hotword biasing: the developer's custom vocabulary as one line. Whisper
+    // conditions its decoding on it, so project names/API terms come out
+    // spelled right. Parakeet has no conditioning input and ignores it.
+    initial_prompt: Option<String>,
 ) -> Result<String, String> {
     if model_id.starts_with("parakeet") {
         let models_dir = get_models_dir();
@@ -641,7 +669,7 @@ pub async fn local_stt_transcribe(
         {
             let model_path = PathBuf::from(get_model_path(model_id).await?);
             return tokio::task::spawn_blocking(move || {
-                crate::commands::whisper::transcribe_wav(&audio_bytes, model_path)
+                crate::commands::whisper::transcribe_wav(&audio_bytes, model_path, initial_prompt.as_deref())
             })
             .await
             .map_err(|e| format!("Transcription task failed: {e}"))?;

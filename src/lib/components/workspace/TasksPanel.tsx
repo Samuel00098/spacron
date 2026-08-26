@@ -18,6 +18,7 @@ import { getDispatchableAgents, sendChatMessage } from '$lib/stores/orchestrator
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
+import { recordTranscription } from '$lib/stores/voiceHistory';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { useStore } from '$lib/react/useStore';
 import TaskEditorModal from './TaskEditorModal';
@@ -30,6 +31,13 @@ const columns: { id: TaskStatus; label: string; color: string; borderColor: stri
   { id: 'doing', label: 'In Progress', color: 'var(--warning)',     borderColor: 'rgba(251,191,36,0.45)', badgeBg: 'rgba(251,191,36,0.12)', badgeColor: 'var(--warning)' },
   { id: 'done',  label: 'Done',        color: 'var(--success)',     borderColor: 'rgba(74,222,128,0.45)', badgeBg: 'rgba(74,222,128,0.12)', badgeColor: 'var(--success)' },
 ];const statusOrder: TaskStatus[] = ['todo', 'doing', 'done'];
+// Cursor travel (px) before a card press becomes a drag — below it, the
+// gesture is still a click and must not hijack the editor-opening click.
+const DRAG_ARM_THRESHOLD_PX = 5;
+// Rough tallest-case height of the run menu (its max-height cap plus the
+// trigger offset). If less than this fits below the run button inside the
+// panel, the menu flips above it instead of clipping against the column.
+const RUN_MENU_MAX_PX = 210;
 
 function formatDue(ts: number): string {
   const day = 86400000;
@@ -76,6 +84,9 @@ export default function TasksPanel() {
   const [dropTarget, setDropTarget] = useState<{ col: TaskStatus; beforeId: string | null } | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [runMenuTaskId, setRunMenuTaskId] = useState<string | null>(null);
+  // The run menu opens below its card by default; a card near the column
+  // bottom flips it above the run button (see runClick) so nothing clips.
+  const [runMenuUp, setRunMenuUp] = useState(false);
   // Set right after a drag ends so the browser's follow-up click on the source
   // card doesn't open the editor — the drop already did the work.
   const justDraggedRef = useRef(false);
@@ -91,10 +102,16 @@ export default function TasksPanel() {
   // be flushed immediately instead of leaving an invisible card behind.
   const exitTimerRef = useRef<number | null>(null);
   const pendingExitRef = useRef<(() => void) | null>(null);
-  // Cross-column drops delay the commit; the post-drop click guard must cover
-  // that window. Same-column drops commit instantly, so they keep the original
-  // hair-trigger guard instead of swallowing clicks for 300ms+.
-  const longClickGuardRef = useRef(false);
+  // Live gesture record for the active card drag (null when idle). Drags are
+  // pointer-based — see the drag & drop section below for why HTML5 DnD is not
+  // usable inside Tauri.
+  const pointerDragRef = useRef<{
+    taskId: string;
+    startX: number;
+    startY: number;
+    armed: boolean;
+    detach: () => void;
+  } | null>(null);
 
   const allTasks = useStore(tasks);
   const project = useStore(activeProject);
@@ -206,12 +223,25 @@ export default function TasksPanel() {
           setListeningStatus((prev) => ({ ...prev, [status]: false }));
           setRefiningStatus((prev) => ({ ...prev, [status]: true }));
         },
-        onEnd: () => {
+        // onTurnComplete, not onEnd: the session now reserves onEnd for "the
+        // capture graph is gone" and fires this after EVERY finalized turn —
+        // which is what a commit-after-each-utterance consumer needs.
+        onTurnComplete: () => {
           setListeningStatus((prev) => ({ ...prev, [status]: false }));
           setRefiningStatus((prev) => ({ ...prev, [status]: true }));
           void (async () => {
+            const spoken = voiceDraftInputsRef.current[status];
             try {
-              const { text: refined } = await refineVoicePrompt(voiceDraftInputsRef.current[status]);
+              const { text: refined } = await refineVoicePrompt(spoken);
+              // Same log the dictation hotkey writes to — Settings → Voice →
+              // History. Task dictation is dictation.
+              recordTranscription({
+                text: refined,
+                raw: spoken,
+                target: 'task',
+                targetLabel: `New ${label} task`,
+                refined: refined !== spoken,
+              });
               setNewTaskInputs((prev) => ({
                 ...prev,
                 [status]: mergeVoiceTranscript(voiceBaseInputsRef.current[status], refined),
@@ -333,9 +363,11 @@ export default function TasksPanel() {
     setSuppressEnter(false);
   }, []);
 
-  // Unmount safety: never leave a pending exit timer or a half-collapsed card.
+  // Unmount safety: never leave a pending exit timer, a half-collapsed card,
+  // or window listeners from an in-flight drag behind.
   useEffect(
     () => () => {
+      pointerDragRef.current?.detach();
       pendingExitRef.current?.();
     },
     [],
@@ -351,58 +383,45 @@ export default function TasksPanel() {
   }
 
   // ── Drag & drop ────────────────────────────────────────────────────────────
-  function onCardDragStart(e: React.DragEvent, task: Task) {
-    // Dragging from a button (run / move / edit / delete) would fight the click;
-    // start the drag only from the card body.
-    if ((e.target as HTMLElement).closest('button')) {
-      e.preventDefault();
-      return;
+  // Pointer-based, because HTML5 drag-and-drop never fires inside Tauri on
+  // Windows: the window registers its own OS-level drop handler (for file
+  // drops), which disables the WebView's native DnD pipeline entirely. A press
+  // on a card body arms a potential drag, moving past the arm threshold starts
+  // it, every move hit-tests the board into the same `{col, beforeId}` target
+  // shape, and release runs through the same cross-column exit / reorder commit
+  // path the old drop handlers used.
+  const projectTasksRef = useRef(projectTasks);
+  useEffect(() => {
+    projectTasksRef.current = projectTasks;
+  }, [projectTasks]);
+
+  function hitTestDrop(clientX: number, clientY: number, draggedId: string): { col: TaskStatus; beforeId: string | null } | null {
+    const stack = document.elementsFromPoint(clientX, clientY);
+    const colEl = stack.find((el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains('kanban-col'));
+    if (!colEl) return null;
+    const col = statusOrder.find((s) => s === colEl.dataset.colId);
+    if (!col) return null;
+    let beforeId: string | null = null;
+    for (const el of colEl.querySelectorAll<HTMLElement>('.task-card')) {
+      const id = el.dataset.taskId;
+      if (!id || id === draggedId) continue;
+      const r = el.getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) {
+        beforeId = id;
+        break;
+      }
     }
-    setDragId(task.id);
-    e.dataTransfer.setData('text/plain', task.id);
-    e.dataTransfer.effectAllowed = 'move';
+    return { col, beforeId };
   }
 
-  function onDragEnd() {
-    setDragId(null);
-    setDropTarget(null);
-    // Long enough to swallow the follow-up click AND the exit-window delay of a
-    // cross-column drop (the card still sits in its old column until then);
-    // same-column drops keep the original hair-trigger guard.
-    justDraggedRef.current = true;
-    const delay = longClickGuardRef.current ? 320 : 0;
-    longClickGuardRef.current = false;
-    window.setTimeout(() => {
-      justDraggedRef.current = false;
-    }, delay);
-  }
-
-  function onCardDragOver(e: React.DragEvent, col: TaskStatus, beforeId: string) {
-    e.preventDefault();
-    e.stopPropagation();
-    setDropTarget({ col, beforeId });
-  }
-
-  function onColDragOver(e: React.DragEvent, col: TaskStatus) {
-    e.preventDefault();
-    setDropTarget({ col, beforeId: null });
-  }
-
-  function onColDrop(e: React.DragEvent, col: TaskStatus) {
-    e.preventDefault();
+  function commitDrop(id: string, col: TaskStatus, beforeId: string | null) {
     // Flush a superseded exit (a second drop mid-collapse) so its card is never
     // left invisible behind a cancelled timer.
     pendingExitRef.current?.();
-    const id = dragId ?? e.dataTransfer.getData('text/plain');
-    const beforeId = dropTarget?.col === col ? dropTarget.beforeId : null;
-    const task = id ? projectTasks.find((t) => t.id === id) : undefined;
-    const movingCol = !!task && task.status !== col;
-    setDragId(null);
-    setDropTarget(null);
-    setRunMenuTaskId(null);
-    if (!id) return;
+    const task = projectTasksRef.current.find((t) => t.id === id);
+    if (!task) return;
 
-    if (movingCol) {
+    if (task.status !== col) {
       // Let the card visibly leave its column before the store commit moves it.
       // `commit` is idempotent: beginCardExit may call it synchronously (reduced
       // motion / element missing) or via its timer, and the flush path may call
@@ -421,7 +440,6 @@ export default function TasksPanel() {
         setExitingId(null);
         moveTask(id, col, beforeId);
       };
-      longClickGuardRef.current = true;
       beginCardExit(id, commit);
       pendingExitRef.current = commit;
       return;
@@ -429,6 +447,89 @@ export default function TasksPanel() {
 
     snapshotCards();
     moveTask(id, col, beforeId);
+  }
+
+  function endPointerDrag(dropAt?: { x: number; y: number }) {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+    pointerDragRef.current = null;
+    drag.detach();
+
+    // Released before the arm threshold: a plain click, which the card's own
+    // onClick handles.
+    if (!drag.armed) return;
+
+    setDragId(null);
+    setDropTarget(null);
+    // Long enough to swallow the follow-up click AND the exit-window delay of a
+    // cross-column drop (the card still sits in its old column until then).
+    justDraggedRef.current = true;
+    window.setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 320);
+
+    if (!dropAt) return; // pointercancel / Escape / released off-board
+    const target = hitTestDrop(dropAt.x, dropAt.y, drag.taskId);
+    if (!target) return;
+    commitDrop(drag.taskId, target.col, target.beforeId);
+  }
+
+  function onCardPointerDown(e: React.PointerEvent, task: Task) {
+    if (e.button !== 0) return;
+    // Presses on buttons / inputs / an open run menu belong to those controls —
+    // dragging starts only from the card body. And a card mid-collapse (cross-
+    // column exit) must not be grabbable, like the old draggable={false}.
+    const target = e.target as HTMLElement;
+    if (
+      exitingId === task.id ||
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('.task-run-menu')
+    ) {
+      return;
+    }
+    e.preventDefault();
+
+    const drag: NonNullable<typeof pointerDragRef.current> = {
+      taskId: task.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      armed: false,
+      detach: () => {},
+    };
+    pointerDragRef.current = drag;
+
+    const onMove = (ev: PointerEvent) => {
+      if (pointerDragRef.current !== drag) return;
+      if (!drag.armed) {
+        if (Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY) < DRAG_ARM_THRESHOLD_PX) return;
+        drag.armed = true;
+        setDragId(drag.taskId);
+        document.body.style.userSelect = 'none';
+      }
+      ev.preventDefault();
+      setDropTarget(hitTestDrop(ev.clientX, ev.clientY, drag.taskId));
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.button !== 0) return;
+      endPointerDrag(drag.armed ? { x: ev.clientX, y: ev.clientY } : undefined);
+    };
+    const onCancel = () => endPointerDrag();
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') endPointerDrag();
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+    drag.detach = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      document.body.style.userSelect = '';
+    };
   }
 
   // Close the card's agent menu on Escape or any pointer-down outside it. The
@@ -481,6 +582,9 @@ export default function TasksPanel() {
       runTaskWithAgent(task, dispatchableAgents[0].command);
       return;
     }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const panelRect = panelRef.current?.getBoundingClientRect();
+    setRunMenuUp(!!panelRect && panelRect.bottom - rect.bottom < RUN_MENU_MAX_PX);
     setRunMenuTaskId((cur) => (cur === task.id ? null : task.id));
   }
 
@@ -535,8 +639,7 @@ export default function TasksPanel() {
                 <div
                   className={`kanban-col${dropTarget?.col === col.id && dragId ? ' drag-over' : ''}`}
                   key={col.id}
-                  onDragOver={(e) => onColDragOver(e, col.id)}
-                  onDrop={(e) => onColDrop(e, col.id)}
+                  data-col-id={col.id}
                 >
                   <div className="col-header">
                     <span className="col-dot" style={{ background: col.color, boxShadow: `0 0 0 3px ${col.badgeBg}` }}></span>
@@ -551,10 +654,7 @@ export default function TasksPanel() {
                         style={{ borderLeftColor: col.borderColor }}
                         key={task.id}
                         data-task-id={task.id}
-                        draggable={exitingId !== task.id}
-                        onDragStart={(e) => onCardDragStart(e, task)}
-                        onDragEnd={onDragEnd}
-                        onDragOver={(e) => onCardDragOver(e, col.id, task.id)}
+                        onPointerDown={(e) => onCardPointerDown(e, task)}
                         onClick={() => {
                           // A drop can be followed by a click on the source card.
                           if (justDraggedRef.current) return;
@@ -623,7 +723,10 @@ export default function TasksPanel() {
                           </button>
                         </div>
                         {runMenuTaskId === task.id && (
-                          <div className="task-run-menu" onClick={(e) => e.stopPropagation()}>
+                          <div
+                            className={`task-run-menu${runMenuUp ? ' run-up' : ''}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             {dispatchableAgents.map((a) => (
                               <button
                                 key={a.command}

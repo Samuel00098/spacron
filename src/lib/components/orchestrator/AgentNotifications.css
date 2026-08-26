@@ -20,16 +20,21 @@
   pointer-events: none;
 }
 
-/* Each card is interactive; the container itself lets clicks fall through the gaps. */
+/* Each card is interactive; the container itself lets clicks fall through the gaps.
+   The ring that used to live in this shadow is gone: every card already draws its
+   own 1px border, and the two together read as a double outline — part of why the
+   stack looked heavier and muddier than the rest of the UI. */
 .agent-notifs > .agent-notif {
   pointer-events: auto;
-  animation: agent-notif-in 0.26s var(--ease-out) both;
-  box-shadow: 0 10px 32px -8px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border);
+  animation: agent-notif-in 0.24s var(--ease-out) both;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.16),
+    0 12px 28px -12px rgba(0, 0, 0, 0.5);
 }
 
 @keyframes agent-notif-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -37,15 +42,19 @@
 }
 
 /* ══ mailbox card — from AgentMailboxCards.css, scoped here ══════════════════ */
+/* Same shell as the completion card — one radius, one border, one rail — so a
+   stack holding both does not look like two components from two apps. The rail
+   is a `::before` rather than a `border-left` so it reaches the card's rounded
+   corners instead of squaring them off. */
 .agent-notifs .orc-mb-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 11px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-  border-left: 2px solid var(--accent);
+  gap: 7px;
+  padding: 12px 14px 12px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
   /* Solid, like every other notification (see Toasts.css). `--bg-secondary` is
      ~20% alpha whenever transparency is on, so mixing against it made the card
      borrow whatever was behind it — dark over the terminal, pale over the
@@ -54,13 +63,20 @@
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.agent-notifs .orc-mb-handoff { border-left-color: var(--role-agent, var(--accent)); }
-.agent-notifs .orc-mb-ask { border-left-color: var(--warning, #f59e0b); }
-.agent-notifs .orc-mb-report { border-left-color: var(--info, #38bdf8); }
+.agent-notifs .orc-mb-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--mb-rail, var(--accent));
+}
+.agent-notifs .orc-mb-handoff { --mb-rail: var(--role-agent, var(--accent)); }
+.agent-notifs .orc-mb-ask { --mb-rail: var(--warning, #f59e0b); }
+.agent-notifs .orc-mb-report { --mb-rail: var(--info, #38bdf8); }
 
 .agent-notifs .orc-mb-meta {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  font-size: 10px; color: var(--text-muted);
+  font-size: 10.5px; color: var(--text-muted);
 }
 .agent-notifs .orc-mb-kind {
   display: inline-flex; align-items: center; gap: 3px;
@@ -73,7 +89,7 @@
 .agent-notifs .orc-mb-age { margin-left: auto; white-space: nowrap; }
 
 .agent-notifs .orc-mb-text {
-  font-size: 12px; line-height: 1.4; color: var(--text-primary); word-break: break-word;
+  font-size: 12.5px; line-height: 1.45; color: var(--text-primary); word-break: break-word;
 }
 
 .agent-notifs .orc-mb-files { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -113,24 +129,43 @@
 .agent-notifs .orc-mb-reply-input:focus { outline: none; border-color: var(--accent); }
 .agent-notifs .orc-mb-reply-actions { justify-content: flex-end; }
 
-/* ══ completion card — from AgentCommandCenter.css, scoped here ══════════════ */
+/* ══ completion card ═════════════════════════════════════════════════════════
+   Status is carried by a rail, an icon and a chip — never by tinting the card.
+   It used to wash the whole surface in `color-mix(--cc 7%, …)` with a 22%
+   border, and `--warning` is #a86008 in light mode: a 7% ochre film over the
+   panel colour, which is what made a "needs input" card look like dirty gold
+   rather than a piece of this UI. A neutral surface with one saturated edge
+   reads as deliberate at any tint, and keeps the three states apart at a glance
+   without three differently-coloured cards competing in one stack. */
 .agent-notifs .orc-completion {
   --cc: var(--success, #4ade80);
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 11px 12px;
-  padding-right: 34px; /* room for the action cluster */
-  border-radius: 10px;
-  /* Status tint over a *solid* base — see the note on .orc-mb-card. */
-  background: color-mix(in srgb, var(--cc) 7%, rgba(var(--bg-secondary-rgb), 1));
-  border: 1px solid color-mix(in srgb, var(--cc) 22%, var(--border));
+  gap: 11px;
+  padding: 12px 14px 12px 15px;
+  padding-right: 56px; /* room for the action cluster */
+  border-radius: 12px;
+  background: rgba(var(--bg-secondary-rgb), 1);
+  border: 1px solid var(--border);
+  overflow: hidden; /* clips the rail to the radius */
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 .agent-notifs .orc-completion-failed { --cc: var(--error, #f87171); }
 .agent-notifs .orc-completion-blocked { --cc: var(--warning, #fbbf24); }
+
+/* The grouped card has one button, not a cluster, so it needs less clearance. */
+.agent-notifs .orc-completion-group { padding-right: 38px; }
+
+/* The one saturated element: a full-height edge in the status colour. */
+.agent-notifs .orc-completion::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--cc);
+}
 
 .agent-notifs .orc-comp-icon {
   flex-shrink: 0;
@@ -140,20 +175,57 @@
   justify-content: center;
   color: var(--cc);
 }
-.agent-notifs .orc-comp-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.agent-notifs .orc-comp-headline {
-  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-  font-size: 11px; font-weight: 650; color: var(--text-primary);
+.agent-notifs .orc-comp-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
 }
-.agent-notifs .orc-comp-status { color: var(--cc); }
-.agent-notifs .orc-comp-time { font-size: 10px; color: var(--text-muted); }
+
+/* Name and status on one line, with a real size gap to the detail below —
+   four type sizes within 1px of each other is not a hierarchy, it is just
+   small, and it is the other half of why this card read as mush. */
+.agent-notifs .orc-comp-headline {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+.agent-notifs .orc-comp-agent {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;
+}
+.agent-notifs .orc-comp-status {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cc);
+  background: color-mix(in srgb, var(--cc) 13%, transparent);
+  border-radius: 999px;
+  padding: 2.5px 7px;
+  line-height: 1.15;
+}
+.agent-notifs .orc-comp-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 .agent-notifs .orc-comp-task {
-  font-size: 10.5px; color: var(--text-secondary);
+  font-size: 11.5px; color: var(--text-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.agent-notifs .orc-comp-reason { font-size: 10px; color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+/* The agent's own words. This is the line the user is actually here to read,
+   so it is the largest thing under the headline, not the smallest. */
+.agent-notifs .orc-comp-reason {
+  font-size: 12px; line-height: 1.45; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+}
 .agent-notifs .orc-comp-summary {
-  margin: 4px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--text-secondary);
+  margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary);
   white-space: pre-wrap; word-break: break-word;
 }
 .agent-notifs .orc-comp-loading {
@@ -187,50 +259,71 @@
 .agent-notifs .orc-comp-group-list li {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
-  font-size: 10.5px;
-  line-height: 1.5;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+/* A dot per row, in the status colour — enough to tie the list to the rail
+   without repeating the icon four times. */
+.agent-notifs .orc-comp-group-list li::before {
+  content: '';
+  flex-shrink: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--cc);
+  transform: translateY(-2px);
 }
 .agent-notifs .orc-comp-group-agent {
   font-weight: 600;
   color: var(--text-primary);
   flex-shrink: 0;
-  max-width: 40%;
+  max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .agent-notifs .orc-comp-group-task {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .agent-notifs .orc-comp-more {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
-/* ── shared action cluster (show / close on completion cards) ──────────────── */
+/* ── shared action cluster (show / close on completion cards) ────────────────
+   Horizontal and top-aligned rather than a stacked column: two 22px buttons in
+   a vertical strip made the card look like it had a scrollbar. They sit at a
+   low contrast until the card is hovered or one of them is focused, so the
+   card's own content leads. */
 .agent-notifs .orc-comp-actions {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 8px;
+  right: 8px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  opacity: 0.55;
+  transition: opacity var(--dur-fast, 0.12s) var(--ease-out);
 }
+.agent-notifs .agent-notif:hover .orc-comp-actions,
+.agent-notifs .orc-comp-actions:focus-within { opacity: 1; }
+
 .agent-notifs .orc-comp-show,
 .agent-notifs .agent-notif-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -241,3 +334,15 @@
 .agent-notifs .orc-comp-show:hover { color: var(--cc); }
 .agent-notifs .orc-comp-show:focus-visible,
 .agent-notifs .agent-notif-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The grouped card carries only a close button, with no absolutely-positioned
+   cluster around it — it needs the same box so it does not sit flush in the
+   corner at a different size from the single card's. */
+.agent-notifs .orc-completion > .agent-notif-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0.55;
+}
+.agent-notifs .orc-completion:hover > .agent-notif-close,
+.agent-notifs .orc-completion > .agent-notif-close:focus-visible { opacity: 1; }

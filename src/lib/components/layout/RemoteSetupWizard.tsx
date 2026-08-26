@@ -4,12 +4,15 @@ import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import { addRemoteConnection, connectRemote } from '$lib/stores/remoteWorkspace';
 import {
+  binaryNotice,
   DEPLOY_PLATFORMS,
   platformLabel,
   validateDeployInput,
   type DeployInput,
   type DeployPlatform,
   type DeployResult,
+  type ServerBinaryStatus,
+  type ServerDownloadResult,
 } from './remoteSetup';
 import './RemoteSetupWizard.css';
 
@@ -54,6 +57,10 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Whether a server build for the *target* platform exists on this machine.
+  // null until the first check answers, which renders as no notice at all.
+  const [binaryStatus, setBinaryStatus] = useState<ServerBinaryStatus | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   // Set once the user changes the picker by hand — afterwards a differing
   // detection is surfaced as a warning instead of silently overriding them.
@@ -92,6 +99,37 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
       setDetecting(false);
     }
   }, [open]);
+
+  // Is there a server build for the chosen platform on this machine? Re-checked
+  // whenever the target changes and after a download, because the answer is
+  // per-platform and the download is what changes it. A failed check leaves the
+  // status null: the deploy still surfaces the resolver's own error, so an
+  // unavailable check must not invent a blocker.
+  const refreshBinaryStatus = async (target: DeployPlatform) => {
+    try {
+      const status = await invoke<ServerBinaryStatus>('remote_server_binary_status', {
+        platform: target,
+      });
+      return status;
+    } catch {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (!open) {
+      setBinaryStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const status = await refreshBinaryStatus(platform);
+      if (!cancelled) setBinaryStatus(status);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, platform]);
 
   // Auto-detect the server's OS once host + username are filled in. Debounced
   // per edit burst; adopts what the server reports unless the user already
@@ -179,6 +217,22 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
     }
   }
 
+  async function downloadServerBuild() {
+    setDownloading(true);
+    setError(null);
+    try {
+      const result = await invoke<ServerDownloadResult>('remote_download_server', { platform });
+      setBinaryStatus(await refreshBinaryStatus(platform));
+      const { showToast } = await import('$lib/stores/notification');
+      const mb = (result.bytes / (1024 * 1024)).toFixed(1);
+      showToast(`${platformLabel(platform)} server downloaded (${mb} MB)`, 'success', 4000);
+    } catch (err) {
+      setError((err as Error)?.message ?? String(err));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       // Stop the RemoteStatus popover's own Escape handler from closing too.
@@ -262,14 +316,34 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
             )}
           </label>
 
-          {hostOs && hostOs !== platform && (
-            <p className="rsw-desc rsw-warn">
-              This app bundles the {platformLabel(hostOs)} build of the server. Deploying to a{' '}
-              {platformLabel(platform)} box needs that platform&apos;s server binary — either run
-              the wizard from a machine running {platformLabel(platform)}, or point
-              SPACRON_SERVER_PATH at a build made for it.
-            </p>
-          )}
+          {/* The server binary for the TARGET OS is the one hard prerequisite
+              this flow has, and it used to surface only as a failed deploy.
+              Now it is stated up front, with the fix as a button: a packaged
+              install carries only its own OS's build, so anything cross-OS is
+              a download away rather than a Rust toolchain away. */}
+          {(() => {
+            const notice = binaryNotice(platform, binaryStatus, hostOs);
+            if (notice.kind === 'none') return null;
+            if (notice.kind === 'ready') {
+              return <p className="rsw-desc rsw-hint-ok">{notice.text}</p>;
+            }
+            if (notice.kind === 'blocked') {
+              return <p className="rsw-desc rsw-warn">{notice.text}</p>;
+            }
+            return (
+              <div className="rsw-binary rsw-field-wide">
+                <p className="rsw-desc rsw-warn">{notice.text}</p>
+                <button
+                  type="button"
+                  className="rsw-btn"
+                  onClick={() => void downloadServerBuild()}
+                  disabled={downloading || busy}
+                >
+                  {downloading ? 'Downloading…' : notice.action}
+                </button>
+              </div>
+            );
+          })()}
           <label className="rsw-field rsw-field-wide">
             <span className="rsw-label">Host</span>
             <input
@@ -368,7 +442,21 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
           <button
             type="submit"
             className="rsw-btn rsw-btn-primary"
-            disabled={busy || !host.trim() || !username.trim()}
+            // Only a *definite* "no binary" blocks the button. A status of null
+            // (not checked, or the check itself failed) must stay deployable —
+            // the resolver runs again inside the deploy and reports properly.
+            disabled={
+              busy ||
+              downloading ||
+              !host.trim() ||
+              !username.trim() ||
+              binaryStatus?.available === false
+            }
+            title={
+              binaryStatus?.available === false
+                ? `Download the ${platformLabel(platform)} server first.`
+                : undefined
+            }
           >
             {busy ? 'Deploying…' : 'Deploy & connect'}
           </button>

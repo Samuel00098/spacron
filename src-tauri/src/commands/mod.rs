@@ -33,6 +33,7 @@ pub mod terminal;
 pub mod theme;
 pub mod usage;
 pub mod usage_stats;
+pub mod vad;
 pub mod web_session;
 #[cfg(feature = "whisper-stt")]
 pub mod whisper;

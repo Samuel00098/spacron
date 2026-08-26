@@ -61,7 +61,12 @@ import {
   type ActivityKind,
   type ActivityEvent,
 } from '$lib/services/orchestrator/activity-log';
-import { type AgentTurnOutcome } from '$lib/services/orchestrator/agent-turn-watch';
+import {
+  describeTurnEnd,
+  type AgentTurnOutcome,
+  type TurnEndPresentation,
+} from '$lib/services/orchestrator/agent-turn-watch';
+import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -794,16 +799,25 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
     // Capture any files this task claimed BEFORE the `done` below releases the
     // claim, so the handoff can tell the Reviewer exactly what changed.
     const claim = activeClaims(getProjectMailbox(task.projectId)).find((c) => c.taskId === task.id);
+    // A guessed finish gets the weaker word here too — this log line is read
+    // back by other agents, so "Finished" would launder a guess into a fact.
+    const guessed = outcome.kind === 'finished' && outcome.via === 'inferred';
     await postMailboxMessage(task.projectId, rootPath, {
       from,
       kind: 'done',
       taskId: task.id,
-      text: `Finished: ${label}`,
+      text: guessed ? `Went quiet: ${label}` : `Finished: ${label}`,
     });
     // Bi-directional handoff: a Builder that just finished hands its work to a
     // Reviewer directly — no user relay. The Reviewer gates it and either merges
     // or bounces it back with a note. Only fires when a reviewer is on the team.
-    if (task.role === 'builder') {
+    //
+    // NOT on a guessed finish. `handoff` is an actionable kind, so it floats a
+    // card AND dispatches a reviewer against the branch — off the back of
+    // "output stopped growing for 90 seconds", which is equally a long compile.
+    // Reviewing half-written work is worse than reviewing late: the builder's
+    // real finish (declared, or its process exiting) still reaches here.
+    if (task.role === 'builder' && !guessed) {
       const reviewer = findTeamReviewer(task.projectId, task.id);
       if (reviewer) {
         // Include the worktree branch so the Reviewer agent can git-diff the
@@ -1153,6 +1167,7 @@ async function completeLeasedTask(
   if (!task || task.status !== 'in-progress' || task.assignedSessionId !== sessionId) return;
 
   const blocked = outcome.kind === 'blocked';
+  const declaredFailure = outcome.kind === 'failed';
   // Snapshot the agent's terminal output before we release the lease, so the
   // durable record captures exactly what it did this turn.
   captureTaskTranscript(taskId, sessionId);
@@ -1164,7 +1179,8 @@ async function completeLeasedTask(
     ...classifyTaskAfterExecution(t, {
       exitCode: opts?.exitCode ?? 0,
       needsHumanInput: blocked,
-      note: blocked ? outcome.reason : undefined,
+      failed: declaredFailure,
+      note: blocked || declaredFailure ? outcome.reason : undefined,
     }),
   }));
   releaseOrchestratorTerminal(sessionId);
@@ -1176,7 +1192,13 @@ async function completeLeasedTask(
     } else if (updated.status === 'failed') {
       logTaskActivity(taskId, 'failed', updated.failureReason ?? 'Agent exited with errors.');
     } else {
-      logTaskActivity(taskId, 'finished', 'Finished its turn.');
+      logTaskActivity(
+        taskId,
+        'finished',
+        outcome.kind === 'finished' && outcome.via === 'exit'
+          ? 'Its process exited.'
+          : 'Finished its turn.',
+      );
     }
     const rememberedTask = get(orchestratorTasks).find((t) => t.id === updated.id) ?? updated;
     void rememberTask(updated.projectId, projectPaths.get(updated.projectId), rememberedTask);
@@ -1187,16 +1209,66 @@ async function completeLeasedTask(
   if (!updated) return;
   const name = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
 
+  // A task launched FROM the task panel ("Run with agent") asks instead of
+  // auto-completing: the agent ending its turn is evidence, not a decision, so
+  // the user gets a one-click move of the card to Done. Only a clean finish
+  // asks — blocked/failed need human judgement first. The click re-checks the
+  // board: the card may have been moved or deleted while the agent worked.
+  if (task.panelTaskId && updated.status === 'complete') {
+    const panelTaskId = task.panelTaskId;
+    const panelTask = get(tasks).find((t) => t.id === panelTaskId);
+    if (panelTask && panelTask.status !== 'done') {
+      showToast(
+        `"${panelTask.title}" — ${name} finished its turn.`,
+        'info',
+        12000,
+        false,
+        {
+          label: 'Mark done',
+          onClick: () => {
+            const current = get(tasks).find((t) => t.id === panelTaskId);
+            if (current && current.status !== 'done') updateTaskStatus(panelTaskId, 'done');
+          },
+        },
+      );
+    }
+  }
+
   // The completion card below is the durable record — it must be written even
   // when the toast is suppressed, because the card is what lands in the inbox
   // for a finished agent the user was not watching.
   const elapsed = task.startedAt ? Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000)) : null;
+  const told = describeTurnEnd(outcome);
   const completionStatus: CompletionSummary['status'] =
     updated.status === 'blocked' ? 'blocked' : updated.status === 'failed' ? 'failed' : 'done';
   const completionReason =
     updated.status === 'blocked' && outcome.kind === 'blocked' ? outcome.reason
-    : updated.status === 'failed' ? updated.failureReason
-    : null;
+    : updated.status === 'failed' ? updated.failureReason ?? told?.reason ?? null
+    // A finished turn used to carry no text at all, which is what left the
+    // inbox showing a name and a title and nothing else. When the agent said
+    // what it did, that sentence is the message.
+    : told?.reason ?? null;
+  // A finish we merely inferred must not be worded as one the agent declared.
+  // The task's own status can outrank the outcome (a non-zero exit makes a
+  // "finished" turn `failed`), and those are observed facts — so only a `done`
+  // card inherits the doubt.
+  const completionEndedBy: NonNullable<CompletionSummary['endedBy']> =
+    completionStatus === 'done' ? (told?.endedBy ?? 'declared') : 'declared';
+  // …and an inferred finish does not interrupt — but ONLY when this agent had
+  // a way to tell us and didn't. A CLI with no MCP config surface can never
+  // report, so silencing its guesses would mean it finishes and the user hears
+  // nothing at all. Those still raise a card; it just says "went quiet".
+  //
+  // "Output stopped growing for 90 seconds" is not evidence that an agent
+  // finished — it is equally what a long compile, a slow tool call, or an agent
+  // sitting at an untouched prompt looks like. Announcing those as completions
+  // is the false "your agent has finished" the user gets while nothing has
+  // happened, and it costs the real ones their credibility. The turn still
+  // resolves (the lease must be released either way) and the card is still
+  // written for the inbox; it just does not float, chime, or raise an OS
+  // notification. Only something the agent actually said — or a fact we
+  // observed, like a non-zero exit — is allowed to interrupt.
+  const silent = completionEndedBy === 'inferred' && agentCanReport(task.agentPreset, sessionId);
 
   // The completion card is the one visual notification for this event — it
   // floats as the corner card and lands in the inbox (see AgentNotifications),
@@ -1212,7 +1284,9 @@ async function completeLeasedTask(
     if (updated.status !== 'blocked' && updated.status !== 'failed') {
       if (updated.worktree && projectPaths.has(updated.projectId)) void reconcileNow();
     }
-    announceCompletionAloud(name, completionStatus, task.title);
+    // The reconcile above still runs for a silent finish — the work is real
+    // whether or not the agent announced it. Only the cue is withheld.
+    if (!silent) announceCompletionAloud(name, completionStatus, task.title);
   }
 
   const chatMsgId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -1227,6 +1301,8 @@ async function completeLeasedTask(
     summary: null,
     summaryPending: willSummarize,
     taskId: task.id,
+    endedBy: completionEndedBy,
+    silent,
   };
 
   appendChat(task.projectId, {
@@ -1258,7 +1334,8 @@ export function createOrchestratorTask(
   agentPreset?: string | null,
   name?: string | null,
   role?: AgentRole | null,
-  skipWorktree?: boolean
+  skipWorktree?: boolean,
+  panelTaskId?: string | null
 ): OrchestratorTask {
   const task = createTaskRecord(
     projectId,
@@ -1271,6 +1348,7 @@ export function createOrchestratorTask(
     ...task,
     title: summarizeTerminalTask(task.goal) || task.title || 'Untitled task',
     skipWorktree: skipWorktree ?? false,
+    panelTaskId: panelTaskId ?? null,
   };
   orchestratorTasks.update((all) => [...all, titledTask]);
   void flush(projectId);
@@ -1779,6 +1857,32 @@ export interface CompletionSummary {
   summaryPending?: boolean;
   /** The orchestrator task this turn belonged to, when one exists. Lets the
    *  notification card offer a "Show terminal" action while the session lives. */
+  /**
+   * How this turn end became known, which decides what the card is allowed to
+   * claim:
+   *
+   * - `declared` — the agent said so (hook sentinel or `report_status`).
+   *   The card says **finished**.
+   * - `exit` — the agent's process ended. An observed fact, but not a claim
+   *   that the work is done: a CLI you quit with `/exit` exits cleanly too.
+   *   The card says **exited**.
+   * - `inferred` — output stopped growing and we assumed. Equally a long
+   *   compile. The card says **went quiet**, and does not interrupt.
+   *
+   * Optional for cards persisted before this field existed; a missing value is
+   * treated as `declared`, which is how they were already worded.
+   */
+  endedBy?: 'declared' | 'exit' | 'inferred';
+  /**
+   * True when this turn end must not interrupt: no floating card, no chime, no
+   * OS notification. The row still lands in the inbox.
+   *
+   * Set for a finish nobody declared — one the idle fallback inferred from the
+   * output going quiet. That is the same shape as a long compile or an agent
+   * parked at an untouched prompt, so announcing it produces exactly the
+   * "your agent finished" alert that arrives while nothing has happened.
+   */
+  silent?: boolean;
   taskId?: string | null;
 }
 
@@ -2094,47 +2198,71 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       const bufLen = getSessionOutputLength(sessionId);
       if (shouldNudgeAdopted(sessionId, bufLen)) {
         lastAdoptedNudge.set(sessionId, { len: bufLen, at: Date.now() });
-        notifyAdoptedTurnEnd(task, outcome);
+        notifyAdoptedTurnEnd(task, outcome, sessionId);
       }
     }
   })();
 }
 
 /** The chime and durable inbox card for one adopted turn end. */
-function notifyAdoptedTurnEnd(task: OrchestratorTask, outcome: AgentTurnOutcome): void {
+function notifyAdoptedTurnEnd(
+  task: OrchestratorTask,
+  outcome: AgentTurnOutcome,
+  sessionId?: number,
+): void {
   const name =
     task.name
     ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
     ?? task.agentPreset
     ?? 'Agent';
 
-  logTaskActivity(task.id, outcome.kind === 'blocked' ? 'blocked' : 'finished',
-    outcome.kind === 'blocked' ? outcome.reason : 'Finished its turn.');
+  const told = describeTurnEnd(outcome);
+  if (!told) return;
+
+  logTaskActivity(
+    task.id,
+    told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
+    told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet — assumed finished.'),
+  );
+
+  // A hand-launched agent gets the same rule as a leased one: only a turn end
+  // the agent actually declared may interrupt. An inferred one — output stopped
+  // growing, so we assumed — is recorded in the inbox and nothing else. This is
+  // the loudest version of the false alarm, because an adopted watcher re-arms
+  // every turn and would chime on every quiet spell.
+  const silent = told.endedBy === 'inferred' && agentCanReport(task.agentPreset, sessionId);
 
   // The completion card below is the one visual notification for this turn end —
   // a toast would duplicate it. The chime stays as the "right now" audio cue.
-  if (get(announceAgentCompletions)) {
+  if (!silent && get(announceAgentCompletions)) {
     // In voice mode the realtime model relays it in its own voice; a chime on
     // top of a live call is jarring. Same split as announceCompletionAloud.
     if (get(agentVoiceModeActive)) {
-      announceViaRealtimeVoice(
-        outcome.kind === 'blocked'
-          ? `${name} needs your input.`
-          : `${name} finished its turn.`
-      );
+      announceViaRealtimeVoice(spokenTurnEnd(name, told));
     } else {
-      playNudge(outcome.kind === 'blocked' ? 'blocked' : 'done');
+      playNudge(told.status === 'done' ? 'done' : 'blocked');
     }
   }
 
   // The durable trace for this turn. A card lands only when a cue lands, so it
   // can never outnumber the chimes (shouldNudgeAdopted already deduped this one).
-  appendAdoptedTurnCard(
-    task,
-    name,
-    outcome.kind === 'blocked' ? 'blocked' : 'done',
-    outcome.kind === 'blocked' ? outcome.reason : null,
-  );
+  appendAdoptedTurnCard(task, name, told.status, told.reason, told.endedBy, silent);
+}
+
+/**
+ * What the voice relay says for a turn end.
+ *
+ * Kept separate from the card copy because it is spoken: "went quiet" reads
+ * fine in a corner card and sounds evasive out loud, so an inferred finish is
+ * spoken as "seems to have finished" instead.
+ */
+function spokenTurnEnd(name: string, told: TurnEndPresentation): string {
+  if (told.status === 'blocked') return `${name} needs your input.`;
+  if (told.status === 'failed') return `${name} could not finish.`;
+  if (told.endedBy === 'exit') return `${name} has exited.`;
+  return told.endedBy === 'declared'
+    ? `${name} finished its turn.`
+    : `${name} seems to have finished.`;
 }
 
 /**
@@ -2151,6 +2279,10 @@ function appendAdoptedTurnCard(
   name: string,
   status: 'done' | 'failed' | 'blocked',
   reason: string | null,
+  /** How the turn end became known. See `CompletionSummary.endedBy`. */
+  endedBy: NonNullable<CompletionSummary['endedBy']> = 'declared',
+  /** Inbox-only: no floating card, no chime, no OS notification. */
+  silent = false,
 ): void {
   appendChat(task.projectId, {
     id: msgId(),
@@ -2166,6 +2298,8 @@ function appendAdoptedTurnCard(
       summary: null,
       summaryPending: false,
       taskId: task.id,
+      endedBy,
+      silent,
     },
   });
 }
@@ -2563,6 +2697,7 @@ export async function sendChatMessage(
     projectName?: string;
     forcedAgent?: string;
     voiceConversation?: boolean;
+    panelTaskId?: string;
   }
 ): Promise<void> {
   const trimmed = text.trim();
@@ -2609,7 +2744,7 @@ export async function sendChatMessage(
   if (forced) {
     result = {
       reply: `Handing this to ${forced.name}.`,
-      actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed }],
+      actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed, panelTaskId: opts?.panelTaskId ?? null }],
       viaLLM: false,
     };
   } else {
@@ -2834,7 +2969,8 @@ export async function sendChatMessage(
       action.agent,
       name,
       action.role ?? null,
-      skipWorktree
+      skipWorktree,
+      action.panelTaskId ?? null
     );
 
     // Post the claim so later spawns in this same plan see it as live.
@@ -3263,6 +3399,10 @@ if (typeof window !== 'undefined') {
         // `exitCode !== null && exitCode !== 0` convention.
         code != null && code !== 0 ? 'failed' : 'done',
         code != null && code !== 0 ? `Agent process exited with code ${code}.` : null,
+        // `exit`, not `declared`: the process ending is an observed fact, but
+        // it is NOT a claim that the work is done — a CLI quit with `/exit`
+        // exits cleanly too. The card says "exited" rather than "finished".
+        'exit',
       );
       return;
     }
@@ -3271,10 +3411,23 @@ if (typeof window !== 'undefined') {
     // "complete" for both success and crashes. The terminal layer already raised
     // its own exit notification, so suppress ours here (notify: false).
     const exitCode = code ?? null;
+    // A crash is `failed`, not `blocked`. The task already ended up in the right
+    // state (classify reads the exit code), but the outcome is what the mailbox
+    // note and the completion card are written from, so a crash used to be
+    // announced as "needs your input" — sending the user to look for a question
+    // the agent never asked. `via: 'declared'` because a process exit is an
+    // observed fact, not a guess about what the screen means.
     const outcome: AgentTurnOutcome =
       exitCode !== null && exitCode !== 0
-        ? { kind: 'blocked', reason: `Agent process exited with code ${exitCode}.` }
-        : { kind: 'finished' };
+        ? {
+            kind: 'failed',
+            reason: `Agent process exited with code ${exitCode}.`,
+            via: 'exit',
+          }
+        // `exit`, not `declared`: the process ended, which is a fact, but it is
+        // not the agent saying it finished the work — a CLI quit with `/exit`
+        // reaches here too. The card says "exited".
+        : { kind: 'finished', via: 'exit' };
     completeLeasedTask(task.id, sessionId, outcome, { notify: false, exitCode });
   });
 }

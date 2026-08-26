@@ -165,12 +165,20 @@ const h = vi.hoisted(() => {
     sendAgentPromptDirect: vi.fn(async () => true),
     requestTerminalInput: vi.fn(),
     transcriptionAutoSend: makeWritable<boolean>(true),
+    voiceRefinementEnabled: makeWritable<boolean>(false),
+    voiceInputProvider: makeWritable<string>('local'),
+    refineVoicePrompt: vi.fn(async (text: string) => ({ text: `[polished] ${text}`, aiRefined: true })),
     showToast: vi.fn(),
+    /** Mirrors the real session's "start() while live is a no-op" guard. */
+    micActive: { value: false },
+    /** Counts EFFECTIVE starts (ones that signalled onStart), not no-ops. */
+    onStartCount: { value: 0 },
   };
 });
 
 type Callbacks = { onStart?: () => void; onResult: (t: string) => void; onEnd?: () => void };
 let captured: Callbacks | null = null;
+let sessionStart: ReturnType<typeof vi.fn>;
 
 vi.mock('$lib/stores/terminal', () => ({
   activeSessionId: h.activeSessionId,
@@ -178,16 +186,30 @@ vi.mock('$lib/stores/terminal', () => ({
   sendAgentPromptDirect: h.sendAgentPromptDirect,
   requestTerminalInput: h.requestTerminalInput,
 }));
-vi.mock('$lib/stores/settings', () => ({ transcriptionAutoSend: h.transcriptionAutoSend }));
+vi.mock('$lib/stores/settings', () => ({
+  transcriptionAutoSend: h.transcriptionAutoSend,
+  voiceRefinementEnabled: h.voiceRefinementEnabled,
+  // Read by `deliver` only to stamp the voice-history entry.
+  voiceInputProvider: h.voiceInputProvider,
+}));
 vi.mock('$lib/stores/notification', () => ({ showToast: h.showToast }));
+vi.mock('$lib/services/voice-refinement', () => ({ refineVoicePrompt: h.refineVoicePrompt }));
 vi.mock('$lib/services/voice-input', () => ({
   createVoiceInputSession: (callbacks: Callbacks) => {
     captured = callbacks;
     return {
-      start: vi.fn(async () => callbacks.onStart?.()),
+      start: (sessionStart = vi.fn(async () => {
+        if (h.micActive.value) return; // real sessions no-op a start while live
+        h.micActive.value = true;
+        h.onStartCount.value += 1;
+        callbacks.onStart?.();
+      })),
       // Mirrors the real session: releasing the mic always ends with onEnd,
       // which is what commits an accumulated dictation.
-      stop: vi.fn(() => callbacks.onEnd?.()),
+      stop: vi.fn(() => {
+        h.micActive.value = false;
+        callbacks.onEnd?.();
+      }),
       isSupported: () => true,
       setConversationMode: vi.fn(),
     };
@@ -214,8 +236,12 @@ describe('transcription-hotkey targeting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     captured = null;
+    sessionStart = vi.fn(async () => {});
     h.activeSessionId.set(7);
     h.transcriptionAutoSend.set(true);
+    h.voiceRefinementEnabled.set(false);
+    h.micActive.value = false;
+    h.onStartCount.value = 0;
     focus(null);
     stubDocument.activeElement = null;
   });
@@ -503,5 +529,70 @@ describe('transcription-hotkey targeting', () => {
     await speak('echo hi');
 
     expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'echo hi');
+  });
+
+  /**
+   * Webspeech engines end the recognizer after a long silence. That must not
+   * end the dictation — the service re-arms and keeps listening, and only the
+   * user's own end gesture delivers.
+   */
+  it('re-arms when the engine stops itself mid-dictation', async () => {
+    const field = new StubInput();
+    focus(field);
+
+    toggleTerminalTranscription();
+    await flush();
+    captured?.onResult('still speaking');
+    await flush();
+
+    // The engine released its recognizer, then reported the stop.
+    h.micActive.value = false;
+    captured?.onEnd?.(); // engine auto-stopped; nobody ended the dictation
+    await flush();
+
+    expect(h.onStartCount.value).toBe(2); // initial start + the re-arm
+    expect(field.value).toBe('');
+
+    captured?.onResult('and more');
+    await flush();
+    press('Escape');
+    await flush();
+
+    expect(field.value).toBe('still speaking and more');
+  });
+
+  /**
+   * WhisperFlow-parity polish: with voice refinement enabled, text-field
+   * dictation goes through the AI cleanup pass before insertion.
+   */
+  it('applies AI polish to a text field when refinement is enabled', async () => {
+    h.voiceRefinementEnabled.set(true);
+    const field = new StubInput();
+    focus(field);
+
+    toggleTerminalTranscription();
+    await flush();
+    captured?.onResult('draft the release notes');
+    await flush();
+    press('Escape');
+    await flush();
+
+    expect(h.refineVoicePrompt).toHaveBeenCalledWith(
+      'draft the release notes',
+      expect.objectContaining({ allowForModelProviders: true }),
+    );
+    // The mock returns "[polished] <text>"; that is what lands in the field.
+    expect(field.value).toBe('[polished] draft the release notes');
+  });
+
+  /** And without the setting, the mechanical cleanup alone is inserted. */
+  it('keeps mechanical-only text when refinement is disabled', async () => {
+    const field = new StubInput();
+    focus(field);
+
+    await speak('plain and clean');
+
+    expect(h.refineVoicePrompt).not.toHaveBeenCalled();
+    expect(field.value).toBe('plain and clean');
   });
 });

@@ -31,6 +31,32 @@ export interface CompletionSummary {
   summaryPending?: boolean;
   /** The orchestrator task this turn belonged to, when one exists. Lets the
    *  notification card offer a "Show terminal" action while the session lives. */
+  /**
+   * How this turn end became known, which decides what the card is allowed to
+   * claim:
+   *
+   * - `declared` — the agent said so (hook sentinel or `report_status`).
+   *   The card says **finished**.
+   * - `exit` — the agent's process ended. An observed fact, but not a claim
+   *   that the work is done: a CLI you quit with `/exit` exits cleanly too.
+   *   The card says **exited**.
+   * - `inferred` — output stopped growing and we assumed. Equally a long
+   *   compile. The card says **went quiet**, and does not interrupt.
+   *
+   * Optional for cards persisted before this field existed; a missing value is
+   * treated as `declared`, which is how they were already worded.
+   */
+  endedBy?: 'declared' | 'exit' | 'inferred';
+  /**
+   * True when this turn end must not interrupt: no floating card, no chime, no
+   * OS notification. The row still lands in the inbox.
+   *
+   * Set for a finish nobody declared — one the idle fallback inferred from the
+   * output going quiet. That is the same shape as a long compile or an agent
+   * parked at an untouched prompt, so announcing it produces exactly the
+   * "your agent finished" alert that arrives while nothing has happened.
+   */
+  silent?: boolean;
   taskId?: string | null;
 }
 

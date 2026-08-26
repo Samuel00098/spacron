@@ -1,0 +1,84 @@
+# cargo-deny policy for the Spacron workspace.
+#
+# CI runs `cargo deny check licenses bans sources` — deliberately NOT a bare
+# `cargo deny check`, which would also run an advisories pass and duplicate the
+# triage list already maintained in `.cargo/audit.toml`. Advisories belong to
+# cargo-audit; this file owns the things cargo-audit cannot see.
+#
+# The licence check is the point of this file. Spacron ships closed-source under
+# a paid licence, so a copyleft dependency entering the tree is a legal problem
+# rather than a style preference — and it can enter through a transitive bump
+# nobody reviewed. See docs/SECURITY.md section 11.
+
+[graph]
+# Evaluate every platform we ship, not just the host running CI. Without this,
+# the Linux-only GTK stack and the Windows-only `windows-*` crates would be
+# invisible to the licence check depending on which runner happened to execute
+# it.
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+all-features = false
+
+[licenses]
+version = 2
+# Anything not listed here fails the build. Permissive licences only: each of
+# these permits linking into a closed-source binary with attribution alone.
+#
+# This list is exactly what the tree contains today and nothing more — an
+# aspirational entry earns a `license-not-encountered` warning, and a list padded
+# with licences nobody uses quietly pre-approves them for whatever arrives next.
+# Regenerate with `cargo deny list` when adding one.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# Two entries above are not the usual MIT/Apache and are worth stating plainly:
+#
+# `MPL-2.0` (cssparser, selectors, option-ext) is weak copyleft. It obliges us to
+# publish changes to *those files* if we modify them. We vendor nothing and patch
+# nothing, so linking is fine — but this is the reminder that MPL crates are not
+# interchangeable with the permissive ones if that ever changes.
+#
+# `CDLA-Permissive-2.0` (webpki-roots) is a *data* licence covering the Mozilla
+# root-CA bundle rather than code. It is permissive and imposes no obligation on
+# the binary that embeds it.
+confidence-threshold = 0.8
+
+# Our own workspace crates carry `license-file = "../LICENSE"` pointing at a
+# proprietary licence, which cargo-deny cannot match against any SPDX id (it
+# scores 0.51 and gives up). They are `publish = false`, so skip them rather
+# than inventing an SPDX expression for a licence that has none — this check
+# exists to police *dependencies*, not us.
+private = { ignore = true }
+
+[bans]
+# Duplicate versions are a size and audit-surface problem, not a correctness
+# one, and the Tauri/GTK graph guarantees a long tail of them. Warn so it stays
+# visible in the log without failing a build nobody can act on.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Everything must come from crates.io. An unvetted git dependency is the
+# cheapest available supply-chain attack on this project: it bypasses the
+# registry's immutability and yank machinery entirely.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

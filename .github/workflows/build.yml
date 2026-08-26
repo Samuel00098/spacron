@@ -8,6 +8,68 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Dependency auditing, split out of the build matrix on purpose: it is
+  # platform-independent (it reads lockfiles, it does not compile the app), so
+  # running it once is enough, and as its own job it reports in ~2 minutes
+  # instead of waiting behind a three-platform Tauri build.
+  #
+  # The policy files this job enforces are `src-tauri/.cargo/audit.toml`
+  # (triaged advisory exceptions) and `src-tauri/deny.toml` (licences and crate
+  # sources). Both carry the reasoning for every exception — see
+  # docs/SECURITY.md section 11 before adding to either.
+  security:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable branch
+
+      # Also caches `~/.cargo/bin`, so the `cargo install` below is paid once
+      # and restored on later runs rather than rebuilt every time.
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
+        with:
+          workspaces: ./src-tauri -> target
+          cache-bin: true
+
+      # Reads package-lock.json directly — no `npm ci` needed, which is why this
+      # job stays fast. `--omit=dev` because a vulnerability in vitest or the
+      # Tauri CLI is not something a user of the shipped app can be reached
+      # through; those get picked up by Dependabot instead of blocking a build.
+      - name: Audit npm dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Install Rust audit tooling
+        run: cargo install cargo-audit cargo-deny --locked
+
+      # `--deny warnings` rather than the default: a crate going unmaintained is
+      # worth seeing on the run that introduces it, not six months later. The
+      # already-triaged exceptions are in .cargo/audit.toml, each with a reason.
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: cargo audit --deny warnings
+
+      # Licences are the real reason this runs: Spacron ships closed-source under
+      # a paid licence, so a copyleft crate entering the tree is a legal problem
+      # rather than a style one.
+      #
+      # Scoped to `licenses bans sources` on purpose — a bare `cargo deny check`
+      # would also run its own advisories pass, which means maintaining the same
+      # triage list in two files that drift apart. Advisories are cargo-audit's
+      # job (the step above); this step owns everything cargo-audit cannot see.
+      - name: Check licences and crate sources
+        working-directory: src-tauri
+        run: cargo deny check licenses bans sources
+
   build:
     strategy:
       fail-fast: false

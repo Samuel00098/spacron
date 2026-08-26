@@ -12,10 +12,15 @@ matching section.
 
 ## Agents, delegation & review
 
-- [agent-turn-detection](agent-turn-detection.md) — how `watchLeasedAgentTurn` ends a turn: only Claude gets hooks, all other CLIs share one heuristic config, bell is corroborated-by-quiescence (not instant), attention-phrase misses
+- [agent-turn-detection](agent-turn-detection.md) — how `watchLeasedAgentTurn` ends a turn: the three outcome kinds + `via` (declared vs inferred, "went quiet" vs "finished"), only Claude gets hooks, all other CLIs share one heuristic config, bell is corroborated-by-quiescence (not instant), attention-phrase misses
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — the "needs input" card text is a slice of the raw PTY buffer; strip it with `stripTerminalOutput` or it renders ANSI escape codes
+- [agent-report-status](agent-report-status.md) — the `report_status` MCP tool + per-launch agent tokens (transport for Claude, `SPACRON_AGENT_TOKEN` env for every other CLI): **only a declared turn end may interrupt** — an inferred "finished" is inbox-only; why `hasTurnSignalChannel` must not be `channels.has`; why a delivered report must not also toast; what `completionBody` guarantees
+- [t3code-turn-signals](t3code-turn-signals.md) — how T3 Code (pingdotgg/t3code) never scrapes a screen: SDK/ACP/app-server protocols, the `raw.source` provenance envelope, the awareness phase ladder, publish dedupe + confirm-before-publish, and the two ways to widen our nonce channel
+- [notification-card-design](notification-card-design.md) — the agent notification card: a status colour may light a 3px rail, an icon and a chip, **never a surface** (`--warning` is #a86008 in light mode — a 7% wash of it is the "gold card" bug); plus the type scale and why rails are `::before`
 - [agent-inbox-unread](agent-inbox-unread.md) — the inbox behind the toasts; why "read" and "dismissed" must stay separate bits, the cold-start seeding, and why every dismiss path must acknowledge
-- [transcription-hotkey](transcription-hotkey.md) — the Ctrl+Alt+M speak-into-terminal feature: single-shot phase machine, the two delivery seams (sendAgentPromptDirect / requestTerminalInput), and why cleanup stays mechanical (never AI-refine shell commands)
+- [transcription-hotkey](transcription-hotkey.md) — the F9 dictate-to-the-caret feature: pauses must not end a dictation, `onTurnComplete` vs `onEnd` semantics, webspeech cumulative-vs-utterances mode (the says-it-twice bug), instant-processing exit, filler stripping + field-only AI polish, and the DOM stub its tests need
+- [voice-is-realtime-only](voice-is-realtime-only.md) — TTS is deleted app-wide; speech-to-speech runs only through the realtime engines, what was removed, the voiceReplyProvider→voiceBrainProvider rename, and the `'pipeline'` engine trap
+- [voice-history](voice-history.md) — Settings → Voice → History: the two durable logs (dictations, realtime calls), why retention lives in the store instead of `settings.ts`, the subscribe-order TDZ trap that only breaks in the browser, every recording seam, and the local-midnight date parsing
 - [prompt-bar-is-voice-only](prompt-bar-is-voice-only.md) — the floating bar has no text input: typing and the pick-a-terminal path are gone; `promptBarInput` now lands in the read-only "staged prompt" strip that a spoken turn merges onto
 
 ## Workspace shell, rooms & visuals
@@ -36,7 +41,9 @@ matching section.
 - [preview-responsive-viewport](preview-responsive-viewport.md) — phone/tablet preview is a plain scaled viewport now (no device chassis); where the fit/centring/drag rules live, and the browser-parity console behaviour
 - [fleet-in-right-drawer](fleet-in-right-drawer.md) — Agent Fleet is a right-drawer tool, not a centre room; `visiblePanels` is the room/not-room switch, `rightDrawerToolOf` checks fleet LAST on purpose, and tiling all agents auto-opens it via `applyRightDrawerTool`
 - [tools-menu-launcher](tools-menu-launcher.md) — the bottom room dock is gone; every launcher is now the "Tools" dropdown at the right end of the floating prompt bar (`ToolsMenu.tsx`), with Spawn/Split/Tile inline beside it
+- [html5-dnd-dead-in-tauri](html5-dnd-dead-in-tauri.md) — HTML5 drag-and-drop never fires in the Tauri window (WebView2's native DnD is disabled by `dragDropEnabled` default); never set it false (breaks file drops) — build drags on pointer events like the kanban does
 - [command-palette-registry](command-palette-registry.md) — the palette auto-registers every Tools-menu item/layout action/settings tab via a per-render bridge ref (stale-closure guard); `initDefaultCommands` merges, never replaces; overlay is a transparent click-catcher — no blur veil; Memory Graph is a FloatingYouTube-style room (`memoryGraphVisible`), `knowledgeGraphOpen` deleted; arrow-scroll fixes: rect-based scrollTop + pointerMoved guard on hover-select
+- [per-project-persistence](per-project-persistence.md) — how each project remembers its stage (cache + `spacron_project_<id>`), why the sanitiser must learn every saved field, where each room's open flag lives, and the unconditional write at the end of `restoreProjectState` that made closing the Editor/Terminal never stick
 - [project-hud-in-left-sidebar](project-hud-in-left-sidebar.md) — Project HUD is moved from a center modal overlay to a dedicated Projects tab in the left utility drawer, toggled via TitleBar or Ctrl+K
 - [sketch-room](sketch-room.md) — the Sketch button opens a native drawing room, not excalidraw.com; the canvas was restored from a deleted 4.5k-line component, and stops being an overlay / stops eating other panes' keys
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the separate Focus mode icon is removed; Split mode panes can be zoomed 100% full-stage on top of other cards while keeping the card selection strip below; also why the Split button must switch `ambientLayout` (Focus ignores `splitSlots`) and the `expandedRoom` invariants — always retile, clear on mode change, follow focus
@@ -47,7 +54,8 @@ matching section.
 
 ## Remote workspace & mobile
 
-- [remote-invoke-seam-gap](remote-invoke-seam-gap.md) — the server's `invoke` allowlist covers `fs_*`/`workspace_git_*`/`lsp_*` but **not** `project_state_*`, so the orchestrator silently reads empty against a remote
+- [remote-invoke-seam-gap](remote-invoke-seam-gap.md) — the server's `invoke` allowlist covers `fs_*`/`workspace_git_*`/`lsp_*` but **not** `project_state_*`, so the orchestrator silently reads empty against a remote; also why `agent_signal_*` (hook turn signals) silently dies in remote mode
+- [server-artifact-download](server-artifact-download.md) — the wizard's "Get the Linux server" button: CI publishes a per-platform `spacron-server` + `.sha256`, the app downloads and caches it into the dir `artifact_dirs()` searches; why the published Linux triple is gnu not musl
 - [vps-deploy-cross-platform](vps-deploy-cross-platform.md) — the VPS wizard now detects the server's OS over SSH and resolves a matching `spacron-server` build (SPACRON_SERVER_PATH → triple artifact → host sidecar); musl cross-builds via `server:build --target`, macOS needs Mac/CI; no release-download yet
 - [mobile-companion-plan](mobile-companion-plan.md) — the phone app goes in a top-level `mobile/` folder (Expo, `website/`-style sibling); why not a Tauri mobile target; terminals need no server change, agents do
 

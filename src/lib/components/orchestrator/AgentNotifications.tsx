@@ -140,13 +140,32 @@ export default function AgentNotifications() {
     const msgs = allChat[projectId] ?? [];
     const baseline = baselineRef.current.ts;
     const pending = msgs
-      .filter((m) => m.completion && m.ts >= baseline && !dismissed.has(m.id))
+      .filter(
+        (m) =>
+          m.completion &&
+          m.ts >= baseline &&
+          !dismissed.has(m.id) &&
+          // A silent completion is inbox-only. It is a turn end nobody
+          // declared — inferred from output going quiet — and floating it is
+          // the false "agent finished" alert this whole path exists to stop.
+          !m.completion.silent,
+      )
       .slice(-MAX_COMPLETION_CARDS * 3);
-    const done = pending.filter((m) => m.completion!.status === 'done').slice(-MAX_COMPLETION_CARDS);
+    // "Finished" and "went quiet" are grouped apart even though both are `done`.
+    // A mixed group takes its wording from the newest member, which would let
+    // one declared finish label two guesses as "3 agents finished".
+    const isQuiet = (m: (typeof pending)[number]) => m.completion!.endedBy === 'inferred';
+    const done = pending
+      .filter((m) => m.completion!.status === 'done' && !isQuiet(m))
+      .slice(-MAX_COMPLETION_CARDS);
+    const quiet = pending
+      .filter((m) => m.completion!.status === 'done' && isQuiet(m))
+      .slice(-MAX_COMPLETION_CARDS);
     const others = pending.filter((m) => m.completion!.status !== 'done');
 
     const groups: CompletionGroup[] = [];
     if (done.length > 0) groups.push({ key: 'cp-done', status: 'done', members: done });
+    if (quiet.length > 0) groups.push({ key: 'cp-quiet', status: 'done', members: quiet });
     for (const m of others) {
       groups.push({ key: `cp-${m.id}`, status: m.completion!.status, members: [m] });
     }
@@ -204,7 +223,7 @@ export default function AgentNotifications() {
         const c = m.completion;
         if (!c) continue;
         showSystemNotification(
-          `${c.status === 'done' ? 'Agent finished' : c.status === 'failed' ? 'Agent failed' : 'Agent needs input'} — ${c.agentName}: ${c.taskTitle}`,
+          `${completionHeadline(c)} — ${c.agentName}: ${c.taskTitle}`,
           c.status === 'done' ? 'success' : c.status === 'failed' ? 'error' : 'warning',
         );
       }
@@ -302,6 +321,36 @@ function TerminalGlyph() {
   );
 }
 
+/**
+ * The three things a completion card is allowed to say, in the two registers
+ * the UI needs.
+ *
+ * `verb` completes "N agents …" / "Iris …"; `headline` is the standalone OS
+ * notification line. They stay together so a state can never be worded one way
+ * in the corner and another way on the lock screen.
+ *
+ * The `done` split is the point. A turn ends either because the agent said so
+ * — a hook sentinel, or a `report_status` call it made itself — or because its
+ * output stopped growing for long enough that we assumed it had. The second is
+ * a guess, and it fires on a long compile exactly as readily as on a real
+ * completion, so it says the agent went quiet rather than claiming it finished.
+ */
+export function completionVerb(c: { status: string; endedBy?: string }): string {
+  if (c.status === 'failed') return 'failed';
+  if (c.status === 'blocked') return 'needs input';
+  if (c.endedBy === 'inferred') return 'went quiet';
+  if (c.endedBy === 'exit') return 'exited';
+  return 'finished';
+}
+
+export function completionHeadline(c: { status: string; endedBy?: string }): string {
+  if (c.status === 'failed') return 'Agent failed';
+  if (c.status === 'blocked') return 'Agent needs input';
+  if (c.endedBy === 'inferred') return 'Agent went quiet';
+  if (c.endedBy === 'exit') return 'Agent exited';
+  return 'Agent finished';
+}
+
 function CompletionNotification({
   group,
   onDismiss,
@@ -314,20 +363,22 @@ function CompletionNotification({
   const newest = group.members[group.members.length - 1];
   const c = newest.completion;
   if (!c) return null;
-  const statusLabel = c.status === 'done' ? 'finished' : c.status === 'failed' ? 'failed' : 'needs input';
+  const statusLabel = completionVerb(c);
 
   if (group.members.length > 1) {
     const shown = group.members.slice(-MAX_GROUP_ROWS);
     const more = group.members.length - shown.length;
     return (
-      <div className={`agent-notif orc-completion orc-completion-${c.status}`}>
+      <div className={`agent-notif orc-completion orc-completion-group orc-completion-${c.status}`}>
         <span className="orc-comp-icon" aria-hidden="true">
           <StatusIcon kind={c.status} />
         </span>
         <div className="orc-comp-body">
           <span className="orc-comp-headline">
-            {group.members.length} agents {statusLabel}
-            <span className="orc-comp-time">· {formatSecs(c.elapsedSec)}</span>
+            <span className="orc-comp-agent">{group.members.length} agents</span>
+            <span className="orc-comp-status">{statusLabel}</span>
+            {/* Adopted turns carry no elapsed time; an empty span left a gap. */}
+            {c.elapsedSec != null && <span className="orc-comp-time">{formatSecs(c.elapsedSec)}</span>}
           </span>
           <ul className="orc-comp-group-list">
             {shown.map((m) => (
@@ -356,9 +407,9 @@ function CompletionNotification({
       </span>
       <div className="orc-comp-body">
         <span className="orc-comp-headline">
-          {c.agentName}
+          <span className="orc-comp-agent" title={c.agentName}>{c.agentName}</span>
           <span className="orc-comp-status">{statusLabel}</span>
-          {c.elapsedSec != null && <span className="orc-comp-time">· {formatSecs(c.elapsedSec)}</span>}
+          {c.elapsedSec != null && <span className="orc-comp-time">{formatSecs(c.elapsedSec)}</span>}
         </span>
         <span className="orc-comp-task" title={c.taskTitle}>{c.taskTitle}</span>
         {c.reason && <span className="orc-comp-reason">{c.reason}</span>}

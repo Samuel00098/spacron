@@ -36,9 +36,17 @@ const h = vi.hoisted(() => {
     sendAgentPromptDirect: vi.fn<(text?: unknown, sessionId?: number) => Promise<boolean>>(),
     requestTerminalInput: vi.fn(),
     transcriptionAutoSend: makeWritable<boolean>(true),
+    voiceRefinementEnabled: makeWritable<boolean>(false),
+    voiceInputProvider: makeWritable<string>('local'),
     showToast: vi.fn(),
     sessionStop: vi.fn(),
+    /** Overridable per-test; the default mimics a healthy warm start. */
     sessionStart: vi.fn(async () => {}),
+    /** Mirrors the real session's "start() while live is a no-op" guard. */
+    micActive: { value: false },
+    /** Counts EFFECTIVE starts (ones that signalled onStart), not no-ops. */
+    onStartCount: { value: 0 },
+    refineVoicePrompt: vi.fn(async (text: string) => ({ text: text.toUpperCase(), aiRefined: true })),
     supported: { value: true },
   };
 });
@@ -50,7 +58,10 @@ type CapturedCallbacks = {
   onEnd?: () => void;
 };
 
+type CapturedOptions = { mode?: string } | undefined;
+
 let capturedCallbacks: CapturedCallbacks | null = null;
+let capturedOptions: CapturedOptions = undefined;
 
 vi.mock('$lib/stores/terminal', () => ({
   activeSessionId: h.activeSessionId,
@@ -63,22 +74,30 @@ vi.mock('$lib/stores/terminal', () => ({
 
 vi.mock('$lib/stores/settings', () => ({
   transcriptionAutoSend: h.transcriptionAutoSend,
+  voiceRefinementEnabled: h.voiceRefinementEnabled,
+  // Read by `deliver` only to stamp the voice-history entry.
+  voiceInputProvider: h.voiceInputProvider,
 }));
 
 vi.mock('$lib/stores/notification', () => ({
   showToast: h.showToast,
 }));
 
+vi.mock('$lib/services/voice-refinement', () => ({
+  refineVoicePrompt: h.refineVoicePrompt,
+}));
+
 vi.mock('$lib/services/voice-input', () => ({
-  createVoiceInputSession: vi.fn((callbacks: CapturedCallbacks) => {
+  createVoiceInputSession: vi.fn((callbacks: CapturedCallbacks, options: CapturedOptions) => {
     capturedCallbacks = callbacks;
+    capturedOptions = options;
     return {
-      start: vi.fn(async () => {
-        callbacks.onStart?.();
-      }),
+      start: vi.fn(() => h.sessionStart()),
       stop: vi.fn(() => {
+        h.micActive.value = false;
         h.sessionStop();
-        // Mirrors the real session: releasing the mic always ends with onEnd.
+        // Mirrors the real session: a user-driven stop releases the mic and
+        // ends with onEnd — the drain that commits an ended dictation.
         callbacks.onEnd?.();
       }),
       isSupported: () => h.supported.value,
@@ -121,12 +140,23 @@ describe('transcription-hotkey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedCallbacks = null;
+    capturedOptions = undefined;
     h.supported.value = true;
     h.activeSessionId.set(7);
     h.devActiveSessionId.set(null);
     h.sessions.set([]);
     h.devSessions.set([]);
     h.transcriptionAutoSend.set(true);
+    h.voiceRefinementEnabled.set(false);
+    // Default start: resolve and signal onStart, like a healthy capture graph.
+    h.sessionStart.mockImplementation(async () => {
+      if (h.micActive.value) return; // real sessions no-op a start while live
+      h.micActive.value = true;
+      h.onStartCount.value += 1;
+      capturedCallbacks?.onStart?.();
+    });
+    h.micActive.value = false;
+    h.onStartCount.value = 0;
     h.sendAgentPromptDirect.mockResolvedValue(true);
   });
 
@@ -270,5 +300,162 @@ describe('transcription-hotkey', () => {
 
     expect(h.showToast).toHaveBeenCalledWith('microphone blocked', 'error');
     expect(currentState()).toBe('idle');
+  });
+
+  /**
+   * The dictation consumer must never receive cumulative engine payloads —
+   * "hello", then "hello world", banked twice, delivered as
+   * "hello hello world". The session is created in utterances mode.
+   */
+  it('creates its voice session in utterances mode to prevent duplication', () => {
+    toggleTerminalTranscription();
+    expect(capturedOptions).toEqual({ mode: 'utterances' });
+    // Don't leak a live dictation into the next test.
+    abortTranscription();
+  });
+
+  /**
+   * An unexpected graph stop mid-dictation (webspeech auto-end after a long
+   * silence) used to be treated as "the mic died, ship what we have" — which
+   * chopped the dictation at that silence. It must re-arm and keep banking.
+   */
+  it('re-arms after an unexpected graph stop instead of delivering', async () => {
+    toggleTerminalTranscription();
+    await flush();
+
+    capturedCallbacks!.onResult('first piece');
+    await flush();
+    // The engine released its recognizer, then reported the stop.
+    h.micActive.value = false;
+    capturedCallbacks!.onEnd?.(); // engine stopped itself; user said nothing
+    await flush();
+
+    // Re-armed (a second effective start), still listening, nothing delivered.
+    expect(h.onStartCount.value).toBe(2);
+    expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
+    expect(currentState()).toBe('listening');
+
+    capturedCallbacks!.onResult('second piece');
+    await flush();
+    await finish();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledTimes(1);
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'first piece second piece');
+  });
+
+  /**
+   * If the graph cannot be revived, the dictation must not loop forever — but
+   * what was actually said still has to land.
+   */
+  it('delivers what was said once re-arming keeps failing', async () => {
+    let firstStart = true;
+    h.sessionStart.mockImplementation(async () => {
+      if (firstStart) {
+        firstStart = false;
+        h.micActive.value = true;
+        capturedCallbacks?.onStart?.();
+        return;
+      }
+      throw new Error('mic gone');
+    });
+
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks!.onResult('half done');
+    await flush();
+
+    capturedCallbacks!.onEnd?.();
+    // Three failing re-arm attempts, then the fallback delivery.
+    await flush();
+    await flush();
+    await flush();
+    await flush();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledTimes(1);
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'half done');
+    expect(currentState()).toBe('idle');
+  });
+
+  /**
+   * The exit-lag fix: ending the dictation flips the indicator to processing
+   * IMMEDIATELY — draining local STT takes seconds, and the pill sitting on
+   * "Listening" through that drain is why Escape felt like it needed two or
+   * three presses.
+   */
+  it('shows processing the instant the dictation is ended', async () => {
+    let resolveSend!: (v: boolean) => void;
+    h.sendAgentPromptDirect.mockReturnValue(
+      new Promise<boolean>((resolve) => (resolveSend = resolve)),
+    );
+
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks!.onResult('still cooking');
+    await flush();
+
+    toggleTerminalTranscription();
+    // Synchronously processing — no flush, no waiting for STT.
+    expect(currentState()).toBe('processing');
+
+    resolveSend(true);
+    await flush();
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'still cooking');
+    expect(currentState()).toBe('idle');
+  });
+
+  /** Teardown re-entry fires onEnd more than once; delivery must not repeat. */
+  it('delivers exactly once no matter how many times onEnd fires', async () => {
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks!.onResult('once only');
+    await flush();
+
+    await finish();
+    capturedCallbacks!.onEnd?.();
+    await flush();
+    capturedCallbacks!.onEnd?.();
+    await flush();
+
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledTimes(1);
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'once only');
+  });
+
+  /**
+   * While the mic is still opening there is no dictation to end — Escape used
+   * to be swallowed there, which read as a dead key. It cancels instead.
+   */
+  it('cancels cleanly when Escape lands during mic startup', async () => {
+    let resolveStart!: () => void;
+    h.sessionStart.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    toggleTerminalTranscription(); // starting=true, start() pending
+    abortTranscription();
+
+    expect(h.sessionStop).toHaveBeenCalled();
+    expect(currentState()).toBe('idle');
+
+    resolveStart(); // the pending startup settles later — must stay cancelled
+    await flush();
+    expect(currentState()).toBe('idle');
+    expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
+  });
+
+  /** Terminals get mechanical cleanup only — never the AI polish pass. */
+  it('never runs AI polish for terminal delivery even when enabled', async () => {
+    h.voiceRefinementEnabled.set(true);
+
+    toggleTerminalTranscription();
+    await flush();
+    capturedCallbacks!.onResult('git commit dash m now');
+    await flush();
+    await finish();
+
+    expect(h.refineVoicePrompt).not.toHaveBeenCalled();
+    expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'git commit dash m now');
   });
 });

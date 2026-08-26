@@ -637,3 +637,27 @@ describe('ensureAgentRulesFiles — native extras', () => {
     expect(content).toContain('<!-- SORYQ:BEGIN agent-brief');
   });
 });
+
+describe('the standing brief tells agents how to be heard', () => {
+  it('names the tool, the token and the env var', () => {
+    const body = buildStandingBriefBody();
+    // Without all three the agent either never reports, or reports
+    // unattributed — which cannot end its turn. See agent-report-status.md.
+    expect(body).toContain('report_status');
+    expect(body).toContain('agent_token');
+    expect(body).toContain('SPACRON_AGENT_TOKEN');
+  });
+
+  it('says the report is what raises the notification', () => {
+    // The instruction has to carry the *reason*, or it reads as bookkeeping
+    // and gets skipped under load.
+    expect(buildStandingBriefBody()).toMatch(/only way the user is notified/i);
+  });
+
+  it('keeps its rules numbered in order', () => {
+    const numbers = [...buildStandingBriefBody().matchAll(/^(\d+)\. \*\*/gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+});

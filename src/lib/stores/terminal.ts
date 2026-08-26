@@ -39,10 +39,14 @@ import {
   getMcpUrl,
   injectMcpConfigForAgent,
   mcpLaunchFlags,
+  prepareAgentChannel,
+  bindAgentChannel,
+  type AgentChannel,
   registerAgent,
   setMcpProjectRoot,
   unregisterAgent,
 } from './mcpBridge';
+import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -893,7 +897,12 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
     // that stay in their REPL). Pair the chime with the completion card the
     // orchestrator writes on exit, so the cue is the same however the agent was
     // started and however it ended.
-    if (get(announceAgentCompletions)) playNudge(clean ? 'done' : 'failed');
+    // Never chime a completion for a terminal the USER closed: they did it,
+    // they know, and a "done" cue there is the app claiming an agent finished
+    // work that was cancelled out from under it.
+    if (!wasClosedByUser && get(announceAgentCompletions)) {
+      playNudge(clean ? 'done' : 'failed');
+    }
     // Orchestrator-tracked sessions (leased/adopted) already get a completion
     // card in the inbox on exit — the card is the notification. Only untracked
     // agent terminals — a CLI run by hand and never adopted — get the toast.
@@ -901,7 +910,11 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
       if (wasClosedByUser) {
         showToast(`${label} closed`, 'info', 3000, true);
       } else if (clean) {
-        showToast(`${label} finished its work`, 'success', 6000, true);
+        // "Exited", not "finished its work". A clean exit is the process
+        // ending — which is also what `/exit`, Ctrl-D and a finished session
+        // all look like. Claiming completion from it is the same false alarm
+        // as claiming it from an idle screen.
+        showToast(`${label} exited`, 'info', 5000, true);
       } else {
         showToast(`${label} exited with errors (code ${code})`, 'error', 8000, true);
       }
@@ -1128,6 +1141,10 @@ export async function createTerminalSession(
       ...(opts?.extraEnv ?? {}),
     };
 
+    // Both bound to the PTY once it exists — see SPACRON_AGENT_TOKEN and
+    // SPACRON_TURN_FILE below.
+    let agentChannel: AgentChannel | null = null;
+    let statusChannel: { channelId: string; path: string } | null = null;
     // Inject MCP server config when launching an agent so it auto-discovers
     // other running agents via the Spacron MCP bridge.
     if (agentPreset) {
@@ -1145,6 +1162,33 @@ export async function createTerminalSession(
         // Code is now handled by `mcpLaunchFlags`; do not re-add an env var for
         // an agent without first confirming the CLI actually reads it.
         env['SPACRON_MCP_URL'] = mcpUrl;
+
+        // This agent's own identity, for `report_status`.
+        //
+        // Only Claude Code gets a config file written per launch, so only it
+        // can be identified by the token it presents on the connection. Every
+        // other CLI reads a shared config and connects as "some agent on this
+        // machine". Putting the per-launch token in the PTY environment closes
+        // that gap for all of them: the agent passes it back as `agent_token`,
+        // and only its own process tree could have read it.
+        //
+        // Minted here and bound below, once the PTY exists — the env has to be
+        // complete before the process starts, and the session id does not exist
+        // until after.
+        agentChannel = await prepareAgentChannel();
+        if (agentChannel) env['SPACRON_AGENT_TOKEN'] = agentChannel.token;
+
+        // The universal fallback channel. `report_status` only exists for the
+        // CLIs Spacron can write an MCP config for; every other agent gets a
+        // file and a nonce here and is told (in its standing brief) to echo one
+        // line into it when it stops. Running a shell command is the one thing
+        // every coding CLI can do, so this is what makes turn reporting reach
+        // all of them rather than eight of them.
+        statusChannel = await prepareStatusChannel();
+        if (statusChannel) {
+          env['SPACRON_TURN_FILE'] = statusChannel.path;
+          env['SPACRON_TURN_TOKEN'] = statusChannel.channelId;
+        }
 
         // Config-file-based agents (Cursor, Codex CLI) — fire-and-forget
         injectMcpConfigForAgent(agentPreset, resolvedCwd).catch((e) =>
@@ -1171,6 +1215,14 @@ export async function createTerminalSession(
     }, resolvedCwd, get(terminalShell) || undefined, env);
 
     pty = await ptyPromise;
+    // The token is already in the process's environment; this is what makes it
+    // mean "session N" rather than "an agent this app started".
+    if (agentChannel) void bindAgentChannel(agentChannel, pty.id);
+    // `guaranteed: false` — the agent may simply forget to echo, so this must
+    // not buy the long idle window a Claude hook does.
+    if (statusChannel) {
+      attachTurnSignals(pty.id, { command: '', channelId: statusChannel.channelId });
+    }
     registerPtySession(pty, owningProjectId, resolvedCwd, targetPaneIndex, { agentPreset }, assignPane, isDev);
     return pty.id;
   } catch (err) {
@@ -1535,7 +1587,7 @@ export async function relaunchRestoredAgentSession(
     role: metadata.role ?? 'Agent',
   });
 
-  const mcpFlags = await mcpLaunchFlags(agentPreset, resolveSessionRoot(id) ?? undefined);
+  const mcpFlags = await mcpLaunchFlags(agentPreset, resolveSessionRoot(id) ?? undefined, id);
   // A restored session is a relaunch of an agent Spacron spawned, so it follows
   // the same permission mode as a fresh spawn — the yolo args belong on the
   // line written to the PTY, never in the preset key. (Env overrides like
@@ -2215,7 +2267,7 @@ export async function spawnAgentPreset(
   updateSessionTitle(sessionId, displayName);
   // Appended to the typed command, not the environment: Claude Code discovers
   // the Spacron MCP server only from `--mcp-config`. Empty for every other preset.
-  const mcpFlags = await mcpLaunchFlags(command, briefRoot ?? undefined);
+  const mcpFlags = await mcpLaunchFlags(command, briefRoot ?? undefined, sessionId);
 
   // `command` (not `launchCommand`) stays the preset key for detection, rules
   // files and display names; only the line written to the PTY carries the

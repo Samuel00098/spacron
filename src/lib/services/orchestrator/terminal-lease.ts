@@ -90,7 +90,9 @@ export async function leaseOrchestratorTerminal(args: LeaseOrchestratorTerminalA
   }
 
   if (prepared) {
-    attachTurnSignals(sessionId, prepared);
+    // Claude's `Stop` hook always fires, which is what earns the long idle
+    // window; the shell channel every agent also has does not.
+    attachTurnSignals(sessionId, prepared, { guaranteed: true });
     closeSignalsOnExit(sessionId);
   }
 

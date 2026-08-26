@@ -4,7 +4,7 @@ const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 const getSessionOutputLength = vi.hoisted(() => vi.fn(() => 0));
 vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer, getSessionOutputLength }));
 
-import { watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
+import { describeTurnEnd, watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
 import { __registerChannelForTest, __resetTurnSignalsForTest } from './agent-hook-signals';
 
 beforeEach(() => {
@@ -65,7 +65,7 @@ describe('watchLeasedAgentTurn', () => {
     await vi.advanceTimersByTimeAsync(10); // sees new bell
     // Quiescence after the bell — long past the grace window — corroborates end.
     await vi.advanceTimersByTimeAsync(3000);
-    await expect(p).resolves.toEqual({ kind: 'finished' });
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
   });
 
   it('does not finish on a bell that only appeared because the buffer slid', async () => {
@@ -125,7 +125,7 @@ describe('watchLeasedAgentTurn', () => {
     buf = 'streamed some real work '.repeat(20); // well past minWorkChars
     await vi.advanceTimersByTimeAsync(10); // activity, resets idle timer
     await vi.advanceTimersByTimeAsync(80); // no further growth past idleMs
-    await expect(p).resolves.toEqual({ kind: 'finished' });
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
   });
 
   it('does not idle-finish a tiny burst at the normal idle window', async () => {
@@ -152,7 +152,7 @@ describe('watchLeasedAgentTurn', () => {
     expect(settled).toBe('pending');
 
     await vi.advanceTimersByTimeAsync(QUIET_TURN_IDLE_MS);
-    await expect(p).resolves.toEqual({ kind: 'finished' });
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
   });
 
   it('aborts when shouldContinue turns false', async () => {
@@ -280,6 +280,71 @@ describe('watchLeasedAgentTurn', () => {
     expect(settled).toBe('pending');
     // Now let it go quiet; quiescence finishes it (not the earlier bell).
     await vi.advanceTimersByTimeAsync(80);
-    await expect(p).resolves.toEqual({ kind: 'finished' });
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
+  });
+});
+
+describe('describeTurnEnd', () => {
+  it('keeps the three states distinct', () => {
+    expect(describeTurnEnd({ kind: 'finished', via: 'declared' })).toEqual({
+      status: 'done',
+      reason: null,
+      declared: true,
+      endedBy: 'declared',
+    });
+    expect(describeTurnEnd({ kind: 'blocked', reason: 'which db?', via: 'declared' })).toEqual({
+      status: 'blocked',
+      reason: 'which db?',
+      declared: true,
+      endedBy: 'declared',
+    });
+    // The regression this exists for: a failure must not arrive as "needs
+    // input", which sends the user looking for a question nobody asked.
+    expect(describeTurnEnd({ kind: 'failed', reason: 'build broke', via: 'declared' })).toEqual({
+      status: 'failed',
+      reason: 'build broke',
+      declared: true,
+      endedBy: 'declared',
+    });
+  });
+
+  it('marks a guessed finish as not declared', () => {
+    expect(describeTurnEnd({ kind: 'finished', via: 'inferred' })?.declared).toBe(false);
+    // The two provenance fields are set together and must never disagree.
+    expect(describeTurnEnd({ kind: 'finished', via: 'inferred' })?.endedBy).toBe('inferred');
+  });
+
+  it('has nothing to say about an aborted watch', () => {
+    // The watch was torn down (task unlinked, session killed) — no event
+    // happened that the user should be told about.
+    expect(describeTurnEnd({ kind: 'aborted' })).toBeNull();
+  });
+});
+
+describe('what is allowed to interrupt', () => {
+  // The rule the notification path enforces: only a turn end the agent itself
+  // declared may raise a card, a chime or an OS notification. Everything else
+  // is inbox-only. `silent` is computed from exactly this pair in both
+  // `completeLeasedTask` and `notifyAdoptedTurnEnd`.
+  const silent = (o: Parameters<typeof describeTurnEnd>[0]) => {
+    const told = describeTurnEnd(o);
+    return told ? told.status === 'done' && !told.declared : null;
+  };
+
+  it('stays quiet for a finish nobody declared', () => {
+    // "Output stopped growing for 90 seconds" is equally a long compile, a slow
+    // tool call, or an agent parked at an untouched prompt.
+    expect(silent({ kind: 'finished', via: 'inferred' })).toBe(true);
+  });
+
+  it('speaks up when the agent said it finished', () => {
+    expect(silent({ kind: 'finished', via: 'declared' })).toBe(false);
+  });
+
+  it('always speaks up for needs-input and failures', () => {
+    // A missed "needs input" strands the user waiting on an agent that is
+    // waiting on them, so these interrupt even when inferred from the screen.
+    expect(silent({ kind: 'blocked', reason: 'which db?', via: 'inferred' })).toBe(false);
+    expect(silent({ kind: 'failed', reason: 'exit 1', via: 'inferred' })).toBe(false);
   });
 });

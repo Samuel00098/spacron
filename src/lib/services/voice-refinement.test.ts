@@ -10,6 +10,7 @@ vi.mock('$lib/services/ai-keychain', () => ({ isProviderApiKeyConfiguredLocal })
 
 import { buildVoiceProviderOrder, refineVoicePrompt } from './voice-refinement';
 import {
+  dictationVocabulary,
   voiceAiModelByProvider,
   voiceAiProvider,
   voiceInputProvider,
@@ -29,6 +30,7 @@ beforeEach(() => {
   isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'openrouter');
 
   voiceRefinementEnabled.set(true);
+  dictationVocabulary.set('');
   voiceInputProvider.set('webspeech');
   voiceAiProvider.set('groq');
   voiceAiModelByProvider.set({});
@@ -36,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   voiceRefinementEnabled.set(true);
+  dictationVocabulary.set('');
   voiceInputProvider.set('webspeech');
   voiceAiProvider.set('groq');
   voiceAiModelByProvider.set({});
@@ -59,7 +62,9 @@ describe('voice refinement provider chain', () => {
   it('can skip AI refinement and keep only the local cleanup', async () => {
     const result = await refineVoicePrompt('um please clean this up', { aiRefinement: false });
 
-    expect(result).toEqual({ text: 'um please clean this up', aiRefined: false });
+    // The mechanical pass now strips hesitation fillers too — that is part of
+    // "local cleanup", not the AI stage.
+    expect(result).toEqual({ text: 'please clean this up', aiRefined: false });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -70,5 +75,37 @@ describe('voice refinement provider chain', () => {
 
     expect(result).toEqual({ text: 'please transcribe this exactly', aiRefined: false });
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The dictation path polishes prose regardless of which STT engine produced
+   * it; only it may bypass the model-provider gate.
+   */
+  it('lets the dictation path polish even when model transcription is active', async () => {
+    voiceInputProvider.set('google');
+
+    const result = await refineVoicePrompt('please transcribe this exactly', {
+      allowForModelProviders: true,
+    });
+
+    expect(result).toEqual({ text: 'Write the thing clearly.', aiRefined: true });
+    expect(invoke).toHaveBeenCalled();
+  });
+
+  /** WhisperFlow's hotword trick: the user's own terms ride along to the model. */
+  it('passes the custom vocabulary list to the polish call', async () => {
+    dictationVocabulary.set('Spacron, Parakeet');
+
+    await refineVoicePrompt('clean this up');
+
+    const refineCall = invoke.mock.calls.at(-1)!;
+    expect((refineCall[1] as Record<string, unknown>).vocabulary).toBe('Spacron, Parakeet');
+  });
+
+  it('sends no vocabulary instruction when the list is empty', async () => {
+    await refineVoicePrompt('clean this up');
+
+    const refineCall = invoke.mock.calls.at(-1)!;
+    expect((refineCall[1] as Record<string, unknown>).vocabulary).toBeUndefined();
   });
 });

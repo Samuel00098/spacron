@@ -189,6 +189,49 @@ pub(crate) fn ensure_crypto_provider() {
 /// sockets cannot pile up.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Read the `--cert`/`--key` PEM pair off disk into the DER material rustls
+/// wants.
+///
+/// Split out of [`serve_tls`] so it is reachable from a test: `serve_tls` owns a
+/// listener and an accept loop that never returns, so nothing else in this file
+/// can exercise the parsing.
+///
+/// `pem_file_iter`/`from_pem_file` open the file themselves, so an unreadable
+/// path and malformed PEM both surface as one `PemError` — these split them back
+/// apart so the operator is told which of the two went wrong. This runs on a
+/// headless box where the printed error is the only diagnostic.
+fn load_tls_material(
+    cert: &Path,
+    key: &Path,
+) -> anyhow::Result<(
+    Vec<rustls_pki_types::CertificateDer<'static>>,
+    rustls_pki_types::PrivateKeyDer<'static>,
+)> {
+    use rustls_pki_types::pem::{Error as PemError, PemObject};
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert)
+        .map_err(|e| match e {
+            PemError::Io(io) => anyhow::anyhow!("--cert {:?}: {io}", cert),
+            other => anyhow::anyhow!("--cert {:?} is not valid PEM: {other}", cert),
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("--cert {:?} is not valid PEM: {e}", cert))?;
+    if certs.is_empty() {
+        return Err(anyhow::anyhow!("--cert {:?} contains no certificates", cert));
+    }
+    let key = PrivateKeyDer::from_pem_file(key).map_err(|e| match e {
+        PemError::Io(io) => anyhow::anyhow!("--key {:?}: {io}", key),
+        // A PEM file that parses but holds no key section at all — the old
+        // `rustls_pemfile::private_key(..) -> Option` shape reported this
+        // separately, and the message is worth keeping distinct from "the bytes
+        // are not PEM".
+        PemError::NoItemsFound => anyhow::anyhow!("--key {:?} contains no private key", key),
+        other => anyhow::anyhow!("--key {:?} is not valid PEM: {other}", key),
+    })?;
+    Ok((certs, key))
+}
+
 /// Serve the router over TLS (wss://) with the official axum TLS pattern:
 /// a tokio-rustls `TlsAcceptor` accept loop feeding hyper-util's auto builder,
 /// which performs WebSocket upgrades (the axum 0.8 Router implements
@@ -201,33 +244,13 @@ async fn serve_tls(
     key: PathBuf,
 ) -> anyhow::Result<()> {
     ensure_crypto_provider();
-    use std::io::BufReader;
     use std::sync::Arc as StdArc;
 
     use hyper_util::rt::TokioExecutor;
     use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
     use tokio_rustls::TlsAcceptor;
 
-    let certs: Vec<_> = {
-        let mut reader = BufReader::new(
-            std::fs::File::open(&cert)
-                .map_err(|e| anyhow::anyhow!("--cert {:?}: {e}", cert))?,
-        );
-        rustls_pemfile::certs(&mut reader)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("--cert {:?} is not valid PEM: {e}", cert))?
-    };
-    if certs.is_empty() {
-        return Err(anyhow::anyhow!("--cert {:?} contains no certificates", cert));
-    }
-    let key = {
-        let mut reader = BufReader::new(
-            std::fs::File::open(&key).map_err(|e| anyhow::anyhow!("--key {:?}: {e}", key))?,
-        );
-        rustls_pemfile::private_key(&mut reader)
-            .map_err(|e| anyhow::anyhow!("--key {:?} is not valid PEM: {e}", key))?
-            .ok_or_else(|| anyhow::anyhow!("--key {:?} contains no private key", key))?
-    };
+    let (certs, key) = load_tls_material(&cert, &key)?;
 
     let server_config = RustlsServerConfig::builder()
         .with_no_client_auth()
@@ -1803,5 +1826,85 @@ impl ExitSink for WsExitSink {
                     .into(),
             ))
             .is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tls_material_tests {
+    use super::load_tls_material;
+
+    /// A throwaway self-signed cert + its key, in the PEM shape an operator's
+    /// `--cert`/`--key` pair arrives in. Nothing here validates a chain — these
+    /// tests are about the parsing, not the trust decision.
+    fn cert_and_key() -> (String, String) {
+        let leaf = rcgen::generate_simple_self_signed(vec!["spacron.test".to_string()])
+            .expect("generate test cert");
+        (leaf.cert.pem(), leaf.key_pair.serialize_pem())
+    }
+
+    #[test]
+    fn a_valid_pem_pair_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, key_pem) = cert_and_key();
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        std::fs::write(&cert, cert_pem).unwrap();
+        std::fs::write(&key, key_pem).unwrap();
+
+        let (certs, _key) = load_tls_material(&cert, &key).expect("valid pair should load");
+        assert_eq!(certs.len(), 1);
+    }
+
+    #[test]
+    fn a_missing_cert_file_reports_the_path_not_a_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, key_pem) = cert_and_key();
+        let key = dir.path().join("key.pem");
+        std::fs::write(&key, key_pem).unwrap();
+
+        let err = load_tls_material(&dir.path().join("absent.pem"), &key)
+            .expect_err("a missing cert must fail")
+            .to_string();
+        assert!(
+            !err.contains("is not valid PEM"),
+            "an unreadable file must not be reported as malformed PEM: {err}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_cert_is_reported_as_bad_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, key_pem) = cert_and_key();
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\nnot base64\n").unwrap();
+        std::fs::write(&key, key_pem).unwrap();
+
+        let err = load_tls_material(&cert, &key)
+            .expect_err("garbage PEM must fail")
+            .to_string();
+        assert!(err.contains("--cert"), "error should name the flag: {err}");
+    }
+
+    /// A well-formed PEM file that simply holds no key keeps its own message,
+    /// rather than folding into the generic "not valid PEM" branch — this is the
+    /// case the pre-`rustls-pki-types` code reported through an `Option`.
+    #[test]
+    fn a_key_file_with_no_key_section_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, _) = cert_and_key();
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        std::fs::write(&cert, &cert_pem).unwrap();
+        // The cert PEM parses cleanly but contains no private key.
+        std::fs::write(&key, &cert_pem).unwrap();
+
+        let err = load_tls_material(&cert, &key)
+            .expect_err("a keyless key file must fail")
+            .to_string();
+        assert!(
+            err.contains("contains no private key"),
+            "expected the no-key message, got: {err}"
+        );
     }
 }

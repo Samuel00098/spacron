@@ -63,11 +63,17 @@ What actually dims the wallpaper is **two stacked scrims** in `global.css`:
 
 | layer | dark themes | light themes |
 | --- | --- | --- |
-| `body::after` flat wash | `rgba(--bg-primary-rgb, 0.16)` | `rgba(255,255,255,0.03)` |
-| `#app::before` gradient | black `0.10 → 0.20` | white `0.18 → 0.22` |
+| `body::after` flat wash | `rgba(--bg-primary-rgb, 0.10)` | `rgba(255,255,255,0.03)` |
+| `#app::before` gradient | black `0.06 → 0.13` | white `0.12 → 0.15` |
 
-At these values roughly 67–76% (dark) / 76–82% (light) of the wallpaper reads
-through. They were much heavier before 2026-08-07 (dark wash was `0.40`).
+At these values roughly 82–86% (dark) / ~78% (light) of the wallpaper reads
+through. History: dark wash was `0.40` before 2026-08-07, `0.16` until
+2026-08-26, then lightened again at the user's request ("images too dim") —
+the same day the **accent bloom halos** on `body::after` (the radial-gradient
+layers inherited from the base liquid-glass rule) were cut to ~1/3 strength
+(18/12/8% → 6/4/3%) under `has-bg-image`, because they read as a coloured haze
+over the image. The no-wallpaper look keeps full-strength blooms. Wallpapers
+have NO blur by default (`backgroundBlur` is unset in every preset ⇒ 0px).
 
 Both carry `!important` and override the `--frost-base` value that
 `interfaceTransparency` computes, so the Settings transparency slider does not

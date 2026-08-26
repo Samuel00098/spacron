@@ -72,6 +72,10 @@ export interface CompletionLike {
     reason?: string | null;
     summary?: string | null;
     summaryPending?: boolean;
+    /** How the turn end became known: reported, observed, or assumed. */
+    endedBy?: 'declared' | 'exit' | 'inferred';
+    /** True for a turn end that must not interrupt — inbox only. */
+    silent?: boolean;
   } | null;
 }
 
@@ -152,14 +156,36 @@ export function completionEntry(msg: CompletionLike, read: boolean): InboxEntry 
     read,
     agentName: c.agentName,
     title: c.taskTitle,
-    // A pending summary must not render as an empty row — fall back to the
-    // failure reason, then to a plain status line.
-    body: c.summary?.trim() || c.reason?.trim() || '',
+    body: completionBody(c),
     status: c.status,
     // Only a stalled or failed agent is actually waiting on the user; a clean
     // finish is information, not a task.
     actionable: c.status !== 'done',
   };
+}
+
+/**
+ * The line an inbox row actually shows.
+ *
+ * An inbox whose rows are a name and a title tells you nothing you did not
+ * already know — the whole point of the row is *what happened*. So this never
+ * returns an empty string: it prefers the real message and falls back through
+ * progressively weaker ones rather than rendering a blank.
+ *
+ * In order: the AI recap of the turn, then whatever the agent said itself (its
+ * `report_status` detail, the blocked prompt, the failure), then — only when
+ * there is genuinely nothing — a sentence stating the outcome, which at least
+ * distinguishes a turn the agent finished from one that merely went quiet.
+ */
+export function completionBody(c: NonNullable<CompletionLike['completion']>): string {
+  const said = c.summary?.trim() || c.reason?.trim();
+  if (said) return said;
+  if (c.summaryPending) return 'Summarising what it did…';
+  if (c.status === 'failed') return 'The agent stopped without finishing.';
+  if (c.status === 'blocked') return 'The agent is waiting for you.';
+  if (c.endedBy === 'inferred') return 'Went quiet — no completion reported.';
+  if (c.endedBy === 'exit') return 'The agent process exited.';
+  return 'Finished its turn.';
 }
 
 /**

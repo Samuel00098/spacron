@@ -101,6 +101,17 @@
   padding-left: 8px;
 }
 
+/* The "you need the other OS's server build" block: the warning and the button
+   that fixes it, kept together so the fix is never scrolled away from the
+   problem. Column layout with the button left-aligned under the text — a
+   right-aligned button here would read as a form action. */
+.rsw-binary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 /* A bare <code> inherits the UA's monospace default, which lands a size larger
    than the prose around it. Match the paragraph instead. */
 .rsw-desc code {

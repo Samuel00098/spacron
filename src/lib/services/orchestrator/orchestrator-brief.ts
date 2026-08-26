@@ -2,9 +2,10 @@
  * The Fleet Orchestrator protocol — the standing brief for an agent that runs
  * OTHER agents.
  *
- * Spacron exposes four MCP tools to every launched CLI agent (`list_agents`,
- * `spawn_agent`, `send_to_agent`, `read_agent_output` — see
- * `.spacron/memory/mcp-architecture.md`). Any agent holding those tools can
+ * Spacron exposes a handful of MCP tools to every launched CLI agent
+ * (`list_agents`, `spawn_agent`, `send_to_agent`, `read_agent_output`, and
+ * `report_status` — see `.spacron/memory/mcp-architecture.md` and
+ * `.spacron/memory/agent-report-status.md`). Any agent holding those tools can
  * dispatch a team, review what comes back, send fixes, and iterate. What it
  * cannot do is invent a reliable protocol for that on its own — the failure
  * modes are specific and repeatable (reviewing half-written work, two workers on
@@ -91,6 +92,12 @@ result**, so a round is one call, not a polling chore:
 
 Lower-level tools, for when you need to drive something yourself:
 \`list_agents()\`, \`spawn_agent()\`, \`send_to_agent()\`, \`read_agent_output()\`.
+
+\`report_status(state, detail)\` is how **you** reach the user. Call it with
+\`needs_input\` the moment you are blocked on them, and with \`done\` or \`failed\` when
+you stop. Spacron raises a notification from that call; without it the user only has
+terminal output they may not be looking at, and your turn ends on a timeout instead of
+when you actually finished.
 
 You also keep your own shell and file tools. Use them for \`git\` and for running tests.
 

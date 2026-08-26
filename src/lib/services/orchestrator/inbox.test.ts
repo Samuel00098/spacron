@@ -109,12 +109,71 @@ describe('completionEntry', () => {
     expect(entry?.body).toBe('exit 1');
   });
 
-  it('renders an empty body rather than "undefined" while the summary is pending', () => {
+  it('says the summary is coming rather than rendering a blank row', () => {
     const entry = completionEntry(
       completion({ completion: { status: 'done', agentName: 'Neo', taskTitle: 'T', elapsedSec: null, summaryPending: true } }),
       false,
     );
-    expect(entry?.body).toBe('');
+    expect(entry?.body).toBe('Summarising what it did…');
+  });
+
+  it('never leaves a row with no message at all', () => {
+    // An inbox row that is just a name and a title tells the user nothing they
+    // did not already know — the message is the point of the row.
+    for (const status of ['done', 'blocked', 'failed'] as const) {
+      const entry = completionEntry(
+        completion({ completion: { status, agentName: 'Neo', taskTitle: 'T', elapsedSec: null } }),
+        false,
+      );
+      expect(entry?.body).toBeTruthy();
+      expect(entry?.body).not.toContain('undefined');
+    }
+  });
+
+  it('distinguishes a reported finish, a bare exit and a guess', () => {
+    const quiet = completionEntry(
+      completion({
+        completion: {
+          status: 'done', agentName: 'Neo', taskTitle: 'T', elapsedSec: null, endedBy: 'inferred',
+        },
+      }),
+      false,
+    );
+    expect(quiet?.body).toBe('Went quiet — no completion reported.');
+
+    // A process that exits cleanly has ended, but that is not evidence the
+    // work was finished — `/exit` and Ctrl-D exit cleanly too.
+    const exited = completionEntry(
+      completion({
+        completion: {
+          status: 'done', agentName: 'Neo', taskTitle: 'T', elapsedSec: null, endedBy: 'exit',
+        },
+      }),
+      false,
+    );
+    expect(exited?.body).toBe('The agent process exited.');
+
+    const declared = completionEntry(
+      completion({ completion: { status: 'done', agentName: 'Neo', taskTitle: 'T', elapsedSec: null } }),
+      false,
+    );
+    expect(declared?.body).toBe('Finished its turn.');
+  });
+
+  it('prefers what the agent said over any canned line', () => {
+    const entry = completionEntry(
+      completion({
+        completion: {
+          status: 'done',
+          agentName: 'Neo',
+          taskTitle: 'T',
+          elapsedSec: null,
+          reason: 'Migrated 4 tables; tests pass.',
+        },
+      }),
+      false,
+    );
+    expect(entry?.body).toBe('Migrated 4 tables; tests pass.');
   });
 
   it('treats a clean finish as information and a stall as actionable', () => {

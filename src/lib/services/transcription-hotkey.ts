@@ -8,12 +8,14 @@ import {
   sessions,
   type TerminalSessionInfo,
 } from '$lib/stores/terminal';
-import { transcriptionAutoSend } from '$lib/stores/settings';
+import { transcriptionAutoSend, voiceInputProvider, voiceRefinementEnabled } from '$lib/stores/settings';
+import { recordTranscription } from '$lib/stores/voiceHistory';
 import {
   createVoiceInputSession,
   refineVoiceTranscript,
   type VoiceInputSession,
 } from '$lib/services/voice-input';
+import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { showToast } from '$lib/stores/notification';
 
 /**
@@ -64,8 +66,10 @@ import { showToast } from '$lib/stores/notification';
  *   recently (see `resolveTargetSession`).
  *
  * Transcript cleanup into TERMINALS is mechanical only (`refineVoiceTranscript`,
- * spoken punctuation + newline flattening). No AI refinement on purpose — it
- * must never reword shell commands.
+ * spoken punctuation + fillers + newline flattening). No AI refinement on
+ * purpose — it must never reword shell commands. Text fields DO get the AI
+ * polish pass when voice refinement is enabled (WhisperFlow-style cleanup);
+ * that is prose, not a command.
  */
 
 export type TranscriptionState = 'idle' | 'listening' | 'processing';
@@ -99,6 +103,24 @@ let keyHandlerInstalled = false;
 let accumulated: string[] = [];
 /** True once the user has ended the dictation and we're draining the last audio. */
 let finalizing = false;
+/** Guards against double delivery: onEnd can fire more than once during the
+ *  drain (teardown re-entry, a late engine event), and each of those used to
+ *  be an invitation to deliver again. */
+let deliveryStarted = false;
+/**
+ * Consecutive failed re-arm attempts after the capture graph stopped on its
+ * own mid-dictation (webspeech engines end the recognizer after long silences;
+ * devices hiccup). Reset by every successful `onStart`. Past the cap we stop
+ * retrying and deliver what was said rather than looping forever.
+ */
+let rearmFailures = 0;
+const MAX_REARM_FAILURES = 3;
+/**
+ * When the mic actually went live for THIS dictation, used only to stamp a
+ * duration onto the history entry. Zero means "never started", which is what
+ * makes the duration optional rather than a bogus 0 ms.
+ */
+let captureStartedAt = 0;
 
 function setPhase(next: TranscriptionState) {
   phase = next;
@@ -291,10 +313,12 @@ function handleKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
   event.preventDefault();
   event.stopPropagation();
-  // Escape ENDS the dictation and pastes (WhisperFlow-style). Ctrl/Cmd+Escape
-  // is the discard path, kept so a mistimed hotkey never has to fire a
-  // half-spoken sentence into a live terminal.
-  if (event.ctrlKey || event.metaKey) {
+  // Ctrl/Cmd+Escape is the discard path. Plain Escape ENDS the dictation and
+  // pastes (WhisperFlow-style) — but while the mic is still opening (phase not
+  // yet 'listening') there is nothing to end, and finalizeListening would
+  // silently ignore the key. That dead keypress read as "Escape needs two or
+  // three tries", so while starting it cancels instead.
+  if (event.ctrlKey || event.metaKey || starting) {
     abortTranscription();
   } else {
     finalizeListening();
@@ -327,23 +351,138 @@ function teardownMic() {
 function resetToIdle() {
   targetSessionId = null;
   targetField = null;
+  captureStartedAt = 0;
   accumulated = [];
   finalizing = false;
+  deliveryStarted = false;
   starting = false;
   setPhase('idle');
 }
 
 /**
- * Mechanical cleanup — spoken punctuation ("comma" → ",", "quote" → '"', …).
- * Terminals additionally get newlines flattened so the payload is always a
- * single shell-safe line; text fields keep them (multi-line dictation).
+ * Kick off delivery exactly once per dictation. `onEnd` can arrive several
+ * times while a dictation is being drained (the teardown stop re-enters it,
+ * webspeech fires its own), and every one of those used to be a fresh chance
+ * to paste the transcript twice.
+ */
+function beginDelivery(): void {
+  if (deliveryStarted) return;
+  deliveryStarted = true;
+  void deliver();
+}
+
+/**
+ * The capture graph stopped while the user was still dictating (webspeech
+ * engines end the recognizer after a long silence; devices hiccup). Re-arm
+ * instead of delivering — an unexpected onEnd used to be treated as "the mic
+ * died, ship what we have", which chopped the dictation at that silence. If
+ * re-arming keeps failing, hand over whatever was banked rather than binning
+ * it or looping.
+ */
+function scheduleRearm(): void {
+  queueMicrotask(() => {
+    if (finalizing || phase !== 'listening') return;
+    if (!voiceSession || rearmFailures >= MAX_REARM_FAILURES) {
+      if (accumulated.length) beginDelivery();
+      else {
+        teardownMic();
+        resetToIdle();
+      }
+      return;
+    }
+    void voiceSession.start().catch((error) => {
+      console.error('Transcription failed to re-arm:', error);
+      rearmFailures += 1;
+      scheduleRearm();
+    });
+  });
+}
+
+/**
+ * Mechanical cleanup — spoken punctuation ("comma" → ",", "quote" → '"', …)
+ * and hesitation fillers ("um", "uh" → gone). Terminals additionally get
+ * newlines flattened so the payload is always a single shell-safe line; text
+ * fields keep them (multi-line dictation).
  */
 function cleanTranscript(raw: string, allowNewLines: boolean): string | null {
   const text = refineVoiceTranscript(raw, { allowNewLines, spokenPunctuation: true });
   return text || null;
 }
 
-/** End the dictation: join everything captured, clean it, and place it. */
+/**
+ * A human name for the field a dictation landed in, for the history list.
+ * Everything is read defensively — this runs on whatever element happened to
+ * hold the caret, and a missing label must never cost the user their words.
+ */
+function describeField(target: EditableTarget): string {
+  const el = target.el as HTMLElement & { placeholder?: string; name?: string };
+  try {
+    const aria = el.getAttribute?.('aria-label')?.trim();
+    if (aria) return aria;
+    const placeholder = el.placeholder?.trim();
+    if (placeholder) return placeholder;
+    const name = el.name?.trim();
+    if (name) return name;
+    const id = el.id?.trim();
+    if (id) return id;
+  } catch {
+    /* exotic element — fall through to the generic label */
+  }
+  return 'Text field';
+}
+
+/** "Claude — Terminal 3" style label for a dictation that went to a terminal. */
+function describeSession(sessionId: number): string {
+  const find = (list: TerminalSessionInfo[]) => list.find((session) => session.id === sessionId);
+  const session = find(get(sessions)) ?? find(get(devSessions));
+  const name = session?.agentName?.trim() || session?.title?.trim();
+  return name ? `${name} (terminal ${sessionId})` : `Terminal ${sessionId}`;
+}
+
+/**
+ * Log the dictation, whatever happens to it next.
+ *
+ * Called BEFORE delivery on purpose: a transcript that could not be inserted
+ * (the field went away, the terminal session died) is exactly the one the user
+ * most wants to find in history and copy out by hand.
+ */
+function logToHistory(input: {
+  mechanical: string;
+  finalText: string;
+  field: EditableTarget | null;
+  sessionId: number | null;
+}): void {
+  try {
+    recordTranscription({
+      text: input.finalText,
+      raw: input.mechanical,
+      target: input.field ? 'field' : 'terminal',
+      targetLabel: input.field
+        ? describeField(input.field)
+        : input.sessionId != null
+          ? describeSession(input.sessionId)
+          : undefined,
+      provider: get(voiceInputProvider),
+      durationMs: captureStartedAt ? Date.now() - captureStartedAt : undefined,
+      refined: input.finalText !== input.mechanical,
+    });
+  } catch (error) {
+    // History is a nicety; delivery is the job. Never let one break the other.
+    console.error('Could not record the dictation in voice history:', error);
+  }
+}
+
+/**
+ * End the dictation: join everything captured, clean it, and place it.
+ *
+ * Cleanup is two-stage. `cleanTranscript` is the mechanical pass (spoken
+ * punctuation, filler words, newline flattening) that always runs — it is what
+ * terminal payloads get, since a shell command must never be reworded. Text
+ * fields additionally get the optional AI polish (`refineVoicePrompt`) when
+ * the user has voice refinement enabled: that is the WhisperFlow/Typeless
+ * "make it a clean paragraph" step, and it is safe here because the target is
+ * prose, not a command.
+ */
 async function deliver(): Promise<void> {
   setPhase('processing');
   const field = liveEditable(targetField);
@@ -354,31 +493,43 @@ async function deliver(): Promise<void> {
     resetToIdle();
     return;
   }
+  let finalText = text;
+  if (field && get(voiceRefinementEnabled)) {
+    try {
+      const refined = await refineVoicePrompt(text, { allowForModelProviders: true });
+      // A polish pass that comes back empty (provider chain exhausted, empty
+      // model reply) must never erase what was actually said.
+      if (refined.text) finalText = refined.text;
+    } catch (error) {
+      console.error('Transcript polish failed; keeping the mechanical cleanup:', error);
+    }
+  }
+  // Null means either "aimed at a terminal but retargeted mid-dictation" or
+  // "the remembered field is gone" — both want the terminal the user is in NOW.
+  const sessionId = field ? null : targetSessionId ?? resolveTargetSession();
+  logToHistory({ mechanical: text, finalText, field, sessionId });
   try {
     // The field this dictation is aimed at wins: the one the caret was in when
     // the capture started, or the one the user deliberately clicked into since.
     // Incidental focus moves never get here — see `retargetDuringCapture`.
     if (field) {
-      if (!insertIntoEditable(field, text)) {
+      if (!insertIntoEditable(field, finalText)) {
         showToast('Could not insert the transcript at the cursor.', 'error');
       }
       return;
     }
 
-    // Null means either "aimed at a terminal but retargeted mid-dictation" or
-    // "the remembered field is gone" — both want the terminal the user is in NOW.
-    const sessionId = targetSessionId ?? resolveTargetSession();
     if (sessionId == null) {
       showToast('Click into a terminal or text field first — nowhere to put the transcript.', 'error');
       return;
     }
     if (get(transcriptionAutoSend)) {
-      const sent = await sendAgentPromptDirect(sessionId, text);
+      const sent = await sendAgentPromptDirect(sessionId, finalText);
       if (!sent) {
         showToast('Could not reach the terminal session — transcript discarded.', 'error');
       }
     } else {
-      requestTerminalInput(sessionId, text);
+      requestTerminalInput(sessionId, finalText);
     }
   } catch (error) {
     console.error('Transcription delivery failed:', error);
@@ -405,59 +556,61 @@ async function startListening(): Promise<void> {
   accumulated = [];
   finalizing = false;
 
-  const session = createVoiceInputSession({
-    onStart: () => {
-      starting = false;
-      setPhase('listening');
-    },
-    onResult: (transcript) => {
-      // One utterance, not the whole dictation. Bank it and keep the mic live;
-      // `finalizeListening` is the only thing that ends a dictation.
-      const piece = transcript.trim();
-      if (piece) accumulated.push(piece);
-      // The flush that `stop()` triggers arrives here too — `onEnd` delivers
-      // right after, so don't re-arm into a session we're tearing down.
-      if (finalizing || phase !== 'listening') return;
-      // Re-arm out of band: `start()` re-entering the session from inside its
-      // own callback is asking for trouble, and a warm re-arm is cheap.
-      queueMicrotask(() => {
+  const session = createVoiceInputSession(
+    {
+      onStart: () => {
+        starting = false;
+        // A live capture graph means the re-arm machinery is healthy again.
+        rearmFailures = 0;
+        // Only the FIRST start of a dictation is its beginning — the mic is
+        // re-armed after every pause, and each of those calls this too.
+        if (!captureStartedAt) captureStartedAt = Date.now();
+        setPhase('listening');
+      },
+      onResult: (transcript) => {
+        // One utterance, not the whole dictation. Bank it and keep the mic live;
+        // `finalizeListening` is the only thing that ends a dictation.
+        const piece = transcript.trim();
+        if (piece) accumulated.push(piece);
+        // The flush that `stop()` triggers arrives here too — `onEnd` delivers
+        // right after, so don't re-arm into a session we're tearing down.
         if (finalizing || phase !== 'listening') return;
-        void voiceSession?.start().catch((error) => {
-          console.error('Transcription failed to re-arm:', error);
+        // Re-arm out of band: `start()` re-entering the session from inside its
+        // own callback is asking for trouble, and a warm re-arm is cheap.
+        queueMicrotask(() => {
+          if (finalizing || phase !== 'listening') return;
+          void voiceSession?.start().catch((error) => {
+            console.error('Transcription failed to re-arm:', error);
+          });
         });
-      });
-    },
-    onError: (message) => {
-      // Late mic errors while a transcript is already being delivered would
-      // clobber the processing state — the delivery path owns cleanup then.
-      if (phase === 'processing') return;
-      teardownMic();
-      resetToIdle();
-      showToast(message, 'error');
-    },
-    onEnd: () => {
-      // The mic is gone. If the user ended the dictation, this is the moment the
-      // last flushed utterance has landed — deliver everything banked.
-      //
-      // The phase check is load-bearing: `deliver` itself calls `teardownMic`,
-      // whose `stop()` fires `onEnd` a second time. Without it that re-entered
-      // delivery and sent the transcript twice.
-      if (finalizing) {
-        if (phase === 'listening') void deliver();
-        return;
-      }
-      // Otherwise the graph died on its own (device unplugged, OS interruption).
-      // Don't silently bin what was already said.
-      if (phase === 'listening') {
-        if (accumulated.length) {
-          void deliver();
-        } else {
-          teardownMic();
-          resetToIdle();
+      },
+      onError: (message) => {
+        // A failure during delivery (e.g. the final drain's STT call erroring)
+        // must not clobber the processing state — but silencing it entirely
+        // used to make a failed transcription look like lost words. Surface
+        // it; whatever was banked still delivers when onEnd lands.
+        showToast(message, 'error');
+        if (phase === 'processing') return;
+        teardownMic();
+        resetToIdle();
+      },
+      onEnd: () => {
+        // If the user ended the dictation, this is the moment the last flushed
+        // utterance has landed — deliver everything banked, exactly once.
+        if (finalizing) {
+          beginDelivery();
+          return;
         }
-      }
+        // Otherwise the capture stopped while the dictation was still live:
+        // webspeech engines auto-end after long silences, devices hiccup. Try
+        // to keep listening instead of delivering half a sentence — an older
+        // version treated every unexpected onEnd as "the mic died" and shipped
+        // the banked text at the first pause.
+        if (phase === 'listening') scheduleRearm();
+      },
     },
-  });
+    { mode: 'utterances' },
+  );
 
   if (!session.isSupported()) {
     showToast('Voice input is not supported with the current provider.', 'error');
@@ -485,29 +638,36 @@ async function startListening(): Promise<void> {
 function finalizeListening(): void {
   if (phase !== 'listening' || finalizing) return;
   finalizing = true;
+  // Instant feedback: flip the pill out of "Listening" NOW. Draining the last
+  // audio through STT takes a beat — seconds for local models on a long
+  // utterance — and the pill sitting on "Listening" through that drain is
+  // exactly why Escape felt like it needed two or three presses.
+  setPhase('processing');
   const session = voiceSession;
   if (!session) {
     // Nothing to drain — deliver whatever was banked.
-    void deliver();
+    beginDelivery();
     return;
   }
   // Leaving keep-warm makes stop() release the mic instead of parking it, so
-  // `onEnd` is guaranteed to fire; that is where delivery happens, once the
-  // final flushed utterance has landed in `accumulated`.
+  // `onEnd` fires once the final flushed utterance has landed in `accumulated`
+  // — that is where delivery happens.
   session.setConversationMode(false);
   session.stop();
 }
 
 /**
  * Discard the dictation without delivering. Bound to Ctrl/Cmd+Escape while
- * listening.
+ * listening (plain Escape while the mic is still opening).
  */
 export function abortTranscription(): void {
-  // Only a live capture can be cancelled — delivery in flight runs to completion.
-  if (phase !== 'listening') return;
-  // Clear state BEFORE releasing the mic. `teardownMic` stops the session, which
-  // fires `onEnd`, and onEnd's "the graph died on its own" branch would happily
-  // deliver the very transcript the user just asked to throw away.
+  // Only a live capture — or a startup still in flight — can be cancelled;
+  // delivery in flight runs to completion.
+  if (phase !== 'listening' && !starting) return;
+  // Clear state BEFORE releasing the mic. `teardownMic` stops the session,
+  // which fires `onEnd`, and a stale "the graph stopped on its own" reaction
+  // would happily deliver the very transcript the user just threw away — or
+  // resurrect a dictation they cancelled before the mic ever opened.
   resetToIdle();
   teardownMic();
 }

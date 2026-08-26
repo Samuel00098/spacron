@@ -134,3 +134,50 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+      # Publish this leg's headless server as its own release asset.
+      #
+      # Why it has to be here rather than in a build job of its own: an
+      # installer only ever carries the sidecar for the OS it was built on, so
+      # a Windows install had no way to deploy to a Linux VPS without a local
+      # Rust + zig cross-build. The wizard's "Get the Linux server" button
+      # downloads this asset instead (see `remote_download_server`), and one
+      # asset per matrix leg is exactly the set of platforms it can offer.
+      #
+      # No second cargo build: tauri's `beforeBuildCommand` already produced
+      # `binaries/spacron-server-<host triple>` during the step above. This
+      # only names, hashes and uploads it.
+      - name: Publish spacron-server artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'` because this runs under Git Bash on the Windows leg,
+          # where rustc's output is CRLF and the stray CR would corrupt the
+          # asset name.
+          triple="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"
+          ext=""
+          case "$triple" in *windows*) ext=".exe" ;; esac
+          asset="spacron-server-${triple}${ext}"
+          dir="src-tauri/binaries"
+          if [ ! -f "$dir/$asset" ]; then
+            echo "Expected $dir/$asset to exist after the build." >&2
+            ls -la "$dir" || true
+            exit 1
+          fi
+          # The client refuses to deploy a download whose digest doesn't match,
+          # so the sidecar file is not optional. macOS has no sha256sum.
+          (
+            cd "$dir"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$asset" | cut -d' ' -f1 > "$asset.sha256"
+            else
+              shasum -a 256 "$asset" | cut -d' ' -f1 > "$asset.sha256"
+            fi
+          )
+          # --clobber so re-running a release replaces the assets instead of
+          # failing on the second attempt.
+          gh release upload "$TAG" "$dir/$asset" "$dir/$asset.sha256" \
+            --repo Samuel00098/spacron-releases --clobber

@@ -38,8 +38,11 @@ export type OrchestratorAction =
    * `role` assigns a team charter (coordinator/builder/scout/reviewer) when the
    * spawn is part of a divided plan. Set `skipWorktree` to true for admin/
    * release tasks (tagging, pushing, changelogs) that need the main branch.
+   * `panelTaskId` is never set by the brain — only by an in-app dispatch that
+   * launched this agent FROM a task-panel card, so completion can offer that
+   * card a one-click move to Done.
    */
-  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; skipWorktree?: boolean; placement?: SpawnPlacement | null }
+  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; skipWorktree?: boolean; placement?: SpawnPlacement | null; panelTaskId?: string | null }
   /** Push a new prompt to an already-running agent, addressed by its name. */
   | { kind: 'send'; target: string; prompt: string }
   /** Give a running agent a name (or rename it). */
