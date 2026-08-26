@@ -58,8 +58,18 @@ opencode.json
 src-tauri/cargo_check.log
 src-tauri/cargo_output*.txt
 
-# Per-project local data (daily notes, tasks) written by the app at runtime
-.spacron/
+# Per-project local data (daily notes, tasks, agent worktrees, reports) written
+# by the app at runtime.
+#
+# `.spacron/*` and not `.spacron/`: git does not descend into an excluded
+# DIRECTORY, so a `!` re-include underneath one is never evaluated. Excluding
+# the contents instead is what lets the exception below work.
+.spacron/*
+# The shared agent memory is the exception — durable knowledge whose entire
+# purpose is that the NEXT agent, on any checkout, starts with it. Kept out of
+# the blanket rule above, which was written for runtime scratch and swept the
+# notes up with it (5 of 48 ended up tracked by accident, 43 did not).
+!.spacron/memory/
 /.worktrees/
 .vercel
 
