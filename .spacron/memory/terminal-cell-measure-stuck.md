@@ -61,5 +61,3 @@ either account.
 
 - [[terminal-fit-host-padding]] — the `.xterm-fit-host` indirection and the
   fractional-DPR overshoot clamp.
-- [[terminal-rendering-stability]] — atlas eviction gating, Unicode 11 widths,
-  DPI rescale.

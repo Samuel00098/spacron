@@ -1,7 +1,7 @@
 # `report_status` — the agent tells us, we stop guessing
 
 Shipped 2026-08-25. The first deterministic turn signal that is not Claude-only,
-built after reading how T3 Code does it ([[t3code-turn-signals]]).
+built after reading how T3 Code (github.com/pingdotgg/t3code) does it.
 
 ## The two halves
 
@@ -220,5 +220,5 @@ per-launch token into the shared config file just before spawning — an agent
 that re-reads its config later would then present another agent's token, and a
 misattributed report is worse than an unattributed one.
 
-Related: [[t3code-turn-signals]], [[agent-turn-detection]],
+Related: [[agent-turn-detection]]
 [[blocked-reason-is-raw-pty]], [[agent-inbox-unread]]

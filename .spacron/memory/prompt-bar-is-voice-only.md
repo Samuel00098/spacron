@@ -46,4 +46,4 @@ Gotcha: the strip keys off `hasStagedContent` (text **or** attachments), not
 text. Preview can send a screenshot with no text, and keying off text alone left
 that chip with no way to send it.
 
-Related: [[tools-menu-launcher]] (the trailing controls the bar still renders).
+Related: (the trailing controls the bar still renders).

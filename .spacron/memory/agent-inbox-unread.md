@@ -67,7 +67,7 @@ per event, persisted unread). Three changes in `AgentNotifications.tsx` +
 1. **Dedupe.** A completion used to fire BOTH an orchestrator toast AND the
    floating card. The card is now the single visual surface: `completeLeasedTask`
    and `notifyAdoptedTurnEnd` keep only the chime, and `terminal.ts`'s exit toast
-   is gated on `isOrchestratorTrackedSession` (see [[completion-announcements]]).
+   is gated on `isOrchestratorTrackedSession`.
 2. **SVG status glyphs.** `components/orchestrator/statusIcons.tsx` replaces the
    emoji in the inbox rows and the notification cards — `currentColor` + per-
    status CSS classes (`ok`/`bad`/`warn`/`info`/`accent`), so light/dark is
@@ -95,7 +95,7 @@ Hand-launched (adopted) agents used to reach the inbox never — only a transien
 toast. `appendAdoptedTurnCard` (in `stores/orchestrator.ts`) now drops a
 completion card per turn end (and on process exit), with **no AI summary**, and
 the task stays `in-progress`. Done turns are informational in the inbox;
-blocked/failed ones are actionable. See [[completion-announcements]].
+blocked/failed ones are actionable.
 
 ## e2e wiring test
 
@@ -118,5 +118,4 @@ path is ever added, it must do both — `acknowledge` is the both-bits helper.
 
 `InboxState` now includes a `cleared: string[]` list of entry IDs. Calling `clearInbox(projectId, ids)` marks entries as cleared (as well as read & dismissed), and `mergeInboxEntries` filters out any entries in `cleared`. The `InboxPanel` header provides a "Clear" button to clear all current inbox entries, and each row has a row-level clear button on hover.
 
-Related: [[completion-announcements]], [[premium-feel-fixes]], [[glass-panel-recipe]],
-[[accent-and-icon-treatment]], [[per-project-persistence]]
+[[per-project-persistence]]

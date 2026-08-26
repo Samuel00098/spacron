@@ -20,7 +20,6 @@ The old Focus mode icon in the prompt bar trailing controls has been removed. Th
      - `fleet`: Tiles all active agents
      - `ToolsMenu`: Launcher popover for rooms, workspace drawers, and utilities
 
-Related notes: [[tools-menu-launcher]]
 
 ## The Split button must switch the mode (regression fixed 2026-08-24)
 

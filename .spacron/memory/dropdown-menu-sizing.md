@@ -31,4 +31,3 @@ intact, exactly backwards. Both ellipsize now.
 If you add a picker with a deliberately narrow trigger, you no longer need to
 widen it just so the menu is readable.
 
-Related: [[mobile-emulator-pane-layout]]

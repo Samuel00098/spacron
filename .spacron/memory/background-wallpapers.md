@@ -28,7 +28,7 @@ directory before trusting any number here.
   wildflowers) and land at **100–325 KB** even at quality 60. Squeezing them
   into 120 KB needs quality ~15–20 and visibly falls apart. Judge a new file
   by eye, not against the band. Whole directory is ~3.1 MB.
-- **Overlay:** UI overlay operates at 75% opacity with glassmorphism blur (see [[glass-panel-recipe]]).
+- **Overlay:** UI overlay operates at 75% opacity with glassmorphism blur.
 - **Prompt Reference:** [background-generation-prompt.md](file:///C:/Users/samue/OneDrive/Documents/Projects/Real%20Projects/spacron/background-generation-prompt.md)
 
 ## Adding a new wallpaper pair
@@ -110,7 +110,7 @@ If you pick this up again, the three things that will bite you, in order:
    `important` priority. Harmless today only because both sides hold the same
    hardcoded neutral.
 
-The wallpaper's own visibility ([[background-precedence]] and the scrims above)
+The wallpaper's own visibility (the scrims above)
 is the safer lever for making a theme feel like its image.
 
 ## Theme Mapping

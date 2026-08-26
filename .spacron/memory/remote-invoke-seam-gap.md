@@ -59,4 +59,4 @@ tail back over the WS, or write the settings file locally too (which only works
 when the agent also runs locally). Until then, treat "hooks + remote" as
 unsupported rather than working.
 
-Related: [[agent-turn-detection]], [[t3code-turn-signals]]
+Related: [[agent-turn-detection]]

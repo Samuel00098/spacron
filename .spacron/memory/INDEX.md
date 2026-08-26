@@ -16,7 +16,6 @@ short enough that it says what the note is *about*, never what it says.
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
 - [agent-inbox-unread](agent-inbox-unread.md) — why "read" and "dismissed" have to stay separate bits
 - [notification-card-design](notification-card-design.md) — colour rules for the agent notification card; never tint a whole surface
-- [t3code-turn-signals](t3code-turn-signals.md) — how T3 Code signals turns without screen-scraping (external reference)
 - [transcription-hotkey](transcription-hotkey.md) — F9 dictation: pause/end semantics and its lifecycle ordering traps
 - [voice-is-realtime-only](voice-is-realtime-only.md) — TTS is deleted app-wide; speech-to-speech is realtime-engine only
 - [voice-history](voice-history.md) — the two durable voice logs, and where retention lives
@@ -31,24 +30,16 @@ short enough that it says what the note is *about*, never what it says.
 - [shortcut-key-matching](shortcut-key-matching.md) — `matchShortcut` compares produced characters, not key codes
 - [dropdown-menu-sizing](dropdown-menu-sizing.md) — the shared `Dropdown` sizes to content, then clamps in a second layout pass
 - [command-palette-registry](command-palette-registry.md) — the palette auto-registers menu, layout and settings actions; merge, never replace
-- [tools-menu-launcher](tools-menu-launcher.md) — every launcher lives in the Tools dropdown; the room dock is gone
-- [fleet-in-right-drawer](fleet-in-right-drawer.md) — Agent Fleet is a right-drawer tool, not a centre room
-- [project-hud-in-left-sidebar](project-hud-in-left-sidebar.md) — Project HUD is a left-drawer tab, not a modal overlay
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the `expandedRoom` invariants, and why Split must switch `ambientLayout`
 - [per-project-persistence](per-project-persistence.md) — how a project remembers its stage, and what the sanitiser must learn
-- [sketch-room](sketch-room.md) — Sketch is a native drawing room, not excalidraw.com
 - [preview-iframe-bridge](preview-iframe-bridge.md) — the preview iframe is cross-origin; the postMessage contract
 - [preview-room-is-persistent](preview-room-is-persistent.md) — preview is hidden, not unmounted, so the page survives a room switch
 - [preview-responsive-viewport](preview-responsive-viewport.md) — phone/tablet preview is a scaled viewport, with no device chassis
 - [terminal-cell-measure-stuck](terminal-cell-measure-stuck.md) — a pane opened at 0x0 wedges the grid at 80x24 for its whole life
 - [terminal-fit-host-padding](terminal-fit-host-padding.md) — FitAddon cannot see container padding; open xterm into a zero-padding host
-- [terminal-rendering-stability](terminal-rendering-stability.md) — the settings that keep terminal rendering at native parity
 - [session-close-label](session-close-label.md) — name a closed terminal from a snapshot, never from its process-wide id
-- [markdown-preview-default](markdown-preview-default.md) — `.md` opens in preview mode; the toggle persists per file
-- [text-editor-styling](text-editor-styling.md) — the editor is a distraction-free document canvas
 - [edge-light-gating](edge-light-gating.md) — the traveling edge light runs only while a room is working
 - [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`
-- [relative-window-minimize-size](relative-window-minimize-size.md) — unmaximizing resizes relative to the monitor work area
 - [resource-monitor-removed](resource-monitor-removed.md) — the CPU/RAM chip and its Rust side are deleted; `sysinfo` stays
 
 ## Remote workspace & mobile

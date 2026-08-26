@@ -62,4 +62,4 @@ would fix it but contradicts the existing test
 `'frees the terminal number again once an agent reverts to a shell'`, which
 asserts count-based numbering on purpose. Needs a product call before changing.
 
-Related: [[terminal-rendering-stability]], [[agent-inbox-unread]]
+Related: [[agent-inbox-unread]]

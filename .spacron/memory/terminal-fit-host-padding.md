@@ -52,5 +52,3 @@ Files: `src/lib/components/terminal/TerminalPane.tsx` (fitHostRef, open/observe/
 
 ## Related notes
 
-- [[terminal-rendering-stability]] — atlas eviction gating, Unicode 11 widths,
-  DPI rescale: the other half of native-parity rendering.

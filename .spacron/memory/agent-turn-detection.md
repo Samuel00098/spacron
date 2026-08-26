@@ -53,9 +53,6 @@ How Spacron decides an agent CLI has ended its turn, and the footguns in that pa
   a silent hook failure doesn't false-complete during normal long tool calls.
 
 ## Related
-- [[terminal-lease]] — `leaseOrchestratorTerminal` installs hooks before launch.
-- [[agent-notification-ping]] — the corner-card / OS-notification gating on visibility.
-- [[reviewer-verdict-signals]] — same nonce-sentinel trust model, for reviewer verdicts.
 
 ## 2026-08-25: three states, and `via` (declared vs inferred)
 

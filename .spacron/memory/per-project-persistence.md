@@ -46,5 +46,5 @@ project with none falls through to that default stage.
 The lesson generalises — when a per-project value "doesn't persist", check for a
 later unconditional write in the same function before suspecting the save.
 
-Related: [[fleet-in-right-drawer]], [[split-maximize-zoom-layout]],
+Related: [[split-maximize-zoom-layout]]
 [[preview-room-is-persistent]]

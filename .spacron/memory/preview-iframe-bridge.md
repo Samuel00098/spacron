@@ -51,4 +51,4 @@ returns an HTML error page (`preview_error_response`) that posts
 `iframeError` — it is cleared when a new load starts and when a page reports its
 own location (an error page never does).
 
-Related: [[markdown-preview-default]], [[preview-room-is-persistent]]
+Related: [[preview-room-is-persistent]]

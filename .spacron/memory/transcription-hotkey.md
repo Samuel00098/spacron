@@ -28,35 +28,26 @@ Two ordering traps, both now covered by tests:
   fires `onEnd`, and without the reset-first order a stale end event could
   still deliver or resurrect what the user just cancelled.
 
-## The two end-of-turn signals (onTurnComplete vs onEnd)
+## The two end-of-turn signals, and cumulative vs utterances mode
 
-The session (`voice-input.ts`) fires TWO distinct lifecycle signals, and
-confusing them caused both headline bugs of 2026-08-25:
+Both of these now have their full explanation as doc comments at the definition
+site in `voice-input.ts` — on `onTurnComplete` in `VoiceInputCallbacks`, and on
+`VoiceInputSessionOptions`. **Read them there, not here.** They used to be
+written out in this note as well, and a second copy of a rule is the copy that
+goes stale.
 
-- **`onTurnComplete`** — every finalized turn, warm park or teardown. Consumers
-  that commit after each utterance (TasksPanel task dictation) listen here.
-- **`onEnd`** — the capture graph is GONE (user stop, teardown-while-busy,
-  fatal). Only that.
+What this note adds, because it is about the *hotkey* rather than the session:
 
-`finishGoogleTranscription` used to fire `onEnd` after every turn including
-warm parks; the hotkey service reads any `onEnd` while listening as "mic died",
-so every thinking pause delivered half a dictation. If you add a consumer:
-commit-per-turn ⇒ `onTurnComplete`; session-over ⇒ `onEnd`. Never re-merge them.
-
-Webspeech engines (Chrome) ALSO auto-end continuous recognition after long
-silences — an `onEnd` that is not the user's doing. The hotkey answers it with
-`scheduleRearm()` (bounded by `MAX_REARM_FAILURES`, reset on every `onStart`;
-past the cap it delivers whatever was banked instead of looping).
-
-## Webspeech duplication: cumulative vs utterances mode
-
-`createVoiceInputSession(callbacks, { mode })`. Web Speech re-sends the WHOLE
-result list on every `onresult`; `'cumulative'` (default) forwards that full
-draft each time (live-preview consumers replace their draft — fine).
-`'utterances'` emits only segments finalized since the previous event (tracking
-`finalsEmitted`). Dictation banking accumulates whatever it receives, so it
-MUST use `'utterances'` — feeding it cumulative payloads is the reported
-"says everything twice" bug ("hello", then "hello world" → "hello hello world").
+- The hotkey reads any `onEnd` while listening as "the mic died", which is why
+  the split matters to it more than to other consumers. If you add a consumer:
+  commit-per-turn ⇒ `onTurnComplete`; session-over ⇒ `onEnd`. Never re-merge.
+- Webspeech engines also auto-end continuous recognition after long silences —
+  an `onEnd` nobody asked for. The hotkey answers it with `scheduleRearm()`,
+  bounded by `MAX_REARM_FAILURES` and reset on every `onStart`; past the cap it
+  delivers whatever was banked rather than looping or binning it.
+- Dictation banking accumulates what it receives, so it MUST pass
+  `'utterances'`. Cumulative payloads into an accumulating consumer is the
+  "says everything twice" bug.
 
 ## Ending feels instant (the exit-lag fix)
 

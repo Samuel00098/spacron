@@ -37,30 +37,22 @@ keeps its frost.
 ## Execution & keyboard contract
 
 - `executeCommand` closes the palette **first**, then runs the action inside
-  try/catch (async failures toast). Reason: the overlay is z-index 9999 while
-  `SettingsModal` is 9000 and `KnowledgeGraphOverlay.css` 1000 — if a launched
-  surface raced the unmount it would open underneath the palette and look like
-  nothing happened. Never reorder this.
+  try/catch (async failures toast). Reason: the palette overlay sits above the
+  surfaces it launches (`SettingsModal` and friends), so if one raced the
+  unmount it would open *underneath* the palette and look like nothing
+  happened. Never reorder this.
 - Keys: ArrowUp/Down wrap, PageUp/Down ±5, Home/End, Enter runs, Esc closes;
   selection follows via `scrollIntoView(block:'nearest')`; empty result set
   guards the modulo-NaN trap; typing clamps the selection into the shrunk list.
 
-## "Memory Graph" is real — and is a Media-Player-style room
+## The Memory Graph is gone (v2.0.0)
 
-The graph renders the wikilinked notes under `.spacron/memory/` as an SVG
-graph (`FloatingKnowledgeGraph.tsx`, solid surface, left-docked default,
-node click opens the note's markdown in the editor via
-`useEditorStore.openFile(root/.spacron/memory/<slug>.md)`).
-
-It follows the FloatingYouTube contract exactly, do not fork from it:
-`memoryGraphVisible` lives on LayoutState (types + zustand defaults +
-ShellLayoutKeys union + layoutState selector in AppShell), toggled by
-`toggleMemoryGraphVisible` (zustand impl mirrors `toggleYoutubeVisible`
-incl. the minimize→`spacron-memory-graph-restore` event dance), wrapper in
-`stores/layout.ts`, launcher in AppShell `panelItems` (so Tools → Rooms AND
-the palette get it via the bridge), mounted beside FloatingYouTube at the
-AppShell root. `knowledgeGraphOpen` was **deleted** — if you find a reference,
-it is stale.
+This note used to document a "Memory Graph" room that visualised the wikilinked
+notes under `.spacron/memory/`. It was **removed in v2.0.0** — the overlay, its
+palette command, `memoryGraphVisible`, `toggleMemoryGraphVisible` and
+`knowledgeGraphOpen` no longer exist anywhere. The knowledge store it drew from
+is untouched and still backs the orchestrator's memory; only the visualisation
+went. Do not resurrect it from this note or from an older copy of it.
 
 ## Palette arrow-key scrolling gotchas
 
@@ -71,4 +63,3 @@ Two bugs made arrows feel broken, both fixed — don't regress them:
    a stationary cursor, mouseenter yanks selection back. Guarded by
    `pointerMovedRef` (set on window pointermove, cleared by any nav key).
 
-Related: [[tools-menu-launcher]], [[fleet-in-right-drawer]], [[project-hud-in-left-sidebar]]
