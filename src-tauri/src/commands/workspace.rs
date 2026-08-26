@@ -1138,24 +1138,90 @@ pub(crate) fn is_under(path: &std::path::Path, area: &std::path::Path) -> bool {
     }
 }
 
+/// The exclude rule Spacron manages, and the one exception to it.
+///
+/// `/.spacron/*` rather than `/.spacron/` is load-bearing: **git never descends
+/// into an excluded directory**, so a `!` re-include for anything underneath one
+/// is never even evaluated. Excluding the *contents* is the only arrangement in
+/// which the exception below can take effect.
+const SPACRON_EXCLUDE_RULE: &str = "/.spacron/*";
+/// `.spacron/memory/` is the shared agent memory — durable notes whose entire
+/// purpose is that the next agent, on any checkout, starts with them. They are
+/// meant to be committed, so they must not be swept up by the runtime-scratch
+/// rule above.
+const SPACRON_MEMORY_EXCEPTION: &str = "!/.spacron/memory/";
+
+/// The blanket forms written before the memory directory was carved out.
+///
+/// These are migrated rather than left alone: the rule is written into a
+/// per-clone file that is never committed, so a fix shipped only in
+/// `.gitignore` would never reach a machine that already has one of these. Any
+/// checkout that opens a project on a build carrying this code gets repaired.
+fn is_legacy_spacron_rule(line: &str) -> bool {
+    matches!(
+        line.trim(),
+        "/.spacron/" | ".spacron/" | "/.spacron" | ".spacron"
+    )
+}
+
+/// Rewrite the managed rules in an existing `.git/info/exclude` body.
+///
+/// Returns `None` when nothing needs to change, so an untouched file is never
+/// rewritten. Split out from the IO so it can be tested directly.
+fn apply_spacron_exclude_rules(current: &str) -> Option<String> {
+    let has_rule = current.lines().any(|l| l.trim() == SPACRON_EXCLUDE_RULE);
+    let has_exception = current
+        .lines()
+        .any(|l| l.trim() == SPACRON_MEMORY_EXCEPTION);
+    let has_legacy = current.lines().any(is_legacy_spacron_rule);
+
+    if has_rule && has_exception && !has_legacy {
+        return None;
+    }
+
+    // Replace the first legacy rule in place — keeping its position preserves
+    // whatever comment sits above it — and drop any later duplicates.
+    let mut out: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for line in current.lines() {
+        if is_legacy_spacron_rule(line) {
+            if !replaced {
+                out.push(SPACRON_EXCLUDE_RULE.to_string());
+                out.push(SPACRON_MEMORY_EXCEPTION.to_string());
+                replaced = true;
+            }
+            continue;
+        }
+        // Drop existing managed lines so they can be re-emitted as a pair,
+        // rather than leaving a rule stranded without its exception.
+        if line.trim() == SPACRON_EXCLUDE_RULE || line.trim() == SPACRON_MEMORY_EXCEPTION {
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !replaced {
+        out.push(SPACRON_EXCLUDE_RULE.to_string());
+        out.push(SPACRON_MEMORY_EXCEPTION.to_string());
+    }
+
+    let body = out.join("\n");
+    Some(format!("{}\n", body.trim_end()))
+}
+
 /// Keep the worktree checkouts out of the user's git surface by excluding the
-/// whole `.spacron/` data directory in `.git/info/exclude` (local-only, never
-/// committed). Without this a nested worktree shows up as an untracked directory
-/// in the project's own status — and `git add -A` would try to embed it.
+/// `.spacron/` data directory's contents in `.git/info/exclude` (local-only,
+/// never committed). Without this a nested worktree shows up as an untracked
+/// directory in the project's own status — and `git add -A` would try to embed
+/// it. The shared agent memory is exempted; see [`SPACRON_MEMORY_EXCEPTION`].
 /// Best-effort: a linked worktree or a repo without an exclude file is skipped.
 fn ensure_spacron_excluded(root: &std::path::Path) {
     let exclude = root.join(".git").join("info").join("exclude");
     let Ok(current) = std::fs::read_to_string(&exclude) else {
         return; // no plain .git/info/exclude — not a standard checkout
     };
-    if current
-        .lines()
-        .any(|l| matches!(l.trim(), "/.spacron/" | ".spacron/" | "/.spacron" | ".spacron"))
-    {
-        return;
+    if let Some(next) = apply_spacron_exclude_rules(&current) {
+        let _ = std::fs::write(&exclude, next);
     }
-    let next = format!("{}\n/.spacron/\n", current.trim_end());
-    let _ = std::fs::write(&exclude, next);
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -3778,6 +3844,107 @@ pub fn workspace_get_recent_daily_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- .git/info/exclude management ---
+
+    #[test]
+    fn legacy_blanket_rule_is_migrated_in_place() {
+        // The bug this repairs: the blanket rule hid `.spacron/memory/` — the
+        // shared agent notes, which are meant to be committed — from git
+        // entirely. It lives in a per-clone file that is never committed, so
+        // shipping a fixed `.gitignore` alone would never reach a machine that
+        // already had one of these written.
+        let before = "# Spacron: local MCP configs\n.mcp.json\n/.spacron/\n/CLAUDE.md\n";
+        let after = apply_spacron_exclude_rules(before).expect("must rewrite a legacy rule");
+        assert_eq!(
+            after, "# Spacron: local MCP configs\n.mcp.json\n/.spacron/*\n!/.spacron/memory/\n/CLAUDE.md\n",
+            "the pair must land where the old rule was, so its comment still applies and \
+             surrounding entries keep their order"
+        );
+    }
+
+    #[test]
+    fn every_legacy_spelling_is_recognised() {
+        for spelling in ["/.spacron/", ".spacron/", "/.spacron", ".spacron"] {
+            let before = format!("*.log\n{spelling}\n");
+            let after = apply_spacron_exclude_rules(&before)
+                .unwrap_or_else(|| panic!("{spelling} should be migrated"));
+            assert!(after.contains(SPACRON_EXCLUDE_RULE));
+            assert!(after.contains(SPACRON_MEMORY_EXCEPTION));
+            assert!(
+                !after.lines().any(is_legacy_spacron_rule),
+                "{spelling} survived the migration"
+            );
+        }
+    }
+
+    #[test]
+    fn an_already_correct_file_is_left_alone() {
+        // Returning None is what stops a rewrite on every worktree creation.
+        let current = "*.log\n/.spacron/*\n!/.spacron/memory/\n";
+        assert!(apply_spacron_exclude_rules(current).is_none());
+    }
+
+    #[test]
+    fn a_rule_stranded_without_its_exception_is_repaired() {
+        // The exception is useless on its own and the rule is harmful on its
+        // own, so they are only ever written as a pair.
+        let after = apply_spacron_exclude_rules("*.log\n/.spacron/*\n")
+            .expect("a rule with no exception must be repaired");
+        assert!(after.contains(SPACRON_MEMORY_EXCEPTION));
+        assert_eq!(after.matches(SPACRON_EXCLUDE_RULE).count(), 1);
+    }
+
+    #[test]
+    fn duplicate_legacy_rules_collapse_to_one_pair() {
+        let after = apply_spacron_exclude_rules("/.spacron/\n*.log\n.spacron/\n")
+            .expect("duplicates must be collapsed");
+        assert_eq!(after.matches(SPACRON_EXCLUDE_RULE).count(), 1);
+        assert_eq!(after.matches(SPACRON_MEMORY_EXCEPTION).count(), 1);
+    }
+
+    #[test]
+    fn a_legacy_rule_appended_after_the_managed_pair_is_removed() {
+        // Observed for real: an older build appends its blanket rule at the end
+        // of a file that already carries the pair, because the pair does not
+        // match its legacy check. Left there it wins on precedence (later rules
+        // override earlier ones) and silently re-hides the notes.
+        let before = "\
+.mcp.json
+.spacron/*
+!.spacron/memory/
+/CLAUDE.md
+.spacron/
+";
+        let after = apply_spacron_exclude_rules(before).expect("the trailing legacy rule must go");
+        assert!(
+            !after.lines().any(is_legacy_spacron_rule),
+            "a blanket rule survived and would re-hide the memory notes: {after}"
+        );
+        assert_eq!(after.matches(SPACRON_EXCLUDE_RULE).count(), 1);
+        assert_eq!(after.matches(SPACRON_MEMORY_EXCEPTION).count(), 1);
+        // The exception must still come after the rule it narrows.
+        let rule_at = after.find(SPACRON_EXCLUDE_RULE).unwrap();
+        let exc_at = after.find(SPACRON_MEMORY_EXCEPTION).unwrap();
+        assert!(rule_at < exc_at, "the exception must follow its rule");
+    }
+
+    #[test]
+    fn rules_are_appended_when_the_file_has_none() {
+        let after = apply_spacron_exclude_rules("# just comments\n").expect("must append");
+        assert!(after.ends_with("/.spacron/*\n!/.spacron/memory/\n"));
+    }
+
+    #[test]
+    fn the_exclude_rule_targets_contents_not_the_directory() {
+        // Guard on the one detail that makes the exception reachable at all:
+        // git does not descend into an excluded DIRECTORY, so `/.spacron/`
+        // would make `!/.spacron/memory/` dead text. If someone "tidies" the
+        // trailing `/*` away, this fails rather than silently re-hiding the
+        // notes on every machine.
+        assert!(SPACRON_EXCLUDE_RULE.ends_with("/*"));
+        assert!(!is_legacy_spacron_rule(SPACRON_EXCLUDE_RULE));
+    }
 
     // --- porcelain parsing ---
 
