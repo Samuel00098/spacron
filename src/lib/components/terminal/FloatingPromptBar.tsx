@@ -1062,8 +1062,11 @@ export default function FloatingPromptBar({
       handleExplorerDragEndRef.current(event)) as EventListener;
 
     document.addEventListener('mousedown', handleDocumentPointerDown);
-    document.addEventListener('keydown', handleGlobalVoiceShortcut);
-    document.addEventListener('keyup', handleGlobalVoiceShortcut);
+    // Observe the companion key before terminals/editors can stop propagation.
+    // Otherwise Alt followed by a key that belongs to the focused surface can
+    // look like a bare Alt tap when its keyup arrives.
+    document.addEventListener('keydown', handleGlobalVoiceShortcut, true);
+    document.addEventListener('keyup', handleGlobalVoiceShortcut, true);
     document.addEventListener('dragover', handleDocumentDragOver);
     document.addEventListener('drop', handleDocumentDrop);
     window.addEventListener('spacron-explorer-drag-start', dragStartHandler);
@@ -1072,8 +1075,8 @@ export default function FloatingPromptBar({
 
     return () => {
       document.removeEventListener('mousedown', handleDocumentPointerDown);
-      document.removeEventListener('keydown', handleGlobalVoiceShortcut);
-      document.removeEventListener('keyup', handleGlobalVoiceShortcut);
+      document.removeEventListener('keydown', handleGlobalVoiceShortcut, true);
+      document.removeEventListener('keyup', handleGlobalVoiceShortcut, true);
       document.removeEventListener('dragover', handleDocumentDragOver);
       document.removeEventListener('drop', handleDocumentDrop);
       window.removeEventListener(

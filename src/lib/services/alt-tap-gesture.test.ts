@@ -52,6 +52,13 @@ describe('alt-tap gesture', () => {
     expect(g.keyup(ev('Alt'))).toBe(false);
   });
 
+  it('does not fire for a plain Alt+letter chord', () => {
+    const g = createAltTapGesture();
+    g.keydown(ev('Alt'));
+    g.keydown(ev('m', { altKey: true } as Partial<AltTapEvent>));
+    expect(g.keyup(ev('Alt'))).toBe(false);
+  });
+
   it('ignores right Alt (AltGr) entirely', () => {
     const g = createAltTapGesture();
     g.keydown(ev('Alt', { location: RIGHT }));
