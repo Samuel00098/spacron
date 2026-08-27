@@ -918,16 +918,52 @@ async function removeLegacyClaudeConfig(projectRoot: string): Promise<void> {
  *
  * The Claude Code config written by `mcpLaunchFlags` is no longer among them —
  * it now lives in the app config dir, so the token never enters the working tree
- * at all. `.spacron/` stays on the list for the worker report files and the
- * worktree checkouts, which are app state rather than project content.
+ * at all. The `.spacron/` data directory is covered separately, by
+ * SPACRON_SCRATCH_RULES below: it needs a rule shape a flat path list cannot
+ * express.
  */
 const TOKEN_BEARING_PATHS = [
   '.mcp.json',
   '.gemini/settings.json',
   '.cursor/mcp.json',
   'opencode.json',
-  '.spacron/',
 ];
+
+/**
+ * The `.spacron/` runtime-scratch rule, and the one exception to it.
+ *
+ * `/.spacron/*` rather than `/.spacron/` is load-bearing: **git never descends
+ * into an excluded directory**, so a `!` re-include for anything underneath one
+ * is never even evaluated. Excluding the *contents* is the only arrangement in
+ * which the exception can take effect.
+ *
+ * A bare `/.spacron/` here is not a harmless synonym for it. That form hides the
+ * shared agent memory — notes whose whole purpose is to be committed — and makes
+ * `git add` on one of them fail outright with “paths are ignored by one of your
+ * .gitignore files”, which is what the Source Control pane reports as a failure
+ * to stage.
+ *
+ * These mirror `SPACRON_EXCLUDE_RULE` / `SPACRON_MEMORY_EXCEPTION` in
+ * `workspace.rs`, which manages the same two lines for worktree creation. Both
+ * writers have to emit the identical pair: the Rust side actively migrates the
+ * legacy bare form away, so anything here that re-appends it just undoes that
+ * repair on the next project open.
+ */
+const SPACRON_EXCLUDE_RULE = '/.spacron/*';
+const SPACRON_MEMORY_EXCEPTION = '!/.spacron/memory/';
+const SPACRON_SCRATCH_RULES = [SPACRON_EXCLUDE_RULE, SPACRON_MEMORY_EXCEPTION];
+
+/**
+ * A leading `/` is redundant for a pattern that already contains a slash, so
+ * `/.spacron/*` and `.spacron/*` are the same rule. Normalising lets the
+ * present-check see a rule the Rust writer (or the user) spelled the other
+ * way, instead of appending a second copy on every project open.
+ *
+ * The slash to strip on a negation sits AFTER the `!`, not at the start.
+ */
+function normalizeRule(rule: string): string {
+  return rule.trim().replace(/^(!?)\//, '$1');
+}
 
 /**
  * Keep the token-bearing configs out of the user's git history.
@@ -960,8 +996,21 @@ export async function ensureMcpConfigsIgnored(projectRoot: string): Promise<void
       // No exclude file (or no .git at all) — a fresh one is still valid.
     }
 
-    const present = new Set(current.split('\n').map((line) => line.trim()));
-    const missing = TOKEN_BEARING_PATHS.filter((p) => !present.has(p));
+    const present = new Set(
+      current.split('\n').map((line) => normalizeRule(line)),
+    );
+    const has = (rule: string) => present.has(normalizeRule(rule));
+
+    // Emitted as a unit when the rule is absent: the exception only takes effect
+    // when it FOLLOWS the rule, so re-adding the rule after a stray exception
+    // would silently re-exclude the memory directory.
+    const scratch = !has(SPACRON_EXCLUDE_RULE)
+      ? SPACRON_SCRATCH_RULES
+      : has(SPACRON_MEMORY_EXCEPTION)
+        ? []
+        : [SPACRON_MEMORY_EXCEPTION];
+
+    const missing = [...TOKEN_BEARING_PATHS.filter((p) => !has(p)), ...scratch];
     if (!missing.length) return;
 
     const header = '# Spacron: local MCP configs. These carry the MCP server token.';

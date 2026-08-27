@@ -467,9 +467,48 @@ describe('ensureMcpConfigsIgnored', () => {
     await ensureMcpConfigsIgnored('C:/work/repo');
 
     const content = written(EXCLUDE)!;
-    for (const path of ['.mcp.json', '.gemini/settings.json', '.cursor/mcp.json', 'opencode.json', '.spacron/']) {
+    for (const path of ['.mcp.json', '.gemini/settings.json', '.cursor/mcp.json', 'opencode.json']) {
       expect(content).toContain(path);
     }
+  });
+
+  /**
+   * Regression: this list used to carry a bare `.spacron/`, and it silently broke
+   * staging. Git never descends into an excluded DIRECTORY, so the
+   * `!/.spacron/memory/` exception below it was never evaluated and the whole
+   * tree went dark. `git add .spacron/memory/INDEX.md` — a TRACKED file — then
+   * failed with “paths are ignored by one of your .gitignore files”, which the
+   * Source Control pane showed as “Failed to stage the selected files”.
+   *
+   * `workspace.rs` migrates the bare form away on worktree creation, so a bare
+   * form re-added here does not just sit there: it undoes that repair on every
+   * project open, and the bug comes back seconds after anyone hand-fixes it.
+   */
+  it('excludes the .spacron contents, never the directory, so the memory exception is reachable', async () => {
+    const { ensureMcpConfigsIgnored } = await mockModule();
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    const content = written(EXCLUDE)!;
+    const rules = content.split('\n').map((l) => l.trim());
+
+    expect(rules).toContain('/.spacron/*');
+    expect(rules).toContain('!/.spacron/memory/');
+    expect(rules.some((l) => l === '.spacron/' || l === '/.spacron/')).toBe(false);
+
+    // The exception is only honoured when it follows the rule it exempts.
+    expect(rules.indexOf('!/.spacron/memory/')).toBeGreaterThan(rules.indexOf('/.spacron/*'));
+  });
+
+  it('leaves an exclude file that already carries the rule pair alone', async () => {
+    // Project open calls this every time. Re-appending the pair would grow the
+    // file without bound, and the unslashed spelling is the same rule.
+    const { ensureMcpConfigsIgnored } = await mockModule({
+      [EXCLUDE]:
+        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.spacron/*\n!.spacron/memory/\n',
+    });
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    expect(written(EXCLUDE)).toBeUndefined();
   });
 
   it('runs before any config is written, so nothing is ever briefly trackable', async () => {
@@ -518,11 +557,26 @@ describe('ensureMcpConfigsIgnored', () => {
   it('writes nothing when every entry is already present', async () => {
     // Project open calls this every time; it must not churn the file.
     const { ensureMcpConfigsIgnored } = await mockModule({
-      [EXCLUDE]: '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.spacron/\n',
+      [EXCLUDE]:
+        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n/.spacron/*\n!/.spacron/memory/\n',
     });
     await ensureMcpConfigsIgnored('C:/work/repo');
 
     expect(written(EXCLUDE)).toBeUndefined();
+  });
+
+  it('repairs a legacy bare `.spacron/` by appending the rule and its exception', async () => {
+    // Older installs wrote the bare directory form. Leaving it in place keeps
+    // the shared memory unstageable, so the corrected pair has to be appended
+    // AFTER it, where it wins.
+    const { ensureMcpConfigsIgnored } = await mockModule({
+      [EXCLUDE]: '.mcp.json\n.spacron/\n',
+    });
+    await ensureMcpConfigsIgnored('C:/work/repo');
+
+    const rules = written(EXCLUDE)!.split('\n').map((l) => l.trim());
+    expect(rules.indexOf('/.spacron/*')).toBeGreaterThan(rules.indexOf('.spacron/'));
+    expect(rules.indexOf('!/.spacron/memory/')).toBeGreaterThan(rules.indexOf('/.spacron/*'));
   });
 
   it('never throws when there is no git directory to write into', async () => {
