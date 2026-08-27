@@ -15,6 +15,7 @@ import {
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import { getActiveEditorVocabulary } from '$lib/services/editor-symbols';
 import { isWebkitGtk } from '$lib/utils/tauri';
+import { normalizeTechnicalTranscript } from '$lib/services/technical-transcript';
 
 export type VoiceInputCallbacks = {
   onStart?: () => void;
@@ -52,6 +53,21 @@ export type VoiceInputCallbacks = {
  */
 export type VoiceInputSessionOptions = {
   mode?: 'cumulative' | 'utterances';
+  /**
+   * What happens to audio spoken while the PREVIOUS turn is still being
+   * transcribed — the window between the silence timer firing and the mic
+   * re-arming, which is however long the STT round-trip takes (seconds, for a
+   * local Whisper model on a long utterance).
+   *
+   * - 'pre-roll' (default): keep only a short rolling tail (PRE_ROLL_CHUNKS).
+   *   What the conversational loop wants — it must not carry a wall of audio
+   *   from the assistant's turn into the user's next one.
+   * - 'continuous': keep EVERYTHING said in the gap, bounded only by
+   *   GAP_CAPTURE_MAX_MS. What dictation needs: a speaker who pauses for
+   *   800 ms and carries straight on is not waiting for the transcriber, and
+   *   under 'pre-roll' every word past ~1.4 s of that gap was simply dropped.
+   */
+  gapCapture?: 'pre-roll' | 'continuous';
 };
 
 export type VoiceInputSession = {
@@ -72,6 +88,19 @@ export type VoiceRefineOptions = {
    * "um" as a shell command, and \b keeps it away from volume/urban).
    */
   removeFillers?: boolean;
+  /**
+   * Run the technical pass — spelled-out product names, acronym casing,
+   * reconstructed CLI flags and file extensions, stumbled word repeats. On by
+   * default: every rule in it is word-bounded and deterministic, and a
+   * developer dictating "get hub" never meant two words.
+   */
+  technicalTerms?: boolean;
+  /**
+   * Capitalize sentence openings. Prose only — a terminal payload is a
+   * command, where "Npm install" is a typo, so the dictation path leaves this
+   * off for terminals.
+   */
+  capitalizeSentences?: boolean;
 };
 
 type BrowserSpeechRecognition = {
@@ -136,6 +165,11 @@ const VAD_HARD_MAX_UTTERANCE_MS = 120_000;
 // between the assistant finishing and the mic re-arming is simply gone — which
 // is why replies that began the instant the reply ended lost their first word.
 const PRE_ROLL_CHUNKS = 16;
+// Ceiling on 'continuous' gap capture (see `gapCapture`). Long enough to cover
+// any realistic STT round-trip — including a large local model chewing on a
+// 45 s utterance — while still bounding what a wedged transcription can hold in
+// memory (60 s of 48 kHz mono f32 is ~11 MB).
+const GAP_CAPTURE_MAX_MS = 60_000;
 
 function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
@@ -267,10 +301,24 @@ const SPOKEN_PUNCTUATION_REPLACEMENTS: Array<[RegExp, string]> = [
 const FILLER_WORD_RE = /\b(?:umm?|uhh?|uhm|erm|ahh?)\b[.,;:!?]?\s*/gi;
 
 export function refineVoiceTranscript(input: string, options: VoiceRefineOptions = {}) {
-  const { allowNewLines = false, spokenPunctuation = true, removeFillers = true } = options;
+  const {
+    allowNewLines = false,
+    spokenPunctuation = true,
+    removeFillers = true,
+    technicalTerms = true,
+    capitalizeSentences = false,
+  } = options;
   let text = input.replace(/\r\n?/g, '\n').trim();
 
   if (!text) return '';
+
+  // Before the punctuation table, which rewrites "dot" and "dash" to bare
+  // symbols and so destroys the evidence that ".ts" and "--force" were ever
+  // spoken. Capitalization is held back to the end of this function, once the
+  // fillers are gone and each sentence starts where it looks like it starts.
+  if (technicalTerms) {
+    text = normalizeTechnicalTranscript(text);
+  }
 
   if (spokenPunctuation) {
     for (const [pattern, replacement] of SPOKEN_PUNCTUATION_REPLACEMENTS) {
@@ -299,6 +347,10 @@ export function refineVoiceTranscript(input: string, options: VoiceRefineOptions
   }
 
   text = text.replace(/\s+([,.;:!?])/g, '$1');
+
+  if (capitalizeSentences) {
+    text = normalizeTechnicalTranscript(text, { capitalize: true });
+  }
 
   return text.trim();
 }
@@ -468,7 +520,8 @@ export function createVoiceInputSession(
   callbacks: VoiceInputCallbacks,
   options: VoiceInputSessionOptions = {},
 ): VoiceInputSession {
-  const { mode = 'cumulative' } = options;
+  const { mode = 'cumulative', gapCapture = 'pre-roll' } = options;
+  const continuousGap = gapCapture === 'continuous';
   let recognition: BrowserSpeechRecognition | null = null;
   // Results already handed to onResult in 'utterances' mode (webspeech only).
   // The engine re-sends every result on each event; anything before this index
@@ -494,9 +547,17 @@ export function createVoiceInputSession(
   // pick the end-of-turn silence window: a turn that has barely started gets a
   // longer grace than one already carrying a full sentence.
   let speechStartedAt = 0;
-  // Rolling pre-roll captured while the graph is warm but not listening, so a
-  // turn that begins before the mic re-arms doesn't lose its first syllable.
+  // Audio captured while the graph is warm but not listening — a short rolling
+  // pre-roll by default, everything said in the gap under 'continuous' — so a
+  // turn that begins before the mic re-arms doesn't lose its first syllable
+  // (or, in dictation, its next three sentences).
   let preRoll: Float32Array[] = [];
+  // Whether the gap audio above already contains confirmed speech. The next
+  // turn's onset detector only looks forward from the re-arm, so without this
+  // a stretch of speech that lived ENTIRELY inside the gap would be carried
+  // into `capturedChunks` and then thrown away by the `!speechDetected` bail.
+  let gapHadSpeech = false;
+  let gapVoicedRun = 0;
   // Rolling estimate of the ambient noise floor (RMS), seeded during the mic
   // warmup and adapted between utterances so the gate tracks the room.
   let noiseFloor = 0;
@@ -598,12 +659,18 @@ export function createVoiceInputSession(
   // (the room hasn't changed) and re-base the warmup window.
   function softResetVad() {
     clearSilenceTimer();
-    // Seed the new turn with the pre-roll so speech that started in the gap
-    // between turns is still in the audio we transcribe.
+    // Seed the new turn with the gap audio so speech that started — or, under
+    // 'continuous', ran entirely — while the last turn was transcribing is
+    // still in what we send to STT.
     capturedChunks = preRoll;
     preRoll = [];
-    speechDetected = false;
-    speechStartedAt = 0;
+    // Carry the gap's own speech verdict forward. Onset confirmation runs on
+    // live buffers only, so a turn whose speech is all in the past would
+    // otherwise finalize as silence and drop the words.
+    speechDetected = gapHadSpeech;
+    speechStartedAt = gapHadSpeech ? Date.now() : 0;
+    gapHadSpeech = false;
+    gapVoicedRun = 0;
     onsetRun = 0;
     startTime = Date.now();
   }
@@ -622,6 +689,8 @@ export function createVoiceInputSession(
     captureStream = null;
     capturedChunks = [];
     preRoll = [];
+    gapHadSpeech = false;
+    gapVoicedRun = 0;
     speechDetected = false;
     speechStartedAt = 0;
     onsetRun = 0;
@@ -837,9 +906,35 @@ export function createVoiceInputSession(
             // isn't missing its opening syllable (see PRE_ROLL_CHUNKS).
             if (stopRequested || !listening) {
               if (!stopRequested) {
-                preRoll.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-                if (preRoll.length > PRE_ROLL_CHUNKS) {
-                  preRoll.splice(0, preRoll.length - PRE_ROLL_CHUNKS);
+                const gapBuffer = new Float32Array(event.inputBuffer.getChannelData(0));
+                preRoll.push(gapBuffer);
+                if (continuousGap) {
+                  // Dictation: the speaker did not stop for us. Keep every
+                  // buffer, and run the same onset test over it so the next
+                  // turn knows this audio holds speech (see `gapHadSpeech`).
+                  // The level meter keeps ticking too — a pill that freezes
+                  // while you are mid-sentence reads as "it stopped hearing me".
+                  let gapSumSquares = 0;
+                  for (let i = 0; i < gapBuffer.length; i += 1) {
+                    gapSumSquares += gapBuffer[i] * gapBuffer[i];
+                  }
+                  const gapRms = Math.sqrt(gapSumSquares / Math.max(gapBuffer.length, 1));
+                  callbacks.onAudioLevel?.(gapRms);
+                  if (gapRms >= Math.max(VAD_ONSET_MIN_RMS, noiseFloor * VAD_ONSET_MULT)) {
+                    gapVoicedRun += 1;
+                    if (gapVoicedRun >= VAD_ONSET_FRAMES) gapHadSpeech = true;
+                  } else {
+                    gapVoicedRun = 0;
+                  }
+                }
+                const gapCap = continuousGap
+                  ? Math.max(
+                      PRE_ROLL_CHUNKS,
+                      Math.ceil((GAP_CAPTURE_MAX_MS / 1000) * captureSampleRate / gapBuffer.length),
+                    )
+                  : PRE_ROLL_CHUNKS;
+                if (preRoll.length > gapCap) {
+                  preRoll.splice(0, preRoll.length - gapCap);
                 }
               }
               return;

@@ -19,6 +19,7 @@ short enough that it says what the note is *about*, never what it says.
 - [notification-card-design](notification-card-design.md) — colour rules for the agent notification card; never tint a whole surface
 - [transcription-hotkey](transcription-hotkey.md) — F9 dictation: pause/end semantics and its lifecycle ordering traps
 - [voice-is-realtime-only](voice-is-realtime-only.md) — TTS is deleted app-wide; speech-to-speech is realtime-engine only
+- [transcript-quality](transcript-quality.md) — the two cleanup stages for dictated text, and why the deterministic one stays conservative
 - [voice-history](voice-history.md) — the two durable voice logs, and where retention lives
 - [prompt-bar-is-voice-only](prompt-bar-is-voice-only.md) — the floating bar has no text input; staged prompts replace it
 

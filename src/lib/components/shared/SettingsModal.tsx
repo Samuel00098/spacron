@@ -1788,7 +1788,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Terminal transcription">
                   <SettingRow
                     title="Hotkey"
-                    detail="Speak one command and it goes straight into the active terminal. Press the hotkey again to send, Esc to cancel."
+                    detail="Tap the hotkey and speak — pauses do not end it. Tap again or press Esc to send, Ctrl+Esc to discard. The text lands wherever the cursor is, terminal or text field."
                   >
                     <kbd>{shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9'}</kbd>
                   </SettingRow>

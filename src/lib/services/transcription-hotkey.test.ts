@@ -309,7 +309,10 @@ describe('transcription-hotkey', () => {
    */
   it('creates its voice session in utterances mode to prevent duplication', () => {
     toggleTerminalTranscription();
-    expect(capturedOptions).toEqual({ mode: 'utterances' });
+    // 'continuous' gap capture is what keeps the words spoken WHILE the
+    // previous utterance is going through STT; the short default pre-roll
+    // dropped everything past ~1.4 s of that gap.
+    expect(capturedOptions).toEqual({ mode: 'utterances', gapCapture: 'continuous' });
     // Don't leak a live dictation into the next test.
     abortTranscription();
   });

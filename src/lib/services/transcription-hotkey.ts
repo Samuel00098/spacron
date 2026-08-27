@@ -76,6 +76,28 @@ export type TranscriptionState = 'idle' | 'listening' | 'processing';
 
 export const transcriptionState = writable<TranscriptionState>('idle');
 
+/**
+ * Live input level (RMS, 0..~0.3) while dictating, for the indicator's meter.
+ * A pill that only says "Listening" cannot tell you the mic is muted, aimed at
+ * the wrong device, or simply not hearing you — which is the failure people
+ * describe as "it transcribed nothing and I don't know why".
+ */
+export const transcriptionLevel = writable<number>(0);
+
+/** Words banked so far in this dictation — proof the words are landing. */
+export const transcriptionWordCount = writable<number>(0);
+
+/**
+ * The gesture is a TAP, not a hold, and that is deliberate.
+ *
+ * Push-to-talk (hold the key, release to send) was tried here and reverted: a
+ * deliberate keypress routinely lasts longer than any threshold that could
+ * still tell it apart from a hold, so an ordinary tap was read as a release
+ * and the dictation delivered itself before the user had said a word. The pill
+ * flashed and vanished, and Escape had nothing left to cancel. Tap to start,
+ * tap again (or Escape) to send.
+ */
+
 let phase: TranscriptionState = 'idle';
 let starting = false;
 // The terminal session this dictation is aimed at, resolved when the capture
@@ -125,6 +147,14 @@ let captureStartedAt = 0;
 function setPhase(next: TranscriptionState) {
   phase = next;
   transcriptionState.set(next);
+  if (next !== 'listening') transcriptionLevel.set(0);
+  if (next === 'idle') transcriptionWordCount.set(0);
+}
+
+/** Rough word count of everything banked so far, for the indicator. */
+function publishWordCount(): void {
+  const words = accumulated.join(' ').trim();
+  transcriptionWordCount.set(words ? words.split(/\s+/).length : 0);
 }
 
 /** A terminal pane's hidden focus sink — never treated as a text field. */
@@ -399,13 +429,24 @@ function scheduleRearm(): void {
 }
 
 /**
- * Mechanical cleanup — spoken punctuation ("comma" → ",", "quote" → '"', …)
- * and hesitation fillers ("um", "uh" → gone). Terminals additionally get
- * newlines flattened so the payload is always a single shell-safe line; text
- * fields keep them (multi-line dictation).
+ * Mechanical cleanup, and the only cleanup a terminal payload ever gets.
+ *
+ * Spoken punctuation ("comma" → ",", "quote" → '"'), hesitation fillers, and
+ * the technical pass — "get hub" → GitHub, "a p i" → API, "dash dash force" →
+ * --force, "dot ts" → .ts. All of it is deterministic and word-bounded, which
+ * is why it is safe over a shell command; the AI rewrite is not, and terminals
+ * never see it.
+ *
+ * `allowNewLines` doubles as "this is prose": text fields keep their line
+ * breaks AND get sentence capitalization, while terminals get a single
+ * shell-safe line with the casing exactly as spoken.
  */
 function cleanTranscript(raw: string, allowNewLines: boolean): string | null {
-  const text = refineVoiceTranscript(raw, { allowNewLines, spokenPunctuation: true });
+  const text = refineVoiceTranscript(raw, {
+    allowNewLines,
+    spokenPunctuation: true,
+    capitalizeSentences: allowNewLines,
+  });
   return text || null;
 }
 
@@ -567,11 +608,17 @@ async function startListening(): Promise<void> {
         if (!captureStartedAt) captureStartedAt = Date.now();
         setPhase('listening');
       },
+      onAudioLevel: (rms) => {
+        if (phase === 'listening') transcriptionLevel.set(rms);
+      },
       onResult: (transcript) => {
         // One utterance, not the whole dictation. Bank it and keep the mic live;
         // `finalizeListening` is the only thing that ends a dictation.
         const piece = transcript.trim();
-        if (piece) accumulated.push(piece);
+        if (piece) {
+          accumulated.push(piece);
+          publishWordCount();
+        }
         // The flush that `stop()` triggers arrives here too — `onEnd` delivers
         // right after, so don't re-arm into a session we're tearing down.
         if (finalizing || phase !== 'listening') return;
@@ -609,7 +656,14 @@ async function startListening(): Promise<void> {
         if (phase === 'listening') scheduleRearm();
       },
     },
-    { mode: 'utterances' },
+    {
+      mode: 'utterances',
+      // A dictating speaker does not stop for the transcriber. Under the
+      // default short pre-roll, everything said more than ~1.4 s into the gap
+      // while the previous utterance was still going through STT was dropped
+      // on the floor — the words simply never appeared, with no error.
+      gapCapture: 'continuous',
+    },
   );
 
   if (!session.isSupported()) {
@@ -677,7 +731,8 @@ export function abortTranscription(): void {
  * processing → ignored (delivery already in flight).
  *
  * Pressing the hotkey again is the same gesture as Escape: both end the
- * dictation. Nothing is delivered until one of them happens.
+ * dictation. Nothing is delivered until one of them happens, which is what
+ * lets you pause mid-thought without losing the sentence.
  */
 export function toggleTerminalTranscription(): void {
   if (starting || phase === 'processing') return;

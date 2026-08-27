@@ -884,6 +884,95 @@ describe('createVoiceInputSession', () => {
     vi.useRealTimers();
   });
 
+  /**
+   * Dictation, unlike the conversational loop, has nobody waiting for it: the
+   * speaker pauses for 800 ms, the utterance goes off to STT, and they carry
+   * straight on talking. Under the default short pre-roll everything past
+   * ~1.4 s of that gap was dropped on the floor — no error, no warning, the
+   * words simply never appeared in the transcript.
+   */
+  it('keeps everything spoken during a long transcription gap', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('a turn');
+
+    const session = createVoiceInputSession(
+      { onResult: vi.fn(), onEnd: vi.fn() },
+      { gapCapture: 'continuous' },
+    );
+    session.setConversationMode(true);
+
+    const lastWavByteLength = () => {
+      const call = invoke.mock.calls.filter(([cmd]) => cmd === 'ai_transcribe_audio').at(-1);
+      return (call![1] as { audioBytes: number[] }).audioBytes.length;
+    };
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    const baseline = lastWavByteLength();
+
+    // The user keeps talking through the whole STT round-trip: far more than
+    // the 16-buffer pre-roll would have held.
+    feedSpeech(audioProcessors[0], 40);
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    // All 40 buffers survive — 40 x 4 samples x 2 bytes.
+    expect(lastWavByteLength()).toBe(baseline + 320);
+
+    vi.useRealTimers();
+  });
+
+  /**
+   * The onset detector only looks forward from the re-arm. A stretch of speech
+   * that lived ENTIRELY inside the gap therefore reached `capturedChunks` and
+   * was then thrown away by the "no speech in this turn" bail — the audio was
+   * recovered and discarded in the same breath.
+   */
+  it('transcribes a turn whose speech happened entirely in the gap', async () => {
+    vi.useFakeTimers();
+    voiceInputProvider.set('google');
+    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'google');
+    invoke.mockResolvedValue('the words from the gap');
+
+    const onResult = vi.fn();
+    const session = createVoiceInputSession({ onResult, onEnd: vi.fn() }, { gapCapture: 'continuous' });
+    session.setConversationMode(true);
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSpeech(audioProcessors[0], 3);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+    onResult.mockClear();
+    invoke.mockClear();
+
+    // Everything is said in the gap; the mic re-arms to silence.
+    feedSpeech(audioProcessors[0], 6);
+
+    await session.start();
+    await vi.advanceTimersByTimeAsync(200);
+    feedSilence(audioProcessors[0]);
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+
+    expect(invoke.mock.calls.some(([cmd]) => cmd === 'ai_transcribe_audio')).toBe(true);
+    expect(onResult).toHaveBeenCalledWith('the words from the gap');
+
+    vi.useRealTimers();
+  });
+
   it('ignores a lone transient (click/cough) instead of treating it as speech', async () => {
     vi.useFakeTimers();
     voiceInputProvider.set('google');

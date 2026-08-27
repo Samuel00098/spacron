@@ -1379,6 +1379,11 @@ export default function AppShell() {
      * thing that ever worked.
      */
     function handleTranscriptionKeyDown(event: KeyboardEvent) {
+      // A held key repeats. Without this, holding the hotkey for a moment fires
+      // keydown over and over and every repeat reads as another tap — start,
+      // send, start, send — which is how a single deliberate press ended up
+      // delivering nothing.
+      if (event.repeat) return;
       const binding = (shortcuts || []).find((shortcut) => {
         if (!shortcut) return false;
         const actionId = shortcut.id.startsWith('custom_') ? shortcut.action : shortcut.id;
