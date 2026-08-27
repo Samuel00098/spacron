@@ -230,6 +230,11 @@ function TerminalPane({
   const oscSequenceRemainderRef = useRef('');
   const fitRafRef = useRef<number | null>(null);
   const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Only the latest layout measurement may perform the delayed settled fit.
+  // During a room/layer transition ResizeObserver can report several sizes;
+  // keeping one timer prevents stale callbacks from competing with the newest
+  // grid and making the terminal visibly jump between geometries.
+  const settledFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentShellRef = useRef<string | null>(null);
   const isActiveRef = useRef(isActive);
   const seenDevUrlsRef = useRef<Set<string>>(new Set());
@@ -669,7 +674,11 @@ function TerminalPane({
       // that leaves the viewport height wrong and scrolling broken. Wait long
       // enough that any CSS transition or layout reparenting has finished,
       // then re-fit if the settled dimensions differ.
-      setTimeout(() => {
+      if (settledFitTimerRef.current !== null) {
+        clearTimeout(settledFitTimerRef.current);
+      }
+      settledFitTimerRef.current = setTimeout(() => {
+        settledFitTimerRef.current = null;
         const t = termRef.current;
         const fa = fitAddonRef.current;
         const host = fitHostRef.current;
@@ -1416,6 +1425,7 @@ function TerminalPane({
       unsubInput();
       if (fitRafRef.current !== null) cancelAnimationFrame(fitRafRef.current);
       if (fitTimerRef.current !== null) clearTimeout(fitTimerRef.current);
+      if (settledFitTimerRef.current !== null) clearTimeout(settledFitTimerRef.current);
       resizeObserver?.disconnect();
       container.removeEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.removeEventListener('mouseup', handleTerminalLinkMouseUp, true);
