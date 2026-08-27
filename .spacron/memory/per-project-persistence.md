@@ -30,6 +30,21 @@ reason.
   Closing them does survive a switch (nothing puts them back), so this shows up
   as leakage, not as lost state.
 
+## Reading a *background* project's rooms
+
+`layout` and `terminalRoomOpen` describe the ACTIVE project and nothing else, so
+anything that wants to show what another project has open (the Projects panel
+lists a project's rooms under it) cannot read them. `projectOpenRooms` in
+`stores/workspace.ts` is the per-project mirror: `publishProjectRooms` rewrites
+the active project's entry on every save, and a `projects` subscription seeds
+every other project once from its persisted layout — without that seed a cold
+start would leave every project but one listing nothing.
+
+Two traps live there. `collectOpenRoomIds` reads the live stores, so publishing
+under any id but the active one writes one project's rooms onto another. And a
+room that is app-global rather than per-project (`sketch`) can only ever be
+reported for the active project, so the seed does not claim it.
+
 ## The bug that made all of this look broken (fixed 2026-08-25)
 
 `restoreProjectState` ended with an unconditional

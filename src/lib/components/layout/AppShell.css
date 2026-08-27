@@ -86,7 +86,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 30;
+  z-index: 1300;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -642,11 +642,13 @@
    React container as Focus/Fleet, switching in and out of Split never unmounts a
    terminal; the panes only resize, which their ResizeObserver handles cleanly.
 
-   `--split-cols` is set by `splitColumns()` in AppShell.tsx: up to three rooms
-   share a single row, beyond that the grid wraps so panes keep a readable width
-   instead of turning into slivers. `grid-auto-rows: 1fr` keeps every row an equal
-   share of the height, with a floor so a short window scrolls rather than
-   crushing the panes below the point where a terminal is legible. */
+   `--split-cols` is set by `splitColumnCount()`: 1, 2, or 3. Two panes sit
+   side by side; three use the same 2-column grid with the last pane spanning
+   the full second row (two-on-top / one-below); four are 2×2. Past four the
+   grid wraps at three columns so panes keep a readable width instead of
+   turning into slivers. `grid-auto-rows: 1fr` keeps every row an equal share
+   of the height, with a floor so a short window scrolls rather than crushing
+   the panes below the point where a terminal is legible. */
 .app-shell .focused-room.stage-layers.split-grid {
   display: grid;
   grid-template-columns: repeat(var(--split-cols, 2), minmax(0, 1fr));
@@ -655,6 +657,18 @@
   align-items: stretch;
   position: relative;
   overflow-y: auto;
+}
+
+/* 3-pane 2+1 and 4-pane 2×2: two explicit equal rows so the bottom pane
+   (or bottom pair) gets a real half of the stage, not a leftover auto-row. */
+.app-shell .focused-room.stage-layers.split-grid.split-2row {
+  grid-template-rows: minmax(180px, 1fr) minmax(180px, 1fr);
+}
+
+/* Last pane of a 3-pane stage. Slot index is applied via `order`, so this
+   class (not :nth-child) is what identifies it — DOM order is mount order. */
+.app-shell .stage-layers.split-grid > .stage-pane.split-span-row {
+  grid-column: 1 / -1;
 }
 
 /* Past SPLIT_FIT_PANES the stage stops trying to fit every pane on screen and
@@ -1485,6 +1499,7 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  gap: 6px;
 }
 
 .app-shell .split-switcher-count {
@@ -1574,18 +1589,19 @@
   position: fixed;
   left: calc(12px + var(--usage-dock-width, 0px));
   bottom: 14px;
-  z-index: 1300;
+  z-index: 1200;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: min(440px, calc(50vw - 20px - var(--usage-dock-width, 0px)));
+  max-width: max(0px, calc(50vw - 388px - var(--usage-dock-width, 0px)));
   padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  scroll-behavior: smooth;
   pointer-events: auto;
   transition: left var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
@@ -2425,16 +2441,7 @@
     max-height: min(100%, 580px, calc(65 * var(--app-vh, 1vh)));
   }
 
-  /* When minimized chips are present in focus mode, allow the room-stack row to
-  .app-shell .rooms-table.ambient-focus .minimized-room-stack {
-    max-width: min(440px, calc(50vw - 20px));
-    overflow-x: auto;
-  }
-
-  .app-shell .rooms-table.ambient-development .minimized-room-stack {
-    max-width: min(440px, calc(50vw - 20px));
-    overflow-x: auto;
-  }
+  /* When minimized chips are present in focus mode, allow the room-stack row to scroll */
 
   .app-shell .ambient-secondary-room {
     min-height: 220px;

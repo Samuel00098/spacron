@@ -39,7 +39,16 @@ export function loadGlobalSnippets() {
 // Save global snippets
 function saveGlobalSnippets() {
   const globals = get(snippets).filter(s => s.projectId === undefined);
-  localStorage.setItem('spacron_global_snippets', JSON.stringify(globals));
+  try {
+    localStorage.setItem('spacron_global_snippets', JSON.stringify(globals));
+  } catch (err) {
+    // A full quota is the realistic failure here. Left unguarded it threw out
+    // of `addSnippet` — past the caller's success toast and form reset — so the
+    // panel froze mid-save and the snippet was gone at the next mount, when
+    // `loadGlobalSnippets` read the older localStorage copy back over it.
+    // Matching the project path: keep the snippet in memory, log the reason.
+    console.error('Failed to save global snippets:', err);
+  }
 }
 
 // Load project-specific snippets

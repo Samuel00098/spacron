@@ -657,22 +657,45 @@ const PLAYWRIGHT_OPENCODE_ENTRY = {
 };
 
 /**
- * How long Codex waits for the browser server to finish starting.
+ * How long an agent should wait for the browser server to finish starting.
  *
- * Codex's default is 10 seconds, and `npx` does not make it. Measured on a
- * warm cache — the package already downloaded, printing `--help` and exiting —
- * `npx -y @playwright/mcp@latest` takes 10.1s on Windows. That is already over
- * the line before Playwright does any work, so the server was timing out on
- * every launch and the agent simply had no browser tools, with nothing in the
- * UI to say why. A first run that still has to download the package is far
- * slower again, which is what this number is really sized for.
+ * `npx -y @playwright/mcp@latest` is far slower to start than any CLI's default
+ * allows, and the `@latest` tag is why: npm re-resolves the tag against the
+ * registry on every single launch, so the cost is paid even on a warm cache.
+ * Measured on Windows, package already downloaded, just printing its version:
  *
- * Only Codex needs this stated: it is the one CLI here whose default is shorter
- * than an npx cold start. Erring long is the safe direction — a too-short
- * timeout breaks the server outright, while a too-long one only delays the
- * error message for a server that was never going to start.
+ *   `npx -y @playwright/mcp@latest --version`   27.8s
+ *   `npx -y @playwright/mcp@0.0.79 --version`   17.5s
+ *
+ * That is before Playwright does any work at all. Codex's 10s default and
+ * Claude Code's 30s default both fall inside that window, so the server was
+ * timing out on launch and the agent simply had no browser tools — with nothing
+ * in the UI to say why. A first run that still has to download the package and
+ * a browser is slower again, which is what this number is really sized for.
+ *
+ * Erring long is the safe direction: a too-short timeout breaks the server
+ * outright, while a too-long one only delays the error message for a server
+ * that was never going to start.
+ *
+ * Claude Code takes the same budget through `MCP_TIMEOUT` in the agent's PTY
+ * environment rather than through a config file — see `terminal.ts`. Keep the
+ * two in step; they are sizing the same npx cold start.
  */
-const CODEX_BROWSER_STARTUP_TIMEOUT_SEC = 60;
+export const BROWSER_STARTUP_TIMEOUT_SEC = 120;
+
+/** The same budget in milliseconds, for CLIs whose knob is an env var. */
+export const BROWSER_STARTUP_TIMEOUT_MS = BROWSER_STARTUP_TIMEOUT_SEC * 1000;
+
+/**
+ * How long a single MCP *tool call* may run, once the server is up.
+ *
+ * Separate from the startup budget and necessarily larger: starting is a
+ * one-off, but a browser tool call navigates a real page, waits on real network
+ * and can legitimately take minutes on a slow site. Claude Code's default here
+ * is generous already; this only stops a genuinely slow page load from being
+ * reported to the agent as a broken tool.
+ */
+export const BROWSER_TOOL_TIMEOUT_MS = 180_000;
 
 /** Whether the user has opted into giving agents a browser. Off by default. */
 function wantsBrowserTools(): boolean {
@@ -1303,7 +1326,7 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       const args = PLAYWRIGHT_ARGS.map((a) => `"${a}"`).join(', ');
       content +=
         `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n` +
-        `startup_timeout_sec = ${CODEX_BROWSER_STARTUP_TIMEOUT_SEC}\n`;
+        `startup_timeout_sec = ${BROWSER_STARTUP_TIMEOUT_SEC}\n`;
     }
 
     await invoke('mcp_write_global_agent_config', {

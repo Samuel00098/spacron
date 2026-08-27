@@ -398,6 +398,23 @@ describe('agent browser tools (Playwright MCP)', () => {
     expect(Number(timeout![1])).toBeGreaterThan(10);
   });
 
+  it('sizes the startup budget above every CLI default npx overruns', async () => {
+    // The measured cost of `npx -y @playwright/mcp@latest` on a *warm* cache is
+    // ~28s on Windows, because the `@latest` tag re-resolves against the
+    // registry every launch. That overruns Codex's 10s default and Claude
+    // Code's 30s one, and a cold run that downloads the package and a browser
+    // is far slower again. Both CLIs take this same budget — Codex through
+    // `startup_timeout_sec`, Claude Code through `MCP_TIMEOUT` in the agent's
+    // PTY env — so the floor is asserted once, here, on the shared constant.
+    const { BROWSER_STARTUP_TIMEOUT_SEC, BROWSER_STARTUP_TIMEOUT_MS, BROWSER_TOOL_TIMEOUT_MS } =
+      await mockModule({}, { browserTools: true });
+
+    expect(BROWSER_STARTUP_TIMEOUT_SEC).toBeGreaterThanOrEqual(60);
+    expect(BROWSER_STARTUP_TIMEOUT_MS).toBe(BROWSER_STARTUP_TIMEOUT_SEC * 1000);
+    // A tool call navigates a real page, so it must outlast merely starting up.
+    expect(BROWSER_TOOL_TIMEOUT_MS).toBeGreaterThan(BROWSER_STARTUP_TIMEOUT_MS);
+  });
+
   it('removes the entry again when the setting is turned back off', async () => {
     // The regression that matters: a toggle that only ever adds would leave a
     // dead server in every config the user ever opened a project with.

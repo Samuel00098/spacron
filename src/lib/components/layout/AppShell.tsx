@@ -21,6 +21,16 @@ import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
 import ToolsMenu, { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
+import {
+  getSplitPaneStyle,
+  getSplitStageStyle,
+  resolvePreset,
+  splitColumnCount,
+  splitPaneSpansRow,
+  splitUsesTwoRows,
+  type SplitPresetId,
+} from '$lib/components/layout/split-layout';
+import SplitLayoutPicker from '$lib/components/layout/SplitLayoutPicker.tsx';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
@@ -36,7 +46,12 @@ import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
 import MobilePanel from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
-import { useLayoutStore, rightDrawerToolOf } from '$lib/stores/zustand/layout';
+import {
+  useLayoutStore,
+  rightDrawerToolOf,
+  clampRightDrawerWidth,
+  RIGHT_DRAWER_MAX_WIDTH,
+} from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import {
   toggleSidebar,
@@ -71,6 +86,8 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import {
+  claimStartupShell,
+  releaseStartupShellClaim,
   createTerminalSession,
   launchPromptBarVoiceMode,
   activeSessionId,
@@ -81,6 +98,7 @@ import {
   paneAssignments,
   setActiveSession,
   sessions as terminalSessions,
+  devSessions as devTerminalSessions,
   allProjectSessions,
   commandHistory,
 } from '$lib/stores/terminal';
@@ -89,6 +107,7 @@ import TranscriptionIndicator from '$lib/components/terminal/TranscriptionIndica
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
+import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
@@ -173,16 +192,6 @@ const SPLIT_MAX_PANES = 12;
 // dozen panes into one screen leaves each too short to read. The two regimes are
 // different jobs — working in a few panes, versus watching many.
 const SPLIT_FIT_PANES = 6;
-
-// Column count for a given pane count, used only in the fit regime. Up to three
-// rooms sit in a single row (the familiar side-by-side); beyond that the grid
-// wraps into rows so panes keep a readable width instead of becoming slivers.
-function splitColumns(count: number): number {
-  if (count <= 1) return 1;
-  if (count <= 3) return count;
-  if (count === 4) return 2;
-  return 3;
-}
 
 function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
@@ -596,6 +605,10 @@ export default function AppShell() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [leftPanelResizing, setLeftPanelResizing] = useState(false);
   const [rightDrawerResizing, setRightDrawerResizing] = useState(false);
+  /** Terminal-room close awaiting confirmation, because it will kill live shells. */
+  const [pendingTerminalClose, setPendingTerminalClose] = useState<
+    { room: 'terminal' | 'dev-terminal'; count: number } | null
+  >(null);
   const [auxResizing, setAuxResizing] = useState(false);
   const [auxRowResizing, setAuxRowResizing] = useState(false);
   const [auxPanelWidth, setAuxPanelWidth] = useState(layoutState.auxPanelWidth);
@@ -624,6 +637,7 @@ export default function AppShell() {
   // list is authoritative, which is what stops the slot drift documented in
   // `.spacron/memory/split-room-slots.md`.
   const [splitSlots, setSplitSlots] = useState<RoomId[]>([]);
+  const [splitPresets, setSplitPresets] = useState<Record<number, SplitPresetId>>({});
   const lastActiveRoomRef = useRef<RoomId | null>(null);
   // The room the user last actually touched — a click or a focus anywhere inside
   // its pane, not just a title-bar "focus this room" press. In Split this is what
@@ -634,7 +648,7 @@ export default function AppShell() {
 
   const sidebarResizeRef = useRef({ startX: 0, startWidth: 0 });
   const leftPanelResizeRef = useRef({ startX: 0, startWidth: 0 });
-  const rightDrawerResizeRef = useRef({ startX: 0, startWidth: 0 });
+  const rightDrawerResizeRef = useRef({ startX: 0, startWidth: 0, active: false });
   const auxResizeRef = useRef({ startX: 0, startWidth: 0 });
   const auxRowResizeRef = useRef({ startY: 0, startHeight: 0 });
   const layoutSwitchTimerRef = useRef<number | null>(null);
@@ -696,6 +710,7 @@ export default function AppShell() {
     };
   }, [workspaceId, ambientLayout]);
   const allTerminalSessions = useStore(terminalSessions);
+  const allDevTerminalSessions = useStore(devTerminalSessions);
   // Sessions across EVERY project, not just the active one — the stage mounts
   // background projects' agent panes from this so switching projects hides them
   // instead of disposing their xterms.
@@ -940,6 +955,7 @@ export default function AppShell() {
         layoutCommand.slots.filter(isKnownRoomId),
         isKnownRoomId(layoutCommand.focused) ? layoutCommand.focused : null,
         isKnownRoomId(layoutCommand.expanded) ? layoutCommand.expanded : null,
+        layoutCommand.presets,
       );
       return;
     }
@@ -1010,9 +1026,10 @@ export default function AppShell() {
       // now would pin that accident as a deliberate arrangement.
       splitSlots,
       expandedRoom,
+      splitPresets,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots, expandedRoom]);
+  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots, expandedRoom, splitPresets]);
 
   // Preview mode is built around the preview browser; if it gets closed (its X),
   // the mode has nothing to show, so fall back to Focus.
@@ -1178,14 +1195,6 @@ export default function AppShell() {
         useLayoutStore.setState({
           leftPanelWidth: Math.max(180, Math.min(maxAllowedWidth, leftPanelResizeRef.current.startWidth + delta)),
         });
-      } else if (rightDrawerResizing) {
-        // Drawer is anchored to the right edge, so dragging its left handle
-        // leftwards (negative deltaX) widens it.
-        const delta = (rightDrawerResizeRef.current.startX - event.clientX) / scale;
-        const maxAllowedWidth = Math.min(720, windowWidth / scale - 250 - 48);
-        useLayoutStore.setState({
-          rightDrawerWidth: Math.max(280, Math.min(maxAllowedWidth, rightDrawerResizeRef.current.startWidth + delta)),
-        });
       } else if (auxResizing) {
         const delta = (event.clientX - auxResizeRef.current.startX) / scale;
         const nextWidth = auxResizeRef.current.startWidth - delta;
@@ -1203,20 +1212,14 @@ export default function AppShell() {
 
     function handleMouseUp() {
       const wasAuxResize = auxResizing || auxRowResizing;
-      const wasRightDrawerResize = rightDrawerResizing;
       setSidebarResizing(false);
       setLeftPanelResizing(false);
-      setRightDrawerResizing(false);
       setAuxResizing(false);
       setAuxRowResizing(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       if (wasAuxResize) {
         useLayoutStore.setState({ auxPanelWidth, auxEditorHeight });
-      }
-      if (wasRightDrawerResize) {
-        // Persist the final width (the live drag wrote straight to the store).
-        useLayoutStore.getState().setRightDrawerWidth(useLayoutStore.getState().rightDrawerWidth);
       }
     }
 
@@ -1226,7 +1229,7 @@ export default function AppShell() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [auxEditorHeight, auxPanelWidth, auxResizing, auxRowResizing, sidebarResizing, leftPanelResizing, rightDrawerResizing, windowWidth, zoom]);
+  }, [auxEditorHeight, auxPanelWidth, auxResizing, auxRowResizing, sidebarResizing, leftPanelResizing, windowWidth, zoom]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1418,12 +1421,51 @@ export default function AppShell() {
     document.body.style.userSelect = 'none';
   }
 
-  function startRightDrawerResize(event: React.MouseEvent) {
+  // The right drawer's resize runs on POINTER events with pointer capture, not
+  // on the shared window mouse handlers the other panels use. The width is only
+  // written back to storage when the drag ends, and a `mouseup` released outside
+  // the Tauri window never arrives — so the drawer would look resized for the
+  // rest of the session and open at the old width next time. Capture guarantees
+  // both the moves and the release land on the handle, wherever the pointer is.
+  // The live flag is a ref, not the `rightDrawerResizing` state, so a move that
+  // arrives before React re-renders is not dropped; the state only drives the
+  // `.resizing` class.
+  function startRightDrawerResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
     setRightDrawerResizing(true);
-    rightDrawerResizeRef.current = { startX: event.clientX, startWidth: layoutState.rightDrawerWidth };
+    rightDrawerResizeRef.current = {
+      startX: event.clientX,
+      startWidth: layoutState.rightDrawerWidth,
+      active: true,
+    };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
+  }
+
+  function moveRightDrawerResize(event: React.PointerEvent<HTMLDivElement>) {
+    if (!rightDrawerResizeRef.current.active) return;
+    const scale = zoom / 100;
+    // Drawer is anchored to the right edge, so dragging its left handle
+    // leftwards (negative deltaX) widens it.
+    const delta = (rightDrawerResizeRef.current.startX - event.clientX) / scale;
+    const maxAllowedWidth = Math.min(RIGHT_DRAWER_MAX_WIDTH, windowWidth / scale - 250 - 48);
+    useLayoutStore.setState({
+      rightDrawerWidth: clampRightDrawerWidth(
+        Math.min(maxAllowedWidth, rightDrawerResizeRef.current.startWidth + delta),
+      ),
+    });
+  }
+
+  function endRightDrawerResize() {
+    if (!rightDrawerResizeRef.current.active) return;
+    rightDrawerResizeRef.current.active = false;
+    setRightDrawerResizing(false);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    // Persist the final width — the live drag wrote straight to the store, which
+    // does not touch storage. This is the only place the new width is saved.
+    useLayoutStore.getState().setRightDrawerWidth(useLayoutStore.getState().rightDrawerWidth);
   }
 
   // --- LEFT utility drawer (workspace navigation) -------------------------
@@ -1519,7 +1561,11 @@ export default function AppShell() {
       >
         <div
           className="right-drawer-resize-handle"
-          onMouseDown={startRightDrawerResize}
+          onPointerDown={startRightDrawerResize}
+          onPointerMove={moveRightDrawerResize}
+          onPointerUp={endRightDrawerResize}
+          onPointerCancel={endRightDrawerResize}
+          onLostPointerCapture={endRightDrawerResize}
           role="separator"
           aria-orientation="vertical"
         />
@@ -1852,7 +1898,51 @@ export default function AppShell() {
     setFocusedRoom(id);
   }
 
+  /**
+   * The shells a terminal room owns: the room's non-agent sessions that are
+   * still running. Agent sessions have rooms of their own, so closing the
+   * Terminal must never touch them.
+   */
+  function liveShellsOf(id: 'terminal' | 'dev-terminal') {
+    const list = id === 'dev-terminal' ? allDevTerminalSessions : allTerminalSessions;
+    return list.filter((session) => session.isRunning && !isAgentSession(session));
+  }
+
+  /**
+   * Close a terminal room for real: kill the shells it owns, then hide it.
+   *
+   * Closing used to only hide the room and leave its shells running, which is
+   * the state behind "the Projects panel says a terminal is running but nothing
+   * is open" — a live process with no window onto it. An agent room has always
+   * closed by killing its session (below); this makes the terminal rooms agree,
+   * with a confirmation in front of it because a shell may be holding a build.
+   */
+  function closeTerminalRoomForReal(id: 'terminal' | 'dev-terminal') {
+    for (const session of liveShellsOf(id)) void killSession(session.id);
+    // The shells this project's claim was covering are gone, so the next open
+    // must be allowed to make one. Without this, closing and reopening inside
+    // the 5s claim window would leave both auto-openers declining and the room
+    // would come up empty.
+    releaseStartupShellClaim(activeProjectIdValue);
+    withRoomTransition(() => {
+      if (expandedRoom === id) setExpandedRoom(null);
+      if (id === 'terminal') setTerminalRoomOpen(false);
+      else setDevTerminalRoomOpen(false);
+      if (focusedRoom === id) setFocusedRoom(nextVisibleRoom(id));
+    });
+  }
+
   function closeRoom(id: RoomId) {
+    // Ask before killing live shells. Cancelling leaves the room open rather
+    // than hiding it: a hidden room whose processes are still running is the
+    // ghost state this whole path exists to remove.
+    if (id === 'terminal' || id === 'dev-terminal') {
+      const live = liveShellsOf(id);
+      if (live.length > 0) {
+        setPendingTerminalClose({ room: id, count: live.length });
+        return;
+      }
+    }
     withRoomTransition(() => {
       if (expandedRoom === id) {
         setExpandedRoom(null);
@@ -1899,9 +1989,14 @@ export default function AppShell() {
       onClick: () => {
         setTerminalRoomOpen(true);
         focusRoom('terminal');
-        // Auto-create a shell session if the terminal grid is empty
+        // Auto-create a shell session if the terminal grid is empty. Through the
+        // same synchronous claim `TerminalPanel`'s auto-open uses: opening the
+        // room mounts that panel, whose effect runs 80ms later and cannot see an
+        // in-flight async creation, so without the claim both fire and the room
+        // opens with two shells. Only reachable once closing the room kills its
+        // shells — before that the grid was never empty on a reopen.
         const pa = get(paneAssignments);
-        if (pa.every((id) => id === null)) {
+        if (pa.every((id) => id === null) && claimStartupShell(activeProjectIdValue)) {
           createTerminalSession();
         }
       },
@@ -2495,6 +2590,21 @@ export default function AppShell() {
     );
   }
 
+  const handleMinimizedWheel = useCallback((e: WheelEvent) => {
+    const target = e.currentTarget as HTMLElement | null;
+    if (!target) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && target.scrollWidth > target.clientWidth) {
+      e.preventDefault();
+      target.scrollLeft += e.deltaY;
+    }
+  }, []);
+
+  const minimizedStackRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    node.addEventListener('wheel', handleMinimizedWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleMinimizedWheel);
+  }, [handleMinimizedWheel]);
+
   function renderMinimizedRooms() {
     if (minimizedRooms.size === 0) return null;
     const orderedMinimized = [
@@ -2502,7 +2612,7 @@ export default function AppShell() {
       ...Array.from(minimizedRooms).filter((room) => !roomOrder.includes(room)),
     ];
     return (
-      <div className="minimized-room-stack" aria-label="Minimized rooms">
+      <div ref={minimizedStackRef} className="minimized-room-stack" aria-label="Minimized rooms">
         {orderedMinimized.map((room) => (
           <button
             key={room}
@@ -2543,6 +2653,7 @@ export default function AppShell() {
     slots: RoomId[],
     focused: RoomId | null,
     expanded: RoomId | null = null,
+    presets?: Record<number, string>,
   ) {
     // Collapse to the two modes that actually exist, mirroring the rule inside
     // `switchAmbientLayout`. Seeding `perLayoutState` under a name it will not
@@ -2557,6 +2668,16 @@ export default function AppShell() {
     // Kept even when landing in Focus: it is this project's Split arrangement,
     // and it should still be there when they switch back to Split.
     setSplitSlots(slots);
+    if (presets) {
+      const validated: Record<number, SplitPresetId> = {};
+      for (const [k, v] of Object.entries(presets)) {
+        const count = Number(k);
+        if (!isNaN(count)) {
+          validated[count] = resolvePreset(v, count);
+        }
+      }
+      setSplitPresets(validated);
+    }
     setFocusedRoom(focused);
     // Only when the mode is really changing — `switchAmbientLayout` early-returns
     // on an unchanged one, which would leave the two setters above as the whole
@@ -2699,6 +2820,20 @@ export default function AppShell() {
                 : `${splitRooms.length}/${SPLIT_MAX_PANES}`}
             </span>
           </span>
+          {!isExpanded && splitRooms.length >= 2 && (
+            <SplitLayoutPicker
+              count={splitRooms.length}
+              activePreset={resolvePreset(splitPresets[splitRooms.length], splitRooms.length)}
+              onSelectPreset={(presetId) => {
+                withStageRetile(() => {
+                  setSplitPresets((prev) => ({
+                    ...prev,
+                    [splitRooms.length]: presetId,
+                  }));
+                });
+              }}
+            />
+          )}
         </div>
         <div className="split-switcher-rooms">
           {visibleRooms.map((room) => {
@@ -2845,19 +2980,28 @@ export default function AppShell() {
     const emptyStageMessage = stageRooms.length === 0 ? 'No open panes' : null;
     const stageIsVacant = stageRooms.length === 0;
 
+    const activePreset = resolvePreset(splitPresets[stageRooms.length], stageRooms.length);
+    const { className: stagePresetClass, style: stagePresetStyle } =
+      !isExpanded && isSplit
+        ? getSplitStageStyle(activePreset, stageRooms.length)
+        : { className: '', style: undefined };
+
     const stageModifier = isExpanded
       ? ' stage-expanded'
       : isSplit
-        ? ` split-grid${stageRooms.length > SPLIT_FIT_PANES ? ' split-scroll' : ''}`
+        ? ` ${stagePresetClass}`
         : '';
-    const paneOrder = (room: RoomId): React.CSSProperties | undefined =>
-      !isExpanded && isSplit ? { order: stageRooms.indexOf(room) } : undefined;
 
     function stagePaneProps(room: RoomId) {
       const hidden = !stageRoomSet.has(room);
+      const index = stageRooms.indexOf(room);
+      const paneStyle =
+        !hidden && !isExpanded && isSplit
+          ? getSplitPaneStyle(activePreset, index, stageRooms.length)
+          : undefined;
       return {
         className: `stage-pane${hidden ? ' stage-hidden' : ''}`,
-        style: hidden ? undefined : paneOrder(room),
+        style: hidden ? undefined : paneStyle,
       };
     }
 
@@ -2865,11 +3009,7 @@ export default function AppShell() {
       <>
         <div
           className={`focused-room stage-layers${stageModifier}${stageIsVacant ? ' empty-stage' : ''}`}
-          style={
-            !isExpanded && isSplit
-              ? ({ '--split-cols': splitColumns(stageRooms.length) } as React.CSSProperties)
-              : undefined
-          }
+          style={!isExpanded && isSplit ? stagePresetStyle : undefined}
           aria-label={emptyStageMessage ?? undefined}
         >
           {emptyStageMessage !== null && (
@@ -2976,6 +3116,35 @@ export default function AppShell() {
 
         {/* The Memory Graph, on exactly the same contract: a free-floating
             window driven by its own layout flag, surviving mode switches. */}
+
+        {/* Rendered conditionally, never mounted-and-null: `useModalFocus` inside
+            it pins the app-wide modal count for as long as it is mounted. */}
+        {pendingTerminalClose && (
+          <ConfirmDialog
+            title={
+              pendingTerminalClose.count === 1
+                ? 'A shell is still running'
+                : `${pendingTerminalClose.count} shells are still running`
+            }
+            body={
+              <>
+                Closing the {pendingTerminalClose.room === 'dev-terminal' ? 'Dev Terminal' : 'Terminal'}{' '}
+                ends {pendingTerminalClose.count === 1 ? 'it' : 'them'} and anything{' '}
+                {pendingTerminalClose.count === 1 ? 'it is' : 'they are'} running. Agent panes are not
+                affected.
+              </>
+            }
+            confirmLabel="Close and end"
+            cancelLabel="Keep open"
+            danger
+            onConfirm={() => {
+              const target = pendingTerminalClose.room;
+              setPendingTerminalClose(null);
+              closeTerminalRoomForReal(target);
+            }}
+            onCancel={() => setPendingTerminalClose(null)}
+          />
+        )}
 
         <TranscriptionIndicator />
       </div>

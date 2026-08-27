@@ -20,6 +20,23 @@ export function sanitiseSidebarTab(v: unknown, fallback: SidebarTab = 'files'): 
 
 const LAYOUT_KEY = 'spacron_layout';
 
+// The right utility drawer's width. ONE definition, used by the default, by the
+// setter, and by the load-time sanitiser — the drawer opens at the same width
+// whichever tool summons it (Agent Fleet included), so a value that skips a
+// clamp anywhere is a drawer that opens at the wrong size somewhere.
+export const RIGHT_DRAWER_MIN_WIDTH = 280;
+export const RIGHT_DRAWER_MAX_WIDTH = 720;
+export const RIGHT_DRAWER_DEFAULT_WIDTH = 380;
+
+/** Narrow anything (a persisted value, a drag result) to a usable drawer width.
+ *  A non-finite value falls back to the default rather than through: `width:
+ *  NaN` / `width: null` makes the panel size to its content, which is the
+ *  "why did the drawer open that size?" failure this guards. */
+export function clampRightDrawerWidth(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : RIGHT_DRAWER_DEFAULT_WIDTH;
+  return Math.max(RIGHT_DRAWER_MIN_WIDTH, Math.min(RIGHT_DRAWER_MAX_WIDTH, n));
+}
+
 const defaultLayout: LayoutState = {
   sidebarVisible: true,
   sidebarWidth: 310,
@@ -44,7 +61,7 @@ const defaultLayout: LayoutState = {
   auxPanelWidth: 550,
   auxEditorHeight: 50,
   leftPanelWidth: 310,
-  rightDrawerWidth: 380,
+  rightDrawerWidth: RIGHT_DRAWER_DEFAULT_WIDTH,
 };
 
 // The right utility drawer hosts the "summoned tool" panels. They are mutually
@@ -132,6 +149,10 @@ function loadLayout(): LayoutState {
     if ((parsed.sidebarTab as string) === 'tasks') parsed.sidebarTab = 'files';
     if ((parsed.sidebarTab as string) === 'runs') parsed.sidebarTab = 'files';
     if (parsed.auxPanelWidth < 180) parsed.auxPanelWidth = 180;
+    // Clamp on the way in, not only on the way out. A width persisted by an
+    // older build, by a narrower window, or as `null` (what JSON.stringify makes
+    // of a NaN) otherwise reaches the panel's inline style untouched.
+    parsed.rightDrawerWidth = clampRightDrawerWidth(parsed.rightDrawerWidth);
     return parsed;
   } catch {
     return defaultLayout;
@@ -557,7 +578,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
 
   setRightDrawerWidth: (width: number) => {
     set((l) => {
-      const next: LayoutState = { ...l, rightDrawerWidth: Math.max(280, Math.min(720, width)) };
+      const next: LayoutState = { ...l, rightDrawerWidth: clampRightDrawerWidth(width) };
       persistLayout(next);
       return next;
     });

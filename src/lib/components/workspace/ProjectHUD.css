@@ -580,3 +580,204 @@
   color: var(--button-text, #fff);
   border-color: transparent;
 }
+
+/* ── What is open inside a project ─────────────────────────────────────────
+   The card and its disclosure panel share one wrapper so the panel travels
+   with the card during a drag and the drop line can sit above the pair. */
+.project-sidebar-entry {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-disclosure-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 18px;
+  margin-left: -2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.project-disclosure-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.project-disclosure-btn.open {
+  transform: rotate(90deg);
+  color: var(--text-secondary);
+}
+
+/* A project with nothing running and no rooms has nothing to disclose. The
+   chevron stays in place so the cards keep one left edge. */
+.project-disclosure-btn:disabled {
+  opacity: 0.22;
+  cursor: default;
+}
+
+/* Collapsed summary: agent count, tinted by whether any of them is working. */
+.project-sidebar-card-agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* The one status light: lit green while the agent is working, dull when idle.
+   `.working` is driven by `TerminalSessionInfo.isExecuting`, the same flag the
+   room panels' edge light is gated on. */
+.hud-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.hud-status-dot.working {
+  background: var(--success);
+  opacity: 1;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 70%, transparent);
+  animation: hud-status-pulse 1.8s var(--ease-in-out, ease-in-out) infinite;
+}
+
+@keyframes hud-status-pulse {
+  0%, 100% { box-shadow: 0 0 5px color-mix(in srgb, var(--success) 55%, transparent); }
+  50% { box-shadow: 0 0 9px color-mix(in srgb, var(--success) 90%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-status-dot.working {
+    animation: none;
+  }
+}
+
+.project-contents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 4px 19px;
+  padding: 6px 6px 7px 8px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+/* Double-tapping a card always expands it, so a project with nothing open needs
+   an answer rather than an empty box. */
+.project-contents-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 2px;
+}
+
+.project-contents-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-contents-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-muted);
+  padding: 0 2px 1px;
+}
+
+.project-process-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 5px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.project-process-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.project-process-name {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.project-process-detail {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.project-room-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 1px 2px;
+}
+
+.project-room-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.project-room-chip:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-primary);
+}
+
+/* ── Dragging a project between collections ───────────────────────────────── */
+.project-sidebar-card.dragging {
+  opacity: 0.45;
+}
+
+.projects-collection-group.drop-target {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 8px;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 1px;
+}
+
+.projects-drop-line {
+  height: 2px;
+  margin: 1px 4px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}

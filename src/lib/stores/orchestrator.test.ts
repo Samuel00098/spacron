@@ -17,6 +17,8 @@ const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 // tests set up stay call-for-call identical to when callers read `.length` off
 // the buffer themselves.
 const getSessionOutputLength = vi.hoisted(() => vi.fn());
+const getSessionOutputTail = vi.hoisted(() => vi.fn());
+const getSessionOutputProduced = vi.hoisted(() => vi.fn());
 const killSession = vi.hoisted(() => vi.fn(async () => undefined));
 const getAgentDisplayName = vi.hoisted(() => vi.fn((id: string) => id));
 const promptBarInput = vi.hoisted(() => ({ set: vi.fn() }));
@@ -151,6 +153,8 @@ vi.mock('$lib/stores/terminal', () => ({
   sendAgentPromptDirect,
   getSessionOutputBuffer,
   getSessionOutputLength,
+  getSessionOutputTail,
+  getSessionOutputProduced,
   killSession,
   getAgentDisplayName,
   promptBarInput,
@@ -191,6 +195,14 @@ function resetMocks() {
   getSessionOutputBuffer.mockReturnValue('');
   getSessionOutputLength.mockReset();
   getSessionOutputLength.mockImplementation(() => getSessionOutputBuffer().length);
+  // The turn watcher reads growth from the monotonic produced counter and pulls
+  // only the new tail; both are derived from the same fake buffer these tests
+  // already drive, so they stay in step with `getSessionOutputBuffer`.
+  getSessionOutputTail.mockReset();
+  getSessionOutputTail.mockImplementation((_id: number, chars: number) =>
+    chars <= 0 ? '' : String(getSessionOutputBuffer()).slice(-chars));
+  getSessionOutputProduced.mockReset();
+  getSessionOutputProduced.mockImplementation(() => getSessionOutputBuffer().length);
   killSession.mockReset();
   getAgentDisplayName.mockReset();
   getAgentDisplayName.mockImplementation((id: string) => id);

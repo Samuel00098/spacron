@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { orchestratorTasks } from '$lib/stores/orchestrator';
-import { allProjectSessions, devSessions, sessions } from '$lib/stores/terminal';
-import { getWorktreeStatus, type WorktreeStatus } from '$lib/services/orchestrator/worktree-manager';
+import { allProjectSessions, devSessions, getSessionOutputProduced, sessions } from '$lib/stores/terminal';
+import type { WorktreeStatus } from '$lib/services/orchestrator/worktree-manager';
+import { subscribeWorktreeStatus } from '$lib/services/orchestrator/worktree-status-poll';
 import { useStore } from '$lib/react/useStore';
 import './AgentWorktreeBadge.css';
 
@@ -47,23 +48,22 @@ export default function AgentWorktreeBadge({ sessionId }: Props) {
 
   const [status, setStatus] = useState<WorktreeStatus | null>(null);
 
+  // Shared poller rather than a timer of our own: every badge asking git for its
+  // own worktree every 4s made the cost of having agents open scale linearly
+  // with how many were running, forever, even while they sat idle or the window
+  // was hidden. The activity probe is what lets it back off — a worktree cannot
+  // change while its agent is producing nothing.
   useEffect(() => {
     if (!worktree) {
       setStatus(null);
       return;
     }
-    let cancelled = false;
-    const tick = async () => {
-      const next = await getWorktreeStatus(worktree);
-      if (!cancelled) setStatus(next);
-    };
-    void tick();
-    const timer = setInterval(tick, 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [worktree]);
+    return subscribeWorktreeStatus(
+      worktree,
+      () => getSessionOutputProduced(sessionId),
+      setStatus,
+    );
+  }, [worktree, sessionId]);
 
   // If running with skipWorktree (admin/release task), show "Main repo" badge.
   if (isSkipWorktree) {

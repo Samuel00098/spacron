@@ -12,6 +12,7 @@ short enough that it says what the note is *about*, never what it says.
 ## Agents, delegation & review
 
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
+- [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
 - [agent-turn-detection](agent-turn-detection.md) — how a turn is judged to have ended, and why a guess may not say "finished"
 - [agent-report-status](agent-report-status.md) — the `report_status` tool and per-launch agent tokens; only a declared end may interrupt
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
@@ -32,6 +33,7 @@ short enough that it says what the note is *about*, never what it says.
 - [shortcut-key-matching](shortcut-key-matching.md) — `matchShortcut` compares produced characters, not key codes
 - [dropdown-menu-sizing](dropdown-menu-sizing.md) — the shared `Dropdown` sizes to content, then clamps in a second layout pass
 - [command-palette-registry](command-palette-registry.md) — the palette auto-registers menu, layout and settings actions; merge, never replace
+- [room-liveness-invariant](room-liveness-invariant.md) — why closing a terminal room ends its shells, and the single close gate that keeps it true
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the `expandedRoom` invariants, and why Split must switch `ambientLayout`
 - [per-project-persistence](per-project-persistence.md) — how a project remembers its stage, and what the sanitiser must learn
 - [preview-iframe-bridge](preview-iframe-bridge.md) — the preview iframe is cross-origin; the postMessage contract

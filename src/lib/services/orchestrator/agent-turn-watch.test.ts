@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 const getSessionOutputLength = vi.hoisted(() => vi.fn(() => 0));
-vi.mock('$lib/stores/terminal', () => ({ getSessionOutputBuffer, getSessionOutputLength }));
+const getSessionOutputTail = vi.hoisted(() => vi.fn((_id: number, _chars: number) => ''));
+const getSessionOutputProduced = vi.hoisted(() => vi.fn(() => 0));
+vi.mock('$lib/stores/terminal', () => ({
+  getSessionOutputBuffer,
+  getSessionOutputLength,
+  getSessionOutputTail,
+  getSessionOutputProduced,
+}));
 
 import { describeTurnEnd, watchLeasedAgentTurn, QUIET_TURN_IDLE_MS } from './agent-turn-watch';
 import { __registerChannelForTest, __resetTurnSignalsForTest } from './agent-hook-signals';
@@ -16,13 +23,31 @@ afterEach(() => {
 
 describe('watchLeasedAgentTurn', () => {
   let buf = '';
+  // The real store's produced-chars counter is MONOTONIC: it counts everything
+  // the session ever emitted and does not fall when the retained window slides.
+  // Modelling that is what makes the "buffer slid" test meaningful — a slide is
+  // zero growth, not negative growth.
+  let produced = 0;
+  let lastBufLen = 0;
   beforeEach(() => {
     vi.useFakeTimers();
     buf = '';
+    produced = 0;
+    lastBufLen = 0;
     getSessionOutputBuffer.mockReset();
     getSessionOutputBuffer.mockImplementation(() => buf);
     getSessionOutputLength.mockReset();
     getSessionOutputLength.mockImplementation(() => buf.length);
+    getSessionOutputTail.mockReset();
+    getSessionOutputTail.mockImplementation((_id: number, chars: number) =>
+      chars <= 0 ? '' : buf.slice(-chars),
+    );
+    getSessionOutputProduced.mockReset();
+    getSessionOutputProduced.mockImplementation(() => {
+      if (buf.length > lastBufLen) produced += buf.length - lastBufLen;
+      lastBufLen = buf.length;
+      return produced;
+    });
   });
   afterEach(() => {
     vi.clearAllTimers();
@@ -83,6 +108,44 @@ describe('watchLeasedAgentTurn', () => {
     expect(buf.indexOf('\x07')).toBeGreaterThanOrEqual(0);
     expect(buf.slice(0, buf.indexOf('\x07'))).not.toContain('\x1b');
     await vi.advanceTimersByTimeAsync(30);
+    const settled = await Promise.race([p, Promise.resolve('pending')]);
+    expect(settled).toBe('pending');
+  });
+
+  it('keeps a turn alive once the output window has filled and stopped growing', async () => {
+    // Regression: growth used to be measured against the length of the RETAINED
+    // window, which is capped. A verbose agent hits that cap after a couple of
+    // minutes, its length stops rising, and the watcher then saw a permanently
+    // idle session — refreshing `lastGrowthAt` never again — so it reported
+    // `finished` `idleMs` later while the agent was still streaming, releasing
+    // the lease and throwing away the answer. Growth is now read from the
+    // monotonic produced-chars counter, which a full window does not affect.
+    const CAP = 400;
+    const emitCapped = (text: string) => {
+      produced += text.length;
+      buf = (buf + text).slice(-CAP);
+      lastBufLen = buf.length;
+    };
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 50,
+    });
+    // Real work first, while the window is still filling — so the turn has
+    // activity and is past its work floor, and the idle fallback is live.
+    emitCapped('a'.repeat(200));
+    await vi.advanceTimersByTimeAsync(10);
+    emitCapped('b'.repeat(300)); // window is full from here on
+    await vi.advanceTimersByTimeAsync(10);
+    expect(buf.length).toBe(CAP);
+    // Keep streaming for many times `idleMs`. Every chunk leaves `buf.length`
+    // pinned at CAP, so a length-based watcher sees a session that went silent.
+    for (let i = 0; i < 40; i += 1) {
+      emitCapped(`still working ${i} `);
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(buf.length).toBe(CAP);
     const settled = await Promise.race([p, Promise.resolve('pending')]);
     expect(settled).toBe('pending');
   });

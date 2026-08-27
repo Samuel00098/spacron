@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { __sanitisePersistedProjectState as sanitise } from './workspace';
+import { __sanitisePersistedProjectState as sanitise, moveProjectBetweenCollections } from './workspace';
+import type { Workspace } from '$lib/types/workspace';
 
 /**
  * The per-project stage arrangement — Split's tiling and the primary room.
@@ -19,11 +20,27 @@ describe('persisted stage arrangement', () => {
       ambient: 'gallery',
       splitSlots: ['terminal', 'agent:7', 'editor'],
       focusedRoom: 'agent:7',
+      splitPresets: { 3: '3-left-master', 2: '2-rows' },
     });
 
     expect(state?.ambient).toBe('gallery');
     expect(state?.splitSlots).toEqual(['terminal', 'agent:7', 'editor']);
     expect(state?.focusedRoom).toBe('agent:7');
+    expect(state?.splitPresets).toEqual({ 3: '3-left-master', 2: '2-rows' });
+  });
+
+  it('filters invalid preset IDs and non-numeric keys from splitPresets', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      splitPresets: {
+        3: '3-left-master',
+        foo: 'invalid',
+        2: 'danger_injection',
+      },
+    });
+
+    expect(state?.splitPresets).toEqual({ 3: '3-left-master' });
   });
 
   it('keeps an empty arrangement empty — that is the "never arranged" sentinel', () => {
@@ -176,5 +193,119 @@ describe('persisted editor room state', () => {
       layout: { activeView: 'terminal', editorSplitPreview: false, editorVisible: false },
     });
     expect(state?.layout?.editorVisible).toBe(false);
+  });
+});
+
+/**
+ * Dragging a project onto another collection, and picking one out of the move
+ * menu, both land here. The index arithmetic is the part that goes wrong: a drop
+ * inside one collection has to remove before it inserts, or the position the
+ * drop was aimed at has already shifted by one.
+ */
+describe('moving a project between collections', () => {
+  function collection(id: string, paths: string[], active: string | null = null): Workspace {
+    return {
+      id,
+      name: id,
+      project_paths: paths,
+      active_project_path: active,
+      last_opened: '0',
+    };
+  }
+
+  it('appends to the target when no sibling is named', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one', '/two']), collection('b', ['/three'])],
+      '/one',
+      'a',
+      'b',
+    );
+
+    expect(next[0].project_paths).toEqual(['/two']);
+    expect(next[1].project_paths).toEqual(['/three', '/one']);
+  });
+
+  it('lands the project before the card it was dropped on', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one']), collection('b', ['/two', '/three'])],
+      '/one',
+      'a',
+      'b',
+      '/three',
+    );
+
+    expect(next[1].project_paths).toEqual(['/two', '/one', '/three']);
+  });
+
+  it('reorders within one collection without the removal shifting the target', () => {
+    // Dropping the first card before the last: remove-then-insert on one list.
+    // Splicing into the original list instead puts it one slot too far left.
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one', '/two', '/three'])],
+      '/one',
+      'a',
+      'a',
+      '/three',
+    );
+
+    expect(next[0].project_paths).toEqual(['/two', '/one', '/three']);
+  });
+
+  it('sends a project to the end of its own collection', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one', '/two', '/three'])],
+      '/one',
+      'a',
+      'a',
+    );
+
+    expect(next[0].project_paths).toEqual(['/two', '/three', '/one']);
+  });
+
+  it('never duplicates a project the target already holds', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one']), collection('b', ['/one', '/two'])],
+      '/one',
+      'a',
+      'b',
+      '/two',
+    );
+
+    expect(next[1].project_paths).toEqual(['/one', '/two']);
+  });
+
+  it('repoints a source collection that was pointing at the project it lost', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one', '/two'], '/one'), collection('b', [])],
+      '/one',
+      'a',
+      'b',
+    );
+
+    expect(next[0].active_project_path).toBe('/two');
+  });
+
+  it('clears the source pointer when the collection is left empty', () => {
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one'], '/one'), collection('b', [])],
+      '/one',
+      'a',
+      'b',
+    );
+
+    expect(next[0].project_paths).toEqual([]);
+    expect(next[0].active_project_path).toBeNull();
+  });
+
+  it('leaves collections that are neither source nor target alone', () => {
+    const untouched = collection('c', ['/four'], '/four');
+    const next = moveProjectBetweenCollections(
+      [collection('a', ['/one']), collection('b', []), untouched],
+      '/one',
+      'a',
+      'b',
+    );
+
+    expect(next[2]).toBe(untouched);
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useGitBranchStore } from '$lib/stores/zustand/gitBranch';
+import { useStore } from '$lib/react/useStore';
 import {
   recentWorkspaces,
   openWorkspace,
@@ -12,7 +13,18 @@ import {
   openProject,
   newFolderPromptOpen,
   cloneRepoPromptOpen,
+  projectOpenRooms,
+  isProjectSwitching,
+  moveProjectBetweenCollections,
 } from '$lib/stores/workspace';
+import {
+  allProjectSessions,
+  getSessionPromptTargetLabel,
+  getSessionPaneDisplayTitle,
+  isAgentSession,
+  type TerminalSessionInfo,
+} from '$lib/stores/terminal';
+import { requestRoomControl } from '$lib/stores/layoutControl';
 import './ProjectHUD.css';
 
 function getFilename(path: string): string {
@@ -28,12 +40,41 @@ function shortPath(path: string) {
 }
 
 const COLLAPSED_KEY = 'spacron.hud.collapsedCollections';
+const EXPANDED_PROJECTS_KEY = 'spacron.hud.expandedProjects';
+
+// Past this a press is a drag, not a click. HTML5 drag-and-drop never fires
+// inside the Tauri window (the window owns an OS-level file-drop handler, which
+// disables the WebView's native DnD pipeline), so moving a project between
+// collections is pointer-driven — the same shape the tasks kanban uses.
+const DRAG_ARM_THRESHOLD_PX = 5;
+
+// Two clicks on the same card inside this window are one double-tap. Matches the
+// platform default closely enough that a deliberate double-tap is never split
+// into two project opens.
+const DOUBLE_TAP_MS = 400;
+
+// Room ids as AppShell spells them, so a click here can be handed straight to
+// `requestRoomControl`. Kept to the rooms `projectOpenRooms` can report.
+const ROOM_LABELS: Record<string, string> = {
+  terminal: 'Terminal',
+  editor: 'Editor',
+  preview: 'Preview',
+  review: 'Review',
+  tasks: 'Tasks',
+  sketch: 'Sketch',
+};
 
 interface FlatProjectItem {
   workspaceId: string;
   workspaceName: string;
   path: string;
   name: string;
+}
+
+/** Where a dragged project would land: a collection, and the card it goes before. */
+interface DropTarget {
+  workspaceId: string;
+  beforePath: string | null;
 }
 
 export default function ProjectHUD() {
@@ -59,9 +100,63 @@ export default function ProjectHUD() {
     }
   });
 
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(EXPANDED_PROJECTS_KEY);
+      return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set<string>();
+    }
+  });
+  const [dragPath, setDragPath] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+
   const inputRef = useRef<HTMLInputElement | null>(null);
   const newCollectionInputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const pointerDragRef = useRef<{
+    path: string;
+    workspaceId: string;
+    startX: number;
+    startY: number;
+    armed: boolean;
+    detach: () => void;
+  } | null>(null);
+  // A release ends with a click on the card, which would open the project the
+  // drag just moved. Swallow it for a beat, like the tasks board does.
+  const justDraggedRef = useRef(false);
+  // Double-tapping a card expands it, and a double-tap is delivered as two
+  // clicks plus a `dblclick`. Without this the second click runs `handleOpen`
+  // again — a second `switchToProject` into a switch that is still restoring.
+  // Single-click stays instant: the FIRST click is never delayed, only a
+  // repeat one on the same card inside the double-tap window is dropped.
+  const lastCardClickRef = useRef<{ path: string; at: number }>({ path: '', at: 0 });
+
+  // Every running session in every project, so a project's processes are
+  // readable without switching into it. `sessions` only ever holds the active
+  // project's.
+  const crossProjectSessions = useStore(allProjectSessions);
+  const openRoomsByProject = useStore(projectOpenRooms);
+
+  // A project only has a stable id once it has been opened at least once, and
+  // only an opened project can have anything running in it — so a path with no
+  // id here is simply a project with nothing to show.
+  const projectIdByPath = useMemo(() => {
+    const byPath = new Map<string, string>();
+    for (const project of projectsMap.values()) byPath.set(project.root_path, project.id);
+    return byPath;
+  }, [projectsMap]);
+
+  const sessionsByProject = useMemo(() => {
+    const byProject = new Map<string, TerminalSessionInfo[]>();
+    for (const session of crossProjectSessions) {
+      if (!session.isRunning) continue;
+      const list = byProject.get(session.projectId);
+      if (list) list.push(session);
+      else byProject.set(session.projectId, [session]);
+    }
+    return byProject;
+  }, [crossProjectSessions]);
 
   // Derive active project's path
   const activeProjPath = useMemo(() => {
@@ -172,6 +267,76 @@ export default function ProjectHUD() {
     });
   }
 
+  // Expand / collapse a project's contents (persisted across sessions)
+  function toggleProjectExpanded(path: string) {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      try {
+        localStorage.setItem(EXPANDED_PROJECTS_KEY, JSON.stringify(Array.from(next)));
+      } catch {
+        /* storage unavailable — expansion stays session-only */
+      }
+      return next;
+    });
+  }
+
+  // ── Jumping to a room from the panel ───────────────────────────────────────
+  // A room only exists on the stage once its project is active, and switching
+  // projects restores that project's whole saved arrangement asynchronously —
+  // a focus sent before that lands is simply overwritten by it. So the request
+  // waits for `isProjectSwitching` to go true and back to false rather than for
+  // the switch call to return, which is several awaits too early.
+  const pendingFocusRef = useRef<(() => void) | null>(null);
+
+  function focusRoomAfterSwitch(room: string) {
+    pendingFocusRef.current?.();
+
+    let settled = false;
+    let sawSwitch = false;
+    let unsubscribe: (() => void) | null = null;
+    let timer = 0;
+
+    function cancel() {
+      window.clearTimeout(timer);
+      unsubscribe?.();
+      unsubscribe = null;
+      if (pendingFocusRef.current === cancel) pendingFocusRef.current = null;
+    }
+
+    function finish() {
+      if (settled) return;
+      settled = true;
+      cancel();
+      requestRoomControl('focus', room);
+    }
+
+    pendingFocusRef.current = cancel;
+    unsubscribe = isProjectSwitching.subscribe((busy) => {
+      if (busy) sawSwitch = true;
+      else if (sawSwitch) finish();
+    });
+    // A switch can also be a no-op (nothing to restore), and then the flag never
+    // flips and there is nothing to wait for. The fallback only applies while no
+    // switch has been seen — a slow restore is waited out by the subscription.
+    timer = window.setTimeout(() => {
+      if (!sawSwitch) finish();
+    }, 800);
+  }
+
+  useEffect(() => () => pendingFocusRef.current?.(), []);
+
+  async function openRoom(wsId: string, path: string, room: string) {
+    const projectId = projectIdByPath.get(path);
+    if (projectId && activeProjId === projectId) {
+      requestRoomControl('focus', room);
+      return;
+    }
+    focusRoomAfterSwitch(room);
+    await handleOpen(wsId, path);
+  }
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -211,31 +376,126 @@ export default function ProjectHUD() {
     setShowWsMenuId(showWsMenuId === path ? null : path);
   }
 
-  function handleMoveProject(projectPath: string, sourceWsId: string, targetWsId: string) {
-    if (sourceWsId === targetWsId) return;
-
+  // Both ways of moving a project — this menu and the drag below — commit
+  // through the same list surgery.
+  function handleMoveProject(
+    projectPath: string,
+    sourceWsId: string,
+    targetWsId: string,
+    beforePath: string | null = null
+  ) {
+    if (sourceWsId === targetWsId && beforePath === projectPath) return;
     recentWorkspaces.update((list) =>
-      list.map((w) => {
-        if (w.id === sourceWsId) {
-          const paths = w.project_paths.filter((p) => p !== projectPath);
-          return {
-            ...w,
-            project_paths: paths,
-            active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
-          };
-        }
-        if (w.id === targetWsId) {
-          const paths = w.project_paths.includes(projectPath) ? w.project_paths : [...w.project_paths, projectPath];
-          return {
-            ...w,
-            project_paths: paths,
-          };
-        }
-        return w;
-      })
+      moveProjectBetweenCollections(list, projectPath, sourceWsId, targetWsId, beforePath)
     );
     setShowWsMenuId(null);
   }
+
+  // ── Dragging a project between collections ─────────────────────────────────
+  // Pointer events, not HTML5 DnD: the Tauri window's OS-level file-drop handler
+  // disables the WebView's native drag pipeline, so `draggable`/`onDragStart`
+  // never fire. A press on the card body arms a drag past the threshold, every
+  // move hit-tests the list into a `{workspaceId, beforePath}` target, and the
+  // release runs the same move the "Move to collection" menu does.
+
+  function hitTestDrop(clientX: number, clientY: number, draggedPath: string): DropTarget | null {
+    const stack = document.elementsFromPoint(clientX, clientY);
+    const groupEl = stack.find(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains('projects-collection-group')
+    );
+    const workspaceId = groupEl?.dataset.wsId;
+    if (!workspaceId) return null;
+
+    let beforePath: string | null = null;
+    for (const cardEl of groupEl.querySelectorAll<HTMLElement>('.project-sidebar-card')) {
+      const path = cardEl.dataset.projectPath;
+      if (!path || path === draggedPath) continue;
+      const rect = cardEl.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        beforePath = path;
+        break;
+      }
+    }
+    return { workspaceId, beforePath };
+  }
+
+  function endPointerDrag(dropAt?: { x: number; y: number }) {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+    pointerDragRef.current = null;
+    drag.detach();
+
+    // Released before the threshold: an ordinary click, which the card's own
+    // onClick handles.
+    if (!drag.armed) return;
+
+    setDragPath(null);
+    setDropTarget(null);
+    justDraggedRef.current = true;
+    window.setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 320);
+
+    if (!dropAt) return; // pointercancel / Escape / released off the list
+    const target = hitTestDrop(dropAt.x, dropAt.y, drag.path);
+    if (!target) return;
+    handleMoveProject(drag.path, drag.workspaceId, target.workspaceId, target.beforePath);
+  }
+
+  function onCardPointerDown(e: React.PointerEvent, wsId: string, path: string) {
+    if (e.button !== 0) return;
+    // Presses on the card's own controls (expand chevron, move menu, remove)
+    // belong to those controls — a drag starts from the card body only.
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input') || target.closest('.hud-move-menu')) return;
+    e.preventDefault();
+
+    const drag: NonNullable<typeof pointerDragRef.current> = {
+      path,
+      workspaceId: wsId,
+      startX: e.clientX,
+      startY: e.clientY,
+      armed: false,
+      detach: () => {},
+    };
+    pointerDragRef.current = drag;
+
+    const onMove = (ev: PointerEvent) => {
+      if (pointerDragRef.current !== drag) return;
+      if (!drag.armed) {
+        if (Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY) < DRAG_ARM_THRESHOLD_PX) return;
+        drag.armed = true;
+        setDragPath(drag.path);
+        document.body.style.userSelect = 'none';
+      }
+      ev.preventDefault();
+      setDropTarget(hitTestDrop(ev.clientX, ev.clientY, drag.path));
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.button !== 0) return;
+      endPointerDrag(drag.armed ? { x: ev.clientX, y: ev.clientY } : undefined);
+    };
+    const onCancel = () => endPointerDrag();
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') endPointerDrag();
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+    drag.detach = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      document.body.style.userSelect = '';
+    };
+  }
+
+  // A drag in flight when the panel unmounts must not leave its window
+  // listeners (or the body's `user-select: none`) behind.
+  useEffect(() => () => pointerDragRef.current?.detach(), []);
 
   return (
     <div className="projects-sidebar-panel">
@@ -369,8 +629,14 @@ export default function ProjectHUD() {
           // While searching every group stays open so matches are never hidden
           const isCollapsed = !search && collapsedIds.has(ws.id);
 
+          const isDropTarget = dropTarget?.workspaceId === ws.id;
+
           return (
-            <section key={ws.id} className="projects-collection-group">
+            <section
+              key={ws.id}
+              className={`projects-collection-group${isDropTarget ? ' drop-target' : ''}`}
+              data-ws-id={ws.id}
+            >
               <header className={`projects-collection-header${isCollapsed ? ' collapsed' : ''}`}>
                 {editingWsId === ws.id ? (
                   <input
@@ -484,103 +750,236 @@ export default function ProjectHUD() {
                         ? branchInfo[activeProjId]
                         : null;
 
+                    const projectId = projectIdByPath.get(p.path) ?? null;
+                    const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
+                    const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
+                    const workingCount = projectSessions.filter((session) => session.isExecuting).length;
+                    const hasContents = projectSessions.length > 0 || projectRooms.length > 0;
+                    const isExpanded = expandedProjects.has(p.path);
+
                     return (
-                      <div
-                        key={p.path}
-                        className={`project-sidebar-card${isHovered ? ' hovered' : ''}${p.isActive ? ' active' : ''}`}
-                        onClick={() => handleOpen(ws.id, p.path)}
-                        onMouseEnter={() => setHoveredIndex(globalIdx)}
-                      >
-                        <div className="project-sidebar-card-avatar">
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="project-folder-icon">
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="currentColor" fillOpacity="0.12" />
-                          </svg>
-                        </div>
-
-                        <div className="project-sidebar-card-info">
-                          <div className="project-sidebar-card-name-row">
-                            <span className="project-sidebar-card-name">{p.name}</span>
-                            {p.isActive && (
-                              <span className="project-active-badge">
-                                <span className="project-active-dot" />
-                                Active
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="project-sidebar-card-meta-row">
-                            <span className="project-sidebar-card-path" title={p.path}>
-                              {shortPath(p.path)}
-                            </span>
-
-                            {gitInfo && (
-                              <span className="project-sidebar-card-git" title={`Git Branch: ${gitInfo.current}`}>
-                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                  <line x1="6" y1="3" x2="6" y2="15" />
-                                  <circle cx="18" cy="6" r="3" />
-                                  <circle cx="6" cy="18" r="3" />
-                                  <path d="M18 9a9 9 0 0 1-9 9" />
-                                </svg>
-                                <span className="git-branch-text">{gitInfo.current}</span>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Card Hover Action Buttons */}
-                        <div className="project-card-actions" onClick={(e) => e.stopPropagation()}>
+                      <div key={p.path} className="project-sidebar-entry">
+                        {isDropTarget && dropTarget?.beforePath === p.path && (
+                          <div className="projects-drop-line" />
+                        )}
+                        <div
+                          data-project-path={p.path}
+                          className={`project-sidebar-card${isHovered ? ' hovered' : ''}${p.isActive ? ' active' : ''}${
+                            dragPath === p.path ? ' dragging' : ''
+                          }${isExpanded ? ' expanded' : ''}`}
+                          onClick={() => {
+                            if (justDraggedRef.current) return;
+                            const now = Date.now();
+                            const last = lastCardClickRef.current;
+                            lastCardClickRef.current = { path: p.path, at: now };
+                            // Second half of a double-tap: the expand handler
+                            // owns it, and the project was already opened by the
+                            // first click.
+                            if (last.path === p.path && now - last.at < DOUBLE_TAP_MS) return;
+                            handleOpen(ws.id, p.path);
+                          }}
+                          onDoubleClick={(e) => {
+                            // Double-tap anywhere on the card is the big target
+                            // for the same thing the disclosure chevron does.
+                            e.preventDefault();
+                            if (justDraggedRef.current) return;
+                            toggleProjectExpanded(p.path);
+                          }}
+                          onPointerDown={(e) => onCardPointerDown(e, ws.id, p.path)}
+                          onMouseEnter={() => setHoveredIndex(globalIdx)}
+                        >
                           <button
                             type="button"
-                            className="hud-card-action-btn"
-                            onClick={(e) => toggleMoveMenu(e, p.path)}
-                            title="Move to collection..."
-                            aria-label="Move to collection..."
+                            className={`project-disclosure-btn${isExpanded ? ' open' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleProjectExpanded(p.path);
+                            }}
+                            aria-expanded={isExpanded}
+                            title={
+                              isExpanded
+                                ? 'Hide what is open in this project'
+                                : 'Show what is open in this project (or double-click the card)'
+                            }
+                            aria-label={isExpanded ? 'Hide project contents' : 'Show project contents'}
                           >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <circle cx="12" cy="12" r="1" />
-                              <circle cx="12" cy="5" r="1" />
-                              <circle cx="12" cy="19" r="1" />
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="9 6 15 12 9 18" />
                             </svg>
                           </button>
 
-                          <button
-                            type="button"
-                            className="hud-card-action-btn hover-danger"
-                            onClick={() => removeProjectFromCollection(ws.id, p.path)}
-                            title="Remove project from collection"
-                            aria-label="Remove project from collection"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <line x1="18" y1="6" x2="6" y2="18" />
-                              <line x1="6" y1="6" x2="18" y2="18" />
+                          <div className="project-sidebar-card-avatar">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="project-folder-icon">
+                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="currentColor" fillOpacity="0.12" />
                             </svg>
-                          </button>
+                          </div>
 
-                          {/* Move to another workspace popup menu */}
-                          {showWsMenuId === p.path && (
-                            <div className="hud-move-menu">
-                              <div className="hud-move-menu-label">Move to collection</div>
-                              {workspaces
-                                .filter((other) => other.id !== ws.id)
-                                .map((other) => (
+                          <div className="project-sidebar-card-info">
+                            <div className="project-sidebar-card-name-row">
+                              <span className="project-sidebar-card-name">{p.name}</span>
+                              {p.isActive && (
+                                <span className="project-active-badge">
+                                  <span className="project-active-dot" />
+                                  Active
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="project-sidebar-card-meta-row">
+                              <span className="project-sidebar-card-path" title={p.path}>
+                                {shortPath(p.path)}
+                              </span>
+
+                              {gitInfo && (
+                                <span className="project-sidebar-card-git" title={`Git Branch: ${gitInfo.current}`}>
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                    <line x1="6" y1="3" x2="6" y2="15" />
+                                    <circle cx="18" cy="6" r="3" />
+                                    <circle cx="6" cy="18" r="3" />
+                                    <path d="M18 9a9 9 0 0 1-9 9" />
+                                  </svg>
+                                  <span className="git-branch-text">{gitInfo.current}</span>
+                                </span>
+                              )}
+
+                              {/* Collapsed summary, so a glance is enough: how many
+                                  agents are running here, and whether any is working. */}
+                              {!isExpanded && projectSessions.length > 0 && (
+                                <span
+                                  className="project-sidebar-card-agents"
+                                  title={
+                                    workingCount > 0
+                                      ? `${workingCount} of ${projectSessions.length} working`
+                                      : `${projectSessions.length} idle`
+                                  }
+                                >
+                                  <span className={`hud-status-dot${workingCount > 0 ? ' working' : ''}`} />
+                                  {projectSessions.length}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Card Hover Action Buttons */}
+                          <div className="project-card-actions" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="hud-card-action-btn"
+                              onClick={(e) => toggleMoveMenu(e, p.path)}
+                              title="Move to collection..."
+                              aria-label="Move to collection..."
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="1" />
+                                <circle cx="12" cy="5" r="1" />
+                                <circle cx="12" cy="19" r="1" />
+                              </svg>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="hud-card-action-btn hover-danger"
+                              onClick={() => removeProjectFromCollection(ws.id, p.path)}
+                              title="Remove project from collection"
+                              aria-label="Remove project from collection"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                              </svg>
+                            </button>
+
+                            {/* Move to another workspace popup menu */}
+                            {showWsMenuId === p.path && (
+                              <div className="hud-move-menu">
+                                <div className="hud-move-menu-label">Move to collection</div>
+                                {workspaces
+                                  .filter((other) => other.id !== ws.id)
+                                  .map((other) => (
+                                    <button
+                                      key={other.id}
+                                      type="button"
+                                      className="hud-move-menu-item"
+                                      onClick={() => handleMoveProject(p.path, ws.id, other.id)}
+                                    >
+                                      {other.name}
+                                    </button>
+                                  ))}
+                                {workspaces.filter((other) => other.id !== ws.id).length === 0 && (
+                                  <div className="hud-move-menu-empty">No other collections</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                      {isExpanded && (
+                        <div className="project-contents">
+                          {!hasContents && (
+                            <div className="project-contents-empty">Nothing open in this project</div>
+                          )}
+                          {projectSessions.length > 0 && (
+                            <div className="project-contents-section">
+                              <div className="project-contents-label">Running</div>
+                              {projectSessions.map((session) => {
+                                const isAgent = isAgentSession(session);
+                                const name = isAgent
+                                  ? getSessionPromptTargetLabel(session, projectSessions)
+                                  : session.title;
+                                const detail = getSessionPaneDisplayTitle(session, projectSessions);
+                                return (
                                   <button
-                                    key={other.id}
+                                    key={session.id}
                                     type="button"
-                                    className="hud-move-menu-item"
-                                    onClick={() => handleMoveProject(p.path, ws.id, other.id)}
+                                    className="project-process-row"
+                                    onClick={() =>
+                                      openRoom(ws.id, p.path, isAgent ? `agent:${session.id}` : 'terminal').catch(
+                                        console.error
+                                      )
+                                    }
+                                    title={session.isExecuting ? `${name} — working` : `${name} — idle`}
                                   >
-                                    {other.name}
+                                    <span
+                                      className={`hud-status-dot${session.isExecuting ? ' working' : ''}`}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="project-process-name">{name}</span>
+                                    {detail && detail !== name && (
+                                      <span className="project-process-detail">{detail}</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {projectRooms.length > 0 && (
+                            <div className="project-contents-section">
+                              <div className="project-contents-label">Rooms</div>
+                              <div className="project-room-chips">
+                                {projectRooms.map((room) => (
+                                  <button
+                                    key={room}
+                                    type="button"
+                                    className="project-room-chip"
+                                    onClick={() => openRoom(ws.id, p.path, room).catch(console.error)}
+                                    title={`Open ${ROOM_LABELS[room] ?? room}`}
+                                  >
+                                    {ROOM_LABELS[room] ?? room}
                                   </button>
                                 ))}
-                              {workspaces.filter((other) => other.id !== ws.id).length === 0 && (
-                                <div className="hud-move-menu-empty">No other collections</div>
-                              )}
+                              </div>
                             </div>
                           )}
                         </div>
+                      )}
                       </div>
                     );
                   })}
+
+                  {isDropTarget && dropTarget?.beforePath === null && (
+                    <div className="projects-drop-line" />
+                  )}
 
                   {wsProjects.length === 0 && !search && (
                     <div className="projects-collection-empty">

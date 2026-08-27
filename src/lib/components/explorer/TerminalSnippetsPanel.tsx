@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
@@ -17,6 +17,50 @@ import { layoutSnapshot } from '$lib/stores/layoutControl';
 import './TerminalSnippetsPanel.css';
 
 type Scope = 'global' | 'project';
+
+/**
+ * The scope the panel last showed, remembered across mounts.
+ *
+ * A project snippet is invisible from the Global tab, and this panel unmounts
+ * whenever the left drawer switches tools — so a scope kept only in component
+ * state reset to `global` every time it came back, and a snippet saved under
+ * Project looked like it had never been saved at all. It is a preference, not
+ * workspace state, so it lives in localStorage next to the global snippets
+ * rather than in the per-project layout.
+ */
+const SCOPE_KEY = 'spacron_snippets_scope';
+
+function readStoredScope(): Scope {
+  try {
+    return localStorage.getItem(SCOPE_KEY) === 'project' ? 'project' : 'global';
+  } catch {
+    return 'global';
+  }
+}
+
+function writeStoredScope(scope: Scope) {
+  try {
+    localStorage.setItem(SCOPE_KEY, scope);
+  } catch {
+    // Losing the preference is not worth failing the click over.
+  }
+}
+
+/** A snippet belongs to exactly one scope: the open project's, or global. */
+function inScope(snippet: ShellSnippet, scope: Scope, project: { id: string } | null): boolean {
+  if (scope === 'project') return Boolean(project) && snippet.projectId === project!.id;
+  return snippet.projectId === undefined;
+}
+
+function matchesQuery(snippet: ShellSnippet, rawQuery: string): boolean {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return true;
+  return (
+    snippet.name.toLowerCase().includes(query) ||
+    snippet.command.toLowerCase().includes(query) ||
+    snippet.description.toLowerCase().includes(query)
+  );
+}
 
 function PlusIcon() {
   return (
@@ -68,7 +112,7 @@ export default function TerminalSnippetsPanel() {
   const sessionId = useStore(isDev ? devActiveSessionId : activeSessionId);
   const allSnippets = useStore(snippets);
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentScope, setCurrentScope] = useState<Scope>('global');
+  const [currentScope, setCurrentScope] = useState<Scope>(readStoredScope);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
@@ -85,31 +129,43 @@ export default function TerminalSnippetsPanel() {
     }
   }, [project]);
 
+  // Falling back with no project open is not a choice the user made, so it is
+  // deliberately not written to `SCOPE_KEY` — reopening the project must land
+  // back on Project rather than on whatever this fallback picked.
   useEffect(() => {
     if (currentScope === 'project' && !project) {
       setCurrentScope('global');
     }
   }, [currentScope, project]);
 
-  const filteredSnippets = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    const isProjectScope = currentScope === 'project';
+  const chooseScope = useCallback((scope: Scope) => {
+    setCurrentScope(scope);
+    writeStoredScope(scope);
+  }, []);
 
-    return allSnippets.filter((snippet) => {
-      if (isProjectScope) {
-        if (!project || snippet.projectId !== project.id) return false;
-      } else if (snippet.projectId !== undefined) {
-        return false;
-      }
+  const scopeCounts = useMemo(
+    () => ({
+      global: allSnippets.filter((snippet) => snippet.projectId === undefined).length,
+      project: project
+        ? allSnippets.filter((snippet) => snippet.projectId === project.id).length
+        : 0,
+    }),
+    [allSnippets, project],
+  );
 
-      if (!query) return true;
-      return (
-        snippet.name.toLowerCase().includes(query) ||
-        snippet.command.toLowerCase().includes(query) ||
-        snippet.description.toLowerCase().includes(query)
-      );
-    });
-  }, [allSnippets, currentScope, project, searchQuery]);
+  const filteredSnippets = useMemo(
+    () => allSnippets.filter((snippet) => inScope(snippet, currentScope, project) && matchesQuery(snippet, searchQuery)),
+    [allSnippets, currentScope, project, searchQuery],
+  );
+
+  // How many snippets the tab you are *not* looking at would show for the same
+  // search. A snippet only ever appears under its own scope, so without this an
+  // empty list is indistinguishable from a snippet that was never saved.
+  const otherScope: Scope = currentScope === 'global' ? 'project' : 'global';
+  const otherScopeMatches = useMemo(
+    () => allSnippets.filter((snippet) => inScope(snippet, otherScope, project) && matchesQuery(snippet, searchQuery)).length,
+    [allSnippets, otherScope, project, searchQuery],
+  );
 
   function resetForm() {
     setFormName('');
@@ -146,7 +202,7 @@ export default function TerminalSnippetsPanel() {
     setFormCommand(snippet.command);
     setFormDescription(snippet.description);
     setEditingId(snippet.id);
-    setCurrentScope(snippet.projectId ? 'project' : 'global');
+    chooseScope(snippet.projectId ? 'project' : 'global');
     setShowForm(true);
   }
 
@@ -212,10 +268,10 @@ export default function TerminalSnippetsPanel() {
             <div className="input-wrap scope-wrap">
               <span className="field-label">Scope</span>
               <div className="scope-toggle-group">
-                <button type="button" className={`toggle-opt${currentScope === 'global' ? ' active' : ''}`} onClick={() => setCurrentScope('global')}>
+                <button type="button" className={`toggle-opt${currentScope === 'global' ? ' active' : ''}`} onClick={() => chooseScope('global')}>
                   Global
                 </button>
-                <button type="button" className={`toggle-opt${currentScope === 'project' ? ' active' : ''}`} onClick={() => setCurrentScope('project')}>
+                <button type="button" className={`toggle-opt${currentScope === 'project' ? ' active' : ''}`} onClick={() => chooseScope('project')}>
                   Project
                 </button>
               </div>
@@ -231,11 +287,13 @@ export default function TerminalSnippetsPanel() {
 
       {project && !showForm && (
         <div className="scope-tabs">
-          <button className={`scope-tab${currentScope === 'global' ? ' active' : ''}`} onClick={() => setCurrentScope('global')}>
+          <button className={`scope-tab${currentScope === 'global' ? ' active' : ''}`} onClick={() => chooseScope('global')}>
             Global
+            {scopeCounts.global > 0 && <span className="scope-count">{scopeCounts.global}</span>}
           </button>
-          <button className={`scope-tab${currentScope === 'project' ? ' active' : ''}`} onClick={() => setCurrentScope('project')}>
+          <button className={`scope-tab${currentScope === 'project' ? ' active' : ''}`} onClick={() => chooseScope('project')}>
             Project ({project.name})
+            {scopeCounts.project > 0 && <span className="scope-count">{scopeCounts.project}</span>}
           </button>
         </div>
       )}
@@ -250,7 +308,12 @@ export default function TerminalSnippetsPanel() {
         {filteredSnippets.length === 0 ? (
           <div className="empty-state">
             <span className="empty-icon">[]</span>
-            <span>No snippets found</span>
+            <span>No {currentScope === 'project' ? 'project' : 'global'} snippets found</span>
+            {otherScopeMatches > 0 && (
+              <button className="empty-action" onClick={() => chooseScope(otherScope)}>
+                {otherScopeMatches} in {otherScope === 'project' ? 'this project' : 'Global'} →
+              </button>
+            )}
             {!showForm && <button className="empty-action" onClick={() => setShowForm(true)}>Create one now</button>}
           </div>
         ) : (

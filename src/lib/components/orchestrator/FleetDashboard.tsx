@@ -48,6 +48,7 @@ import {
   allProjectSessions,
   setActiveSession,
   getAgentDisplayName,
+  getSessionOutputProduced,
   isAgentSession,
 } from '$lib/stores/terminal';
 import { orchestratorTasks, stageAgentWorktree, markWorktreeMerged } from '$lib/stores/orchestrator';
@@ -61,6 +62,12 @@ import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import WorktreeReviewModal from './WorktreeReviewModal.tsx';
+import {
+  filesOwnedBy,
+  isSharedFile,
+  recordDiffReading,
+  type AgentSample,
+} from '$lib/services/orchestrator/agent-file-attribution';
 import './FleetDashboard.css';
 
 /** How often the per-card diff stat is refreshed. Three cheap git reads each. */
@@ -272,26 +279,48 @@ export default function FleetDashboard() {
       const next: Record<string, DiffStat> = {};
       // One read per distinct repo+base, not per card.
       const targets = new Map<string, FleetRow>();
+      // Per-agent output counters, grouped the same way, so a reading can be
+      // credited to the agents that actually produced something during it.
+      const samples = new Map<string, AgentSample[]>();
       for (const row of list) {
-        if (!targets.has(statKey(row))) targets.set(statKey(row), row);
+        const key = statKey(row);
+        if (!targets.has(key)) targets.set(key, row);
+        if (row.sessionId !== null) {
+          const produced = getSessionOutputProduced(row.sessionId);
+          const bucket = samples.get(key);
+          if (bucket) bucket.push({ sessionId: row.sessionId, produced });
+          else samples.set(key, [{ sessionId: row.sessionId, produced }]);
+        }
       }
-      await Promise.all(
-        [...targets].map(async ([key, row]) => {
-          try {
-            next[key] = await invoke<DiffStat>('workspace_git_worktree_diff_stat', {
-              projectId: row.projectId,
-              worktreePath: row.repoPath,
-              // Null asks the backend to resolve HEAD, which is the only base a
-              // main-repo agent has — it never forked from anything.
-              baseCommit: row.baseCommit,
-            });
-          } catch {
-            // A worktree removed underneath us, or git unavailable. Leave it out
-            // rather than blanking every other card's numbers.
-          }
-        }),
-      );
-      setStats((current) => ({ ...current, ...next }));
+      // Read one at a time rather than in parallel: each of these spawns git, and
+      // firing one per agent into the same instant is what makes the whole app
+      // hitch every few seconds once several agents are running.
+      //
+      // Deliberately NOT skipped when the agents have been quiet, the way the
+      // worktree-status poller is. Attribution is a fold over consecutive
+      // readings, so a skipped one merges two intervals into one: an edit YOU
+      // made while every agent was idle would land in the same interval as the
+      // next agent's work and be credited to it. The panel is only polled while
+      // it is open and visible, which is the gate that keeps this affordable.
+      for (const [key, row] of targets) {
+        try {
+          const stat = await invoke<DiffStat>('workspace_git_worktree_diff_stat', {
+            projectId: row.projectId,
+            worktreePath: row.repoPath,
+            // Null asks the backend to resolve HEAD, which is the only base a
+            // main-repo agent has — it never forked from anything.
+            baseCommit: row.baseCommit,
+          });
+          next[key] = stat;
+          // Fold the reading in before it is shown, so a card never paints a
+          // file list one reading behind its attribution.
+          recordDiffReading(key, samples.get(key) ?? [], stat.files);
+        } catch {
+          // A worktree removed underneath us, or git unavailable. Leave it out
+          // rather than blanking every other card's numbers.
+        }
+      }
+      if (Object.keys(next).length > 0) setStats((current) => ({ ...current, ...next }));
     },
     [],
   );
@@ -301,14 +330,21 @@ export default function FleetDashboard() {
   useEffect(() => {
     if (rows.length === 0) return;
     let cancelled = false;
+    // A hidden window has nobody reading these numbers, so running git for them
+    // only takes CPU from the agents. Becoming visible forces a full re-read,
+    // since everything is stale by an unknown amount by then.
     const tick = () => {
-      if (!cancelled) void refreshStats(rows);
+      if (cancelled || document.hidden) return;
+      void refreshStats(rows);
     };
     tick();
     const timer = setInterval(tick, POLL_MS);
+    const onVisible = () => tick();
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [rows, refreshStats]);
 
@@ -514,12 +550,30 @@ export default function FleetDashboard() {
 
       <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>
         {rows.map((row) => {
-          const stat = stats[statKey(row)];
+          const key = statKey(row);
+          const stat = stats[key];
           const isBusy = busy.has(row.key);
           const isExpanded = expanded === row.key;
           const pendingConfirm = confirming?.key === row.key ? confirming.action : null;
           const worktree = row.worktree;
-          const hasFiles = Boolean(stat && stat.files.length > 0);
+
+          // An isolated agent owns its whole worktree diff, so the reading IS
+          // its work. A main-repo agent shares the checkout with you and with
+          // every other main-repo agent, so it is credited only with the files
+          // that moved while it was the one producing output.
+          const allFiles = stat?.files ?? [];
+          const files =
+            row.placement === 'worktree' ? allFiles : filesOwnedBy(key, row.sessionId, allFiles);
+          const othersCount = row.placement === 'worktree' ? 0 : allFiles.length - files.length;
+          const additions =
+            row.placement === 'worktree'
+              ? stat?.total_additions ?? 0
+              : files.reduce((sum, file) => sum + file.additions, 0);
+          const deletions =
+            row.placement === 'worktree'
+              ? stat?.total_deletions ?? 0
+              : files.reduce((sum, file) => sum + file.deletions, 0);
+          const hasFiles = files.length > 0;
 
           const ready = readyToReview(row);
 
@@ -568,9 +622,16 @@ export default function FleetDashboard() {
                   </span>
                 )}
                 {stat ? (
-                  <span className="fc-stat">
-                    <span className="fc-add">+{stat.total_additions}</span>
-                    <span className="fc-del">&minus;{stat.total_deletions}</span>
+                  <span
+                    className="fc-stat"
+                    title={
+                      row.placement === 'worktree'
+                        ? 'Everything this agent changed in its own worktree'
+                        : 'Files that changed while this agent was the one working'
+                    }
+                  >
+                    <span className="fc-add">+{additions}</span>
+                    <span className="fc-del">&minus;{deletions}</span>
                   </span>
                 ) : (
                   <span className="fc-stat fc-stat-loading">…</span>
@@ -594,7 +655,7 @@ export default function FleetDashboard() {
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   <span>
-                    Ready to review: {stat.files.length} file{stat.files.length === 1 ? '' : 's'}, isolated on{' '}
+                    Ready to review: {files.length} file{files.length === 1 ? '' : 's'}, isolated on{' '}
                     <code>{worktree?.branch}</code>
                   </span>
                 </div>
@@ -618,26 +679,29 @@ export default function FleetDashboard() {
                 </svg>
                 {!stat
                   ? 'Reading changes…'
-                  : stat.files.length === 0
+                  : files.length === 0
                     ? 'No changes yet'
-                    : `${stat.files.length} changed file${stat.files.length === 1 ? '' : 's'}`}
+                    : `${files.length} changed file${files.length === 1 ? '' : 's'}`}
               </button>
 
               {isExpanded && stat && row.placement === 'main' && (
-                /* Stated plainly, because the numbers above are the checkout's,
-                   not this agent's: it works in the same tree you do, so its
-                   edits are indistinguishable from yours and from any other
-                   main-repo agent's. Isolated cards need no such note — there
-                   the diff really is that one agent's. */
+                /* The rest of the checkout is deliberately not hidden in
+                   silence. This agent shares the tree with you and with every
+                   other main-repo agent, so "not attributed to it" covers your
+                   own edits, another agent's, and anything that was already
+                   changed before the panel started watching. */
                 <div className="fc-note">
-                  Everything uncommitted in your checkout, which this agent shares
-                  with you and with any other agent running in the main repo.
+                  {othersCount > 0
+                    ? `Files that changed while this agent was working. ${othersCount} other changed
+                       file${othersCount === 1 ? '' : 's'} in your checkout ${othersCount === 1 ? 'is' : 'are'}
+                       not attributed to it.`
+                    : 'Files that changed while this agent was working, out of everything uncommitted in your checkout.'}
                 </div>
               )}
 
               {isExpanded && stat && (
                 <div className="fc-files">
-                  {stat.files.map((file) => {
+                  {files.map((file) => {
                     const fileKey = `${row.key}::${file.path}`;
                     const fileOpen = openFileKey === fileKey;
                     return (
@@ -649,6 +713,18 @@ export default function FleetDashboard() {
                         >
                           <FileIcon name={file.path.split('/').pop() || ''} isDir={false} />
                           <span className="fc-file-path">{file.path}</span>
+                          {row.placement === 'main' && isSharedFile(key, file.path) && (
+                            /* Two agents were producing output over the interval
+                               this file moved in, so which of them wrote it is
+                               not something the evidence can settle. Say so
+                               rather than letting one card claim it. */
+                            <span
+                              className="fc-file-shared"
+                              title="Another agent was also working when this file changed"
+                            >
+                              shared
+                            </span>
+                          )}
                           <span className={`fc-file-badge ${file.status}`}>
                             {file.status.charAt(0).toUpperCase()}
                           </span>

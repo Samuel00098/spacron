@@ -1,4 +1,4 @@
-import { getSessionOutputBuffer, getSessionOutputLength } from '$lib/stores/terminal';
+import { getSessionOutputProduced, getSessionOutputTail } from '$lib/stores/terminal';
 import {
   attentionReason,
   containsAttentionRequest,
@@ -240,7 +240,13 @@ async function watchTurnUntilDone(
   // each agent's distinctive "needs input" prompts are recognised.
   const attentionPhrases = agentAttentionPhrases(opts.agentCommand);
 
-  let lastLen = getSessionOutputLength(sessionId);
+  // Growth is measured against the session's MONOTONIC produced-chars counter,
+  // not against the length of the retained window. The window is capped, so once
+  // an agent has printed ~250k chars its length stops rising and a length-based
+  // watcher goes permanently blind: it sees no growth, never refreshes
+  // `lastGrowthAt`, and false-completes the turn `idleMs` later while the agent
+  // is still working. `produced` never plateaus.
+  let lastProduced = getSessionOutputProduced(sessionId);
   let lastGrowthAt = Date.now();
   let sawActivity = false;
   let grownTotal = 0;
@@ -302,29 +308,31 @@ async function watchTurnUntilDone(
       if (sentinel) return sentinel;
       if (!opts.shouldContinue()) return { kind: 'aborted' };
 
-      const buf = getSessionOutputBuffer(sessionId);
-      const len = buf.length;
+      const produced = getSessionOutputProduced(sessionId);
+      const growth = produced - lastProduced;
+      lastProduced = produced;
 
-      if (len > lastLen) {
-        const added = buf.slice(lastLen);
+      if (growth > 0) {
+        // Only the chunks still inside the window can be scanned. Reading just
+        // the new tail keeps this O(what arrived) — the whole point, since this
+        // runs every `pollMs` for every agent that is running.
+        const added = getSessionOutputTail(sessionId, growth);
         sawActivity = true;
-        grownTotal += added.length;
+        grownTotal += growth;
         lastGrowthAt = Date.now();
+        if (added.length < growth) {
+          // The window slid past part of this delta, so the bytes the escape
+          // scanner was mid-sequence on are gone. Guessing a ring across that
+          // gap manufactures bells, so restart the scanner from a clean state
+          // instead and count only what survived.
+          bellState.inOsc = false;
+          bellState.escPending = false;
+        }
         const newBells = countBellStream(added, bellState);
         if (newBells > 0) lastBellAt = Date.now();
-        recent = (recent + added).slice(-tailChars);
-      } else if (len < lastLen) {
-        // Buffer was capped/sliced — treat as fresh activity so we don't stall.
-        // There is no trustworthy delta to scan for bells here (the window slid
-        // by an unknown amount), and guessing one manufactures rings, so this
-        // poll counts none and the escape scanner restarts from a clean state.
-        grownTotal += len;
-        lastGrowthAt = Date.now();
-        bellState.inOsc = false;
-        bellState.escPending = false;
-        recent = buf.slice(-tailChars);
+        recent =
+          added.length >= tailChars ? added.slice(-tailChars) : (recent + added).slice(-tailChars);
       }
-      lastLen = len;
 
       // An unambiguous attention PROMPT in this turn's tail is independent
       // evidence of "needs input" that must be honoured for every agent,
@@ -375,7 +383,7 @@ async function watchTurnUntilDone(
       // "blocked", and hook agents skip the rescan (they report via sentinel).
       function finishQuietTurn(): AgentTurnOutcome {
         if (!signalled) {
-          const tail = getSessionOutputBuffer(sessionId).slice(-IDLE_ATTENTION_SCAN_CHARS);
+          const tail = getSessionOutputTail(sessionId, IDLE_ATTENTION_SCAN_CHARS);
           if (containsAttentionRequest(tail, attentionPhrases)) {
             return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases), via: 'inferred' };
           }

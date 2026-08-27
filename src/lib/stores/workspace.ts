@@ -7,6 +7,7 @@ import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
 import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, currentRightDrawerTool, applyRightDrawerTool, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
 import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
+import { isSafePresetId } from '$lib/components/layout/split-layout';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
 import { backendInvoke } from '$lib/services/backend';
@@ -82,6 +83,83 @@ export const openProjectsList = derived(
     $openProjectIds.map((id) => $projects.get(id)).filter(Boolean) as Project[]
 );
 
+/**
+ * Which rooms each project has open, keyed by project id.
+ *
+ * The live room state (`layout`, `terminalRoomOpen`) only ever describes the
+ * ACTIVE project, so anything that wants to show a background project's stage —
+ * the Projects panel lists them under each project — needs a per-project
+ * snapshot. This is that snapshot: `publishProjectRooms` refreshes the active
+ * project's entry from the live stores on every save (the 150ms autosave keeps
+ * it current) and `closeProject` drops it.
+ *
+ * Ids match AppShell's `RoomId` so a click here can be handed straight to
+ * `requestRoomControl`.
+ */
+export const projectOpenRooms = writable<Map<string, string[]>>(new Map());
+
+/** The open rooms of whichever project is active right now. */
+function collectOpenRoomIds(): string[] {
+  const l = get(layout);
+  const rooms: string[] = [];
+  if (get(terminalRoomOpen)) rooms.push('terminal');
+  if (l.editorVisible) rooms.push('editor');
+  if (l.previewVisible) rooms.push('preview');
+  if (l.reviewVisible) rooms.push('review');
+  if (l.tasksVisible) rooms.push('tasks');
+  // Sketch is app-global rather than per-project (see per-project-persistence),
+  // so a background project keeps whatever it was left with — the same way the
+  // rest of its saved stage behaves.
+  if (l.sketchVisible) rooms.push('sketch');
+  return rooms;
+}
+
+function setProjectRooms(projectId: string, rooms: string[]) {
+  projectOpenRooms.update((map) => {
+    const prev = map.get(projectId);
+    // Same list → same Map reference, so `useSyncExternalStore` bails out and
+    // the panel doesn't re-render on every autosave tick.
+    if (prev && prev.length === rooms.length && prev.every((id, i) => id === rooms[i])) return map;
+    const next = new Map(map);
+    next.set(projectId, rooms);
+    return next;
+  });
+}
+
+function publishProjectRooms(projectId: string) {
+  setProjectRooms(projectId, collectOpenRoomIds());
+}
+
+// Projects already seeded from disk. A project that has no persisted state yet
+// still counts as seeded — re-reading localStorage on every `projects` update
+// would be pure churn, and the live publish takes over the moment it is opened.
+const seededProjectRooms = new Set<string>();
+
+/**
+ * A project that has not been active this session has published nothing, so on
+ * a cold start every project but one would list no rooms. Seed those from the
+ * stage they were last left on — which is exactly what they will come back to.
+ */
+projects.subscribe((map) => {
+  for (const projectId of map.keys()) {
+    if (seededProjectRooms.has(projectId)) continue;
+    seededProjectRooms.add(projectId);
+    if (get(projectOpenRooms).has(projectId)) continue;
+    const l = loadProjectStateFromStorage(projectId)?.layout;
+    if (!l) continue;
+    const rooms: string[] = [];
+    // Absent in state saved before the terminal room was per-project, and open
+    // is what those builds always did.
+    if (l.terminalRoomOpen !== false) rooms.push('terminal');
+    if (l.editorVisible) rooms.push('editor');
+    if (l.previewVisible) rooms.push('preview');
+    if (l.reviewVisible) rooms.push('review');
+    if (l.tasksVisible) rooms.push('tasks');
+    // No `sketch`: it is app-global, so a saved project never carried one.
+    setProjectRooms(projectId, rooms);
+  }
+});
+
 interface ProjectWorkspaceState {
   editor: {
     openFiles: string[];
@@ -116,6 +194,8 @@ interface ProjectWorkspaceState {
   focusedRoom: string | null;
   /** The room that was expanded / maximized 100% on the stage, if any. */
   expandedRoom?: string | null;
+  /** Active preset layouts mapped by pane count (2, 3, 4). */
+  splitPresets?: Record<number, string>;
   layout: {
     activeView: string;
     editorVisible: boolean;
@@ -194,6 +274,10 @@ function bindProjectAutosave() {
     expandedPaths,
     selectedPath,
     layout,
+    // The Terminal room's open/closed state is its own store, not a `layout`
+    // field, so without it here closing the Terminal never scheduled a save —
+    // and the per-project room list the Projects panel reads went stale.
+    terminalRoomOpen,
     // The stage arrangement (mode, Split tiling, primary room). Without it only
     // a project switch would write it out — `saveCurrentProjectState` runs on
     // the way past — so rearranging panes and then quitting lost the layout,
@@ -253,6 +337,7 @@ interface PersistedProjectState {
   splitSlots?: string[];
   focusedRoom?: string | null;
   expandedRoom?: string | null;
+  splitPresets?: Record<number, string>;
   layout?: {
     activeView: string;
     editorVisible: boolean;
@@ -342,6 +427,7 @@ function saveProjectStateToStorage(projectId: string) {
     splitSlots: get(layoutSnapshot).splitSlots.slice(0, MAX_SPLIT_SLOTS),
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
+    splitPresets: get(layoutSnapshot).splitPresets,
     layout: {
       activeView: currentLayout.activeView,
       editorVisible: currentLayout.editorVisible,
@@ -475,6 +561,16 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   const focusedRoom = isSafeRoomId(r.focusedRoom) ? r.focusedRoom : null;
   const expandedRoom = isSafeRoomId(r.expandedRoom) ? r.expandedRoom : null;
 
+  let splitPresets: Record<number, string> | undefined;
+  if (r.splitPresets && typeof r.splitPresets === 'object' && !Array.isArray(r.splitPresets)) {
+    const entries = Object.entries(r.splitPresets as Record<string, unknown>)
+      .filter(([k, v]) => !isNaN(Number(k)) && typeof v === 'string' && isSafePresetId(v))
+      .map(([k, v]) => [Number(k), v as string]);
+    if (entries.length > 0) {
+      splitPresets = Object.fromEntries(entries);
+    }
+  }
+
   // Sanitise layout sub-object: clamp numerics, strip unknown view names
   let layout: PersistedProjectState['layout'] | undefined;
   if (r.layout && typeof r.layout === 'object') {
@@ -530,7 +626,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, splitPresets, layout, preview };
 }
 
 /**
@@ -586,6 +682,7 @@ export function saveProjectState(projectId: string) {
     splitSlots: get(layoutSnapshot).splitSlots,
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
+    splitPresets: get(layoutSnapshot).splitPresets,
     layout: {
       activeView: get(layout).activeView,
       editorVisible: get(layout).editorVisible,
@@ -609,6 +706,9 @@ export function saveProjectState(projectId: string) {
   });
   // Also persist to localStorage so state survives app close
   saveProjectStateToStorage(projectId);
+  // `collectOpenRoomIds` reads the live stores, which only ever describe the
+  // active project — so only the active project's entry may be rewritten here.
+  if (get(activeProjectId) === projectId) publishProjectRooms(projectId);
 }
 
 function saveCurrentProjectState() {
@@ -738,6 +838,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         cached.splitSlots ?? [],
         cached.focusedRoom ?? null,
         cached.expandedRoom ?? null,
+        cached.splitPresets,
       );
     } else {
       const persisted = loadProjectStateFromStorage(projectId);
@@ -827,6 +928,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         persisted?.splitSlots ?? [],
         persisted?.focusedRoom ?? null,
         persisted?.expandedRoom ?? null,
+        persisted?.splitPresets,
       );
 
       const existingTerminalState = getTerminalProjectState(projectId);
@@ -963,6 +1065,10 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
     isRestoringProjectState = false;
     isProjectSwitching.set(false);
     useWorkspaceStore.getState().setSwitchingPhase(null);
+    // Autosave is muted for the whole restore, so nothing else publishes the
+    // rooms this project just came back with. Skipped when a newer restore has
+    // already taken over — the live stores describe that project by now.
+    if (generation === restoreProjectStateGeneration) publishProjectRooms(projectId);
   }
 }
 
@@ -1323,6 +1429,12 @@ export function closeProject(projectId: string) {
 
   // Remove from in-memory cache and localStorage
   projectStateCache.delete(projectId);
+  projectOpenRooms.update((map) => {
+    if (!map.has(projectId)) return map;
+    const next = new Map(map);
+    next.delete(projectId);
+    return next;
+  });
   if (typeof window !== 'undefined') localStorage.removeItem(projectStorageKey(projectId));
 
   const wsId = get(activeWorkspaceId);
@@ -1609,6 +1721,56 @@ export function moveProjectToWorkspace(projectPath: string, targetWorkspaceId: s
       break;
     }
   }
+}
+
+/**
+ * Move a project into another collection, landing it before `beforePath` (or at
+ * the end when that is null).
+ *
+ * Pure list surgery rather than a store write, because both ways of moving a
+ * project — the card's "Move to collection" menu and dragging it onto another
+ * collection — have to agree on the arithmetic, and a drop within one collection
+ * is a reorder, where removing before inserting shifts the index the drop was
+ * aimed at. Unlike `moveProjectToWorkspace` the source is explicit, so a project
+ * can be moved out of a collection that is not the active one.
+ */
+export function moveProjectBetweenCollections(
+  list: Workspace[],
+  projectPath: string,
+  sourceWorkspaceId: string,
+  targetWorkspaceId: string,
+  beforePath: string | null = null,
+): Workspace[] {
+  const insertInto = (paths: string[]): string[] => {
+    const rest = paths.filter((p) => p !== projectPath);
+    const at = beforePath === null ? -1 : rest.indexOf(beforePath);
+    const next = [...rest];
+    next.splice(at === -1 ? rest.length : at, 0, projectPath);
+    return next;
+  };
+
+  return list.map((w) => {
+    // A reorder inside one collection: the removal and the insert are one edit
+    // on one list, not the two independent branches below.
+    if (sourceWorkspaceId === targetWorkspaceId && w.id === targetWorkspaceId) {
+      return { ...w, project_paths: insertInto(w.project_paths) };
+    }
+    if (w.id === sourceWorkspaceId) {
+      const paths = w.project_paths.filter((p) => p !== projectPath);
+      return {
+        ...w,
+        project_paths: paths,
+        // The collection loses whatever it was pointing at, so it falls back to
+        // whatever is left — or to nothing, when it is now empty.
+        active_project_path:
+          w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
+      };
+    }
+    if (w.id === targetWorkspaceId) {
+      return { ...w, project_paths: insertInto(w.project_paths) };
+    }
+    return w;
+  });
 }
 
 export function removeProjectFromCollection(workspaceId: string, projectPath: string) {

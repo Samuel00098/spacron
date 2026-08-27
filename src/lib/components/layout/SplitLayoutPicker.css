@@ -1,0 +1,191 @@
+.split-layout-picker {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.split-layout-btn {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+.split-layout-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+
+.split-layout-btn.open {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-active));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.split-layout-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
+.split-layout-label {
+  line-height: 1;
+}
+
+.split-layout-chevron {
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.split-layout-btn.open .split-layout-chevron {
+  transform: rotate(180deg);
+}
+
+/* Popover (Portaled to body) */
+.split-layout-popover {
+  min-width: 230px;
+  max-width: 320px;
+  padding: 6px;
+  background: var(--bg-elevated, #1a1d21);
+  border: 1px solid var(--border-elevated, #2f343b);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg, 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5));
+  backdrop-filter: blur(12px);
+  animation: split-popover-in var(--dur-fast) var(--ease-out);
+  user-select: none;
+}
+
+@keyframes split-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.split-layout-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  margin-bottom: 4px;
+}
+
+.split-layout-popover-title {
+  font-size: 10px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.split-layout-popover-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.split-layout-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.split-preset-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.split-preset-item:hover {
+  background: var(--bg-hover);
+}
+
+.split-preset-item.selected {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-active));
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.split-preset-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: 1px;
+}
+
+.split-preset-icon-box {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.split-preset-item.selected .split-preset-icon-box {
+  color: var(--accent);
+}
+
+.split-preset-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.split-preset-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.split-preset-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.split-preset-check {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .split-layout-btn {
+    padding: 0 6px;
+    font-size: 10px;
+    height: 24px;
+  }
+
+  .split-layout-label {
+    display: none;
+  }
+}

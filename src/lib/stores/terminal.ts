@@ -45,6 +45,8 @@ import {
   registerAgent,
   setMcpProjectRoot,
   unregisterAgent,
+  BROWSER_STARTUP_TIMEOUT_MS,
+  BROWSER_TOOL_TIMEOUT_MS,
 } from './mcpBridge';
 import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 
@@ -459,7 +461,12 @@ export function onAgentDetected(listener: (info: AgentDetectedInfo) => void): ()
 // trimming on append, so it always equals the length of the string
 // getSessionOutputBuffer() returns. `joined` memoises that string until the next
 // append dirties it.
-type SessionOutput = { parts: string[]; len: number; joined: string | null };
+// `produced` is the total number of chars this session has EVER emitted. `len`
+// plateaus at MAX_SESSION_BUFFER_CHARS once the window fills, so it stops being
+// a usable "is this agent still working?" signal after a couple of minutes;
+// `produced` never stops growing, which is what the worktree pollers back off
+// against.
+type SessionOutput = { parts: string[]; len: number; produced: number; joined: string | null };
 const sessionOutputBuffers = new Map<number, SessionOutput>();
 const sessionOutputDecoders = new Map<number, TextDecoder>();
 const sessionInputBuffers = new Map<number, string>();
@@ -803,12 +810,13 @@ function appendSessionOutputBuffer(id: number, bytes: Uint8Array): string {
 
   let entry = sessionOutputBuffers.get(id);
   if (!entry) {
-    entry = { parts: [], len: 0, joined: null };
+    entry = { parts: [], len: 0, produced: 0, joined: null };
     sessionOutputBuffers.set(id, entry);
   }
 
   entry.parts.push(text);
   entry.len += text.length;
+  entry.produced += text.length;
   entry.joined = null;
 
   // Drop whole chunks that are entirely outside the window, then trim whatever
@@ -831,6 +839,59 @@ export function getSessionOutputBuffer(id: number): string {
   if (!entry) return '';
   if (entry.joined === null) entry.joined = entry.parts.join('');
   return entry.joined;
+}
+
+/**
+ * The last `chars` characters of the buffer, built from only the chunks that
+ * reach back that far.
+ *
+ * `getSessionOutputBuffer(id).slice(-n)` joins the whole 250k window to throw
+ * almost all of it away, and every append drops the `joined` memo — so a caller
+ * that wants a 2 KB tail on a timer rebuilds a quarter-megabyte string on every
+ * tick, per session. The scanners that watch a working agent do exactly that
+ * several times a second, so the waste multiplies by the number of agents
+ * running, which is the case this exists for.
+ */
+export function getSessionOutputTail(id: number, chars: number): string {
+  const entry = sessionOutputBuffers.get(id);
+  if (!entry || chars <= 0) return '';
+  if (chars >= entry.len) return getSessionOutputBuffer(id);
+  const picked: string[] = [];
+  let have = 0;
+  for (let i = entry.parts.length - 1; i >= 0 && have < chars; i -= 1) {
+    picked.push(entry.parts[i]);
+    have += entry.parts[i].length;
+  }
+  return picked.reverse().join('').slice(-chars);
+}
+
+/**
+ * Everything appended after index `from` (an earlier {@link getSessionOutputLength}
+ * reading), or `''` when nothing has been. O(what was added) rather than O(window),
+ * for the same reason as {@link getSessionOutputTail}.
+ *
+ * When the window has slid past `from` — the buffer trimmed away output the
+ * caller had not read yet — the whole surviving window is returned, matching
+ * what `getSessionOutputBuffer(id).slice(from)` would have produced in spirit:
+ * everything still available. Callers that care about the distinction compare
+ * lengths themselves, exactly as they did before.
+ */
+export function getSessionOutputSince(id: number, from: number): string {
+  const entry = sessionOutputBuffers.get(id);
+  if (!entry) return '';
+  if (from <= 0) return getSessionOutputBuffer(id);
+  if (from >= entry.len) return '';
+  return getSessionOutputTail(id, entry.len - from);
+}
+
+/**
+ * Total characters this session has produced since it started — monotonic, and
+ * unaffected by the buffer window sliding. Poll loops use it to tell "this agent
+ * is still working" from "this agent has been idle", which
+ * {@link getSessionOutputLength} cannot do once the window is full.
+ */
+export function getSessionOutputProduced(id: number): number {
+  return sessionOutputBuffers.get(id)?.produced ?? 0;
 }
 
 /**
@@ -1162,6 +1223,24 @@ export async function createTerminalSession(
         // Code is now handled by `mcpLaunchFlags`; do not re-add an env var for
         // an agent without first confirming the CLI actually reads it.
         env['SPACRON_MCP_URL'] = mcpUrl;
+
+        // How long the agent waits for a stdio MCP server to finish starting.
+        //
+        // These two *are* read — Claude Code's own MCP client reads both — which
+        // is what separates them from the dead `CLAUDE_CODE__MCP__SERVERS`
+        // described above. Claude Code allows 30s by default and the browser
+        // server does not make it: `npx -y @playwright/mcp@latest` spends ~28s
+        // on Windows before Playwright starts doing anything, because `@latest`
+        // re-resolves against the registry on every launch even with the package
+        // already cached. Agents were losing their browser tools on essentially
+        // every launch, and a server that never finished starting is reported
+        // only as a connection failure, so there was nothing to debug from.
+        //
+        // Set for every agent rather than only when the browser toggle is on: a
+        // user's own hand-written stdio server in `.mcp.json` pays the same npx
+        // cost, and a longer ceiling costs a working server nothing.
+        env['MCP_TIMEOUT'] = String(BROWSER_STARTUP_TIMEOUT_MS);
+        env['MCP_TOOL_TIMEOUT'] = String(BROWSER_TOOL_TIMEOUT_MS);
 
         // This agent's own identity, for `report_status`.
         //

@@ -17,3 +17,7 @@ learned there: `preventDefault()` on the card's pointerdown stops text selection
 without breaking the follow-up click; guard presses landing on buttons/inputs/the run
 menu; and keep the ~320ms post-drop click guard or the release-click opens the task
 editor.
+
+The Projects panel (ProjectHUD.tsx) drags projects between collections the same
+way, hit-testing into `{workspaceId, beforePath}`. Same gotchas, same guard —
+there the release-click would open the project you just moved.
