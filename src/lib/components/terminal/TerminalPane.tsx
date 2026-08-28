@@ -531,30 +531,42 @@ function TerminalPane({
     requestAnimationFrame(() => forceRedraw());
   }
 
-  function waitForOpenDimensions(target: HTMLDivElement) {
-    return new Promise<void>((resolve) => {
+  function waitForOpenDimensions(target: HTMLDivElement, isCancelled: () => boolean) {
+    return new Promise<boolean>((resolve) => {
       if (target.clientWidth > 0 && target.clientHeight > 0) {
-        resolve();
+        resolve(true);
         return;
       }
       let settled = false;
-      const finish = () => {
+      const pollTimer = window.setInterval(() => {
+        if (isCancelled()) cancel();
+        else if (target.clientWidth > 0 && target.clientHeight > 0) finish(true);
+      }, 100);
+      const finish = (_ready: boolean) => {
         if (settled) return;
         settled = true;
         observer.disconnect();
-        resolve();
+        window.clearInterval(pollTimer);
+        resolve(true);
+      };
+      const cancel = () => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        window.clearInterval(pollTimer);
+        resolve(false);
       };
       const observer = new ResizeObserver(() => {
-        if (target.clientWidth > 0 && target.clientHeight > 0) finish();
+        if (isCancelled()) cancel();
+        else if (target.clientWidth > 0 && target.clientHeight > 0) finish(true);
       });
       observer.observe(target);
-      // Opening into a 0x0 element makes xterm measure a zero-wide character
-      // cell, and nothing in xterm ever re-measures on its own — the pane then
-      // stays wedged at the 80x24 default and clips instead of wrapping (see
-      // measuredCell below, which recovers from it). A pane behind a room
-      // transition or a tiling split can legitimately take longer than the old
-      // 250 ms to gain size, so wait meaningfully longer before giving up.
-      setTimeout(finish, 2000);
+      // Never open xterm into a zero-sized element. xterm measures its character
+      // cell when open() runs and does not reliably recover if that measurement
+      // happens against a collapsed split pane. The ResizeObserver handles the
+      // normal layout transition; the short poll also catches a host whose
+      // ancestor changed size without producing a child observer notification.
+      if (isCancelled()) cancel();
     });
   }
 
@@ -571,18 +583,13 @@ function TerminalPane({
   // unusable.
   //
   // xterm measures the cell exactly once, off the element it was opened into.
-  // `waitForOpenDimensions` gives up after 250 ms and opens anyway, so a pane
-  // that mounts behind a layout transition (a fresh split, a room that is still
-  // animating in, a project layer being revealed) can be opened at 0x0 — and a
-  // zero-sized element measures a zero-wide cell. Nothing in xterm ever re-runs
-  // that measurement on its own, and FitAddon.proposeDimensions() returns
-  // `undefined` whenever the cell is zero. So every later fit for that pane
-  // bailed at the dimensions guard, the grid stayed at xterm's 80x24 default
-  // while the pane was far narrower, and the shell kept emitting lines wider
-  // than the pane could show: they were clipped at the pane edge instead of
-  // wrapping. Re-measuring now that the host has a real size is what un-sticks
-  // it — and it is why only panes created into an already-settled layout (the
-  // most recent one) rendered correctly.
+  // If a pane is mounted behind a layout transition (a fresh split, a room that
+  // is still animating in, or a project layer being revealed), opening xterm at
+  // 0x0 measures a zero-wide character cell. Nothing in xterm reliably re-runs
+  // that measurement, so the grid can remain at its 80x24 default while the
+  // pane is much narrower and clips instead of wrapping. waitForOpenDimensions
+  // prevents that poisoned initialization; measuredCell remains a recovery
+  // guard for panes restored from older versions.
   function measuredCell(): { width: number; height: number } | null {
     const core = (termRef.current as any)?._core;
     const usable = (c: any) => !!c && c.width > 0 && c.height > 0;
@@ -1152,8 +1159,8 @@ function TerminalPane({
     let resizeObserver: ResizeObserver | null = null;
 
     void (async () => {
-      await waitForOpenDimensions(fitHost);
-      if (disposed) return;
+      const hasOpenDimensions = await waitForOpenDimensions(fitHost, () => disposed);
+      if (disposed || !hasOpenDimensions) return;
 
       term.open(fitHost);
       applyTerminalRenderer();
