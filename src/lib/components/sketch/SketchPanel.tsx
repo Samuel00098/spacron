@@ -1088,11 +1088,15 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     const dpr = window.devicePixelRatio || 1;
     
-    // Clear canvas
-    activeCtx.setTransform(1, 0, 0, 1, 0, 0);
-    activeCtx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Apply zoom, pan, and dpr transform
+    // Reset the backing store before repainting instead of relying on a
+    // transformed clearRect. Shape fills can use clipping paths and the
+    // browser may retain stale transparent/composited pixels when a shape is
+    // moved rapidly over the same canvas. Assigning the existing dimensions
+    // clears the bitmap and its clip state in one operation, so a drag frame
+    // can never accumulate the previous hachure/cross-hatch pattern.
+    canvas.width = canvas.width;
+    canvas.height = canvas.height;
+    // Apply zoom, pan, and device-pixel-ratio transform after the reset.
     activeCtx.setTransform(zoomScale * dpr, 0, 0, zoomScale * dpr, panOffset.x * dpr, panOffset.y * dpr);
 
     // Set high-quality image smoothing for crisp renderings
