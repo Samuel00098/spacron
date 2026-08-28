@@ -78,6 +78,10 @@ function getRoleColor(role: string | null | undefined): string {
 // Below these values xterm bakes glyphs at wrong cell sizes, corrupting the atlas for future resizes.
 const MIN_COLS = 10;
 const MIN_ROWS = 3;
+// Quiet time after the last observed size change before the heavyweight settle
+// pass runs. Every live frame re-arms it, so during a drag or a CSS layout
+// transition it simply keeps sliding and lands once, at the end.
+const SETTLE_FIT_MS = 350;
 const isWindowsHost = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
 // ConPTY gained correct line-wrapping at Windows build 21376. At or above it, xterm's
@@ -230,7 +234,9 @@ function TerminalPane({
   const hoveredTerminalLinkRef = useRef<string | null>(null);
   const oscSequenceRemainderRef = useRef('');
   const fitRafRef = useRef<number | null>(null);
-  const fitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when a live frame resized the grid without flushing the glyph atlas.
+  // The settle pass owes that flush even if it finds nothing left to resize.
+  const liveFitDirtyRef = useRef(false);
   // Only the latest layout measurement may perform the delayed settled fit.
   // During a room/layer transition ResizeObserver can report several sizes;
   // keeping one timer prevents stale callbacks from competing with the newest
@@ -648,7 +654,26 @@ function TerminalPane({
     return { cols: Math.max(0, cols), rows: Math.max(0, rows) };
   }
 
-  function doFit() {
+  /**
+   * Measure the host and resize the grid to match it.
+   *
+   * `live` marks one frame of a resize that is still in progress: another frame
+   * is probably coming, so only the cheap half runs — measure, drop the stale
+   * frame, `term.resize()`. The expensive half (glyph-atlas flush, full
+   * refresh, geometry persistence) is left to the settle pass below.
+   *
+   * This used to be a single pass behind a trailing debounce, which meant no
+   * fit ran at all while the user was actually dragging: ResizeObserver fires
+   * every frame, each call re-armed the timer, and the grid kept its old pixel
+   * size inside the moving box — a blank band while growing, clipped text while
+   * shrinking, then a snap once the drag paused. Native terminals (Windows
+   * Terminal, Terminal.app) reflow on every frame, so we do too. The stated
+   * reason for the debounce — "running 60x/s corrupts xterm's render pipeline"
+   * — was the texture-atlas flush being thrashed once per frame; that is now
+   * settle-only, and the cell size never changes across a resize, so a mid-drag
+   * frame can safely keep painting from the atlas it already has.
+   */
+  function applyFit(live: boolean) {
     const container = containerRef.current;
     const fitHost = fitHostRef.current;
     const fitAddon = fitAddonRef.current;
@@ -664,6 +689,11 @@ function TerminalPane({
       // Checked BEFORE resizing, and the degenerate-atlas guard still skips
       // panes too small to produce a valid atlas.
       const { cols, rows } = clampedProposal(fitAddon, fitHost);
+      // Validity guard, load-bearing on every pass and not just the settled
+      // one: a pane that is hidden or mid-transition proposes nothing, and
+      // resizing with 0x0 makes xterm silently clamp to its 2x1 minimum and
+      // report that through onResize — shrinking the *PTY* to two columns and
+      // scrambling everything the shell draws afterwards.
       if (!cols || !rows || cols < MIN_COLS || rows < MIN_ROWS) return;
 
       const sizeChanged = cols !== term.cols || rows !== term.rows;
@@ -676,70 +706,74 @@ function TerminalPane({
         // DOM/canvas/WebGL share the render service. The freshly-opened pane
         // has no stale frame, which is why only pre-existing panes clipped.
         ((term as any)._core as any)?._renderService?.clear?.();
+        // xterm reflows its buffer here and fires onResize, which forwards the
+        // new grid to the PTY — the SIGWINCH the shell re-wraps against.
         term.resize(cols, rows);
+      }
+
+      if (live) {
+        if (sizeChanged) liveFitDirtyRef.current = true;
+        return;
+      }
+
+      // One atlas flush per resize, owed on settle rather than per frame. The
+      // atlas survives a grid resize on its own — the cell size does not change
+      // — but a renderer whose atlas was evicted or left degenerate while the
+      // pane was tiny or hidden repaints clean here.
+      if (sizeChanged || liveFitDirtyRef.current) {
+        liveFitDirtyRef.current = false;
         (term as any).clearTextureAtlas?.();
         canvasAddonRef.current?.clearTextureAtlas();
         term.refresh(0, term.rows - 1);
       }
 
-
       // Teach the next spawn what a real pane measures, so a new PTY opens at
       // this grid instead of the 120x34 placeholder and never has to reflow.
+      // Settled-only: mid-drag this would write localStorage once per column
+      // crossed, and the steady-state size is the one worth remembering.
       recordTerminalGeometry(cols, rows);
-
-      // Second pass after layout settles — the first fit can run before the
-      // pane's flex/grid layout has stabilised (especially in vibe mode where
-      // the CSS grid transition is 320ms), latching a too-small row count
-      // that leaves the viewport height wrong and scrolling broken. Wait long
-      // enough that any CSS transition or layout reparenting has finished,
-      // then re-fit if the settled dimensions differ.
-      if (settledFitTimerRef.current !== null) {
-        clearTimeout(settledFitTimerRef.current);
-      }
-      settledFitTimerRef.current = setTimeout(() => {
-        settledFitTimerRef.current = null;
-        const t = termRef.current;
-        const fa = fitAddonRef.current;
-        const host = fitHostRef.current;
-        if (!t || !fa || !host) return;
-        if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
-        const settled = clampedProposal(fa, host);
-        // Same validity guard as the first pass. Without it a pane that is
-        // hidden or mid-transition at this moment proposes nothing, and the
-        // resize below runs with 0x0 — which xterm silently clamps to its 2x1
-        // minimum and then reports through onResize, shrinking the *PTY* to
-        // two columns and scrambling everything the shell draws afterwards.
-        if (!settled.cols || !settled.rows || settled.cols < MIN_COLS || settled.rows < MIN_ROWS) return;
-        // The settled pass is the authoritative measurement — record it even
-        // when nothing changed, since that is the steady-state pane size.
-        recordTerminalGeometry(settled.cols, settled.rows);
-        if (settled.cols !== t.cols || settled.rows !== t.rows) {
-          // Same render-service clear as the first pass — see the comment there.
-          ((t as any)._core as any)?._renderService?.clear?.();
-          t.resize(settled.cols, settled.rows);
-          (t as any).clearTextureAtlas?.();
-          canvasAddonRef.current?.clearTextureAtlas();
-          t.refresh(0, t.rows - 1);
-        }
-      }, 350);
     } catch {}
   }
 
-  // Debounced fit: waits 120 ms of silence before measuring.
-  // Prevents doFit from running 60x/s during drag, which corrupts xterm's render pipeline.
-  function scheduleFit() {
+  // Trailing pass, re-armed by every live frame so it lands exactly once: after
+  // the drag stops, or after a CSS layout transition has finished emitting
+  // sizes (vibe mode's grid transition runs 320ms and reports a box every
+  // frame). It performs the atlas flush and records the steady-state geometry;
+  // by the time it runs the grid is normally already correct, so it rarely
+  // resizes anything — which is what removes the second, post-drag snap.
+  function scheduleSettledFit() {
+    if (settledFitTimerRef.current !== null) {
+      clearTimeout(settledFitTimerRef.current);
+    }
+    settledFitTimerRef.current = setTimeout(() => {
+      settledFitTimerRef.current = null;
+      applyFit(false);
+    }, SETTLE_FIT_MS);
+  }
+
+  // Fit now, at full weight, for a layout change that is already final.
+  function doFit() {
     if (fitRafRef.current !== null) {
       cancelAnimationFrame(fitRafRef.current);
       fitRafRef.current = null;
     }
-    if (fitTimerRef.current !== null) clearTimeout(fitTimerRef.current);
-    fitTimerRef.current = setTimeout(() => {
-      fitTimerRef.current = null;
+    applyFit(false);
+    scheduleSettledFit();
+  }
+
+  // Live fit: one pass per animation frame for as long as the pane keeps
+  // changing size, so the grid follows the drag instead of trailing it.
+  // Coalesced rather than debounced — ResizeObserver can fire several times
+  // between paints, and re-measuring twice in one frame cannot see a different
+  // box anyway.
+  function scheduleFit() {
+    if (fitRafRef.current === null) {
       fitRafRef.current = requestAnimationFrame(() => {
         fitRafRef.current = null;
-        doFit();
+        applyFit(true);
       });
-    }, 50);
+    }
+    scheduleSettledFit();
   }
 
   async function fitAfterFonts() {
@@ -1297,12 +1331,10 @@ function TerminalPane({
       resizeObserver.observe(fitHost);
     })();
 
-    // After drag ends, cancel any pending debounce and fit immediately
+    // A layout change the pane cannot observe for itself (a room promoted into
+    // focus, a pane revealed from `visibility: hidden`). Drop any live frame
+    // still queued and fit at full weight against the final layout.
     function onResizeEnd() {
-      if (fitTimerRef.current !== null) {
-        clearTimeout(fitTimerRef.current);
-        fitTimerRef.current = null;
-      }
       if (fitRafRef.current !== null) {
         cancelAnimationFrame(fitRafRef.current);
         fitRafRef.current = null;
@@ -1476,7 +1508,6 @@ function TerminalPane({
       document.fonts.removeEventListener('loadingdone', handleFontsLoaded);
       unsubInput();
       if (fitRafRef.current !== null) cancelAnimationFrame(fitRafRef.current);
-      if (fitTimerRef.current !== null) clearTimeout(fitTimerRef.current);
       if (settledFitTimerRef.current !== null) clearTimeout(settledFitTimerRef.current);
       resizeObserver?.disconnect();
       container.removeEventListener('mousedown', handleTerminalLinkMouseDown, true);
