@@ -339,6 +339,7 @@ export const aiProviders: AiProviderDef[] = [
       { id: 'qwen2.5-coder', label: 'Qwen 2.5 Coder', description: 'Tuned for code tasks.' },
       { id: 'gemma2', label: 'Gemma 2', description: 'Google Gemma 2, lightweight.' },
       { id: 'phi3', label: 'Phi-3', description: 'Small and fast Microsoft model.' },
+      { id: 's1-mini', label: 'S1-mini by Superwhisper', description: 'Local English dictation cleanup; load it in Ollama first.' },
     ],
   },
   {
@@ -355,6 +356,7 @@ export const aiProviders: AiProviderDef[] = [
     defaultModel: 'local-model',
     models: [
       { id: 'local-model', label: 'Loaded model', description: 'Uses whichever model LM Studio currently has loaded.' },
+      { id: 's1-mini', label: 'S1-mini by Superwhisper', description: 'Local English dictation cleanup; load the GGUF in LM Studio first.' },
     ],
   },
   {

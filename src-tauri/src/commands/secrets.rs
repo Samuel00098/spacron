@@ -53,6 +53,17 @@ const COMMIT_SYSTEM_PROMPT: &str = "You are an expert software engineer writing 
 // teammates — and no generic prompt can know them. Spelled exactly.
 const CUSTOM_VOCABULARY_RULE: &str = "CUSTOM VOCABULARY — the developer relies on these terms. When what they said sounds like any of them, transcribe it exactly as written here, even if the raw audio sounded like something else. These override normal spelling:\n\n";
 
+const S1_MINI_SYSTEM_PROMPT: &str = "You are a text normalizer for speech-to-text transcripts. The input begins with a control line specifying the styling, structure, and context settings; clean the transcript to match those settings and output only the cleaned text.";
+
+fn is_s1_mini_model(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("s1-mini") || model.contains("s1_mini")
+}
+
+fn s1_mini_input(text: &str) -> String {
+    format!("[Styling: semi-formal] [Structure: prose] [Context: general]\n{text}")
+}
+
 // Endpoints used to list each provider's live model catalogue. The frontend
 // shows whatever these return so users can pick any model their key unlocks —
 // new or old — instead of a hand-maintained allowlist.
@@ -1117,6 +1128,9 @@ async fn run_completion(
                     if shape.send_temperature {
                         fields.insert("temperature".to_string(), json!(temperature));
                     }
+                    if is_s1_mini_model(model) && is_local_provider(provider) {
+                        fields.insert("chat_template_kwargs".to_string(), json!({ "enable_thinking": false }));
+                    }
                 }
 
                 let response = request.json(&body).send().await.map_err(|err| {
@@ -1227,19 +1241,23 @@ pub async fn ai_refine_prompt(
         return Err("Input text exceeds maximum length".to_string());
     }
 
+    let s1_mini = is_s1_mini_model(&model);
     let system_prompt = match vocabulary {
         Some(list) => {
             let list = list.trim();
             if list.is_empty() {
-                OPENROUTER_SYSTEM_PROMPT.to_string()
+                if s1_mini { S1_MINI_SYSTEM_PROMPT.to_string() } else { OPENROUTER_SYSTEM_PROMPT.to_string() }
             } else if list.chars().count() > MAX_VOCABULARY_LEN {
                 return Err("Custom vocabulary exceeds maximum length".to_string());
             } else {
-                format!("{OPENROUTER_SYSTEM_PROMPT}\n\n{CUSTOM_VOCABULARY_RULE}{list}")
+                let base = if s1_mini { S1_MINI_SYSTEM_PROMPT } else { OPENROUTER_SYSTEM_PROMPT };
+                format!("{base}\n\n{CUSTOM_VOCABULARY_RULE}{list}")
             }
         }
-        None => OPENROUTER_SYSTEM_PROMPT.to_string(),
+        None => if s1_mini { S1_MINI_SYSTEM_PROMPT.to_string() } else { OPENROUTER_SYSTEM_PROMPT.to_string() },
     };
+
+    let text = if s1_mini { s1_mini_input(&text) } else { text };
 
     // The reply is a rewrite of the input, so the ceiling has to scale WITH the
     // input. A flat 512 silently truncated any dictation past roughly 380
@@ -1257,7 +1275,7 @@ pub async fn ai_refine_prompt(
         base_url.as_deref(),
         &system_prompt,
         &text,
-        0.1,
+        if s1_mini { 0.0 } else { 0.1 },
         max_tokens,
     )
     .await?;
@@ -2046,6 +2064,7 @@ mod tests {
         openai_is_realtime_model, openrouter_audio_chat_model_is_unsupported, redact_secrets,
         embedded_error_message, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
         strip_inline_reasoning, token_budget_for, with_reasoning_headroom, xai_is_realtime_model,
+        is_s1_mini_model, s1_mini_input,
         ChatParamShape, TokenBudgetField,
     };
     use serde_json::json;
@@ -2528,5 +2547,21 @@ mod tests {
     fn text_exceeding_max_len_would_be_rejected() {
         let text = "a".repeat(MAX_TEXT_LEN + 1);
         assert!(text.len() > MAX_TEXT_LEN);
+    }
+
+    #[test]
+    fn s1_mini_model_detection_handles_local_model_ids() {
+        assert!(is_s1_mini_model("s1-mini"));
+        assert!(is_s1_mini_model("hf.co/superwhisper/s1-mini-GGUF:F16"));
+        assert!(is_s1_mini_model("S1_MINI"));
+        assert!(!is_s1_mini_model("llama3.1"));
+    }
+
+    #[test]
+    fn s1_mini_input_has_the_required_control_line() {
+        assert_eq!(
+            s1_mini_input("send the report by friday"),
+            "[Styling: semi-formal] [Structure: prose] [Context: general]\nsend the report by friday"
+        );
     }
 }

@@ -701,6 +701,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [completionLiveModels]);
 
   const [providerSttModels, setProviderSttModels] = useState<Record<string, AiModelOption[]>>({});
+  const [sttModelLoading, setSttModelLoading] = useState(false);
   const [providerRealtimeModels, setProviderRealtimeModels] = useState<Record<string, AiModelOption[]>>({});
   const [realtimeModelLoading, setRealtimeModelLoading] = useState(false);
   const providerRealtimeModelsRef = useRef<Record<string, AiModelOption[]>>({});
@@ -926,6 +927,34 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }, []);
 
+  const loadSttModels = useCallback(async (prov: VoiceInputProviderId, force = false) => {
+    if (!isTauriRuntime() || prov === 'webspeech') return;
+    const pid = prov as AiProviderId;
+    const isLocal = isLocalProvider(pid);
+    const hasKey = isLocal ? true : await providerApiKeyExists(pid).catch(() => false);
+    if (!hasKey) return;
+    if (!force && providerSttModels[pid]) return;
+
+    setSttModelLoading(true);
+    try {
+      const remote = await listProviderModels(pid, 'stt');
+      const curated = new Map(getVoiceInputModelOptions(prov).map((m) => [m.id, m]));
+      const merged: AiModelOption[] = remote.map((r) => {
+        const c = curated.get(r.id);
+        return {
+          id: r.id,
+          label: c?.label ?? r.label ?? r.id,
+          description: c?.description ?? r.description ?? '',
+        };
+      });
+      if (merged.length) setProviderSttModels((prev) => ({ ...prev, [pid]: merged }));
+    } catch (err) {
+      console.error(`Failed to load speech-to-text models for ${pid}:`, err);
+    } finally {
+      setSttModelLoading(false);
+    }
+  }, [providerSttModels]);
+
   const loadRealtimeModels = useCallback(async (prov: 'openai' | 'xai', force = false) => {
     if (!isTauriRuntime()) return;
 
@@ -1020,30 +1049,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
         void loadLiveModels(pid);
       }
     };
-    const loadSttModels = async (prov: string) => {
-      const pid = prov as AiProviderId;
-      const isLocal = isLocalProvider(pid);
-      const hasKey = isLocal ? true : await providerApiKeyExists(pid).catch(() => false);
-      if (!hasKey) return;
-      try {
-        const remote = await listProviderModels(pid, 'stt');
-        const merged: AiModelOption[] = remote.map((r) => ({
-          id: r.id,
-          label: r.label ?? r.id,
-          description: r.description ?? '',
-        }));
-        if (merged.length) {
-          setProviderSttModels((prev) => ({ ...prev, [pid]: merged }));
-        }
-      } catch { /* ignore */ }
-    };
     if (refinementProvider) void loadChatModels(refinementProvider);
     if (voiceInput && voiceInput !== 'webspeech') {
       void loadSttModels(voiceInput);
     }
     void loadRealtimeModels('openai');
     void loadRealtimeModels('xai');
-  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels]);
+  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels]);
 
   useEffect(() => {
     setLocalUrlInput(getProviderBaseUrl(provider, baseUrls) || '');
@@ -1107,6 +1119,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
     await loadLiveModels(provider, true);
     await loadCompletionLiveModels(completionProvider, true);
+    if (voiceInput !== 'webspeech') await loadSttModels(voiceInput, true);
+    await loadLiveModels(refinementProvider, true);
     showToast('Model list refreshed', 'success');
   }
 
@@ -1679,6 +1693,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       label="Completion model"
                     />
                   </SettingRow>
+                  <div className="settings-action-row">
+                    <button className="settings-secondary" onClick={() => void loadCompletionLiveModels(completionProvider, true)} disabled={modelLoading}>
+                      {modelLoading ? 'Refreshing...' : 'Refresh models'}
+                    </button>
+                  </div>
                 </Section>
 
                 <Section title="Local Speech-to-Text (STT)">
@@ -1769,14 +1788,21 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     <SelectField value={voiceInput} options={voiceInputProviders} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" />
                   </SettingRow>
                   {voiceInputUsesModelTranscription(voiceInput) && (
-                    <SettingRow title="Transcription model">
-                      <ModelSelect
-                        value={voiceInputModel}
-                        models={voiceInputModels}
-                        onChange={(value) => setVoiceInputModel(voiceInput as Exclude<VoiceInputProviderId, 'webspeech'>, value)}
-                        label="Voice input model"
-                      />
-                    </SettingRow>
+                    <>
+                      <SettingRow title="Transcription model">
+                        <ModelSelect
+                          value={voiceInputModel}
+                          models={voiceInputModels}
+                          onChange={(value) => setVoiceInputModel(voiceInput as Exclude<VoiceInputProviderId, 'webspeech'>, value)}
+                          label="Voice input model"
+                        />
+                      </SettingRow>
+                      <div className="settings-action-row">
+                        <button className="settings-secondary" onClick={() => void loadSttModels(voiceInput, true)} disabled={sttModelLoading}>
+                          {sttModelLoading ? 'Refreshing...' : 'Refresh models'}
+                        </button>
+                      </div>
+                    </>
                   )}
                   <SettingRow
                     title="Smart voice detection"
@@ -1802,7 +1828,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>
 
                 <Section title="Voice refinement">
-                  <SettingRow title="Refinement">
+                  <SettingRow
+                    title="Refinement"
+                    detail="Cleans prose after dictation. For a fully local option, load S1-mini by Superwhisper in Ollama or LM Studio, then choose it below."
+                  >
                     <Toggle label="Toggle voice refinement" checked={voiceRefinement} onChange={voiceRefinementEnabled.set} />
                   </SettingRow>
                   <SettingRow
@@ -1822,6 +1851,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow title="Model">
                     <ModelSelect value={refinementModel} models={refinementModels} onChange={(value) => setVoiceAiModel(refinementProvider, value)} label="Voice refinement model" />
                   </SettingRow>
+                  <div className="settings-action-row">
+                    <button className="settings-secondary" onClick={() => void loadLiveModels(refinementProvider, true)} disabled={modelLoading}>
+                      {modelLoading ? 'Refreshing...' : 'Refresh models'}
+                    </button>
+                  </div>
                 </Section>
 
                 <Section title="Conversation engine">
