@@ -364,6 +364,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const [currentTool, setCurrentTool] = useState<'select' | 'pen' | 'eraser' | 'text' | 'pan' | 'connector' | 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'pentagon' | 'octagon' | 'line'>('select');
   const [currentColor, setCurrentColor] = useState('#06b6d4');
   const [customColor, setCustomColor] = useState('#e2e2eb');
+  const [openCustomColor, setOpenCustomColor] = useState<'stroke' | 'fill' | null>(null);
   const [brushSize, setBrushSize] = useState(6);
   const [brushOpacity, setBrushOpacity] = useState(1.0);
 
@@ -3957,24 +3958,12 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   <button
                     className="custom-color-picker-btn"
                     onClick={() => {
-                      const picker = document.getElementById('stroke-color-picker');
-                      picker?.click();
+                      setOpenCustomColor((current) => current === 'stroke' ? null : 'stroke');
                     }}
                     title="Custom Stroke Color"
                   >
                     <div className="custom-color-preview" style={{ backgroundColor: getSelectedProperty('color', currentColor) }} />
                     Custom
-                    <input
-                      id="stroke-color-picker"
-                      type="color"
-                      value={customColor}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setCustomColor(val);
-                        updateSelectedColor(val);
-                      }}
-                      style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
-                    />
                   </button>
                   <div className="custom-color-code-row">
                     <input
@@ -3992,6 +3981,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customColor)} title="Copy stroke color code">Copy</button>
                     <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('stroke')} title="Paste stroke color code">Paste</button>
                   </div>
+                  {openCustomColor === 'stroke' && (
+                    <div className="custom-color-popover" onPointerDown={(e) => e.stopPropagation()}>
+                      <div className="custom-color-popover-heading">Custom stroke color</div>
+                      <div className="custom-color-popover-preview" style={{ backgroundColor: isHexColor(customColor) ? customColor : '#06b6d4' }} />
+                      <div className="custom-color-popover-actions">
+                        <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customColor)}>Copy</button>
+                        <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('stroke')}>Paste</button>
+                        <button type="button" className="custom-color-apply-btn" onClick={() => setOpenCustomColor(null)}>Done</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -4036,24 +4036,12 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   <button
                     className="custom-color-picker-btn"
                     onClick={() => {
-                      const picker = document.getElementById('bg-color-picker');
-                      picker?.click();
+                      setOpenCustomColor((current) => current === 'fill' ? null : 'fill');
                     }}
                     title="Custom Fill Color"
                   >
                     <div className="custom-color-preview" style={{ backgroundColor: getSelectedProperty('fillColor', defaultFillColor) === 'transparent' ? '#ffffff' : getSelectedProperty('fillColor', defaultFillColor) }} />
                     Custom
-                    <input
-                      id="bg-color-picker"
-                      type="color"
-                      value={customFillColor}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setCustomFillColor(val);
-                        updateSelectedProperty('fillColor', val);
-                      }}
-                      style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
-                    />
                   </button>
                   <div className="custom-color-code-row">
                     <input
@@ -4071,6 +4059,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customFillColor)} title="Copy fill color code">Copy</button>
                     <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('fill')} title="Paste fill color code">Paste</button>
                   </div>
+                  {openCustomColor === 'fill' && (
+                    <div className="custom-color-popover" onPointerDown={(e) => e.stopPropagation()}>
+                      <div className="custom-color-popover-heading">Custom fill color</div>
+                      <div className="custom-color-popover-preview" style={{ backgroundColor: isHexColor(customFillColor) ? customFillColor : '#ffffff' }} />
+                      <div className="custom-color-popover-actions">
+                        <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customFillColor)}>Copy</button>
+                        <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('fill')}>Paste</button>
+                        <button type="button" className="custom-color-apply-btn" onClick={() => setOpenCustomColor(null)}>Done</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

@@ -1328,6 +1328,59 @@
   color: var(--text-primary);
 }
 
+.sketch-overlay .custom-color-popover {
+  grid-column: span 7;
+  display: grid;
+  grid-template-columns: 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  animation: popIn 0.12s ease-out;
+}
+
+.sketch-overlay .custom-color-popover-heading {
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.sketch-overlay .custom-color-popover-preview {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.sketch-overlay .custom-color-popover-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 5px;
+}
+
+.sketch-overlay .custom-color-apply-btn {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.sketch-overlay .custom-color-apply-btn:hover {
+  background: var(--accent);
+  color: var(--button-text, #fff);
+}
+
 .sketch-overlay .floating-text.active-selected {
   border-color: var(--accent) !important;
   background-color: rgba(6, 182, 212, 0.08);
