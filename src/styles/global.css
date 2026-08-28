@@ -996,19 +996,19 @@ input:focus {
    with `color-mix(… calc(var(--frost-chrome) * 100%) …)`, and `--frost-chrome`
    resolves to `1` under a solid theme — so they are ALREADY fully opaque there.
    Tinting over that would replace an opaque panel with a 70%-translucent one
-   and hand back the see-through problem this exists to fix. `.is-webkitgtk` is
-   excluded for the same reason as the shell: Linux keeps its original look.
+   and hand back the see-through problem this exists to fix. The same tint is
+   shared by every desktop webview so Linux matches the Windows panel recipe.
 
    Modals are deliberately absent: settings, quick capture, the model switcher
    and the search bar are full-attention overlays that are already solid. */
-:root:not(.solid-theme):not(.is-webkitgtk) .titlebar,
-:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .room-dock,
-:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .composer-strip .floating-prompt-bar,
-:root:not(.solid-theme):not(.is-webkitgtk) .usage-panel,
-:root:not(.solid-theme):not(.is-webkitgtk) .usage-dock,
-:root:not(.solid-theme):not(.is-webkitgtk) .inbox-panel,
-:root:not(.solid-theme):not(.is-webkitgtk) .project-hud,
-:root:not(.solid-theme):not(.is-webkitgtk) .floating-youtube {
+:root:not(.solid-theme) .titlebar,
+:root:not(.solid-theme) .app-shell .room-dock,
+:root:not(.solid-theme) .app-shell .composer-strip .floating-prompt-bar,
+:root:not(.solid-theme) .usage-panel,
+:root:not(.solid-theme) .usage-dock,
+:root:not(.solid-theme) .inbox-panel,
+:root:not(.solid-theme) .project-hud,
+:root:not(.solid-theme) .floating-youtube {
   background:
     linear-gradient(var(--panel-veil) 0 0),
     rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;

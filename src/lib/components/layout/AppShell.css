@@ -441,10 +441,9 @@
 
 /* Canonical side-panel frost (see `.spacron/memory/glass-panel-recipe.md`): a
    light translucent tint over a real blur of the wallpaper — "just blurred, like
-   the side panels", not a milky wash. Scoped exactly like the see-through rule
-   below: solid theme has its own opaque path, and WebKitGTK keeps the original
-   look where the tint lives on `.room-panel` instead. */
-:root:not(.solid-theme):not(.is-webkitgtk)
+   the side panels", not a milky wash. Solid theme has its own opaque path;
+   every desktop webview uses the same visual recipe. */
+:root:not(.solid-theme)
   .app-shell .rooms-table.ambient-focus .focused-room {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, transparent 50%, rgba(255, 255, 255, 0.015) 100%),
@@ -453,14 +452,14 @@
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
 }
 
-:root.light-theme:not(.solid-theme):not(.is-webkitgtk)
+:root.light-theme:not(.solid-theme)
   .app-shell .rooms-table.ambient-focus .focused-room {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
 }
 
-:root:not(.solid-theme):not(.is-webkitgtk)
+:root:not(.solid-theme)
   .app-shell .rooms-table.ambient-focus .focused-room .room-panel {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -470,7 +469,7 @@
    When every room is minimized to a chip, the stage element stays mounted
    to hold persistent hidden terminals, but removes the surface styling so the
    wallpaper is unobscured. */
-:root:not(.solid-theme):not(.is-webkitgtk)
+:root:not(.solid-theme)
   .app-shell .rooms-table.ambient-focus .focused-room.empty-stage {
   background: none;
   backdrop-filter: none;
@@ -898,12 +897,11 @@
    `.spacron/memory/glass-panel-recipe.md` ("color-mix cannot make a glass token
    opaque").
 
-   Scoped to :not(.is-webkitgtk) so LINUX IS UNCHANGED — WebKitGTK renders the
-   frosted recipe differently and keeps the original look. This only reshapes the
-   Chromium (Windows WebView2) and macOS WKWebView paths. */
-:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .room-panel,
-:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .left-utility-panel,
-:root:not(.solid-theme):not(.is-webkitgtk) .app-shell .right-utility-panel {
+   The same recipe is intentionally shared by Chromium, WebKitGTK, and
+   WKWebView so panel surfaces stay visually consistent across desktop builds. */
+:root:not(.solid-theme) .app-shell .room-panel,
+:root:not(.solid-theme) .app-shell .left-utility-panel,
+:root:not(.solid-theme) .app-shell .right-utility-panel {
   background:
     linear-gradient(var(--panel-veil) 0 0),
     rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;
