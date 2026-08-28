@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   buildClaudeHookSettings,
   parseSignalLine,
+  parseOpenUrlLine,
   supportsHookSignals,
   onTurnSignal,
   hasTurnSignalChannel,
@@ -33,6 +34,35 @@ describe('supportsHookSignals', () => {
     for (const cmd of ['codex', 'aider', 'cursor-agent', 'grok', '', null, undefined]) {
       expect(supportsHookSignals(cmd)).toBe(false);
     }
+  });
+});
+
+describe('parseOpenUrlLine', () => {
+  it('returns the URL an agent asked to open', () => {
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE} https://example.com/a`, NONCE)).toBe(
+      'https://example.com/a',
+    );
+  });
+
+  it('ignores a line carrying a different nonce', () => {
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:someone-else https://example.com`, NONCE)).toBeNull();
+  });
+
+  it('is not a turn signal, so it never ends a turn', () => {
+    // The two vocabularies share a channel; they must not share a meaning.
+    expect(parseSignalLine(`SPACRON-OPEN-URL:${NONCE} https://example.com`, NONCE)).toBeNull();
+    expect(parseOpenUrlLine(`SPACRON-TURN-DONE:${NONCE} all done`, NONCE)).toBeNull();
+  });
+
+  it('refuses a scheme the preview iframe must never navigate to', () => {
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE} javascript:alert(1)`, NONCE)).toBeNull();
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE} file:///etc/passwd`, NONCE)).toBeNull();
+  });
+
+  it('refuses a line with no URL on it', () => {
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE}`, NONCE)).toBeNull();
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE}   `, NONCE)).toBeNull();
+    expect(parseOpenUrlLine(`SPACRON-OPEN-URL:${NONCE} not-a-url`, NONCE)).toBeNull();
   });
 });
 

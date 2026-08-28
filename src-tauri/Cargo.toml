@@ -9,7 +9,7 @@
 # load-bearing here: the server depends on this package with
 # `default-features = false` to keep whisper/cmake out of its graph.
 [workspace]
-members = [".", "server"]
+members = [".", "server", "opener"]
 resolver = "2"
 
 [package]

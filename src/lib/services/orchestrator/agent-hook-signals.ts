@@ -83,6 +83,18 @@ export type HookSignal =
 const DONE_PREFIX = 'SPACRON-TURN-DONE:';
 const INPUT_PREFIX = 'SPACRON-NEEDS-INPUT:';
 const FAILED_PREFIX = 'SPACRON-TURN-FAILED:';
+/**
+ * Not a turn state — a URL an agent asked to open.
+ *
+ * It rides the same channel because the shim that writes it (`spacron-open`,
+ * handed to every agent as its `BROWSER`) inherits `SPACRON_TURN_FILE` and
+ * `SPACRON_TURN_TOKEN` from the agent that spawned it, so there is nothing to
+ * thread through and no second watcher to keep alive. It is dispatched away
+ * from the turn listeners deliberately: opening a link says nothing about
+ * whether the agent has finished, and routing it through `HookSignal` would
+ * end turns every time an agent showed you something.
+ */
+const OPEN_URL_PREFIX = 'SPACRON-OPEN-URL:';
 
 /**
  * Agent presets whose CLI can emit turn hooks. Everything else keeps the
@@ -174,11 +186,50 @@ export function parseSignalLine(line: string, nonce: string): HookSignal | null 
   return null;
 }
 
+/**
+ * Interpret one line as an open-url sentinel, returning the URL to show.
+ *
+ * Anchored to the nonce exactly like `parseSignalLine`, and re-validated here
+ * rather than trusted from the shim: this is the boundary where a line of text
+ * an agent's own output could have influenced becomes a navigation. Only
+ * http(s) survives, so a `file://` or `javascript:` line cannot reach the
+ * preview iframe.
+ */
+export function parseOpenUrlLine(line: string, nonce: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith(`${OPEN_URL_PREFIX}${nonce}`)) return null;
+  const raw = trimmed.slice(OPEN_URL_PREFIX.length + nonce.length).replace(/^[\s:]+/, '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** Randomness good enough that an agent cannot guess or accidentally reproduce it. */
 function mintNonce(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Show an agent's URL in the preview room.
+ *
+ * Imported lazily so this service does not pull the preview store (and the
+ * layout store behind it) into every module that only wants turn signals —
+ * the same shape `changelog.ts` and `agent-install.ts` use for the panel.
+ */
+async function showUrlInPreview(url: string): Promise<void> {
+  try {
+    const { openUrlInPreviewPanel } = await import('$lib/stores/preview');
+    await openUrlInPreviewPanel(url);
+  } catch (err) {
+    console.error('Could not show an agent URL in the preview panel:', err);
+  }
 }
 
 async function ensureListening(): Promise<void> {
@@ -191,6 +242,13 @@ async function ensureListening(): Promise<void> {
     if (!channel) return;
     // Parse against the nonce of the channel the line actually arrived on —
     // a session can have two, and the entry's `channelId` is only one of them.
+    // A URL the agent asked to open. Handled before the turn parse and returned
+    // on, so it never reaches the turn listeners — see OPEN_URL_PREFIX.
+    const url = parseOpenUrlLine(line, channelId);
+    if (url) {
+      void showUrlInPreview(url);
+      return;
+    }
     const signal = parseSignalLine(line, channelId);
     if (!signal) return;
     emitToListeners(channel, signal);

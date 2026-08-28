@@ -342,6 +342,7 @@ pub fn run() {
             commands::terminal::terminal_attach,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
+            commands::browser_shim::browser_shim_path,
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_list_shells,

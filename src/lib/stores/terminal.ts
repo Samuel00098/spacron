@@ -1269,6 +1269,38 @@ export async function createTerminalSession(
           env['SPACRON_TURN_TOKEN'] = statusChannel.channelId;
         }
 
+        // Keep the agent's links inside the app.
+        //
+        // Every CLI that opens a URL does it the same way: spawn whatever
+        // `BROWSER` names, with the URL as the single argument. Claude Code,
+        // gh, Vite, and Python's `webbrowser` all read it, which is what makes
+        // this the one hook that works across the agents Spacron launches
+        // rather than a per-CLI special case. `spacron-open` appends the URL to
+        // the status channel above and the preview room shows it, so an agent
+        // publishing an artifact no longer throws the user out to the system
+        // browser mid-task.
+        //
+        // Bound to the status channel deliberately: the shim inherits
+        // SPACRON_TURN_FILE / SPACRON_TURN_TOKEN from the agent that spawns it,
+        // so there is nothing extra to thread through. No channel, no BROWSER —
+        // an agent with a `BROWSER` it cannot route through is worse off than
+        // one with none, since the shim would have nowhere to send the URL.
+        //
+        // GH_BROWSER too: `gh` prefers it over BROWSER, and the GitHub auth
+        // flow is one of the most common times an agent reaches for a browser.
+        if (statusChannel) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const shimPath = await invoke<string | null>('browser_shim_path');
+            if (shimPath) {
+              env['BROWSER'] = shimPath;
+              env['GH_BROWSER'] = shimPath;
+            }
+          } catch (e) {
+            console.warn('[browser] no URL shim available; agent links will open externally:', e);
+          }
+        }
+
         // Config-file-based agents (Cursor, Codex CLI) — fire-and-forget
         injectMcpConfigForAgent(agentPreset, resolvedCwd).catch((e) =>
           console.warn('[mcp] config injection failed:', e),

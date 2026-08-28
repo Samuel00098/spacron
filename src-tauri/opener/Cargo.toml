@@ -1,0 +1,25 @@
+# The browser shim, as its own tiny crate.
+#
+# Deliberately std-only and dependency-free: it is spawned once per URL an agent
+# tries to open, so it has to start instantly, and it is staged as a second
+# Tauri sidecar so every installer carries it next to `spacron-server`.
+#
+# It is NOT a bin target of the `spacron` package. Tauri bundles every bin target
+# of the app package *and* every `bundle.externalBin` entry, which is exactly the
+# duplication that broke the Windows MSI with `ICE30` once before — see the note
+# at the top of `../server/Cargo.toml`. As a separate crate, `externalBin` stays
+# the single source of this binary.
+[package]
+name = "spacron-open"
+version = "2.0.0"
+description = "Hands a URL back to the running Spacron app instead of the system browser"
+authors = ["samue"]
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[[bin]]
+name = "spacron-open"
+path = "src/main.rs"
+
+[dependencies]

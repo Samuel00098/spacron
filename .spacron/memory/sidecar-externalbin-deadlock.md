@@ -3,8 +3,12 @@
 `src-tauri/tauri.conf.json` declares:
 
 ```json
-"externalBin": ["binaries/spacron-server"]
+"externalBin": ["binaries/spacron-server", "binaries/spacron-open"]
 ```
+
+(`spacron-open` is the browser shim agents get as their `BROWSER`; it is its own
+crate under `src-tauri/opener` for the same reason the server is one. Everything
+below applies to **both** entries — `build.rs` stamps a placeholder per name.)
 
 tauri-build resolves that to `binaries/spacron-server-<target-triple>[.exe]`
 **on every cargo invocation of the `spacron` package** — `cargo check` and
@@ -25,7 +29,14 @@ To reproduce, move that file away first.
 ## The fix
 
 `src-tauri/build.rs` stamps an empty placeholder at that path when nothing is
-there, before calling `tauri_build::build()`, and emits a `cargo:warning`.
+there, before calling `tauri_build::build()`, and emits a `cargo:warning`. It is
+called once per sidecar name.
+
+**The placeholder is a real, zero-byte file.** Anything that *resolves* a sidecar
+at runtime must therefore check the length, not just `is_file()` — see
+`is_real_binary` in `commands/browser_shim.rs`. A bare existence check in a dev
+tree finds the placeholder and hands it out as if it were a build, which for the
+browser shim meant giving every agent a `BROWSER` that cannot spawn.
 
 It cannot ship: `tauri build` runs the sidecar script in `beforeBuildCommand`,
 before the cargo build that bundles, so the real binary always overwrites the

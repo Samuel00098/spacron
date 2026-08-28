@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-/// Stamp an empty `binaries/spacron-server-<triple>[.exe]` when none is there.
+/// Stamp an empty `binaries/<name>-<triple>[.exe]` when none is there.
 ///
-/// `bundle.externalBin` in `tauri.conf.json` names `binaries/spacron-server`,
-/// and tauri-build resolves that to a triple-suffixed path on **every** cargo
+/// `bundle.externalBin` in `tauri.conf.json` names `binaries/spacron-server`
+/// and `binaries/spacron-open`, and tauri-build resolves each to a
+/// triple-suffixed path on **every** cargo
 /// invocation of this package — `cargo check` and `cargo test` included, not
 /// just at bundle time. It hard-errors when the file is missing.
 ///
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 /// runs the sidecar script in `beforeBuildCommand`, before the cargo build that
 /// bundles, so a real binary always overwrites this first. The placeholder only
 /// survives a bare `cargo check` / `cargo test`, neither of which bundles.
-fn ensure_sidecar_placeholder() {
+fn ensure_sidecar_placeholder(name: &str) {
     let (Ok(target), Ok(manifest_dir)) = (
         std::env::var("TARGET"),
         std::env::var("CARGO_MANIFEST_DIR"),
@@ -29,7 +30,7 @@ fn ensure_sidecar_placeholder() {
     let ext = if target.contains("windows") { ".exe" } else { "" };
     let path = PathBuf::from(manifest_dir)
         .join("binaries")
-        .join(format!("spacron-server-{target}{ext}"));
+        .join(format!("{name}-{target}{ext}"));
 
     if path.exists() {
         return;
@@ -41,13 +42,17 @@ fn ensure_sidecar_placeholder() {
     if std::fs::File::create(&path).is_ok() {
         println!(
             "cargo:warning=staged an empty sidecar placeholder at {}; \
-             run `npm run server:build` to put the real spacron-server there",
+             run `npm run server:build` to put the real binary there",
             path.display()
         );
     }
 }
 
 fn main() {
-    ensure_sidecar_placeholder();
+    // Both sidecars named by `bundle.externalBin`. `spacron-open` is the browser
+    // shim agents get as their `BROWSER`; it is a separate crate for the same
+    // reason the server is — see the note atop `opener/Cargo.toml`.
+    ensure_sidecar_placeholder("spacron-server");
+    ensure_sidecar_placeholder("spacron-open");
     tauri_build::build()
 }

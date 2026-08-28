@@ -1,7 +1,14 @@
 /**
- * Builds the headless `spacron-server` binary and stages it as a Tauri
- * **sidecar** so every app installer (.msi / .dmg / .deb / .AppImage) carries
- * it. The desktop app then ships with the server it needs to set up a remote
+ * Builds the two sidecar binaries and stages them so every app installer
+ * (.msi / .dmg / .deb / .AppImage) carries them:
+ *
+ *   - `spacron-server` — the headless remote-workspace server.
+ *   - `spacron-open`   — the browser shim handed to agents as their `BROWSER`,
+ *                        so a URL an agent opens lands in the preview room
+ *                        instead of the system browser. Host-only; a
+ *                        `--target` cross build is a server-only concern.
+ *
+ * The desktop app then ships with the server it needs to set up a remote
  * workspace on a VPS (see the in-app "Set up a remote VPS" wizard).
  *
  * Tauri's `bundle.externalBin` convention: a sidecar named `spacron-server`
@@ -84,28 +91,44 @@ const triple = requestedTarget || hostTriple();
 // The `.exe` follows the TARGET OS, not the machine building it.
 const ext = triple.includes('windows') ? '.exe' : '';
 
-console.log(`build-server-sidecar: building spacron-server for ${triple}…`);
-run(
-  `cargo build --release -p spacron-server${
-    requestedTarget ? ` --target ${requestedTarget}` : ''
-  }`,
-);
+const outDir = path.join(tauriDir, 'binaries');
 
-// An explicit --target redirects cargo's output into target/<triple>/release.
-const profileDir = requestedTarget
-  ? path.join(tauriDir, 'target', requestedTarget, 'release')
-  : path.join(tauriDir, 'target', 'release');
-const built = path.join(profileDir, `spacron-server${ext}`);
-if (!fs.existsSync(built)) {
-  console.error(`build-server-sidecar: expected build output missing: ${built}`);
-  process.exit(1);
+/** Build one workspace crate and stage its binary as a Tauri sidecar. */
+function buildSidecar(crate) {
+  console.log(`build-server-sidecar: building ${crate} for ${triple}…`);
+  run(
+    `cargo build --release -p ${crate}${
+      requestedTarget ? ` --target ${requestedTarget}` : ''
+    }`,
+  );
+
+  // An explicit --target redirects cargo's output into target/<triple>/release.
+  const profileDir = requestedTarget
+    ? path.join(tauriDir, 'target', requestedTarget, 'release')
+    : path.join(tauriDir, 'target', 'release');
+  const built = path.join(profileDir, `${crate}${ext}`);
+  if (!fs.existsSync(built)) {
+    console.error(`build-server-sidecar: expected build output missing: ${built}`);
+    process.exit(1);
+  }
+
+  fs.mkdirSync(outDir, { recursive: true });
+  const dest = path.join(outDir, `${crate}-${triple}${ext}`);
+  fs.copyFileSync(built, dest);
+  console.log(`build-server-sidecar: sidecar ready at ${path.relative(repoRoot, dest)}`);
 }
 
-const outDir = path.join(tauriDir, 'binaries');
-fs.mkdirSync(outDir, { recursive: true });
-const dest = path.join(outDir, `spacron-server-${triple}${ext}`);
-fs.copyFileSync(built, dest);
-console.log(`build-server-sidecar: sidecar ready at ${path.relative(repoRoot, dest)}`);
+buildSidecar('spacron-server');
+
+// The browser shim agents are handed as their `BROWSER`. Staged for the HOST
+// only: it exists to be spawned on the machine running the app, so a cross
+// build aimed at a VPS has no use for it, and `bundle.externalBin` resolves
+// only the host triple at bundling time anyway. Skipping it keeps `--target`
+// a server-only concern.
+if (!requestedTarget || triple === hostTriple()) {
+  buildSidecar('spacron-open');
+}
+
 if (requestedTarget && triple !== hostTriple()) {
   console.log(
     'build-server-sidecar: cross artifact staged — the VPS wizard will find it by name when deploying to that OS.',
