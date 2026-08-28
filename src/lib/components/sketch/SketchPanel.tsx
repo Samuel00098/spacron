@@ -84,6 +84,8 @@ interface SketchArrow {
   color: string;
   opacity: number;
   type?: 'arrow' | 'line';
+  offsetX?: number;
+  offsetY?: number;
 }
 
 type SketchBackgroundStyle =
@@ -336,6 +338,9 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const resizingShapeIdRef = useRef<string | null>(null);
   const resizeShapeStartRef = useRef({ x: 0, y: 0 });
   const shapeStartDimsRef = useRef({ width: 0, height: 0 });
+  const draggingArrowIdRef = useRef<string | null>(null);
+  const dragArrowStartRef = useRef({ x: 0, y: 0 });
+  const dragArrowOffsetStartRef = useRef({ x: 0, y: 0 });
 
   const dragElementStartsRef = useRef<{ [id: string]: { x: number; y: number } }>({});
   const resizeElementStartsRef = useRef<{
@@ -782,18 +787,18 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       const text = sketchTexts.find(t => t.id === arrow.fromTextId);
       if (text) {
         const bounds = getTextBounds(text);
-        return { x: text.x + bounds.w / 2, y: text.y + bounds.h / 2 };
+        return { x: text.x + bounds.w / 2 + (arrow.offsetX ?? 0), y: text.y + bounds.h / 2 + (arrow.offsetY ?? 0) };
       }
       return null;
     }
     if (arrow.fromShapeId) {
       const shape = sketchShapes.find(s => s.id === arrow.fromShapeId);
       if (shape) {
-        return { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
+        return { x: shape.x + shape.width / 2 + (arrow.offsetX ?? 0), y: shape.y + shape.height / 2 + (arrow.offsetY ?? 0) };
       }
       return null;
     }
-    return arrow.fromPoint || null;
+    return arrow.fromPoint ? { x: arrow.fromPoint.x + (arrow.offsetX ?? 0), y: arrow.fromPoint.y + (arrow.offsetY ?? 0) } : null;
   }
 
   function getArrowEnd(arrow: SketchArrow): Point | null {
@@ -801,18 +806,18 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       const text = sketchTexts.find(t => t.id === arrow.toTextId);
       if (text) {
         const bounds = getTextBounds(text);
-        return { x: text.x + bounds.w / 2, y: text.y + bounds.h / 2 };
+        return { x: text.x + bounds.w / 2 + (arrow.offsetX ?? 0), y: text.y + bounds.h / 2 + (arrow.offsetY ?? 0) };
       }
       return null;
     }
     if (arrow.toShapeId) {
       const shape = sketchShapes.find(s => s.id === arrow.toShapeId);
       if (shape) {
-        return { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
+        return { x: shape.x + shape.width / 2 + (arrow.offsetX ?? 0), y: shape.y + shape.height / 2 + (arrow.offsetY ?? 0) };
       }
       return null;
     }
-    return arrow.toPoint || null;
+    return arrow.toPoint ? { x: arrow.toPoint.x + (arrow.offsetX ?? 0), y: arrow.toPoint.y + (arrow.offsetY ?? 0) } : null;
   }
 
   function drawShapeOnCanvas(
@@ -1531,6 +1536,32 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
     const worldCoords = screenToWorld(e.clientX, e.clientY);
 
+    if (currentTool === 'select') {
+      const hitArrow = [...arrows].reverse().find((arrow) => {
+        const start = getArrowStart(arrow);
+        const end = getArrowEnd(arrow);
+        return start && end && getDistanceToLine(worldCoords, start, end) < 14;
+      });
+      if (hitArrow) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedElementIds([hitArrow.id]);
+        setSelectedArrowId(hitArrow.id);
+        setSelectedShapeId(null);
+        setSelectedTextId(null);
+        draggingArrowIdRef.current = hitArrow.id;
+        dragArrowStartRef.current = { x: e.clientX, y: e.clientY };
+        dragArrowOffsetStartRef.current = { x: hitArrow.offsetX ?? 0, y: hitArrow.offsetY ?? 0 };
+        try {
+          viewportRef.current.setPointerCapture(e.pointerId);
+        } catch {}
+        window.addEventListener('pointermove', handleArrowDragMove);
+        window.addEventListener('pointerup', handleArrowDragUp);
+        window.addEventListener('pointercancel', handleArrowDragUp);
+        return;
+      }
+    }
+
     if (currentTool === 'eraser') {
       // Check if we clicked close to an arrow to delete it
       const clickedArrowIndex = arrows.findIndex(arrow => {
@@ -2148,6 +2179,28 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     window.removeEventListener('pointermove', handleShapeDragMove);
     window.removeEventListener('pointerup', handleShapeDragUp);
     window.removeEventListener('pointercancel', handleShapeDragUp);
+  }
+
+  function handleArrowDragMove(e: PointerEvent) {
+    if (!draggingArrowIdRef.current || !viewportRef.current) return;
+    const { zoomScale } = stateRef.current;
+    const rect = viewportRef.current.getBoundingClientRect();
+    const cssZoom = rect.width / viewportRef.current.clientWidth;
+    const deltaX = ((e.clientX - dragArrowStartRef.current.x) / cssZoom) / zoomScale;
+    const deltaY = ((e.clientY - dragArrowStartRef.current.y) / cssZoom) / zoomScale;
+    setArrows(prev => prev.map(arrow => arrow.id === draggingArrowIdRef.current
+      ? { ...arrow, offsetX: dragArrowOffsetStartRef.current.x + deltaX, offsetY: dragArrowOffsetStartRef.current.y + deltaY }
+      : arrow));
+  }
+
+  function handleArrowDragUp() {
+    if (draggingArrowIdRef.current) {
+      draggingArrowIdRef.current = null;
+      saveState();
+    }
+    window.removeEventListener('pointermove', handleArrowDragMove);
+    window.removeEventListener('pointerup', handleArrowDragUp);
+    window.removeEventListener('pointercancel', handleArrowDragUp);
   }
 
   // Resize shape elements

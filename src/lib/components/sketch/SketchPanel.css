@@ -1486,21 +1486,12 @@
   background: #f1f3f5 !important;
 }
 
-/* Keep tool glyphs crisp across every tray. Light mode contrast is scoped
-   below to the in-canvas controls so the main tray keeps its own surfaces. */
+/* Keep SVG edges clean without overriding each icon's natural stroke weight. */
 .sketch-overlay .tool-btn svg,
 .sketch-overlay .action-btn svg,
 .sketch-overlay .exit-btn svg,
 .sketch-overlay .toolbar-toggle svg {
   shape-rendering: geometricPrecision;
-}
-
-.sketch-overlay .tool-btn svg *,
-.sketch-overlay .action-btn svg *,
-.sketch-overlay .exit-btn svg *,
-.sketch-overlay .toolbar-toggle svg * {
-  stroke-width: 2.35;
-  vector-effect: non-scaling-stroke;
 }
 
 .sketch-overlay .sketch-bottom-left-panel .tool-btn svg,
@@ -1511,17 +1502,6 @@
 .sketch-overlay .sketch-top-right-panel .exit-btn svg,
 .sketch-overlay .sketch-style-panel .style-panel-btn svg {
   shape-rendering: geometricPrecision;
-}
-
-.sketch-overlay .sketch-bottom-left-panel .tool-btn svg *,
-.sketch-overlay .sketch-bottom-left-panel .action-btn svg *,
-.sketch-overlay .sketch-bottom-left-panel .exit-btn svg *,
-.sketch-overlay .sketch-top-right-panel .tool-btn svg *,
-.sketch-overlay .sketch-top-right-panel .action-btn svg *,
-.sketch-overlay .sketch-top-right-panel .exit-btn svg *,
-.sketch-overlay .sketch-style-panel .style-panel-btn svg * {
-  stroke-width: 2.35;
-  vector-effect: non-scaling-stroke;
 }
 
 :root.light-theme .sketch-overlay .sketch-bottom-left-panel .tool-btn,
