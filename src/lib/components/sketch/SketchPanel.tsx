@@ -2961,6 +2961,25 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     setPanOffset({ x: 0, y: 0 });
   }
 
+  function resetSketchSettings() {
+    commitText();
+    setCurrentColor('#06b6d4');
+    setDefaultFillColor('transparent');
+    setDefaultFillStyle('transparent');
+    setDefaultStrokeWidth(2);
+    setDefaultStrokeStyle('solid');
+    setDefaultRoughness(1.5);
+    setDefaultFontFamily('handwritten');
+    setDefaultBorderRadius(8);
+    setBackgroundStyle('transparent');
+    setGridSpacing(24);
+    setSnapToGrid(false);
+    resetZoom();
+    setShowSettingsDropdown(false);
+    setTimeout(() => persistCanvasSnapshot(), 10);
+    showToast('Sketch settings reset.', 'success');
+  }
+
   // Wheel listener (touchpad gestures + mouse wheel zoom)
   function handleWheel(e: WheelEvent) {
     const target = e.target as HTMLElement;
@@ -3298,7 +3317,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       const blob = await new Promise<Blob | null>((resolve) => compiled.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('Could not encode sketch screenshot');
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      showToast('Sketch screenshot copied — paste it into an agent', 'success');
+      showToast('Sketch screenshot copied. Paste it into an agent.', 'success');
     } catch (err) {
       console.error('Failed to copy sketch screenshot:', err);
       showToast('Could not copy the sketch screenshot', 'error');
@@ -3846,7 +3865,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   {[
                     { value: 'transparent', label: 'Transparent' },
                     { value: 'hachure', label: 'Hachure' },
-                    { value: 'cross-hatch', label: 'Cross-Hatch' },
+                    { value: 'cross-hatch', label: 'Cross Hatch' },
                     { value: 'solid', label: 'Solid' }
                   ].map((opt) => (
                     <button
@@ -3986,7 +4005,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 <div className="style-panel-grid">
                   {[
                     { value: 'handwritten', label: 'Handwritten' },
-                    { value: 'sans-serif', label: 'Sans-Serif' },
+                    { value: 'sans-serif', label: 'Sans Serif' },
                     { value: 'monospace', label: 'Monospace' },
                     { value: 'serif', label: 'Serif' },
                     { value: 'playful', label: 'Playful' },
@@ -4447,7 +4466,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   <div className="section-title">Design Presets</div>
                   <div className="grid-style-options design-preset-options">
                     {[
-                      { value: 'excalidraw', label: 'Hand-drawn' },
+                      { value: 'excalidraw', label: 'Hand drawn' },
                       { value: 'blueprint', label: 'Blueprint' },
                       { value: 'sticky-notes', label: 'Sticky Notes' },
                       { value: 'ink', label: 'Ink Sketch' }
@@ -4571,6 +4590,13 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                         <circle cx="12" cy="13" r="3.5" />
                       </svg>
                       Copy Screenshot
+                    </button>
+                    <button type="button" className="util-btn" onClick={resetSketchSettings} title="Reset sketch settings and view">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 12a9 9 0 1 0 3-6.7" />
+                        <polyline points="3 4 3 10 9 10" />
+                      </svg>
+                      Reset
                     </button>
                     <button type="button" className="util-btn" onClick={pasteEntireCanvas} title="Replace canvas from copied drawing in clipboard">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
