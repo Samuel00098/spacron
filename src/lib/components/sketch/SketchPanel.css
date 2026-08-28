@@ -1454,8 +1454,8 @@
   margin-top: 12px;
   padding: 8px;
   color: var(--text-secondary);
-  background: transparent;
-  border: 0;
+  background: #24242c;
+  border: 1px solid var(--border);
   border-radius: 7px;
   cursor: pointer;
 }
@@ -1467,7 +1467,9 @@
 .sketch-overlay .sketch-bottom-left-panel,
 .sketch-overlay .sketch-top-right-panel,
 .sketch-overlay .settings-dropdown-panel,
-.sketch-overlay .shape-context-menu {
+.sketch-overlay .shape-context-menu,
+.sketch-overlay .settings-trigger-btn,
+.sketch-overlay .toolbar-toggle {
   background: #18181e !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -1484,7 +1486,10 @@
 :root.light-theme .sketch-overlay .sketch-bottom-left-panel,
 :root.light-theme .sketch-overlay .sketch-top-right-panel,
 :root.light-theme .sketch-overlay .settings-dropdown-panel,
-:root.light-theme .sketch-overlay .shape-context-menu {
+:root.light-theme .sketch-overlay .shape-context-menu,
+:root.light-theme .sketch-overlay .settings-trigger-btn,
+:root.light-theme .sketch-overlay .toolbar-toggle,
+:root.light-theme .sketch-overlay .sketch-reset-cancel {
   background: #ffffff !important;
 }
 
