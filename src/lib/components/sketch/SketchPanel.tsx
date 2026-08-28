@@ -704,7 +704,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       gridStyleColor = 'rgba(100, 210, 255, 0.25)'; // Blueprint dots
       gridStyleLineColor = 'rgba(100, 210, 255, 0.15)'; // Blueprint lines
     } else {
-      gridStyleColor = isLightThemeVal ? 'rgba(0, 0, 0, 0.15)' : 'rgba(255, 255, 255, 0.15)';
+      gridStyleColor = isLightThemeVal ? 'rgba(15, 23, 42, 0.24)' : 'rgba(255, 255, 255, 0.15)';
       gridStyleLineColor = isLightThemeVal ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.06)';
     }
 
@@ -714,7 +714,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       gridCtx.fillStyle = gridStyleColor;
       const startX = panOffset.x % scaledSpacing;
       const startY = panOffset.y % scaledSpacing;
-      const dotRadius = Math.max(0.5, 1 * zoomScale);
+      const dotRadius = Math.max(0.75, 1 * zoomScale);
       
       const limitX = w + scaledSpacing;
       const limitY = h + scaledSpacing;
@@ -752,7 +752,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       gridCtx.fillStyle = gridStyleColor;
       const colSpacing = gridSpacing * zoomScale;
       const rowSpacing = colSpacing * 0.866025;
-      const dotRadius = Math.max(0.5, 1 * zoomScale);
+      const dotRadius = Math.max(0.75, 1 * zoomScale);
       
       const startRow = Math.floor(-panOffset.y / rowSpacing) - 1;
       const endRow = Math.ceil((h - panOffset.y) / rowSpacing) + 1;
@@ -3317,12 +3317,12 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     // Draw Grid Lines/Dots
     if (backgroundStyle === 'dot-grid') {
-      tempCtx.fillStyle = isLightThemeVal ? 'rgba(0, 0, 0, 0.15)' : 'rgba(255, 255, 255, 0.15)';
+      tempCtx.fillStyle = isLightThemeVal ? 'rgba(15, 23, 42, 0.24)' : 'rgba(255, 255, 255, 0.15)';
       const dotSpacing = 24;
       const scaledSpacing = dotSpacing * zoomScale;
       const startX = panOffset.x % scaledSpacing;
       const startY = panOffset.y % scaledSpacing;
-      const dotRadius = Math.max(0.5, 1 * zoomScale);
+      const dotRadius = Math.max(0.75, 1 * zoomScale);
       
       const limitX = w + scaledSpacing;
       const limitY = h + scaledSpacing;
@@ -3831,7 +3831,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               opacity: text.opacity,
               // Legacy text has a higher default layer than shapes. Explicit
               // layer actions override that default and work across both types.
-              zIndex: text.layer ?? 100,
+              // Grid and drawing canvases occupy layers 1 and 2. Offset every
+              // interactive element into the overlay range while preserving
+              // its cross-type layer order.
+              zIndex: Math.max(3, (text.layer ?? 100) + 3),
               cursor: currentTool === 'eraser' ? 'pointer' : (currentTool === 'select' ? 'move' : 'inherit')
             }}
             onPointerDown={(e) => startDragText(e, text)}
@@ -3873,7 +3876,12 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               backdropFilter: shape.type !== 'image' && shape.fillColor === 'glass' ? 'blur(8px)' : 'none',
               WebkitBackdropFilter: shape.type !== 'image' && shape.fillColor === 'glass' ? 'blur(8px)' : 'none',
               opacity: shape.opacity,
-              zIndex: shape.layer ?? 0,
+              // The resize handle is a child of this interaction layer. A
+              // legacy/default shape layer of 0 used to put both behind the
+              // drawing canvas (z-index 2), making the handle exist but remain
+              // invisible. Reserve 0-2 for the canvases and offset document
+              // layers above them without changing their relative order.
+              zIndex: Math.max(3, (shape.layer ?? 0) + 3),
               cursor: currentTool === 'eraser' ? 'pointer' : (currentTool === 'select' ? 'move' : 'inherit')
             }}
             onPointerDown={(e) => startDragShape(e, shape)}
@@ -3889,9 +3897,6 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   width: '10px',
                   height: '10px',
                   cursor: 'se-resize',
-                  backgroundColor: 'var(--accent)',
-                  borderRadius: '50%',
-                  border: '1.5px solid var(--bg-primary)',
                   zIndex: 10
                 }}
                 onPointerDown={(e) => startResizeShape(e, shape)}

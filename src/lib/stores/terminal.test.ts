@@ -1263,6 +1263,11 @@ describe('new PTY spawn geometry', () => {
     return { cols, rows };
   }
 
+  function lastSpawnEnv(): Record<string, string> {
+    const calls = vi.mocked(openPty).mock.calls;
+    return calls[calls.length - 1][5] as Record<string, string>;
+  }
+
   it('falls back to 120x34 before any pane has measured', async () => {
     await createTerminalSession('/repo');
     expect(lastSpawnSize()).toEqual({ cols: 120, rows: 34 });
@@ -1292,5 +1297,23 @@ describe('new PTY spawn geometry', () => {
     recordTerminalGeometry(97, 21);
     await createTerminalSession('/repo', undefined, undefined, { initialCols: 200, initialRows: 50 });
     expect(lastSpawnSize()).toEqual({ cols: 200, rows: 50 });
+  });
+
+  it('advertises the dark truecolor surface that agent TUIs actually render on', async () => {
+    await createTerminalSession('/repo');
+    expect(lastSpawnEnv()).toMatchObject({
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      CLAUDE_CODE_THEME: 'dark',
+      THEME: 'dark',
+      COLORFGBG: '15;0',
+    });
+  });
+
+  it('still lets an explicit per-session environment override a color default', async () => {
+    await createTerminalSession('/repo', undefined, undefined, {
+      extraEnv: { COLORTERM: '24bit' },
+    });
+    expect(lastSpawnEnv().COLORTERM).toBe('24bit');
   });
 });

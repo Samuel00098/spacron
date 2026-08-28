@@ -34,7 +34,6 @@ import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import { forgetWorktree } from '$lib/services/orchestrator/worktree-reconciler';
-import { activeTheme } from '$lib/stores/theme';
 import {
   getMcpUrl,
   injectMcpConfigForAgent,
@@ -1166,6 +1165,24 @@ export function __resetTerminalGeometry(): void {
   lastMeasuredGeometry = null;
 }
 
+/**
+ * xterm is always a dark terminal surface, even while the surrounding app is
+ * using a light theme. Advertise that real surface to child processes and
+ * expose the color capability xterm actually supports, so agent TUIs keep
+ * their own borders, prompts, and status colors instead of choosing a pale or
+ * reduced-color palette that disappears against the terminal well.
+ */
+function buildTerminalColorEnv(extraEnv?: Record<string, string>): Record<string, string> {
+  return {
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    CLAUDE_CODE_THEME: 'dark',
+    THEME: 'dark',
+    COLORFGBG: '15;0',
+    ...(extraEnv ?? {}),
+  };
+}
+
 export async function createTerminalSession(
   cwd?: string,
   targetPaneIndex?: number,
@@ -1193,14 +1210,7 @@ export async function createTerminalSession(
 
     const resolvedCwd = cwd ?? terminalProjectRoots.get(owningProjectId);
  
-    const theme = get(activeTheme);
-    const isLight = theme?.type === 'light';
-    const env: Record<string, string> = {
-      CLAUDE_CODE_THEME: isLight ? 'light' : 'dark',
-      THEME: isLight ? 'light' : 'dark',
-      COLORFGBG: isLight ? '0;15' : '15;0',
-      ...(opts?.extraEnv ?? {}),
-    };
+    const env = buildTerminalColorEnv(opts?.extraEnv);
 
     // Both bound to the PTY once it exists — see SPACRON_AGENT_TOKEN and
     // SPACRON_TURN_FILE below.
@@ -2552,4 +2562,3 @@ export async function killSession(id: number) {
     }
   }
 }
-
