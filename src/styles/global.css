@@ -805,113 +805,148 @@ input:focus {
   overscroll-behavior: none;
 }
 
-/* Prevent scroll jitter/flicker and overscroll elastic bouncing inside sub-containers */
-.cm-scroller,
-.scrollable,
-.colors-list,
-.file-tree,
-.modal-body,
-.review-body,
-.sc-section-body,
-.markdown-container,
-.results-container,
-.search-results-dropdown,
-.editor-tabs,
-.project-switcher,
-.session-tabs,
-.xterm-viewport,
-.welcome,
-.recent-list,
-.file-card-body,
-.markdown-body pre,
-.sticky-content,
-/* The floating popovers (usage meter, inbox) and the spawn picker: a popover
-   that chains its scroll into the workspace behind it reads as the panel
-   itself sliding, which is exactly what it must never do. */
-.usage-list,
-.inbox-list,
-.asm-preset-list {
-  overscroll-behavior: none;
-}
-
-/* Prevent horizontal layout shifts when scrollbars appear */
-.scrollable,
-.review-body,
-.sc-section-body,
-.colors-list,
-.modal-body,
-.file-tree,
-.markdown-container,
-.results-container,
-.search-results-dropdown,
-.welcome,
-.recent-list,
-.sticky-content,
-.usage-list,
-.inbox-list,
-.asm-preset-list {
-  scrollbar-gutter: stable;
-}
-
-/* Pinned top/bottom scroll edges for vertical scroll containers. This avoids
-   pseudo-element boxes inside scroll areas, so the edge treatment cannot create
-   extra bounce space or horizontal drift while resizing narrow panels. */
+/* Audited vertical scroll surfaces. The edge treatment lives on the viewport,
+   so it stays pinned while its content moves; gutter reservation prevents a
+   panel-width jump when a scrollbar appears. This is deliberately an explicit
+   set of real scroll containers rather than `#app *`: the latter breaks nested
+   wheel scrolling in WebView2/Tauri dev. Horizontal-only strips are excluded. */
 :where(
+  .cm-scroller,
   .scrollable,
-  .sc-section-body,
-  .sticky-content,
+  .containers-panel,
+  .image-stage,
   .colors-list,
+  .file-tree,
+  .root-list,
+  .search-results,
+  .search-results-spotlight,
+  .search-results-dropdown,
+  .branch-list,
+  .sc-section-body,
+  .sc-file-expanded-diff,
+  .snippet-list,
   .tables-list,
   .grid-wrapper,
-  .root-list,
-  .file-tree,
-  .search-results,
-  .search-results-dropdown,
   .diff-body,
-  .dd-menu,
-  .model-dropdown,
-  .branch-list,
-  .snippet-list,
-  .block-strip,
-  .cmd-output,
   .req-list,
   .req-tab-content,
   .res-body,
   .res-headers-list,
+  .drawer-body,
+  .agent-room-strip,
+  .split-grid,
+  .rsw-card,
+  .rs-popover,
   .snap-list,
+  .dd-menu,
+  .model-dropdown,
+  .tools-menu-popover,
+  .mobile-stage,
+  .agent-notifs,
+  .fleet-grid,
+  .fc-files,
+  .fc-file-diff,
+  .inbox-detail-message,
+  .inbox-list,
+  .wrm-files,
+  .wrm-diff,
   .markdown-container,
   .console-body,
-  .review-body,
-  .results-container,
-  .env-body,
-  .modal-body,
-  .orc-scroll,
   .history-list,
-  .entries-list,
-  .task-list,
-  .kanban-board--stacked,
-  .note-preview,
-  .slide-content,
+  .viewport-stage,
+  .pp-body,
+  .file-card-body,
+  .review-body,
+  .rp-files,
+  .apm-card,
+  .asm-preset-list,
+  .cr-repo-list,
+  .results-container,
+  .project-switcher,
+  .env-body,
+  .settings-panel,
+  .settings-tabs,
+  .sselect-options-list,
   .update-notes,
+  .vh-list,
+  .sketch-style-panel,
+  .voice-transcript,
+  .xterm-viewport,
+  .attach-list,
+  .empty-pane-container,
+  .command-list,
   .error-box,
+  .json-code,
   .match-list,
+  .scrollable-tab-content,
+  .account-switch-menu,
+  .usage-list,
+  .ob-card,
+  .projects-panel-body,
+  .te-run-menu,
+  .te-body,
+  .task-list,
+  .task-run-menu,
+  .kanban-board--stacked,
   .welcome,
   .recent-list,
+  .recent-list-layout,
+  .lm-licenses,
+  .lm-list,
+  .lm-switcher-menu,
+  .yt-results-list,
+  .yt-album-tracklist,
+  .yt-grid,
+  .block-strip,
+  .cmd-output,
+  .modal-body,
+  .orc-scroll,
+  .entries-list,
+  .note-preview,
+  .slide-content,
   .feed-list,
   .notes-timeline,
   .ws-menu-list,
-  .usage-list,
-  .inbox-list,
-  .asm-preset-list
+  .sticky-content
 ):not(.toolbox-tabs) {
   --scroll-edge-shadow: color-mix(in srgb, var(--bg-primary) 82%, transparent);
-  position: relative;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: none;
+  scrollbar-gutter: stable;
   background-clip: padding-box;
   box-shadow:
     inset 0 12px 14px -16px var(--scroll-edge-shadow),
     inset 0 -12px 14px -16px var(--scroll-edge-shadow);
+}
+
+/* Horizontal strips and two-axis canvases keep momentum inside their own pane
+   without inheriting the vertical edge shadow or losing horizontal overflow. */
+:where(
+  .editor-tabs,
+  .preview-tab-list,
+  .image-stage,
+  .sc-file-expanded-diff,
+  .card-body,
+  .grid-wrapper,
+  .res-body,
+  .res-headers-list,
+  .minimized-room-stack,
+  .room-stack,
+  .split-switcher-rooms,
+  .mobile-stage,
+  .api-strip,
+  .fc-file-diff,
+  .wrm-diff,
+  .viewport-stage,
+  .markdown-body pre,
+  .hdv-lines,
+  .stats-sessions-scroll,
+  .session-tabs,
+  .mode-tabs,
+  .toolbox-tabs,
+  .json-code,
+  .yt-music-filters
+) {
+  overscroll-behavior-x: none;
 }
 
 /* ══ Panel surfaces ═════════════════════════════════════════════════════════

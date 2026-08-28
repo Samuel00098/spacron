@@ -30,7 +30,8 @@ import {
   replaceCurrentNavigation,
   goBackPreviewTab,
   goForwardPreviewTab,
-  createBlankPreviewBrowserTab,
+  createPreviewBrowserTab,
+  previewAddressBarValue,
   selectPreviewBrowserTab,
   closePreviewBrowserTab,
 } from '$lib/stores/preview';
@@ -332,7 +333,7 @@ export default function PreviewPanel() {
   const [screenshotting, setScreenshotting] = useState(false);
   const [clearingData, setClearingData] = useState(false);
   const [tempPort, setTempPort] = useState(port);
-  const [inputUrl, setInputUrl] = useState(currentUrlValue);
+  const [inputUrl, setInputUrl] = useState(() => previewAddressBarValue(currentUrlValue));
   const [inspectMode, setInspectMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   // Responsive/device mode. The viewport is a plain rectangle of an exact
@@ -1387,8 +1388,8 @@ export default function PreviewPanel() {
   }, [preserveConsoleLog]);
 
   const openNewTab = useCallback(() => {
-    createBlankPreviewBrowserTab();
-    setInputUrl('about:blank');
+    createPreviewBrowserTab('/');
+    setInputUrl('');
   }, []);
 
   const activateTab = useCallback((tabId: string) => {
@@ -1416,7 +1417,7 @@ export default function PreviewPanel() {
   // store-driven action (activateTab/closeTab call store setters that update
   // currentUrl, which this mirrors back into the local inputUrl field).
   useEffect(() => {
-    setInputUrl(currentUrlValue);
+    setInputUrl(previewAddressBarValue(currentUrlValue));
   }, [currentUrlValue]);
 
   // onMount

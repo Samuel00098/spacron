@@ -10,6 +10,8 @@ vi.mock('./notification', () => ({
 import {
   BLANK_PREVIEW_URL,
   createBlankPreviewBrowserTab,
+  createPreviewBrowserTab,
+  previewAddressBarValue,
   navigatePreviewTab,
   commitInternalNavigation,
   goBackPreviewTab,
@@ -61,6 +63,13 @@ describe('preview navigation', () => {
       expect(tab.historyIndex).toBe(0);
       expect(tab.historyIndex <= 0).toBe(true);
       expect(tab.historyIndex >= tab.history.length - 1).toBe(true);
+    });
+
+    it('keeps the home sentinel out of the address bar', () => {
+      expect(previewAddressBarValue('/')).toBe('');
+      expect(previewAddressBarValue(BLANK_PREVIEW_URL)).toBe('');
+      expect(previewAddressBarValue('/docs')).toBe('/docs');
+      expect(previewAddressBarValue('https://example.com')).toBe('https://example.com');
     });
   });
 
@@ -306,6 +315,19 @@ describe('preview navigation', () => {
   });
 
   describe('multiple tabs', () => {
+    it('creates ordinary new tabs on the preview home page', () => {
+      navigatePreviewTab('https://example.com/docs');
+
+      const homeTabId = createPreviewBrowserTab();
+      const homeTab = get(previewTabs).find((tab) => tab.id === homeTabId)!;
+
+      expect(get(activePreviewTabId)).toBe(homeTabId);
+      expect(get(currentUrl)).toBe('/');
+      expect(homeTab.url).toBe('/');
+      expect(homeTab.loadUrl).toBe('/');
+      expect(homeTab.history).toEqual(['/']);
+    });
+
     it('creates blank browser tabs without inheriting the active tab URL', () => {
       navigatePreviewTab('https://example.com/docs');
 

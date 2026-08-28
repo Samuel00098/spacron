@@ -33,6 +33,11 @@ export type PreviewTab = {
 
 export const BLANK_PREVIEW_URL = 'about:blank';
 
+/** Hide Preview's internal home sentinel from the user-facing address field. */
+export function previewAddressBarValue(url: string): string {
+  return url === '/' || url === BLANK_PREVIEW_URL ? '' : url;
+}
+
 const currentUrlStore = writable<string>('/');
 
 function createTabId() {

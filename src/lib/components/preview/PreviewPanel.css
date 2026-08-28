@@ -1208,6 +1208,22 @@
   }
 }
 
+/* Once the preview is narrower than a typical split pane, give navigation its
+   own full-width row. The controls may wrap above it, but the URL/search field
+   never gets squeezed into a hard-to-find sliver when the room is minimized. */
+@container (max-width: 620px) {
+  .preview-panel .address-bar {
+    order: 8;
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .preview-panel .preview-trust-pill {
+    display: none;
+  }
+}
+
 @container (max-width: 480px) {
   .preview-panel .preview-tabs {
     padding-inline: 8px;
