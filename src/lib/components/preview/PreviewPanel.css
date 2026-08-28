@@ -965,6 +965,19 @@
   padding-bottom: 0;
 }
 
+/* Auto margins center a fitting frame, but they must not create a leading
+   gutter on an axis that is being scrolled. Keep the oversized viewport
+   anchored to the pane's top/left edges at every scroll position. */
+.preview-panel .preview-content.is-device .viewport-stage.is-overflowing-x .viewport-sizer {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.preview-panel .preview-content.is-device .viewport-stage.is-overflowing-y .viewport-sizer {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
 .preview-panel .viewport-sizer {
   position: relative;
   width: 100%;
