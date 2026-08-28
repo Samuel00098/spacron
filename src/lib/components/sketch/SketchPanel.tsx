@@ -2816,7 +2816,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     try {
       const text = await navigator.clipboard.readText();
       if (!text || !text.startsWith('soryq-canvas-full:')) {
-        showToast('Clipboard does not contain a copied Soryq canvas', 'warning');
+        showToast('Clipboard does not contain a copied Spacron canvas', 'warning');
         return;
       }
 
@@ -2908,16 +2908,24 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     const mouseX = (e.clientX - rect.left) / cssZoom;
     const mouseY = (e.clientY - rect.top) / cssZoom;
     
-    const { zoomScale: currentZoom, panOffset: currentPan } = stateRef.current;
+    const { zoomScale: currentZoom, panOffset: currentPan, currentTool: activeTool } = stateRef.current;
+    const deltaY = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? e.deltaY * 16
+      : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? e.deltaY * viewport.clientHeight
+        : e.deltaY;
+    const shouldZoom = e.ctrlKey || e.metaKey || e.altKey || (!e.shiftKey && activeTool !== 'pan' && deltaY !== 0);
 
-    if (e.ctrlKey) {
-      // Touchpad Pinch gesture or Ctrl + Mouse Wheel
-      const zoomFactor = Math.exp(-e.deltaY * 0.0015);
+    if (shouldZoom) {
+      // Pinch gestures, modifier + wheel, and regular vertical wheel/trackpad
+      // input all zoom around the pointer. The explicit pan tool keeps wheel
+      // panning available for users who want to move around the canvas.
+      const zoomFactor = Math.exp(-deltaY * 0.0015);
       
       const beforeZoomX = (mouseX - currentPan.x) / currentZoom;
       const beforeZoomY = (mouseY - currentPan.y) / currentZoom;
       
-      let nextZoom = Math.min(5.0, Math.max(0.1, currentZoom * zoomFactor));
+      const nextZoom = Math.min(5.0, Math.max(0.1, currentZoom * zoomFactor));
       
       setPanOffset({
         x: mouseX - beforeZoomX * nextZoom,
@@ -2927,8 +2935,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     } else {
       // Two-finger scroll panning / scroll-wheel panning
       // e.shiftKey for horizontal panning (mapping vertical wheel deltaY to horizontal offset)
-      const dx = e.shiftKey ? e.deltaY : e.deltaX;
-      const dy = e.shiftKey ? 0 : e.deltaY;
+      const dx = e.shiftKey ? deltaY : e.deltaX;
+      const dy = e.shiftKey ? 0 : deltaY;
       setPanOffset({
         x: currentPan.x - dx / cssZoom,
         y: currentPan.y - dy / cssZoom
