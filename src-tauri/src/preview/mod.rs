@@ -249,6 +249,18 @@ const INSPECTOR_SNIPPET: &str = r#"<script>
 </script>"#;
 
 const SCROLL_FLAG: &str = "spacron-scroll-sync";
+const VIEWPORT_EDGE_FLAG: &str = "spacron-viewport-edge";
+// Keep the proxied document flush with the iframe viewport. Without this,
+// pages that rely on the browser's default body margin expose the iframe's
+// white canvas as a leading gutter, so the preview appears to float away from
+// the top/left edge while it scrolls.
+const VIEWPORT_EDGE_SNIPPET: &str = r#"<style data-spacron-viewport-edge>
+html, body {
+  margin: 0;
+  overscroll-behavior: none;
+  scroll-behavior: auto;
+}
+</style>"#;
 // Tiny, self-contained scroll-position bridge injected into *every* proxied HTML
 // page (local dev and external alike). The preview iframe is cross-origin to the
 // app, so the parent cannot read or set the document's scroll directly — this
@@ -2748,6 +2760,10 @@ async fn build_preview_response(
         } else {
             html.into_owned()
         };
+        // Keep the document edge flush with the embedded browser viewport before
+        // the page's own styles load. A site's explicit body margin can still
+        // override this normally; this only removes the user-agent default.
+        let injected = inject_viewport_edge_style(&injected);
         // The scroll-position bridge is harmless and useful everywhere, so inject
         // it into both local dev and external pages.
         let injected = inject_scroll_script(&injected);
@@ -3082,6 +3098,13 @@ fn inject_scroll_script(html: &str) -> String {
     format!("{}{}", html, SCROLL_SNIPPET)
 }
 
+fn inject_viewport_edge_style(html: &str) -> String {
+    if html.contains(VIEWPORT_EDGE_FLAG) {
+        return html.to_string();
+    }
+    inject_at_head_top(html, VIEWPORT_EDGE_SNIPPET)
+}
+
 /// Parse `/proxy-ws/{ws|wss}/{host}{path}` (+ query) into the real socket URL.
 fn get_ws_target_from_proxy_path(path: &str, query: Option<&str>) -> Option<String> {
     let rest = path.strip_prefix("/proxy-ws/")?;
@@ -3279,7 +3302,8 @@ mod tests {
         consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
         html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
         inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
-        local_file_error, preview_error_response, proxy_request_allowed, wants_html_error,
+        inject_viewport_edge_style, local_file_error, preview_error_response,
+        proxy_request_allowed, wants_html_error,
         LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
     };
     use axum::http::{HeaderMap, StatusCode};
@@ -3348,6 +3372,17 @@ mod tests {
         let injected = inject_ytm_snippet(html);
         assert!(injected.contains("<style data-spacron-ytm-chrome>"));
         assert_eq!(inject_ytm_snippet(&injected), injected);
+    }
+
+    #[test]
+    fn viewport_edge_style_is_head_first_and_idempotent() {
+        let html = "<!doctype html><html><head><title>t</title></head><body></body></html>";
+        let injected = inject_viewport_edge_style(html);
+        let head_end = injected.find("<head>").unwrap() + "<head>".len();
+        assert!(injected[head_end..].starts_with("<style data-spacron-viewport-edge>"));
+        assert!(injected.contains("margin: 0"));
+        assert!(injected.contains("overscroll-behavior: none"));
+        assert_eq!(inject_viewport_edge_style(&injected), injected);
     }
 
     #[test]
