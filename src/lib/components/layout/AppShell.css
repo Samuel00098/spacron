@@ -129,6 +129,15 @@
   overflow-x: hidden;
 }
 
+/* Every left-drawer tab owns its scroll region (the tree, search results,
+   source-control section bodies, snapshots, snippets, or problems). Keep the
+   wrapper out of that scroll chain so wheel input over the tab content reaches
+   the element the user is actually pointing at. The right drawer remains a
+   fallback scroll container for tools that do not provide an inner viewport. */
+.app-shell .left-utility-panel .drawer-body {
+  overflow-y: hidden;
+}
+
 .app-shell .left-utility-panel .drawer-body > *,
 .app-shell .right-utility-panel .drawer-body > * {
   flex: 1 1 auto;
