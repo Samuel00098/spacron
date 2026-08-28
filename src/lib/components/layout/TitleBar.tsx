@@ -9,6 +9,7 @@ import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/sto
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { toggleProjectHUD } from '$lib/stores/workspace';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
 import packageJson from '../../../../package.json';
@@ -191,7 +192,7 @@ export default function TitleBar() {
             <button
               className="titlebar-hud-trigger"
               onClick={toggleProjectHUD}
-              title="Search projects and collections (Ctrl+K)"
+              title={`Search projects and collections (${formatShortcutLabel('Ctrl+K')})`}
             >
               <svg className="hud-trigger-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -201,7 +202,7 @@ export default function TitleBar() {
                 {project && <span className="hud-trigger-separator">/</span>}
                 {project && <span className="hud-trigger-project">{project.name}</span>}
               </span>
-              <kbd className="hud-trigger-kbd">Ctrl K</kbd>
+              <kbd className="hud-trigger-kbd">{formatShortcutLabel('Ctrl+K')}</kbd>
             </button>
           )}
         </div>
@@ -217,7 +218,7 @@ export default function TitleBar() {
               className="icon-btn tb-collapse-1"
               onClick={openQuickCapture}
               aria-label="Quick Capture"
-              title="Quick Capture (Ctrl+Shift+Space)"
+              title={`Quick Capture (${formatShortcutLabel('Ctrl+Shift+Space')})`}
             >
               <svg
                 width="15"
@@ -239,7 +240,7 @@ export default function TitleBar() {
               className="icon-btn"
               onClick={toggleFloatingSearch}
               aria-label="Search in Files"
-              title="Search in Files (Ctrl+Shift+F)"
+              title={`Search in Files (${formatShortcutLabel('Ctrl+Shift+F')})`}
             >
               <svg
                 width="15"
@@ -272,7 +273,7 @@ export default function TitleBar() {
             className="icon-btn"
             onClick={() => openSettings()}
             aria-label="Settings"
-            title="Settings (Ctrl+,)"
+            title={`Settings (${formatShortcutLabel('Ctrl+,')})`}
           >
             <svg
               width="15"

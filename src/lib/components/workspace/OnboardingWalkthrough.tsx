@@ -6,6 +6,7 @@ import { settingsOpen, openSettings } from '$lib/stores/layout';
 import { useStore } from '$lib/react/useStore';
 import packageJson from '../../../../package.json';
 import './OnboardingWalkthrough.css';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 const iconSrc = `/icon.png?v=${packageJson.version}`;
 
@@ -303,7 +304,7 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
                 )}
                 <h1 className="ob-title">You&apos;re all set</h1>
                 <p className="ob-desc">
-                  Open a folder to start coding, or press <kbd className="ob-desc-kbd">Ctrl+Shift+P</kbd> to open the command palette.
+                  Open a folder to start coding, or press <kbd className="ob-desc-kbd">{formatShortcutLabel('Ctrl+Shift+P')}</kbd> to open the command palette.
                 </p>
               </div>
 

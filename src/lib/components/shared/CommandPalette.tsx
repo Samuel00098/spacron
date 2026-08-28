@@ -4,6 +4,7 @@ import { useCommandPaletteStore } from '$lib/stores/zustand/commandpalette';
 import { switchTheme } from '$lib/stores/theme';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { showToast } from '$lib/stores/notification';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import './CommandPalette.css';
 
 export default function CommandPalette() {
@@ -206,7 +207,7 @@ export default function CommandPalette() {
                   <span className="command-category">{cmd.category}</span>
                   <span className="command-name">{cmd.name}</span>
                 </div>
-                {cmd.shortcut && <span className="command-shortcut">{cmd.shortcut}</span>}
+                {cmd.shortcut && <span className="command-shortcut">{formatShortcutLabel(cmd.shortcut)}</span>}
               </div>
             ))
           )}

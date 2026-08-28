@@ -17,6 +17,7 @@ import { openSettings } from '$lib/stores/layout';
 import { useStore } from '$lib/react/useStore';
 import type { Workspace } from '$lib/types/workspace';
 import './WelcomeScreen.css';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 const iconSrc = `/icon.png?v=${packageJson.version}`;
 
@@ -162,7 +163,7 @@ export default function WelcomeScreen() {
           <button className="action-btn primary" onClick={() => newWorkspacePromptOpen.set(true)}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg></span>
             <span className="action-label">New Collection</span>
-            <kbd>Ctrl+N</kbd>
+            <kbd>{formatShortcutLabel('Ctrl+N')}</kbd>
           </button>
           <button className="action-btn secondary" onClick={() => newFolderPromptOpen.set(true)}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg></span>
@@ -171,7 +172,7 @@ export default function WelcomeScreen() {
           <button className="action-btn secondary" onClick={() => void openProject()}>
             <span className="action-icon"><FolderIcon size={15} /></span>
             <span className="action-label">Open Folder</span>
-            <kbd>Ctrl+O</kbd>
+            <kbd>{formatShortcutLabel('Ctrl+O')}</kbd>
           </button>
           <button className="action-btn secondary" onClick={() => cloneRepoPromptOpen.set(true)}>
             <span className="action-icon"><GitHubIcon size={15} /></span>
@@ -180,7 +181,7 @@ export default function WelcomeScreen() {
           <button className="action-btn secondary" onClick={() => openSettings()}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></svg></span>
             <span className="action-label">Settings</span>
-            <kbd>Ctrl+,</kbd>
+            <kbd>{formatShortcutLabel('Ctrl+,')}</kbd>
           </button>
         </div>
 

@@ -113,6 +113,7 @@ import './SettingsModal.css';
 
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import type { SettingsTab as Tab } from '$lib/types/layout';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 // App actions a custom shortcut can be bound to. Zoom actions are dispatched
 // separately (window zoom in App.tsx, canvas zoom is view-local), so they're
@@ -1790,7 +1791,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Hotkey"
                     detail="Tap the hotkey and speak — pauses do not end it. Tap again or press Esc to send, Ctrl+Esc to discard. The text lands wherever the cursor is, terminal or text field."
                   >
-                    <kbd>{shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9'}</kbd>
+                    <kbd>{formatShortcutLabel(shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9')}</kbd>
                   </SettingRow>
                   <SettingRow
                     title="Send after transcribing"
