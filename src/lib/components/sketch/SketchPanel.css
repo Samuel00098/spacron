@@ -1339,3 +1339,37 @@
   min-height: 30px;
   font-weight: 650;
 }
+
+/* Sketch controls are intentionally opaque: open panels and tabs must remain
+   readable over artwork, grids, and textured backgrounds. */
+.sketch-overlay .sketch-toolbar,
+.sketch-overlay .sketch-style-panel,
+.sketch-overlay .sketch-bottom-left-panel,
+.sketch-overlay .sketch-top-right-panel,
+.sketch-overlay .settings-dropdown-panel,
+.sketch-overlay .shape-context-menu {
+  background: #18181e !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.sketch-overlay .style-panel-btn,
+.sketch-overlay .style-opt-btn,
+.sketch-overlay .util-btn {
+  background: #24242c !important;
+}
+
+:root.light-theme .sketch-overlay .sketch-toolbar,
+:root.light-theme .sketch-overlay .sketch-style-panel,
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel,
+:root.light-theme .sketch-overlay .sketch-top-right-panel,
+:root.light-theme .sketch-overlay .settings-dropdown-panel,
+:root.light-theme .sketch-overlay .shape-context-menu {
+  background: #ffffff !important;
+}
+
+:root.light-theme .sketch-overlay .style-panel-btn,
+:root.light-theme .sketch-overlay .style-opt-btn,
+:root.light-theme .sketch-overlay .util-btn {
+  background: #f1f3f5 !important;
+}

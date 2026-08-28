@@ -4567,9 +4567,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     </button>
                     <button type="button" className="util-btn" onClick={() => void copySketchScreenshot()} title="Copy a PNG screenshot to paste into an agent">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="5" width="18" height="14" rx="2" />
-                        <circle cx="8.5" cy="10" r="1.5" />
-                        <path d="m21 15-4.5-4.5L9 18" />
+                        <path d="M5 7h3l1.5-2h5L16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
+                        <circle cx="12" cy="13" r="3.5" />
                       </svg>
                       Copy Screenshot
                     </button>
@@ -4625,9 +4624,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
             title="Copy Sketch Screenshot"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <circle cx="8.5" cy="10" r="1.5" />
-              <path d="m21 15-4.5-4.5L9 18" />
+              <path d="M5 7h3l1.5-2h5L16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
+              <circle cx="12" cy="13" r="3.5" />
             </svg>
           </button>
 
