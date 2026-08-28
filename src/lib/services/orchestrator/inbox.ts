@@ -38,6 +38,38 @@ export const MAX_TRACKED_IDS = 500;
 
 export type InboxStatus = 'done' | 'failed' | 'blocked' | MailboxKind;
 
+/**
+ * The facts a row keeps back until the user opens it.
+ *
+ * The collapsed row is a two-line scan — who, what, and enough of the message
+ * to decide whether it matters. Everything that answers "so what actually
+ * happened?" lives here and is rendered only once the row is expanded, so the
+ * queue stays scannable without the detail being lost. Like the rest of this
+ * module it is derived on every merge from the mailbox log and the chat cards;
+ * nothing here is persisted.
+ */
+export interface InboxEntryDetail {
+  /** What the agent said in its own words — `report_status` detail, the
+   *  blocked prompt, or the failure. Already ANSI-stripped upstream. */
+  reason?: string;
+  /** The AI recap of the turn, when one was produced. */
+  summary?: string;
+  /** True while the recap call is still in flight. */
+  summaryPending?: boolean;
+  /** How long the turn ran, when known. */
+  elapsedSec?: number | null;
+  /** How the turn end became known — decides what the expanded row may claim. */
+  endedBy?: 'declared' | 'exit' | 'inferred';
+  /** Recipient of a directed message; null means the whole team. */
+  to?: string | null;
+  /** Files a message claimed or released. */
+  files?: string[];
+  /** The worktree branch a handoff quotes. */
+  worktreeBranch?: string;
+  /** The orchestrator task, so the expanded row can offer "Show terminal". */
+  taskId?: string | null;
+}
+
 export interface InboxEntry {
   /** The underlying message id — a mailbox message id or a chat message id. */
   id: string;
@@ -53,6 +85,8 @@ export interface InboxEntry {
   status: InboxStatus;
   /** True when the entry wants a human decision rather than just informing. */
   actionable: boolean;
+  /** Everything the expanded row shows and the collapsed one doesn't. */
+  detail: InboxEntryDetail;
 }
 
 /**
@@ -76,6 +110,8 @@ export interface CompletionLike {
     endedBy?: 'declared' | 'exit' | 'inferred';
     /** True for a turn end that must not interrupt — inbox only. */
     silent?: boolean;
+    /** The orchestrator task this turn belonged to, when one exists. */
+    taskId?: string | null;
   } | null;
 }
 
@@ -139,6 +175,12 @@ export function mailEntry(card: MailboxCard, read: boolean): InboxEntry {
     body: card.text,
     status: card.kind,
     actionable: card.actionable,
+    detail: {
+      to: card.to,
+      files: card.files,
+      worktreeBranch: card.worktreeBranch,
+      taskId: card.taskId,
+    },
   };
 }
 
@@ -161,6 +203,17 @@ export function completionEntry(msg: CompletionLike, read: boolean): InboxEntry 
     // Only a stalled or failed agent is actually waiting on the user; a clean
     // finish is information, not a task.
     actionable: c.status !== 'done',
+    // The row body picks *one* of reason/summary; the expanded view shows both
+    // when both exist, because the recap and the agent's own words are
+    // different claims and reading only the recap loses what it was told.
+    detail: {
+      reason: c.reason?.trim() || undefined,
+      summary: c.summary?.trim() || undefined,
+      summaryPending: c.summaryPending,
+      elapsedSec: c.elapsedSec,
+      endedBy: c.endedBy,
+      taskId: c.taskId ?? null,
+    },
   };
 }
 

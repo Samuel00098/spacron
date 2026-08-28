@@ -90,6 +90,19 @@ describe('mailEntry', () => {
     const entry = mailEntry(card({ from: 'Neo', text: 'Done.' }), true);
     expect(entry).toMatchObject({ agentName: 'Neo', body: 'Done.', read: true, kind: 'mail' });
   });
+
+  it('carries the routing facts the expanded row shows', () => {
+    const entry = mailEntry(
+      card({ to: 'Morpheus', taskId: 't1', files: ['src/a.ts'], worktreeBranch: 'spacron/neo' }),
+      false,
+    );
+    expect(entry.detail).toMatchObject({
+      to: 'Morpheus',
+      taskId: 't1',
+      files: ['src/a.ts'],
+      worktreeBranch: 'spacron/neo',
+    });
+  });
 });
 
 describe('completionEntry', () => {
@@ -180,6 +193,46 @@ describe('completionEntry', () => {
     expect(completionEntry(completion({ status: 'done' }), false)?.actionable).toBe(false);
     expect(completionEntry(completion({ status: 'blocked' }), false)?.actionable).toBe(true);
     expect(completionEntry(completion({ status: 'failed' }), false)?.actionable).toBe(true);
+  });
+
+  it('keeps the recap and the agent\'s own words apart for the expanded row', () => {
+    // The row body picks one of the two; the opened row shows both, because a
+    // recap of what an agent did is not the same claim as what it said.
+    const entry = completionEntry(
+      completion({
+        completion: {
+          status: 'blocked',
+          agentName: 'Neo',
+          taskTitle: 'T',
+          elapsedSec: 90,
+          reason: 'Which database should I migrate?',
+          summary: 'Paused on a database choice.',
+          endedBy: 'declared',
+          taskId: 't7',
+        },
+      }),
+      false,
+    );
+    expect(entry?.body).toBe('Paused on a database choice.');
+    expect(entry?.detail).toMatchObject({
+      reason: 'Which database should I migrate?',
+      summary: 'Paused on a database choice.',
+      elapsedSec: 90,
+      endedBy: 'declared',
+      taskId: 't7',
+    });
+  });
+
+  it('leaves blank reasons and summaries out of the detail entirely', () => {
+    // Whitespace is not a message: an empty block in the opened row is worse
+    // than no block at all.
+    const entry = completionEntry(
+      completion({ completion: { status: 'done', agentName: 'Neo', taskTitle: 'T', elapsedSec: null, reason: '   ' } }),
+      false,
+    );
+    expect(entry?.detail.reason).toBeUndefined();
+    expect(entry?.detail.summary).toBeUndefined();
+    expect(entry?.detail.taskId).toBeNull();
   });
 });
 

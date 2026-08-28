@@ -118,4 +118,33 @@ path is ever added, it must do both — `acknowledge` is the both-bits helper.
 
 `InboxState` now includes a `cleared: string[]` list of entry IDs. Calling `clearInbox(projectId, ids)` marks entries as cleared (as well as read & dismissed), and `mergeInboxEntries` filters out any entries in `cleared`. The `InboxPanel` header provides a "Clear" button to clear all current inbox entries, and each row has a row-level clear button on hover.
 
+## 2026-08-28: rows expand, and opening one counts as reading it
+
+A row now has two states — the collapsed scan line, and an opened one showing
+the message in full plus the recap, the exact time, the elapsed run, the
+handoff's recipient/branch/files, and "Show terminal". Three things about it
+are not visible from the code:
+
+1. **Opening a row marks it read; closing it again does not.** Expanding is a
+   deliberate act and so belongs on the short list at the top of this note.
+   Collapsing is not a second act, so it only toggles.
+2. **`.inbox-row` stopped being the `<button>`.** It is the card shell now,
+   with `.inbox-row-trigger` as the clickable line and the detail as a sibling
+   below it. It had to: the detail carries its own buttons, and the old markup
+   already nested the clear button inside the row button, which no browser
+   honours. Anything reaching for `.inbox-row` as the click target will find a
+   div.
+3. **One control lives in the row's right edge, never two.** The chevron sits
+   there and swaps for the clear ✕ on hover; the unread dot moved to the head
+   line, ahead of the agent name. The old top-right dot shared that corner with
+   the clear button, and on hover you could not tell which mark you were about
+   to hit.
+
+`InboxEntry.detail` (built in `mailEntry` / `completionEntry`) is what the
+opened row renders. It is derived on every merge like the rest of the view
+model — **it is not a third copy of the messages**, and the rule at the top of
+this note still holds: `inbox.json` stores id lists and nothing else. The row
+body still picks *one* of reason/summary; the opened row shows both, because a
+recap of what an agent did is not the same claim as what it said.
+
 [[per-project-persistence]]
