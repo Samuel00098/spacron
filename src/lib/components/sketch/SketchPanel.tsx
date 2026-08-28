@@ -32,6 +32,8 @@ function getFontFamilyString(family?: string) {
 
 interface SketchText {
   id: string;
+  /** Explicit cross-type layer. Missing values keep legacy text above shapes. */
+  layer?: number;
   x: number;
   y: number;
   value: string;
@@ -43,6 +45,8 @@ interface SketchText {
 
 interface SketchShape {
   id: string;
+  /** Explicit cross-type layer. Missing values keep legacy shapes below text. */
+  layer?: number;
   type: 'rectangle' | 'circle' | 'diamond' | 'image';
   imageUrl?: string;
   x: number;
@@ -2449,16 +2453,22 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     });
   }
 
-  function moveShapeLayer(id: string, direction: 'front' | 'back') {
-    setSketchShapes(prev => {
-      const shape = prev.find(s => s.id === id);
-      if (!shape) return prev;
-      
-      const remaining = prev.filter(s => s.id !== id);
-      const next = direction === 'front' ? [...remaining, shape] : [shape, ...remaining];
-      setTimeout(() => saveState(), 10);
-      return next;
-    });
+  function moveElementLayer(id: string, direction: 'front' | 'back') {
+    const s = stateRef.current;
+    const allLayers = [
+      ...s.sketchShapes.map(shape => shape.layer ?? 0),
+      ...s.sketchTexts.map(text => text.layer ?? 100),
+    ];
+    const target = s.sketchShapes.find(shape => shape.id === id) ?? s.sketchTexts.find(text => text.id === id);
+    if (!target) return;
+
+    const targetLayer = direction === 'front'
+      ? Math.max(...allLayers, 0) + 1
+      : Math.min(...allLayers, 0) - 1;
+
+    setSketchShapes(prev => prev.map(shape => shape.id === id ? { ...shape, layer: targetLayer } : shape));
+    setSketchTexts(prev => prev.map(text => text.id === id ? { ...text, layer: targetLayer } : text));
+    setTimeout(() => saveState(), 10);
   }
 
   function deleteShape(id: string) {
@@ -3517,6 +3527,9 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               fontSize: `${text.fontSize * zoomScale}px`,
               color: text.color,
               opacity: text.opacity,
+              // Legacy text has a higher default layer than shapes. Explicit
+              // layer actions override that default and work across both types.
+              zIndex: text.layer ?? 100,
               cursor: currentTool === 'eraser' ? 'pointer' : (currentTool === 'select' ? 'move' : 'inherit')
             }}
             onPointerDown={(e) => startDragText(e, text)}
@@ -3558,6 +3571,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               backdropFilter: shape.type !== 'image' && shape.fillColor === 'glass' ? 'blur(8px)' : 'none',
               WebkitBackdropFilter: shape.type !== 'image' && shape.fillColor === 'glass' ? 'blur(8px)' : 'none',
               opacity: shape.opacity,
+              zIndex: shape.layer ?? 0,
               cursor: currentTool === 'eraser' ? 'pointer' : (currentTool === 'select' ? 'move' : 'inherit')
             }}
             onPointerDown={(e) => startDragShape(e, shape)}
@@ -3949,13 +3963,15 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 <div className="style-panel-section">
                   <span className="style-panel-title">Actions</span>
                   <div className="style-panel-grid">
-                    {(selectedShapeId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id))) && (
+                    {(selectedShapeId || selectedTextId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id) || sketchTexts.some(t => t.id === id))) && (
                       <>
                         <button
                           className="style-panel-btn"
                           onClick={() => {
-                            const ids = selectedElementIds.length > 0 ? selectedElementIds.filter(id => sketchShapes.some(s => s.id === id)) : [selectedShapeId!];
-                            ids.forEach(id => moveShapeLayer(id, 'front'));
+                            const ids = selectedElementIds.length > 0
+                              ? selectedElementIds.filter(id => sketchShapes.some(s => s.id === id) || sketchTexts.some(t => t.id === id))
+                              : [selectedShapeId ?? selectedTextId!];
+                            ids.forEach(id => moveElementLayer(id, 'front'));
                           }}
                           title="Bring to Front"
                           style={{ flex: 1 }}
@@ -3965,8 +3981,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                         <button
                           className="style-panel-btn"
                           onClick={() => {
-                            const ids = selectedElementIds.length > 0 ? selectedElementIds.filter(id => sketchShapes.some(s => s.id === id)) : [selectedShapeId!];
-                            ids.forEach(id => moveShapeLayer(id, 'back'));
+                            const ids = selectedElementIds.length > 0
+                              ? selectedElementIds.filter(id => sketchShapes.some(s => s.id === id) || sketchTexts.some(t => t.id === id))
+                              : [selectedShapeId ?? selectedTextId!];
+                            ids.forEach(id => moveElementLayer(id, 'back'));
                           }}
                           title="Send to Back"
                           style={{ flex: 1 }}
