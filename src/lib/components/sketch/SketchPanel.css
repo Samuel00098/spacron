@@ -830,24 +830,6 @@
   background-color: var(--bg-hover);
 }
 
-/* Clear Confirm styling */
-.sketch-overlay .clear-btn {
-  transition: width 0.2s ease, background-color 0.15s;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-}
-
-.sketch-overlay .clear-btn.confirming {
-  width: 76px;
-  color: #ffffff;
-  background-color: var(--error);
-}
-
-.sketch-overlay .clear-btn.confirming:hover {
-  background-color: #ef4444;
-}
-
 /* Save Spinner */
 .sketch-overlay .saving-spinner {
   width: 14px;
@@ -1069,8 +1051,11 @@
   letter-spacing: -0.02em;
 }
 
-/* Make shape interaction divs transparent */
+/* Shape elements are interaction layers over the canvas. Keeping their visual
+   surface transparent prevents a moved shape from appearing twice while the
+   canvas redraw catches up with pointer movement. */
 .sketch-overlay .floating-shape {
+  border: 0 !important;
   border-color: transparent !important;
   background-color: transparent !important;
   box-shadow: none !important;
@@ -1078,12 +1063,12 @@
   -webkit-backdrop-filter: none !important;
 }
 .sketch-overlay .canvas-viewport.tool-select .floating-shape:hover:not(.active-selected) {
-  border: 1px dashed rgba(var(--accent-rgb, 6, 182, 212), 0.45) !important;
+  border: 0 !important;
   box-shadow: none !important;
 }
 .sketch-overlay .floating-shape.active-selected {
-  border: 1px dashed var(--accent) !important;
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 6, 182, 212), 0.15) !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 /* Floating left style panel */
@@ -1501,39 +1486,56 @@
   background: #f1f3f5 !important;
 }
 
-/* Keep every tool glyph crisp and high contrast on pale sketch surfaces. */
-.sketch-overlay .tool-btn svg,
-.sketch-overlay .action-btn svg,
-.sketch-overlay .exit-btn svg,
-.sketch-overlay .toolbar-toggle svg {
+/* Keep only the in-canvas control glyphs crisp. The main tool tray keeps its
+   existing appearance. */
+.sketch-overlay .sketch-bottom-left-panel .tool-btn svg,
+.sketch-overlay .sketch-bottom-left-panel .action-btn svg,
+.sketch-overlay .sketch-bottom-left-panel .exit-btn svg,
+.sketch-overlay .sketch-top-right-panel .tool-btn svg,
+.sketch-overlay .sketch-top-right-panel .action-btn svg,
+.sketch-overlay .sketch-top-right-panel .exit-btn svg,
+.sketch-overlay .sketch-style-panel .style-panel-btn svg {
   shape-rendering: geometricPrecision;
 }
 
-.sketch-overlay .tool-btn svg *,
-.sketch-overlay .action-btn svg *,
-.sketch-overlay .exit-btn svg *,
-.sketch-overlay .toolbar-toggle svg * {
+.sketch-overlay .sketch-bottom-left-panel .tool-btn svg *,
+.sketch-overlay .sketch-bottom-left-panel .action-btn svg *,
+.sketch-overlay .sketch-bottom-left-panel .exit-btn svg *,
+.sketch-overlay .sketch-top-right-panel .tool-btn svg *,
+.sketch-overlay .sketch-top-right-panel .action-btn svg *,
+.sketch-overlay .sketch-top-right-panel .exit-btn svg *,
+.sketch-overlay .sketch-style-panel .style-panel-btn svg * {
   stroke-width: 2.35;
   vector-effect: non-scaling-stroke;
 }
 
-:root.light-theme .sketch-overlay .tool-btn,
-:root.light-theme .sketch-overlay .action-btn,
-:root.light-theme .sketch-overlay .exit-btn {
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .tool-btn,
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .action-btn,
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .exit-btn,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .tool-btn,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .action-btn,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .exit-btn,
+:root.light-theme .sketch-overlay .sketch-style-panel .style-panel-btn {
   color: #1f2937;
   background: #f8fafc;
   border: 1px solid #cbd5e1;
 }
 
-:root.light-theme .sketch-overlay .tool-btn:hover,
-:root.light-theme .sketch-overlay .action-btn:not(:disabled):hover,
-:root.light-theme .sketch-overlay .exit-btn:hover {
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .tool-btn:hover,
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .action-btn:not(:disabled):hover,
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .exit-btn:hover,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .tool-btn:hover,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .action-btn:not(:disabled):hover,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .exit-btn:hover,
+:root.light-theme .sketch-overlay .sketch-style-panel .style-panel-btn:hover {
   color: #0f172a;
   background: #e2e8f0;
   border-color: #94a3b8;
 }
 
-:root.light-theme .sketch-overlay .tool-btn.active {
+:root.light-theme .sketch-overlay .sketch-bottom-left-panel .tool-btn.active,
+:root.light-theme .sketch-overlay .sketch-top-right-panel .tool-btn.active,
+:root.light-theme .sketch-overlay .sketch-style-panel .style-panel-btn.active {
   color: #0369a1;
   background: #bae6fd;
   border-color: #38bdf8;

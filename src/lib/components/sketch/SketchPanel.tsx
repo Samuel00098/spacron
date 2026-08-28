@@ -406,9 +406,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showToolbar, setShowToolbar] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [clearConfirm, setClearConfirm] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const clearConfirmTimeoutRef = useRef<any>(null);
 
   // Zoom & Pan State
   const [zoomScale, setZoomScale] = useState(1.0);
@@ -2024,6 +2022,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     }
 
     e.stopPropagation();
+    e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
     commitText();
 
     const s = stateRef.current;
@@ -3164,24 +3166,6 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     restoreState(nextStateStr);
   }
 
-  // Clear canvas
-  function handleClear() {
-    commitText();
-    if (!clearConfirm) {
-      setClearConfirm(true);
-      if (clearConfirmTimeoutRef.current) clearTimeout(clearConfirmTimeoutRef.current);
-      clearConfirmTimeoutRef.current = setTimeout(() => {
-        setClearConfirm(false);
-      }, 2000);
-      return;
-    }
-    
-    setClearConfirm(false);
-    resetCanvasDocument();
-    clearPersistedSketch();
-    showToast('Canvas cleared', 'info');
-  }
-
   // Export current sketch drawing as a PNG image
   function compilePNG(): HTMLCanvasElement | null {
     if (!viewportRef.current) return null;
@@ -3642,7 +3626,6 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       if (viewport) {
         viewport.removeEventListener('wheel', handleWheel);
       }
-      if (clearConfirmTimeoutRef.current) clearTimeout(clearConfirmTimeoutRef.current);
     };
   }, []);
 
@@ -3747,7 +3730,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         {sketchShapes.map((shape) => (
           <div
             key={shape.id}
-            className={`floating-shape ${shape.type}${(selectedElementIds.includes(shape.id) || selectedShapeId === shape.id) && currentTool === 'select' ? ' active-selected' : ''}`}
+            className={`floating-shape interaction-layer ${shape.type}${(selectedElementIds.includes(shape.id) || selectedShapeId === shape.id) && currentTool === 'select' ? ' active-selected' : ''}`}
             data-shape-id={shape.id}
             style={{
               position: 'absolute',
@@ -4736,23 +4719,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
           <div className="divider" style={{ height: '16px', margin: '0 2px' }} />
 
-          {/* Action buttons: Clear, Save to Workspace, Export PNG */}
-          <button
-            className={`tool-btn clear-btn${clearConfirm ? ' confirming' : ''}`}
-            style={{ width: clearConfirm ? undefined : '28px', height: '28px' }}
-            onClick={handleClear}
-            title="Clear all drawings"
-          >
-            {clearConfirm ? (
-              <span className="confirm-text" style={{ fontSize: '9px' }}>Confirm?</span>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-              </svg>
-            )}
-          </button>
-          
+          {/* Action buttons: Save, Export PNG, Screenshot, Reset */}
           <button
             className="tool-btn"
             style={{ width: '28px', height: '28px' }}
