@@ -45,6 +45,25 @@ under any id but the active one writes one project's rooms onto another. And a
 room that is app-global rather than per-project (`sketch`) can only ever be
 reported for the active project, so the seed does not claim it.
 
+## The panel can be right and still show nothing (fixed 2026-08-28)
+
+`projectOpenRooms` publishing correctly is only half of it. The Projects panel
+resolves a card's path to a project id through a `useMemo` keyed on the
+zustand-backed `projects` Map, and that Map used to be written in place
+(`p.set(id, project); return p`). Same reference in, same reference out — so
+`useWorkspaceStore((s) => s.projects)` never re-rendered, the memo never
+recomputed, and it stayed frozen at the empty Map the panel mounted with. Every
+project then resolved to a null id and listed neither rooms nor running
+sessions, which reads exactly like the mirror being broken.
+
+The tell that it is this and not the mirror: the **Active** badge still lands on
+the right card, because that comparison hangs off `activeProjectId` (a string,
+so its identity does change) and reads the mutated Map at render time.
+
+`projects` writes now go through `setProjectIn`, which returns a new Map.
+Anything else zustand-backed is under the same rule — mutate it and React simply
+stops seeing it.
+
 ## The bug that made all of this look broken (fixed 2026-08-25)
 
 `restoreProjectState` ended with an unconditional

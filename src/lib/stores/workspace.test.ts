@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { __sanitisePersistedProjectState as sanitise, moveProjectBetweenCollections } from './workspace';
+import {
+  __sanitisePersistedProjectState as sanitise,
+  __setProjectIn as setProjectIn,
+  moveProjectBetweenCollections,
+} from './workspace';
 import type { Workspace } from '$lib/types/workspace';
 
 /**
@@ -307,5 +311,43 @@ describe('moving a project between collections', () => {
     );
 
     expect(next[2]).toBe(untouched);
+  });
+});
+
+/**
+ * The `projects` Map is zustand-backed, so React consumers compare it by
+ * reference. Writing it in place (`p.set(id, project); return p`) left the
+ * identity unchanged, so `useWorkspaceStore((s) => s.projects)` never
+ * re-rendered and anything memoised on it stayed frozen at the empty Map the
+ * panel mounted with — which is what made the Projects panel report "Nothing
+ * open in this project" for every project, rooms and running sessions alike.
+ */
+describe('projects map writes', () => {
+  const project = (id: string) => ({ id, name: id, root_path: `/repos/${id}` }) as never;
+
+  it('returns a new Map so memoised consumers recompute', () => {
+    const before = new Map<string, never>();
+    const after = setProjectIn(before, 'p1', project('p1'));
+
+    expect(after).not.toBe(before);
+    expect(after.get('p1')).toBeDefined();
+  });
+
+  it('leaves the previous Map untouched', () => {
+    const before = new Map<string, never>();
+    setProjectIn(before, 'p1', project('p1'));
+
+    expect(before.size).toBe(0);
+  });
+
+  it('carries existing projects forward and replaces one in place by id', () => {
+    const first = setProjectIn(new Map<string, never>(), 'p1', project('p1'));
+    const second = setProjectIn(first, 'p2', project('p2'));
+    const replaced = setProjectIn(second, 'p1', project('p1'));
+
+    expect([...second.keys()]).toEqual(['p1', 'p2']);
+    expect(replaced).not.toBe(second);
+    expect([...replaced.keys()]).toEqual(['p1', 'p2']);
+    expect(replaced.get('p1')).not.toBe(second.get('p1'));
   });
 });

@@ -40,7 +40,25 @@ export const activeWorkspace = derived(
     $activeWorkspaceId ? $recentWorkspaces.find((w) => w.id === $activeWorkspaceId) ?? null : null
 );
 
+// Treat this Map as immutable: every `update` must return a NEW Map. It is
+// backed by zustand, so React consumers compare the selected value by
+// reference — mutating in place and returning the same Map means the identity
+// never changes, `useWorkspaceStore((s) => s.projects)` never re-renders, and
+// anything memoised on it (the Projects panel derives path → id that way) stays
+// frozen at whatever the map held on first render, which is usually empty.
 export const projects = syncWritable<Map<string, Project>>('projects', new Map());
+
+/**
+ * Add or replace one project, returning a NEW Map — the only way the `projects`
+ * store may be written. Exported as `__setProjectIn` for workspace.test.ts,
+ * because the whole point is an identity change no call site can forget.
+ */
+function setProjectIn(map: Map<string, Project>, id: string, project: Project): Map<string, Project> {
+  const next = new Map(map);
+  next.set(id, project);
+  return next;
+}
+export const __setProjectIn = setProjectIn;
 export const activeProjectId = syncWritable<string | null>('activeProjectId', null);
 export const openProjectIds = syncWritable<string[]>('openProjectIds', []); // ordered list of open project tabs
 export const isLoading = syncWritable<boolean>('isLoading', false);
@@ -1117,7 +1135,7 @@ export function clearAllStores() {
 export function setActiveProject(project: Project) {
   saveCurrentProjectState();
 
-  projects.update((p) => { p.set(project.id, project); return p; });
+  projects.update((p) => setProjectIn(p, project.id, project));
 
   // Add to open projects if not already there
   openProjectIds.update((ids) => {
@@ -1247,7 +1265,7 @@ export async function openWorkspace(workspaceId: string) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const project = await invoke<Project>('workspace_open_project', { path });
-        projects.update((p) => { p.set(project.id, project); return p; });
+        projects.update((p) => setProjectIn(p, project.id, project));
         openProjectIds.update((ids) => {
           if (!ids.includes(project.id)) return [...ids, project.id];
           return ids;
@@ -1309,7 +1327,7 @@ async function attachProjectToActiveWorkspace(project: Project, path: string) {
     saveProjectState(currentActiveId);
   }
 
-  projects.update((p) => { p.set(project.id, project); return p; });
+  projects.update((p) => setProjectIn(p, project.id, project));
 
   openProjectIds.update((ids) => {
     if (!ids.includes(project.id)) return [...ids, project.id];
@@ -1570,7 +1588,7 @@ export async function openRemoteRoot(conn: RemoteConnection): Promise<void> {
     state: { open_files: [], active_file: null, last_modified: Date.now().toString() },
   };
 
-  projects.update((p) => { p.set(id, project); return p; });
+  projects.update((p) => setProjectIn(p, id, project));
   openProjectIds.update((ids) => (ids.includes(id) ? ids : [...ids, id]));
   activeProjectId.set(id);
 
@@ -1597,7 +1615,7 @@ export function leaveRemoteRoot(): void {
   const remoteIds = get(openProjectIds).filter((id) => id.startsWith('remote:'));
   if (remoteIds.length === 0) return;
 
-  projects.update((p) => { for (const id of remoteIds) p.delete(id); return p; });
+  projects.update((p) => { const next = new Map(p); for (const id of remoteIds) next.delete(id); return next; });
   openProjectIds.update((ids) => ids.filter((id) => !id.startsWith('remote:')));
 
   const openIds = get(openProjectIds);
