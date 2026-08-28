@@ -3985,6 +3985,14 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     <div className="custom-color-popover" onPointerDown={(e) => e.stopPropagation()}>
                       <div className="custom-color-popover-heading">Custom stroke color</div>
                       <div className="custom-color-popover-preview" style={{ backgroundColor: isHexColor(customColor) ? customColor : '#06b6d4' }} />
+                      <input
+                        className="custom-color-native-input"
+                        type="color"
+                        value={isHexColor(customColor) ? customColor : '#06b6d4'}
+                        onChange={(e) => { setCustomColor(e.target.value); updateSelectedColor(e.target.value); }}
+                        title="Open color picker"
+                        aria-label="Open stroke color picker"
+                      />
                       <div className="custom-color-popover-actions">
                         <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customColor)}>Copy</button>
                         <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('stroke')}>Paste</button>
@@ -4063,6 +4071,14 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     <div className="custom-color-popover" onPointerDown={(e) => e.stopPropagation()}>
                       <div className="custom-color-popover-heading">Custom fill color</div>
                       <div className="custom-color-popover-preview" style={{ backgroundColor: isHexColor(customFillColor) ? customFillColor : '#ffffff' }} />
+                      <input
+                        className="custom-color-native-input"
+                        type="color"
+                        value={isHexColor(customFillColor) ? customFillColor : '#ffffff'}
+                        onChange={(e) => { setCustomFillColor(e.target.value); updateSelectedProperty('fillColor', e.target.value); }}
+                        title="Open color picker"
+                        aria-label="Open fill color picker"
+                      />
                       <div className="custom-color-popover-actions">
                         <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customFillColor)}>Copy</button>
                         <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('fill')}>Paste</button>

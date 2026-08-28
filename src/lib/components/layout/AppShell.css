@@ -136,6 +136,15 @@
   min-height: 0;
 }
 
+/* FileExplorer owns the tree scroll area. The drawer must not compete with it
+   for wheel and trackpad input when the pointer is over the file list. */
+.app-shell .left-utility-panel .drawer-body > .file-explorer {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .app-shell .left-utility-panel.resizing,
 .app-shell .right-utility-panel.resizing {
   user-select: none;
