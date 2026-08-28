@@ -2596,6 +2596,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   }
 
   function updateSelectedColor(color: string) {
+    if (/^#[0-9a-f]{6}$/i.test(color)) setCustomColor(color);
     const s = stateRef.current;
     if (s.selectedElementIds.length > 0) {
       s.selectedElementIds.forEach(id => {
@@ -2617,6 +2618,47 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     } else {
       setCurrentColor(color);
       if (currentTool === 'eraser') setCurrentTool('pen');
+    }
+  }
+
+  function isHexColor(value: string) {
+    return /^#[0-9a-f]{6}$/i.test(value);
+  }
+
+  async function copyColorCode(value: string) {
+    if (!isHexColor(value) || !navigator.clipboard?.writeText) {
+      showToast('Enter a valid hex color first', 'warning');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value.toUpperCase());
+      showToast('Color code copied', 'success');
+    } catch {
+      showToast('Could not copy the color code', 'warning');
+    }
+  }
+
+  async function pasteColorCode(kind: 'stroke' | 'fill') {
+    if (!navigator.clipboard?.readText) {
+      showToast('Color code paste is not available in this window', 'warning');
+      return;
+    }
+    try {
+      const value = (await navigator.clipboard.readText()).trim();
+      if (!isHexColor(value)) {
+        showToast('Clipboard does not contain a valid hex color', 'warning');
+        return;
+      }
+      const normalized = value.toLowerCase();
+      if (kind === 'stroke') {
+        setCustomColor(normalized);
+        updateSelectedColor(normalized);
+      } else {
+        setCustomFillColor(normalized);
+        updateSelectedProperty('fillColor', normalized);
+      }
+    } catch {
+      showToast('Could not read a color code from the clipboard', 'warning');
     }
   }
 
@@ -3934,6 +3976,22 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                       style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
                     />
                   </button>
+                  <div className="custom-color-code-row">
+                    <input
+                      className="custom-color-code-input"
+                      value={customColor}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setCustomColor(value);
+                        if (isHexColor(value)) updateSelectedColor(value);
+                      }}
+                      aria-label="Stroke color hex code"
+                      spellCheck={false}
+                      maxLength={7}
+                    />
+                    <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customColor)} title="Copy stroke color code">Copy</button>
+                    <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('stroke')} title="Paste stroke color code">Paste</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -3997,6 +4055,22 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                       style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
                     />
                   </button>
+                  <div className="custom-color-code-row">
+                    <input
+                      className="custom-color-code-input"
+                      value={customFillColor}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setCustomFillColor(value);
+                        if (isHexColor(value)) updateSelectedProperty('fillColor', value);
+                      }}
+                      aria-label="Fill color hex code"
+                      spellCheck={false}
+                      maxLength={7}
+                    />
+                    <button type="button" className="custom-color-code-btn" onClick={() => void copyColorCode(customFillColor)} title="Copy fill color code">Copy</button>
+                    <button type="button" className="custom-color-code-btn" onClick={() => void pasteColorCode('fill')} title="Paste fill color code">Paste</button>
+                  </div>
                 </div>
               </div>
             )}

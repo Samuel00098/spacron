@@ -1284,6 +1284,50 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
+.sketch-overlay .custom-color-code-row {
+  grid-column: span 7;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.sketch-overlay .custom-color-code-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.sketch-overlay .custom-color-code-input:focus {
+  border-color: var(--accent);
+}
+
+.sketch-overlay .custom-color-code-btn {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.sketch-overlay .custom-color-code-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .sketch-overlay .floating-text.active-selected {
   border-color: var(--accent) !important;
   background-color: rgba(6, 182, 212, 0.08);
