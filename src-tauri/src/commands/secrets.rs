@@ -876,8 +876,10 @@ fn reply_was_truncated(choice: Option<&serde_json::Value>) -> bool {
 
 /// Every field an OpenAI-compatible server might return its thinking in.
 /// OpenRouter uses `reasoning`; llama.cpp, LM Studio, vLLM and the DeepSeek API
-/// use `reasoning_content`; Ollama uses `thinking`. None of them are the answer,
-/// but all of them prove the budget is being shared with a scratchpad.
+/// use `reasoning_content`; Ollama uses `thinking`. These fields normally prove
+/// the budget is being shared with a scratchpad. S1-mini is an exception: LM
+/// Studio places its final cleaned transcript in `reasoning_content` even when
+/// thinking is disabled, so that model gets an explicit response fallback.
 const REASONING_FIELDS: [&str; 3] = ["reasoning", "reasoning_content", "thinking"];
 
 /// Did the model spend hidden reasoning tokens producing this reply? Usage
@@ -942,6 +944,46 @@ fn strip_inline_reasoning(text: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+/// Extract the visible answer from an OpenAI-compatible choice.
+///
+/// Most local models put their answer in `message.content`, but S1-mini's LM
+/// Studio adapter currently returns an empty `content` field and puts the
+/// cleaned transcript in `reasoning_content`. Keep the compatibility quirk
+/// narrow to S1-mini so ordinary reasoning traces are never surfaced to users.
+fn openai_compatible_reply_text(
+    choice: Option<&serde_json::Value>,
+    provider: &str,
+    model: &str,
+) -> String {
+    let Some(message) = choice.and_then(|choice| choice.get("message")) else {
+        return String::new();
+    };
+
+    let content = message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .map(strip_inline_reasoning)
+        .unwrap_or_default();
+    if !content.is_empty() {
+        return content;
+    }
+
+    if is_local_provider(provider) && is_s1_mini_model(model) {
+        for field in ["reasoning_content", "reasoning", "thinking"] {
+            let fallback = message
+                .get(field)
+                .and_then(|value| value.as_str())
+                .map(strip_inline_reasoning)
+                .unwrap_or_default();
+            if !fallback.is_empty() {
+                return fallback;
+            }
+        }
+    }
+
+    String::new()
 }
 
 /// Some gateways answer 200 with an error object where the choices should be —
@@ -1173,7 +1215,7 @@ async fn run_completion(
                     .and_then(|content| content.as_str())
                     .map(str::trim)
                     .unwrap_or("");
-                let text = strip_inline_reasoning(raw);
+                let text = openai_compatible_reply_text(choice, provider, model);
 
                 let truncated = reply_was_truncated(choice);
                 // A reply that was nothing but scratchpad is the same starvation
@@ -2064,7 +2106,7 @@ mod tests {
         openai_is_realtime_model, openrouter_audio_chat_model_is_unsupported, redact_secrets,
         embedded_error_message, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
         strip_inline_reasoning, token_budget_for, with_reasoning_headroom, xai_is_realtime_model,
-        is_s1_mini_model, s1_mini_input,
+        openai_compatible_reply_text, is_s1_mini_model, s1_mini_input,
         ChatParamShape, TokenBudgetField,
     };
     use serde_json::json;
@@ -2547,6 +2589,48 @@ mod tests {
     fn text_exceeding_max_len_would_be_rejected() {
         let text = "a".repeat(MAX_TEXT_LEN + 1);
         assert!(text.len() > MAX_TEXT_LEN);
+    }
+
+    #[test]
+    fn openai_reply_prefers_visible_content_over_reasoning_fields() {
+        let choice = json!({
+            "message": {
+                "content": "  visible answer  ",
+                "reasoning_content": "private scratchpad"
+            }
+        });
+        assert_eq!(
+            openai_compatible_reply_text(Some(&choice), "lmstudio", "qwen3"),
+            "visible answer"
+        );
+    }
+
+    #[test]
+    fn s1_mini_uses_lm_studio_alternate_answer_field() {
+        let choice = json!({
+            "message": {
+                "content": "",
+                "reasoning_content": "\nNum, please fix the login bug and run the tests."
+            }
+        });
+        assert_eq!(
+            openai_compatible_reply_text(Some(&choice), "lmstudio", "s1-mini"),
+            "Num, please fix the login bug and run the tests."
+        );
+    }
+
+    #[test]
+    fn ordinary_local_models_do_not_leak_reasoning_when_content_is_empty() {
+        let choice = json!({
+            "message": {
+                "content": "",
+                "reasoning_content": "private scratchpad"
+            }
+        });
+        assert_eq!(
+            openai_compatible_reply_text(Some(&choice), "ollama", "qwen3"),
+            ""
+        );
     }
 
     #[test]

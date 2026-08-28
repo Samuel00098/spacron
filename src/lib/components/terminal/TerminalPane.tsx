@@ -425,61 +425,38 @@ function TerminalPane({
     return renderer === 'webgl' ? 'rgb(17, 17, 22)' : 'rgba(17, 17, 22, 0)';
   }
 
-  // The terminal's palette. Always dark, in both app modes, and deliberately
-  // decoupled from light/dark — this is the one surface in the app that does not
-  // follow the theme.
-  //
-  // WHY. A TUI asks "what colour is your background?" exactly once, over OSC 11,
-  // at launch, and then paints its own surface from the answer. It is a separate
-  // process; there is no signal that means "you were told light, it is dark now,
-  // please re-theme". So while the answer tracked app mode, a TUI launched in
-  // light mode kept its white surface forever — including after switching to dark,
-  // where it became a glaring white slab. That is not a styling bug that can be
-  // chased; it is a one-shot negotiation that already concluded. Pinning the
-  // answer to dark is what makes the result deterministic.
-  //
-  // It also has to be the WHOLE palette, not just the reported background. The
-  // xterm surface is transparent, so a plain shell's text lands on whatever shows
-  // through. Report dark while leaving the foreground light-tuned and ordinary
-  // shell output goes dark-on-dark. Background, foreground and ANSI slots move
-  // together, and the scrim in TerminalPane.css darkens the surface to match.
-  //
-  // A dark PRESET may still colour the semantic and syntax slots, so each
-  // wallpaper keeps its character. A light theme's tokens are tuned for a bright
-  // page and are ignored outright — the canonical dark values below are used.
+  // The terminal's palette is deliberately independent from the app theme.
+  // Agent CLIs communicate their UI through ANSI (including truecolor), and
+  // remapping the 16 ANSI slots to Spacron semantic/syntax colors makes Codex,
+  // Claude, Gemini and any future agent look wrong. Keep xterm's native ANSI
+  // palette so every agent's emitted color means what it meant in its own CLI.
+  // The terminal surface itself remains dark and transparent; only the palette
+  // is native.
   function buildTerminalTheme() {
-    const theme = get(activeTheme);
-    const usable = theme?.type === 'light' ? undefined : theme;
-    const colors = usable?.colors ?? {};
-    const syntax = usable?.syntax ?? {};
     return {
       background: terminalBackground(),
-      foreground: colors['text-primary'] || '#e6edf3',
-      cursor: colors['accent'] || '#f1f5f9',
-      cursorAccent: colors['bg-primary'] || '#111116',
-      selectionBackground: colors['selection-bg'] || 'rgba(241, 245, 249, 0.28)',
-      black: colors['bg-tertiary'] || '#21262d',
-      red: colors['error'] || '#ff6b6b',
-      green: colors['success'] || '#2ee06d',
-      yellow: colors['warning'] || '#fbbf24',
-      // NOT --accent. The accent is graphite now, so deriving ANSI blue from it
-      // renders every blue token in shell output as near-white. --info is the
-      // token that is actually a blue.
-      blue: colors['info'] || '#58a6ff',
-      magenta: syntax['function'] || '#d2a8ff',
-      cyan: syntax['constant'] || '#39d2c0',
-      white: colors['text-primary'] || '#e6edf3',
-      // ANSI "bright black" is the dim slot agent CLIs use for secondary text
-      // (Thinking lines, tips, hints). Over a see-through terminal it has to stay
-      // legible, so it maps to text-secondary rather than the dimmer text-muted.
-      brightBlack: colors['text-secondary'] || colors['text-muted'] || '#8b949e',
-      brightRed: syntax['keyword'] || '#ff7b72',
-      brightGreen: colors['success'] || '#4ade80',
-      brightYellow: colors['warning'] || '#fbbf24',
-      brightBlue: colors['info'] || '#79b8ff',
-      brightMagenta: syntax['function'] || '#d2a8ff',
-      brightCyan: syntax['constant'] || '#39d2c0',
-      brightWhite: '#ffffff',
+      foreground: '#ffffff',
+      cursor: '#ffffff',
+      cursorAccent: '#000000',
+      selectionBackground: 'rgba(255, 255, 255, 0.3)',
+      // These are xterm's native 16-color defaults. Do not replace them with
+      // app theme tokens: ANSI color codes belong to the child process.
+      black: '#2e3436',
+      red: '#cc0000',
+      green: '#4e9a06',
+      yellow: '#c4a000',
+      blue: '#3465a4',
+      magenta: '#75507b',
+      cyan: '#06989a',
+      white: '#d3d7cf',
+      brightBlack: '#555753',
+      brightRed: '#ef2929',
+      brightGreen: '#8ae234',
+      brightYellow: '#fce94f',
+      brightBlue: '#729fcf',
+      brightMagenta: '#ad7fa8',
+      brightCyan: '#34e2e2',
+      brightWhite: '#eeeeec',
     };
   }
 
@@ -1106,13 +1083,10 @@ function TerminalPane({
       letterSpacing: 0,
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
-      // The terminal surface is fully transparent (glass), so any glyph a TUI
-      // draws in a near-background tone (e.g. Antigravity's input text, which it
-      // colors near-black) vanishes into the wallpaper — black-on-black. xterm's
-      // minimumContrastRatio re-lightens/darkens only the glyphs that fail this
-      // ratio against the theme background, rescuing that text regardless of how
-      // the CLI colored it, while leaving already-legible output untouched.
-      minimumContrastRatio: 4.5,
+      // Do not rewrite ANSI/truecolor output to satisfy a contrast ratio. That
+      // changes the colors selected by agent CLIs and makes their normal UI
+      // colors inconsistent with the same CLI in a native terminal.
+      minimumContrastRatio: 1,
       windowsPty,
       theme: buildTerminalTheme(),
     });
