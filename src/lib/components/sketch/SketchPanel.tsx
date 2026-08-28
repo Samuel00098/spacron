@@ -4362,10 +4362,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 title="Pan Canvas (Hold Space / H / 2)"
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
-                  <path d="M14 10V4a2 2 0 0 0-2 2v0a2 2 0 0 0-2 2v0"/>
-                  <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
-                  <path d="M6 14a4 4 0 0 0-4-4v0a4 4 0 0 0-4 4v7a4 4 0 0 0 4 4h8a7 7 0 0 0 7-7v-3a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2"/>
+                  <path d="M18 11V6a2 2 0 0 0-4 0v4"/>
+                  <path d="M14 10V5a2 2 0 0 0-4 0v6"/>
+                  <path d="M10 10V7a2 2 0 0 0-4 0v7"/>
+                  <path d="M6 13V9a2 2 0 0 0-4 0v6a7 7 0 0 0 7 7h3a6 6 0 0 0 6-6v-5a2 2 0 0 0-4 0v1"/>
                 </svg>
               </button>
               <button

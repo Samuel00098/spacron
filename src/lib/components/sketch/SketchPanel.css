@@ -1450,9 +1450,11 @@
 }
 
 .sketch-overlay .sketch-reset-cancel {
-  width: 100%;
+  width: fit-content;
+  min-width: 76px;
+  align-self: flex-end;
   margin-top: 12px;
-  padding: 8px;
+  padding: 6px 14px;
   color: var(--text-secondary);
   background: #24242c;
   border: 1px solid var(--border);
