@@ -683,7 +683,7 @@ export default function PreviewPanel() {
       }
       markDrivenLoad();
       navigatePreviewTab(normalized);
-      setInputUrl(normalized);
+      setInputUrl(previewAddressBarValue(normalized));
       startLoadFeedback();
     },
     [startLoadFeedback, markDrivenLoad],
@@ -984,7 +984,7 @@ export default function PreviewPanel() {
           // history entry so Back returns to the page the user came from.
           commitInternalNavigation(reported);
         }
-        setInputUrl(reported);
+        setInputUrl(previewAddressBarValue(reported));
         return;
       }
 
@@ -1103,7 +1103,7 @@ export default function PreviewPanel() {
   const handleInputKeydown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Escape') {
-        setInputUrl(currentUrlValue);
+        setInputUrl(previewAddressBarValue(currentUrlValue));
         (e.target as HTMLInputElement).blur();
       }
     },
@@ -1438,7 +1438,7 @@ export default function PreviewPanel() {
       });
 
       unsubscribeUrl = currentUrl.subscribe((val) => {
-        setInputUrl(val);
+        setInputUrl(previewAddressBarValue(val));
       });
     })();
 
