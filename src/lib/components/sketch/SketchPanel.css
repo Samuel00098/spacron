@@ -1339,7 +1339,10 @@
   border-radius: 8px;
   background: var(--bg-secondary);
   box-shadow: var(--shadow-md);
-  animation: popIn 0.12s ease-out;
+  /* The picker belongs to the tray, so it should appear in place rather than
+     sliding in from another edge. */
+  animation: none;
+  transform: none;
 }
 
 .sketch-overlay .custom-color-popover-heading {
