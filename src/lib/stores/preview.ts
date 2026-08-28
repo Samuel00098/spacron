@@ -33,9 +33,24 @@ export type PreviewTab = {
 
 export const BLANK_PREVIEW_URL = 'about:blank';
 
-/** Hide Preview's internal home sentinel from the user-facing address field. */
+/** Hide Preview's internal home/root marker from the user-facing address field. */
 export function previewAddressBarValue(url: string): string {
-  return url === '/' || url === BLANK_PREVIEW_URL ? '' : url;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed === '/' || trimmed.toLowerCase() === BLANK_PREVIEW_URL) return '';
+
+  // A browser URL commonly represents its home page as `https://host/`. The
+  // slash is only the URL's root marker, so omit it while retaining any query
+  // string or hash the page may use.
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname === '/') {
+      return `${parsed.origin}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    // Relative paths and unfinished user input are displayed unchanged.
+  }
+
+  return url;
 }
 
 const currentUrlStore = writable<string>('/');

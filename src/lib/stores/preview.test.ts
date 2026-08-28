@@ -65,10 +65,15 @@ describe('preview navigation', () => {
       expect(tab.historyIndex >= tab.history.length - 1).toBe(true);
     });
 
-    it('keeps the home sentinel out of the address bar', () => {
+    it('keeps home/root markers out of the address bar', () => {
       expect(previewAddressBarValue('/')).toBe('');
       expect(previewAddressBarValue(BLANK_PREVIEW_URL)).toBe('');
+      expect(previewAddressBarValue(' / ')).toBe('');
+      expect(previewAddressBarValue('ABOUT:BLANK')).toBe('');
+      expect(previewAddressBarValue('https://example.com/')).toBe('https://example.com');
+      expect(previewAddressBarValue('https://example.com/?q=search#results')).toBe('https://example.com?q=search#results');
       expect(previewAddressBarValue('/docs')).toBe('/docs');
+      expect(previewAddressBarValue('/docs/')).toBe('/docs/');
       expect(previewAddressBarValue('https://example.com')).toBe('https://example.com');
     });
   });
