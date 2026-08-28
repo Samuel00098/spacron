@@ -56,6 +56,7 @@ import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost
 import { showToast } from '$lib/stores/notification';
 import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/runHistory';
 import { AGENT_ATTENTION_PATTERN } from '$lib/services/orchestrator/agent-signals';
+import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
 import './TerminalPane.css';
 
@@ -337,6 +338,10 @@ function TerminalPane({
   function detectAgentNeedsAttention(text: string) {
     const info = get(sessions).find((s) => s.id === sessionId);
     if (!info?.agentPreset) return;
+    // A live turn watcher turns this same prompt into the durable completion
+    // card/inbox entry. The terminal toast is only the safety net for an
+    // unwatched follow-up; letting both paths run double-notifies one question.
+    if (hasTurnSignalListener(sessionId)) return;
     if (!AGENT_ATTENTION_PATTERN.test(text)) return;
     const now = Date.now();
     if (now - lastAgentAttentionAtRef.current < AGENT_ATTENTION_COOLDOWN) return;
@@ -370,10 +375,17 @@ function TerminalPane({
     }
   }
 
-  function forceRedraw() {
+  function forceRedraw(remeasureCell = false) {
     const term = termRef.current;
     if (!term) return;
     try {
+      if (remeasureCell) {
+        // xterm measures its cell before a late system/web font or a new Windows
+        // display scale may have settled. A valid-but-stale cached value is more
+        // dangerous than a zero one: fit succeeds, but the PTY wraps at columns
+        // that no longer match the pixels being painted.
+        ((term as any)._core as any)?._charSizeService?.measure?.();
+      }
       (term as any).clearTextureAtlas?.();
       canvasAddonRef.current?.clearTextureAtlas();
       term.refresh(0, term.rows - 1);
@@ -734,8 +746,15 @@ function TerminalPane({
     try {
       await document.fonts.ready;
     } catch {}
+    // `term.open()` necessarily ran before this await. Re-measure even when the
+    // cached cell is non-zero: it may belong to the fallback font used while the
+    // configured face was still loading.
+    forceRedraw(true);
     doFit();
-    setTimeout(doFit, 100);
+    setTimeout(() => {
+      forceRedraw(true);
+      doFit();
+    }, 100);
   }
 
   // Force a running full-screen TUI (e.g. the Claude Code agent) to repaint when
@@ -1338,18 +1357,43 @@ function TerminalPane({
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    // Handle display DPI scaling / moving window across high-DPI monitors
+    // Handle display DPI scaling / moving window across high-DPI monitors.
+    // A resolution media query fires only when its own boolean result changes;
+    // after leaving 1dppx it stays false at both 1.25 and 1.5, so a one-shot
+    // listener misses the second monitor move. Re-arm for the new DPR each time.
     let dprMediaQuery: MediaQueryList | null = null;
     const handleDprChange = () => {
-      forceRedraw();
-      scheduleFit();
+      armDprListener();
+      requestAnimationFrame(() => {
+        forceRedraw(true);
+        scheduleFit();
+      });
     };
-    if (typeof window !== 'undefined' && window.matchMedia) {
+    const armDprListener = () => {
+      if (dprMediaQuery) {
+        try {
+          dprMediaQuery.removeEventListener('change', handleDprChange);
+        } catch {}
+      }
+      dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      dprMediaQuery.addEventListener('change', handleDprChange);
+    };
+    if (typeof window !== 'undefined') {
       try {
-        dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-        dprMediaQuery.addEventListener('change', handleDprChange);
+        armDprListener();
       } catch {}
     }
+
+    // A configured font can finish loading after document.fonts.ready was first
+    // observed (for example after a settings change). Re-fit every live pane at
+    // the exact moment glyph metrics become authoritative.
+    const handleFontsLoaded = () => {
+      requestAnimationFrame(() => {
+        forceRedraw(true);
+        scheduleFit();
+      });
+    };
+    document.fonts.addEventListener('loadingdone', handleFontsLoaded);
 
     // Paste element context from the web preview inspector into this terminal pane
     const unsubInput = terminalInputRequest.subscribe((req) => {
@@ -1429,6 +1473,7 @@ function TerminalPane({
           dprMediaQuery.removeEventListener('change', handleDprChange);
         } catch {}
       }
+      document.fonts.removeEventListener('loadingdone', handleFontsLoaded);
       unsubInput();
       if (fitRafRef.current !== null) cancelAnimationFrame(fitRafRef.current);
       if (fitTimerRef.current !== null) clearTimeout(fitTimerRef.current);

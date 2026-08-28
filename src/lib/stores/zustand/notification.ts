@@ -25,6 +25,22 @@ interface NotificationState {
   dismissToast: (id: string) => void;
 }
 
+type NotificationDocument = Pick<Document, 'visibilityState' | 'hasFocus'>;
+
+/**
+ * Whether the in-app notification surface is unavailable to the user.
+ *
+ * `document.hidden` alone misses the ordinary desktop case where Spacron is
+ * still visible on its workspace but another application owns focus. Keep this
+ * as the shared predicate for agent cards and report fallbacks so they cannot
+ * disagree about when an OS notification is required.
+ */
+export function shouldUseSystemNotification(
+  target: NotificationDocument | null = typeof document === 'undefined' ? null : document,
+): boolean {
+  return target !== null && (target.visibilityState !== 'visible' || !target.hasFocus());
+}
+
 /** Timers for toasts that auto-dismiss, so an early dismiss can cancel them. */
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 

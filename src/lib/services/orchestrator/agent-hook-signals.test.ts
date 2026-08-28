@@ -6,6 +6,7 @@ import {
   onTurnSignal,
   hasTurnSignalChannel,
   hasAnyTurnSignalChannel,
+  hasTurnSignalListener,
   __registerStatusChannelForTest,
   deliverTurnSignal,
   __registerChannelForTest,
@@ -134,6 +135,19 @@ describe('channel routing', () => {
     off();
     __deliverLineForTest(NONCE, `SPACRON-TURN-DONE:${NONCE}`);
     expect(seen).toEqual([]);
+  });
+
+  it('distinguishes an armed watcher from a channel with nobody listening', () => {
+    __registerChannelForTest(3, NONCE);
+    expect(hasTurnSignalListener(3)).toBe(false);
+
+    const off = onTurnSignal(3, () => {});
+    expect(hasTurnSignalListener(3)).toBe(true);
+
+    off();
+    expect(hasTurnSignalListener(3)).toBe(false);
+    // The launch channel remains attached after a turn watcher resolves.
+    expect(hasAnyTurnSignalChannel(3)).toBe(true);
   });
 });
 

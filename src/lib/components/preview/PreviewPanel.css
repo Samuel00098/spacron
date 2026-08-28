@@ -7,6 +7,11 @@
      web preview iframe paints its own opaque page background. */
   background: transparent;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  /* The preview behaves like browser chrome: page-edge wheel/touch gestures
+     stop at this pane instead of scrolling the surrounding Split/Fleet stage. */
+  overscroll-behavior: none;
   container-type: inline-size;
 }
 
@@ -372,6 +377,8 @@
 /* Preview area */
 .preview-panel .preview-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   /* Transparent — the actual web iframe / device screen paint their own white
      page background. Keeping this transparent lets the frosted glass (and any
      background image) show through on the initial placeholder + around the
@@ -928,7 +935,13 @@
   box-sizing: border-box;
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
+  /* Loading banners and toolbar wrapping can change the available height. Keep
+     scroll anchoring from shifting the frame while that fixed viewport settles. */
+  overflow-anchor: none;
 }
 
 /* `margin: auto` on the child, not `justify-content: center` on the stage:

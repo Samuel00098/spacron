@@ -53,7 +53,23 @@ global.window = {
 
 import { notificationsEnabled } from './settings';
 import { showToast, dismissToast, toasts, requestNotificationPermission } from './notification';
-import { useNotificationStore } from './zustand/notification';
+import { shouldUseSystemNotification, useNotificationStore } from './zustand/notification';
+
+describe('system notification visibility', () => {
+  const state = (visibilityState: DocumentVisibilityState, focused: boolean) => ({
+    visibilityState,
+    hasFocus: () => focused,
+  });
+
+  it('uses the in-app card when Spacron is visible and focused', () => {
+    expect(shouldUseSystemNotification(state('visible', true))).toBe(false);
+  });
+
+  it('uses the OS when Spacron is hidden or another app has focus', () => {
+    expect(shouldUseSystemNotification(state('hidden', false))).toBe(true);
+    expect(shouldUseSystemNotification(state('visible', false))).toBe(true);
+  });
+});
 
 describe('Notification & Toast Stores', () => {
   beforeEach(() => {

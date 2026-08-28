@@ -26,7 +26,7 @@ import {
 } from '$lib/services/orchestrator/inbox';
 import MailboxCardView from './MailboxCard';
 import StatusIcon from './statusIcons';
-import { showSystemNotification } from '$lib/stores/zustand/notification';
+import { shouldUseSystemNotification, showSystemNotification } from '$lib/stores/zustand/notification';
 import './AgentNotifications.css';
 
 // How long a plain "finished" card lingers before it clears itself, like a
@@ -211,11 +211,7 @@ export default function AgentNotifications() {
   // stack is off in another workspace). When the app is focused and visible the
   // floating card already is the notification, so nothing fires.
   useEffect(() => {
-    if (
-      typeof document === 'undefined' ||
-      (document.visibilityState === 'visible' && document.hasFocus())
-    )
-      return;
+    if (!shouldUseSystemNotification()) return;
     for (const g of completionGroups) {
       for (const m of g.members) {
         if (systemPinged.current.has(m.id)) continue;

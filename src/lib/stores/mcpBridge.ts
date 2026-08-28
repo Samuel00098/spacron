@@ -154,10 +154,8 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   showToast(text, tone, 8000);
   // The toast is invisible to a user who is looking elsewhere, which is the
   // whole case a "needs input" report exists for.
-  if (typeof document !== 'undefined' && document.hidden) {
-    const { showSystemNotification } = await import('$lib/stores/zustand/notification');
-    showSystemNotification(text, tone);
-  }
+  const { shouldUseSystemNotification, showSystemNotification } = await import('$lib/stores/zustand/notification');
+  if (shouldUseSystemNotification()) showSystemNotification(text, tone);
 }
 
 /** The agent's display name, or a neutral fallback if it has already gone. */

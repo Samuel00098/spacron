@@ -391,6 +391,20 @@ export function hasAnyTurnSignalChannel(sessionId: number): boolean {
 }
 
 /**
+ * Whether a turn watcher is currently armed for this session.
+ *
+ * Terminal output has a legacy attention-prompt fallback for sessions whose
+ * turns are not being watched. It must stand down while a watcher is present,
+ * otherwise one prompt produces both that fallback toast and the orchestrator's
+ * durable needs-input card. Channel presence is not enough here: a leased
+ * session keeps its channels after one turn ends so a hand-typed follow-up can
+ * still report, even though no watcher may be listening for screen heuristics.
+ */
+export function hasTurnSignalListener(sessionId: number): boolean {
+  return (channels.get(sessionId)?.listeners.size ?? 0) > 0;
+}
+
+/**
  * Subscribe to this session's turn signals. Returns an unsubscribe function.
  *
  * Registers even when the session has no channel yet. A hook channel is opened
