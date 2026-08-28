@@ -1486,8 +1486,23 @@
   background: #f1f3f5 !important;
 }
 
-/* Keep only the in-canvas control glyphs crisp. The main tool tray keeps its
-   existing appearance. */
+/* Keep tool glyphs crisp across every tray. Light mode contrast is scoped
+   below to the in-canvas controls so the main tray keeps its own surfaces. */
+.sketch-overlay .tool-btn svg,
+.sketch-overlay .action-btn svg,
+.sketch-overlay .exit-btn svg,
+.sketch-overlay .toolbar-toggle svg {
+  shape-rendering: geometricPrecision;
+}
+
+.sketch-overlay .tool-btn svg *,
+.sketch-overlay .action-btn svg *,
+.sketch-overlay .exit-btn svg *,
+.sketch-overlay .toolbar-toggle svg * {
+  stroke-width: 2.35;
+  vector-effect: non-scaling-stroke;
+}
+
 .sketch-overlay .sketch-bottom-left-panel .tool-btn svg,
 .sketch-overlay .sketch-bottom-left-panel .action-btn svg,
 .sketch-overlay .sketch-bottom-left-panel .exit-btn svg,

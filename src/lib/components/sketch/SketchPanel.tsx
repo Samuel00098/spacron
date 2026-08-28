@@ -55,7 +55,7 @@ interface SketchShape {
   id: string;
   /** Explicit cross-type layer. Missing values keep legacy shapes below text. */
   layer?: number;
-  type: 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'image';
+  type: 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'pentagon' | 'octagon' | 'image';
   imageUrl?: string;
   x: number;
   y: number;
@@ -356,7 +356,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const [hasCopiedElements, setHasCopiedElements] = useState(false);
 
   // Toolbar and display states
-  const [currentTool, setCurrentTool] = useState<'select' | 'pen' | 'eraser' | 'text' | 'pan' | 'connector' | 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'line'>('select');
+  const [currentTool, setCurrentTool] = useState<'select' | 'pen' | 'eraser' | 'text' | 'pan' | 'connector' | 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'pentagon' | 'octagon' | 'line'>('select');
   const [currentColor, setCurrentColor] = useState('#06b6d4');
   const [customColor, setCustomColor] = useState('#e2e2eb');
   const [brushSize, setBrushSize] = useState(6);
@@ -941,8 +941,12 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               ? () => drawPolygonPath(3, -Math.PI / 2)
               : shape.type === 'hexagon'
                 ? () => drawPolygonPath(6, -Math.PI / 2)
-                : shape.type === 'star'
-                  ? drawStarPath
+                : shape.type === 'pentagon'
+                  ? () => drawPolygonPath(5, -Math.PI / 2)
+                  : shape.type === 'octagon'
+                    ? () => drawPolygonPath(8, -Math.PI / 2)
+                    : shape.type === 'star'
+                      ? drawStarPath
                   : drawRectPath;
         
         fillSketchyHachure(ctx, x, y, w, h, fillPath, rand, 8, Math.PI / 4);
@@ -956,6 +960,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         else if (shape.type === 'diamond') drawDiamondPath();
         else if (shape.type === 'triangle') drawPolygonPath(3, -Math.PI / 2);
         else if (shape.type === 'hexagon') drawPolygonPath(6, -Math.PI / 2);
+        else if (shape.type === 'pentagon') drawPolygonPath(5, -Math.PI / 2);
+        else if (shape.type === 'octagon') drawPolygonPath(8, -Math.PI / 2);
         else if (shape.type === 'star') drawStarPath();
         else drawRectPath();
         ctx.fill();
@@ -967,8 +973,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       ctx.strokeStyle = shape.color;
       if (shape.type === 'circle') {
         drawSketchyEllipse(ctx, x + w / 2, y + h / 2, w / 2, h / 2, rand, roughness);
-      } else if (shape.type === 'triangle' || shape.type === 'hexagon' || shape.type === 'star') {
-        const sides = shape.type === 'triangle' ? 3 : shape.type === 'hexagon' ? 6 : 10;
+      } else if (['triangle', 'hexagon', 'pentagon', 'octagon', 'star'].includes(shape.type)) {
+        const sides = shape.type === 'triangle' ? 3 : shape.type === 'hexagon' ? 6 : shape.type === 'pentagon' ? 5 : shape.type === 'octagon' ? 8 : 10;
         if (shape.type === 'star') {
           drawStarPath();
           ctx.stroke();
@@ -1229,8 +1235,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         activeCtx.lineTo(x + w / 2, y + h);
         activeCtx.lineTo(x, y + h / 2);
         activeCtx.closePath();
-      } else if (currentTool === 'triangle' || currentTool === 'hexagon' || currentTool === 'star') {
-        const sides = currentTool === 'triangle' ? 3 : currentTool === 'hexagon' ? 6 : 10;
+      } else if (['triangle', 'hexagon', 'pentagon', 'octagon', 'star'].includes(currentTool)) {
+        const sides = currentTool === 'triangle' ? 3 : currentTool === 'hexagon' ? 6 : currentTool === 'pentagon' ? 5 : currentTool === 'octagon' ? 8 : 10;
         const cx = x + w / 2;
         const cy = y + h / 2;
         const rotation = -Math.PI / 2;
@@ -1545,7 +1551,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       }
     }
 
-      if (['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star'].includes(currentTool)) {
+      if (['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool)) {
       e.preventDefault();
       if (activeTextInput) {
         commitText();
@@ -1723,7 +1729,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
           // Create new shape
           const newShape: SketchShape = {
             id: Math.random().toString(36).substring(2, 9),
-            type: currentTool as 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star',
+            type: currentTool as 'rectangle' | 'circle' | 'diamond' | 'triangle' | 'hexagon' | 'star' | 'pentagon' | 'octagon',
             x,
             y,
             width,
@@ -1731,7 +1737,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
             color: currentColor,
             fillColor: defaultFillStyle === 'transparent' ? 'transparent' : (defaultFillStyle === 'solid' ? defaultFillColor : 'tint'),
             borderStyle: defaultStrokeStyle,
-            borderRadius: currentTool === 'circle' ? 9999 : (['diamond', 'triangle', 'hexagon', 'star'].includes(currentTool) ? 0 : defaultBorderRadius),
+            borderRadius: currentTool === 'circle' ? 9999 : (['diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool) ? 0 : defaultBorderRadius),
             opacity: brushOpacity,
             text: '',
             strokeWidth: defaultStrokeWidth,
@@ -1830,7 +1836,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
   // Drag text elements
   function startDragText(e: React.PointerEvent<HTMLDivElement>, text: SketchText) {
-    if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
+    if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
 
     if (currentTool === 'eraser') {
       setSketchTexts(prev => {
@@ -1990,7 +1996,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
   // Drag shape elements
   function startDragShape(e: React.PointerEvent<HTMLDivElement>, shape: SketchShape) {
-    if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
+    if (draggingShapeIdRef.current || resizingShapeIdRef.current) return;
+    if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
 
     if (currentTool === 'eraser') {
       setSketchShapes(prev => {
@@ -2086,6 +2093,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
     window.addEventListener('pointermove', handleShapeDragMove);
     window.addEventListener('pointerup', handleShapeDragUp);
+    window.addEventListener('pointercancel', handleShapeDragUp);
   }
 
   function handleShapeDragMove(e: PointerEvent) {
@@ -2139,12 +2147,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     }
     window.removeEventListener('pointermove', handleShapeDragMove);
     window.removeEventListener('pointerup', handleShapeDragUp);
+    window.removeEventListener('pointercancel', handleShapeDragUp);
   }
 
   // Resize shape elements
   function startResizeShape(e: React.PointerEvent<HTMLDivElement>, shape: SketchShape) {
+    if (draggingShapeIdRef.current || resizingShapeIdRef.current) return;
     e.stopPropagation();
     e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
     resizingShapeIdRef.current = shape.id;
     resizeShapeStartRef.current = { x: e.clientX, y: e.clientY };
     shapeStartDimsRef.current = { width: shape.width, height: shape.height };
@@ -2193,6 +2206,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
     window.addEventListener('pointermove', handleShapeResizeMove);
     window.addEventListener('pointerup', handleShapeResizeUp);
+    window.addEventListener('pointercancel', handleShapeResizeUp);
   }
 
   function handleShapeResizeMove(e: PointerEvent) {
@@ -2300,6 +2314,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     }
     window.removeEventListener('pointermove', handleShapeResizeMove);
     window.removeEventListener('pointerup', handleShapeResizeUp);
+    window.removeEventListener('pointercancel', handleShapeResizeUp);
   }
 
   // Edit text inside shape
@@ -3681,7 +3696,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         style={{
           cursor: spacePressed || currentTool === 'pan' 
             ? (panning ? 'grabbing' : 'grab') 
-            : (currentTool === 'eraser' ? 'cell' : (currentTool === 'text' ? 'text' : (['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star'].includes(currentTool) ? 'crosshair' : (currentTool === 'select' ? 'default' : 'crosshair'))))
+            : (currentTool === 'eraser' ? 'cell' : (currentTool === 'text' ? 'text' : (['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool) ? 'crosshair' : (currentTool === 'select' ? 'default' : 'crosshair'))))
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -3743,7 +3758,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 : (shape.borderStyle === 'none' ? 'none' : `${Math.max(1, 2 * zoomScale)}px ${shape.borderStyle} ${shape.color}`),
               borderRadius: shape.type === 'image'
                 ? '0'
-                : (shape.type === 'circle' ? '50%' : (['diamond', 'triangle', 'hexagon', 'star'].includes(shape.type) ? '0' : `${shape.borderRadius * zoomScale}px`)),
+                : (shape.type === 'circle' ? '50%' : (['diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(shape.type) ? '0' : `${shape.borderRadius * zoomScale}px`)),
               backgroundColor: shape.type === 'image'
                 ? 'transparent'
                 : (shape.fillColor === 'glass'
@@ -3871,7 +3886,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
             )}
 
             {/* Background/Fill Section (only for shapes) */}
-            {(selectedShapeId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id)) || ['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star'].includes(currentTool)) && (
+            {(selectedShapeId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id)) || ['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool)) && (
               <div className="style-panel-section">
                 <span className="style-panel-title">Background Color</span>
                 <div className="style-color-grid">
@@ -3934,7 +3949,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
             )}
 
             {/* Fill Style Section (only for shapes) */}
-            {(selectedShapeId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id)) || ['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star'].includes(currentTool)) && (
+            {(selectedShapeId || selectedElementIds.some(id => sketchShapes.some(s => s.id === id)) || ['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool)) && (
               <div className="style-panel-section">
                 <span className="style-panel-title">Fill Style</span>
                 <div className="style-panel-grid">
@@ -4075,7 +4090,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
             )}
 
             {/* Font Family Section (only for text and text-enabled shapes) */}
-            {(selectedTextId || selectedShapeId || selectedElementIds.length > 0 || ['text', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star'].includes(currentTool)) && (
+            {(selectedTextId || selectedShapeId || selectedElementIds.length > 0 || ['text', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool)) && (
               <div className="style-panel-section">
                 <span className="style-panel-title">Font Family</span>
                 <div className="style-panel-grid">
@@ -4395,7 +4410,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 aria-label="Hexagon Shape"
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m8 3 8 0 5 5v8l-5 5H8l-5-5V8l5-5Z" />
+                  <path d="m7 3 10 0 4 4v10l-4 4H7l-4-4V7l4-4Z" />
                 </svg>
               </button>
               <button
@@ -4406,6 +4421,26 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z" />
+                </svg>
+              </button>
+              <button
+                className={`tool-btn${currentTool === 'pentagon' ? ' active' : ''}`}
+                onClick={() => { commitText(); setCurrentTool('pentagon'); }}
+                title="Pentagon Shape"
+                aria-label="Pentagon Shape"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m12 3 8.6 6.2-3.3 10.1H6.7L3.4 9.2 12 3Z" />
+                </svg>
+              </button>
+              <button
+                className={`tool-btn${currentTool === 'octagon' ? ' active' : ''}`}
+                onClick={() => { commitText(); setCurrentTool('octagon'); }}
+                title="Octagon Shape"
+                aria-label="Octagon Shape"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m8 3 8 0 5 5v8l-5 5H8l-5-5V8l5-5Z" />
                 </svg>
               </button>
               <button
