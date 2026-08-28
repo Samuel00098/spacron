@@ -407,6 +407,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const [showToolbar, setShowToolbar] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const clearConfirmTimeoutRef = useRef<any>(null);
 
   // Zoom & Pan State
@@ -2976,8 +2977,24 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     setSnapToGrid(false);
     resetZoom();
     setShowSettingsDropdown(false);
+    setResetDialogOpen(false);
     setTimeout(() => persistCanvasSnapshot(), 10);
     showToast('Sketch settings reset.', 'success');
+  }
+
+  function clearSketchArtwork() {
+    commitText();
+    resetCanvasDocument();
+    clearPersistedSketch();
+    setResetDialogOpen(false);
+    showToast('Sketch artwork cleared.', 'info');
+  }
+
+  function resetSketchView() {
+    resetZoom();
+    setResetDialogOpen(false);
+    setTimeout(() => persistCanvasSnapshot(), 10);
+    showToast('Sketch view reset.', 'success');
   }
 
   // Wheel listener (touchpad gestures + mouse wheel zoom)
@@ -3395,7 +3412,11 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       const canvasResetZoomShortcut = activeShortcutsList.find((shortcut) => shortcut && shortcut.id === 'canvasResetZoom');
       
       if (e.key === 'Escape') {
-        if (activeTextInput) {
+        if (resetDialogOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setResetDialogOpen(false);
+        } else if (activeTextInput) {
           e.stopPropagation();
           setActiveTextInput(null); // Cancel typing session
         } else if (activeShapeTextInput) {
@@ -3467,7 +3488,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeTextInput, activeShapeTextInput, selectedShapeId, selectedTextId, selectedArrowId, selectedElementIds, sketchGroups, currentTool, zoomScale, panOffset]);
+  }, [activeTextInput, activeShapeTextInput, resetDialogOpen, selectedShapeId, selectedTextId, selectedArrowId, selectedElementIds, sketchGroups, currentTool, zoomScale, panOffset]);
 
   // Handle custom text box ESC / Ctrl+Enter key down
   function handleTextKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -4591,7 +4612,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                       </svg>
                       Copy Screenshot
                     </button>
-                    <button type="button" className="util-btn" onClick={resetSketchSettings} title="Reset sketch settings and view">
+                    <button type="button" className="util-btn" onClick={() => setResetDialogOpen(true)} title="Reset sketch settings and view">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 12a9 9 0 1 0 3-6.7" />
                         <polyline points="3 4 3 10 9 10" />
@@ -4658,6 +4679,18 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
           <button
             className="tool-btn"
             style={{ width: '28px', height: '28px' }}
+            onClick={() => setResetDialogOpen(true)}
+            title="Reset Sketch"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 12a8 8 0 1 0 2.3-5.7" />
+              <polyline points="4 4 4 10 10 10" />
+            </svg>
+          </button>
+
+          <button
+            className="tool-btn"
+            style={{ width: '28px', height: '28px' }}
             disabled={isSaving}
             onClick={saveToWorkspace}
             title="Save sketch to Project folder (.spacron/sketches/)"
@@ -4687,6 +4720,45 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               <line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
+        </div>
+      )}
+
+      {resetDialogOpen && (
+        <div
+          className="sketch-reset-backdrop"
+          role="presentation"
+          onPointerDown={() => setResetDialogOpen(false)}
+        >
+          <div
+            className="sketch-reset-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sketch-reset-title"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="sketch-reset-dialog-header">
+              <div>
+                <h2 id="sketch-reset-title">Reset sketch</h2>
+                <p>What would you like to reset?</p>
+              </div>
+              <button type="button" className="sketch-reset-close" onClick={() => setResetDialogOpen(false)} aria-label="Close reset dialog">×</button>
+            </div>
+            <div className="sketch-reset-options">
+              <button type="button" onClick={resetSketchView}>
+                <strong>Reset view</strong>
+                <span>Return zoom and position to normal.</span>
+              </button>
+              <button type="button" onClick={resetSketchSettings}>
+                <strong>Reset settings</strong>
+                <span>Restore normal colors, fonts, fills, and grid settings.</span>
+              </button>
+              <button type="button" className="sketch-reset-danger" onClick={clearSketchArtwork}>
+                <strong>Clear artwork</strong>
+                <span>Remove everything from this sketch.</span>
+              </button>
+            </div>
+            <button type="button" className="sketch-reset-cancel" onClick={() => setResetDialogOpen(false)}>Cancel</button>
+          </div>
         </div>
       )}
       

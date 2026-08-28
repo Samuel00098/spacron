@@ -1340,6 +1340,126 @@
   font-weight: 650;
 }
 
+.sketch-overlay .sketch-reset-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 9050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 6, 10, 0.58);
+}
+
+.sketch-overlay .sketch-reset-dialog {
+  width: min(390px, 100%);
+  padding: 18px;
+  color: var(--text-primary);
+  background: #18181e;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  animation: scaleIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+:root.light-theme .sketch-overlay .sketch-reset-dialog {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+}
+
+.sketch-overlay .sketch-reset-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sketch-overlay .sketch-reset-dialog h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.sketch-overlay .sketch-reset-dialog p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sketch-overlay .sketch-reset-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sketch-overlay .sketch-reset-close:hover,
+.sketch-overlay .sketch-reset-cancel:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.sketch-overlay .sketch-reset-options {
+  display: grid;
+  gap: 8px;
+}
+
+.sketch-overlay .sketch-reset-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 11px 12px;
+  color: var(--text-primary);
+  text-align: left;
+  background: #24242c;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+:root.light-theme .sketch-overlay .sketch-reset-options button {
+  background: #f1f3f5;
+}
+
+.sketch-overlay .sketch-reset-options button:hover {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.sketch-overlay .sketch-reset-options button strong {
+  font-size: 12px;
+}
+
+.sketch-overlay .sketch-reset-options button span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.sketch-overlay .sketch-reset-options button.sketch-reset-danger:hover {
+  border-color: var(--error);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.sketch-overlay .sketch-reset-cancel {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
 /* Sketch controls are intentionally opaque: open panels and tabs must remain
    readable over artwork, grids, and textured backgrounds. */
 .sketch-overlay .sketch-toolbar,
