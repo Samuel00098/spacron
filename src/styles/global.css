@@ -796,6 +796,16 @@ input:focus {
   background: var(--selection-bg);
 }
 
+/* One scroll policy for the whole app. A scrollable child that reaches an edge
+   must not hand the remaining trackpad/mouse-wheel momentum to its parent or
+   show an elastic overscroll gutter. The #app specificity deliberately wins
+   over component-local `overscroll-behavior: contain` declarations, so new
+   scroll containers get the same behavior without another per-panel patch. */
+#app,
+#app * {
+  overscroll-behavior: none;
+}
+
 /* Prevent scroll jitter/flicker and overscroll elastic bouncing inside sub-containers */
 .cm-scroller,
 .scrollable,
@@ -1588,4 +1598,3 @@ input[type='range']::-webkit-slider-thumb:active {
 .settings-toggle-dot {
   transition: transform var(--dur-slow) var(--ease-spring), background-color var(--dur-slow) var(--ease-spring) !important;
 }
-
