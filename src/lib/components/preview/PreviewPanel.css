@@ -938,7 +938,7 @@
   max-width: 100%;
   max-height: 100%;
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   /* Loading banners and toolbar wrapping can change the available height. Keep
      scroll anchoring from shifting the frame while that fixed viewport settles. */
   overflow-anchor: none;
@@ -950,6 +950,19 @@
 .preview-panel .preview-content.is-device .viewport-stage {
   display: flex;
   padding: 18px;
+}
+
+/* Once the emulated viewport is larger than the stage, padding would become
+   part of the scrollable range. Keep the breathing room on the fitting axis,
+   but let an oversized viewport start/end exactly at the pane edge. */
+.preview-panel .preview-content.is-device .viewport-stage.is-overflowing-x {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.preview-panel .preview-content.is-device .viewport-stage.is-overflowing-y {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .preview-panel .viewport-sizer {

@@ -1259,6 +1259,13 @@ export default function PreviewPanel() {
 
   const viewportScale = dragScale ?? (zoomMode === 'fit' ? fitScale : zoomMode);
 
+  // Fixed stage padding is useful while a viewport fits, but it becomes real
+  // scrollable content once the viewport is larger than the pane. Remove it
+  // on only the overflowing axes so the first and last page pixels can sit on
+  // the pane edges instead of leaving an unreachable/empty gutter.
+  const viewportOverflowsX = deviceMode && viewportSize.width * viewportScale > stageSize.width;
+  const viewportOverflowsY = deviceMode && viewportSize.height * viewportScale > stageSize.height;
+
   useEffect(() => {
     if (!stageEl) return;
     const measure = () => {
@@ -2005,7 +2012,10 @@ export default function PreviewPanel() {
           // One tree for both modes: keeping the iframe stack at the same
           // position means switching in and out of device mode re-lays-out the
           // page instead of remounting (and reloading) every tab.
-          <div className="viewport-stage" ref={setStageEl}>
+          <div
+            className={`viewport-stage${viewportOverflowsX ? ' is-overflowing-x' : ''}${viewportOverflowsY ? ' is-overflowing-y' : ''}`}
+            ref={setStageEl}
+          >
             <div
               className={`viewport-sizer${resizingViewport ? ' is-resizing' : ''}`}
               style={
