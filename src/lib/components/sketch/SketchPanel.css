@@ -12,6 +12,8 @@
 @font-face { font-family: 'Playfair Display'; font-style: italic; font-weight: 400; font-display: swap; src: url('/fonts/playfair-display-400-italic.woff2') format('woff2'); }
 @font-face { font-family: 'Permanent Marker'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/permanent-marker-400.woff2') format('woff2'); }
 @font-face { font-family: 'Patrick Hand'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/patrick-hand-400.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 400 800; font-display: swap; src: url('/fonts/manrope-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400 700; font-display: swap; src: url('/fonts/jetbrains-mono-400.woff2') format('woff2'); }
 
 .sketch-overlay {
   /* Fills whichever pane hosts it. This was `position: absolute; inset: 0` back
@@ -97,6 +99,8 @@
   touch-action: none;
   z-index: 3;
   transform-origin: 0 0;
+  text-rendering: geometricPrecision;
+  letter-spacing: 0.01em;
 }
 
 .sketch-overlay .canvas-viewport.tool-select .floating-text:hover {
@@ -254,6 +258,8 @@
   overflow: hidden;
   line-height: 1.25;
   padding: 8px;
+  text-rendering: geometricPrecision;
+  letter-spacing: 0.01em;
 }
 
 .sketch-overlay .shape-textarea {
@@ -1047,6 +1053,21 @@
 .sketch-overlay .font-marker {
   font-family: 'Permanent Marker', Impact, sans-serif !important;
 }
+.sketch-overlay .font-caveat {
+  font-family: 'Caveat', 'Architects Daughter', cursive !important;
+  font-weight: 600;
+}
+.sketch-overlay .font-comic {
+  font-family: 'Comic Neue', 'Patrick Hand', cursive !important;
+}
+.sketch-overlay .font-manrope {
+  font-family: 'Manrope', 'Inter', sans-serif !important;
+  font-weight: 600;
+}
+.sketch-overlay .font-typewriter {
+  font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+  letter-spacing: -0.02em;
+}
 
 /* Make shape interaction divs transparent */
 .sketch-overlay .floating-shape {
@@ -1281,6 +1302,40 @@
 .sketch-overlay .floating-text.active-selected {
   border-color: var(--accent) !important;
   background-color: rgba(6, 182, 212, 0.08);
+  box-shadow: 0 3px 0 rgba(6, 182, 212, 0.12);
 }
 
+/* The canvas has a tactile board feel while keeping the grid and artwork crisp. */
+.sketch-overlay .canvas-viewport::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.38;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.08) 0.7px, transparent 0.7px),
+    radial-gradient(rgba(0, 0, 0, 0.08) 0.7px, transparent 0.7px);
+  background-position: 0 0, 7px 9px;
+  background-size: 14px 14px;
+  mix-blend-mode: soft-light;
+}
 
+:root.light-theme .sketch-overlay .canvas-viewport::before {
+  opacity: 0.22;
+  background-image:
+    radial-gradient(rgba(15, 23, 42, 0.11) 0.7px, transparent 0.7px),
+    radial-gradient(rgba(255, 255, 255, 0.8) 0.7px, transparent 0.7px);
+  mix-blend-mode: multiply;
+}
+
+.sketch-overlay .preset-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.sketch-overlay .design-preset-options .style-opt-btn {
+  min-height: 30px;
+  font-weight: 650;
+}

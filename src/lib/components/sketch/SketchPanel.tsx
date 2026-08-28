@@ -21,12 +21,20 @@ interface Stroke {
   isEraser: boolean;
 }
 
+type SketchFontFamily =
+  | 'handwritten' | 'sans-serif' | 'monospace' | 'serif' | 'playful' | 'marker'
+  | 'caveat' | 'comic' | 'manrope' | 'typewriter';
+
 function getFontFamilyString(family?: string) {
   if (family === 'monospace') return "'Courier New', Courier, monospace";
   if (family === 'sans-serif') return "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
   if (family === 'serif') return "'Playfair Display', Georgia, serif";
   if (family === 'playful') return "'Patrick Hand', 'Comic Neue', cursive";
   if (family === 'marker') return "'Permanent Marker', Impact, sans-serif";
+  if (family === 'caveat') return "'Caveat', 'Architects Daughter', cursive";
+  if (family === 'comic') return "'Comic Neue', 'Patrick Hand', cursive";
+  if (family === 'manrope') return "'Manrope', Inter, sans-serif";
+  if (family === 'typewriter') return "'JetBrains Mono', 'Courier New', monospace";
   return "'Architects Daughter', 'Caveat', cursive";
 }
 
@@ -40,7 +48,7 @@ interface SketchText {
   color: string;
   fontSize: number;
   opacity: number;
-  fontFamily?: 'handwritten' | 'sans-serif' | 'monospace' | 'serif' | 'playful' | 'marker';
+  fontFamily?: SketchFontFamily;
 }
 
 interface SketchShape {
@@ -61,7 +69,7 @@ interface SketchShape {
   text: string;
   strokeWidth?: number;
   roughness?: number; // 0 (architect), 1.5 (artist), 3 (cartoonist)
-  fontFamily?: 'handwritten' | 'sans-serif' | 'monospace' | 'serif' | 'playful' | 'marker';
+  fontFamily?: SketchFontFamily;
   fillStyle?: 'transparent' | 'hachure' | 'cross-hatch' | 'solid';
 }
 
@@ -87,6 +95,8 @@ type SketchBackgroundStyle =
   | 'blueprint'
   | 'solid-dark'
   | 'solid-light';
+
+type SketchDesignPreset = 'excalidraw' | 'blueprint' | 'sticky-notes' | 'ink';
 
 interface PersistedSketchState {
   version?: string;
@@ -359,7 +369,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   const [defaultStrokeWidth, setDefaultStrokeWidth] = useState<number>(2);
   const [defaultStrokeStyle, setDefaultStrokeStyle] = useState<'solid' | 'dashed' | 'dotted' | 'none'>('solid');
   const [defaultRoughness, setDefaultRoughness] = useState<number>(1.5);
-  const [defaultFontFamily, setDefaultFontFamily] = useState<'handwritten' | 'sans-serif' | 'monospace' | 'serif' | 'playful' | 'marker'>('handwritten');
+  const [defaultFontFamily, setDefaultFontFamily] = useState<SketchFontFamily>('handwritten');
   const [defaultBorderRadius, setDefaultBorderRadius] = useState<number>(8);
 
   // Shapes & Text State
@@ -576,6 +586,59 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     setSnapToGrid(false);
     setZoomScale(1.0);
     setPanOffset({ x: 0, y: 0 });
+  }
+
+  /** Apply a cohesive visual language to defaults and the current selection. */
+  function applyDesignPreset(preset: SketchDesignPreset) {
+    const lightInk = isLightTheme ? '#1f2937' : '#f8fafc';
+    const presets: Record<SketchDesignPreset, {
+      color: string;
+      fillColor: string;
+      fillStyle: 'transparent' | 'hachure' | 'cross-hatch' | 'solid';
+      strokeStyle: 'solid' | 'dashed' | 'dotted' | 'none';
+      roughness: number;
+      font: typeof defaultFontFamily;
+      radius: number;
+      background: SketchBackgroundStyle;
+    }> = {
+      excalidraw: {
+        color: lightInk, fillColor: 'transparent', fillStyle: 'transparent',
+        strokeStyle: 'solid', roughness: 1.5, font: 'handwritten', radius: 8, background: 'dot-grid'
+      },
+      blueprint: {
+        color: '#7dd3fc', fillColor: 'tint', fillStyle: 'hachure',
+        strokeStyle: 'solid', roughness: 0, font: 'monospace', radius: 3, background: 'blueprint'
+      },
+      'sticky-notes': {
+        color: '#713f12', fillColor: '#fef08a', fillStyle: 'solid',
+        strokeStyle: 'solid', roughness: 0.8, font: 'sans-serif', radius: 10, background: 'solid-light'
+      },
+      ink: {
+        color: isLightTheme ? '#1d4ed8' : '#93c5fd', fillColor: 'transparent', fillStyle: 'transparent',
+        strokeStyle: 'dashed', roughness: 2.5, font: 'marker', radius: 0, background: 'blackboard'
+      }
+    };
+
+    const style = presets[preset];
+    setCurrentColor(style.color);
+    setDefaultFillColor(style.fillColor);
+    setDefaultFillStyle(style.fillStyle);
+    setDefaultStrokeStyle(style.strokeStyle);
+    setDefaultRoughness(style.roughness);
+    setDefaultFontFamily(style.font);
+    setDefaultBorderRadius(style.radius);
+    setBackgroundStyle(style.background);
+
+    const selected = new Set(stateRef.current.selectedElementIds);
+    if (selected.size > 0) {
+      setSketchShapes(prev => prev.map(shape => selected.has(shape.id)
+        ? { ...shape, color: style.color, fillColor: style.fillColor, fillStyle: style.fillStyle, borderStyle: style.strokeStyle, roughness: style.roughness, borderRadius: style.radius }
+        : shape));
+      setSketchTexts(prev => prev.map(text => selected.has(text.id)
+        ? { ...text, color: style.color, fontFamily: style.font }
+        : text));
+      setTimeout(() => saveState(), 10);
+    }
   }
 
   // Map screen coordinates to transformed local canvas world coordinates
@@ -3143,27 +3206,33 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     tempCtx.globalAlpha = 1.0;
     tempCtx.setTransform(1, 0, 0, 1, 0, 0);
     
-    // Draw Floating Text Elements
-    sketchTexts.forEach(text => {
-      tempCtx.fillStyle = text.color;
-      tempCtx.globalAlpha = text.opacity;
-      const displayFontSize = text.fontSize * zoomScale;
-      const fontFam = getFontFamilyString(text.fontFamily);
-      tempCtx.font = `500 ${displayFontSize}px ${fontFam}`;
-      tempCtx.textBaseline = 'top';
-      
-      const screenX = text.x * zoomScale + panOffset.x;
-      const screenY = text.y * zoomScale + panOffset.y;
-      
-      const lines = text.value.split('\n');
-      const lineHeight = displayFontSize * 1.25;
-      lines.forEach((line, index) => {
-        tempCtx.fillText(line, screenX, screenY + index * lineHeight);
-      });
-    });
+    // Draw floating elements in their visual layer order, matching the DOM.
+    const layeredElements = [
+      ...sketchTexts.map(text => ({ kind: 'text' as const, layer: text.layer ?? 100, value: text })),
+      ...sketchShapes.map(shape => ({ kind: 'shape' as const, layer: shape.layer ?? 0, value: shape })),
+    ].sort((a, b) => a.layer - b.layer);
 
-    // Draw Floating Shape Elements
-    sketchShapes.forEach(shape => {
+    layeredElements.forEach(element => {
+      if (element.kind === 'text') {
+        const text = element.value;
+        tempCtx.fillStyle = text.color;
+        tempCtx.globalAlpha = text.opacity;
+        const displayFontSize = text.fontSize * zoomScale;
+        const fontFam = getFontFamilyString(text.fontFamily);
+        tempCtx.font = `500 ${displayFontSize}px ${fontFam}`;
+        tempCtx.textBaseline = 'top';
+
+        const screenX = text.x * zoomScale + panOffset.x;
+        const screenY = text.y * zoomScale + panOffset.y;
+        const lines = text.value.split('\n');
+        const lineHeight = displayFontSize * 1.25;
+        lines.forEach((line, index) => {
+          tempCtx.fillText(line, screenX, screenY + index * lineHeight);
+        });
+        return;
+      }
+
+      const shape = element.value;
       const x = shape.x * zoomScale + panOffset.x;
       const y = shape.y * zoomScale + panOffset.y;
       const w = shape.width * zoomScale;
@@ -3211,6 +3280,29 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     link.href = dataUrl;
     link.click();
     showToast('Sketch exported as PNG!', 'success');
+  }
+
+  async function copySketchScreenshot() {
+    // Let an active text editor commit before rasterising the viewport.
+    commitText();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const compiled = compilePNG();
+    if (!compiled) return;
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      showToast('Image clipboard is not available in this window', 'warning');
+      return;
+    }
+
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => compiled.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('Could not encode sketch screenshot');
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showToast('Sketch screenshot copied — paste it into an agent', 'success');
+    } catch (err) {
+      console.error('Failed to copy sketch screenshot:', err);
+      showToast('Could not copy the sketch screenshot', 'error');
+    }
   }
 
   async function saveToWorkspace() {
@@ -3898,7 +3990,11 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                     { value: 'monospace', label: 'Monospace' },
                     { value: 'serif', label: 'Serif' },
                     { value: 'playful', label: 'Playful' },
-                    { value: 'marker', label: 'Marker' }
+                    { value: 'marker', label: 'Marker' },
+                    { value: 'caveat', label: 'Caveat' },
+                    { value: 'comic', label: 'Comic' },
+                    { value: 'manrope', label: 'Manrope' },
+                    { value: 'typewriter', label: 'Typewriter' }
                   ].map((opt) => (
                     <button
                       key={opt.value}
@@ -4346,6 +4442,30 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                 onClick={(e) => e.stopPropagation()}
                 style={{ top: 'calc(100% + 10px)', right: 0 }}
               >
+                {/* Cohesive visual presets */}
+                <div className="panel-section">
+                  <div className="section-title">Design Presets</div>
+                  <div className="grid-style-options design-preset-options">
+                    {[
+                      { value: 'excalidraw', label: 'Hand-drawn' },
+                      { value: 'blueprint', label: 'Blueprint' },
+                      { value: 'sticky-notes', label: 'Sticky Notes' },
+                      { value: 'ink', label: 'Ink Sketch' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        className="style-opt-btn"
+                        onClick={() => applyDesignPreset(preset.value as SketchDesignPreset)}
+                        title={`Apply ${preset.label} defaults to new elements and the current selection`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="preset-hint">Applies to new elements and selected shapes/text.</div>
+                </div>
+
                 {/* Background Section */}
                 <div className="panel-section">
                   <div className="section-title">Background Style</div>
@@ -4445,6 +4565,14 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                       </svg>
                       Copy Canvas
                     </button>
+                    <button type="button" className="util-btn" onClick={() => void copySketchScreenshot()} title="Copy a PNG screenshot to paste into an agent">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                        <circle cx="8.5" cy="10" r="1.5" />
+                        <path d="m21 15-4.5-4.5L9 18" />
+                      </svg>
+                      Copy Screenshot
+                    </button>
                     <button type="button" className="util-btn" onClick={pasteEntireCanvas} title="Replace canvas from copied drawing in clipboard">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
@@ -4487,6 +4615,19 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+
+          <button
+            className="tool-btn"
+            style={{ width: '28px', height: '28px' }}
+            onClick={() => void copySketchScreenshot()}
+            title="Copy Sketch Screenshot"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <circle cx="8.5" cy="10" r="1.5" />
+              <path d="m21 15-4.5-4.5L9 18" />
             </svg>
           </button>
 
