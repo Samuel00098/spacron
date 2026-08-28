@@ -796,13 +796,12 @@ input:focus {
   background: var(--selection-bg);
 }
 
-/* One scroll policy for the whole app. A scrollable child that reaches an edge
-   must not hand the remaining trackpad/mouse-wheel momentum to its parent or
-   show an elastic overscroll gutter. The #app specificity deliberately wins
-   over component-local `overscroll-behavior: contain` declarations, so new
-   scroll containers get the same behavior without another per-panel patch. */
-#app,
-#app * {
+/* Stop the application viewport itself from rubber-banding. Do not apply this
+   to every descendant: WebView2 can suppress wheel scrolling when a blanket
+   overscroll policy sits on the non-scrollable rows beneath a nested viewport
+   (notably File Explorer and Source Control in Tauri dev). Actual scroll
+   containers are covered by the explicit list below or their component CSS. */
+#app {
   overscroll-behavior: none;
 }
 
