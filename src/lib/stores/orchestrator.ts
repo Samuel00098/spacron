@@ -1210,7 +1210,10 @@ async function completeLeasedTask(
   }
 
   if (!updated) return;
-  const name = (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null) ?? task.agentPreset ?? 'Agent';
+  const agentType = task.agentPreset
+    ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset
+    : null;
+  const name = task.name?.trim() || agentType || task.agentPreset || 'Agent';
 
   // A task launched FROM the task panel ("Run with agent") asks instead of
   // auto-completing: the agent ending its turn is evidence, not a decision, so
@@ -1298,6 +1301,7 @@ async function completeLeasedTask(
   const completionData: CompletionSummary = {
     status: completionStatus,
     agentName: name,
+    agentType,
     taskTitle: task.title,
     elapsedSec: elapsed,
     reason: completionReason ?? null,
@@ -1851,6 +1855,8 @@ export interface CompletionSummary {
   /** 'done' | 'failed' | 'blocked' */
   status: 'done' | 'failed' | 'blocked';
   agentName: string;
+  /** The CLI/provider used for this turn, e.g. "Codex CLI" or "Claude Code". */
+  agentType?: string | null;
   taskTitle: string;
   elapsedSec: number | null;
   reason?: string | null;
@@ -2213,11 +2219,10 @@ function notifyAdoptedTurnEnd(
   outcome: AgentTurnOutcome,
   sessionId?: number,
 ): void {
-  const name =
-    task.name
-    ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)
-    ?? task.agentPreset
-    ?? 'Agent';
+  const agentType = task.agentPreset
+    ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset
+    : null;
+  const name = task.name?.trim() || agentType || task.agentPreset || 'Agent';
 
   const told = describeTurnEnd(outcome);
   if (!told) return;
@@ -2295,6 +2300,9 @@ function appendAdoptedTurnCard(
     completion: {
       status,
       agentName: name,
+      agentType: task.agentPreset
+        ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset
+        : null,
       taskTitle: task.title,
       elapsedSec: null,
       reason,
@@ -2362,6 +2370,11 @@ export function recordUnwatchedAgentReport(
     task?.name?.trim()
     || session?.agentName?.trim()
     || fallbackName;
+  const agentType = task?.agentPreset
+    ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset
+    : session?.agentPreset
+      ? getAgentDisplayName(session.agentPreset) ?? session.agentPreset
+      : null;
 
   if (task) {
     logTaskActivity(
@@ -2379,6 +2392,7 @@ export function recordUnwatchedAgentReport(
     completion: {
       status: told.status,
       agentName: name,
+      agentType,
       // The card's second line. A report outside a task has no title to show,
       // and a blank line there reads as a rendering bug rather than as absence.
       taskTitle:

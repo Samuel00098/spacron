@@ -853,7 +853,7 @@ export default function ProjectHUD() {
                                       : `${projectSessions.length} running`
                                   }
                                 >
-                                  <span className={`hud-status-dot live${workingCount > 0 ? ' working' : ''}`} />
+                                  <span className={`hud-status-dot${workingCount > 0 ? ' working' : ''}`} />
                                   {projectSessions.length}
                                 </span>
                               )}
@@ -940,7 +940,7 @@ export default function ProjectHUD() {
                                     title={session.isExecuting ? `${name} — working` : `${name} — running`}
                                   >
                                     <span
-                                      className={`hud-status-dot live${session.isExecuting ? ' working' : ''}`}
+                                      className={`hud-status-dot${session.isExecuting ? ' working' : ''}`}
                                       aria-hidden="true"
                                     />
                                     <span className="project-process-name">{name}</span>

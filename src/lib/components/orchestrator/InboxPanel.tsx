@@ -15,6 +15,7 @@ import {
   clearInbox,
   mergeInboxEntries,
   countUnread,
+  formatAgentIdentity,
   type InboxEntry,
 } from '$lib/services/orchestrator/inbox';
 import StatusIcon, { type StatusIconKind } from './statusIcons';
@@ -97,7 +98,7 @@ function statusLabel(entry: InboxEntry): string {
 /** The whole entry as plain text, for the expanded row's copy button. */
 function copyText(entry: InboxEntry): string {
   const { reason, summary } = entry.detail;
-  const parts = [`${entry.agentName} — ${entry.title}`, absoluteTime(entry.ts)];
+  const parts = [`${formatAgentIdentity(entry.agentName, entry.agentType)} — ${entry.title}`, absoluteTime(entry.ts)];
   if (entry.kind === 'mail') {
     parts.push('', entry.body);
   } else {
@@ -345,7 +346,9 @@ export default function InboxPanel() {
                             right edge is the chevron's, and the clear button's
                             on hover. */}
                         {!entry.read && <span className="inbox-row-dot" aria-label="Unread" />}
-                        <span className="inbox-row-agent">{entry.agentName}</span>
+                        <span className="inbox-row-agent">
+                          {formatAgentIdentity(entry.agentName, entry.agentType)}
+                        </span>
                         <span className="inbox-row-time">{relativeTime(entry.ts, now)}</span>
                       </span>
                       <span className="inbox-row-title">{entry.title}</span>
@@ -416,6 +419,7 @@ function InboxRowDetail({
   return (
     <div className="inbox-detail" id={`inbox-detail-${entry.id}`}>
       <div className="inbox-detail-meta">
+        {entry.agentType && <span className="inbox-detail-fact">{entry.agentType}</span>}
         <span className={`inbox-detail-chip ${STATUS_ICON[entry.status]?.cls ?? 'muted'}`}>
           {statusLabel(entry)}
         </span>

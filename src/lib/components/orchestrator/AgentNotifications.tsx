@@ -23,6 +23,7 @@ import {
   acknowledge,
   markDismissed,
   getDismissedIds,
+  formatAgentIdentity,
 } from '$lib/services/orchestrator/inbox';
 import MailboxCardView from './MailboxCard';
 import StatusIcon from './statusIcons';
@@ -219,7 +220,7 @@ export default function AgentNotifications() {
         const c = m.completion;
         if (!c) continue;
         showSystemNotification(
-          `${completionHeadline(c)} · ${c.agentName}: ${c.taskTitle}`,
+          `${completionHeadline(c)} · ${formatAgentIdentity(c.agentName, c.agentType)}: ${c.taskTitle}`,
           c.status === 'done' ? 'success' : c.status === 'failed' ? 'error' : 'warning',
         );
       }
@@ -379,7 +380,9 @@ function CompletionNotification({
           <ul className="orc-comp-group-list">
             {shown.map((m) => (
               <li key={m.id} title={m.completion?.taskTitle}>
-                <span className="orc-comp-group-agent">{m.completion?.agentName}</span>
+                <span className="orc-comp-group-agent">
+                  {formatAgentIdentity(m.completion?.agentName ?? 'Agent', m.completion?.agentType)}
+                </span>
                 <span className="orc-comp-group-task">{m.completion?.taskTitle}</span>
               </li>
             ))}
@@ -403,7 +406,9 @@ function CompletionNotification({
       </span>
       <div className="orc-comp-body">
         <span className="orc-comp-headline">
-          <span className="orc-comp-agent" title={c.agentName}>{c.agentName}</span>
+          <span className="orc-comp-agent" title={formatAgentIdentity(c.agentName, c.agentType)}>
+            {formatAgentIdentity(c.agentName, c.agentType)}
+          </span>
           <span className="orc-comp-status">{statusLabel}</span>
           {c.elapsedSec != null && <span className="orc-comp-time">{formatSecs(c.elapsedSec)}</span>}
         </span>

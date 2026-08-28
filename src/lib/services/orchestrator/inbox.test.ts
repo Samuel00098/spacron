@@ -14,6 +14,7 @@ import {
   getReadIds,
   getDismissedIds,
   getClearedIds,
+  formatAgentIdentity,
   parseInboxState,
   loadProjectInbox,
   MAX_TRACKED_IDS,
@@ -74,6 +75,16 @@ describe('addTrackedIds', () => {
     expect(next).toHaveLength(MAX_TRACKED_IDS);
     expect(next[0]).toBe('id-1');
     expect(next.at(-1)).toBe('fresh');
+  });
+});
+
+describe('formatAgentIdentity', () => {
+  it('combines a named agent with its CLI type', () => {
+    expect(formatAgentIdentity('Iris', 'Codex CLI')).toBe('Iris · Codex CLI');
+  });
+
+  it('does not duplicate the type when it is already the agent name', () => {
+    expect(formatAgentIdentity('Claude Code', 'Claude Code')).toBe('Claude Code');
   });
 });
 

@@ -44,6 +44,7 @@ import {
   endConversationRecord,
   startConversationRecord,
 } from '$lib/stores/voiceHistory';
+import { formatAgentIdentity } from '$lib/services/orchestrator/inbox';
 import { openSettings } from '$lib/stores/layout';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
@@ -1579,7 +1580,9 @@ export default function FloatingPromptBar({
                               : 'needs input';
                         return (
                           <p className="transcript-now assistant">
-                            {icon} {lastMsg.completion.agentName} {verb}:{' '}
+                            {icon}{' '}
+                            {formatAgentIdentity(lastMsg.completion.agentName, lastMsg.completion.agentType)}{' '}
+                            {verb}:{' '}
                             {lastMsg.completion.taskTitle}
                           </p>
                         );

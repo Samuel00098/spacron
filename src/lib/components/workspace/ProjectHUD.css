@@ -622,7 +622,8 @@
   cursor: default;
 }
 
-/* Collapsed summary: agent count, tinted by whether any of them is working. */
+/* Collapsed summary: agent count, with the status light green only while an
+   agent is actively executing work. */
 .project-sidebar-card-agents {
   display: inline-flex;
   align-items: center;
@@ -636,11 +637,10 @@
   flex-shrink: 0;
 }
 
-/* The one status light, in two stages. `.live` is green because the session is
-   alive at all — the same meaning green carries on the terminal tab dots, and the
-   only thing that survives a long-running process going quiet. `.working` adds
-   the pulse on top, driven by `TerminalSessionInfo.isExecuting`, the flag the
-   room panels' edge light is gated on. Bare (grey) is the dead/unknown state. */
+/* The one status light, in two stages. Bare (grey) means the session is open
+   but idle; `.working` is green and pulsing while
+   `TerminalSessionInfo.isExecuting` is true, matching the room panel's edge
+   light. */
 .hud-status-dot {
   width: 6px;
   height: 6px;
@@ -649,11 +649,6 @@
   opacity: 0.55;
   flex-shrink: 0;
   transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
-}
-
-.hud-status-dot.live {
-  background: var(--success);
-  opacity: 1;
 }
 
 .hud-status-dot.working {

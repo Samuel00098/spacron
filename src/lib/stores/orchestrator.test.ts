@@ -1802,6 +1802,7 @@ describe('recordUnwatchedAgentReport', () => {
       agentName: 'Iris',
       taskTitle: task.title,
       reason: 'Tests pass.',
+      agentType: 'claude',
       taskId: task.id,
       // The agent said this itself, so it is allowed to interrupt — the whole
       // point of the report is that it is not a guess.

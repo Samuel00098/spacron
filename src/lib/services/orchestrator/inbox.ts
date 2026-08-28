@@ -78,6 +78,8 @@ export interface InboxEntry {
   read: boolean;
   /** The agent the entry is about, for the row's leading label. */
   agentName: string;
+  /** The CLI/provider that performed a completion, when known. */
+  agentType?: string | null;
   /** One-line headline: the task title, or the mailbox message's subject line. */
   title: string;
   /** Longer supporting text — the AI recap, or the message body. */
@@ -101,6 +103,7 @@ export interface CompletionLike {
   completion?: {
     status: 'done' | 'failed' | 'blocked';
     agentName: string;
+    agentType?: string | null;
     taskTitle: string;
     elapsedSec: number | null;
     reason?: string | null;
@@ -157,6 +160,14 @@ export function addTrackedIds(list: string[], ids: string[], max: number = MAX_T
   return next.length > max ? next.slice(-max) : next;
 }
 
+/** Format a completion's human name and CLI/provider without duplicating them. */
+export function formatAgentIdentity(agentName: string, agentType?: string | null): string {
+  const name = agentName.trim() || 'Agent';
+  const type = agentType?.trim();
+  if (!type || type.toLowerCase() === name.toLowerCase()) return name;
+  return `${name} · ${type}`;
+}
+
 /** Build an inbox entry from an actionable mailbox card. */
 export function mailEntry(card: MailboxCard, read: boolean): InboxEntry {
   const title =
@@ -197,6 +208,7 @@ export function completionEntry(msg: CompletionLike, read: boolean): InboxEntry 
     ts: msg.ts,
     read,
     agentName: c.agentName,
+    agentType: c.agentType,
     title: c.taskTitle,
     body: completionBody(c),
     status: c.status,
