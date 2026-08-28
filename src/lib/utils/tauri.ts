@@ -84,3 +84,34 @@ export async function restoreWindowToRelativeSize(
   }
 }
 
+/**
+ * Repairs a window that was restored with an invalid native geometry.
+ *
+ * Tauri normally creates the main window at the dimensions in tauri.conf.json,
+ * but Windows can occasionally hand a restarted dev window back as a tiny
+ * 0x0/14x14 surface. It is technically visible, yet impossible for a user to
+ * find or interact with. Do not overwrite normal user sizing; only recover
+ * sizes that are well below the app's configured minimum.
+ */
+export async function ensureWindowUsable(): Promise<void> {
+  if (!isTauriRuntime()) return;
+
+  try {
+    const win = getCurrentWindow();
+    const [size, scaleFactor] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    const logicalWidth = size.width / (scaleFactor || 1);
+    const logicalHeight = size.height / (scaleFactor || 1);
+
+    if (logicalWidth >= 640 && logicalHeight >= 480) return;
+
+    await restoreWindowToRelativeSize();
+    await win.show();
+    await win.unminimize();
+    await win.setFocus();
+  } catch (err) {
+    // Window recovery must never prevent the rest of the application from
+    // starting if the native window API is temporarily unavailable.
+    console.error('Failed to ensure a usable application window:', err);
+  }
+}
+

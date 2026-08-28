@@ -60,7 +60,7 @@ import {
 import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
 import { initMcpBridge } from '$lib/stores/mcpBridge';
-import { isTauriRuntime } from '$lib/utils/tauri';
+import { ensureWindowUsable, isTauriRuntime } from '$lib/utils/tauri';
 import { isModalOpen } from '$lib/react/useModalFocus';
 
 const ZOOM_LEVELS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
@@ -109,6 +109,10 @@ export default function App() {
     initDefaultCommands();
     if (isTauriRuntime()) {
       requestNotificationPermission();
+      // A restarted Windows dev window can occasionally be restored at a
+      // tiny native size (visible to the OS, but effectively hidden). Recover
+      // only that invalid geometry and leave normal user sizing untouched.
+      void ensureWindowUsable();
       initMcpBridge();
       // Tokens live in the OS keychain; load them into session memory so the
       // remote manager can prefill edit forms and reconnect without waiting.
