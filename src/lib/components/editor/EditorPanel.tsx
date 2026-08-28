@@ -74,11 +74,11 @@ export default function EditorPanel() {
           <button
             className={`markdown-toggle-btn${showMarkdownPreview ? ' active' : ''}`}
             onClick={() => active && setMarkdownPreview(active, !showMarkdownPreview)}
-            title={showMarkdownPreview ? 'Show Editor' : 'Show Preview'}
-            aria-label="Toggle markdown preview"
+            title={showMarkdownPreview ? 'Edit Markdown source' : 'Show Markdown preview'}
+            aria-label={showMarkdownPreview ? 'Edit Markdown source' : 'Show Markdown preview'}
           >
             {showMarkdownPreview ? <CodeIcon /> : <EyeIcon />}
-            <span>{showMarkdownPreview ? 'Show Code' : 'Show Preview'}</span>
+            <span>{showMarkdownPreview ? 'Edit Markdown' : 'Show Preview'}</span>
           </button>
         )}
       </div>
