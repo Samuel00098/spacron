@@ -1500,3 +1500,65 @@
 :root.light-theme .sketch-overlay .util-btn {
   background: #f1f3f5 !important;
 }
+
+/* Keep every tool glyph crisp and high contrast on pale sketch surfaces. */
+.sketch-overlay .tool-btn svg,
+.sketch-overlay .action-btn svg,
+.sketch-overlay .exit-btn svg,
+.sketch-overlay .toolbar-toggle svg {
+  shape-rendering: geometricPrecision;
+}
+
+.sketch-overlay .tool-btn svg *,
+.sketch-overlay .action-btn svg *,
+.sketch-overlay .exit-btn svg *,
+.sketch-overlay .toolbar-toggle svg * {
+  stroke-width: 2.35;
+  vector-effect: non-scaling-stroke;
+}
+
+:root.light-theme .sketch-overlay .tool-btn,
+:root.light-theme .sketch-overlay .action-btn,
+:root.light-theme .sketch-overlay .exit-btn {
+  color: #1f2937;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+}
+
+:root.light-theme .sketch-overlay .tool-btn:hover,
+:root.light-theme .sketch-overlay .action-btn:not(:disabled):hover,
+:root.light-theme .sketch-overlay .exit-btn:hover {
+  color: #0f172a;
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+
+:root.light-theme .sketch-overlay .tool-btn.active {
+  color: #0369a1;
+  background: #bae6fd;
+  border-color: #38bdf8;
+}
+
+.sketch-overlay .sketch-reset-dialog {
+  text-align: center;
+}
+
+.sketch-overlay .sketch-reset-dialog-header {
+  position: relative;
+  justify-content: center;
+}
+
+.sketch-overlay .sketch-reset-close {
+  position: absolute;
+  top: -2px;
+  right: 0;
+}
+
+.sketch-overlay .sketch-reset-options button {
+  align-items: center;
+  text-align: center;
+}
+
+.sketch-overlay .sketch-reset-cancel {
+  align-self: center;
+}
