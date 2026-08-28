@@ -145,6 +145,13 @@
   overflow: hidden;
 }
 
+.app-shell .left-utility-panel .drawer-body > .source-control {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .app-shell .left-utility-panel.resizing,
 .app-shell .right-utility-panel.resizing {
   user-select: none;
