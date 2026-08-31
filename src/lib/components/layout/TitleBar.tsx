@@ -2,7 +2,8 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
-import { homeScreenOpen, openQuickCapture, openSettings } from '$lib/stores/layout';
+import { homeScreenOpen, openQuickCapture, openSettings, toggleSidebar } from '$lib/stores/layout';
+import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
@@ -37,6 +38,7 @@ export default function TitleBar() {
   // this instead so they disappear on the welcome screen too.
   const homeOpen = useStore(homeScreenOpen);
   const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
+  const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
 
   async function minimize() {
     await win?.minimize();
@@ -123,7 +125,7 @@ export default function TitleBar() {
         </div>
       </div>
 
-      {/* Navigation: Home, Back, Forward */}
+      {/* Navigation: Home, sidebar, Back, Forward */}
       <div className="titlebar-nav">
         <button className="nav-btn" onClick={goHome} aria-label="Go to home" title="Home">
           <svg
@@ -140,6 +142,31 @@ export default function TitleBar() {
             <path d="M9 21V12h6v9" />
           </svg>
         </button>
+        {showWorkspaceTools && (
+          <button
+            className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
+            onClick={toggleSidebar}
+            aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+            aria-pressed={sidebarVisible}
+            title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+              <path d="M6 8h1M6 12h1M6 16h1" />
+            </svg>
+          </button>
+        )}
         <button
           className="nav-btn tb-collapse-2"
           onClick={goBack}
