@@ -3065,7 +3065,11 @@ export default function AppShell() {
               <div className="rooms-content-horizontal">
                 {renderLeftUtilityPanel()}
 
-                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${
+                  ((ambientLayout === 'gallery' || stageExpandedRoom !== null) && visibleRooms.length > 0)
+                    ? ' has-room-switcher'
+                    : ''
+                }${layoutSwitching ? ' layout-switching' : ''}${
                   (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
                   (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                     ? ` ${ambientLayout}-solo`

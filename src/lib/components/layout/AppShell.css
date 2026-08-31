@@ -379,6 +379,15 @@
   gap: 16px;
 }
 
+/* A saved project can reopen Focus with one room expanded to the full stage.
+   In that state the Split switcher is still rendered so the other open rooms
+   remain reachable. Give it an explicit second row; otherwise Focus's single
+   1fr row makes the switcher an implicit overflow row below the clipped table. */
+.app-shell .rooms-table.ambient-focus.has-room-switcher {
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
 /* The stage is a raised, rounded card — sitting flush against the left drawer
    reads as one merged slab. Inset it by the same 16px the stage uses for its own
    gap so the drawer stays visually separate.
