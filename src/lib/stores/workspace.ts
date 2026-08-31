@@ -849,10 +849,10 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       // Restore the workspace's stage for this project via the AppShell command
       // bus — mode, Split tiling and the primary room together, so switching
       // back lands on the panes that were open rather than on whatever the
-      // project you came from was showing. Defaults to Focus with no
+      // project you came from was showing. Defaults to Split with no
       // arrangement, so a project that has none doesn't inherit the other's.
       requestRoomArrangement(
-        cached.ambient ?? 'focus',
+        cached.ambient ?? 'gallery',
         cached.splitSlots ?? [],
         cached.focusedRoom ?? null,
         cached.expandedRoom ?? null,
@@ -942,7 +942,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       // so most of these ids resolve to nothing — the shell drops what isn't
       // open and falls back to the default stage, which is the right outcome.
       requestRoomArrangement(
-        persisted?.ambient ?? 'focus',
+        persisted?.ambient ?? 'gallery',
         persisted?.splitSlots ?? [],
         persisted?.focusedRoom ?? null,
         persisted?.expandedRoom ?? null,
