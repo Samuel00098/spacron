@@ -709,8 +709,8 @@ export default function ProjectHUD() {
                       }
                       await openProject();
                     }}
-                    title="Add existing folder to collection"
-                    aria-label="Add existing folder to collection"
+                    title="Add existing project to collections"
+                    aria-label="Add existing project to collections"
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <line x1="12" y1="5" x2="12" y2="19" />
