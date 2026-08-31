@@ -2,7 +2,15 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
-import { homeScreenOpen, openQuickCapture, openSettings, toggleSidebar } from '$lib/stores/layout';
+import {
+  homeScreenOpen,
+  openQuickCapture,
+  openSettings,
+  RIGHT_DRAWER_TOOLS,
+  rightDrawerToolOf,
+  setRightDrawerTool,
+  toggleSidebar,
+} from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
@@ -39,6 +47,7 @@ export default function TitleBar() {
   const homeOpen = useStore(homeScreenOpen);
   const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
+  const rightDrawerTool = useLayoutStore((s) => rightDrawerToolOf(s));
 
   async function minimize() {
     await win?.minimize();
@@ -77,6 +86,10 @@ export default function TitleBar() {
   }
   async function goForward() {
     await navigateForward();
+  }
+
+  function toggleRightSidebar() {
+    setRightDrawerTool(rightDrawerTool ? null : RIGHT_DRAWER_TOOLS[0]);
   }
 
   const controlsContainerStyle: CSSProperties = {
@@ -240,6 +253,33 @@ export default function TitleBar() {
 
         {showWorkspaceTools && (
           <>
+            {/* Right utility drawer toggle. Keep the currently selected tool
+                intact when closing and reopen the default drawer tool when
+                the drawer is summoned from the titlebar. */}
+            <button
+              className={`icon-btn sidebar-toggle-btn${rightDrawerTool ? ' active' : ''}`}
+              onClick={toggleRightSidebar}
+              aria-label={rightDrawerTool ? 'Hide right sidebar' : 'Show right sidebar'}
+              aria-pressed={rightDrawerTool !== null}
+              title={rightDrawerTool ? 'Hide right sidebar' : 'Show right sidebar'}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M15 4v16" />
+                <path d="M17 8h1M17 12h1M17 16h1" />
+              </svg>
+            </button>
+
             {/* Quick Capture button */}
             <button
               className="icon-btn tb-collapse-1"
