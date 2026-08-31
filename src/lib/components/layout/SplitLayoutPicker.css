@@ -29,6 +29,14 @@
   border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
 }
 
+:root.light-theme .split-layout-btn:hover {
+  background: #ffffff;
+}
+
+:root:not(.light-theme) .split-layout-btn:hover {
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+}
+
 .split-layout-btn.open {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent) 16%, var(--bg-active));
@@ -59,8 +67,8 @@
   min-width: 230px;
   max-width: 320px;
   padding: 6px;
-  background: var(--bg-elevated, #1a1d21);
-  border: 1px solid var(--border-elevated, #2f343b);
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: var(--shadow-lg, 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5));
   backdrop-filter: blur(12px);
@@ -132,6 +140,43 @@
 .split-preset-item.selected {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-active));
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* The picker is portaled to body, so give it an explicit light surface rather
+   than inheriting the dark elevated fallback. Opaque selected states preserve
+   contrast when the app is in translucent light mode. */
+:root.light-theme .split-layout-btn.open {
+  background: color-mix(in srgb, var(--accent) 16%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+:root.light-theme .split-layout-popover {
+  background: rgb(var(--bg-primary-rgb, 248, 248, 252));
+  border-color: color-mix(in srgb, var(--text-primary) 16%, var(--border));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+}
+
+:root.light-theme .split-preset-item:hover {
+  background: #ffffff;
+}
+
+:root:not(.light-theme) .split-preset-item:hover {
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+}
+
+:root.light-theme .split-preset-item.selected {
+  background: color-mix(in srgb, var(--accent) 12%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.split-layout-picker {
+  --split-preset-fill: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+:root.light-theme .split-layout-picker {
+  --split-preset-fill: color-mix(in srgb, var(--text-primary) 14%, transparent);
 }
 
 .split-preset-item:focus-visible {

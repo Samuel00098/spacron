@@ -15,7 +15,9 @@ interface SplitLayoutPickerProps {
 
 export function PresetThumbnail({ presetId, active = false }: { presetId: SplitPresetId; active?: boolean }) {
   const stroke = active ? 'var(--accent)' : 'currentColor';
-  const fill = active ? 'color-mix(in srgb, var(--accent) 35%, transparent)' : 'rgba(255, 255, 255, 0.12)';
+  const fill = active
+    ? 'color-mix(in srgb, var(--accent) 35%, transparent)'
+    : 'var(--split-preset-fill)';
   const strokeWidth = active ? 1.2 : 0.9;
 
   let inner = null;

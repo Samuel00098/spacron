@@ -1617,6 +1617,48 @@
   }
 }
 
+/* Light mode keeps split controls readable over wallpapers. The normal shell
+   surfaces are intentionally glassy, but selected split states need an opaque
+   face so the text and layout affordances do not disappear into the backdrop. */
+:root.light-theme .app-shell .split-switch-item {
+  background: rgb(var(--bg-primary-rgb, 248, 248, 252));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root.light-theme .app-shell .split-switch-item:hover {
+  background: color-mix(in srgb, var(--accent) 10%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+}
+
+:root.light-theme .app-shell .split-switch-item.on-stage {
+  background: color-mix(in srgb, var(--accent) 10%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+}
+
+:root.light-theme .app-shell .split-switch-item.primary {
+  background: color-mix(in srgb, var(--accent) 16%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+}
+
+:root.light-theme .app-shell .split-target-actions,
+:root.light-theme .app-shell .split-switcher-count {
+  background: rgb(var(--bg-secondary-rgb, 240, 240, 246));
+}
+
+:root.light-theme .app-shell .split-target-btn:hover {
+  background: color-mix(in srgb, var(--accent) 8%, rgb(var(--bg-secondary-rgb, 240, 240, 246)));
+}
+
+:root.light-theme .app-shell .split-target-btn.active,
+:root.light-theme .app-shell .split-target-btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, rgb(var(--bg-secondary-rgb, 240, 240, 246)));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+
+:root.light-theme .app-shell .ambient-switch-btn.active,
+:root.light-theme .app-shell .svt-btn.svt-active {
+  background: color-mix(in srgb, var(--accent) 16%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+
 .app-shell .minimized-room-stack,
 .app-shell .rooms-table > .minimized-room-stack {
   position: fixed;
