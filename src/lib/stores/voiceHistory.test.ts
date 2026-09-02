@@ -59,7 +59,9 @@ describe('retention', () => {
   });
 
   it('drops entries older than the window and keeps the rest', () => {
-    const now = Date.UTC(2026, 7, 26, 12);
+    // Anchored to the real clock: the retention subscriber and every append
+    // prune with Date.now(), so a frozen date would age out on its own.
+    const now = Date.now();
     recordTranscription({ text: 'ancient', target: 'field', ts: now - 40 * DAY });
     recordTranscription({ text: 'recent', target: 'field', ts: now - 2 * DAY });
     voiceHistoryRetention.set('30d');
@@ -68,7 +70,7 @@ describe('retention', () => {
   });
 
   it('ages a conversation by when it ended, not when it started', () => {
-    const now = Date.UTC(2026, 7, 26, 12);
+    const now = Date.now();
     // A long call that began outside the window but finished inside it.
     conversationHistory.set([
       {
