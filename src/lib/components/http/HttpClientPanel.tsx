@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react';
 import {
-  savedRequests, activeRequestId, httpResponse, httpLoading, httpError,
+  savedRequests, httpResponse, httpLoading, httpError,
   createRequest, deleteRequest, updateRequest, duplicateRequest, sendRequest,
-  type HttpRequest, type HttpMethod, type BodyType,
+  type HttpRequest, type HttpResponse, type HttpMethod, type BodyType,
 } from '$lib/stores/http';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
+import { get } from '$lib/stores/storeCompat';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
@@ -42,15 +44,15 @@ function formatSize(bytes: number) {
 
 export default function HttpClientPanel() {
   const requests = useStore(savedRequests);
-  const activeId = useStore(activeRequestId);
-  const response = useStore(httpResponse);
+  const [activeId, setActiveId] = useProjectPanelState<string | null>('http.activeRequestId', null);
+  const [response, setResponse] = useProjectPanelState<HttpResponse | null>('http.response', null);
   const loading = useStore(httpLoading);
-  const error = useStore(httpError);
+  const [error, setError] = useProjectPanelState<string | null>('http.error', null);
   const project = useStore(activeProject);
 
-  const [activeTab, setActiveTab] = useState<'params' | 'headers' | 'body' | 'auth'>('headers');
-  const [responseTab, setResponseTab] = useState<'body' | 'headers'>('body');
-  const [prettyJson, setPrettyJson] = useState(true);
+  const [activeTab, setActiveTab] = useProjectPanelState<'params' | 'headers' | 'body' | 'auth'>('http.requestTab', 'headers');
+  const [responseTab, setResponseTab] = useProjectPanelState<'body' | 'headers'>('http.responseTab', 'body');
+  const [prettyJson, setPrettyJson] = useProjectPanelState('http.prettyJson', true);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const projectRequests = useMemo(
@@ -59,9 +61,18 @@ export default function HttpClientPanel() {
   );
 
   const activeReq = useMemo(
-    () => requests.find((r) => r.id === activeId) ?? null,
-    [requests, activeId],
+    () => projectRequests.find((r) => r.id === activeId) ?? null,
+    [projectRequests, activeId],
   );
+
+  async function runActiveRequest() {
+    if (!activeReq) return;
+    setResponse(null);
+    setError(null);
+    await sendRequest(activeReq);
+    setResponse(get(httpResponse));
+    setError(get(httpError));
+  }
 
   function patch(p: Partial<HttpRequest>) {
     if (activeReq) updateRequest(activeReq.id, p);
@@ -108,26 +119,26 @@ export default function HttpClientPanel() {
       <div className="req-sidebar">
         <div className="req-sidebar-header">
           <span className="req-sidebar-title">Requests</span>
-          <button className="req-add-btn" onClick={() => createRequest(project?.id ?? '')} title="New request">
+          <button className="req-add-btn" onClick={() => setActiveId(createRequest(project?.id ?? '').id)} title="New request">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
           </button>
         </div>
         <div className="req-list">
           {projectRequests.map((req) => (
             <div className={`req-item${req.id === activeId ? ' active' : ''}`} key={req.id}>
-              <button className="req-item-btn" onClick={() => activeRequestId.set(req.id)}>
+              <button className="req-item-btn" onClick={() => setActiveId(req.id)}>
                 <span className="method-badge" style={{ color: METHOD_COLORS[req.method] }}>{req.method}</span>
                 <span className="req-item-name">{req.name || 'Untitled'}</span>
               </button>
               <div className="req-item-actions">
                 {deleteConfirm === req.id ? (
                   <>
-                    <button className="req-del-yes" onClick={() => { deleteRequest(req.id); setDeleteConfirm(null); }}>Del</button>
+                    <button className="req-del-yes" onClick={() => { deleteRequest(req.id); if (activeId === req.id) setActiveId(null); setDeleteConfirm(null); }}>Del</button>
                     <button className="req-del-no" onClick={() => setDeleteConfirm(null)}>✕</button>
                   </>
                 ) : (
                   <>
-                    <button className="req-action-btn" onClick={() => duplicateRequest(req.id)} title="Duplicate">
+                    <button className="req-action-btn" onClick={() => { const copy = duplicateRequest(req.id); if (copy) setActiveId(copy.id); }} title="Duplicate">
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                     </button>
                     <button className="req-action-btn" onClick={() => setDeleteConfirm(req.id)} title="Delete">
@@ -164,7 +175,7 @@ export default function HttpClientPanel() {
                 <Dropdown options={methodOptions} value={activeReq.method} onChange={(val) => patch({ method: val as HttpMethod })} ariaLabel="HTTP Method" />
               </div>
               <input className="url-input" type="text" value={activeReq.url} onChange={(e) => patch({ url: e.target.value })} placeholder="https://api.example.com/endpoint" spellCheck={false} />
-              <button className="send-btn" onClick={() => sendRequest(activeReq!)} disabled={loading}>
+              <button className="send-btn" onClick={() => void runActiveRequest()} disabled={loading}>
                 {loading ? (
                   <svg className="spin-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><polyline points="21 3 21 8 16 8" /></svg>
                 ) : (
@@ -284,7 +295,7 @@ export default function HttpClientPanel() {
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
             <p>Select a request or create a new one</p>
-            <button className="create-first-btn" onClick={() => createRequest(project?.id ?? '')}>+ New Request</button>
+            <button className="create-first-btn" onClick={() => setActiveId(createRequest(project?.id ?? '').id)}>+ New Request</button>
           </div>
         )}
       </div>

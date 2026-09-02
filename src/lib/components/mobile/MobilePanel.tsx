@@ -13,6 +13,7 @@ import {
   type StreamSideChoice,
 } from './streamResolution';
 import { sendStreamKey, sendStreamText, useStreamTouch, type FrameDims } from './useStreamInput';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import {
   advanceScroll,
   createWheelGestures,
@@ -156,7 +157,7 @@ function EmptyState({ title, body }: { title: string; body: string }) {
 }
 
 export default function MobilePanel() {
-  const [tab, setTab] = useState<MobileTab>('android');
+  const [tab, setTab] = useProjectPanelState<MobileTab>('mobile.tab', 'android');
   const [platform, setPlatform] = useState('');
 
   // ── Android ────────────────────────────────────────────────────────────
@@ -166,13 +167,13 @@ export default function MobilePanel() {
   const [selectedSerial, setSelectedSerial] = useState(
     () => localStorage.getItem('spacron.mobile.serial') ?? '',
   );
-  const [avdName, setAvdName] = useState('');
+  const [avdName, setAvdName] = useProjectPanelState('mobile.avdName', '');
   const [frame, setFrame] = useState<AndroidFrame | null>(null);
   const [frameError, setFrameError] = useState<string | null>(null);
   const [booting, setBooting] = useState(false);
   const [devicesLoading, setDevicesLoading] = useState(false);
-  const [rotation, setRotation] = useState(0);
-  const [text, setText] = useState('');
+  const [rotation, setRotation] = useProjectPanelState('mobile.rotation', 0);
+  const [text, setText] = useProjectPanelState('mobile.androidText', '');
   // Bumping this restarts the poll loop and forces an immediate capture —
   // used to redraw right after an input injection instead of waiting a tick.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -197,12 +198,12 @@ export default function MobilePanel() {
     parseStreamSideChoice(localStorage.getItem('spacron.mobile.streamSide')),
   );
   const [iosStreamMode, setIosStreamMode] = useState<'stream' | 'poll'>('stream');
-  const [iosText, setIosText] = useState('');
-  const [iosOrientation, setIosOrientation] = useState(0);
+  const [iosText, setIosText] = useProjectPanelState('mobile.iosText', '');
+  const [iosOrientation, setIosOrientation] = useProjectPanelState('mobile.iosOrientation', 0);
 
   // ── iOS ────────────────────────────────────────────────────────────────
   const [sims, setSims] = useState<IosSimulator[]>([]);
-  const [iosUdid, setIosUdid] = useState('');
+  const [iosUdid, setIosUdid] = useProjectPanelState('mobile.iosUdid', '');
   const [iosShot, setIosShot] = useState<string | null>(null);
   const [iosShotDims, setIosShotDims] = useState<{ width: number; height: number } | null>(null);
   const [iosError, setIosError] = useState<string | null>(null);

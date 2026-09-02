@@ -17,8 +17,8 @@ import { activeProjectId, activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { openFile } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
-import { reviewSelectedFile } from '$lib/stores/reviewSelectedFile';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import './ReviewPanel.css';
 
 interface ChangedFile {
@@ -206,7 +206,7 @@ function makeSplitRows(lines: DiffLine[]): SplitRow[] {
 export default function ReviewPanel() {
   const projectId = useStore(activeProjectId);
   const project = useStore(activeProject);
-  const selectedFilePath = useStore(reviewSelectedFile);
+  const [selectedFilePath, setSelectedFilePath] = useProjectPanelState<string | null>('review.selectedFile', null);
 
   const [fileDiff, setFileDiff] = useState<string | null>(null);
   const [isLoadingDiff, setIsLoadingDiff] = useState(false);
@@ -316,13 +316,12 @@ export default function ReviewPanel() {
     setTotalAdditions(0);
     setTotalDeletions(0);
     setListError(null);
-    reviewSelectedFile.set(null);
     if (projectId) void fetchStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   function selectFile(filePath: string) {
-    reviewSelectedFile.set(selectedFilePath === filePath ? null : filePath);
+    setSelectedFilePath(selectedFilePath === filePath ? null : filePath);
   }
 
   async function openFileInEditor(path: string, event: ReactMouseEvent) {
@@ -339,7 +338,7 @@ export default function ReviewPanel() {
     try {
       await invoke('workspace_git_discard_file', { projectId: pid, filePath: file.path });
       showToast(`Discarded changes for ${file.name}`, 'success');
-      if (selectedFilePath === file.path) reviewSelectedFile.set(null);
+      if (selectedFilePath === file.path) setSelectedFilePath(null);
       await fetchStatus();
     } catch (err) {
       showToast(`Failed to discard changes: ${err}`, 'error');

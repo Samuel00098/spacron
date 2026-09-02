@@ -111,13 +111,14 @@ export function updateRequest(id: string, patch: Partial<HttpRequest>) {
   savedRequests.update((all) => all.map((r) => r.id === id ? { ...r, ...patch } : r));
 }
 
-export function duplicateRequest(id: string) {
+export function duplicateRequest(id: string): HttpRequest | undefined {
   const all = get(savedRequests);
   const orig = all.find((r) => r.id === id);
-  if (!orig) return;
+  if (!orig) return undefined;
   const copy = { ...orig, id: makeId(), name: `${orig.name} (copy)` };
   savedRequests.update((a) => [...a, copy]);
   activeRequestId.set(copy.id);
+  return copy;
 }
 
 function isPrivateUrl(url: string): boolean {

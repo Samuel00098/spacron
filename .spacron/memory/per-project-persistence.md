@@ -82,3 +82,17 @@ later unconditional write in the same function before suspecting the save.
 
 Related: [[split-maximize-zoom-layout]]
 [[preview-room-is-persistent]]
+
+## Panel contents that live in React state
+
+Editor files, terminals, preview tabs and Sketch documents already have their
+own project-aware stores. Smaller panel controls used to live only in component
+`useState`, so unmounting a room while another project was active discarded the
+view even though the room arrangement itself came back correctly.
+
+Durable in-session panel controls now use `useProjectPanelState` in
+`src/lib/react/useProjectPanelState.ts`. Its stores are keyed by active project
+plus a stable panel field name, which keeps Review selection, HTTP selection and
+sub-tabs, database query/results, Toolbox inputs, responsive-preview controls,
+and Mobile drafts isolated while switching projects. Do not put loading flags,
+confirmation dialogs, live stream frames or other in-flight state there.

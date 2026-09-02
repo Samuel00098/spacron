@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
@@ -8,6 +8,7 @@ import { showTerminal } from '$lib/stores/layout';
 import { requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import { useStore } from '$lib/react/useStore';
 import { useAction } from '$lib/react/useAction';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './EmbeddedPanel.css';
 
@@ -22,17 +23,17 @@ export default function EmbeddedPanel() {
   const project = useStore(activeProject);
   const modeTabsRef = useAction<HTMLDivElement>(clampHorizontalScroll);
 
-  const [mode, setMode] = useState<EmbeddedMode>('arduino');
+  const [mode, setMode] = useProjectPanelState<EmbeddedMode>('embedded.mode', 'arduino');
 
-  const [arduinoFqbn, setArduinoFqbn] = useState('arduino:avr:uno');
-  const [arduinoPort, setArduinoPort] = useState('COM3');
-  const [arduinoBaud, setArduinoBaud] = useState('115200');
+  const [arduinoFqbn, setArduinoFqbn] = useProjectPanelState('embedded.arduinoFqbn', 'arduino:avr:uno');
+  const [arduinoPort, setArduinoPort] = useProjectPanelState('embedded.arduinoPort', 'COM3');
+  const [arduinoBaud, setArduinoBaud] = useProjectPanelState('embedded.arduinoBaud', '115200');
 
-  const [platformioBoard, setPlatformioBoard] = useState('uno');
+  const [platformioBoard, setPlatformioBoard] = useProjectPanelState('embedded.platformioBoard', 'uno');
 
-  const [piUser, setPiUser] = useState('pi');
-  const [piHost, setPiHost] = useState('raspberrypi.local');
-  const [piPath, setPiPath] = useState('~/spacron-project');
+  const [piUser, setPiUser] = useProjectPanelState('embedded.piUser', 'pi');
+  const [piHost, setPiHost] = useProjectPanelState('embedded.piHost', 'raspberrypi.local');
+  const [piPath, setPiPath] = useProjectPanelState('embedded.piPath', '~/spacron-project');
 
   const modeTitle =
     mode === 'arduino' ? 'Arduino CLI' : mode === 'platformio' ? 'PlatformIO' : 'Raspberry Pi';

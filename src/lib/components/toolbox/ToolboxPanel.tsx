@@ -3,6 +3,7 @@ import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.t
 import EmbeddedPanel from './EmbeddedPanel.tsx';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './ToolboxPanel.css';
 
@@ -45,10 +46,10 @@ const indentOptions: DropdownOption[] = [
 export default function ToolboxPanel() {
   const tabsRef = useAction<HTMLDivElement>(clampHorizontalScroll);
 
-  const [activeTab, setActiveTab] = useState<UtilityTab>('jwt');
+  const [activeTab, setActiveTab] = useProjectPanelState<UtilityTab>('toolbox.activeTab', 'jwt');
 
   // JWT state
-  const [jwtInput, setJwtInput] = useState('');
+  const [jwtInput, setJwtInput] = useProjectPanelState('toolbox.jwtInput', '');
   const jwtHeader = useMemo(() => {
     try {
       if (!jwtInput.trim()) return '';
@@ -71,10 +72,10 @@ export default function ToolboxPanel() {
   }, [jwtInput]);
 
   // JSON state
-  const [jsonInput, setJsonInput] = useState('');
-  const [jsonIndent, setJsonIndent] = useState('2');
-  const [jsonOutput, setJsonOutput] = useState('');
-  const [jsonError, setJsonError] = useState('');
+  const [jsonInput, setJsonInput] = useProjectPanelState('toolbox.jsonInput', '');
+  const [jsonIndent, setJsonIndent] = useProjectPanelState('toolbox.jsonIndent', '2');
+  const [jsonOutput, setJsonOutput] = useProjectPanelState('toolbox.jsonOutput', '');
+  const [jsonError, setJsonError] = useProjectPanelState('toolbox.jsonError', '');
 
   function formatJsonWith(input: string, indent: string) {
     try {
@@ -124,10 +125,10 @@ export default function ToolboxPanel() {
   }
 
   // Regex state
-  const [regexPattern, setRegexPattern] = useState('([a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,6})');
-  const [regexFlags, setRegexFlags] = useState('g');
-  const [regexText, setRegexText] = useState('Contact us at support@spacron.dev or admin@spacron.dev.');
-  const [regexReplace, setRegexReplace] = useState('[email]');
+  const [regexPattern, setRegexPattern] = useProjectPanelState('toolbox.regexPattern', '([a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,6})');
+  const [regexFlags, setRegexFlags] = useProjectPanelState('toolbox.regexFlags', 'g');
+  const [regexText, setRegexText] = useProjectPanelState('toolbox.regexText', 'Contact us at support@spacron.dev or admin@spacron.dev.');
+  const [regexReplace, setRegexReplace] = useProjectPanelState('toolbox.regexReplace', '[email]');
 
   const regexMatches = useMemo(() => {
     try {
@@ -163,8 +164,8 @@ export default function ToolboxPanel() {
   }, [regexPattern, regexFlags, regexText, regexReplace]);
 
   // Epoch state
-  const [epochInput, setEpochInput] = useState(Math.floor(Date.now() / 1000).toString());
-  const [dateInput, setDateInput] = useState(new Date().toISOString());
+  const [epochInput, setEpochInput] = useProjectPanelState('toolbox.epochInput', () => Math.floor(Date.now() / 1000).toString());
+  const [dateInput, setDateInput] = useProjectPanelState('toolbox.dateInput', () => new Date().toISOString());
   const [currentEpoch, setCurrentEpoch] = useState(Math.floor(Date.now() / 1000));
 
   useEffect(() => {
@@ -209,8 +210,8 @@ export default function ToolboxPanel() {
   }
 
   // Base64 & URL state
-  const [coderInput, setCoderInput] = useState('');
-  const [coderOutput, setCoderOutput] = useState('');
+  const [coderInput, setCoderInput] = useProjectPanelState('toolbox.coderInput', '');
+  const [coderOutput, setCoderOutput] = useProjectPanelState('toolbox.coderOutput', '');
 
   function coderAction(action: 'b64e' | 'b64d' | 'urle' | 'urld') {
     try {

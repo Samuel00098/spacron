@@ -61,6 +61,7 @@ import {
 import { promptBarInput, promptBarImage, focusPromptBar } from '$lib/stores/terminal';
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import { activeProject } from '$lib/stores/workspace';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 
 
 import './PreviewPanel.css';
@@ -339,9 +340,9 @@ export default function PreviewPanel() {
   // Responsive/device mode. The viewport is a plain rectangle of an exact
   // CSS-pixel size (what every browser's responsive mode does) — the page sees a
   // real 390px-wide viewport, so its media queries and vh units behave for real.
-  const [deviceMode, setDeviceMode] = useState(false);
-  const [viewportSize, setViewportSize] = useState({ width: DEFAULT_VIEWPORT.width, height: DEFAULT_VIEWPORT.height });
-  const [zoomMode, setZoomMode] = useState<ViewportZoom>('fit');
+  const [deviceMode, setDeviceMode] = useProjectPanelState('preview.deviceMode', false);
+  const [viewportSize, setViewportSize] = useProjectPanelState('preview.viewportSize', { width: DEFAULT_VIEWPORT.width, height: DEFAULT_VIEWPORT.height });
+  const [zoomMode, setZoomMode] = useProjectPanelState<ViewportZoom>('preview.zoomMode', 'fit');
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   // Scale is frozen for the duration of a hand-resize: with 'fit' active,
@@ -353,10 +354,10 @@ export default function PreviewPanel() {
   const [heightDraft, setHeightDraft] = useState<string | null>(null);
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo | null>(null);
   const consoleLogs = useStore(previewConsoleLogs);
-  const [showConsole, setShowConsole] = useState(false);
-  const [consoleFilter, setConsoleFilter] = useState<ConsoleFilter>('all');
-  const [consoleQuery, setConsoleQuery] = useState('');
-  const [preserveConsoleLog, setPreserveConsoleLog] = useState(false);
+  const [showConsole, setShowConsole] = useProjectPanelState('preview.showConsole', false);
+  const [consoleFilter, setConsoleFilter] = useProjectPanelState<ConsoleFilter>('preview.consoleFilter', 'all');
+  const [consoleQuery, setConsoleQuery] = useProjectPanelState('preview.consoleQuery', '');
+  const [preserveConsoleLog, setPreserveConsoleLog] = useProjectPanelState('preview.preserveConsoleLog', false);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
 
   // One slow-load timer per tab: a single shared timer meant navigating in one

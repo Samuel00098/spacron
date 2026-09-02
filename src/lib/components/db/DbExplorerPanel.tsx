@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import './DbExplorerPanel.css';
 
@@ -38,11 +39,11 @@ function isReadOnlyQuery(sql: string): boolean {
 export default function DbExplorerPanel() {
   const project = useStore(activeProject);
 
-  const [dbPath, setDbPath] = useState('');
-  const [tables, setTables] = useState<string[]>([]);
-  const [query, setQuery] = useState('SELECT * FROM sqlite_master WHERE type="table";');
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [dbPath, setDbPath] = useProjectPanelState('db.path', '');
+  const [tables, setTables] = useProjectPanelState<string[]>('db.tables', []);
+  const [query, setQuery] = useProjectPanelState('db.query', 'SELECT * FROM sqlite_master WHERE type="table";');
+  const [result, setResult] = useProjectPanelState<QueryResult | null>('db.result', null);
+  const [errorMsg, setErrorMsg] = useProjectPanelState('db.error', '');
   const [loading, setLoading] = useState(false);
 
   async function loadTables(path: string) {
