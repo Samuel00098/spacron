@@ -33,6 +33,20 @@ describe('persisted stage arrangement', () => {
     expect(state?.splitPresets).toEqual({ 3: '3-left-master', 2: '2-rows' });
   });
 
+  it('restores minimized rooms, switcher order, and the development terminal', () => {
+    const state = sanitise({
+      openFiles: [],
+      expandedPaths: [],
+      minimizedRooms: ['editor', 'agent:12', '../bad', 42],
+      roomOrder: ['preview', 'terminal', '../bad'],
+      devTerminalOpen: true,
+    });
+
+    expect(state?.minimizedRooms).toEqual(['editor', 'agent:12']);
+    expect(state?.roomOrder).toEqual(['preview', 'terminal']);
+    expect(state?.devTerminalOpen).toBe(true);
+  });
+
   it('filters invalid preset IDs and non-numeric keys from splitPresets', () => {
     const state = sanitise({
       openFiles: [],

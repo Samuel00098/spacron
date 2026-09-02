@@ -956,6 +956,9 @@ export default function AppShell() {
         isKnownRoomId(layoutCommand.focused) ? layoutCommand.focused : null,
         isKnownRoomId(layoutCommand.expanded) ? layoutCommand.expanded : null,
         layoutCommand.presets,
+        layoutCommand.minimized?.filter(isKnownRoomId),
+        layoutCommand.roomOrder?.filter(isKnownRoomId),
+        layoutCommand.devTerminalOpen ?? false,
       );
       return;
     }
@@ -1027,9 +1030,12 @@ export default function AppShell() {
       splitSlots,
       expandedRoom,
       splitPresets,
+      minimizedRooms: Array.from(minimizedRooms),
+      roomOrder,
+      devTerminalOpen: devTerminalRoomOpen,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots, expandedRoom, splitPresets]);
+  }, [ambientLayout, openRooms, activeRoom, minimizedRooms, allTerminalSessions, splitSlots, expandedRoom, splitPresets, roomOrder, devTerminalRoomOpen]);
 
   // Preview mode is built around the preview browser; if it gets closed (its X),
   // the mode has nothing to show, so fall back to Focus.
@@ -2654,6 +2660,9 @@ export default function AppShell() {
     focused: RoomId | null,
     expanded: RoomId | null = null,
     presets?: Record<number, string>,
+    minimized: RoomId[] = [],
+    savedRoomOrder: RoomId[] = [],
+    devTerminalOpen = false,
   ) {
     // Collapse to the two modes that actually exist, mirroring the rule inside
     // `switchAmbientLayout`. Seeding `perLayoutState` under a name it will not
@@ -2663,7 +2672,7 @@ export default function AppShell() {
 
     perLayoutState.current[target] = {
       focused,
-      minimized: perLayoutState.current[target].minimized,
+      minimized: new Set(minimized),
     };
     // Kept even when landing in Focus: it is this project's Split arrangement,
     // and it should still be there when they switch back to Split.
@@ -2678,6 +2687,9 @@ export default function AppShell() {
       }
       setSplitPresets(validated);
     }
+    setMinimizedRooms(new Set(minimized));
+    setRoomOrder(savedRoomOrder.length > 0 ? savedRoomOrder : ['workspace', 'terminal']);
+    setDevTerminalRoomOpen(devTerminalOpen);
     setFocusedRoom(focused);
     // Only when the mode is really changing — `switchAmbientLayout` early-returns
     // on an unchanged one, which would leave the two setters above as the whole

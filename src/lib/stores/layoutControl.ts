@@ -28,6 +28,9 @@ export type LayoutCommand =
       focused: string | null;
       expanded?: string | null;
       presets?: Record<number, string>;
+      minimized?: string[];
+      roomOrder?: string[];
+      devTerminalOpen?: boolean;
     }
   | { nonce: number; type: 'room'; op: RoomOp; room: string };
 
@@ -50,6 +53,12 @@ export interface LayoutSnapshot {
   expandedRoom?: string | null;
   /** Active preset layouts mapped by pane count (2, 3, 4). */
   splitPresets?: Record<number, string>;
+  /** Rooms minimized in the current arrangement. */
+  minimizedRooms?: string[];
+  /** The order used by the room switcher. */
+  roomOrder?: string[];
+  /** The development terminal is a shell-owned room, not a LayoutState flag. */
+  devTerminalOpen?: boolean;
 }
 
 export const layoutControlCommand = writable<LayoutCommand | null>(null);
@@ -77,6 +86,9 @@ export function requestRoomArrangement(
   focused: string | null,
   expanded?: string | null,
   presets?: Record<number, string>,
+  minimized?: string[],
+  roomOrder?: string[],
+  devTerminalOpen?: boolean,
 ): void {
   layoutControlCommand.set({
     nonce: ++commandNonce,
@@ -86,6 +98,9 @@ export function requestRoomArrangement(
     focused,
     expanded: expanded ?? null,
     presets,
+    minimized,
+    roomOrder,
+    devTerminalOpen,
   });
 }
 

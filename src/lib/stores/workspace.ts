@@ -214,6 +214,12 @@ interface ProjectWorkspaceState {
   expandedRoom?: string | null;
   /** Active preset layouts mapped by pane count (2, 3, 4). */
   splitPresets?: Record<number, string>;
+  /** Rooms minimized in the current arrangement. */
+  minimizedRooms: string[];
+  /** Room switcher order for this project. */
+  roomOrder: string[];
+  /** The development terminal is a shell-owned room, not a LayoutState flag. */
+  devTerminalOpen: boolean;
   layout: {
     activeView: string;
     editorVisible: boolean;
@@ -224,6 +230,12 @@ interface ProjectWorkspaceState {
     orchestratorVisible: boolean;
     dbVisible: boolean;
     toolboxVisible: boolean;
+    fleetVisible: boolean;
+    containersVisible: boolean;
+    envVisible: boolean;
+    youtubeVisible: boolean;
+    mobileVisible: boolean;
+    sketchVisible: boolean;
     /** The Terminal room's own open/closed state. Not part of `LayoutState` —
      *  it is its own store — but it is a room like any other, so it has to be
      *  saved per project or closing it can't survive a switch. */
@@ -237,6 +249,8 @@ interface ProjectWorkspaceState {
     sidebarVisible: boolean;
     sidebarWidth: number;
     sidebarTab: string;
+    leftPanelWidth: number;
+    rightDrawerWidth: number;
   };
 }
 
@@ -356,6 +370,9 @@ interface PersistedProjectState {
   focusedRoom?: string | null;
   expandedRoom?: string | null;
   splitPresets?: Record<number, string>;
+  minimizedRooms?: string[];
+  roomOrder?: string[];
+  devTerminalOpen?: boolean;
   layout?: {
     activeView: string;
     editorVisible: boolean;
@@ -366,6 +383,12 @@ interface PersistedProjectState {
     orchestratorVisible?: boolean;
     dbVisible?: boolean;
     toolboxVisible?: boolean;
+    fleetVisible?: boolean;
+    containersVisible?: boolean;
+    envVisible?: boolean;
+    youtubeVisible?: boolean;
+    mobileVisible?: boolean;
+    sketchVisible?: boolean;
     /** The Terminal room's open/closed state — see the note on the cache type.
      *  Absent in state saved before it was per-project; treated as open then,
      *  which is what that build always did. */
@@ -385,6 +408,8 @@ interface PersistedProjectState {
     sidebarVisible: boolean;
     sidebarWidth: number;
     sidebarTab: string;
+    leftPanelWidth?: number;
+    rightDrawerWidth?: number;
   };
   preview?: {
     tabs: PreviewTab[];
@@ -446,6 +471,9 @@ function saveProjectStateToStorage(projectId: string) {
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
     splitPresets: get(layoutSnapshot).splitPresets,
+    minimizedRooms: (get(layoutSnapshot).minimizedRooms ?? []).slice(0, MAX_SPLIT_SLOTS),
+    roomOrder: (get(layoutSnapshot).roomOrder ?? []).slice(0, MAX_SPLIT_SLOTS + 16),
+    devTerminalOpen: get(layoutSnapshot).devTerminalOpen ?? false,
     layout: {
       activeView: currentLayout.activeView,
       editorVisible: currentLayout.editorVisible,
@@ -456,6 +484,12 @@ function saveProjectStateToStorage(projectId: string) {
       orchestratorVisible: currentLayout.orchestratorVisible,
       dbVisible: currentLayout.dbVisible,
       toolboxVisible: currentLayout.toolboxVisible,
+      fleetVisible: currentLayout.fleetVisible,
+      containersVisible: currentLayout.containersVisible,
+      envVisible: currentLayout.envVisible,
+      youtubeVisible: currentLayout.youtubeVisible,
+      mobileVisible: currentLayout.mobileVisible,
+      sketchVisible: currentLayout.sketchVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: currentLayout.lastAuxView,
@@ -465,6 +499,8 @@ function saveProjectStateToStorage(projectId: string) {
       sidebarVisible: currentLayout.sidebarVisible,
       sidebarWidth: currentLayout.sidebarWidth,
       sidebarTab: currentLayout.sidebarTab,
+      leftPanelWidth: currentLayout.leftPanelWidth,
+      rightDrawerWidth: currentLayout.rightDrawerWidth,
     },
     preview: {
       tabs: get(previewTabs),
@@ -579,6 +615,14 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   const focusedRoom = isSafeRoomId(r.focusedRoom) ? r.focusedRoom : null;
   const expandedRoom = isSafeRoomId(r.expandedRoom) ? r.expandedRoom : null;
 
+  const minimizedRooms = Array.isArray(r.minimizedRooms)
+    ? (r.minimizedRooms as unknown[]).filter(isSafeRoomId).slice(0, MAX_SPLIT_SLOTS)
+    : undefined;
+  const roomOrder = Array.isArray(r.roomOrder)
+    ? (r.roomOrder as unknown[]).filter(isSafeRoomId).slice(0, MAX_SPLIT_SLOTS + 16)
+    : undefined;
+  const devTerminalOpen = r.devTerminalOpen === undefined ? undefined : Boolean(r.devTerminalOpen);
+
   let splitPresets: Record<number, string> | undefined;
   if (r.splitPresets && typeof r.splitPresets === 'object' && !Array.isArray(r.splitPresets)) {
     const entries = Object.entries(r.splitPresets as Record<string, unknown>)
@@ -603,6 +647,12 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       orchestratorVisible: Boolean(l.orchestratorVisible),
       dbVisible: Boolean(l.dbVisible),
       toolboxVisible: Boolean(l.toolboxVisible),
+      fleetVisible: Boolean(l.fleetVisible),
+      containersVisible: Boolean(l.containersVisible),
+      envVisible: Boolean(l.envVisible),
+      youtubeVisible: Boolean(l.youtubeVisible),
+      mobileVisible: Boolean(l.mobileVisible),
+      sketchVisible: Boolean(l.sketchVisible),
       terminalRoomOpen: l.terminalRoomOpen === undefined ? true : Boolean(l.terminalRoomOpen),
       rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
       lastAuxView: typeof l.lastAuxView === 'string' ? l.lastAuxView : undefined,
@@ -612,6 +662,8 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       sidebarVisible: Boolean(l.sidebarVisible ?? true),
       sidebarWidth: typeof l.sidebarWidth === 'number' ? Math.max(100, Math.min(600, l.sidebarWidth)) : 310,
       sidebarTab: typeof l.sidebarTab === 'string' ? l.sidebarTab : 'files',
+      leftPanelWidth: typeof l.leftPanelWidth === 'number' ? Math.max(180, Math.min(600, l.leftPanelWidth)) : 310,
+      rightDrawerWidth: typeof l.rightDrawerWidth === 'number' ? Math.max(280, Math.min(720, l.rightDrawerWidth)) : 380,
     };
   }
 
@@ -644,7 +696,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, splitPresets, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, splitPresets, minimizedRooms, roomOrder, devTerminalOpen, layout, preview };
 }
 
 /**
@@ -701,6 +753,9 @@ export function saveProjectState(projectId: string) {
     focusedRoom: focusedRoomOf(get(layoutSnapshot)),
     expandedRoom: get(layoutSnapshot).expandedRoom ?? null,
     splitPresets: get(layoutSnapshot).splitPresets,
+    minimizedRooms: get(layoutSnapshot).minimizedRooms ?? [],
+    roomOrder: get(layoutSnapshot).roomOrder ?? [],
+    devTerminalOpen: get(layoutSnapshot).devTerminalOpen ?? false,
     layout: {
       activeView: get(layout).activeView,
       editorVisible: get(layout).editorVisible,
@@ -711,6 +766,12 @@ export function saveProjectState(projectId: string) {
       orchestratorVisible: get(layout).orchestratorVisible,
       dbVisible: get(layout).dbVisible,
       toolboxVisible: get(layout).toolboxVisible,
+      fleetVisible: get(layout).fleetVisible,
+      containersVisible: get(layout).containersVisible,
+      envVisible: get(layout).envVisible,
+      youtubeVisible: get(layout).youtubeVisible,
+      mobileVisible: get(layout).mobileVisible,
+      sketchVisible: get(layout).sketchVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       lastAuxView: get(layout).lastAuxView,
@@ -720,6 +781,8 @@ export function saveProjectState(projectId: string) {
       sidebarVisible: get(layout).sidebarVisible,
       sidebarWidth: get(layout).sidebarWidth,
       sidebarTab: get(layout).sidebarTab,
+      leftPanelWidth: get(layout).leftPanelWidth,
+      rightDrawerWidth: get(layout).rightDrawerWidth,
     },
   });
   // Also persist to localStorage so state survives app close
@@ -825,6 +888,12 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         orchestratorVisible: cached.layout.orchestratorVisible,
         dbVisible: cached.layout.dbVisible,
         toolboxVisible: cached.layout.toolboxVisible,
+        fleetVisible: cached.layout.fleetVisible,
+        containersVisible: cached.layout.containersVisible,
+        envVisible: cached.layout.envVisible,
+        youtubeVisible: cached.layout.youtubeVisible,
+        mobileVisible: cached.layout.mobileVisible,
+        sketchVisible: cached.layout.sketchVisible,
         lastAuxView: sanitiseActiveView(cached.layout.lastAuxView, l.lastAuxView),
         editorSplitPreview: cached.layout.editorSplitPreview,
         auxPanelWidth: cached.layout.auxPanelWidth,
@@ -832,6 +901,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         sidebarVisible: cached.layout.sidebarVisible,
         sidebarWidth: cached.layout.sidebarWidth,
         sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
+        leftPanelWidth: cached.layout.leftPanelWidth,
+        rightDrawerWidth: cached.layout.rightDrawerWidth,
       }));
 
       // The right utility drawer is per-project too: a tool opened over one
@@ -857,6 +928,9 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         cached.focusedRoom ?? null,
         cached.expandedRoom ?? null,
         cached.splitPresets,
+        cached.minimizedRooms,
+        cached.roomOrder,
+        cached.devTerminalOpen,
       );
     } else {
       const persisted = loadProjectStateFromStorage(projectId);
@@ -907,7 +981,39 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       }
 
       if (generation !== restoreProjectStateGeneration) return;
-      if (persisted?.layout) {
+      if (!persisted?.layout) {
+        // LayoutState is process-global, so a project with no saved layout must
+        // not inherit panels, drawer widths, or sidebar choices from the
+        // project we just left. The final default-stage block below then opens
+        // the usual Terminal + Editor pair for a genuinely new project.
+        layout.update((l) => ({
+          ...l,
+          activeView: 'terminal',
+          editorVisible: false,
+          previewVisible: false,
+          reviewVisible: false,
+          httpVisible: false,
+          tasksVisible: false,
+          orchestratorVisible: false,
+          dbVisible: false,
+          toolboxVisible: false,
+          fleetVisible: false,
+          containersVisible: false,
+          envVisible: false,
+          youtubeVisible: false,
+          mobileVisible: false,
+          sketchVisible: false,
+          lastAuxView: 'preview',
+          editorSplitPreview: false,
+          auxPanelWidth: 550,
+          auxEditorHeight: 50,
+          sidebarVisible: true,
+          sidebarWidth: 310,
+          sidebarTab: 'files',
+          leftPanelWidth: 310,
+          rightDrawerWidth: 380,
+        }));
+      } else {
         layout.update((l) => ({
           ...l,
           activeView: sanitiseActiveView(persisted.layout!.activeView, 'terminal'),
@@ -919,6 +1025,12 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           orchestratorVisible: persisted.layout!.orchestratorVisible ?? false,
           dbVisible: persisted.layout!.dbVisible ?? false,
           toolboxVisible: persisted.layout!.toolboxVisible ?? false,
+          fleetVisible: persisted.layout!.fleetVisible ?? false,
+          containersVisible: persisted.layout!.containersVisible ?? false,
+          envVisible: persisted.layout!.envVisible ?? false,
+          youtubeVisible: persisted.layout!.youtubeVisible ?? false,
+          mobileVisible: persisted.layout!.mobileVisible ?? false,
+          sketchVisible: persisted.layout!.sketchVisible ?? false,
           lastAuxView: sanitiseActiveView(persisted.layout!.lastAuxView, l.lastAuxView),
           editorSplitPreview: persisted.layout!.editorSplitPreview ?? false,
           auxPanelWidth: persisted.layout!.auxPanelWidth ?? 550,
@@ -926,6 +1038,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarVisible: persisted.layout!.sidebarVisible ?? true,
           sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
           sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
+          leftPanelWidth: persisted.layout!.leftPanelWidth ?? 310,
+          rightDrawerWidth: persisted.layout!.rightDrawerWidth ?? 380,
         }));
         terminalRoomOpen.set(persisted.layout.terminalRoomOpen ?? true);
         restoredLayout = true;
@@ -947,6 +1061,9 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         persisted?.focusedRoom ?? null,
         persisted?.expandedRoom ?? null,
         persisted?.splitPresets,
+        persisted?.minimizedRooms ?? [],
+        persisted?.roomOrder ?? [],
+        persisted?.devTerminalOpen ?? false,
       );
 
       const existingTerminalState = getTerminalProjectState(projectId);
