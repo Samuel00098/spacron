@@ -4,9 +4,15 @@ import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { useStore } from '$lib/react/useStore';
 import { appearance, matchShortcut, userShortcuts } from '$lib/stores/settings';
+import { sketchCursor } from './cursors';
 import './SketchPanel.css';
 
 const imageElementCache: { [url: string]: HTMLImageElement } = {};
+
+// An eraser stroke clears a band wider than the brush that drew it. Every
+// erase path scales by this, and so does the eraser cursor ring, which is
+// the only reason the ring matches the area that actually disappears.
+const ERASER_WIDTH_FACTOR = 2.5;
 
 interface Point {
   x: number;
@@ -1112,7 +1118,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       
       if (stroke.isEraser) {
         activeCtx.globalCompositeOperation = 'destination-out';
-        activeCtx.lineWidth = stroke.width * 2.5;
+        activeCtx.lineWidth = stroke.width * ERASER_WIDTH_FACTOR;
         activeCtx.globalAlpha = 1.0;
       } else {
         activeCtx.globalCompositeOperation = 'source-over';
@@ -1656,7 +1662,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     if (currentTool === 'eraser') {
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = brushSize * 2.5;
+      ctx.lineWidth = brushSize * ERASER_WIDTH_FACTOR;
       ctx.globalAlpha = 1.0;
     } else {
       ctx.globalCompositeOperation = 'source-over';
@@ -1709,7 +1715,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     if (currentTool === 'eraser') {
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = brushSize * 2.5;
+      ctx.lineWidth = brushSize * ERASER_WIDTH_FACTOR;
       ctx.globalAlpha = 1.0;
     } else {
       ctx.globalCompositeOperation = 'source-over';
@@ -3368,7 +3374,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       
       if (stroke.isEraser) {
         tempCtx.globalCompositeOperation = 'destination-out';
-        tempCtx.lineWidth = stroke.width * 2.5;
+        tempCtx.lineWidth = stroke.width * ERASER_WIDTH_FACTOR;
         tempCtx.globalAlpha = 1.0;
       } else {
         tempCtx.globalCompositeOperation = 'source-over';
@@ -3794,9 +3800,13 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         ref={viewportRef}
         className={`canvas-viewport tool-${currentTool}`}
         style={{
-          cursor: spacePressed || currentTool === 'pan' 
-            ? (panning ? 'grabbing' : 'grab') 
-            : (currentTool === 'eraser' ? 'cell' : (currentTool === 'text' ? 'text' : (['rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon'].includes(currentTool) ? 'crosshair' : (currentTool === 'select' ? 'default' : 'crosshair'))))
+          cursor: sketchCursor(currentTool, {
+            spacePressed,
+            panning,
+            // World units through the zoom, so the ring tracks both the chosen
+            // eraser size and how far the canvas is zoomed in.
+            eraserDiameterPx: brushSize * ERASER_WIDTH_FACTOR * zoomScale
+          })
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
