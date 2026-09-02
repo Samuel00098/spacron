@@ -1263,6 +1263,14 @@ function TerminalPane({
 
       registerDataCallback(sessionId, (bytes: Uint8Array, text: string) => {
         term.write(bytes);
+        // Input marks a session busy when a command/prompt is submitted, but a
+        // quiet task can outlive the 800 ms output-idle window below. Codex's
+        // spinner usually keeps emitting, which masked this for quieter agent
+        // CLIs and ordinary shell commands. Any new live PTY output means the
+        // session is active again, regardless of which program produced it.
+        if (!isSessionExecutingNow(sessionId)) {
+          setSessionExecuting(sessionId, true);
+        }
         try {
           parseOscSequences(text, currentShellCwd);
           detectDevServerUrl(text);

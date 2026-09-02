@@ -2506,6 +2506,16 @@ export default function AppShell() {
     const isThisExpanded = stageExpandedRoom === id;
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
+    // The same active-work light belongs to every place terminal work can run,
+    // not only agent rooms. Agent sessions have their own rooms and are excluded
+    // from the personal/dev terminal rooms just as renderRoomContent excludes
+    // them, so each executing session lights exactly the room that owns it.
+    const isWorking =
+      agentSession?.isExecuting ||
+      ((id === 'terminal' || id === 'dev-terminal') &&
+        (id === 'dev-terminal' ? allDevTerminalSessions : allTerminalSessions).some(
+          (session) => session.isRunning && !isAgentSession(session) && session.isExecuting,
+        ));
     // Every other room gets its own glyph in that same slot — the one the dock,
     // the Split switcher and the minimized stack already use for it, so a room
     // is the same mark wherever you meet it. `roomIcon` returns null for an id
@@ -2515,7 +2525,7 @@ export default function AppShell() {
       <section
         key={id}
         className={`room-panel bento-card${featured ? ' featured active-glow' : ''}${
-          agentSession?.isExecuting ? ' is-working' : ''
+          isWorking ? ' is-working' : ''
         }`}
         data-room-id={id}
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}

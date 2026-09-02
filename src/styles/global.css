@@ -1159,8 +1159,8 @@ input:focus {
    else the lap is ambient chrome and stays running; on a room — the surface
    where agents actually do things — a permanently traveling light is motion
    that carries no information, which reads as alive for ten minutes and as an
-   itch after an hour. `is-working` is set by AppShell from the room agent
-   session's `isExecuting`, so the light sweeps only while an agent runs, and
+   itch after an hour. `is-working` is set by AppShell from the room's agent or
+   terminal session `isExecuting`, so the light sweeps only while work runs, and
    the always-on base ring above is the resting outline (the same property
    that lets this ring survive prefers-reduced-motion is what makes a paused
    one still read as a border). */
