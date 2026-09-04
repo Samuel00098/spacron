@@ -946,17 +946,18 @@
    is live" is answered by the same cue that separates them. */
 .app-shell .room-panel.featured::after {
   --panel-edge-lap: 5s;
-  --panel-edge-w: 2.5px;
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 62%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.3);
+  --panel-edge-w: 2px;
+  --panel-edge-core: color-mix(in srgb, var(--accent) 55%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 24%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.12);
 }
 
 /* The side drawers sit flush against the window edge, where half the ring is
    off-screen chrome — keep them quieter than the rooms. */
 .app-shell .left-utility-panel::after,
 .app-shell .right-utility-panel::after {
-  --panel-edge-core: color-mix(in srgb, var(--accent) 52%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 16%, transparent);
+  --panel-edge-core: color-mix(in srgb, var(--accent) 30%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 10%, transparent);
   --panel-edge-lap: 9s;
 }
 
@@ -964,7 +965,7 @@
 /* Light theme flips the base ring dark for every panel in `global.css`; only
    the featured room's brighter base needs its own light-mode value. */
 :root.light-theme .app-shell .room-panel.featured::after {
-  --panel-edge-base: rgba(0, 0, 0, 0.2);
+  --panel-edge-base: rgba(0, 0, 0, 0.09);
 }
 
 .app-shell .room-header {

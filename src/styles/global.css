@@ -1094,9 +1094,9 @@ input:focus {
   /* The accent is a graphite, not a hue (see
      `.spacron/memory/accent-and-icon-treatment.md`), so this reads as a light
      sweeping the rim rather than a coloured chase. */
-  --panel-edge-core: var(--accent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 46%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.22);
+  --panel-edge-core: color-mix(in srgb, var(--accent) 45%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 18%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.08);
 }
 
 :root.light-theme .app-shell .room-panel,
@@ -1107,10 +1107,10 @@ input:focus {
 :root.light-theme .usage-panel,
 :root.light-theme .usage-dock,
 :root.light-theme .inbox-panel,
-:root.light-theme :root.light-theme .floating-youtube {
+:root.light-theme .floating-youtube {
   /* The accent is a dark slate in light themes, so the light itself flips to
      dark automatically — only the always-on base ring has to be told. */
-  --panel-edge-base: rgba(0, 0, 0, 0.14);
+  --panel-edge-base: rgba(0, 0, 0, 0.06);
 }
 
 /* The project HUD is deliberately absent from this list: it is a full-attention
