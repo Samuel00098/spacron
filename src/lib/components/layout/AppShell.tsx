@@ -111,6 +111,7 @@ import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
+import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
 // openDailyNote removed
 // toggleSketch removed
 import './AppShell.css';
@@ -839,27 +840,45 @@ export default function AppShell() {
   // in at the front when an arrangement doesn't already include it.
   const splitRooms = useMemo<RoomId[]>(() => {
     if (!activeRoom) return [];
+    // A full-stage-only room never takes a tile. It can still be `activeRoom`
+    // (and is spliced in below), but then the stage renders it expanded and this
+    // list is not read at all — so the filter only ever drops it from the
+    // *other* slots, where it would have been tiled behind whatever is active.
     const arranged = splitSlots.filter(
-      (room, index) => visibleRooms.includes(room) && splitSlots.indexOf(room) === index,
+      (room, index) =>
+        visibleRooms.includes(room) &&
+        splitSlots.indexOf(room) === index &&
+        !isFullscreenRoom(room),
     );
     if (arranged.length === 0) {
       // Unarranged: today's default — the active room plus the next one open.
-      return [activeRoom, ...sideRooms.slice(0, 1)];
+      return [activeRoom, ...sideRooms.filter((room) => !isFullscreenRoom(room)).slice(0, 1)];
     }
     const withActive = arranged.includes(activeRoom) ? arranged : [activeRoom, ...arranged];
     return withActive.slice(0, SPLIT_MAX_PANES);
   }, [activeRoom, sideRooms, splitSlots, visibleRooms]);
 
   /**
-   * The pane that is actually zoomed to the full stage, or null.
+   * The pane the *user* zoomed to the full stage, or null.
    *
    * Same test four render paths were each spelling out for themselves — the
    * stage, the switcher, the prompt-bar Split button and the pane header. They
    * agreed, but nothing made them agree, and every new read of `expandedRoom`
    * was a chance to check it without the "is that room still on stage?" half.
+   *
+   * Read this only where the difference from a forced full-stage room matters
+   * (dismissing, and carrying the zoom across a focus change). Everything that
+   * just asks "is one pane filling the stage?" wants `stageExpandedRoom`.
    */
-  const stageExpandedRoom =
+  const zoomedRoom =
     expandedRoom !== null && visibleRooms.includes(expandedRoom) ? expandedRoom : null;
+
+  // Which room fills the stage, and whether it does so because the user zoomed
+  // it or because of what it is (Tasks/Sketch). See `fullscreenRooms.ts` — the
+  // distinction matters everywhere the expansion can be *left*.
+  const stageExpansion = resolveStageExpansion(activeRoom, zoomedRoom);
+  const stageExpandedRoom = stageExpansion.room as RoomId | null;
+  const forcedFullscreenRoom = stageExpansion.forced ? stageExpandedRoom : null;
 
   /**
    * Every "zoom this pane / go back to the grid" path.
@@ -1682,6 +1701,10 @@ export default function AppShell() {
    * a frozen bitmap of the old tiling gets stretched over the new one.
    */
   function willRetileSplit(id: RoomId): boolean {
+    // Bringing a full-stage-only room on stage is the largest geometry change
+    // there is — every other pane goes hidden and this one stretches over the
+    // whole stage — so it takes the retile path in every mode, not just Split.
+    if (isFullscreenRoom(id) && id !== forcedFullscreenRoom) return true;
     return (
       ambientLayout === 'gallery' &&
       Boolean(activeRoom) &&
@@ -1723,7 +1746,13 @@ export default function AppShell() {
       // terminal" landed — and the stage kept the pane that was already there.
       // Carry the zoom to whatever just took focus instead; the way back to the
       // grid is the restore button, not a room that silently refuses to appear.
-      if (stageExpandedRoom !== null && stageExpandedRoom !== id) setExpandedRoom(id);
+      //
+      // `zoomedRoom`, not `stageExpandedRoom`: only a zoom the user asked for is
+      // carried. Tasks/Sketch are full-stage because of what they are, and
+      // handing that on would make leaving Sketch for the terminal silently
+      // zoom the terminal too — a mode the user never entered and would then
+      // have to find their own way out of.
+      if (zoomedRoom !== null && zoomedRoom !== id) setExpandedRoom(id);
       if (claimSplitSlot(id)) setFocusedRoom(id);
     });
   }
@@ -1747,6 +1776,10 @@ export default function AppShell() {
    */
   function claimSplitSlot(id: RoomId): boolean {
     if (ambientLayout !== 'gallery') return true;
+    // A full-stage-only room takes no slot — it takes the whole stage. Letting
+    // it into `splitSlots` would also evict a real pane at the cap to make room
+    // for a tile that never renders.
+    if (isFullscreenRoom(id)) return true;
     if (!activeRoom || id === activeRoom || splitRooms.includes(id)) return true;
 
     const working = lastInteractedRoomRef.current;
@@ -1778,6 +1811,13 @@ export default function AppShell() {
       });
       if (id === 'terminal') setTerminalRoomOpen(true);
       if (id === 'dev-terminal') setDevTerminalRoomOpen(true);
+      // "Show this too" cannot be honoured for a full-stage-only room — there is
+      // no second pane to show it beside. It degrades to a plain focus, which
+      // puts it on the stage whole.
+      if (isFullscreenRoom(id)) {
+        setFocusedRoom(id);
+        return;
+      }
       if (ambientLayout !== 'gallery') {
         setFocusedRoom(id);
         return;
@@ -2145,21 +2185,38 @@ export default function AppShell() {
     spawnAgentItem,
     {
       id: 'split',
-      title: isExpanded
-        ? 'Restore split grid'
-        : inSplit
-          ? 'Split: add a pane'
-          : 'Split: tile panels',
+      title: forcedFullscreenRoom
+        ? `Leave ${roomTitle(forcedFullscreenRoom)} and go back to the panes`
+        : isExpanded
+          ? 'Restore split grid'
+          : inSplit
+            ? 'Split: add a pane'
+            : 'Split: tile panels',
       active: inSplit && !isExpanded,
       onClick: () => {
-        // Three states, and the button has to tell them apart. It used to
-        // conflate the last two: it only ever edited `splitSlots`, and Focus
+        // Four states, and the button has to tell them apart. It used to
+        // conflate the middle two: it only ever edited `splitSlots`, and Focus
         // renders the active room alone and ignores that list entirely — so
         // pressing Split outside Split re-tiled a stage nobody was looking at
         // and the screen did not move. Entering the mode is what makes it
         // "actually go to split", and it is what the old room dock did before
         // the Tools menu replaced it.
-        if (isExpanded) {
+        //
+        // The full-stage-only case has to be tested FIRST, and for the same
+        // "screen did not move" reason. Tasks/Sketch are expanded by derivation,
+        // so `setStageExpansion(null)` cannot dismiss them — it clears
+        // `expandedRoom`, which they were never in. Leaving one of these rooms
+        // means focusing a room that does tile.
+        if (forcedFullscreenRoom) {
+          const next = visibleRooms.find(
+            (room) => room !== forcedFullscreenRoom && !isFullscreenRoom(room),
+          );
+          if (!next) {
+            showToast('No other panes open', 'info');
+            return;
+          }
+          focusRoom(next);
+        } else if (isExpanded) {
           setStageExpansion(null);
         } else if (!inSplit) {
           switchAmbientLayout('gallery');
@@ -2504,6 +2561,10 @@ export default function AppShell() {
   function renderRoomFrame(id: RoomId, featured = false) {
     const title = roomTitle(id);
     const isThisExpanded = stageExpandedRoom === id;
+    // Tasks and Sketch have no grid to restore to, so they get no zoom control
+    // at all — a restore button that put the room back exactly where it already
+    // was would read as broken. Minimize and Close still get you out.
+    const isThisForcedFullscreen = forcedFullscreenRoom === id;
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
     // The same active-work light belongs to every place terminal work can run,
@@ -2562,7 +2623,7 @@ export default function AppShell() {
             <span className="room-name">{title}</span>
           </button>
           <div className="room-actions">
-            {isThisExpanded ? (
+            {isThisForcedFullscreen ? null : isThisExpanded ? (
               <button
                 className="room-action"
                 onClick={() => setStageExpansion(null)}
@@ -2862,6 +2923,10 @@ export default function AppShell() {
             const slot = splitRooms.indexOf(room);
             const onStage = slot >= 0;
             const isPrimary = isExpanded ? room === stageExpandedRoom : room === activeRoom;
+            // Full-stage-only rooms have no slot, so none of the slot controls
+            // (reorder, take off the split, add to the split) mean anything for
+            // them. Their pill is a plain "go here".
+            const fullscreenOnly = isFullscreenRoom(room);
             return (
               <div
                 key={room}
@@ -2871,7 +2936,11 @@ export default function AppShell() {
                   type="button"
                   className="split-switch-summary"
                   onClick={() => {
-                    if (isExpanded) {
+                    if (fullscreenOnly) {
+                      // Already the room on stage — there is nothing to restore
+                      // it to, so the pill is inert rather than misleading.
+                      if (room !== forcedFullscreenRoom) focusRoom(room);
+                    } else if (isExpanded) {
                       if (room === stageExpandedRoom) {
                         setStageExpansion(null);
                       } else {
@@ -2886,7 +2955,11 @@ export default function AppShell() {
                     }
                   }}
                   title={
-                    isExpanded
+                    fullscreenOnly
+                      ? room === forcedFullscreenRoom
+                        ? `${roomTitle(room)} is on stage`
+                        : `Open ${roomTitle(room)} full stage`
+                      : isExpanded
                       ? isPrimary
                         ? `${roomTitle(room)} is currently expanded. Click to restore the split grid.`
                         : `Show ${roomTitle(room)} full stage`
@@ -2904,7 +2977,9 @@ export default function AppShell() {
                   <span className="split-switch-copy">
                     <span className="split-switch-name">{roomTitle(room)}</span>
                     <span className="split-switch-role">
-                      {isExpanded && isPrimary
+                      {room === forcedFullscreenRoom
+                        ? 'Full stage'
+                        : isExpanded && isPrimary
                         ? 'Expanded'
                         : onStage
                           ? (isPrimary ? `Pane ${slot + 1} · primary` : `Pane ${slot + 1}`)
@@ -2913,7 +2988,7 @@ export default function AppShell() {
                   </span>
                 </button>
                 <span className="split-target-actions">
-                  {onStage ? (
+                  {fullscreenOnly ? null : onStage ? (
                     <>
                       <button
                         type="button"

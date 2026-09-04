@@ -56,3 +56,34 @@ in Split → add a pane.
 - `addRoomToSplit` clears the zoom — "show this too" means two panes.
 - `stageExpandedRoom` is the single derived read (`expandedRoom` still on
   stage); four render paths were each spelling that test out by hand.
+
+## `expandedRoom` is no longer the only thing that fills the stage (2026-09-04)
+
+Tasks and Sketch are **full-stage-only** rooms: being the active room *is* being
+expanded for them. That fact is derived in `fullscreenRooms.ts`
+(`resolveStageExpansion`), never stored — writing it into `expandedRoom` was the
+tempting version and it is wrong, because every path that legitimately clears the
+zoom (`switchAmbientLayout`, `addRoomToSplit`, the restore button) would then
+drop a canvas or a board into a third of a grid, where it renders fine and is
+unusable. Deriving it means none of those paths need an exception.
+
+So `stageExpandedRoom` now has two sources, and the difference matters wherever
+an expansion can be **left**:
+
+- `zoomedRoom` — the user's own zoom. Dismissable, and `focusRoom` carries it
+  onto whatever takes focus next. That carry must read `zoomedRoom`, not
+  `stageExpandedRoom`: carrying a *forced* expansion would silently zoom the
+  terminal when you left Sketch for it.
+- `forcedFullscreenRoom` — Tasks/Sketch. Not dismissable, not carried. The pane
+  header hides its zoom control entirely (a restore that restores nothing reads
+  as broken), and the way out is focusing another room, minimizing, or closing.
+
+The trap this creates is the one the section above is already about: anything
+that "un-expands" by calling `setStageExpansion(null)` is a **no-op** against a
+forced room, so the screen does not move. The prompt-bar Split button therefore
+tests `forcedFullscreenRoom` *first* and leaves by focusing a room that tiles.
+Any new "back to the grid" affordance needs the same fourth branch.
+
+These rooms also never enter `splitSlots` — `claimSplitSlot` refuses them and
+`splitRooms` filters them out of every slot but the active one, so they cannot
+be tiled behind whatever is active, and cannot evict a real pane at the cap.
