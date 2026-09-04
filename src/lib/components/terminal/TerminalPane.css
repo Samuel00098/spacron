@@ -247,7 +247,7 @@
    frosted (non-solid) themes. Windows/macOS strip it below for a fully
    see-through terminal; Linux keeps this scrim. */
 :root:not(.solid-theme) .terminal-pane .xterm-container {
-  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim, 0.35));
+  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim, 0.35));
 }
 
 /* Windows / macOS: a GENTLE readability scrim (default 0.22) instead of a fully
@@ -259,7 +259,7 @@
    --terminal-scrim-glass (0 = fully see-through, 1 = opaque). Linux (WebKitGTK)
    keeps its own 0.35 --terminal-scrim above, untouched. */
 :root:not(.solid-theme):not(.is-webkitgtk) .terminal-pane .xterm-container {
-  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim-glass, 0.22)) !important;
+  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim-glass, 0.22)) !important;
 }
 
 /* Light mode needs a much heavier scrim than dark, and it is load-bearing rather
@@ -269,7 +269,7 @@
    0.88 gives the dark well the text is drawn for, while the wallpaper still
    registers at the edges. Tunable via --terminal-scrim-light. */
 :root:not(.solid-theme).light-theme .terminal-pane .xterm-container {
-  background: rgba(var(--terminal-surface-rgb, 17, 17, 22), var(--terminal-scrim-light, 0.88)) !important;
+  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim-light, 0.88)) !important;
 }
 
 /* Liquid glass sheen overlay — specular diagonal reflection + vignette */

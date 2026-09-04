@@ -422,7 +422,7 @@ function TerminalPane({
   // and only the see-through glass is traded away — and only for the user who
   // opted into WebGL. Canvas (the default) and DOM keep the wallpaper.
   function terminalBackground() {
-    return renderer === 'webgl' ? 'rgb(17, 17, 22)' : 'rgba(17, 17, 22, 0)';
+    return renderer === 'webgl' ? 'rgb(0, 0, 0)' : 'rgba(0, 0, 0, 0)';
   }
 
   // The terminal's palette is deliberately independent from the app theme.

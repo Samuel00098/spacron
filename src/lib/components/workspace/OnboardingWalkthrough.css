@@ -183,102 +183,61 @@
   color: var(--text-muted);
 }
 
-/* ── Appearance toggle ── */
-.ob-appearance-toggle {
+/* ── Appearance cards ── */
+.ob-appearance-cards {
   display: flex;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 7px;
-  overflow: hidden;
-}
-
-.ob-appearance-btn {
-  padding: 4px 12px;
-  font-size: 10.5px;
-  font-weight: 600;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-}
-
-.ob-appearance-btn.active {
-  background: var(--accent);
-  color: var(--button-text, #fff);
-}
-
-.ob-appearance-btn:not(.active):hover {
-  color: var(--text-primary);
-}
-
-/* ── Theme picker ── */
-.ob-theme-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  flex-direction: column;
   gap: 8px;
   width: 100%;
 }
 
-.ob-theme-btn {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1.5px solid rgba(255, 255, 255, 0.07);
-  border-radius: 10px;
-  padding: 8px;
+.ob-appearance-card {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
   cursor: pointer;
-  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.ob-theme-btn:hover {
-  border-color: var(--accent);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+.ob-appearance-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border, rgba(255, 255, 255, 0.16));
 }
 
-.ob-theme-btn.selected {
+.ob-appearance-card.active {
   border-color: var(--accent);
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
   box-shadow: 0 0 0 1.5px var(--accent);
 }
 
-.ob-theme-preview {
-  width: 100%;
-  height: 32px;
-  border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  display: flex;
-  overflow: hidden;
+.ob-appearance-card-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
-.ob-theme-sidebar {
-  width: 10px;
-  border-right: 1px solid rgba(255, 255, 255, 0.03);
-}
-
-.ob-theme-editor {
-  flex: 1;
-  padding: 3px 4px;
+.ob-appearance-card-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  justify-content: center;
 }
 
-.ob-theme-line {
-  height: 2px;
-  border-radius: 1px;
-}
-
-.ob-theme-name {
-  font-size: 9px;
+.ob-appearance-card-title {
+  font-size: 13px;
   font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ob-appearance-card-desc {
+  font-size: 11px;
   color: var(--text-secondary);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ── Ghost button ── */

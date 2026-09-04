@@ -263,54 +263,34 @@ html.bg-palette-light {
 
 :root {
   /* ── Core Palette ───────────────────────── */
-  --bg-primary:      #18181e;
-  --bg-secondary:    #121216;
-  --bg-tertiary:     #22222a;
-  --bg-hover:        rgba(255, 255, 255, 0.04);
-  --bg-active:       rgba(255, 255, 255, 0.07);
-  --bg-glass:        rgba(255, 255, 255, 0.015);
+  --bg-primary:      #000000;
+  --bg-secondary:    #08080a;
+  --bg-tertiary:     #121215;
+  --bg-hover:        rgba(255, 255, 255, 0.05);
+  --bg-active:       rgba(255, 255, 255, 0.09);
+  --bg-glass:        rgba(255, 255, 255, 0.02);
 
   /* ── Text ───────────────────────────────── */
-  --text-primary:    #f3f3f6;
-  --text-secondary:  #9494a6;
-  --text-muted:      #555566;
-  --text-placeholder:#3a3a46;
+  --text-primary:    #ffffff;
+  --text-secondary:  #a1a1aa;
+  --text-muted:      #71717a;
+  --text-placeholder:#454552;
 
-  /* ── Accent (graphite) ──────────────────────
-     The accent is deliberately not a hue. It is the foreground pushed to its
-     brightest, so the one element carrying it is the one element the eye
-     lands on. Colour in this app means exactly one thing now — status
-     (error / warning / success / info) and the categorical --role-* set.
-     Nothing decorative is allowed to spend it.
+  /* ── Accent (graphite) ────────────────────── */
+  --accent:          #ffffff;
+  --accent-hover:    #f4f4f5;
+  --accent-rgb:      255, 255, 255;
+  --on-accent:       #000000;
+  --accent-light:    rgba(255, 255, 255, 0.15);
+  --accent-glow:     rgba(255, 255, 255, 0.08);
 
-     Dark mode inverts the primary button: a near-white fill with an ink
-     label. White-on-accent would vanish, so --button-text tracks
-     --on-accent and must never be hardcoded to #fff. Any rule that paints
-     `background: var(--accent)` owes its label `var(--on-accent)`. */
-  --accent:          #f1f5f9;
-  --accent-hover:    #ffffff;
-  --accent-rgb:      241, 245, 249;
-  --on-accent:       #0b0f17;
-  --accent-light:    rgba(241, 245, 249, 0.15);
-  --accent-glow:     rgba(241, 245, 249, 0.07);
-
-  /* ── Semantic ─────────────────────────────
-     Saturated rather than pastel. These are the only things in the UI still
-     allowed to be a hue (see the accent note above), so they should read as
-     colour, not as tinted grey. All four clear 6:1 on every dark surface. */
+  /* ── Semantic ───────────────────────────── */
   --error:           #ff6b6b;
   --warning:         #fbbf24;
   --success:         #2ee06d;
   --info:            #58a6ff;
 
-  /* ── Roles (categorical) ──────────────────
-     Labels for terminal panes and agent rows — a category axis, not chrome,
-     which is why they stay hues. These live in :root so they are the DARK
-     set and can never be undefined: they used to be declared only in the
-     light-theme block below, so in dark mode every `var(--role-*)` call site
-     without a fallback resolved to nothing and the pane borders and status
-     dots simply did not paint. Light overrides them further down.
-     Measured on #18181e / #0b0f17: 6.8:1 at worst, 10.6:1 at best. */
+  /* ── Roles (categorical) ────────────────── */
   --role-server:     #2ee06d;
   --role-tests:      #58a6ff;
   --role-build:      #ff8c3a;
@@ -319,19 +299,15 @@ html.bg-palette-light {
   --role-reviewer:   #22d3ee;
 
   /* ── Borders & Surfaces ─────────────────── */
-  --border:          rgba(255, 255, 255, 0.06);
-  --border-subtle:   rgba(255, 255, 255, 0.03);
-  /* Focus and selection are neutral on purpose. They fire constantly — on
-     every tab, every input, every drag — so if they carry the accent the
-     accent stops meaning "this is the thing to press". A foreground-tinted
-     ring is just as visible and costs nothing. */
-  --focus-ring:      rgba(241, 245, 249, 0.45);
+  --border:          rgba(255, 255, 255, 0.08);
+  --border-subtle:   rgba(255, 255, 255, 0.04);
+  --focus-ring:      rgba(255, 255, 255, 0.45);
   --border-focus:    var(--focus-ring);
-  --scrollbar-thumb:      rgba(255, 255, 255, 0.08);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb:      rgba(255, 255, 255, 0.10);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
   --scrollbar-track:      transparent;
-  --selection-bg:         rgba(241, 245, 249, 0.16);
-  --editor-lineHighlight: rgba(255, 255, 255, 0.03);
+  --selection-bg:         rgba(255, 255, 255, 0.18);
+  --editor-lineHighlight: rgba(255, 255, 255, 0.04);
   --shadow-sm:       0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md:       0 4px 8px rgba(0, 0, 0, 0.6);
   --shadow-lg:       0 8px 24px rgba(0, 0, 0, 0.7);
@@ -356,46 +332,40 @@ html.bg-palette-light {
   --frost-chrome:      0.45;
   --frost-surface:     0.55;
 
-  /* ── Terminal surface ─────────────────────
-     The terminal does NOT follow light/dark — it is a dark content surface in
-     both modes, the way a code editor keeps its syntax theme. A TUI negotiates
-     its palette once over OSC 11 at launch and cannot be re-themed afterwards,
-     so a mode-dependent answer left a light-launched opencode painting white
-     forever, including after switching to dark. See buildTerminalTheme() in
-     TerminalPane.tsx. This RGB must stay in step with the value reported there. */
-  --terminal-surface:     #111116;
-  --terminal-surface-rgb: 17, 17, 22;
+  /* ── Terminal surface ───────────────────── */
+  --terminal-surface:     #000000;
+  --terminal-surface-rgb: 0, 0, 0;
 
   /* ── TitleBar ───────────────────────────── */
-  --titlebar-bg:     #121216;
-  --titlebar-text:   #e2e2eb;
-  --titlebar-border: rgba(255, 255, 255, 0.04);
+  --titlebar-bg:     #08080a;
+  --titlebar-text:   #ffffff;
+  --titlebar-border: rgba(255, 255, 255, 0.05);
 
   /* ── Activity Bar ───────────────────────── */
-  --activitybar-bg:        #121216;
-  --activitybar-border:    rgba(255, 255, 255, 0.04);
+  --activitybar-bg:        #08080a;
+  --activitybar-border:    rgba(255, 255, 255, 0.05);
 
   /* ── Sidebar ────────────────────────────── */
-  --sidebar-bg:      #121216;
-  --sidebar-border:  rgba(255, 255, 255, 0.05);
+  --sidebar-bg:      #08080a;
+  --sidebar-border:  rgba(255, 255, 255, 0.06);
 
   /* ── Editor ─────────────────────────────── */
-  --editor-bg:       #18181e;
-  --editor-gutter:   #18181e;
+  --editor-bg:       #000000;
+  --editor-gutter:   #000000;
 
   /* ── Tabs ───────────────────────────────── */
-  --tab-active-bg:   #18181e;
-  --tab-inactive-bg: #121216;
-  --tab-border:      rgba(255, 255, 255, 0.05);
+  --tab-active-bg:   #000000;
+  --tab-inactive-bg: #08080a;
+  --tab-border:      rgba(255, 255, 255, 0.06);
 
   /* ── Panel / Terminal ───────────────────── */
-  --panel-bg:        #18181e;
-  --panel-border:    rgba(255, 255, 255, 0.05);
-  --terminal-bg:     #121216;
+  --panel-bg:        #000000;
+  --panel-border:    rgba(255, 255, 255, 0.06);
+  --terminal-bg:     #000000;
 
   /* ── Input / Form ───────────────────────── */
-  --input-bg:        #1e1e24;
-  --input-border:    rgba(255, 255, 255, 0.08);
+  --input-bg:        #0d0d10;
+  --input-border:    rgba(255, 255, 255, 0.12);
   --input-focus-border: var(--focus-ring);
 
   /* ── Buttons ────────────────────────────── */
@@ -404,15 +374,15 @@ html.bg-palette-light {
   --button-text:     var(--on-accent);
 
   /* ── Status Bar ─────────────────────────── */
-  --statusbar-bg:    #121216;
-  --statusbar-border:rgba(255, 255, 255, 0.04);
-  --statusbar-text:  #9494a6;
+  --statusbar-bg:    #08080a;
+  --statusbar-border:rgba(255, 255, 255, 0.05);
+  --statusbar-text:  #a1a1aa;
 
   /* ── Syntax ─────────────────────────────── */
   --syntax-keyword:    #c792ea;
   --syntax-string:     #a5d6ff;
   --syntax-number:     #f78c6c;
-  --syntax-comment:    #4a4a7a;
+  --syntax-comment:    #7a7aa8;
   --syntax-function:   #82aaff;
   --syntax-variable:   #f07178;
   --syntax-type:       #ffcb6b;
@@ -421,22 +391,66 @@ html.bg-palette-light {
   --syntax-constant:   #ff9cac;
 }
 
-/* Light-mode accent fallback. The :root values above are pitched for a dark
-   page — a near-white accent and a near-white focus ring are invisible on a
-   bright one. Preset themes set these per-theme as inline custom properties
-   (see LIGHT_ACCENT in presetThemes.ts), which win over this block; it only
-   covers light mode with no preset applied. Deliberately no !important, or
-   it would override the presets it exists to back up. */
+/* Light-theme definitions: clean crisp pure white */
 :root.light-theme {
-  --accent:          #1e293b;
-  --accent-hover:    #0f172a;
-  --accent-rgb:      30, 41, 59;
+  --bg-primary:      #ffffff;
+  --bg-secondary:    #f8f9fa;
+  --bg-tertiary:     #f1f3f5;
+  --bg-hover:        rgba(0, 0, 0, 0.04);
+  --bg-active:       rgba(0, 0, 0, 0.08);
+
+  --text-primary:    #000000;
+  --text-secondary:  #4b5563;
+  --text-muted:      #6b7280;
+  --text-placeholder:#9ca3af;
+
+  --accent:          #000000;
+  --accent-hover:    #18181b;
+  --accent-rgb:      0, 0, 0;
   --on-accent:       #ffffff;
-  --accent-light:    rgba(30, 41, 59, 0.12);
-  --accent-glow:     rgba(30, 41, 59, 0.06);
-  --focus-ring:      rgba(15, 23, 42, 0.55);
-  --selection-bg:    rgba(15, 23, 42, 0.12);
-  --editor-lineHighlight: rgba(15, 23, 42, 0.04);
+  --accent-light:    rgba(0, 0, 0, 0.08);
+  --accent-glow:     rgba(0, 0, 0, 0.04);
+  --focus-ring:      rgba(0, 0, 0, 0.55);
+  --border-focus:    var(--focus-ring);
+  --selection-bg:    rgba(0, 0, 0, 0.10);
+  --editor-lineHighlight: rgba(0, 0, 0, 0.03);
+
+  --border:          rgba(0, 0, 0, 0.08);
+  --border-subtle:   rgba(0, 0, 0, 0.04);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.12);
+
+  --titlebar-bg:     #ffffff;
+  --titlebar-text:   #000000;
+  --titlebar-border: rgba(0, 0, 0, 0.06);
+
+  --activitybar-bg:        #ffffff;
+  --activitybar-border:    rgba(0, 0, 0, 0.06);
+
+  --sidebar-bg:      #f8f9fa;
+  --sidebar-border:  rgba(0, 0, 0, 0.08);
+
+  --editor-bg:       #ffffff;
+  --editor-gutter:   #ffffff;
+
+  --tab-active-bg:   #ffffff;
+  --tab-inactive-bg: #f8f9fa;
+  --tab-border:      rgba(0, 0, 0, 0.08);
+
+  --panel-bg:        #ffffff;
+  --panel-border:    rgba(0, 0, 0, 0.08);
+  --terminal-bg:     #ffffff;
+
+  --input-bg:        #ffffff;
+  --input-border:    rgba(0, 0, 0, 0.12);
+  --input-focus-border: var(--focus-ring);
+
+  --button-bg:       var(--accent);
+  --button-hover-bg: var(--accent-hover);
+  --button-text:     var(--on-accent);
+
+  --statusbar-bg:    #f8f9fa;
+  --statusbar-border:rgba(0, 0, 0, 0.06);
+  --statusbar-text:  #4b5563;
 }
 
 .theme-transitioning,

@@ -18,8 +18,8 @@ describe('app-settings (agent settings control)', () => {
 
   it('lists preset theme names the agent can switch to', () => {
     const names = listThemeNames();
-    expect(names).toContain('Solace Sky Workspace');
-    expect(names).toContain('Amalfi Coastline (Night)');
+    expect(names).toContain('Dark');
+    expect(names).toContain('Light');
   });
 
   it('snapshots current settings values', () => {
@@ -27,7 +27,8 @@ describe('app-settings (agent settings control)', () => {
     const snap = getAgentSettingsSnapshot();
     expect(snap.values.fontSize).toBe(18);
     expect(snap.values.wordWrap).toBe(false);
-    expect(snap.availableThemes).toContain('Solace Sky Workspace');
+    expect(snap.availableThemes).toContain('Dark');
+    expect(snap.availableThemes).toContain('Light');
   });
 
   it('coerces truthy words to booleans', async () => {
@@ -62,9 +63,9 @@ describe('app-settings (agent settings control)', () => {
   });
 
   it('switches to a preset theme by name', async () => {
-    const res = await applyAgentSetting('theme', 'Amalfi Coastline (Night)');
+    const res = await applyAgentSetting('theme', 'Dark');
     expect(res.ok).toBe(true);
-    expect(get(activeTheme)?.name).toBe('Amalfi Coastline (Night)');
+    expect(get(activeTheme)?.name).toBe('Dark');
   });
 
   it('rejects an unknown theme and an unknown setting', async () => {

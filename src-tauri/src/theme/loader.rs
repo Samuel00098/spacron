@@ -27,68 +27,59 @@ pub fn load_bundled_themes() -> Vec<Theme> {
         name: "Forge Dark".to_string(),
         theme_type: crate::theme::models::ThemeType::Dark,
         colors: [
-            ("bg-primary", "#18181e"),
-            ("bg-secondary", "#121216"),
-            ("bg-tertiary", "#22222a"),
-            ("bg-hover", "rgba(255, 255, 255, 0.04)"),
-            ("bg-active", "rgba(255, 255, 255, 0.07)"),
-            ("text-primary", "#f3f3f6"),
-            ("text-secondary", "#9494a6"),
-            ("text-muted", "#555566"),
+            ("bg-primary", "#000000"),
+            ("bg-secondary", "#08080a"),
+            ("bg-tertiary", "#121215"),
+            ("bg-hover", "rgba(255, 255, 255, 0.05)"),
+            ("bg-active", "rgba(255, 255, 255, 0.09)"),
+            ("text-primary", "#ffffff"),
+            ("text-secondary", "#a1a1aa"),
+            ("text-muted", "#71717a"),
             // Graphite accent — see the LIGHT_ACCENT/DARK_ACCENT note in
             // src/lib/stores/presetThemes.ts for why the accent is a value,
             // not a hue. Keep these two bundled themes in step with it: they
             // are what ships before the user picks anything, and forge-dark
             // is the default active theme.
-            ("accent", "#f1f5f9"),
-            ("accent-hover", "#ffffff"),
+            ("accent", "#ffffff"),
+            ("accent-hover", "#f4f4f5"),
             // Ink for anything painted with the accent. The dark accent is
-            // near-white, so a #ffffff label would vanish on it.
-            ("on-accent", "#18181e"),
-            ("border", "rgba(255, 255, 255, 0.06)"),
-            // Focus is neutral and never the accent. 0.45 measures 4.19:1
-            // against #18181e; a focus indicator needs 3:1.
-            ("focus-ring", "rgba(241, 245, 249, 0.45)"),
-            ("border-focus", "rgba(241, 245, 249, 0.45)"),
-            // Semantic colours, saturated rather than pastel — these are among
-            // the last things in the UI still allowed to be a hue (see the
-            // accent note above), so they have to read as colour, not as tinted
-            // grey. Values match the `:root` set in global.css and must stay in
-            // step with it: a theme's own colours are written inline and beat
-            // that block, so anything stale here silently wins. `info` was
-            // missing entirely, which left it falling through to global.css —
-            // the one semantic colour in this theme that was already current.
-            // All four clear 6:1 on #18181e.
+            // pure white, so a #000000 label contrasts cleanly.
+            ("on-accent", "#000000"),
+            ("border", "rgba(255, 255, 255, 0.08)"),
+            // Focus is neutral and never the accent.
+            ("focus-ring", "rgba(255, 255, 255, 0.45)"),
+            ("border-focus", "rgba(255, 255, 255, 0.45)"),
+            // Semantic colours, saturated rather than pastel
             ("error", "#ff6b6b"),
             ("warning", "#fbbf24"),
             ("success", "#2ee06d"),
             ("info", "#58a6ff"),
-            ("scrollbar-thumb", "rgba(255, 255, 255, 0.08)"),
+            ("scrollbar-thumb", "rgba(255, 255, 255, 0.10)"),
             ("scrollbar-track", "transparent"),
-            ("selection-bg", "rgba(241, 245, 249, 0.16)"),
-            ("titlebar-bg", "#121216"),
-            ("titlebar-text", "#e2e2eb"),
-            ("titlebar-border", "rgba(255, 255, 255, 0.04)"),
-            ("activitybar-bg", "#121216"),
-            ("activitybar-border", "rgba(255, 255, 255, 0.04)"),
-            ("sidebar-bg", "#121216"),
-            ("sidebar-border", "rgba(255, 255, 255, 0.05)"),
-            ("editor-bg", "#18181e"),
-            ("editor-gutter", "#18181e"),
-            ("statusbar-bg", "#121216"),
-            ("statusbar-border", "rgba(255, 255, 255, 0.04)"),
-            ("statusbar-text", "#6060a0"),
-            ("tab-active-bg", "#18181e"),
-            ("tab-inactive-bg", "#121216"),
-            ("tab-border", "rgba(255, 255, 255, 0.05)"),
-            ("panel-bg", "#18181e"),
-            ("panel-border", "rgba(255, 255, 255, 0.05)"),
-            ("input-bg", "#1e1e24"),
-            ("input-border", "rgba(255, 255, 255, 0.08)"),
-            ("input-focus-border", "rgba(241, 245, 249, 0.45)"),
-            ("button-bg", "#f1f5f9"),
-            ("button-hover-bg", "#ffffff"),
-            ("button-text", "#18181e"),
+            ("selection-bg", "rgba(255, 255, 255, 0.18)"),
+            ("titlebar-bg", "#08080a"),
+            ("titlebar-text", "#ffffff"),
+            ("titlebar-border", "rgba(255, 255, 255, 0.05)"),
+            ("activitybar-bg", "#08080a"),
+            ("activitybar-border", "rgba(255, 255, 255, 0.05)"),
+            ("sidebar-bg", "#08080a"),
+            ("sidebar-border", "rgba(255, 255, 255, 0.06)"),
+            ("editor-bg", "#000000"),
+            ("editor-gutter", "#000000"),
+            ("statusbar-bg", "#08080a"),
+            ("statusbar-border", "rgba(255, 255, 255, 0.05)"),
+            ("statusbar-text", "#a1a1aa"),
+            ("tab-active-bg", "#000000"),
+            ("tab-inactive-bg", "#08080a"),
+            ("tab-border", "rgba(255, 255, 255, 0.06)"),
+            ("panel-bg", "#000000"),
+            ("panel-border", "rgba(255, 255, 255, 0.06)"),
+            ("input-bg", "#0d0d10"),
+            ("input-border", "rgba(255, 255, 255, 0.12)"),
+            ("input-focus-border", "rgba(255, 255, 255, 0.45)"),
+            ("button-bg", "#ffffff"),
+            ("button-hover-bg", "#f4f4f5"),
+            ("button-text", "#000000"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -96,10 +87,6 @@ pub fn load_bundled_themes() -> Vec<Theme> {
         syntax: [
             ("keyword", "#c792ea"),
             ("string", "#a5d6ff"),
-            // Lifted from #4a4a7a, which measured 2.15:1 on #18181e — a comment
-            // should recede, but that was dim enough to disappear. 4.4:1 is the
-            // level the wallpaper presets' comments sit at; the indigo cast is
-            // unchanged. Every other token here already reads 6:1–11.8:1.
             ("comment", "#7a7aa8"),
             ("function", "#82aaff"),
             ("number", "#f78c6c"),
@@ -124,63 +111,49 @@ pub fn load_bundled_themes() -> Vec<Theme> {
         name: "Forge Light".to_string(),
         theme_type: crate::theme::models::ThemeType::Light,
         colors: [
-            ("bg-primary", "#fafafa"),
-            ("bg-secondary", "#f4f4f4"),
-            ("bg-tertiary", "#eaeaea"),
+            ("bg-primary", "#ffffff"),
+            ("bg-secondary", "#f8f9fa"),
+            ("bg-tertiary", "#f1f3f5"),
             ("bg-hover", "rgba(0, 0, 0, 0.04)"),
             ("bg-active", "rgba(0, 0, 0, 0.08)"),
-            ("text-primary", "#1f2328"),
-            ("text-secondary", "#444d56"),
-            ("text-muted", "#57606a"),
-            // Graphite accent, inverted for a bright page: the fill is the
-            // far end of this theme's own value range and the label is the
-            // near end. #1f2328 is forge-light's text colour, so the accent
-            // is literally "the darkest thing on the page".
-            ("accent", "#1f2328"),
-            ("accent-hover", "#0d1117"),
+            ("text-primary", "#000000"),
+            ("text-secondary", "#4b5563"),
+            ("text-muted", "#6b7280"),
+            ("accent", "#000000"),
+            ("accent-hover", "#18181b"),
             ("on-accent", "#ffffff"),
             ("border", "rgba(0, 0, 0, 0.08)"),
-            // 0.55 measures 3.59:1 against #fafafa. 0.45 was only 2.74:1 and
-            // would fail the 3:1 a focus indicator needs — light pages need
-            // the heavier alpha that dark ones don't.
-            ("focus-ring", "rgba(31, 35, 40, 0.55)"),
-            ("border-focus", "rgba(31, 35, 40, 0.55)"),
-            // Semantic colours, deeper than the dark set: the same hue that
-            // reads vivid on near-black turns pale on a white page. Values
-            // match the `:root.light-theme` block in global.css, which declares
-            // them `!important` and therefore already wins over whatever sits
-            // here — but the theme editor and any custom theme forked from this
-            // one read these, so leaving the old GitHub values behind is drift
-            // waiting to surface. All four clear 4.5:1 on #fafafa.
+            ("focus-ring", "rgba(0, 0, 0, 0.55)"),
+            ("border-focus", "rgba(0, 0, 0, 0.55)"),
             ("error", "#d40c0c"),
             ("warning", "#a86008"),
             ("success", "#077f33"),
             ("info", "#1359f3"),
-            ("scrollbar-thumb", "rgba(0, 0, 0, 0.1)"),
+            ("scrollbar-thumb", "rgba(0, 0, 0, 0.12)"),
             ("scrollbar-track", "transparent"),
-            ("selection-bg", "rgba(31, 35, 40, 0.12)"),
-            ("titlebar-bg", "#fafafa"),
-            ("titlebar-text", "#1f2328"),
+            ("selection-bg", "rgba(0, 0, 0, 0.10)"),
+            ("titlebar-bg", "#ffffff"),
+            ("titlebar-text", "#000000"),
             ("titlebar-border", "rgba(0, 0, 0, 0.06)"),
-            ("activitybar-bg", "#fafafa"),
+            ("activitybar-bg", "#ffffff"),
             ("activitybar-border", "rgba(0, 0, 0, 0.06)"),
-            ("sidebar-bg", "#f4f4f4"),
+            ("sidebar-bg", "#f8f9fa"),
             ("sidebar-border", "rgba(0, 0, 0, 0.08)"),
-            ("editor-bg", "#fafafa"),
-            ("editor-gutter", "#fafafa"),
-            ("statusbar-bg", "#f4f4f4"),
+            ("editor-bg", "#ffffff"),
+            ("editor-gutter", "#ffffff"),
+            ("statusbar-bg", "#f8f9fa"),
             ("statusbar-border", "rgba(0, 0, 0, 0.06)"),
-            ("statusbar-text", "#444d56"),
-            ("tab-active-bg", "#fafafa"),
-            ("tab-inactive-bg", "#f4f4f4"),
+            ("statusbar-text", "#4b5563"),
+            ("tab-active-bg", "#ffffff"),
+            ("tab-inactive-bg", "#f8f9fa"),
             ("tab-border", "rgba(0, 0, 0, 0.08)"),
-            ("panel-bg", "#fafafa"),
+            ("panel-bg", "#ffffff"),
             ("panel-border", "rgba(0, 0, 0, 0.08)"),
             ("input-bg", "#ffffff"),
-            ("input-border", "rgba(0, 0, 0, 0.1)"),
-            ("input-focus-border", "rgba(31, 35, 40, 0.55)"),
-            ("button-bg", "#1f2328"),
-            ("button-hover-bg", "#0d1117"),
+            ("input-border", "rgba(0, 0, 0, 0.12)"),
+            ("input-focus-border", "rgba(0, 0, 0, 0.55)"),
+            ("button-bg", "#000000"),
+            ("button-hover-bg", "#18181b"),
             ("button-text", "#ffffff"),
         ]
         .iter()

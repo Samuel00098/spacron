@@ -99,8 +99,7 @@ import {
   deleteCustomAgent,
   removedPresetAgents,
 } from '$lib/stores/customAgents';
-import { activeTheme, switchPresetTheme } from '$lib/stores/theme';
-import { presetThemes } from '$lib/stores/presetThemes';
+import { activeTheme } from '$lib/stores/theme';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
 import {
@@ -1498,108 +1497,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button className="num-btn-reset" onClick={() => uiZoom.set(100)}>Reset</button>
                     </div>
                   </SettingRow>
-                </Section>
-
-                <Section title="Color Themes">
-                  <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div className="theme-grid">
-                      {presetThemes.map(theme => {
-                        // ── Per-card smart foreground derivation ──────────
-                        // We drive all foreground colors from the theme's own
-                        // declared type, so each card is self-consistent:
-                        // dark-type cards → light glass text/icons
-                        // light-type cards → dark glass text/icons
-                        const isDarkTheme = theme.type === 'dark';
-
-                        // Glass panel: use theme's own bg-primary as tint
-                        const bgPrimary = theme.colors['bg-primary'] || (isDarkTheme ? '#111' : '#fafafa');
-                        const glassTintAlpha = isDarkTheme ? 0.72 : 0.76;
-                        const borderColor = theme.colors['border'] || (isDarkTheme ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)');
-
-                        // Theme name footer area
-                        const metaBg = isDarkTheme
-                          ? 'rgba(0,0,0,0.35)'
-                          : 'rgba(255,255,255,0.60)';
-                        // Same two steps deriveForegroundPalette() hands the real
-                        // app, so a card previews what picking it actually looks
-                        // like. Keep them in step with that function.
-                        const nameColor = isDarkTheme ? '#ffffff' : '#000000';
-                        const nameSecondary = isDarkTheme ? '#cdcdda' : '#2a2a35';
-
-                        return (
-                          <button
-                            key={theme.id}
-                            className={`theme-card ${currentActiveTheme?.id === theme.id ? 'active' : ''}`}
-                            onClick={() => switchPresetTheme(theme.id)}
-                          >
-                            <div
-                              className="theme-preview"
-                              style={{
-                                backgroundImage: theme.backgroundImage ? `url(${theme.backgroundImage})` : 'none',
-                                backgroundColor: bgPrimary,
-                              }}
-                            >
-                              {/* Scrim overlay to dim the image so the glass panel text is always readable */}
-                              <div style={{
-                                position: 'absolute',
-                                inset: 0,
-                                background: isDarkTheme
-                                  ? 'rgba(0, 0, 0, 0.45)'
-                                  : 'rgba(255, 255, 255, 0.42)',
-                                zIndex: 0,
-                              }} />
-                              <div
-                                className="theme-preview-glass"
-                                style={{
-                                  position: 'relative',
-                                  zIndex: 1,
-                                  background: isDarkTheme
-                                    ? `rgba(0, 0, 0, 0.55)`
-                                    : `rgba(255, 255, 255, 0.65)`,
-                                  borderColor: borderColor,
-                                  backdropFilter: 'blur(8px) saturate(160%)',
-                                  WebkitBackdropFilter: 'blur(8px) saturate(160%)',
-                                }}
-                              >
-                                <div className="theme-preview-header">
-                                  <span className="theme-preview-dot" style={{ background: theme.colors['error'] || '#ff5f56' }} />
-                                  <span className="theme-preview-dot" style={{ background: theme.colors['warning'] || '#ffbd2e' }} />
-                                  <span className="theme-preview-dot" style={{ background: theme.colors['success'] || '#27c93f' }} />
-                                </div>
-                                <div className="theme-preview-code">
-                                  <div className="theme-preview-line">
-                                    <span className="theme-preview-token" style={{ width: '20%', background: theme.syntax['keyword'] || theme.colors['accent'] }} />
-                                    <span className="theme-preview-token" style={{ width: '35%', background: nameColor }} />
-                                    <span className="theme-preview-token" style={{ width: '15%', background: theme.syntax['operator'] || theme.colors['accent'] }} />
-                                    <span className="theme-preview-token" style={{ width: '10%', background: theme.syntax['number'] || theme.colors['accent'] }} />
-                                  </div>
-                                  <div className="theme-preview-line" style={{ paddingLeft: '8px' }}>
-                                    <span className="theme-preview-token" style={{ width: '25%', background: theme.syntax['function'] || theme.colors['accent'] }} />
-                                    <span className="theme-preview-token" style={{ width: '50%', background: theme.syntax['string'] || theme.colors['success'] }} />
-                                  </div>
-                                  <div className="theme-preview-line">
-                                    <span className="theme-preview-token" style={{ width: '70%', background: nameSecondary }} />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            <div
-                              className="theme-meta"
-                              style={{ background: metaBg }}
-                            >
-                              <span className="theme-name" style={{ color: nameColor }}>{theme.name}</span>
-                              {currentActiveTheme?.id === theme.id && (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.colors['accent'] || 'var(--accent)'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="20 6 9 17 4 12"/>
-                                </svg>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
-
-                    </div>
-                  </div>
                 </Section>
 
                 <Section title="Background">

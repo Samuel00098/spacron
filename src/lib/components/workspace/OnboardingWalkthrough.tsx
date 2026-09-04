@@ -1,8 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { markOnboardingCompleted, appearance } from '$lib/stores/settings';
-import { switchPresetTheme, activeTheme } from '$lib/stores/theme';
-import { presetThemes } from '$lib/stores/presetThemes';
-import { settingsOpen, openSettings } from '$lib/stores/layout';
 import { useStore } from '$lib/react/useStore';
 import packageJson from '../../../../package.json';
 import './OnboardingWalkthrough.css';
@@ -10,9 +7,11 @@ import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 const iconSrc = `/icon.png?v=${packageJson.version}`;
 
-const onboardingThemes = presetThemes.filter(t =>
-  ['solace-workspace', 'nocturne-sky-workspace', 'aether-curves', 'dark-coastline'].includes(t.id)
-);
+const appearanceOptions: { id: 'dark' | 'light' | 'system'; label: string; desc: string; icon: string }[] = [
+  { id: 'dark', label: 'Dark Mode', desc: 'Pure pitch black workspace with crisp contrast', icon: '🌙' },
+  { id: 'light', label: 'Light Mode', desc: 'Pure crisp white interface with clean typography', icon: '☀️' },
+  { id: 'system', label: 'System', desc: 'Automatically match operating system preferences', icon: '💻' },
+];
 
 type Step = 'welcome' | 'appearance' | 'interface' | 'shortcuts' | 'features' | 'done';
 
@@ -27,33 +26,14 @@ const shortcuts = [
   { label: 'Toggle Sidebar',  kbd: 'Ctrl+B' },
 ];
 
-const appearanceModes: { id: 'system' | 'light' | 'dark'; label: string }[] = [
-  { id: 'system', label: 'System' },
-  { id: 'light', label: 'Light' },
-  { id: 'dark', label: 'Dark' },
-];
-
 export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?: () => void }) {
-  const theme = useStore(activeTheme);
   const currentAppearance = useStore(appearance);
-  const settingsIsOpen = useStore(settingsOpen);
   const [step, setStep] = useState<Step>(() => {
     const saved = sessionStorage.getItem('spacron_onboarding_step');
     return (saved && ['welcome', 'appearance', 'interface', 'shortcuts', 'features', 'done'].includes(saved))
       ? saved as Step : 'welcome';
   });
   const [iconError, setIconError] = useState(false);
-  const wasSettingsOpen = useRef(false);
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (wasSettingsOpen.current && !settingsIsOpen) {
-      const el = overlayRef.current;
-      if (el) el.style.zIndex = '99999';
-      if (step === 'appearance') setStep('interface');
-    }
-    wasSettingsOpen.current = settingsIsOpen;
-  }, [settingsIsOpen, step]);
 
   const finish = useCallback(() => {
     sessionStorage.removeItem('spacron_onboarding_step');
@@ -66,14 +46,8 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
     setStep(s);
   }, []);
 
-  const handleBrowseThemes = useCallback(() => {
-    const el = overlayRef.current;
-    if (el) el.style.zIndex = '8000';
-    openSettings();
-  }, []);
-
   return (
-    <div className="ob-overlay" ref={overlayRef}>
+    <div className="ob-overlay">
       <div className="ob-card">
         <div className="ob-card-inner">
           <div className="ob-progress">
@@ -133,53 +107,21 @@ export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?
                 <p className="ob-step-desc">Choose your look. You can always change this later in Settings.</p>
               </div>
 
-              <div className="ob-section-row">
-                <span className="ob-section-label">Mode</span>
-                <div className="ob-appearance-toggle">
-                  {appearanceModes.map((m) => (
-                    <button
-                      key={m.id}
-                      className={`ob-appearance-btn${currentAppearance === m.id ? ' active' : ''}`}
-                      onClick={() => appearance.set(m.id)}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="ob-section-row">
-                <span className="ob-section-label">Quick theme pick</span>
-              </div>
-              <div className="ob-theme-grid">
-                {onboardingThemes.map((t) => (
+              <div className="ob-appearance-cards">
+                {appearanceOptions.map((opt) => (
                   <button
-                    key={t.id}
-                    className={`ob-theme-btn${theme?.id === t.id ? ' selected' : ''}`}
-                    onClick={() => switchPresetTheme(t.id, false)}
-                    title={t.name}
+                    key={opt.id}
+                    className={`ob-appearance-card${currentAppearance === opt.id ? ' active' : ''}`}
+                    onClick={() => appearance.set(opt.id)}
                   >
-                    <div className="ob-theme-preview">
-                      <div className="ob-theme-sidebar" style={{ background: t.colors['activitybar-bg'] || (t.type === 'dark' ? '#111' : '#eee') }} />
-                      <div className="ob-theme-editor" style={{ background: t.colors['editor-bg'] || (t.type === 'dark' ? '#1a1a1a' : '#fff') }}>
-                        <div className="ob-theme-line" style={{ width: '55%', background: t.syntax['keyword'] || t.colors['accent'] }} />
-                        <div className="ob-theme-line" style={{ width: '80%', background: t.colors['text-primary'] || '#888', opacity: 0.4 }} />
-                        <div className="ob-theme-line" style={{ width: '45%', background: t.colors['text-primary'] || '#888', opacity: 0.25 }} />
-                      </div>
+                    <div className="ob-appearance-card-icon">{opt.icon}</div>
+                    <div className="ob-appearance-card-info">
+                      <span className="ob-appearance-card-title">{opt.label}</span>
+                      <span className="ob-appearance-card-desc">{opt.desc}</span>
                     </div>
-                    <span className="ob-theme-name" style={{ color: t.type === 'dark' ? '#ddd' : '#333' }}>{t.name}</span>
                   </button>
                 ))}
               </div>
-
-              <button className="ob-ghost-btn" onClick={handleBrowseThemes}>
-                Browse all themes in Settings
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                  <polyline points="15 3 21 3 21 9" />
-                  <line x1="10" y1="14" x2="21" y2="3" />
-                </svg>
-              </button>
 
               <button className="ob-primary-btn" onClick={() => goTo('interface')}>
                 Continue
