@@ -3,6 +3,15 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v3.0.1] - 2026-09-05
+
+Spacron 3.0.1 fixes project-switch races that could show one project's editor files in another project or overwrite its saved workspace layout. Switching projects now clears the outgoing editor immediately and prevents unfinished work from changing the next project's state.
+
+### Fixed
+
+- **Editor isolation between projects** — ignore file reads, restores, formatting results, and save completions that arrive after a project switch. Clear stale selections and pending cursor jumps, cancel the outgoing editor's autosave timer, and release image resources created by an interrupted restore.
+- **Saved project layouts during rapid switching** — suspend workspace saves before asynchronous restoration starts, cancel pending workspace autosaves, and prevent interrupted restores from saving partial state or clearing a newer switch's loading status. Each project's existing saved panels, dimensions, and room arrangement remain protected while switching.
+
 ## [v3.0.0] - 2026-09-05
 
 Spacron 3.0 brings project-specific workspace layouts, clearer activity indicators, and a more consistent desktop shell. Projects retain their panel contents and stage arrangement when you switch between them; terminal and agent indicators reflect active work. The release also tightens outbound request handling so provider redirects cannot move credentials or request content to another origin, and closes address-validation gaps in the preview and HTTP clients.
