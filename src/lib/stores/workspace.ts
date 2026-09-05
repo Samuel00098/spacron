@@ -1,6 +1,6 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
-import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles } from './editor';
+import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
 import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession, claimStartupShell } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
@@ -720,6 +720,8 @@ function loadProjectStateFromStorage(projectId: string): PersistedProjectState |
 // ─────────────────────────────────────────────────────────────────────────
 
 export function saveProjectState(projectId: string) {
+  // Shared stores are incomplete while a project is being restored.
+  if (isRestoringProjectState) return;
   const terminalState = getTerminalProjectState(projectId);
   projectStateCache.set(projectId, {
     editor: {
@@ -801,11 +803,14 @@ function saveCurrentProjectState() {
 
 export async function restoreProjectState(projectId: string, rootPath: string) {
   const generation = ++restoreProjectStateGeneration;
-  const { invoke } = await import('@tauri-apps/api/core');
   isRestoringProjectState = true;
+  cancelPendingProjectAutosave();
+  resetEditorSession();
   isProjectSwitching.set(true);
   useWorkspaceStore.getState().setSwitchingPhase('Restoring project…');
   try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    if (generation !== restoreProjectStateGeneration) return;
     try {
       await invoke('workspace_set_active', { projectId });
     } catch (e) {
@@ -1192,27 +1197,26 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
     // unconditionally, after the restore above — which force-reopened the
     // Terminal and Editor rooms on every switch, so closing either of them never
     // survived leaving the project and coming back.
+    if (generation !== restoreProjectStateGeneration) return;
     if (!restoredLayout) {
       terminalRoomOpen.set(true);
       layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
     }
   } finally {
-    isRestoringProjectState = false;
-    isProjectSwitching.set(false);
-    useWorkspaceStore.getState().setSwitchingPhase(null);
-    // Autosave is muted for the whole restore, so nothing else publishes the
-    // rooms this project just came back with. Skipped when a newer restore has
-    // already taken over — the live stores describe that project by now.
-    if (generation === restoreProjectStateGeneration) publishProjectRooms(projectId);
+    if (generation === restoreProjectStateGeneration) {
+      isRestoringProjectState = false;
+      isProjectSwitching.set(false);
+      useWorkspaceStore.getState().setSwitchingPhase(null);
+      // Autosave is muted for the whole restore, so nothing else publishes the
+      // rooms this project just came back with. Skipped when a newer restore has
+      // already taken over — the live stores describe that project by now.
+      publishProjectRooms(projectId);
+    }
   }
 }
 
 export function clearAllStores() {
-  openFiles.set([]);
-  activeFile.set(null);
-  fileCache.set(new Map());
-  activeLine.set(1);
-  activeColumn.set(1);
+  resetEditorSession();
 
   sessions.set([]);
   activeSessionId.set(null);

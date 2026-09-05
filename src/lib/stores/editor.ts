@@ -47,6 +47,22 @@ export const activeSelection = syncWritable<string>('selectedText', '');
 
 // ── Utility functions (unchanged) ──
 
+// Async file work belongs to the editor session that started it.
+let editorGeneration = 0;
+export function resetEditorSession() {
+  editorGeneration++;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = null;
+  autoSavePendingPath = null;
+  openFiles.set([]);
+  activeFile.set(null);
+  fileCache.set(new Map());
+  activeLine.set(1);
+  activeColumn.set(1);
+  activeSelection.set('');
+  jumpToLine.set(null);
+}
+
 const IMAGE_EXTENSIONS = new Set([
   'png', 'apng', 'jpg', 'jpeg', 'jpe', 'jfif', 'gif', 'webp', 'bmp', 'ico', 'cur',
   'svg', 'avif', 'tif', 'tiff',
@@ -133,6 +149,7 @@ export function detectLanguage(path: string): string {
 // ── Functions using Zustand-backed writables ──
 
 export async function openFile(path: string) {
+  const generation = editorGeneration;
   const currentOpenFiles = get(openFiles);
   activeSelection.set('');
 
@@ -147,6 +164,7 @@ export async function openFile(path: string) {
 
     if (isImagePath(path)) {
       const bytes = await invoke<number[]>('fs_read_binary', { path });
+      if (generation !== editorGeneration) return;
       const mimeType = getImageMimeType(path);
       editorFile = {
         path, content: '', originalContent: '', isDirty: false,
@@ -155,6 +173,7 @@ export async function openFile(path: string) {
       };
     } else {
       const content = await invoke<string>('fs_read_file', { path });
+      if (generation !== editorGeneration) return;
       const language = detectLanguage(path);
       editorFile = {
         path, content, originalContent: content, isDirty: false,
@@ -254,6 +273,7 @@ function scheduleAutoSave(path: string) {
 }
 
 export async function saveFile(path: string, silent = false) {
+  const generation = editorGeneration;
   const cache = get(fileCache);
   const file = cache.get(path);
   if (!file || file.kind !== 'text') return;
@@ -263,6 +283,7 @@ export async function saveFile(path: string, silent = false) {
   if (get(formatOnSave)) {
     try {
       const formatted = await formatCode(file.content, path);
+      if (generation !== editorGeneration) return;
       if (formatted !== file.content) {
         contentToSave = formatted;
         fileCache.update((c) => {
@@ -276,8 +297,10 @@ export async function saveFile(path: string, silent = false) {
     }
   }
 
+  if (generation !== editorGeneration) return;
   try {
     await invoke('fs_write_file', { path, content: contentToSave });
+    if (generation !== editorGeneration) return;
     fileCache.update((c) => {
       const next = new Map(c);
       const currentFile = next.get(path) || file;
@@ -300,40 +323,50 @@ export async function saveActiveFile() {
 }
 
 export async function restoreEditorFiles(filePaths: string[], activeFilePath: string | null) {
+  const generation = editorGeneration;
   const previousCache = get(fileCache);
   const newCache = new Map<string, EditorFile>();
   const validPaths: string[] = [];
 
-  for (const path of filePaths) {
-    try {
-      if (isImagePath(path)) {
-        const bytes = await invoke<number[]>('fs_read_binary', { path });
-        const mimeType = getImageMimeType(path);
-        newCache.set(path, {
-          path, content: '', originalContent: '', isDirty: false,
-          language: 'image', kind: 'image',
-          imageSrc: createObjectUrl(bytes, mimeType), mimeType, size: bytes.length,
-        });
-      } else {
-        const content = await invoke<string>('fs_read_file', { path });
-        newCache.set(path, {
-          path, content, originalContent: content, isDirty: false,
-          language: detectLanguage(path), kind: 'text', imageSrc: null, mimeType: null, size: content.length,
-        });
-      }
-      validPaths.push(path);
-    } catch {}
+  try {
+    for (const path of filePaths) {
+      if (generation !== editorGeneration) return;
+      try {
+        if (isImagePath(path)) {
+          const bytes = await invoke<number[]>('fs_read_binary', { path });
+          if (generation !== editorGeneration) return;
+          const mimeType = getImageMimeType(path);
+          newCache.set(path, {
+            path, content: '', originalContent: '', isDirty: false,
+            language: 'image', kind: 'image',
+            imageSrc: createObjectUrl(bytes, mimeType), mimeType, size: bytes.length,
+          });
+        } else {
+          const content = await invoke<string>('fs_read_file', { path });
+          if (generation !== editorGeneration) return;
+          newCache.set(path, {
+            path, content, originalContent: content, isDirty: false,
+            language: detectLanguage(path), kind: 'text', imageSrc: null, mimeType: null, size: content.length,
+          });
+        }
+        validPaths.push(path);
+      } catch {}
+    }
+
+    if (generation !== editorGeneration) return;
+    previousCache.forEach((file, path) => { if (!newCache.has(path)) revokeEditorAsset(file); });
+
+    fileCache.set(newCache);
+    openFiles.set(validPaths);
+    const restoredActive = validPaths.includes(activeFilePath ?? '') ? activeFilePath : (validPaths[0] ?? null);
+    activeFile.set(restoredActive);
+  } finally {
+    if (generation !== editorGeneration) newCache.forEach(revokeEditorAsset);
   }
-
-  previousCache.forEach((file, path) => { if (!newCache.has(path)) revokeEditorAsset(file); });
-
-  fileCache.set(newCache);
-  openFiles.set(validPaths);
-  const restoredActive = validPaths.includes(activeFilePath ?? '') ? activeFilePath : (validPaths[0] ?? null);
-  activeFile.set(restoredActive);
 }
 
 export async function formatActiveFile() {
+  const generation = editorGeneration;
   const active = get(activeFile);
   if (!active) return;
   const cache = get(fileCache);
@@ -343,6 +376,7 @@ export async function formatActiveFile() {
 
   try {
     const formatted = await formatCode(file.content, active);
+    if (generation !== editorGeneration) return;
     if (formatted !== file.content) {
       fileCache.update((c) => {
         const next = new Map(c);
