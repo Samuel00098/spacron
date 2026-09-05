@@ -24,6 +24,7 @@ import {
   devGridLayout,
   devTerminalMosaic,
   projectTerminalStates,
+  devProjectTerminalStates,
   type GridLayout,
   type TerminalMosaic,
   type TerminalSessionInfo,
@@ -98,7 +99,7 @@ export default function TerminalPanel({
   const visibleActivePane = useStore(devMode ? devActivePaneIndex : activePaneIndex);
   const visibleLayout = useStore(devMode ? devGridLayout : gridLayout);
   const visibleMosaic = useStore(devMode ? devTerminalMosaic : terminalMosaic);
-  const allProjectStates = useStore(projectTerminalStates);
+  const allProjectStates = useStore(devMode ? devProjectTerminalStates : projectTerminalStates);
   const activeProjectValue = useStore(activeProject);
   const openProjects = useStore(projects);
 
@@ -111,7 +112,7 @@ export default function TerminalPanel({
   // display-only: every effect below that writes state, spawns a shell or binds
   // a window listener is gated on `isActiveProject`, so a parked panel can
   // neither steal input nor mutate the project you are actually working in.
-  const isParked = !isActiveProject && !devMode && Boolean(projectId);
+  const isParked = !isActiveProject && Boolean(projectId);
   // A parked panel NEVER falls back to the visible stores. Its project may have
   // no terminal state yet (it is added to the open list before its state is
   // restored), and borrowing the active project's state there would mount a

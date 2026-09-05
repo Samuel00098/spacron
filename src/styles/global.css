@@ -118,7 +118,7 @@
    that were deliberately identical stay identical: success = role-server,
    info = role-tests, warning = role-git. */
 :root.light-theme,
-html.bg-palette-light {
+html.bg-palette-light:not(.has-bg-media) {
   --error:           #d40c0c !important;
   --warning:         #a86008 !important;
   --success:         #077f33 !important;
@@ -656,8 +656,7 @@ html.has-bg-media.light-theme body::after {
    haloes gone there is nothing veiling the glyphs, so the extremes read as
    crisp instead of harsh, and the secondary/muted steps come up with them so
    the whole ramp stays legible over a wallpaper rather than only its top. */
-html.has-bg-media.bg-palette-dark,
-html.has-bg-image.bg-palette-dark {
+html.has-bg-image.bg-palette-dark:not(.has-bg-media) {
   --text-primary:    #ffffff !important;
   --text-secondary:  #cdcdda !important;
   --text-muted:      #8f8fa2 !important;
@@ -665,13 +664,36 @@ html.has-bg-image.bg-palette-dark {
   --titlebar-text:   #ffffff !important;
 }
 
-html.has-bg-media.bg-palette-light,
-html.has-bg-image.bg-palette-light {
+html.has-bg-image.bg-palette-light:not(.has-bg-media) {
   --text-primary:    #000000 !important;
   --text-secondary:  #2a2a35 !important;
   --text-muted:      #5c5c6a !important;
   --text-placeholder: #9a9aa8 !important;
   --titlebar-text:   #000000 !important;
+}
+
+/* A custom image does not change the panel theme. Sampling the wallpaper
+   must not put dark ink on dark panels (or white ink on light panels). */
+:root.has-bg-media {
+  --text-primary: #f1f5f9 !important;
+  --text-primary-rgb: 241, 245, 249 !important;
+  --text-secondary: #d8dee9 !important;
+  --text-secondary-rgb: 216, 222, 233 !important;
+  --text-muted: #b0bac9 !important;
+  --text-muted-rgb: 176, 186, 201 !important;
+  --text-placeholder: #a3afbf !important;
+  --text-placeholder-rgb: 163, 175, 191 !important;
+}
+
+:root.has-bg-media.light-theme {
+  --text-primary: #334155 !important;
+  --text-primary-rgb: 51, 65, 85 !important;
+  --text-secondary: #3e4c60 !important;
+  --text-secondary-rgb: 62, 76, 96 !important;
+  --text-muted: #475569 !important;
+  --text-muted-rgb: 71, 85, 105 !important;
+  --text-placeholder: #475569 !important;
+  --text-placeholder-rgb: 71, 85, 105 !important;
 }
 
 /* One tight outline, no bloom. The wide 10/18/28px layers this used to stack
@@ -1001,6 +1023,17 @@ input:focus {
   --panel-veil: rgba(28, 32, 44, 0.13);
 }
 
+/* Unknown wallpapers can be pure white or black behind a label. Give custom
+   backgrounds a stronger panel surface while leaving the wallpaper visible
+   across the workspace outside the panels. */
+:root.has-bg-media {
+  --panel-tint: 0.94;
+}
+
+:root.has-bg-media.light-theme {
+  --panel-veil: rgba(28, 32, 44, 0.04);
+}
+
 /* The floating panels. Each ships its own hand-rolled frost recipe in its own
    stylesheet, and component CSS loads after this file — hence `!important`,
    the same lever the shell's room panels use for the same reason.
@@ -1041,6 +1074,26 @@ input:focus {
 :root.light-theme .titlebar {
   --panel-tint: 0.5;
   --panel-veil: rgba(28, 32, 44, 0.07);
+}
+
+/* Custom wallpapers must not wash out the window controls. Keep this chrome
+   on the selected theme's opaque surface, independent of image luminance. */
+:root.has-bg-media .titlebar {
+  background: rgb(var(--bg-secondary-rgb)) !important;
+  --titlebar-text: var(--text-primary) !important;
+  --titlebar-text-rgb: var(--text-primary-rgb);
+  --text-secondary: #d8dee9 !important;
+  --text-muted: #b0bac9 !important;
+}
+
+:root.has-bg-media.light-theme .titlebar {
+  --titlebar-text: var(--text-primary) !important;
+  --text-secondary: #3e4c60 !important;
+  --text-muted: #475569 !important;
+}
+
+:root.has-bg-media .titlebar :is(.nav-btn, .icon-btn, .github-push-btn, .wc-btn, .search-icon, .ws-caret) {
+  color: var(--titlebar-text) !important;
 }
 
 /* ── The traveling edge light ──

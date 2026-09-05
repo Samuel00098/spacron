@@ -32,12 +32,15 @@ import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
 import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
-import { requestAgentPlacement, expandSpawnPlan } from '$lib/stores/agentPlacement';
+import {
+  defaultAgentPlacement,
+  expandSpawnPlan,
+  type AgentPlacement,
+} from '$lib/stores/agentPlacement';
 
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
 import './AgentSpawnModal.css';
-
 
 export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const project = useStore(activeProject);
@@ -49,11 +52,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const layout = useStore(layoutSnapshot);
   const isDev = layout.ambient === 'development';
 
-  // How these agents will actually launch. Read live rather than stated as a
-  // fact, because the mode is a setting: a hardcoded "runs with permissions
-  // bypassed" would be a lie the moment someone switches to Manual. `somePinned`
-  // is the same divergence check the Agents pane shows its note from — with a
-  // per-agent pin in play the mode below is the default, not the whole story.
   const $permissionMode = useStore(agentPermissionMode);
   const $agentDefaultArgs = useStore(agentDefaultArgs);
   const $agentDefaultEnv = useStore(agentDefaultEnv);
@@ -64,13 +62,11 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const yolo = $permissionMode === 'yolo';
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
-  // True only for scans the user kicked off (the Rescan button), so the label
-  // stays "Rescan" during quiet background ticks instead of flashing.
+  const [spawnPlacements, setSpawnPlacements] = useState<Map<string, AgentPlacement>>(new Map());
+  const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
 
-  // One-click sign-in: close the picker, then open a terminal running the CLI
-  // so the user can complete the login flow there. Shared with the Agents
-  // settings pane via `runAgentSignIn`.
+  // One-click sign-in: close picker, open CLI in terminal to complete login
   const openSignIn = (command: string, name: string) => {
     const cwd = project?.root_path;
     const projectId = project?.id;
@@ -82,14 +78,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     void runAgentSignIn({ command, name, cwd, projectId, isDev });
   };
 
-  // Detection only — the usage dock owns the polling schedule (15 min), but
-  // opening the spawn picker is a deliberate "what can I launch right now", so
-  // top the scan up once on mount and keep a lightweight tick while the modal
-  // is open. A CLI installed *or removed* mid-session then appears (or
-  // disappears) without waiting for the next background poll or a manual
-  // Rescan. Only sign-in probes are cached in Rust (60s) — the PATH install
-  // check is fresh on every scan — but 36 stat calls every 20s is nothing,
-  // and `refreshUsage` dedupes in-flight calls.
   useEffect(() => {
     void refreshUsage();
     const timer = setInterval(() => {
@@ -103,11 +91,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     void $removedPresetAgents;
     if (!project) return [];
     const all = getPresetRuns(project.id).filter((r) => r.isAgent);
-    // Once detection has landed, built-ins are narrowed to the ones actually
-    // on PATH; custom agents are always kept (the scan can't know them). Until
-    // then — scan in flight, scan failed, or a browser session where no scan
-    // exists — `haveDetection` is false and nothing is filtered, rather than
-    // hiding agents on a detection hiccup.
     return filterInstalledAgents(all, {
       installedCommands: installedAgentCommands($usage),
       customCommands: new Set($customAgents.map((a) => a.command)),
@@ -115,17 +98,12 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     });
   }, [project, $usage.lastFetchedAt, $usage.detected, $customAgents, $removedPresetAgents]);
 
-  // Detection results keyed by command, for the per-row state badge. Only
-  // populated once the scan has run — before that (or in a browser session,
-  // where no scan exists) every lookup misses and rows show no badge, which is
-  // right because the list itself is unfiltered until detection lands.
   const detectedByCommand = useMemo(() => {
     const map = new Map<string, DetectedAgent>();
     for (const det of $usage.detected) map.set(det.command, det);
     return map;
   }, [$usage.detected]);
 
-  /** First scan still in flight — show that rather than flashing the unfiltered list. */
   const scanning = isTauriRuntime() && $usage.loading && $usage.lastFetchedAt === 0;
 
   const totalSpawnCount = useMemo(
@@ -133,7 +111,35 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     [spawnCounts]
   );
 
+  // All presets currently chosen (count > 0)
+  const selectedPresets = useMemo(() => {
+    return spawnPresets.filter((p) => (spawnCounts.get(p.command) ?? 0) > 0);
+  }, [spawnPresets, spawnCounts]);
+
+  // Active agent shown in the configuration section
+  const activePreset = useMemo(() => {
+    if (activeCommand) {
+      const found = spawnPresets.find((p) => p.command === activeCommand);
+      if (found) return found;
+    }
+    if (selectedPresets.length > 0) return selectedPresets[0];
+    return spawnPresets[0] ?? null;
+  }, [spawnPresets, activeCommand, selectedPresets]);
+
+  useEffect(() => {
+    if (!activeCommand && spawnPresets.length > 0) {
+      setActiveCommand(spawnPresets[0].command);
+    }
+  }, [spawnPresets, activeCommand]);
+
   const incrementSpawn = (command: string) => {
+    setActiveCommand(command);
+    setSpawnPlacements((prev) => {
+      if (prev.has(command)) return prev;
+      const next = new Map(prev);
+      next.set(command, defaultAgentPlacement());
+      return next;
+    });
     setSpawnCounts((prev) => {
       const next = new Map(prev);
       next.set(command, (next.get(command) ?? 0) + 1);
@@ -152,17 +158,47 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       }
       return next;
     });
+    if ((spawnCounts.get(command) ?? 0) <= 1) {
+      setSpawnPlacements((placements) => {
+        const nextPlacements = new Map(placements);
+        nextPlacements.delete(command);
+        return nextPlacements;
+      });
+    }
+  };
+
+  const handleTileClick = (command: string) => {
+    setActiveCommand(command);
+    const count = spawnCounts.get(command) ?? 0;
+    if (count === 0) {
+      setSpawnCounts((prev) => {
+        const next = new Map(prev);
+        next.set(command, 1);
+        return next;
+      });
+      setSpawnPlacements((prev) => {
+        if (!prev.has(command)) {
+          const next = new Map(prev);
+          next.set(command, defaultAgentPlacement());
+          return next;
+        }
+        return prev;
+      });
+    }
+  };
+
+  const setSpawnPlacement = (command: string, placement: AgentPlacement) => {
+    setSpawnPlacements((prev) => {
+      const next = new Map(prev);
+      next.set(command, placement);
+      return next;
+    });
   };
 
   const handleSpawnConfirm = useCallback(async () => {
     const entries = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
     if (!entries.length) return;
 
-    // Always confirm the working directory before anything starts — a worktree
-    // agent's edits are invisible in the main checkout, which is easy to miss if
-    // the choice is only a toggle. Flattened to one entry per agent so a batch
-    // can be mixed (one in the main repo, the rest isolated). Dismissing keeps
-    // this modal open with the user's picks intact.
     const plan = expandSpawnPlan(
       entries.map(([cmd, count]) => ({
         key: cmd,
@@ -170,14 +206,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
         count,
       }))
     );
-    const placements = await requestAgentPlacement({
-      agents: plan.map((item) => item.label),
-      source: 'manual',
-    });
-    if (!placements) return;
+    const placements = plan.map(
+      (item) => spawnPlacements.get(item.key) ?? defaultAgentPlacement()
+    );
 
-    // Close the popup immediately so that the background spawning process
-    // can run without modal overlays flickering on top of tab changes.
     onclose();
 
     const cwd = project?.root_path;
@@ -192,8 +224,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     const spawnedNames: string[] = [];
 
     try {
-      // `plan` is already one entry per agent, index-aligned with `placements`,
-      // so each agent honours its OWN answer from the dialog.
       for (const [index, { key: cmd }] of plan.entries()) {
         const skipWorktree = placements[index] === 'main';
         const name = pickAssistantName(takenNames);
@@ -215,11 +245,6 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           takenNames.push(name);
           applyOrchestratorAgentName(id, name);
           if (worktree) setSessionWorktree(id, worktree);
-          // Register with the orchestrator so this agent gets the same
-          // turn-end cue and readable-output treatment as a dispatched one.
-          // The typed-launch detector deliberately skips modal spawns, so
-          // without this they stay invisible to agent mode. Must come after
-          // applyOrchestratorAgentName so the task adopts the assigned name.
           if (projectId) adoptSpawnedAgent(id, projectId);
           spawnedNames.push(name);
           lastId = id;
@@ -254,7 +279,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, spawnPresets, project, isDev, onclose]);
+  }, [spawnCounts, spawnPlacements, spawnPresets, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && totalSpawnCount > 0) {
@@ -268,6 +293,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     if (e.target === e.currentTarget) onclose();
   }
 
+  const activePlacement = activePreset
+    ? spawnPlacements.get(activePreset.command) ?? defaultAgentPlacement()
+    : defaultAgentPlacement();
+
   return (
     <div
       className="asm-backdrop"
@@ -280,12 +309,13 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       onKeyDown={handleKeyDown}
     >
       <div className="asm-card">
+        {/* Header with relatable Bot/Agent Icon */}
         <header className="asm-header">
           <div className="asm-title-row">
             <span className="asm-title-badge" aria-hidden="true">
               <svg
-                width="16"
-                height="16"
+                width="18"
+                height="18"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -293,12 +323,17 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
+                <path d="M12 8V4H8" />
+                <rect width="16" height="12" x="4" y="8" rx="2" />
+                <path d="M2 14h2" />
+                <path d="M20 14h2" />
+                <line x1="9" y1="13" x2="9" y2="15" />
+                <line x1="15" y1="13" x2="15" y2="15" />
               </svg>
             </span>
             <div className="asm-title-text">
               <span className="asm-title">Spawn Agents</span>
-              <span className="asm-subtitle">Pick a coding CLI. You'll choose where it runs next.</span>
+              <span className="asm-subtitle">Choose agents, set instance counts under each, and configure workspace.</span>
             </div>
           </div>
           <button className="asm-close-btn" onClick={onclose} aria-label="Close dialog">
@@ -309,6 +344,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
           </button>
         </header>
 
+        {/* Top Section: Agent Icons Grid with Steppers right under each agent */}
         <div className="asm-preset-list">
           {spawnPresets.length === 0 ? (
             <div className="asm-empty">
@@ -317,46 +353,55 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                 : 'No agent CLIs detected on this machine. Install one, then hit Rescan below, or add a custom agent in Settings → Agents.'}
             </div>
           ) : (
-            spawnPresets.map((preset) => {
-              const count = spawnCounts.get(preset.command) ?? 0;
-              // Bundled brand drives the tile's --logo color; the mark itself is
-              // rendered via AgentBrandMark so a custom agent's dashboardicons
-              // logo shows here too (falling back to bundled/glyph).
-              const brand = getAgentBrand(preset.command, preset.name);
-              const selected = count > 0;
-              const logoColor =
-                brand.color === 'mono' ? 'var(--text-primary, #e8e8e8)' : brand.color;
-              return (
-                <div
-                  key={preset.id}
-                  className={`asm-card-item${selected ? ' selected' : ''}`}
-                  style={{ ['--logo' as string]: logoColor }}
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={selected}
-                  onClick={() => (selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      selected ? decrementSpawn(preset.command) : incrementSpawn(preset.command);
-                    }
-                  }}
-                >
-                  <div className="asm-logo" aria-hidden="true">
-                    <AgentBrandMark command={preset.command} name={preset.name} />
-                  </div>
-                  <div className="asm-card-info">
-                    <span className="asm-card-name-row">
-                      <span className="asm-card-name">{preset.name}</span>
+            <div className="asm-icon-grid">
+              {spawnPresets.map((preset) => {
+                const count = spawnCounts.get(preset.command) ?? 0;
+                const brand = getAgentBrand(preset.command, preset.name);
+                const isSelected = count > 0;
+                const isActive = activePreset?.command === preset.command;
+                const logoColor =
+                  brand.color === 'mono' ? 'var(--text-primary)' : brand.color;
+                const det = detectedByCommand.get(preset.command);
+                const offerSignIn = shouldOfferSignIn(det);
+
+                return (
+                  <div
+                    key={preset.id}
+                    className={`asm-agent-tile${isSelected ? ' selected' : ''}${isActive ? ' active' : ''}`}
+                    style={{ ['--logo' as string]: logoColor }}
+                    onClick={() => handleTileClick(preset.command)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleTileClick(preset.command);
+                      }
+                    }}
+                    aria-label={`Select ${preset.name}`}
+                  >
+                    {count > 0 && (
+                      <span
+                        className={`asm-tile-count-badge${brand.color === 'mono' ? ' mono' : ''}`}
+                        aria-label={`${count} selected`}
+                      >
+                        ×{count}
+                      </span>
+                    )}
+
+                    <div className="asm-tile-icon" aria-hidden="true">
+                      <AgentBrandMark command={preset.command} name={preset.name} />
+                    </div>
+
+                    <span className="asm-tile-name">{preset.name}</span>
+
+                    <div className="asm-tile-badge-row">
                       {renderStateBadge(
-                        detectedByCommand.get(preset.command),
+                        det,
                         preset.id.startsWith('custom:'),
                         preset.name
                       )}
-                      {shouldOfferSignIn(detectedByCommand.get(preset.command)) && (
-                        // Stop the keydown from bubbling to the card's own
-                        // Enter/Space handler, which would swallow this
-                        // button's click and toggle the row's selection.
+                      {offerSignIn && (
                         <button
                           type="button"
                           className="asm-signin-btn"
@@ -364,66 +409,205 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                             e.stopPropagation();
                             void openSignIn(preset.command, preset.name);
                           }}
-                          onKeyDown={(e) => e.stopPropagation()}
                           title={`Run \`${preset.command}\` in a new terminal to sign in, then hit Rescan.`}
                         >
-                          <svg
-                            width="9"
-                            height="9"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.4"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
-                          >
-                            <polyline points="4 7 9 12 4 17" />
-                            <line x1="12" y1="19" x2="20" y2="19" />
-                          </svg>
                           Sign in
                         </button>
                       )}
-                    </span>
-                    <span className="asm-card-cmd">{preset.command}</span>
-                  </div>
-                  <div
-                    className={`asm-stepper${selected ? ' active' : ''}`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      className="asm-btn asm-btn-decrement"
-                      onClick={() => decrementSpawn(preset.command)}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      disabled={count === 0}
-                      aria-label={`Decrease count for ${preset.name}`}
+                    </div>
+
+                    {/* Stepper directly under the agent icon */}
+                    <div
+                      className={`asm-tile-stepper${count > 0 ? ' has-count' : ''}`}
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      −
-                    </button>
-                    <span className="asm-count-value">{count}</span>
-                    <button
-                      className="asm-btn asm-btn-increment"
-                      onClick={() => incrementSpawn(preset.command)}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      aria-label={`Increase count for ${preset.name}`}
-                    >
-                      +
-                    </button>
+                      {count > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            className="asm-tile-step-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              decrementSpawn(preset.command);
+                            }}
+                            aria-label={`Decrease count for ${preset.name}`}
+                          >
+                            −
+                          </button>
+                          <span className="asm-tile-step-count">{count}</span>
+                          <button
+                            type="button"
+                            className="asm-tile-step-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              incrementSpawn(preset.command);
+                            }}
+                            aria-label={`Increase count for ${preset.name}`}
+                          >
+                            +
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="asm-tile-add-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleTileClick(preset.command);
+                          }}
+                          aria-label={`Add ${preset.name}`}
+                        >
+                          + Add
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
         </div>
 
+        {/* Configuration Section: Workspace Target for active agent */}
+        {activePreset && (
+          <div className="asm-config-section">
+            <div className="asm-config-header">
+              <div className="asm-config-agent-info">
+                <span className="asm-config-label">Configuring</span>
+                <span className="asm-config-agent-name">{activePreset.name}</span>
+                <code className="asm-config-agent-cmd">{activePreset.command}</code>
+              </div>
+              {shouldOfferSignIn(detectedByCommand.get(activePreset.command)) && (
+                <button
+                  type="button"
+                  className="asm-signin-btn"
+                  onClick={() => void openSignIn(activePreset.command, activePreset.name)}
+                  title={`Run \`${activePreset.command}\` in a new terminal to sign in, then hit Rescan.`}
+                >
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <polyline points="4 7 9 12 4 17" />
+                    <line x1="12" y1="19" x2="20" y2="19" />
+                  </svg>
+                  Sign in
+                </button>
+              )}
+            </div>
+
+            {/* Quick-switch tabs when multiple agents are picked */}
+            {selectedPresets.length > 1 && (
+              <div className="asm-selected-agent-tabs" role="tablist" aria-label="Selected agents">
+                {selectedPresets.map((p) => {
+                  const count = spawnCounts.get(p.command) ?? 0;
+                  const isTabActive = activePreset?.command === p.command;
+                  return (
+                    <button
+                      key={p.command}
+                      type="button"
+                      role="tab"
+                      aria-selected={isTabActive}
+                      className={`asm-agent-tab${isTabActive ? ' active' : ''}`}
+                      onClick={() => setActiveCommand(p.command)}
+                    >
+                      <span>{p.name}</span>
+                      <span className="asm-tab-count">×{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Workspace target switcher */}
+            <div className="asm-config-field">
+              <span className="asm-field-title">
+                Workspace target {selectedPresets.length > 1 ? `for ${activePreset.name}` : ''}
+              </span>
+              <div
+                className="asm-placement-grid"
+                role="radiogroup"
+                aria-label={`Where ${activePreset.name} works`}
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={activePlacement === 'main'}
+                  className={`asm-placement-card${activePlacement === 'main' ? ' selected' : ''}`}
+                  onClick={() => setSpawnPlacement(activePreset.command, 'main')}
+                >
+                  <div className="asm-placement-card-header">
+                    <span className="asm-placement-radio" aria-hidden="true">
+                      {activePlacement === 'main' && <span className="asm-radio-inner" />}
+                    </span>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="asm-placement-icon"
+                    >
+                      <line x1="6" y1="3" x2="6" y2="15" />
+                      <circle cx="18" cy="6" r="3" />
+                      <circle cx="6" cy="18" r="3" />
+                      <path d="M18 9a9 9 0 0 1-9 9" />
+                    </svg>
+                    <strong>Main repo</strong>
+                  </div>
+                  <small>Edits appear in tree immediately</small>
+                </button>
+
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={activePlacement === 'worktree'}
+                  className={`asm-placement-card${activePlacement === 'worktree' ? ' selected' : ''}`}
+                  onClick={() => setSpawnPlacement(activePreset.command, 'worktree')}
+                >
+                  <div className="asm-placement-card-header">
+                    <span className="asm-placement-radio" aria-hidden="true">
+                      {activePlacement === 'worktree' && <span className="asm-radio-inner" />}
+                    </span>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="asm-placement-icon"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1" />
+                      <rect x="14" y="3" width="7" height="7" rx="1" />
+                      <rect x="14" y="14" width="7" height="7" rx="1" />
+                      <path d="M10 6.5h4" />
+                      <path d="M17.5 10v4" />
+                    </svg>
+                    <strong>Isolated repo</strong>
+                  </div>
+                  <small>Dedicated worktree &amp; branch</small>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
         <footer className="asm-footer">
           <div className="asm-footer-left">
-            {/* Isolated vs main repo is no longer a toggle here — spawning opens
-                the placement dialog so the choice is always a deliberate one. */}
-            <span className="asm-hint">Next: choose isolated worktree or main repo</span>
-            {/* What the CLI is about to be launched with. The spawn picker is
-                the last point before a permission decision takes effect, so the
-                mode belongs here and not only three panels away in Settings. */}
             <span
               className="asm-perm"
               data-mode={$permissionMode}
@@ -438,8 +622,8 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
               }
             >
               <svg
-                width="11"
-                height="11"
+                width="12"
+                height="12"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -456,14 +640,10 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
               </span>
               {somePinned && <span className="asm-perm-note">· some pinned</span>}
             </span>
-            {/* The list only shows installed agents once the detection scan has
-                run, so a CLI installed *after* the modal opened needs a way to
-                be picked up without leaving. `force` bypasses the probe memo
-                and re-reads PATH. */}
+
             {isTauriRuntime() && (
-              // If a background tick is mid-flight, refreshUsage dedupes and
-              // this click joins the non-forced scan (no fresh probe).
               <button
+                type="button"
                 className={`asm-rescan${rescanning ? ' scanning' : ''}`}
                 onClick={() => {
                   setRescanning(true);
@@ -490,12 +670,18 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
               </button>
             )}
           </div>
+
           <button
+            type="button"
             className="asm-confirm-btn"
             onClick={() => void handleSpawnConfirm()}
             disabled={totalSpawnCount === 0}
           >
-            {`Spawn${totalSpawnCount > 0 ? ` ${totalSpawnCount}` : ''}`}
+            {totalSpawnCount === 0
+              ? 'Select an agent'
+              : totalSpawnCount === 1
+                ? 'Spawn 1 Agent'
+                : `Spawn ${totalSpawnCount} Agents`}
           </button>
         </footer>
       </div>
@@ -503,19 +689,8 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   );
 }
 
-/** While the picker is open, re-scan on this cadence so installs and
- * uninstalls show up without a manual Rescan — Rust caches sign-in probes for
- * 60s and `refreshUsage` dedupes in-flight calls, so this is cheap. */
 const SPAWN_MODAL_POLL_MS = 20 * 1000;
 
-/**
- * The small pill under an agent's name. Answers the two questions a row's
- * presence raises — "why is this here?" (it's installed, or it's yours) and
- * "will it just work?" (are you signed in). Mirrors the Agents pane's badge
- * semantics exactly so the picker and the settings tab tell the same story:
- * green = ready to go, amber = installed but sign-in unknown/missing, violet =
- * a custom agent (always shown, nothing to detect).
- */
 function renderStateBadge(
   det: DetectedAgent | undefined,
   isCustom: boolean,
@@ -527,6 +702,7 @@ function renderStateBadge(
         className="asm-badge custom"
         title="Custom agent, added by you in Settings → Agents. Spacron can't auto-detect it, so it's always shown here."
       >
+        <span className="asm-badge-dot" aria-hidden="true" />
         Custom
       </span>
     );
@@ -538,18 +714,19 @@ function renderStateBadge(
         data-tone="ready"
         title={`${name} is signed in and ready to spawn.`}
       >
+        <span className="asm-badge-dot" aria-hidden="true" />
         Signed in
       </span>
     );
   }
   if (det?.installed && !det.detectsSignIn) {
-    // Keychain CLIs: `signedIn: false` means "unknown", not "signed out".
     return (
       <span
         className="asm-badge"
         data-tone="partial"
         title="Installed. This CLI keeps its credentials in your system keychain or environment (API keys), so Spacron can't tell whether you're signed in."
       >
+        <span className="asm-badge-dot" aria-hidden="true" />
         Installed
       </span>
     );
@@ -561,10 +738,10 @@ function renderStateBadge(
         data-tone="partial"
         title={`Installed but no sign-in detected. Run \`${det.command}\` once to sign in, then hit Rescan if you already did.`}
       >
+        <span className="asm-badge-dot" aria-hidden="true" />
         Installed
       </span>
     );
   }
-  // Pre-scan / browser: the list is unfiltered and there is no data yet.
   return null;
 }

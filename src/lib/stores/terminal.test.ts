@@ -64,6 +64,8 @@ import {
   attachTerminalSession,
   commandBlocks,
   createTerminalSession,
+  devProjectTerminalStates,
+  devSessions,
   getSessionOutputBuffer,
   getSessionOutputLength,
   registerDataCallback,
@@ -97,6 +99,32 @@ import {
 import { openPty } from '$lib/services/pty-bridge';
 import { showToast } from './notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
+
+describe('development terminal project parking', () => {
+  afterEach(async () => {
+    await killAllSessions();
+    setActiveTerminalProject(null);
+  });
+
+  it('publishes each project state and restores the active development sessions on switch', async () => {
+    const projectA = 'dev-project-a';
+    const projectB = 'dev-project-b';
+
+    setActiveTerminalProject(projectA);
+    const sessionA = await createTerminalSession('/repo-a', 0, projectA, { isDev: true });
+
+    setActiveTerminalProject(projectB);
+    const sessionB = await createTerminalSession('/repo-b', 0, projectB, { isDev: true });
+
+    const parked = get(devProjectTerminalStates);
+    expect(parked.get(projectA)?.sessions.map((session) => session.id)).toEqual([sessionA]);
+    expect(parked.get(projectB)?.sessions.map((session) => session.id)).toEqual([sessionB]);
+    expect(get(devSessions).map((session) => session.id)).toEqual([sessionB]);
+
+    setActiveTerminalProject(projectA);
+    expect(get(devSessions).map((session) => session.id)).toEqual([sessionA]);
+  });
+});
 
 describe('sessionHasRunningProcess', () => {
   const base = { id: 1, isRunning: true, isExecuting: false } as const;

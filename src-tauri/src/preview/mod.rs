@@ -1131,32 +1131,34 @@ fn get_target_url_from_proxy_path(path: &str, query: Option<&str>) -> Option<Str
     Some(target)
 }
 
+fn preview_ip_is_private(addr: std::net::IpAddr) -> bool {
+    match addr {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private()
+            || v4.is_link_local() || v4.is_multicast() || v4.is_unspecified()
+            || v4.is_broadcast(),
+        std::net::IpAddr::V6(v6) => {
+            // Apply the IPv4 policy to mapped addresses as well.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return preview_ip_is_private(std::net::IpAddr::V4(v4));
+            }
+            let segs = v6.segments();
+            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified()
+                || (segs[0] & 0xfe00) == 0xfc00
+                || (segs[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 fn is_private_target(url: &str) -> bool {
     if let Ok(parsed) = url::Url::parse(url) {
         if let Some(host) = parsed.host_str() {
-            if host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" {
+            if host.eq_ignore_ascii_case("localhost") {
                 return true;
             }
-            if let Ok(addr) = host.parse::<std::net::IpAddr>() {
-                return match addr {
-                    std::net::IpAddr::V4(v4) => {
-                        v4.is_loopback()
-                            || v4.is_private()
-                            || v4.is_link_local()
-                            || v4.is_multicast()
-                            || v4.octets()[0] == 169 && v4.octets()[1] == 254
-                    }
-                    std::net::IpAddr::V6(v6) => {
-                        let segs = v6.segments();
-                        v6.is_loopback()
-                            || v6.is_multicast()
-                            || v6.is_unspecified()
-                            // ULA: fc00::/7
-                            || (segs[0] & 0xfe00) == 0xfc00
-                            // Link-local: fe80::/10
-                            || (segs[0] & 0xffc0) == 0xfe80
-                    }
-                };
+            // URL host strings retain brackets around IPv6 literals.
+            let bare = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(addr) = bare.parse::<std::net::IpAddr>() {
+                return preview_ip_is_private(addr);
             }
         }
     }
@@ -1174,25 +1176,11 @@ fn is_private_target(url: &str) -> bool {
 /// cloud-metadata address. Resolution failures return false so the client
 /// surfaces the real connection error instead of a misleading block.
 async fn has_blocked_resolved_ip(host: &str, port: u16) -> bool {
-    use std::net::IpAddr;
-    let addr_str = format!("{}:{}", host, port);
-    match tokio::net::lookup_host(addr_str).await {
-        Ok(addrs) => addrs.into_iter().any(|sa| match sa.ip() {
-            IpAddr::V4(v4) => {
-                !v4.is_loopback()
-                    && (v4.is_private()
-                        || v4.is_link_local()
-                        || v4.is_multicast()
-                        || v4.is_unspecified())
-            }
-            IpAddr::V6(v6) => {
-                let segs = v6.segments();
-                !v6.is_loopback()
-                    && (v6.is_multicast()
-                        || v6.is_unspecified()
-                        || (segs[0] & 0xfe00) == 0xfc00  // ULA fc00::/7
-                        || (segs[0] & 0xffc0) == 0xfe80) // link-local fe80::/10
-            }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    match tokio::net::lookup_host((bare, port)).await {
+        Ok(addrs) => addrs.into_iter().any(|sa| {
+            let ip = sa.ip();
+            !ip.is_loopback() && preview_ip_is_private(ip)
         }),
         Err(_) => false,
     }
@@ -3638,6 +3626,18 @@ mod tests {
         assert!(!is_loopback_host_target("http://0.0.0.0:3000/"));
         // Public hosts are neither.
         assert!(!is_loopback_host_target("https://example.com/"));
+    }
+
+    #[tokio::test]
+    async fn preview_blocks_ipv6_private_and_mapped_addresses() {
+        for host in ["[fc00::1]", "[fe80::1]", "[::]", "[ff02::1]",
+            "[::ffff:192.168.1.10]", "[::ffff:169.254.169.254]",
+            "[::ffff:0.0.0.0]", "[::ffff:255.255.255.255]"] {
+            assert!(super::is_private_target(&format!("http://{host}/")), "{host}");
+            assert!(super::has_blocked_resolved_ip(host, 80).await, "{host}");
+        }
+        assert!(!super::has_blocked_resolved_ip("[::1]", 80).await);
+        assert!(!super::is_private_target("https://[2606:4700:4700::1111]/"));
     }
 
     #[test]

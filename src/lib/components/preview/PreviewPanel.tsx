@@ -616,6 +616,19 @@ export default function PreviewPanel() {
     [updateTabLoadState, clearLoadFeedbackTimer],
   );
 
+  useEffect(() => {
+    // Back/Forward starts load feedback even when returning to the start
+    // screen. That screen has no iframe, so no load event can finish it.
+    // Do not clear real page loads that are still waiting for their proxy.
+    if (!activeTabId || proxyStartedValue || !normalizeUrl(desiredUrl).startsWith('/')) return;
+    clearLoadFeedbackTimer(activeTabId);
+    drivenLoadTabsRef.current.delete(activeTabId);
+    const state = tabLoadState[activeTabId];
+    if (state && (state.isLoading || state.slowLoad || state.iframeError)) {
+      updateTabLoadState(activeTabId, { ...DEFAULT_TAB_LOAD_STATE });
+    }
+  }, [activeTabId, desiredUrl, proxyStartedValue, tabLoadState, clearLoadFeedbackTimer, updateTabLoadState]);
+
   const handlePortChange = useCallback(() => {
     if (tempPort >= 1 && tempPort <= 65535) {
       setTargetPort(tempPort);

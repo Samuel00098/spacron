@@ -30,6 +30,7 @@ export default function LiveTicker({
   refreshing = false,
   countdown = true,
   liveLabel = 'Live',
+  labelOnly = false,
 }: {
   /** How often the owning surface re-fetches, in milliseconds. */
   intervalMs: number;
@@ -41,18 +42,23 @@ export default function LiveTicker({
   countdown?: boolean;
   /** Static label when `countdown` is false, e.g. "Live". */
   liveLabel?: string;
+  /** Keep the status visually steady while the owning store refreshes itself. */
+  labelOnly?: boolean;
 }) {
   // A 1s tick so the countdown (and the age in the panel header) moves. Only
   // this component re-renders — the parent stays put between polls.
   const [, setNow] = useState(0);
 
   useEffect(() => {
+    if (labelOnly) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [labelOnly]);
 
   let text: string;
-  if (refreshing) {
+  if (labelOnly) {
+    text = liveLabel;
+  } else if (refreshing) {
     text = 'Updating…';
   } else if (countdown) {
     text =
@@ -64,7 +70,7 @@ export default function LiveTicker({
   }
 
   return (
-    <span className="live-ticker" title={text}>
+    <span className={`live-ticker${labelOnly ? ' label-only' : ''}`} title={text}>
       <i className="live-ticker-dot" aria-hidden="true" />
       {text}
     </span>

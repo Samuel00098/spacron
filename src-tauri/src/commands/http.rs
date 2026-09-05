@@ -23,7 +23,9 @@ fn ip_is_blocked(ip: IpAddr) -> bool {
             // IPv4-mapped link-local address (e.g. ::ffff:169.254.x.x).
             v6.is_unspecified()
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
-                || v6.to_ipv4().map(|m| m.is_link_local()).unwrap_or(false)
+                || v6.to_ipv4()
+                    .map(|m| ip_is_blocked(IpAddr::V4(m)))
+                    .unwrap_or(false)
         }
     }
 }
@@ -34,7 +36,10 @@ fn ip_is_blocked(ip: IpAddr) -> bool {
 /// (`secrets::resolve_base_url`) so a tampered `base_url` can't point an
 /// authenticated request at the cloud-metadata endpoint.
 pub(crate) fn host_is_blocked(host: &str) -> bool {
-    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let host = host.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
 
     const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.goog"];
     if BLOCKED_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h)) {
@@ -1037,6 +1042,8 @@ mod tests {
         // Metadata hostnames (case-insensitive).
         assert!(host_is_blocked("metadata.google.internal"));
         assert!(host_is_blocked("Metadata.Google.Internal"));
+        assert!(host_is_blocked("metadata.google.internal."));
+        assert!(host_is_blocked("METADATA.GOOG."));
         // IPv6 link-local and IPv4-mapped link-local.
         assert!(host_is_blocked("fe80::1"));
         assert!(host_is_blocked("[fe80::1]"));
@@ -1044,6 +1051,8 @@ mod tests {
         // Unspecified addresses.
         assert!(host_is_blocked("0.0.0.0"));
         assert!(host_is_blocked("::"));
+        assert!(host_is_blocked("::ffff:0.0.0.0"));
+        assert!(host_is_blocked("::ffff:255.255.255.255"));
     }
 
     #[test]

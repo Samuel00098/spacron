@@ -1,6 +1,6 @@
-/* The agent usage readout, docked in the bottom-left corner.
-   It used to live in the titlebar and inherit `.icon-btn`; free of that row it
-   now carries its own chrome. Frost recipe matches the popover it opens — see
+/* The agent usage readout now lives only in the Navigator footer. The sidebar
+   variant below removes the old viewport anchoring and standalone glass shell.
+   Frost recipe matches the expanded details — see
    [[glass-panel-recipe]]: the color-mix layer stays LAST in the background
    shorthand, and no ancestor may establish a backdrop root. */
 
@@ -40,6 +40,72 @@
 .usage-dock:hover {
   border-color: var(--border-strong, rgba(255, 255, 255, 0.18));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+}
+
+/* In the Navigator the same live readout becomes a contained status banner.
+   Its data and click target are unchanged; only the old viewport anchoring and
+   stand-alone glass shell are removed because the parent Bento card owns both. */
+.usage-dock.usage-dock-sidebar {
+  position: relative;
+  inset: auto;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 30px;
+  padding: 5px 8px;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  justify-content: flex-start;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.usage-dock.usage-dock-sidebar:hover {
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.usage-dock.usage-dock-sidebar:focus-visible {
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.usage-dock.usage-dock-sidebar::after {
+  display: none;
+}
+
+.usage-dock.usage-dock-sidebar .usage-dock-agent {
+  min-width: 0;
+}
+
+.usage-dock.usage-dock-sidebar .usage-dock-empty-label {
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.usage-dock.usage-dock-sidebar .usage-dock-num {
+  font-size: 11px;
+}
+
+.usage-dock.usage-dock-sidebar .usage-dock-win,
+.usage-dock.usage-dock-sidebar .usage-dock-more {
+  font-size: 9px;
+}
+
+.usage-dock-caret {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.usage-dock[data-open='true'] .usage-dock-caret {
+  transform: rotate(180deg);
 }
 
 .usage-dock:focus-visible {
@@ -171,7 +237,7 @@
 }
 
 @media (max-width: 480px) {
-  .usage-dock {
+  .usage-dock:not(.usage-dock-sidebar) {
     left: 8px;
     bottom: 8px;
     padding: 5px 9px;

@@ -50,8 +50,25 @@ export function parseChangelog(markdown: string): VersionEntry[] {
   return entries;
 }
 
-export function getChangelogContent(): string {
+const RAW_CHANGELOG_URL =
+  'https://raw.githubusercontent.com/Samuel00098/spacron/main/CHANGELOG.md';
+
+export async function getChangelogContent(): Promise<string> {
   const filePath = findChangelog();
-  if (!filePath) return '# Changelog\n\nUnable to locate CHANGELOG.md.';
-  return fs.readFileSync(filePath, 'utf-8');
+  if (filePath) return fs.readFileSync(filePath, 'utf-8');
+
+  // Vercel builds this project with `website/` as its root. The parent
+  // repository file is therefore outside the deployment and is also excluded
+  // by the root .vercelignore. Fetch the public source at build time so a push
+  // of CHANGELOG.md is reflected by the next website deployment.
+  try {
+    const response = await fetch(RAW_CHANGELOG_URL, {
+      next: { revalidate: 300 },
+    });
+    if (response.ok) return await response.text();
+  } catch (error) {
+    console.warn('Failed to fetch the repository changelog:', error);
+  }
+
+  return '# Changelog\n\nUnable to locate CHANGELOG.md.';
 }

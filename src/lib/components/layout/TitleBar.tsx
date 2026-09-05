@@ -1,44 +1,35 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
   homeScreenOpen,
   openQuickCapture,
-  openSettings,
   RIGHT_DRAWER_TOOLS,
   rightDrawerToolOf,
   setRightDrawerTool,
   toggleSidebar,
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
-import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
-import { toggleProjectHUD } from '$lib/stores/workspace';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
-import packageJson from '../../../../package.json';
+import { useAppIcon } from '$lib/react/useAppIcon';
 import './TitleBar.css';
 
 export default function TitleBar() {
   const win = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
 
-  // Cache-bust the titlebar icon by app version so an update always paints the
-  // new icon. The webview caches `/icon.png` by URL; without a version-tied
-  // query the old icon would persist across updates until the string changed by
-  // hand. Bumping the app version (which every release does) yields a fresh URL.
-  const iconSrc = `/icon.png?v=${packageJson.version}`;
+  const iconSrc = useAppIcon();
 
   const [iconError, setIconError] = useState(false);
 
   // Reactive store reads — the React equivalent of `$store`.
-  const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const workspace = useWorkspaceStore((s) => (s.activeWorkspaceId ? s.recentWorkspaces.find((w) => w.id === s.activeWorkspaceId) ?? null : null));
   const goBackEnabled = useStore(canGoBack);
   const goForwardEnabled = useStore(canGoForward);
   // Home is an overlay over the live workspace, so `workspaceId` stays set while
@@ -91,16 +82,6 @@ export default function TitleBar() {
   function toggleRightSidebar() {
     setRightDrawerTool(rightDrawerTool ? null : RIGHT_DRAWER_TOOLS[0]);
   }
-
-  const controlsContainerStyle: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    pointerEvents: 'auto',
-    // Non-standard Tauri drag-region hints; cast through unknown for TS.
-    WebkitAppRegion: 'no-drag',
-    appRegion: 'no-drag',
-  } as CSSProperties;
 
   return (
     <div className="titlebar" data-tauri-drag-region>
@@ -222,31 +203,11 @@ export default function TitleBar() {
         </button>
       </div>
 
-      {/* Centre breadcrumb (drag region) */}
+      {/* Centre drag region */}
       <div
-        className="titlebar-center left-align"
+        className="titlebar-center"
         data-tauri-drag-region
-      >
-        <div className="titlebar-controls-container" style={controlsContainerStyle}>
-          {showWorkspaceTools && (
-            <button
-              className="titlebar-hud-trigger"
-              onClick={toggleProjectHUD}
-              title={`Search projects and collections (${formatShortcutLabel('Ctrl+K')})`}
-            >
-              <svg className="hud-trigger-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <span className="hud-trigger-text">
-                <span className="hud-trigger-collection">{workspace?.name || 'Select Collection'}</span>
-                {project && <span className="hud-trigger-separator">/</span>}
-                {project && <span className="hud-trigger-project">{project.name}</span>}
-              </span>
-              <kbd className="hud-trigger-kbd">{formatShortcutLabel('Ctrl+K')}</kbd>
-            </button>
-          )}
-        </div>
-      </div>
+      />
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right">
@@ -280,7 +241,6 @@ export default function TitleBar() {
               </svg>
             </button>
 
-            {/* Quick Capture button */}
             <button
               className="icon-btn tb-collapse-1"
               onClick={openQuickCapture}
@@ -296,70 +256,24 @@ export default function TitleBar() {
                 strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                aria-hidden="true"
               >
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
 
-            {/* Spotlight Search button */}
-            <button
-              className="icon-btn"
-              onClick={toggleFloatingSearch}
-              aria-label="Search in Files"
-              title={`Search in Files (${formatShortcutLabel('Ctrl+Shift+F')})`}
-            >
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.3-4.3" />
-              </svg>
-            </button>
           </>
         )}
 
-        {/* Agent usage used to sit here; it is now docked in the bottom-left
-            corner (`UsageCounter`, mounted in App.tsx) because it is a reading
-            that changes width, not a fixed-size icon button like its former
-            neighbours. */}
+        {/* Agent usage is a changing readout rather than a fixed-size titlebar
+            action, so it lives in the unified left-sidebar status banner. */}
 
-        {/* Agent inbox — finished work and anything waiting on a decision. */}
+        {/* Finished agent work and pending decisions remain globally visible. */}
         {showWorkspaceTools && <InboxBell />}
 
-        {/* Settings button */}
-        {showWorkspaceTools && (
-          <button
-            className="icon-btn"
-            onClick={() => openSettings()}
-            aria-label="Settings"
-            title={`Settings (${formatShortcutLabel('Ctrl+,')})`}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-        )}
-
-        {/* Remote workspace status — always visible so the user can connect
-            to a remote dev server before opening a workspace. */}
+        {/* Connection mode stays in the top-right chrome: it affects the whole
+            workspace, not the currently selected Navigator context. */}
         <RemoteStatus dropdownUp={false} />
 
         {/* Window controls — rendered unconditionally on every OS. The window is

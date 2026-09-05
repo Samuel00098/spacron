@@ -5,6 +5,7 @@ import { showToast } from './notification';
 import { useBackgroundStore } from './zustand/background';
 import { useThemeStore } from './zustand/theme';
 import { analyseImage } from '$lib/utils/imageAnalysis';
+import { applyForegroundPalette } from './theme';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useBackgroundStore.getState() as any)[key];
@@ -27,6 +28,7 @@ function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/stor
 export const backgroundImagePresent = syncWritable<boolean>('backgroundImagePresent', false);
 
 let currentAssetUrl: string | null = null;
+let backgroundAppearanceVersion = 0;
 
 /**
  * Formats the picker accepts. Deliberately short: these four cover every real
@@ -148,6 +150,9 @@ export function applyBackgroundImage(): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   const active = userBackgroundActive();
+  const version = ++backgroundAppearanceVersion;
+  const theme = useThemeStore.getState().activeTheme;
+  const themeType = theme?.type ?? 'dark';
 
   if (active) {
     root.style.setProperty('--user-bg-image', `url("${currentAssetUrl}")`);
@@ -174,30 +179,19 @@ export function applyBackgroundImage(): void {
   }
 
   root.classList.toggle('has-bg-media', active);
+  // Restore the entire visible background, not just its URL. The custom blur
+  // remains saved so enabling the image again restores the user's choice.
+  applyBackgroundAppearance(active ? get(backgroundImageBlur) : (theme?.backgroundBlur ?? 0));
+  applyForegroundPalette(null, themeType);
 
-  // ── Adaptive foreground palette for user-added backgrounds ──────
-  if (active) {
-    // Sync: set palette based on theme type immediately (before async analysis)
-    const themeType = (useThemeStore.getState() as { activeTheme?: { type: 'dark' | 'light' } }).activeTheme?.type ?? 'dark';
-    root.classList.toggle('bg-palette-dark', themeType === 'dark');
-    root.classList.toggle('bg-palette-light', themeType !== 'dark');
-
-    // Async: analyse the actual background image and refine palette
-    if (currentAssetUrl) {
-      const urlAtStart = currentAssetUrl;
-      analyseImage(urlAtStart).then((analysis) => {
-        // Stale check: don't apply if user has since removed/changed the background
-        if (!get(backgroundImageEnabled) || currentAssetUrl !== urlAtStart) return;
-        const effectivelyDark = analysis !== null ? analysis.isDark : themeType === 'dark';
-        root.classList.toggle('bg-palette-dark', effectivelyDark);
-        root.classList.toggle('bg-palette-light', !effectivelyDark);
-      });
-    }
-  } else {
-    // No user background active — remove palette classes
-    root.classList.remove('bg-palette-dark', 'bg-palette-light');
-    // If the active theme has its own background, applyForegroundPalette
-    // in applyThemeToCSS will have set the correct palette class already.
+  // Custom-image panels keep their theme palette. Only the preset wallpaper
+  // uses sampled colours, and a later toggle/theme change invalidates the work.
+  if (!active && theme?.backgroundImage) {
+    analyseImage(theme.backgroundImage).then((analysis) => {
+      if (version !== backgroundAppearanceVersion || userBackgroundActive()) return;
+      if (useThemeStore.getState().activeTheme !== theme) return;
+      applyForegroundPalette(analysis, themeType);
+    });
   }
 }
 

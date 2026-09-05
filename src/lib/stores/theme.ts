@@ -370,12 +370,12 @@ export function applyThemeToCSS(theme: Theme | null) {
   // get the real luminance and refine the palette asynchronously.  This
   // means dark-on-paper themes that happen to use a very bright wallpaper
   // will still get dark foreground text, and vice-versa.
-  if (theme.backgroundImage) {
+  if (theme.backgroundImage && !userBackgroundActive()) {
     // Capture the theme id so we don't apply stale results after a switch
     const themeIdAtStart = theme.id;
     analyseImage(theme.backgroundImage).then((analysis) => {
       // Abort if the user has already switched to a different theme
-      if (get(activeTheme)?.id !== themeIdAtStart) return;
+      if (get(activeTheme)?.id !== themeIdAtStart || userBackgroundActive()) return;
       applyForegroundPalette(analysis, theme.type);
     });
   }

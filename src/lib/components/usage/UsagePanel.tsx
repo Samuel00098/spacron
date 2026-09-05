@@ -5,7 +5,6 @@ import {
   usageState,
   isUsagePanelOpen,
   closeUsagePanel,
-  refreshUsage,
   PANEL_POLL_INTERVAL_MS,
   hasNumbers,
   type ProviderUsage,
@@ -126,7 +125,7 @@ function ProviderRow({
 }
 
 /**
- * The usage breakdown, anchored above the bottom-left usage dock.
+ * The usage breakdown, mounted as an inline, expanding part of the Navigator.
  *
  * Scoped to usage and nothing else: the providers Spacron can read a limit for,
  * each with its meters or the reason it has none. It used to end with an "Also
@@ -147,19 +146,9 @@ export default function UsagePanel() {
     if (open) void refreshAccounts();
   }, [open]);
 
-  // While the panel is open the meters refresh themselves — no Refresh button.
-  // The background poll is 15 minutes (right for a quota nobody is watching);
-  // an open panel is someone looking at the numbers, so it ticks faster.
-  // `refreshUsage` dedupes in-flight calls, so overlapping surfaces still cost
-  // one request per tick.
-  useEffect(() => {
-    if (!open) return;
-    const id = setInterval(() => void refreshUsage(), PANEL_POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [open]);
-
-  // Popover, not modal — must not trap Tab or swallow app shortcuts. Same
-  // contract as the inbox panel.
+  // Inline disclosure, not modal — must not trap Tab or swallow app shortcuts.
+  // Escape and outside-click still collapse it so it behaves naturally beside
+  // the footer trigger without becoming a separate floating surface.
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -190,9 +179,16 @@ export default function UsagePanel() {
   const reporting = providers.filter(hasNumbers);
 
   return (
-    <div className="usage-panel" ref={panelRef} role="dialog" aria-label="Agent usage">
+    <section id="sidebar-usage-details" className="usage-panel" ref={panelRef} aria-label="Agent usage">
       <header className="usage-head">
         <span className="usage-title">
+          <span className="usage-title-glyph" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M4.8 15.5a8 8 0 1 1 14.4 0" />
+              <path d="m12 12 4-4" />
+              <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
+            </svg>
+          </span>
           Usage
           {lastFetchedAt > 0 && (
             <span className="usage-head-age">
@@ -205,6 +201,7 @@ export default function UsagePanel() {
             intervalMs={PANEL_POLL_INTERVAL_MS}
             lastFetchedAt={lastFetchedAt}
             refreshing={loading}
+            labelOnly
           />
           <button
             className="usage-close"
@@ -246,6 +243,6 @@ export default function UsagePanel() {
           Nothing is reporting numbers right now. See each row above for why.
         </p>
       )}
-    </div>
+    </section>
   );
 }

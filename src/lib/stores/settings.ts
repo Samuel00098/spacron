@@ -683,7 +683,7 @@ export const swipeNavigationEnabled = persistentWritable<boolean>('swipeNavigati
 export const formatOnSave = persistentWritable('formatOnSave', true);
 
 // Editor autosave — saves the active file shortly after typing stops.
-export const autoSave = persistentWritable('autoSave', false);
+export const autoSave = persistentWritable('autoSave', true);
 
 // Keyboard Shortcuts
 export interface KeyboardShortcut {

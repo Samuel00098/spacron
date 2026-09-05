@@ -1,11 +1,10 @@
 import { useState, useCallback } from 'react';
 import { markOnboardingCompleted, appearance } from '$lib/stores/settings';
 import { useStore } from '$lib/react/useStore';
-import packageJson from '../../../../package.json';
+import { useAppIcon } from '$lib/react/useAppIcon';
 import './OnboardingWalkthrough.css';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
-const iconSrc = `/icon.png?v=${packageJson.version}`;
 
 const appearanceOptions: { id: 'dark' | 'light' | 'system'; label: string; desc: string; icon: string }[] = [
   { id: 'dark', label: 'Dark Mode', desc: 'Pure pitch black workspace with crisp contrast', icon: '🌙' },
@@ -27,6 +26,7 @@ const shortcuts = [
 ];
 
 export default function OnboardingWalkthrough({ onclose = () => {} }: { onclose?: () => void }) {
+  const iconSrc = useAppIcon();
   const currentAppearance = useStore(appearance);
   const [step, setStep] = useState<Step>(() => {
     const saved = sessionStorage.getItem('spacron_onboarding_step');

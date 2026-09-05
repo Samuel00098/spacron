@@ -223,6 +223,7 @@ export default function AgentsPane() {
             intervalMs={PANEL_POLL_INTERVAL_MS}
             lastFetchedAt={lastFetchedAt}
             refreshing={loading}
+            labelOnly
           />
         </div>
 

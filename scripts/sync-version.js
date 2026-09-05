@@ -21,10 +21,12 @@ const conf = JSON.parse(readFileSync(tauriConf, 'utf8'));
 conf.version = version;
 writeFileSync(tauriConf, JSON.stringify(conf, null, 2) + '\n');
 
-// Cargo.toml — replace the version line in [package]
-const cargoToml = resolve(root, 'src-tauri/Cargo.toml');
-const cargo = readFileSync(cargoToml, 'utf8');
-const updated = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
-writeFileSync(cargoToml, updated);
+// Keep the bundled server and opener on the same release as the desktop app.
+for (const manifest of ['src-tauri/Cargo.toml', 'src-tauri/server/Cargo.toml', 'src-tauri/opener/Cargo.toml']) {
+  const cargoToml = resolve(root, manifest);
+  const cargo = readFileSync(cargoToml, 'utf8');
+  const updated = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
+  writeFileSync(cargoToml, updated);
+}
 
-console.log(`synced version ${version} → tauri.conf.json, Cargo.toml`);
+console.log(`synced version ${version} → tauri.conf.json and all workspace Cargo manifests`);

@@ -630,6 +630,12 @@
   display: flex;
   min-width: 0;
   min-height: 0;
+  /* The room panel inherits from this immediate wrapper, not from the outer
+     stage. Give every persistent pane its own radius instead of relying on the
+     ambient stage: Split/expanded stages already had one, but the first pane in
+     layouts with a square stage otherwise inherited 0 and painted square. */
+  border-radius: 12px;
+  overflow: clip;
 }
 /* visibility (not display:none) keeps the hidden pane laid out at full size, so
    its terminal never reflows to zero and is instantly correct when reshown.
@@ -1663,7 +1669,7 @@
 .app-shell .minimized-room-stack,
 .app-shell .rooms-table > .minimized-room-stack {
   position: fixed;
-  left: calc(12px + var(--usage-dock-width, 0px));
+  left: calc(12px + var(--left-nav-space, 0px));
   bottom: 14px;
   z-index: 1200;
   display: flex;
@@ -1672,14 +1678,14 @@
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: max(0px, calc(50vw - 388px - var(--usage-dock-width, 0px)));
+  max-width: max(0px, calc((100vw - var(--left-nav-space, 0px) - var(--right-drawer-space, 0px)) / 2 - 388px));
   padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
   scroll-behavior: smooth;
   pointer-events: auto;
-  transition: left var(--dur-fast, 0.15s) var(--ease-out, ease);
+  transition: left var(--dur-base, 0.2s) var(--ease-out, ease);
 }
 
 .app-shell .minimized-room-stack::-webkit-scrollbar {
@@ -1689,9 +1695,9 @@
 @media (max-width: 480px) {
   .app-shell .minimized-room-stack,
   .app-shell .rooms-table > .minimized-room-stack {
-    left: calc(8px + var(--usage-dock-width, 0px));
+    left: calc(8px + var(--left-nav-space, 0px));
     bottom: 10px;
-    max-width: calc(100vw - 16px - var(--usage-dock-width, 0px));
+    max-width: calc(100vw - 16px - var(--left-nav-space, 0px));
   }
 }
 
@@ -2293,53 +2299,6 @@
 }
 
 
-.app-shell .project-switch-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 50;
-  background: var(--bg-primary, #111116);
-  opacity: 0;
-  animation: project-switch-fade 0.22s ease forwards;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.project-switch-progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 18px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--bg-primary, #111116) 82%, transparent);
-  backdrop-filter: blur(12px);
-  color: var(--text-secondary, #9ca3af);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-.project-switch-spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--text-secondary, #9ca3af) 30%, transparent);
-  border-top-color: var(--accent, #7c9cff);
-  animation: project-switch-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes project-switch-spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes project-switch-fade {
-  0% { opacity: 0.55; }
-  60% { opacity: 0.55; }
-  100% { opacity: 0; }
-}
-
 .app-shell .resize-overlay {
   position: absolute;
   inset: 0;
@@ -2611,38 +2570,6 @@
   }
 }
 
-.app-shell .project-switching-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 100;
-  background: var(--bg-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: ps-fade-in 0.2s ease-out both;
-  pointer-events: none;
-}
-
-.app-shell .project-switching-overlay::after {
-  content: '';
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: ps-spin 0.6s linear infinite;
-  opacity: 0.5;
-}
-
-@keyframes ps-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes ps-spin {
-  to { transform: rotate(360deg); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .app-shell .room-panel,
   .app-shell .room-card,
@@ -2839,4 +2766,413 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .drawer-tab-btn.active,
 .app-shell .split-target-btn.active {
   box-shadow: var(--depth-pressed);
+}
+
+/* ── Unified left navigator ───────────────────────────────────────────────
+   Navigation follows Codex's stable hierarchy, but the containing surface is
+   still Spacron: one floating liquid-glass Bento card with a lit rim, rounded
+   corners and enough depth to separate it from the wallpaper. */
+.app-shell .left-utility-panel.left-sidebar {
+  align-self: stretch;
+  max-height: none;
+  margin: 0;
+  border-radius: var(--bento-radius, 16px);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+}
+
+.app-shell .left-sidebar-header {
+  min-height: 48px;
+  padding: 7px 9px 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.app-shell .left-sidebar-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.app-shell .left-sidebar-eyebrow,
+.app-shell .left-sidebar-section-label {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.app-shell .left-sidebar-project {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .left-sidebar-collapse-btn,
+.app-shell .left-sidebar-settings-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 1;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .left-sidebar-collapse-btn:hover,
+.app-shell .left-sidebar-settings-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.app-shell .left-sidebar-quick-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px 6px;
+  flex: 0 0 auto;
+}
+
+.app-shell .left-sidebar-new-agent {
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex: 1 1 auto;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .left-sidebar-new-agent:hover,
+.app-shell .left-sidebar-new-agent.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 17%, transparent);
+}
+
+.app-shell .left-sidebar-new-agent svg {
+  width: 14px;
+  height: 14px;
+}
+
+.app-shell .left-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 7px 6px;
+  flex: 0 0 auto;
+}
+
+.app-shell .left-sidebar-section-label {
+  padding: 5px 7px 3px;
+}
+
+.app-shell .left-sidebar-section-label.secondary {
+  padding-top: 6px;
+}
+
+.app-shell .left-sidebar-nav-item {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .left-sidebar-nav-item:hover {
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell .left-sidebar-nav-item.active {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Keep the two visible project-list tiers level with the workspace menu. The
+   metadata underneath remains smaller so names still lead each row. */
+.app-shell .left-sidebar .projects-collection-title,
+.app-shell .left-sidebar .project-sidebar-card-name {
+  font-size: 12.5px;
+}
+
+.app-shell .left-sidebar-nav-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.app-shell .left-sidebar-nav-item.active .left-sidebar-nav-icon {
+  color: var(--accent);
+}
+
+.app-shell .left-sidebar-nav-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.app-shell .left-sidebar-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .left-sidebar-secondary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.app-shell .left-sidebar-secondary-grid .left-sidebar-nav-item {
+  padding: 0 7px;
+  gap: 6px;
+}
+
+.app-shell .left-sidebar-secondary-grid .left-sidebar-nav-item:only-child {
+  grid-column: 1 / -1;
+}
+
+.app-shell .left-sidebar-context-label {
+  min-height: 29px;
+  padding: 5px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.app-shell .left-sidebar-context-label > span:first-child,
+.app-shell .left-sidebar-context-label svg {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+}
+
+.app-shell .left-sidebar .drawer-body {
+  background: color-mix(in srgb, var(--bg-primary) 16%, transparent);
+}
+
+/* The navigator supplies the one shared context heading. Individual panels
+   keep their own action rows, but their repeated titles disappear so switching
+   tools never produces a doubled "Projects / Projects" or "Git / Git" stack. */
+.app-shell .left-sidebar .projects-panel-title,
+.app-shell .left-sidebar .source-control .sc-title,
+.app-shell .left-sidebar .pp-title,
+.app-shell .left-sidebar .snippets-panel .panel-title {
+  display: none;
+}
+
+.app-shell .left-sidebar .projects-header-actions,
+.app-shell .left-sidebar .source-control .sc-header-actions,
+.app-shell .left-sidebar .pp-chips,
+.app-shell .left-sidebar .snippets-panel .add-btn {
+  margin-left: auto;
+}
+
+.app-shell .left-sidebar .snapshots-panel > .panel-header {
+  display: none;
+}
+
+.app-shell .left-sidebar-footer {
+  min-height: 44px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.app-shell .left-sidebar-footer .usage-dock-sidebar {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.app-shell .left-sidebar-footer .left-sidebar-settings-btn {
+  margin-left: auto;
+}
+
+.app-shell .left-sidebar .usage-panel {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-height: min(240px, 32%);
+  flex: 0 1 auto;
+  z-index: auto;
+  border: 0;
+  border-radius: 0;
+  /* A radial wash has no rectangular perimeter, so the disclosure remains a
+     distinctive part of the sidebar rather than reading as a panel inside it. */
+  background: radial-gradient(
+    ellipse at 12% 8%,
+    color-mix(in srgb, var(--accent) 16%, transparent),
+    transparent 68%
+  );
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  animation: none;
+}
+
+.app-shell .left-sidebar .usage-panel::after {
+  display: none;
+}
+
+.app-shell .left-sidebar .usage-head {
+  padding: 8px 10px 6px;
+  border-bottom: 0;
+}
+
+.app-shell .left-sidebar .usage-title {
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.app-shell .left-sidebar .usage-title-glyph {
+  width: 23px;
+  height: 23px;
+  border-radius: 8px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 72%),
+    color-mix(in srgb, var(--bg-primary) 48%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 4px 14px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.app-shell .left-sidebar .usage-title-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+.app-shell .left-sidebar .usage-empty {
+  padding: 8px 14px 12px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.app-shell .left-sidebar .usage-list {
+  padding: 2px 6px 7px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.app-shell .left-sidebar .usage-row {
+  padding: 7px 8px 8px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-primary) 32%, transparent);
+  box-shadow: none;
+}
+
+.app-shell .left-sidebar .usage-row + .usage-row {
+  margin-top: 4px;
+}
+
+.app-shell .left-sidebar .usage-row[data-reporting='true'] {
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%),
+    color-mix(in srgb, var(--bg-primary) 34%, transparent);
+}
+
+.app-shell .left-sidebar .usage-row-mark {
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.app-shell .left-sidebar .usage-meter-track {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.app-shell .left-sidebar .usage-meter-fill {
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* The full-height Bento navigator now carries status controls at its foot. The
+   composer is centered in the remaining workspace so the two never collide. */
+.app-shell .workspace-overlays {
+  left: var(--left-nav-space, 0px);
+  right: var(--right-drawer-space, 0px);
+  transition: left var(--dur-base, 0.2s) var(--ease-out, ease), right var(--dur-base, 0.2s) var(--ease-out, ease);
+}
+
+.app-shell .rooms-workspace.resizing .minimized-room-stack,
+.app-shell .rooms-workspace.resizing .workspace-overlays {
+  transition: none !important;
+}
+
+@media (max-height: 760px) {
+  .app-shell .left-sidebar-header {
+    min-height: 44px;
+    padding-top: 5px;
+  }
+
+  .app-shell .left-sidebar-quick-actions {
+    padding-bottom: 6px;
+  }
+
+  .app-shell .left-sidebar-nav-item {
+    height: 23px;
+  }
+
+  .app-shell .left-sidebar-section-label {
+    padding-top: 4px;
+  }
 }

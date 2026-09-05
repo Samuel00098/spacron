@@ -3,6 +3,25 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v3.0.0] - 2026-09-05
+
+Spacron 3.0 brings project-specific workspace layouts, clearer activity indicators, and a more consistent desktop shell. Projects retain their panel contents and stage arrangement when you switch between them; terminal and agent indicators reflect active work. The release also tightens outbound request handling so provider redirects cannot move credentials or request content to another origin, and closes address-validation gaps in the preview and HTTP clients.
+
+### Changed
+
+- **Project continuity** — restore each project's panel contents and chosen Split layout, with new projects opening in Split and project tabs remaining below the stage.
+- **Desktop navigation and presentation** — paired sidebar controls, theme-aware layout surfaces, softer activity borders, improved light-mode sketch controls and cursors, and clearer agent identity in completion reports.
+
+### Fixed
+
+- **Scrolling and preview controls** — keep wheel scrolling within drawer and explorer panels, preserve color-picker placement, and consistently hide the preview root slash in the address bar.
+- **Sketch and terminal behavior** — prevent stale sketch pixels during shape dragging, improve shape resizing, and reflect active execution across terminal sessions.
+
+### Security
+
+- **Provider redirect confinement** — reject redirects that change scheme, hostname, or port before forwarding provider-specific key headers or replaying prompt/audio bodies. Same-origin redirects remain supported, with a bounded redirect count.
+- **Address validation** — reject private IPv6 and IPv4-mapped destinations in the preview proxy, including bracketed literals; apply the HTTP client's blocked IPv4 rules to mapped addresses and recognize trailing-dot metadata hostnames.
+
 ## [v2.0.0] - 2026-08-27
 
 The headline of 2.0 is that an agent now **tells** Spacron when it stops, instead of Spacron guessing from a screen that went still. Every agent gets a `report_status` MCP tool authenticated by a token minted for its own launch, and every agent that has no MCP config at all — the ~30 CLIs in the preset catalog Spacron cannot write one for — gets a one-line shell sentinel that does the same job, because running a shell command is the one capability all of them share. Everything downstream is built on the distinction that buys: a turn end is now `declared`, `exit`, or `inferred`, and only the first is allowed to say "finished". A guess says the agent **went quiet**, and it does not interrupt you at all. That single rule removes the failure this product's notifications have had since they existed — being told an agent completed work it never did, while a compile was still running.

@@ -35,6 +35,8 @@ import SplitLayoutPicker from '$lib/components/layout/SplitLayoutPicker.tsx';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
 import AgentPanelImages from '$lib/components/orchestrator/AgentPanelImages.tsx';
+import UsageCounter from '$lib/components/usage/UsageCounter.tsx';
+import UsagePanel from '$lib/components/usage/UsagePanel.tsx';
 import ContainersPanel from '$lib/components/containers/ContainersPanelLazy.tsx';
 import DbExplorerPanel from '$lib/components/db/DbExplorerPanelLazy.tsx';
 import HttpClientPanel from '$lib/components/http/HttpClientPanelLazy.tsx';
@@ -85,6 +87,7 @@ import { startProxy, stopProxy } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
+import { closeUsagePanel } from '$lib/stores/usage';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -206,7 +209,10 @@ function getAgentRoomSessionId(id: AgentRoomId): number {
 // visit to another room and back reloaded whatever the user was looking at
 // (and dropped any unsaved state inside it).
 function isPersistentRoomId(id: RoomId): boolean {
-  return id === 'terminal' || id === 'dev-terminal' || id === 'preview' || isAgentRoomId(id);
+  // Sketch owns an in-memory canvas document. Minimizing is only a visibility
+  // change, so keep it mounted just like Preview; unmounting here used to
+  // reconstruct the panel from an older delayed localStorage snapshot.
+  return id === 'terminal' || id === 'dev-terminal' || id === 'preview' || id === 'sketch' || isAgentRoomId(id);
 }
 
 // The layout fields AppShell reads. Kept as one named union so both the
@@ -316,11 +322,14 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
 
 // Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
 // `sidebarTab`. Order = tab-strip / dock order.
-const LEFT_DRAWER_TOOLS = ['projects', 'files', 'git', 'problems', 'snapshots', 'snippets'] as const;
+const LEFT_DRAWER_TOOLS = ['projects', 'files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
+const LEFT_PRIMARY_TOOLS: readonly LeftDrawerTool[] = ['projects', 'files', 'search', 'git', 'problems'];
+const LEFT_SECONDARY_TOOLS: readonly LeftDrawerTool[] = ['snapshots', 'snippets'];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
   projects: { title: 'Projects', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
   files: { title: 'Files', icon: <Icon><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></Icon> },
+  search: { title: 'Search files', icon: <Icon><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
@@ -566,7 +575,6 @@ export default function AppShell() {
   const showWelcome = !workspaceId || homeOpen;
   const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
-  const switchingPhase = useWorkspaceStore((s) => s.switchingPhase);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
   // Stable order so a panel never changes position (and gets re-parented) as
@@ -1134,17 +1142,17 @@ export default function AppShell() {
     }
 
     const maxAllowedWidth = Math.min(600, effectiveWindowWidth - 250 - 48);
-    if (layoutState.sidebarWidth > maxAllowedWidth) {
-      useLayoutStore.setState({ sidebarWidth: Math.max(180, maxAllowedWidth) });
+    if (layoutState.leftPanelWidth > maxAllowedWidth) {
+      useLayoutStore.setState({ leftPanelWidth: Math.max(180, maxAllowedWidth) });
     }
-  }, [layoutState.sidebarVisible, layoutState.sidebarWidth, windowWidth, zoom]);
+  }, [layoutState.leftPanelWidth, layoutState.sidebarVisible, windowWidth, zoom]);
 
   useEffect(() => {
     if (windowWidth < 500 || document.hidden) return;
     if (visiblePanels.length > 0 && auxPanelWidth > auxMaxWidth()) {
       setAuxPanelWidth(Math.max(200, auxMaxWidth()));
     }
-  }, [auxPanelWidth, layoutState.sidebarVisible, layoutState.sidebarWidth, visiblePanels.length, windowWidth, zoom]);
+  }, [auxPanelWidth, layoutState.sidebarVisible, layoutState.leftPanelWidth, visiblePanels.length, windowWidth, zoom]);
 
   useEffect(() => {
     if (focusedRoom && !openRooms.includes(focusedRoom)) {
@@ -1497,6 +1505,9 @@ export default function AppShell() {
   // Sidebar-content tabs only. Open == sidebarVisible; switching tabs only swaps
   // the body (the frame stays mounted), so there's no close/reopen glitch.
   const leftDrawerOpen = layoutState.sidebarVisible;
+  useEffect(() => {
+    if (!leftDrawerOpen) closeUsagePanel();
+  }, [leftDrawerOpen]);
   const leftActiveTool: LeftDrawerTool | null =
     layoutState.sidebarVisible && (LEFT_DRAWER_TOOLS as readonly string[]).includes(layoutState.sidebarTab)
       ? (layoutState.sidebarTab as LeftDrawerTool)
@@ -1507,6 +1518,7 @@ export default function AppShell() {
     persistLayoutPatch({ sidebarVisible: true, sidebarTab: tool as SidebarTab });
   }
   function closeLeftDrawer() {
+    closeUsagePanel();
     persistLayoutPatch({ sidebarVisible: false });
   }
   function toggleLeftTool(tool: LeftDrawerTool) {
@@ -1516,9 +1528,36 @@ export default function AppShell() {
 
   function renderLeftUtilityPanel() {
     if (!leftDrawerOpen) return null;
+
+    const renderNavItem = (tool: LeftDrawerTool) => (
+      <button
+        key={tool}
+        type="button"
+        className={`left-sidebar-nav-item${leftActiveTool === tool ? ' active' : ''}`}
+        onClick={() => selectLeftTool(tool)}
+        aria-current={leftActiveTool === tool ? 'page' : undefined}
+      >
+        <span className="left-sidebar-nav-icon" aria-hidden="true">{LEFT_TOOL_META[tool].icon}</span>
+        <span className="left-sidebar-nav-label">{LEFT_TOOL_META[tool].title}</span>
+      </button>
+    );
+
+    const renderRoomNavItem = (item: ActivityItem) => (
+      <button
+        key={item.id}
+        type="button"
+        className={`left-sidebar-nav-item${item.active ? ' active' : ''}`}
+        onClick={item.onClick}
+        aria-pressed={item.active}
+      >
+        <span className="left-sidebar-nav-icon" aria-hidden="true">{item.icon}</span>
+        <span className="left-sidebar-nav-label">{item.title}</span>
+      </button>
+    );
+
     return (
       <aside
-        className="left-utility-panel bento-card"
+        className="left-utility-panel left-sidebar bento-card"
         style={{ width: layoutState.leftPanelWidth }}
         aria-label="Workspace navigation"
       >
@@ -1528,32 +1567,70 @@ export default function AppShell() {
           role="separator"
           aria-orientation="vertical"
         />
-        <header className="drawer-header">
-          <div className="drawer-tabs">
-            {leftDrawerTools.map((tool) => (
-              <button
-                key={tool}
-                className={`drawer-tab-btn${leftActiveTool === tool ? ' active' : ''}`}
-                onClick={() => selectLeftTool(tool)}
-                title={LEFT_TOOL_META[tool].title}
-                aria-label={LEFT_TOOL_META[tool].title}
-              >
-                {LEFT_TOOL_META[tool].icon}
-              </button>
-            ))}
+        <header className="left-sidebar-header">
+          <div className="left-sidebar-heading">
+            <span className="left-sidebar-eyebrow">Navigator</span>
+            <strong className="left-sidebar-project" title={project?.root_path ?? undefined}>
+              {project?.name ?? 'Workspace'}
+            </strong>
           </div>
           <button
-            className="drawer-close-btn"
+            className="left-sidebar-collapse-btn"
             onClick={() => closeLeftDrawer()}
-            title="Close panel"
-            aria-label="Close panel"
+            title="Hide left sidebar"
+            aria-label="Hide left sidebar"
           >
-            <XIcon />
+            <Icon><path d="m15 18-6-6 6-6" /></Icon>
           </button>
         </header>
+
+        <div className="left-sidebar-quick-actions">
+          <button
+            type="button"
+            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
+            onClick={() => {
+              if (layoutState.agentSpawnOpen) closeAgentSpawn();
+              else openAgentSpawn();
+            }}
+            aria-pressed={layoutState.agentSpawnOpen}
+          >
+            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+            <span>New agent</span>
+          </button>
+        </div>
+
+        <nav className="left-sidebar-nav" aria-label="Workspace tools">
+          <span className="left-sidebar-section-label">Workspace</span>
+          {LEFT_PRIMARY_TOOLS.filter((tool) => leftDrawerTools.includes(tool)).map(renderNavItem)}
+          {[tasksItem, sketchItem].map(renderRoomNavItem)}
+          <span className="left-sidebar-section-label secondary">More</span>
+          <div className="left-sidebar-secondary-grid">
+            {LEFT_SECONDARY_TOOLS.filter((tool) => leftDrawerTools.includes(tool)).map(renderNavItem)}
+          </div>
+        </nav>
+
+        <div className="left-sidebar-context-label" role="heading" aria-level={2}>
+          <span aria-hidden="true">{leftActiveTool ? LEFT_TOOL_META[leftActiveTool].icon : null}</span>
+          <span>{leftActiveTool ? LEFT_TOOL_META[leftActiveTool].title : 'Workspace'}</span>
+        </div>
         <div className="drawer-body">
           <SidebarContent tab={layoutState.sidebarTab} />
         </div>
+
+        <UsagePanel />
+
+        <footer className="left-sidebar-footer">
+          <UsageCounter />
+          <button
+            type="button"
+            className="left-sidebar-settings-btn"
+            onClick={() => openSettings()}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <Icon><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></Icon>
+          </button>
+        </footer>
       </aside>
     );
   }
@@ -2020,6 +2097,14 @@ export default function AppShell() {
 
   // The left-bar nav launchers now come from `leftNavDockItems` (built from
   // LEFT_DRAWER_TOOLS); the center-room launchers live in `panelItems` below.
+  const tasksItem: ActivityItem = {
+    id: 'tasks',
+    title: 'Tasks',
+    active: layoutState.tasksVisible && activeRoom === 'tasks',
+    onClick: () => togglePanelRoom('tasks'),
+    icon: <Icon><rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="5" height="8" rx="1" /></Icon>,
+  };
+
   const panelItems: ActivityItem[] = [
     {
       id: 'editor',
@@ -2073,13 +2158,6 @@ export default function AppShell() {
       onClick: () => toggleHttpVisible(),
       icon: <Icon><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>,
     },
-    {
-      id: 'tasks',
-      title: 'Tasks',
-      active: layoutState.tasksVisible,
-      onClick: () => togglePanelRoom('tasks'),
-      icon: <Icon><rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="5" height="8" rx="1" /></Icon>,
-    },
     // No 'fleet' entry: Agent Fleet is a right-drawer tool now, so its launcher
     // is generated from RIGHT_TOOLS_ALL into the Utilities group below.
     {
@@ -2118,8 +2196,8 @@ export default function AppShell() {
   };
 
 
-  // Stays inline in the prompt bar rather than going into the Tools menu — it
-  // is a one-press action, not a panel you toggle.
+  // Kept for command-palette access. The visible one-press action now lives in
+  // the Navigator, so the prompt bar does not duplicate it.
   const spawnAgentItem: ActivityItem = {
     id: 'spawnAgent',
     title: 'Spawn Agents',
@@ -2137,14 +2215,13 @@ export default function AppShell() {
   const sketchItem: ActivityItem = {
     id: 'sketch',
     title: 'Sketch',
-    active: layoutState.sketchVisible,
+    active: layoutState.sketchVisible && activeRoom === 'sketch',
     onClick: () => togglePanelRoom('sketch'),
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
 
-  // Launcher buttons for the LEFT utility drawer's tools — the Workspace group
-  // of the Tools menu. Toggling re-uses the unified left-drawer selection so it
-  // never closes/reopens the frame.
+  // Command-palette launchers for the LEFT utility drawer's tools. These stay
+  // searchable without duplicating the Navigator inside the Tools popover.
   const leftNavDockItems: ActivityItem[] = leftDrawerTools.map((tool) => ({
     id: tool,
     title: LEFT_TOOL_META[tool].title,
@@ -2167,18 +2244,21 @@ export default function AppShell() {
   // into their own group.
   const roomLauncherItems = panelItems.filter((item) => !drawerToolIds.has(item.id));
 
-  // The Tools menu in the prompt bar is now the only launcher — it replaced the
-  // `.room-dock` strip that used to sit above the composer. Same items, same
-  // order, same lit-when-open state; just folded into one popover.
+  // The prompt-bar Tools menu contains room and utility launchers. Workspace
+  // navigation remains exclusively in the left Navigator.
   const toolMenuGroups: ToolMenuGroup[] = [
-    { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
-    { id: 'rooms', label: 'Rooms', items: [...roomLauncherItems, sketchItem] },
+    { id: 'rooms', label: 'Rooms', items: roomLauncherItems },
     { id: 'utilities', label: 'Utilities', items: [...drawerToolItems, mediaPlayerItem] },
   ].filter((group) => group.items.length > 0);
+  const paletteToolGroups: ToolMenuGroup[] = [
+    { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
+    ...toolMenuGroups,
+  ];
 
   // Layout actions stay as bare icons next to the Tools menu: they are pressed
   // constantly while arranging panes, so a popover round-trip would cost more
-  // than the chrome they take up.
+  // than the chrome they take up. Spawn remains in this list for the command
+  // palette, but is filtered out of the prompt bar below.
   const isExpanded = stageExpandedRoom !== null;
   const inSplit = ambientLayout === 'gallery';
   const layoutActionItems: ActivityItem[] = [
@@ -2250,7 +2330,7 @@ export default function AppShell() {
 
   useEffect(() => {
     const bridge = paletteBridgeRef.current;
-    for (const group of toolMenuGroups) {
+    for (const group of paletteToolGroups) {
       for (const item of group.items) bridge[`tools.${group.id}.${item.id}`] = item.onClick;
     }
     for (const item of layoutActionItems) bridge[`layout.${item.id}`] = item.onClick;
@@ -2260,12 +2340,12 @@ export default function AppShell() {
   // arrays are rebuilt every render, and rewriting the store each time would
   // churn every palette subscriber.
   const paletteSignature = [
-    ...toolMenuGroups.flatMap((g) => g.items.map((i) => `${g.id}.${i.id}:${i.title}`)),
+    ...paletteToolGroups.flatMap((g) => g.items.map((i) => `${g.id}.${i.id}:${i.title}`)),
     ...layoutActionItems.map((i) => `layout.${i.id}:${i.title}`),
   ].join('|');
 
   useEffect(() => {
-    for (const group of toolMenuGroups) {
+    for (const group of paletteToolGroups) {
       for (const item of group.items) {
         registerCommand({
           id: `tools.${group.id}.${item.id}`,
@@ -2517,27 +2597,29 @@ export default function AppShell() {
               <TerminalPanel />
             </div>
           )}
-          {projectSwitching && (
-            <div className="project-switch-overlay">
-              <div className="project-switch-progress">
-                <span className="project-switch-spinner" aria-hidden="true" />
-                <span className="project-switch-label">{switchingPhase ?? 'Switching project…'}</span>
-              </div>
-            </div>
-          )}
         </div>
       );
     }
     if (id === 'dev-terminal') {
       return (
         <div className="terminal-room-body dev-terminal">
-          <TerminalPanel devMode={true} />
-          {projectSwitching && (
-            <div className="project-switch-overlay">
-              <div className="project-switch-progress">
-                <span className="project-switch-spinner" aria-hidden="true" />
-                <span className="project-switch-label">{switchingPhase ?? 'Switching project…'}</span>
+          {terminalHostProjectIds.length > 0 ? (
+            terminalHostProjectIds.map((pid) => (
+              <div
+                key={pid}
+                className={`terminal-project-layer${pid === activeProjectIdValue ? '' : ' parked'}`}
+                inert={pid !== activeProjectIdValue}
+              >
+                <TerminalPanel
+                  devMode={true}
+                  projectId={pid}
+                  isActiveProject={pid === activeProjectIdValue}
+                />
               </div>
+            ))
+          ) : (
+            <div className="terminal-project-layer">
+              <TerminalPanel devMode={true} />
             </div>
           )}
         </div>
@@ -3054,7 +3136,7 @@ export default function AppShell() {
     const isExpanded = stageExpandedRoom !== null;
 
     const persistentStageRooms: RoomId[] = [
-      ...(['terminal', 'dev-terminal', 'preview'] as RoomId[]).filter((room) =>
+      ...(['terminal', 'dev-terminal', 'preview', 'sketch'] as RoomId[]).filter((room) =>
         openRooms.includes(room),
       ),
       ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
@@ -3150,11 +3232,12 @@ export default function AppShell() {
         <div className="zoom-content">
         {workspaceId && (
           <div className={`workspace-layer${homeOpen ? ' home-hidden' : ''}`} inert={homeOpen}>
-            {projectSwitching && <div className="project-switching-overlay" />}
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
                 '--overlay-clear': `${overlaysHeight + 12}px`,
+                '--left-nav-space': leftDrawerOpen ? `${layoutState.leftPanelWidth + 20}px` : '0px',
+                '--right-drawer-space': rightDrawerOpen ? `${layoutState.rightDrawerWidth + 20}px` : '0px',
               } as React.CSSProperties}
             >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}
@@ -3189,7 +3272,9 @@ export default function AppShell() {
                 <FloatingPromptBar
                   trailingControls={
                     <div className="prompt-trailing">
-                      {layoutActionItems.map((item) => <ActivityButton key={item.id} item={item} />)}
+                      {layoutActionItems
+                        .filter((item) => item.id !== 'spawnAgent')
+                        .map((item) => <ActivityButton key={item.id} item={item} />)}
                       <div className="prompt-trailing-separator" />
                       <ToolsMenu groups={toolMenuGroups} />
                     </div>

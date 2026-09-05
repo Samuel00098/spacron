@@ -3,8 +3,8 @@ import { getChangelogContent, parseChangelog } from '@/lib/changelog';
 
 const marked = new Marked({ gfm: true });
 
-export default function ChangelogPage() {
-  const raw = getChangelogContent();
+export default async function ChangelogPage() {
+  const raw = await getChangelogContent();
   const entries = parseChangelog(raw);
 
   const renderBody = (body: string) => {

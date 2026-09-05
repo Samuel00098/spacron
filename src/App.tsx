@@ -1,4 +1,5 @@
 import { useEffect, lazy, Suspense } from 'react';
+import { useNativeSystemIcon } from '$lib/react/useNativeSystemIcon';
 import { get } from '$lib/stores/storeCompat';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import AppShell from '$lib/components/layout/AppShell.tsx';
@@ -14,8 +15,6 @@ import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
 import AgentNotifications from '$lib/components/orchestrator/AgentNotifications.tsx';
 import InboxPanel from '$lib/components/orchestrator/InboxPanel.tsx';
-import UsageCounter from '$lib/components/usage/UsageCounter.tsx';
-import UsagePanel from '$lib/components/usage/UsagePanel.tsx';
 import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
@@ -89,6 +88,7 @@ function zoomOut() {
 }
 
 export default function App() {
+  useNativeSystemIcon();
   const isSettingsOpen = useStore(settingsOpen);
   const isQuickCaptureOpen = useStore(quickCaptureOpen);
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
@@ -251,11 +251,6 @@ export default function App() {
       <FloatingSearch />
       <AgentNotifications />
       <InboxPanel />
-      {/* Bottom-left corner dock + the popover it opens above itself. Both are
-          siblings of `.app-shell` so they float over the workspace instead of
-          reserving a strip of it. */}
-      <UsageCounter />
-      <UsagePanel />
       <Toasts />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}

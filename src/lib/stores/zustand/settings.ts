@@ -222,7 +222,7 @@ function createSettingsState() {
     uiZoom: persistentValue('uiZoom', 100),
     swipeNavigationEnabled: persistentValue('swipeNavigationEnabled', true),
     formatOnSave: persistentValue('formatOnSave', true),
-    autoSave: persistentValue('autoSave', false),
+    autoSave: persistentValue('autoSave', true),
     userShortcuts: initialUserShortcuts,
     appearance: persistentValue<'system' | 'light' | 'dark'>('appearance', 'system'),
     interfaceTransparency: persistentValue('interfaceTransparency', 0),
@@ -302,7 +302,7 @@ const defaults: SettingsValues = {
   uiZoom: 100,
   swipeNavigationEnabled: true,
   formatOnSave: true,
-  autoSave: false,
+  autoSave: true,
   userShortcuts: [
     { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },

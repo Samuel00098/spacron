@@ -262,16 +262,24 @@ export const allProjectSessions = writable<TerminalSessionInfo[]>([]);
 // from here — the visible `paneAssignments`/`terminalMosaic`/… stores always
 // describe the active project only.
 export const projectTerminalStates = writable<Map<string, TerminalProjectState>>(new Map());
+export const devProjectTerminalStates = writable<Map<string, TerminalProjectState>>(new Map());
 
-function publishAllProjectSessions() {
-  const out: TerminalSessionInfo[] = [];
+function publishProjectTerminalStates(isDev = false) {
+  const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   const snapshot = new Map<string, TerminalProjectState>();
-  for (const [id, state] of terminalProjectStates) {
-    for (const session of state.sessions) out.push({ ...session });
+  const out: TerminalSessionInfo[] = [];
+  for (const [id, state] of stateMap) {
+    if (!isDev) {
+      for (const session of state.sessions) out.push({ ...session });
+    }
     snapshot.set(id, cloneProjectState(state));
   }
-  allProjectSessions.set(out);
-  projectTerminalStates.set(snapshot);
+  if (isDev) {
+    devProjectTerminalStates.set(snapshot);
+  } else {
+    allProjectSessions.set(out);
+    projectTerminalStates.set(snapshot);
+  }
 }
 
 const terminalSessionProjects = new Map<number, string>();
@@ -362,7 +370,7 @@ function updateProjectState(
   const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   const next = updater(cloneProjectState(getProjectState(projectId, isDev)));
   stateMap.set(projectId, next);
-  if (!isDev) publishAllProjectSessions();
+  publishProjectTerminalStates(isDev);
   if (projectId === (isDev ? activeDevTerminalProjectId : activeTerminalProjectId)) {
     setVisibleProjectState(next, isDev);
   }
@@ -392,7 +400,7 @@ export function getTerminalProjectState(projectId: string, isDev = false): Termi
 export function restoreTerminalProjectState(projectId: string, state: TerminalProjectState, isDev = false) {
   const stateMap = isDev ? devTerminalProjectStates : terminalProjectStates;
   stateMap.set(projectId, cloneProjectState(state));
-  if (!isDev) publishAllProjectSessions();
+  publishProjectTerminalStates(isDev);
   if ((isDev ? activeDevTerminalProjectId : activeTerminalProjectId) === projectId) {
     setVisibleProjectState(getProjectState(projectId, isDev), isDev);
   }
@@ -2440,7 +2448,8 @@ export async function killAllSessions() {
   // Each killSession above already emptied its project's session list through
   // updateProjectState; this just makes sure the cross-project view agrees even
   // if a project had state but no live pty.
-  publishAllProjectSessions();
+  publishProjectTerminalStates(false);
+  publishProjectTerminalStates(true);
 }
 
 export async function killSession(id: number) {

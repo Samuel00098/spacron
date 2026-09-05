@@ -10,6 +10,11 @@
   white-space: nowrap;
 }
 
+.live-ticker.label-only {
+  color: var(--success, #4ade80);
+  font-weight: 600;
+}
+
 .live-ticker-dot {
   flex: none;
   width: 7px;

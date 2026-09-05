@@ -132,7 +132,7 @@ interface FloatingPromptBarProps {
   /** Chrome rendered at the tail of the bar, between the input and Send — the
    *  Tools menu and the layout actions that used to live in the room dock.
    *  Owned by AppShell (it holds the room/drawer wiring). Always rendered —
-   *  including in voice mode — so the layout, spawn and Tools buttons never
+   *  including in voice mode — so the layout and Tools buttons never
    *  move out from under the cursor when the orb takes over the bar. */
   trailingControls?: React.ReactNode;
 }
@@ -1694,9 +1694,8 @@ export default function FloatingPromptBar({
               )}
             </div>
 
-            {/* Layout / spawn / Tools stay put in voice mode: they sit at the
-                tail of the bar either way, so switching modes never shuffles
-                them. */}
+            {/* Layout and Tools stay put in voice mode: they sit at the tail of
+                the bar either way, so switching modes never shuffles them. */}
             {trailingControls}
           </div>
         </>

@@ -28,6 +28,19 @@ fn shared_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
     }
     let client = reqwest::Client::builder()
         .timeout(timeout)
+        // Provider keys can live in custom headers and URLs, and a 307/308
+        // replays the prompt/audio body. Never send them to another origin.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("too many provider redirects");
+            }
+            if attempt.previous().first().map(|url| url.origin())
+                != Some(attempt.url().origin())
+            {
+                return attempt.error("cross-origin provider redirect blocked");
+            }
+            attempt.follow()
+        }))
         .build()
         .map_err(|err| format!("Failed to prepare the request: {err}"))?;
     map.insert(key, client.clone());
@@ -2099,6 +2112,47 @@ pub async fn check_local_provider_online(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn provider_redirects_keep_credentials_and_body_on_the_same_origin() {
+        use axum::{routing::post, Router};
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+        let leaked = Arc::new(AtomicUsize::new(0));
+        let observed = leaked.clone();
+        let victim = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}/capture", victim.local_addr().unwrap());
+        let victim_task = tokio::spawn(async move {
+            axum::serve(victim, Router::new().route("/capture", post(move || async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                "leaked"
+            }))).await.unwrap();
+        });
+        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", source.local_addr().unwrap());
+        let app = Router::new()
+            .route("/cross", post(move || async move {
+                (axum::http::StatusCode::TEMPORARY_REDIRECT, [("location", destination)])
+            }))
+            .route("/same", post(|| async {
+                (axum::http::StatusCode::TEMPORARY_REDIRECT, [("location", "/echo")])
+            }))
+            .route("/echo", post(|headers: axum::http::HeaderMap, body: String| async move {
+                assert_eq!(headers["x-api-key"], "test-only-key");
+                body
+            }));
+        let source_task = tokio::spawn(async move { axum::serve(source, app).await.unwrap(); });
+        let client = super::shared_http_client(std::time::Duration::from_secs(3)).unwrap();
+        let blocked = client.post(format!("{origin}/cross"))
+            .header("x-api-key", "test-only-key").body("private prompt").send().await;
+        assert!(blocked.unwrap_err().is_redirect());
+        assert_eq!(leaked.load(Ordering::SeqCst), 0);
+        let allowed = client.post(format!("{origin}/same"))
+            .header("x-api-key", "test-only-key").body("private prompt").send().await.unwrap();
+        assert_eq!(allowed.text().await.unwrap(), "private prompt");
+        source_task.abort();
+        victim_task.abort();
+    }
+
     use super::{
         adapt_chat_shape, audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
         build_audio_transcription_multipart_body, extract_anthropic_text, extract_google_text,

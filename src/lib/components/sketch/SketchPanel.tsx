@@ -27,6 +27,42 @@ interface Stroke {
   isEraser: boolean;
 }
 
+function distanceToSegment(point: Point, start: Point, end: Point): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+/** Remove the portion of a freehand stroke touched by a circular eraser. */
+export function eraseStrokeAtPoint(stroke: Stroke, point: Point, radius: number): Stroke[] {
+  if (!stroke.points.length) return [];
+  const erased = stroke.points.map((candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) <= radius);
+  const breaks = new Set<number>();
+  for (let index = 1; index < stroke.points.length; index++) {
+    if (distanceToSegment(point, stroke.points[index - 1], stroke.points[index]) <= radius) {
+      breaks.add(index);
+    }
+  }
+
+  const fragments: Stroke[] = [];
+  let points: Point[] = [];
+  const flush = () => {
+    if (points.length >= 2 || (stroke.points.length === 1 && points.length === 1)) {
+      fragments.push({ ...stroke, points });
+    }
+    points = [];
+  };
+  stroke.points.forEach((candidate, index) => {
+    if (breaks.has(index)) flush();
+    if (erased[index]) flush();
+    else points.push(candidate);
+  });
+  flush();
+  return fragments;
+}
+
 type SketchFontFamily =
   | 'handwritten' | 'sans-serif' | 'monospace' | 'serif' | 'playful' | 'marker'
   | 'caveat' | 'comic' | 'manrope' | 'typewriter';
@@ -332,6 +368,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
   // Interaction Refs (to avoid stale closures in window listeners)
   const drawingRef = useRef(false);
+  const erasingRef = useRef(false);
+  const eraserChangedRef = useRef(false);
   const currentStrokeRef = useRef<Stroke | null>(null);
   const draggingTextIdRef = useRef<string | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
@@ -684,10 +722,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     // Set background color
     if (backgroundStyle === 'solid-dark') {
-      gridCtx.fillStyle = '#121216';
+      gridCtx.fillStyle = '#000000';
       gridCtx.fillRect(0, 0, w, h);
     } else if (backgroundStyle === 'solid-light') {
-      gridCtx.fillStyle = '#f3f3f6';
+      gridCtx.fillStyle = '#ffffff';
       gridCtx.fillRect(0, 0, w, h);
     } else if (backgroundStyle === 'blackboard') {
       gridCtx.fillStyle = '#182d27'; // Slate Green
@@ -697,6 +735,11 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       gridCtx.fillRect(0, 0, w, h);
     } else if (backgroundStyle === 'dot-grid' || backgroundStyle === 'line-grid' || backgroundStyle === 'isometric-grid') {
       gridCtx.fillStyle = isLightThemeVal ? 'rgba(255, 255, 255, 0.85)' : 'rgba(24, 24, 30, 0.7)';
+      gridCtx.fillRect(0, 0, w, h);
+    } else {
+      // The legacy "transparent" value now means an opaque surface that follows
+      // the app theme. Keeping the persisted value avoids breaking saved sketches.
+      gridCtx.fillStyle = isLightThemeVal ? '#ffffff' : '#000000';
       gridCtx.fillRect(0, 0, w, h);
     }
     
@@ -1280,12 +1323,18 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
   function saveState(projectId: string | null | undefined = resolveStorageProjectId()) {
     const stateObj = createPersistedState();
     const stateStr = JSON.stringify(stateObj);
-    
-    undoStackRef.current.push(stateStr);
-    if (undoStackRef.current.length > 50) {
-      undoStackRef.current.shift();
+
+    // Pointer-driven actions can schedule more than one save while React is
+    // settling related state updates (for example, erasing a shape and its
+    // connectors). Identical snapshots must still persist, but they should not
+    // consume extra undo clicks.
+    if (undoStackRef.current[undoStackRef.current.length - 1] !== stateStr) {
+      undoStackRef.current.push(stateStr);
+      if (undoStackRef.current.length > 50) {
+        undoStackRef.current.shift();
+      }
     }
-    setCanUndo(true);
+    setCanUndo(undoStackRef.current.length > 0);
     
     redoStackRef.current = [];
     setCanRedo(false);
@@ -1547,6 +1596,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
     const worldCoords = screenToWorld(e.clientX, e.clientY);
 
+    if (currentTool === 'eraser') {
+      e.preventDefault();
+      erasingRef.current = true;
+      eraserChangedRef.current = false;
+      try {
+        viewportRef.current.setPointerCapture(e.pointerId);
+      } catch {}
+      eraseAtPoint(worldCoords, e.clientX, e.clientY);
+      return;
+    }
+
     if (currentTool === 'select') {
       const hitArrow = [...arrows].reverse().find((arrow) => {
         const start = getArrowStart(arrow);
@@ -1569,26 +1629,6 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
         window.addEventListener('pointermove', handleArrowDragMove);
         window.addEventListener('pointerup', handleArrowDragUp);
         window.addEventListener('pointercancel', handleArrowDragUp);
-        return;
-      }
-    }
-
-    if (currentTool === 'eraser') {
-      // Check if we clicked close to an arrow to delete it
-      const clickedArrowIndex = arrows.findIndex(arrow => {
-        const start = getArrowStart(arrow);
-        const end = getArrowEnd(arrow);
-        if (!start || !end) return false;
-        const dist = getDistanceToLine(worldCoords, start, end);
-        return dist < 12; // 12px threshold
-      });
-      
-      if (clickedArrowIndex !== -1) {
-        setArrows(prev => {
-          const next = prev.filter((_, idx) => idx !== clickedArrowIndex);
-          setTimeout(() => saveState(), 10);
-          return next;
-        });
         return;
       }
     }
@@ -1649,7 +1689,7 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       color: currentColor,
       width: brushSize,
       opacity: brushOpacity,
-      isEraser: currentTool === 'eraser'
+      isEraser: false
     };
 
     const ctx = canvasRef.current.getContext('2d');
@@ -1660,20 +1700,14 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(zoomScale * dpr, 0, 0, zoomScale * dpr, panOffset.x * dpr, panOffset.y * dpr);
     
-    if (currentTool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = brushSize * ERASER_WIDTH_FACTOR;
-      ctx.globalAlpha = 1.0;
-    } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.strokeStyle = currentColor;
-      ctx.lineWidth = brushSize;
-      ctx.globalAlpha = brushOpacity;
-    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = brushSize;
+    ctx.globalAlpha = brushOpacity;
 
     ctx.beginPath();
     ctx.arc(worldCoords.x, worldCoords.y, ctx.lineWidth / 2, 0, Math.PI * 2);
-    ctx.fillStyle = currentTool === 'eraser' ? 'rgba(0,0,0,0)' : currentColor;
+    ctx.fillStyle = currentColor;
     ctx.fill();
   }
 
@@ -1696,6 +1730,10 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
       return;
     }
 
+    if (currentTool === 'eraser' && erasingRef.current) {
+      eraseAtPoint(screenToWorld(e.clientX, e.clientY), e.clientX, e.clientY);
+      return;
+    }
     if (currentTool === 'text' || currentTool === 'pan' || currentTool === 'select') return;
     if (!drawingRef.current || !canvasRef.current || !currentStrokeRef.current) return;
     
@@ -1746,6 +1784,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
 
   // Pointer up (drawing or panning finished)
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (erasingRef.current) {
+      erasingRef.current = false;
+      try {
+        viewportRef.current?.releasePointerCapture(e.pointerId);
+      } catch {}
+      if (eraserChangedRef.current) {
+        eraserChangedRef.current = false;
+        setTimeout(() => saveState(), 0);
+      }
+      return;
+    }
     if (panning) {
       setPanning(false);
       try {
@@ -1876,17 +1925,74 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     });
   }
 
+  function eraseAtPoint(point: Point, clientX: number, clientY: number) {
+    const radius = (brushSize * ERASER_WIDTH_FACTOR) / 2;
+    setStrokes((previous) => {
+      const next = previous.flatMap((stroke) => eraseStrokeAtPoint(stroke, point, radius));
+      if (next.length !== previous.length || next.some((stroke, index) => stroke.points.length !== previous[index]?.points.length)) {
+        eraserChangedRef.current = true;
+        stateRef.current.strokes = next;
+        return next;
+      }
+      return previous;
+    });
+
+    setArrows((previous) => {
+      const next = previous.filter((arrow) => {
+        const start = getArrowStart(arrow);
+        const end = getArrowEnd(arrow);
+        return !start || !end || getDistanceToLine(point, start, end) > radius;
+      });
+      if (next.length !== previous.length) {
+        eraserChangedRef.current = true;
+        stateRef.current.arrows = next;
+        return next;
+      }
+      return previous;
+    });
+
+    const hit = document.elementFromPoint(clientX, clientY);
+    const shapeId = hit?.closest('.floating-shape')?.getAttribute('data-shape-id');
+    const textId = hit?.closest('.floating-text')?.getAttribute('data-text-id');
+    if (shapeId) {
+      setSketchShapes((previous) => {
+        const next = previous.filter((shape) => shape.id !== shapeId);
+        if (next.length !== previous.length) {
+          eraserChangedRef.current = true;
+          stateRef.current.sketchShapes = next;
+        }
+        return next;
+      });
+      setArrows((previous) => {
+        const next = previous.filter((arrow) => arrow.fromShapeId !== shapeId && arrow.toShapeId !== shapeId);
+        stateRef.current.arrows = next;
+        return next;
+      });
+    }
+    if (textId) {
+      setSketchTexts((previous) => {
+        const next = previous.filter((text) => text.id !== textId);
+        if (next.length !== previous.length) {
+          eraserChangedRef.current = true;
+          stateRef.current.sketchTexts = next;
+        }
+        return next;
+      });
+      setArrows((previous) => {
+        const next = previous.filter((arrow) => arrow.fromTextId !== textId && arrow.toTextId !== textId);
+        stateRef.current.arrows = next;
+        return next;
+      });
+    }
+  }
+
   // Drag text elements
   function startDragText(e: React.PointerEvent<HTMLDivElement>, text: SketchText) {
     if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
 
     if (currentTool === 'eraser') {
-      setSketchTexts(prev => {
-        const next = prev.filter(t => t.id !== text.id);
-        setTimeout(() => saveState(), 10);
-        return next;
-      });
-      setArrows(prev => prev.filter(a => a.fromTextId !== text.id && a.toTextId !== text.id));
+      // Let the pointer event bubble to the viewport's single eraser path.
+      // Deleting here as well created two history entries for one gesture.
       return;
     }
 
@@ -2042,12 +2148,8 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     if (['pen', 'rectangle', 'circle', 'diamond', 'triangle', 'hexagon', 'star', 'pentagon', 'octagon', 'line', 'text'].includes(currentTool)) return; // Bubble up to canvas to draw/type
 
     if (currentTool === 'eraser') {
-      setSketchShapes(prev => {
-        const next = prev.filter(s => s.id !== shape.id);
-        setTimeout(() => saveState(), 10);
-        return next;
-      });
-      setArrows(prev => prev.filter(a => a.fromShapeId !== shape.id && a.toShapeId !== shape.id));
+      // The viewport owns destructive erasing and records exactly one undo
+      // snapshot when the gesture ends.
       return;
     }
 
@@ -3307,17 +3409,17 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
     
     // Draw background
     if (backgroundStyle === 'solid-dark') {
-      tempCtx.fillStyle = '#121216';
+      tempCtx.fillStyle = '#000000';
       tempCtx.fillRect(0, 0, w, h);
     } else if (backgroundStyle === 'solid-light') {
-      tempCtx.fillStyle = '#f3f3f6';
+      tempCtx.fillStyle = '#ffffff';
       tempCtx.fillRect(0, 0, w, h);
     } else if (backgroundStyle === 'dot-grid' || backgroundStyle === 'line-grid') {
       tempCtx.fillStyle = isLightThemeVal ? '#ffffff' : '#18181e';
       tempCtx.fillRect(0, 0, w, h);
     } else {
-      // transparent mode - use theme color background
-      tempCtx.fillStyle = isLightThemeVal ? '#ffffff' : '#18181e';
+      // Legacy theme-following mode is always exported as an opaque image.
+      tempCtx.fillStyle = isLightThemeVal ? '#ffffff' : '#000000';
       tempCtx.fillRect(0, 0, w, h);
     }
     
@@ -4792,7 +4894,6 @@ export default function SketchPanel({ onClose }: SketchPanelProps) {
                   <div className="section-title">Background Style</div>
                   <div className="grid-style-options">
                     {[
-                      { value: 'transparent', label: 'Transparent' },
                       { value: 'dot-grid', label: 'Dot Grid' },
                       { value: 'line-grid', label: 'Graph Grid' },
                       { value: 'isometric-grid', label: 'Isometric' },

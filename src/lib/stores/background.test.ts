@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Precedence between the user's own wallpaper and a preset theme's built-in one.
@@ -60,12 +60,14 @@ function installDomStub() {
   return {
     bgImage: () => props.get('--user-bg-image') ?? '',
     hasClass: (n: string) => classes.has(n),
+    property: (name: string) => props.get(name),
   };
 }
 
 let dom: ReturnType<typeof installDomStub>;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.resetModules();
   invokeMock.mockReset();
   dom = installDomStub();
@@ -153,6 +155,63 @@ describe('user background vs theme background', () => {
     expect(dom.bgImage()).toBe('');
     expect(dom.hasClass('has-bg-image')).toBe(false);
   });
+});
+
+describe('custom background toggle', () => {
+  it.each(['dark', 'light'] as const)('restores the %s theme and custom image across toggles', async (type) => {
+    vi.useFakeTimers();
+    const { background, settings, theme } = await bootWith('/home/me/wallpaper.png');
+    theme.activeTheme.set({ ...THEMED, type, backgroundBlur: 2 } as never);
+    settings.backgroundImageBlur.set(18);
+    // Same subscription as App: changing the setting must repaint immediately.
+    const unsubscribe = settings.backgroundImageEnabled.subscribe(() => background.applyBackgroundImage());
+    try {
+      settings.backgroundImageEnabled.set(true);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(dom.bgImage()).toContain('wallpaper.png');
+      expect(dom.property('--user-bg-blur')).toBe('18px');
+      expect(dom.hasClass('has-bg-media')).toBe(true);
+
+      settings.backgroundImageEnabled.set(false);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(dom.bgImage()).toContain('dark-coastline.webp');
+      expect(dom.property('--user-bg-blur')).toBe('2px');
+      expect(dom.hasClass(`bg-palette-${type}`)).toBe(true);
+      expect(dom.hasClass('has-bg-media')).toBe(false);
+      expect(background.hasBackgroundImage()).toBe(true);
+      expect(invokeMock).not.toHaveBeenCalledWith('background_image_clear');
+
+      settings.backgroundImageEnabled.set(true);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(dom.bgImage()).toContain('wallpaper.png');
+      expect(dom.property('--user-bg-blur')).toBe('18px');
+      expect(dom.hasClass('has-bg-media')).toBe(true);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores preset analysis that finishes after custom background is enabled', async () => {
+    const { background, settings, theme } = await bootWith('/home/me/wallpaper.png');
+    const { analyseImage } = await import('$lib/utils/imageAnalysis');
+    let resolveAnalysis!: (value: any) => void;
+    vi.mocked(analyseImage).mockImplementationOnce(() => new Promise((resolve) => { resolveAnalysis = resolve; }));
+    theme.activeTheme.set(THEMED as never);
+    background.applyBackgroundImage();
+    settings.backgroundImageEnabled.set(true);
+    background.applyBackgroundImage();
+    resolveAnalysis({ isDark: false });
+    await Promise.resolve();
+    expect(dom.hasClass('bg-palette-dark')).toBe(true);
+    expect(dom.hasClass('bg-palette-light')).toBe(false);
+    expect(dom.bgImage()).toContain('wallpaper.png');
+  });
+});
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
 });
 
 describe('legacy video wallpapers', () => {

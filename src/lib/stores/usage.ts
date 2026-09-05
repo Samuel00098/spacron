@@ -16,18 +16,18 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { isTauriRuntime } from '$lib/utils/tauri';
 
-/** Background poll cadence. Matches Orca's 15 minutes — these windows move slowly. */
-const POLL_INTERVAL_MS = 15 * 60 * 1000;
+/**
+ * Live cadence for every visible usage surface. The footer is always visible
+ * inside a project, so it must not wait for the disclosure to open before its
+ * numbers advance. Rust keeps the provider result cached for this same window,
+ * preventing duplicate consumers from multiplying network requests.
+ */
+const POLL_INTERVAL_MS = 30 * 1000;
 
 /**
- * Cadence while the usage panel itself is open. The user is looking at the
- * meters then, so 15 minutes feels stale — and so did two minutes, which is why
- * this is now 30s: a meter you are actively watching should move.
- *
- * This is the *only* cadence that runs this hot, and it runs only while one of
- * the usage surfaces is mounted. The background poll behind the titlebar stays
- * at [`POLL_INTERVAL_MS`], so a Spacron left open in the background does not
- * spend the quota these meters report on watching that quota.
+ * Cadence while the usage panel itself is open. It deliberately matches the
+ * background footer cadence now, so opening the details changes presentation,
+ * not whether the underlying reading stays live.
  *
  * Paired with `CACHE_TTL` in `src-tauri/src/commands/usage.rs`, which is held at
  * 30s to match. Raising that TTL above this interval makes the extra ticks
@@ -41,7 +41,7 @@ export const PANEL_POLL_INTERVAL_MS = 30 * 1000;
  * older. Coming back to the app is exactly when a stale meter is most likely to
  * be wrong and most likely to be looked at.
  */
-const REFOCUS_STALE_MS = 2 * 60 * 1000;
+const REFOCUS_STALE_MS = POLL_INTERVAL_MS;
 
 /** Percentage at or above which a window is worth surfacing on the titlebar. */
 export const WARN_PERCENT = 75;
@@ -337,7 +337,9 @@ let listenersBound = false;
 export function startUsagePolling(): void {
   if (!isTauriRuntime() || pollTimer) return;
 
-  void refreshUsage();
+  // The first visible reading should be current immediately, even if another
+  // surface populated Rust's short cache just before this footer mounted.
+  void refreshUsage(true);
 
   pollTimer = setInterval(() => {
     if (typeof document !== 'undefined' && document.hidden) return;

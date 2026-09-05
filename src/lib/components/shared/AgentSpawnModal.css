@@ -2,56 +2,63 @@
   position: fixed;
   inset: 0;
   z-index: 8000;
-  background: rgba(0, 0, 0, 0.48);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
   animation: asmFadeIn 0.2s var(--ease-out) forwards;
 }
 
+:root.light-theme .asm-backdrop {
+  background: rgba(0, 0, 0, 0.32);
+}
+
+/* Modal Card: Solid, clean, focused with flexible bounds */
 .asm-card {
-  width: 440px;
-  max-width: calc(100 * var(--app-vw, 1vw) - 40px);
-  /* Both bounds live on the card, not on the list inside it. The floor is what
-     keeps a one-agent picker from looking cramped (the list used to carry it as
-     `min-height: 200px`, which a flex item cannot shrink below — on a short
-     window that pushed the footer, and the Spawn button with it, out through
-     the card's `overflow: hidden`). Clamping the floor against the viewport
-     means it can never do that. */
-  min-height: min(320px, calc(84 * var(--app-vh, 1vh)));
-  /* 580px ≈ the height the card settled at before, when the list capped itself
-     at 460px — kept so a tall screen doesn't stretch the picker to 84% of it. */
-  max-height: min(580px, calc(84 * var(--app-vh, 1vh)));
-  /* Fixed frame: the card never moves or resizes, and a pan gesture over it
-     scrolls the preset list rather than dragging the surface. */
-  touch-action: pan-y;
-  background: rgba(var(--bg-secondary-rgb), 1);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  width: 590px;
+  max-width: calc(100 * var(--app-vw, 1vw) - 32px);
+  max-height: min(650px, calc(90 * var(--app-vh, 1vh)));
+  background: #111116;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: asmSlideUp 0.28s var(--ease-spring) forwards;
+  box-sizing: border-box;
+  animation: asmSlideUp 0.25s var(--ease-spring) forwards;
+}
+
+/* Light theme solid adjustments */
+:root.light-theme .asm-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 /* ---- Header ---- */
-/* Pinned, like the footer: only the preset list between them scrolls. */
 .asm-header {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px 14px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  box-sizing: border-box;
+}
+
+:root.light-theme .asm-header {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
 .asm-title-row {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -59,314 +66,767 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
-  border-radius: 9px;
-  color: var(--accent, #3b82f6);
-  background: rgba(var(--accent-rgb, 59, 130, 246), 0.12);
+  border-radius: 10px;
+  color: var(--role-agent, #b48cff);
+  background: color-mix(in srgb, var(--role-agent, #b48cff) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--role-agent, #b48cff) 28%, var(--border, rgba(255, 255, 255, 0.1)));
+}
+
+:root.light-theme .asm-title-badge {
+  color: var(--role-agent, #6d28d9);
+  background: color-mix(in srgb, var(--role-agent, #6d28d9) 12%, #f3f4f6);
+  border-color: color-mix(in srgb, var(--role-agent, #6d28d9) 26%, rgba(0, 0, 0, 0.08));
 }
 
 .asm-title-text {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
 }
 
 .asm-title {
-  font-size: 15px;
+  font-size: 15.5px;
   font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--text-primary, #e8e8e8);
+  letter-spacing: -0.015em;
+  color: var(--text-primary, #f0f0f4);
 }
 
 .asm-subtitle {
-  font-size: 11.5px;
-  color: var(--text-muted, #808080);
+  font-size: 12px;
+  color: var(--text-muted, #8a8a9a);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .asm-close-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted, #808080);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  color: var(--text-muted, #8a8a9a);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   flex-shrink: 0;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  box-sizing: border-box;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-close-btn {
+  background: #f4f4f6;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-muted, #6b7280);
 }
 
 .asm-close-btn:hover {
-  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
-  color: var(--text-primary, #fff);
+  background: var(--bg-active, rgba(255, 255, 255, 0.12));
+  border-color: var(--border-focus, rgba(255, 255, 255, 0.2));
+  color: var(--text-primary, #ffffff);
 }
 
-/* ---- Agent list ---- */
-/* The only scroller in the card. Its bounds come from the card's min/max height
-   (see `.asm-card`) — a min-height here would stop it shrinking and clip the
-   footer instead. */
+:root.light-theme .asm-close-btn:hover {
+  background: #e4e4e7;
+  border-color: rgba(0, 0, 0, 0.2);
+  color: #000000;
+}
+
+/* ---- Agent Preset List & Grid ---- */
 .asm-preset-list {
   flex: 1 1 auto;
   min-height: 0;
+  max-height: 270px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: none;
-  padding: 4px 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  /* Rows are click targets; a drag across them scrolls rather than selecting. */
+  padding: 14px 18px 12px;
   user-select: none;
+  box-sizing: border-box;
 }
 
 .asm-empty {
-  padding: 48px 32px;
+  padding: 36px 24px;
   text-align: center;
-  color: var(--text-muted, #808080);
+  color: var(--text-muted, #8a8a9a);
   font-size: 13px;
+  line-height: 1.5;
 }
 
-.asm-card-item {
+.asm-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Individual Agent Tile */
+.asm-agent-tile {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 13px;
-  padding: 9px 10px;
-  border-radius: 10px;
+  text-align: center;
+  padding: 10px 8px 8px;
+  min-height: 140px;
+  border-radius: 12px;
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--text-primary, #fff) 3%, #16161c);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.09));
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.asm-card-item:hover {
-  background: color-mix(in srgb, var(--text-primary, #fff) 5%, transparent);
+:root.light-theme .asm-agent-tile {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.asm-card-item:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
-  background: color-mix(in srgb, var(--text-primary, #fff) 5%, transparent);
+.asm-agent-tile:hover {
+  background: color-mix(in srgb, var(--text-primary, #fff) 7%, #16161c);
+  border-color: color-mix(in srgb, var(--logo, var(--accent)) 45%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.asm-card-item.selected {
-  background: rgba(var(--accent-rgb, 59, 130, 246), 0.1);
-  border-color: rgba(var(--accent-rgb, 59, 130, 246), 0.3);
+:root.light-theme .asm-agent-tile:hover {
+  background: #ffffff;
+  border-color: color-mix(in srgb, var(--logo, #000000) 50%, rgba(0, 0, 0, 0.15));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* ---- Logo tile ---- */
-.asm-logo {
+.asm-agent-tile.active,
+.asm-agent-tile.selected {
+  background: color-mix(in srgb, var(--logo, var(--accent)) 12%, #16161c);
+  border-color: var(--logo, var(--accent, #3b82f6));
+}
+
+:root.light-theme .asm-agent-tile.active,
+:root.light-theme .asm-agent-tile.selected {
+  background: color-mix(in srgb, var(--logo, #000000) 7%, #ffffff);
+  border-color: var(--logo, #000000);
+}
+
+.asm-agent-tile.active {
+  box-shadow: 0 0 0 1.5px var(--logo, var(--accent, #3b82f6)), 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+:root.light-theme .asm-agent-tile.active {
+  box-shadow: 0 0 0 1.5px var(--logo, #000000), 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Corner selection count badge */
+.asm-tile-count-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--logo, var(--accent, #3b82f6));
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.asm-tile-count-badge.mono {
+  background: var(--accent, #ffffff);
+  color: var(--on-accent, #000000);
+}
+
+:root.light-theme .asm-tile-count-badge.mono {
+  background: #000000;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+/* Big Brand Icon Container */
+.asm-tile-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
   flex-shrink: 0;
-  border-radius: 10px;
+  border-radius: 12px;
+  margin-bottom: 6px;
   color: var(--logo, var(--text-primary, #e8e8e8));
-  background: color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+  background: color-mix(in srgb, var(--logo, var(--text-primary)) 12%, rgba(255, 255, 255, 0.04));
+  border: 1px solid color-mix(in srgb, var(--logo, var(--text-primary)) 24%, var(--border));
+  box-sizing: border-box;
   transition: background var(--dur-fast) var(--ease-out);
 }
 
-.asm-card-item:hover .asm-logo,
-.asm-card-item.selected .asm-logo {
-  background: color-mix(in srgb, var(--text-primary, #fff) 10%, transparent);
+:root.light-theme .asm-tile-icon {
+  background: color-mix(in srgb, var(--logo, #000000) 10%, #f3f4f6);
+  border-color: color-mix(in srgb, var(--logo, #000000) 22%, rgba(0, 0, 0, 0.1));
 }
 
-.asm-logo svg,
-.asm-logo img {
-  width: 22px;
-  height: 22px;
+.asm-agent-tile:hover .asm-tile-icon {
+  background: color-mix(in srgb, var(--logo, var(--text-primary)) 18%, rgba(255, 255, 255, 0.06));
+}
+
+:root.light-theme .asm-agent-tile:hover .asm-tile-icon {
+  background: color-mix(in srgb, var(--logo, #000000) 16%, #f3f4f6);
+}
+
+.asm-tile-icon svg,
+.asm-tile-icon img {
+  width: 26px;
+  height: 26px;
   display: block;
 }
 
-.asm-card-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
+.asm-tile-name {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary, #e8e8ec);
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
 }
 
-/* Name sits beside its state badge; the badge is never squeezed, the name
-   truncates instead. */
-.asm-card-name-row {
+.asm-tile-badge-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-width: 0;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  min-height: 18px;
 }
 
-.asm-card-name-row .asm-card-name {
-  flex: 1;
-  min-width: 0;
-}
-
-.asm-card-name {
-  font-size: 13.5px;
-  font-weight: 550;
-  color: var(--text-primary, #e8e8e8);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.asm-card-cmd {
-  font-size: 11px;
-  font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
-  color: var(--text-muted, #808080);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ---- State badge ---- */
-/* Same shape and tone language as the Agents pane's `.agents-row-badge`, so
-   the spawn picker and the settings roster never disagree about what an
-   agent's state means. */
+/* State badge with glowing dot */
 .asm-badge {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   height: 16px;
   padding: 0 6px;
   border-radius: 999px;
   font-size: 9px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.02em;
-  color: var(--accent, #3b82f6);
-  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 25%, transparent);
-  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
+  letter-spacing: 0.01em;
+  color: var(--text-muted, #8a8a9a);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.09));
+  box-sizing: border-box;
+}
+
+:root.light-theme .asm-badge {
+  background: #f4f4f6;
+  border-color: rgba(0, 0, 0, 0.08);
+  color: var(--text-muted, #6b7280);
+}
+
+.asm-badge-dot {
+  width: 4.5px;
+  height: 4.5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 
 .asm-badge.custom {
-  color: #8b5cf6;
-  border-color: color-mix(in srgb, #8b5cf6 25%, transparent);
-  background: color-mix(in srgb, #8b5cf6 10%, transparent);
+  color: var(--role-agent, #a855f7);
+  border-color: color-mix(in srgb, var(--role-agent, #a855f7) 32%, transparent);
+  background: color-mix(in srgb, var(--role-agent, #a855f7) 12%, transparent);
+}
+
+.asm-badge.custom .asm-badge-dot {
+  background: var(--role-agent, #a855f7);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--role-agent, #a855f7) 70%, transparent);
 }
 
 .asm-badge[data-tone='ready'] {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 25%, transparent);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success, #10b981);
+  border-color: color-mix(in srgb, var(--success, #10b981) 32%, transparent);
+  background: color-mix(in srgb, var(--success, #10b981) 12%, transparent);
+}
+
+.asm-badge[data-tone='ready'] .asm-badge-dot {
+  background: var(--success, #10b981);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--success, #10b981) 70%, transparent);
 }
 
 .asm-badge[data-tone='partial'] {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--warning, #f59e0b);
+  border-color: color-mix(in srgb, var(--warning, #f59e0b) 32%, transparent);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
 }
 
-/* ---- One-click Sign in ---- */
-/* Shown on rows where detection knows credentials are missing. Matches the
-   badge's height so the name-row stays one line; accent-tinted so it reads as
-   an action next to the neutral state pill. */
+.asm-badge[data-tone='partial'] .asm-badge-dot {
+  background: var(--warning, #f59e0b);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--warning, #f59e0b) 70%, transparent);
+}
+
+/* Sign-in button on the tile */
 .asm-signin-btn {
-  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   height: 16px;
-  padding: 0 7px;
+  padding: 0 6px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 35%, transparent);
-  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
-  color: var(--accent, #3b82f6);
+  border: 1px solid color-mix(in srgb, var(--info, #3b82f6) 40%, transparent);
+  background: color-mix(in srgb, var(--info, #3b82f6) 12%, transparent);
+  color: var(--info, #3b82f6);
   font-size: 9px;
   font-weight: 650;
-  line-height: 1;
-  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-
-.asm-signin-btn:hover {
-  background: var(--accent, #3b82f6);
-  color: var(--button-text, #fff);
-  border-color: var(--accent, #3b82f6);
-}
-
-.asm-signin-btn:active {
-  transform: scale(0.95);
-}
-
-/* ---- Stepper (revealed on hover / when selected) ---- */
-.asm-stepper {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: 8px;
-  padding: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-  pointer-events: none;
-}
-
-.asm-card-item:hover .asm-stepper,
-.asm-card-item:focus-within .asm-stepper,
-.asm-stepper.active {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.asm-btn {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--text-secondary, #c0c0c0);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
+  box-sizing: border-box;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.asm-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text-primary, #fff) 12%, transparent);
-  color: var(--text-primary, #fff);
+.asm-signin-btn:hover {
+  background: var(--info, #3b82f6);
+  color: #ffffff;
 }
 
-.asm-btn:disabled {
-  opacity: 0.28;
-  cursor: not-allowed;
+/* ---- Stable Stepper & Add Button Container ---- */
+.asm-tile-stepper {
+  width: 100%;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: auto;
+  box-sizing: border-box;
 }
 
-.asm-count-value {
-  font-size: 12px;
-  font-weight: 650;
+/* "+ Add" Button: Exact 26px height match, zero layout jumping */
+.asm-tile-add-btn {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border-radius: 6px;
+  border: 1px dashed var(--border, rgba(255, 255, 255, 0.16));
+  background: transparent;
+  color: var(--text-muted, #8a8a9a);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  /* Specific transitions ONLY - never layout/size/all! */
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-tile-add-btn {
+  border-color: rgba(0, 0, 0, 0.16);
+  color: var(--text-muted, #6b7280);
+}
+
+.asm-tile-add-btn:hover {
+  background: color-mix(in srgb, var(--logo, var(--accent)) 15%, transparent);
+  border-color: var(--logo, var(--accent));
+  border-style: solid;
+  color: var(--text-primary, #ffffff);
+}
+
+:root.light-theme .asm-tile-add-btn:hover {
+  background: color-mix(in srgb, var(--logo, #000000) 10%, #f3f4f6);
+  border-color: var(--logo, #000000);
+  border-style: solid;
+  color: #000000;
+}
+
+/* Stepper capsule: Exact 26px height match */
+.asm-tile-stepper.has-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--text-primary, #fff) 8%, #121215);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+:root.light-theme .asm-tile-stepper.has-count {
+  background: #f1f3f5;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.asm-tile-step-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary, #ffffff);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-tile-step-btn {
+  color: #000000;
+}
+
+.asm-tile-step-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.12));
+}
+
+:root.light-theme .asm-tile-step-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.asm-tile-step-count {
+  font-size: 11.5px;
+  font-weight: 750;
   font-variant-numeric: tabular-nums;
-  min-width: 15px;
-  text-align: center;
-  color: var(--text-primary, #e8e8e8);
+  color: var(--text-primary, #ffffff);
+  line-height: 1;
+}
+
+:root.light-theme .asm-tile-step-count {
+  color: #000000;
+}
+
+/* ---- Middle Section: Active Agent Config (Below the Icons) ---- */
+.asm-config-section {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 20px 14px;
+  background: color-mix(in srgb, var(--text-primary, #fff) 2%, #0e0e12);
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  box-sizing: border-box;
+}
+
+:root.light-theme .asm-config-section {
+  background: #f8f9fa;
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.asm-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.asm-config-agent-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.asm-config-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted, #8a8a9a);
+}
+
+.asm-config-agent-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-primary, #e8e8ec);
+}
+
+.asm-config-agent-cmd {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-secondary, #a0a0b2);
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+:root.light-theme .asm-config-agent-cmd {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-secondary, #4b5563);
+}
+
+/* Selected agent switcher tabs (when multiple agents chosen) */
+.asm-selected-agent-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 1px 0 2px;
+}
+
+.asm-agent-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--bg-primary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary, #a0a0b2);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-agent-tab {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-secondary, #4b5563);
+}
+
+.asm-agent-tab:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary, #ffffff);
+}
+
+:root.light-theme .asm-agent-tab:hover {
+  background: #f1f3f5;
+  color: #000000;
+}
+
+.asm-agent-tab.active {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 14%, var(--bg-primary, #000000));
+  border-color: var(--accent, #3b82f6);
+  color: var(--text-primary, #ffffff);
+}
+
+:root.light-theme .asm-agent-tab.active {
+  background: #000000;
+  border-color: #000000;
+  color: #ffffff;
+}
+
+.asm-tab-count {
+  font-size: 10px;
+  font-weight: 750;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.12));
+  color: inherit;
+}
+
+.asm-agent-tab.active .asm-tab-count {
+  background: var(--accent, #ffffff);
+  color: var(--on-accent, #000000);
+}
+
+:root.light-theme .asm-agent-tab.active .asm-tab-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.asm-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.asm-field-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary, #c0c0d2);
+}
+
+:root.light-theme .asm-field-title {
+  color: var(--text-secondary, #4b5563);
+}
+
+/* Workspace switching grid */
+.asm-placement-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.asm-placement-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-primary, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.09));
+  color: var(--text-secondary, #b0b0c2);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-placement-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-secondary, #4b5563);
+}
+
+.asm-placement-card:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--border));
+  color: var(--text-primary, #e8e8ec);
+}
+
+:root.light-theme .asm-placement-card:hover {
+  background: #f8f9fa;
+  border-color: rgba(0, 0, 0, 0.22);
+  color: #000000;
+}
+
+.asm-placement-card.selected {
+  background: color-mix(in srgb, var(--accent, #ffffff) 10%, #000000);
+  border-color: var(--accent, #ffffff);
+  color: var(--text-primary, #ffffff);
+  box-shadow: 0 0 0 1px var(--accent, #ffffff), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+:root.light-theme .asm-placement-card.selected {
+  background: #f4f4f6;
+  border-color: #000000;
+  color: #000000;
+  box-shadow: 0 0 0 1px #000000, 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.asm-placement-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asm-placement-icon {
+  flex-shrink: 0;
+  color: var(--text-muted, #a0a0b2);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.asm-placement-card.selected .asm-placement-icon {
+  color: var(--text-primary, #ffffff);
+}
+
+:root.light-theme .asm-placement-card.selected .asm-placement-icon {
+  color: #000000;
+}
+
+.asm-placement-card strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary, #ffffff);
+}
+
+:root.light-theme .asm-placement-card strong {
+  color: #000000;
+}
+
+.asm-placement-card small {
+  font-size: 10.5px;
+  color: var(--text-muted, #8a8a9a);
+  line-height: 1.3;
+}
+
+:root.light-theme .asm-placement-card small {
+  color: var(--text-muted, #6b7280);
+}
+
+.asm-placement-card.selected small {
+  color: var(--text-secondary, #c0c0d2);
+}
+
+:root.light-theme .asm-placement-card.selected small {
+  color: #4b5563;
+}
+
+.asm-placement-radio {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-muted, #707082);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+:root.light-theme .asm-placement-radio {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.asm-placement-card.selected .asm-placement-radio {
+  border-color: var(--accent, #ffffff);
+}
+
+:root.light-theme .asm-placement-card.selected .asm-placement-radio {
+  border-color: #000000;
+}
+
+.asm-radio-inner {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #ffffff);
+}
+
+:root.light-theme .asm-radio-inner {
+  background: #000000;
 }
 
 /* ---- Footer ---- */
-/* Wraps on narrow widths: the hint/Rescan group keeps its line and the Spawn
-   button docks right-aligned beneath it (via `margin-left: auto`) rather than
-   crushing the hint. */
 .asm-footer {
   flex: none;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  justify-content: space-between;
+  gap: 12px;
   padding: 13px 20px;
+  background: #111116;
   border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  box-sizing: border-box;
+}
+
+:root.light-theme .asm-footer {
+  background: #ffffff;
+  border-top-color: rgba(0, 0, 0, 0.08);
 }
 
 .asm-footer-left {
@@ -377,33 +837,42 @@
   flex: 1 1 auto;
 }
 
-/* The Isolated / Main repo toggle that used to live here moved into the
-   placement dialog (AgentPlacementModal) — spawning always asks now. */
-
-/* Quiet secondary action for re-scanning PATH after a fresh install. Sits
-   beside the hint rather than competing with the Spawn button. */
 .asm-rescan {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted, #808080);
+  border-radius: 7px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--text-secondary, #8a8a9a);
   font-size: 11px;
+  font-weight: 550;
   cursor: pointer;
+  box-sizing: border-box;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
+:root.light-theme .asm-rescan {
+  background: #f4f4f6;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-secondary, #4b5563);
+}
+
 .asm-rescan:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
-  color: var(--text-primary, #e8e8e8);
-  border-color: var(--accent, #3b82f6);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary, #e8e8ec);
+  border-color: var(--accent, #ffffff);
+}
+
+:root.light-theme .asm-rescan:hover:not(:disabled) {
+  background: #e4e4e7;
+  color: #000000;
+  border-color: #000000;
 }
 
 .asm-rescan:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
 }
 
@@ -416,47 +885,38 @@
   to   { transform: rotate(360deg); }
 }
 
-.asm-hint {
-  font-size: 11px;
-  color: var(--text-muted, #808080);
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* Permission-mode pill. Yolo gets the accent because it is the state worth
-   noticing before spawning — guardrails off — while Manual is the quiet
-   default and stays muted rather than shouting a reassurance. */
 .asm-perm {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  /* Shrinks with the footer: `min-width: 0` lets the label truncate below its
-     content width so the pill flows with the hint text instead of forcing the
-     whole group to wrap or overflow. */
   flex-shrink: 1;
   min-width: 0;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  background: transparent;
-  color: var(--text-muted, #808080);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+  color: var(--text-secondary, #8a8a9a);
   font-size: 11px;
   cursor: default;
+  box-sizing: border-box;
+}
+
+:root.light-theme .asm-perm {
+  background: #f4f4f6;
+  border-color: rgba(0, 0, 0, 0.08);
+  color: var(--text-secondary, #4b5563);
 }
 
 .asm-perm[data-mode='yolo'] {
-  color: var(--accent, #3b82f6);
-  border-color: color-mix(in srgb, var(--accent, #3b82f6) 38%, transparent);
-  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
+  color: var(--warning, #fbbf24);
+  border-color: color-mix(in srgb, var(--warning, #fbbf24) 38%, transparent);
+  background: color-mix(in srgb, var(--warning, #fbbf24) 10%, transparent);
 }
 
 .asm-perm svg {
   flex-shrink: 0;
 }
 
-/* The label ellipsizes on narrow footers (the title tooltip carries the full
-   wording), so the pill and the hint text truncate in step. */
 .asm-perm-label {
   min-width: 0;
   overflow: hidden;
@@ -466,35 +926,51 @@
 
 .asm-perm-note {
   flex-shrink: 0;
-  color: var(--text-muted, #808080);
+  color: var(--text-muted, #8a8a9a);
 }
 
-.asm-hint kbd {
-  font-family: inherit;
-  font-size: 10.5px;
-  padding: 1.5px 5px;
-  border-radius: 5px;
-  color: var(--text-secondary, #b0b0b0);
-  background: color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+:root.light-theme .asm-perm-note {
+  color: var(--text-muted, #6b7280);
 }
 
+/* High-contrast, responsive Spawn CTA button */
 .asm-confirm-btn {
   flex-shrink: 0;
-  margin-left: auto;
-  padding: 8px 18px;
-  background: var(--accent, #3b82f6);
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 20px;
   border-radius: 8px;
-  color: var(--button-text, #ffffff);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  background: var(--button-bg, var(--accent, #ffffff));
+  color: var(--button-text, var(--on-accent, #000000));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  box-sizing: border-box;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              opacity var(--dur-fast) var(--ease-out),
+              transform var(--dur-instant) var(--ease-out);
+}
+
+:root.light-theme .asm-confirm-btn {
+  background: #000000;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
 }
 
 .asm-confirm-btn:hover:not(:disabled) {
-  background: var(--accent-hover, #2563eb);
+  background: var(--accent-hover, #f4f4f5);
+  color: var(--button-text, var(--on-accent, #000000));
+}
+
+:root.light-theme .asm-confirm-btn:hover:not(:disabled) {
+  background: #27272a;
+  color: #ffffff;
 }
 
 .asm-confirm-btn:active:not(:disabled) {
@@ -502,45 +978,45 @@
 }
 
 .asm-confirm-btn:disabled {
-  background: color-mix(in srgb, var(--text-muted, #404040) 45%, transparent);
-  color: color-mix(in srgb, var(--button-text, #fff) 35%, transparent);
+  background: #242430;
+  color: #71717a;
+  border-color: #2e2e3e;
   cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.65;
+}
+
+:root.light-theme .asm-confirm-btn:disabled {
+  background: #e4e4e7;
+  color: #a1a1aa;
+  border-color: #d4d4d8;
+  opacity: 0.7;
 }
 
 @keyframes asmFadeIn {
   from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes asmSlideUp {
-  from { opacity: 0; }
   to   { opacity: 1; }
 }
 
+@keyframes asmSlideUp {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 /* ---- Responsive ---- */
-/* The card already shrinks with the viewport (`max-width: 100vw - 40px`); at
-   narrow widths tighten the chrome and let the hint ellipsize to one line so
-   the wrapped footer stays two lines (hint/Rescan, then the Spawn button). */
-@media (max-width: 520px) {
-  .asm-header {
-    padding: 14px 14px 12px;
+@media (max-width: 540px) {
+  .asm-icon-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .asm-footer {
-    padding: 12px 14px;
-  }
-
-  .asm-preset-list {
-    padding: 4px 10px 10px;
-  }
-
-  .asm-hint {
-    /* Flex items won't shrink below content size without this — the ellipsis
-       above is dead unless the hint can actually be squeezed. */
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .asm-placement-grid {
+    grid-template-columns: 1fr;
   }
 
   .asm-confirm-btn {

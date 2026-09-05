@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import packageJson from '../../../../package.json';
+import { useAppIcon } from '$lib/react/useAppIcon';
 import {
   clearRecentWorkspaces,
   cloneRepoPromptOpen,
@@ -19,7 +19,6 @@ import type { Workspace } from '$lib/types/workspace';
 import './WelcomeScreen.css';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
-const iconSrc = `/icon.png?v=${packageJson.version}`;
 
 function FolderIcon({ size = 12 }: { size?: number }) {
   return (
@@ -68,6 +67,7 @@ function projectHue(name: string) {
 }
 
 export default function WelcomeScreen() {
+  const iconSrc = useAppIcon();
   const workspaces = useWorkspaceStore((s) => s.recentWorkspaces);
   const search = useStore(paletteSearch);
   const theme = useThemeStore((s) => s.activeTheme);
