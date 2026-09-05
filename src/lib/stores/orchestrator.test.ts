@@ -9,6 +9,7 @@ const spawnAgentPreset = vi.hoisted(() => vi.fn(async (): Promise<number | null>
 const setSessionOwnerTask = vi.hoisted(() => vi.fn());
 const setSessionTaskSummary = vi.hoisted(() => vi.fn());
 const setSessionAgentName = vi.hoisted(() => vi.fn());
+const setSessionWorktree = vi.hoisted(() => vi.fn());
 const setSessionRole = vi.hoisted(() => vi.fn());
 const setActiveSession = vi.hoisted(() => vi.fn());
 const sendAgentPromptDirect = vi.hoisted(() => vi.fn());
@@ -149,6 +150,7 @@ vi.mock('$lib/stores/terminal', () => ({
   setSessionTaskSummary,
   setSessionAgentName,
   setSessionRole,
+  setSessionWorktree,
   setActiveSession,
   sendAgentPromptDirect,
   getSessionOutputBuffer,
@@ -172,13 +174,16 @@ vi.mock('$lib/stores/terminal', () => ({
   getActiveTerminalProjectId,
 }));
 
-import { trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, recordUnwatchedAgentReport } from './orchestrator';
+import { cleanupStaleWorktrees, trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, recordUnwatchedAgentReport } from './orchestrator';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
 
 function resetMocks() {
   invoke.mockReset();
+  invoke.mockImplementation(async (command: string) => {
+    if (command === 'workspace_git_create_worktree') return { path: '/repo/isolated', branch: 'spacron/test', base_branch: 'main', base_commit: 'abc' };
+  });
   routeOrchestratorRequest.mockReset();
   showToast.mockReset();
   showTerminal.mockReset();
@@ -188,6 +193,7 @@ function resetMocks() {
   setSessionTaskSummary.mockReset();
   setSessionAgentName.mockReset();
   setSessionRole.mockReset();
+  setSessionWorktree.mockReset();
   setActiveSession.mockReset();
   sendAgentPromptDirect.mockReset();
   sendAgentPromptDirect.mockResolvedValue(true);
@@ -268,6 +274,28 @@ describe('orchestrator terminal leasing', () => {
     vi.useRealTimers();
   });
 
+  it('does not launch in the main repo when isolation fails', async () => {
+    const task = createOrchestratorTask('project-1', 'Isolated task', 'claude');
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'workspace_git_create_worktree') throw new Error('Git permission denied');
+    });
+    await expect(launchOrchestratorTask(task.id, 'claude', '/repo', false)).resolves.toBeNull();
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('Git permission denied'), 'error');
+  });
+
+  it('keeps an existing worktree and never retries in main after terminal failure', async () => {
+    const task = createOrchestratorTask('project-1', 'Isolated task', 'claude');
+    const worktree = { path: '/repo/isolated', branch: 'spacron/test', baseBranch: 'main', baseCommit: 'abc', createdAt: 0 };
+    orchestratorTasks.update((tasks) => tasks.map((t) => t.id === task.id ? { ...t, worktree } : t));
+    spawnAgentPreset.mockResolvedValue(null);
+    await expect(launchOrchestratorTask(task.id, 'claude', '/repo', false)).resolves.toBeNull();
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', worktree.path, expect.anything());
+    expect(get(orchestratorTasks)[0].worktree).toEqual(worktree);
+    expect(invoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.anything());
+  });
+
   it('leases and activates a direct launch while recording owner and summary', async () => {
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: 'pending' }] });
     const task = createOrchestratorTask('project-1', 'Explain how the lease boundary works', 'claude');
@@ -275,7 +303,7 @@ describe('orchestrator terminal leasing', () => {
 
     await launchOrchestratorTask(task.id, 'claude', '/repo', false);
 
-    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo', { activate: true, skipAutoBrief: true });
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/isolated', { activate: true, skipAutoBrief: true });
     expect(setSessionOwnerTask).toHaveBeenCalledWith(42, task.id);
     expect(setSessionTaskSummary).toHaveBeenCalledWith(42, task.title);
     // Launching focuses the new agent's pane but must NOT switch the aux view to
@@ -720,8 +748,8 @@ describe('orchestrator chat actions', () => {
     expect(spawnAgentPreset).toHaveBeenCalledTimes(2);
     // Only the primary agent takes focus; the rest spawn in the background so the
     // primary terminal stays stationary.
-    expect(spawnAgentPreset).toHaveBeenNthCalledWith(1, 'claude', '/repo', { activate: true, skipAutoBrief: true });
-    expect(spawnAgentPreset).toHaveBeenNthCalledWith(2, 'claude', '/repo', { activate: false, skipAutoBrief: true });
+    expect(spawnAgentPreset).toHaveBeenNthCalledWith(1, 'claude', '/repo/isolated', { activate: true, skipAutoBrief: true });
+    expect(spawnAgentPreset).toHaveBeenNthCalledWith(2, 'claude', '/repo/isolated', { activate: false, skipAutoBrief: true });
 
     const tasks = get(orchestratorTasks);
     expect(tasks).toHaveLength(2);
@@ -834,6 +862,7 @@ describe('orchestrator chat actions', () => {
 
     const byName = Object.fromEntries(get(orchestratorTasks).map((t) => [t.name, t.skipWorktree]));
     expect(byName).toEqual({ Release: true, Backend: false, Frontend: false });
+    expect(spawnAgentPreset.mock.calls.map((call) => (call as unknown[])[1])).toEqual(['/repo', '/repo/isolated', '/repo/isolated']);
   });
 
   it('keeps answers aligned when a spawn is held back by a file claim', async () => {
@@ -990,7 +1019,7 @@ describe('orchestrator chat actions', () => {
 
     await sendChatMessage('project-1', '/repo', 'open a claude agent called Backend');
 
-    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo', { activate: true, skipAutoBrief: true });
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/isolated', { activate: true, skipAutoBrief: true });
     const task = get(orchestratorTasks)[0];
     expect(task.name).toBe('Backend');
     expect(task.status).toBe('in-progress');
@@ -1014,7 +1043,7 @@ describe('orchestrator chat actions', () => {
     });
 
     expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
-    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo', { activate: true, skipAutoBrief: true });
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/isolated', { activate: true, skipAutoBrief: true });
     expect(get(orchestratorTasks)).toHaveLength(1);
   });
 
@@ -1569,6 +1598,37 @@ describe('trackedWorktrees', () => {
   beforeEach(async () => {
     await loadProjectOrchestratorTasks({ id: 'project-1', root_path: '/repo' });
     orchestratorTasks.set([]);
+  });
+
+  it.each([false, true])('cleans stopped picker worktrees in ambient %s and skips live agents', async (dev) => {
+    setSessionWorktree.mockClear();
+    const closed = wt('/repo/.spacron/worktrees/closed', 'spacron/closed');
+    const live = wt('/repo/.spacron/worktrees/live', 'spacron/live');
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) => ({ sessions: isDev === dev ? [
+      { id: 7, isRunning: false, ownerTaskId: null, worktree: closed },
+      { id: 8, isRunning: true, ownerTaskId: null, worktree: live },
+    ] : [] }));
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'workspace_git_worktree_delta') return { head: 'tip', dirty_files: 0, committed_files: 0, up_to_date: true };
+    });
+    expect(await cleanupStaleWorktrees('project-1')).toBe(1);
+    expect(setSessionWorktree).toHaveBeenCalledWith(7, null);
+    expect(setSessionWorktree).not.toHaveBeenCalledWith(8, null);
+    expect(invoke).toHaveBeenCalledWith('workspace_git_remove_worktree', expect.objectContaining({ worktreePath: closed.path, deleteBranch: false }));
+    expect(invoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.objectContaining({ worktreePath: live.path }));
+  });
+
+  it('keeps failed removals tracked for a later cleanup retry', async () => {
+    setSessionWorktree.mockClear();
+    const worktree = wt('/repo/.spacron/worktrees/closed', 'spacron/closed');
+    getTerminalProjectState.mockImplementation((_p?: string, isDev = false) => ({ sessions: isDev ? [] : [{ id: 7, isRunning: false, ownerTaskId: null, worktree }] }));
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'workspace_git_worktree_delta') return { head: 'tip', dirty_files: 0, committed_files: 0, up_to_date: true };
+      if (command === 'workspace_git_remove_worktree') throw new Error('Worktree locked');
+    });
+    await cleanupStaleWorktrees('project-1');
+    expect(setSessionWorktree).not.toHaveBeenCalled();
+    expect(trackedWorktrees().some((entry) => entry.worktree.path === worktree.path)).toBe(true);
   });
 
   it('picks up an agent spawned from the Spawn Agents picker', () => {

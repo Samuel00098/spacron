@@ -81,11 +81,6 @@ export function deriveTaskBranch(taskId: string, label?: string | null): string 
 }
 
 /**
- * Create an isolated worktree for an agent. Returns null when isolation isn't
- * possible (not a git repo, no commits yet, backend failure) — the caller then
- * falls back to running the agent in the project root.
- */
-/**
  * Derive a branch name from the agent's first real work, Orca-style: name the
  * work from what it actually did rather than the spawn-time label. The commit
  * subject is the best source ("fix: login redirect" → `fix-login-redirect`);
@@ -162,11 +157,12 @@ export async function renameTaskWorktree(
   }
 }
 
+/** Create the requested isolated checkout; failure must never change placement. */
 export async function createTaskWorktree(args: {
   projectId: string;
   taskId: string;
   label?: string | null;
-}): Promise<WorktreeInfo | null> {
+}): Promise<WorktreeInfo> {
   const branch = deriveTaskBranch(args.taskId, args.label);
   try {
     const raw = await backendInvoke<{
@@ -187,16 +183,7 @@ export async function createTaskWorktree(args: {
     };
   } catch (err) {
     const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-    // Not a git repo / empty repo — isolation is skipped, not fatal.
-    if (msg.includes('not a Git repository') || msg.includes('no commits yet') || msg.includes('Not a git worktree')) {
-      console.warn('Worktree isolation skipped; running agent in project root:', msg);
-    } else {
-      // Git unavailable, permission denied, or other unexpected failure.
-      // Log at error level so it's visible in devtools even during production
-      // builds — helps diagnose "worktree badge not showing" reports.
-      console.error('Worktree isolation failed (unexpected); running agent in project root:', msg);
-    }
-    return null;
+    throw new Error(`Could not create isolated worktree: ${msg}`);
   }
 }
 
@@ -210,7 +197,7 @@ export async function removeTaskWorktree(
   projectId: string,
   worktree: WorktreeInfo,
   deleteBranch = false
-): Promise<void> {
+): Promise<boolean> {
   try {
     await backendInvoke('workspace_git_remove_worktree', {
       projectId,
@@ -218,8 +205,10 @@ export async function removeTaskWorktree(
       deleteBranch,
       branch: worktree.branch,
     });
+    return true;
   } catch (err) {
     console.warn('Worktree removal failed:', err);
+    return false;
   }
 }
 
@@ -243,7 +232,7 @@ export type ReclaimOutcome =
 export async function reclaimWorktree(
   projectId: string,
   worktree: WorktreeInfo,
-  opts?: { deleteBranch?: boolean }
+  opts?: { deleteBranch?: boolean; stagePending?: boolean }
 ): Promise<ReclaimOutcome> {
   let staged = 0;
   // Advances as we stage, so the final check compares against what the main
@@ -251,7 +240,9 @@ export async function reclaimWorktree(
   let baseline = worktree;
   try {
     const delta = await getWorktreeDelta(projectId, worktree);
-    if (delta && !delta.upToDate) {
+    if (!delta) throw new Error('Could not verify the agent worktree; it was kept.');
+    if (!delta.upToDate) {
+      if (opts?.stagePending === false) return { removed: false, reason: 'pending', pendingFiles: delta.pendingFiles };
       const result = await stageWorktreeChanges(projectId, worktree);
       if (!result.success) {
         return {
@@ -269,7 +260,8 @@ export async function reclaimWorktree(
     // before an irreversible delete. Catches anything the agent wrote while we
     // were staging.
     const after = await getWorktreeDelta(projectId, baseline);
-    if (after && !after.upToDate) {
+    if (!after) throw new Error('Could not verify the agent worktree after bringing in changes; it was kept.');
+    if (!after.upToDate) {
       return { removed: false, reason: 'pending', pendingFiles: after.pendingFiles };
     }
   } catch (err) {
@@ -281,7 +273,9 @@ export async function reclaimWorktree(
     };
   }
 
-  await removeTaskWorktree(projectId, worktree, opts?.deleteBranch ?? false);
+  if (!await removeTaskWorktree(projectId, worktree, opts?.deleteBranch ?? false)) {
+    return { removed: false, reason: 'error', pendingFiles: 0, message: 'Git could not remove the worktree; cleanup will be retried.' };
+  }
   return { removed: true, staged };
 }
 

@@ -61,7 +61,7 @@ export default function AgentChangesList() {
             copies a worktree into your working tree; it is not `git add`. */}
         <span className="ac-sub">
           {autoStage === false
-            ? 'Quarantined until you review it. Bring the work in to run and test it.'
+            ? 'Bring in to run and test locally, then commit and push when ready.'
             : 'Not in your working tree yet'}
         </span>
       </header>
@@ -99,7 +99,7 @@ export default function AgentChangesList() {
                 title={
                   row.conflicted
                     ? 'Retry after resolving the conflicting files'
-                    : "Copy this agent's changes into your working tree so you can run and review them. This is not `git add`. Nothing is committed, and the agent's branch is kept."
+                    : "Apply this agent's changes to your main checkout for local testing. Your main branch is not committed or pushed, and the agent's branch is kept."
                 }
               >
                 {isBusy ? 'Bringing in…' : row.conflicted ? 'Retry' : 'Bring in'}

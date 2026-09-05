@@ -4,6 +4,7 @@ const { backendInvoke } = vi.hoisted(() => ({ backendInvoke: vi.fn() }));
 vi.mock('$lib/services/backend', () => ({ backendInvoke }));
 
 import {
+  createTaskWorktree,
   reclaimWorktree,
   stageBaseline,
   deriveTaskBranch,
@@ -139,6 +140,31 @@ describe('reclaimWorktree', () => {
 
     expect(outcome).toMatchObject({ removed: false });
     expect(backendInvoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.anything());
+  });
+
+  it.each([1, 2])('keeps the checkout if verification read %s fails', async (failingRead) => {
+    let reads = 0;
+    backend({
+      workspace_git_worktree_delta: () => {
+        if (++reads === failingRead) throw new Error('Git unavailable');
+        return CLEAN;
+      },
+      workspace_git_remove_worktree: undefined,
+    });
+    await expect(reclaimWorktree('p1', worktree())).resolves.toMatchObject({ removed: false, reason: 'error' });
+    expect(backendInvoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.anything());
+  });
+
+  it('automatic cleanup does not bring in outstanding work', async () => {
+    backend({ workspace_git_worktree_delta: DIRTY });
+    await expect(reclaimWorktree('p1', worktree(), { stagePending: false })).resolves.toMatchObject({ removed: false, reason: 'pending' });
+    expect(backendInvoke).not.toHaveBeenCalledWith('workspace_git_stage_worktree', expect.anything());
+    expect(backendInvoke).not.toHaveBeenCalledWith('workspace_git_remove_worktree', expect.anything());
+  });
+
+  it('reports failed disk removal instead of forgetting the checkout', async () => {
+    backend({ workspace_git_worktree_delta: CLEAN, workspace_git_remove_worktree: () => { throw new Error('locked'); } });
+    await expect(reclaimWorktree('p1', worktree())).resolves.toMatchObject({ removed: false, reason: 'error' });
   });
 
   it('re-checks against the newly staged tip, not the stale baseline', async () => {
@@ -375,5 +401,18 @@ describe('sweepAgentBranches', () => {
     const sweep = await sweepAgentBranches('p1');
     expect(sweep.deleted).toEqual([]);
     expect(sweep.retained).toEqual([]);
+  });
+});
+
+
+describe('createTaskWorktree', () => {
+  it('returns the isolated checkout supplied by Git', async () => {
+    backendInvoke.mockResolvedValue({ path: '/repo/.spacron/worktrees/agent', branch: 'spacron/agent', base_branch: 'main', base_commit: BASE });
+    await expect(createTaskWorktree({ projectId: 'p', taskId: 't' })).resolves.toMatchObject({ path: '/repo/.spacron/worktrees/agent', baseCommit: BASE });
+  });
+
+  it.each(['This project is not a Git repository.', 'The repository has no commits yet.', 'Permission denied'])('surfaces %s instead of allowing a main-repo fallback', async (reason) => {
+    backendInvoke.mockRejectedValue(reason);
+    await expect(createTaskWorktree({ projectId: 'p', taskId: 't' })).rejects.toThrow(reason);
   });
 });

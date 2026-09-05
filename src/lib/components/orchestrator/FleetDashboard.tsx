@@ -808,7 +808,7 @@ export default function FleetDashboard() {
                         className="fc-btn"
                         onClick={() => doStage(row)}
                         disabled={isBusy}
-                        title="Copy this agent's changes into your working tree so you can run and review them. This is not `git add`. Nothing is committed, and this worktree is kept."
+                        title="Apply this agent's changes to your main checkout for local testing. Your main branch is not committed or pushed, and running agents keep their worktrees. Closed, fully brought-in worktrees are cleaned up automatically."
                       >
                         Bring in
                       </button>
@@ -816,7 +816,7 @@ export default function FleetDashboard() {
                         className="fc-btn primary"
                         onClick={() => setConfirming({ key: row.key, action: 'merge' })}
                         disabled={isBusy}
-                        title={`Merge ${worktree.branch} into ${worktree.baseBranch}`}
+                        title={`Create a local merge commit from ${worktree.branch} in the main checkout. Nothing is pushed.`}
                       >
                         Merge into{' '}
                         {/* The base branch is arbitrary-length; clamp it here so a

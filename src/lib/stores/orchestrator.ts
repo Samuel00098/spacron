@@ -983,45 +983,36 @@ export async function mergeAndApproveMailboxCard(
   );
 }
 
-/**
- * Reclaim the worktrees of agents that are finished and fully staged, after a
- * successful commit in Source Control.
- *
- * Two rules, both learned the hard way:
- *
- * 1. **Only agents that are actually gone.** A live agent keeps its worktree —
- *    that is its working directory. Deleting it out from under a running process
- *    breaks the agent, and on Windows can't even fully succeed, leaving an
- *    orphaned directory behind.
- * 2. **Only when git says nothing is outstanding.** `reclaimWorktree` stages any
- *    remainder and re-checks before deleting. An earlier version keyed off a
- *    sticky `worktreeStaged` boolean, so committing one agent's work force-deleted
- *    branches still holding work nobody had reviewed — unrecoverable.
- *
- * Returns how many worktrees it attempted, so the caller knows whether the main
- * checkout may have moved underneath it. Reclaiming stages any remainder into the
- * index, so a non-zero result means a displayed git status is now stale. Zero —
- * the common case, no finished agents — means nothing was touched and no refresh
- * is warranted.
+/** Reclaim closed agents after bring-in/merge/commit, without importing new work.
+ * Branch refs are retained until Git's branch sweep proves them merged. They are
+ * cheap; the checkout and its dependencies are what take disk space.
  */
+const cleanupInFlight = new Set<string>();
 export async function cleanupStaleWorktrees(projectId: string): Promise<number> {
-  const finished = new Set(['complete', 'failed', 'cancelled']);
-  const tasks = get(orchestratorTasks).filter(
-    (t) => t.projectId === projectId && t.worktree && finished.has(t.status) && !agentSessionLive(t)
-  );
+  if (cleanupInFlight.has(projectId)) return 0;
+  cleanupInFlight.add(projectId);
   let attempted = 0;
-  for (const task of tasks) {
-    if (!task.worktree) continue;
-    attempted += 1;
-    const outcome = await reclaimWorktree(projectId, task.worktree, { deleteBranch: true });
-    if (outcome.removed) {
-      forgetWorktree(task.worktree.path);
-      patchTask(task.id, (t) => ({ ...t, worktree: null }));
+  try {
+    for (const entry of trackedWorktrees().filter((w) => w.projectId === projectId && !w.live)) {
+      attempted++;
+      const outcome = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false, stagePending: false });
+      if (!outcome.removed) continue;
+      forgetWorktree(entry.worktree.path);
+      for (const task of get(orchestratorTasks)) {
+        if (task.projectId === projectId && task.worktree?.path === entry.worktree.path) {
+          patchTask(task.id, (t) => ({ ...t, worktree: null }));
+        }
+      }
+      for (const isDev of [false, true]) {
+        for (const session of getTerminalProjectState(projectId, isDev).sessions) {
+          if (session.worktree?.path === entry.worktree.path) setSessionWorktree(session.id, null);
+        }
+      }
     }
-    // Not removed → it still holds work (or needs a conflict resolved). Leave it
-    // alone; the Agent changes list is already showing it.
+    return attempted;
+  } finally {
+    cleanupInFlight.delete(projectId);
   }
-  return attempted;
 }
 
 export interface ReclaimAllOutcome {
@@ -1540,8 +1531,8 @@ export async function launchOrchestratorTask(
   try {
     // Give each agent its own isolated git worktree (own branch off HEAD) so
     // concurrent agents never collide in the shared working tree. Reuse an
-    // existing worktree on relaunch; fall back to the project root when isolation
-    // isn't possible (non-git project, empty repo, …).
+    // existing worktree on relaunch; a failed isolated launch must not change
+    // the requested placement or discard an existing checkout.
     // When `skipWorktree` is true (admin/release tasks), the agent runs directly
     // in the project root so git tag/push operations work on the main branch.
     let effectiveCwd = cwd;
@@ -1559,7 +1550,7 @@ export async function launchOrchestratorTask(
     }
     if (worktree) effectiveCwd = worktree.path;
 
-    let sessionId = await leaseOrchestratorTerminal({
+    const sessionId = await leaseOrchestratorTerminal({
       agentCommand,
       cwd: effectiveCwd,
       taskId: task.id,
@@ -1567,23 +1558,8 @@ export async function launchOrchestratorTask(
       name: task.name,
       activate,
     });
-    // If the isolated worktree couldn't start the agent, don't fail the launch —
-    // drop the worktree and retry in the project root so the agent still runs.
-    if (sessionId == null && worktree && effectiveCwd !== cwd) {
-      void removeTaskWorktree(task.projectId, worktree, false);
-      patchTask(task.id, (current) => ({ ...current, worktree: null }));
-      worktree = null;
-      sessionId = await leaseOrchestratorTerminal({
-        agentCommand,
-        cwd,
-        taskId: task.id,
-        taskTitle: task.title,
-        name: task.name,
-        activate,
-      });
-    }
     if (sessionId == null) {
-      showToast('Could not start the agent terminal', 'error');
+      showToast(worktree ? 'Could not start the agent in its isolated worktree. The worktree was kept; retry the launch.' : 'Could not start the agent terminal', 'error');
       return null;
     }
     // Exits of this session surface as a completion card (completeLeasedTask /
@@ -1618,6 +1594,11 @@ export async function launchOrchestratorTask(
       }
     }
     return sessionId;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logTaskActivity(task.id, 'failed', message);
+    showToast(message, 'error');
+    return null;
   } finally {
     void launchCommitted;
     clearLaunchGeneration(task.id, launchGeneration);
@@ -3378,6 +3359,7 @@ export async function stageAgentWorktree(projectId: string, worktree: WorktreeIn
   } else {
     showToast(`Couldn't bring the changes in: ${result.message}`, 'error', 8000);
   }
+  void cleanupStaleWorktrees(projectId);
   void reconcileNow();
 }
 
@@ -3401,6 +3383,7 @@ export function markWorktreeMerged(
     stageConflict: false,
   });
   forgetWorktree(worktree.path);
+  void cleanupStaleWorktrees(projectId);
 }
 
 if (typeof window !== 'undefined') {
@@ -3452,7 +3435,8 @@ if (typeof window !== 'undefined') {
   const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
   setInterval(() => {
     for (const [projectId] of projectPaths) {
-      void sweepOrphanWorktrees(projectId)
+      void cleanupStaleWorktrees(projectId)
+        .then(() => sweepOrphanWorktrees(projectId))
         .then(() => sweepAgentBranchesForProject(projectId))
         .catch(() => {});
     }

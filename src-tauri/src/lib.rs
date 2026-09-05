@@ -12,6 +12,7 @@ pub mod remote;
 pub mod state;
 mod theme;
 mod workspace;
+mod worktree_snapshot;
 
 use state::AppState;
 use std::io;

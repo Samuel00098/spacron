@@ -1378,23 +1378,8 @@ pub fn workspace_git_remove_worktree(
 
     let _repo = lock_repo_write(root_path);
 
-    let remove_out = git_base()
-        .args(["worktree", "remove", "--force", &worktree_path])
-        .current_dir(root_path)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
-    let _ = git_base()
-        .args(["worktree", "prune"])
-        .current_dir(root_path)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
-
-    if let Ok(out) = remove_out {
-        if !out.status.success() && PathBuf::from(&worktree_path).exists() {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(format!("git worktree remove failed: {stderr}"));
-        }
-    }
+    crate::worktree_snapshot::remove_clean(root_path, &cleaned, git_base)
+        .map_err(|e| sanitize_git_error(&e))?;
 
     if delete_branch.unwrap_or(false) {
         if let Some(b) = branch {
@@ -1906,44 +1891,8 @@ fn sweep_agent_branches_at(
 /// `--no-verify` is deliberate: this fires many times a session on a throwaway
 /// branch and is not a commit the user authored. Their hooks run on the commit
 /// they write themselves in Source Control.
-fn snapshot_worktree(worktree: &Path) -> bool {
-    let dirty = git_capture(worktree, &["status", "--porcelain"])
-        .unwrap_or_default()
-        .lines()
-        .any(|l| !l.trim().is_empty());
-    if !dirty {
-        return false;
-    }
-
-    let _ = git_base()
-        .args(["add", "-A"])
-        .current_dir(worktree)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
-
-    // A repo with no configured identity would fail to commit; supply one only in
-    // that case so a real identity is never overridden.
-    let mut commit: Vec<String> = Vec::new();
-    if git_capture(worktree, &["config", "user.email"]).is_none() {
-        commit.extend([
-            "-c".into(),
-            "user.name=Spacron".into(),
-            "-c".into(),
-            "user.email=agent@spacron.local".into(),
-        ]);
-    }
-    commit.extend([
-        "commit".into(),
-        "--no-verify".into(),
-        "-m".into(),
-        "spacron: snapshot uncommitted agent work".into(),
-    ]);
-    let _ = git_base()
-        .args(&commit)
-        .current_dir(worktree)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
-    true
+fn snapshot_worktree(worktree: &Path) -> Result<bool, String> {
+    crate::worktree_snapshot::snapshot(worktree, git_base).map_err(|e| sanitize_git_error(&e))
 }
 
 /// True when git reported the merge as a no-op.
@@ -2020,7 +1969,7 @@ pub fn workspace_git_merge_worktree(
     // Guarded on the checkout still being there: merging a branch whose worktree
     // has already gone is legitimate, and used to work.
     if cleaned.join(".git").exists() {
-        snapshot_worktree(&cleaned);
+        snapshot_worktree(&cleaned)?;
     }
 
     let _repo = lock_repo_write(root_path);
@@ -2442,7 +2391,7 @@ pub fn workspace_git_stage_worktree(
     // 1. Snapshot uncommitted work onto the agent's own branch. Shared with the
     //    merge path, which needs it for exactly the same reason.
     if snapshot.unwrap_or(true) {
-        snapshot_worktree(&cleaned);
+        snapshot_worktree(&cleaned)?;
     }
 
     let head = git_capture(&cleaned, &["rev-parse", "HEAD"])

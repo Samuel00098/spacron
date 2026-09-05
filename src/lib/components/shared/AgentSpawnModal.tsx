@@ -227,7 +227,8 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       for (const [index, { key: cmd }] of plan.entries()) {
         const skipWorktree = placements[index] === 'main';
         const name = pickAssistantName(takenNames);
-        let worktree = projectId && !skipWorktree
+        if (!skipWorktree && !projectId) throw new Error('Open a project first to create an isolated worktree.');
+        const worktree = projectId && !skipWorktree
           ? await createTaskWorktree({
               projectId,
               taskId: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -235,16 +236,14 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             })
           : null;
 
-        let id = await spawnAgentPreset(cmd, worktree?.path ?? cwd, { isDev });
-        if (id === null && worktree) {
-          if (projectId) void removeTaskWorktree(projectId, worktree, false);
-          worktree = null;
-          id = await spawnAgentPreset(cmd, cwd, { isDev });
-        }
+        const id = await spawnAgentPreset(cmd, worktree?.path ?? cwd, {
+          isDev,
+          projectId,
+          onSessionCreated: worktree ? (id) => setSessionWorktree(id, worktree) : undefined,
+        });
         if (id !== null) {
           takenNames.push(name);
           applyOrchestratorAgentName(id, name);
-          if (worktree) setSessionWorktree(id, worktree);
           if (projectId) adoptSpawnedAgent(id, projectId);
           spawnedNames.push(name);
           lastId = id;
@@ -255,6 +254,8 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       }
     } catch (err) {
       console.error('Failed spawning agents:', err);
+      showToast(err instanceof Error ? err.message : String(err), 'error');
+      if (!total) return;
     }
 
     if (!total) {

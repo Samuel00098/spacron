@@ -495,8 +495,7 @@ export function initMcpBridge(): void {
           label: preset,
         });
       }
-      // `createTaskWorktree` returns null for a non-git or empty repo. That is
-      // not fatal — the agent runs in the project root, exactly as before.
+      if (!projectId) throw new Error('Open a project first to create an isolated worktree.');
 
       // `spawnAgentPreset`, not `createTerminalSession`: the latter opens a bare
       // shell and only *records* `agentPreset` as metadata — it never types the
@@ -558,6 +557,7 @@ export function initMcpBridge(): void {
       }
     } catch (e) {
       console.error('[mcp] Failed to spawn agent:', e);
+      showToast(e instanceof Error ? e.message : String(e), 'error');
     }
   }).catch((e) => {
     console.error('[mcp] Failed to listen for spawn-agent events:', e);

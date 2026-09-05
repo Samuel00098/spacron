@@ -374,7 +374,7 @@ export default function WorktreeReviewModal({
 
         <footer className="wrm-foot">
           <span className="wrm-hint">
-            Review the diff. Nothing moves until you bring it in, merge it, or discard it.
+            Bring in to test in your main checkout. Merge creates a local commit. Neither action pushes.
           </span>
           {confirming ? (
             <div className="wrm-confirm">
@@ -410,7 +410,7 @@ export default function WorktreeReviewModal({
                 className="wrm-btn"
                 onClick={() => void doBringIn()}
                 disabled={busy}
-                title="Copy this agent's changes into your working tree so you can run and review them. Not `git add`. Nothing is committed, and this worktree is kept."
+                title="Apply this agent's changes to your main checkout for local testing. Your main branch is not committed or pushed, and running agents keep their worktrees. Closed, fully brought-in worktrees are cleaned up automatically."
               >
                 Bring in
               </button>
@@ -418,7 +418,7 @@ export default function WorktreeReviewModal({
                 className="wrm-btn primary"
                 onClick={() => setConfirming('merge')}
                 disabled={busy}
-                title={`Merge ${worktree.branch} into ${worktree.baseBranch}`}
+                title={`Create a local merge commit from ${worktree.branch} in the main checkout. Nothing is pushed.`}
               >
                 Merge into {worktree.baseBranch}
               </button>

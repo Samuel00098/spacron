@@ -968,18 +968,8 @@ fn git_remove_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
 
-    let _ = std::process::Command::new("git")
-        .args(["worktree", "remove", "--force", worktree_path])
-        .current_dir(workspace)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
-    let _ = std::process::Command::new("git")
-        .args(["worktree", "prune"])
-        .current_dir(workspace)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
+    crate::worktree_snapshot::remove_clean(workspace, &cleaned, || std::process::Command::new("git"))?;
 
-    // Optionally delete the branch.
     let delete_branch = args.get("deleteBranch").and_then(|v| v.as_bool()).unwrap_or(false);
     let branch = args.get("branch").and_then(|v| v.as_str());
     if delete_branch {
@@ -1036,7 +1026,7 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     // delete_after paths, have its checkout removed. Mirrors `snapshot_worktree`
     // in commands/workspace.rs.
     if cleaned.join(".git").exists() {
-        snapshot_worktree_remote(&cleaned);
+        snapshot_worktree_remote(&cleaned)?;
     }
 
     // Tip after the snapshot: what the merge actually takes.
@@ -1131,34 +1121,8 @@ fn git_merge_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
 
 /// Commit an agent's uncommitted work onto its own branch so a commit-range
 /// operation can see it. Mirrors `snapshot_worktree` in commands/workspace.rs.
-fn snapshot_worktree_remote(worktree: &Path) {
-    let dirty = git_capture(worktree, &["status", "--porcelain"])
-        .unwrap_or_default()
-        .lines()
-        .any(|l| !l.trim().is_empty());
-    if !dirty {
-        return;
-    }
-    let _ = git_ok(worktree, &["add", "-A"]);
-    let mut commit: Vec<String> = Vec::new();
-    if git_capture(worktree, &["config", "user.email"]).is_none() {
-        commit.extend([
-            "-c".into(),
-            "user.name=Spacron".into(),
-            "-c".into(),
-            "user.email=agent@spacron.local".into(),
-        ]);
-    }
-    // --no-verify: automated snapshot on a throwaway branch, not a commit the
-    // user authored.
-    commit.extend([
-        "commit".into(),
-        "--no-verify".into(),
-        "-m".into(),
-        "spacron: snapshot uncommitted agent work".into(),
-    ]);
-    let refs: Vec<&str> = commit.iter().map(|s| s.as_str()).collect();
-    let _ = git_ok(worktree, &refs);
+fn snapshot_worktree_remote(worktree: &Path) -> Result<bool, String> {
+    crate::worktree_snapshot::snapshot(worktree, || std::process::Command::new("git"))
 }
 
 /// Branch-name validation for the remote control path. Mirrors the rules in
@@ -1361,32 +1325,7 @@ fn git_stage_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
     let snapshot = args.get("snapshot").and_then(|v| v.as_bool()).unwrap_or(true);
 
     if snapshot {
-        let dirty = git_capture(&cleaned, &["status", "--porcelain"])
-            .unwrap_or_default()
-            .lines()
-            .any(|l| !l.trim().is_empty());
-        if dirty {
-            let _ = git_ok(&cleaned, &["add", "-A"]);
-            let mut commit: Vec<String> = Vec::new();
-            if git_capture(&cleaned, &["config", "user.email"]).is_none() {
-                commit.extend([
-                    "-c".into(),
-                    "user.name=Spacron".into(),
-                    "-c".into(),
-                    "user.email=agent@spacron.local".into(),
-                ]);
-            }
-            // --no-verify: automated snapshot on a throwaway branch, not a commit the
-            // user authored. The kept commit is written in Source Control.
-            commit.extend([
-                "commit".into(),
-                "--no-verify".into(),
-                "-m".into(),
-                "spacron: snapshot uncommitted agent work".into(),
-            ]);
-            let refs: Vec<&str> = commit.iter().map(|s| s.as_str()).collect();
-            let _ = git_ok(&cleaned, &refs);
-        }
+        snapshot_worktree_remote(&cleaned)?;
     }
 
     let head = git_capture(&cleaned, &["rev-parse", "HEAD"])
