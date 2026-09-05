@@ -3,6 +3,16 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v3.0.2] - 2026-09-05
+
+Spacron 3.0.2 makes isolated agent worktrees safe to operate throughout their lifecycle. An isolated launch can no longer silently fall back to the main checkout, agent edits are snapshotted before review operations, and cleanup refuses to forget a checkout when Git cannot prove that it is safe to remove.
+
+### Fixed
+
+- **Isolation stays isolated** — failures to create an isolated worktree or start an agent inside one now stop that launch with an actionable error instead of retrying in the main repository. This keeps the placement the user selected meaningful and prevents an agent intended to work on its own branch from changing the checkout used for release work.
+- **Agent work survives review operations** — local and remote worktree snapshots now check every Git operation, tolerate incomplete identities without changing the user's configuration, disable signing only for the internal snapshot commit, and detect edits that arrive while a snapshot is being written. Bring in and merge therefore read a stable committed tip, while a failed or racing snapshot leaves the agent checkout intact for retry.
+- **Cleanup does not discard unreviewed changes** — stopped worktrees are removed only after a fresh clean-state verification, never force-removed, and remain tracked when Git reports pending files, a lock, or any other removal failure. Automatic cleanup skips live agents and does not stage or import their outstanding work; successful removal clears the associated task and terminal references while retaining recovery branches until Git confirms they are merged.
+
 ## [v3.0.1] - 2026-09-05
 
 Spacron 3.0.1 fixes project-switch races that could show one project's editor files in another project or overwrite its saved workspace layout. Switching projects now clears the outgoing editor immediately and prevents unfinished work from changing the next project's state.
