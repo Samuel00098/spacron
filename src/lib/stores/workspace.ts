@@ -1,7 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
-import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession, claimStartupShell } from './terminal';
+import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths } from './explorer';
 import { resetSettingsToDefault } from './settings';
@@ -989,8 +989,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       if (!persisted?.layout) {
         // LayoutState is process-global, so a project with no saved layout must
         // not inherit panels, drawer widths, or sidebar choices from the
-        // project we just left. The final default-stage block below then opens
-        // the usual Terminal + Editor pair for a genuinely new project.
+        // project we just left. A genuinely new project starts with an empty
+        // stage; the user can open an agent, terminal, or editor explicitly.
         layout.update((l) => ({
           ...l,
           activeView: 'terminal',
@@ -1157,20 +1157,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           if (spawnedIds.length > 1) {
             showToast(`Restored ${spawnedIds.length} terminal sessions`, 'info', 3000);
           }
-        } else {
-          if (generation !== restoreProjectStateGeneration) return;
-          // Fresh project — auto-create a terminal shell so the user doesn't
-          // land on an empty "Open Shell" button.
-          //
-          // Both arguments matter. With no cwd the backend falls back to whatever
-          // it considers the active project (or errors with "No project is open"
-          // on a cold start, leaving a shell-less pane that shows no path at all),
-          // and with no projectId the session lands in the active project instead
-          // of this one.
-          // Claim first: TerminalPanel's auto-open races this one.
-          if (claimStartupShell(projectId)) {
-            void createTerminalSession(rootPath, undefined, projectId);
-          }
         }
       }
     }
@@ -1192,15 +1178,12 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       console.error('Failed to load orchestrator state for project:', e);
     }
 
-    // Default stage for a project with NO saved layout: terminal focused, editor
-    // alongside. Gated on `restoredLayout` because this used to run
-    // unconditionally, after the restore above — which force-reopened the
-    // Terminal and Editor rooms on every switch, so closing either of them never
-    // survived leaving the project and coming back.
+    // A project with NO saved layout is intentionally blank. Gated on
+    // `restoredLayout` so an existing project's saved rooms remain untouched.
     if (generation !== restoreProjectStateGeneration) return;
     if (!restoredLayout) {
-      terminalRoomOpen.set(true);
-      layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
+      terminalRoomOpen.set(false);
+      layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: false }));
     }
   } finally {
     if (generation === restoreProjectStateGeneration) {
@@ -1714,15 +1697,14 @@ export async function openRemoteRoot(conn: RemoteConnection): Promise<void> {
   activeProjectId.set(id);
 
   // Minimal restore, in the same order as restoreProjectState: clear the outgoing
-  // project's stores first, then point the terminal at the remote root and open a
-  // shell (which runs remotely via pty-bridge). The file tree loads itself —
-  // FileExplorer reacts to the active project's root.
+  // project's stores first, then point the terminal at the remote root. The file
+  // tree loads itself — FileExplorer reacts to the active project's root — and a
+  // new remote project starts blank just like a local project.
   clearAllStores();
   setActiveTerminalProject(id);
   setTerminalProjectRoot(id, info.root);
-  createTerminalSession();
-  terminalRoomOpen.set(true);
-  layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: true }));
+  terminalRoomOpen.set(false);
+  layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: false }));
 }
 
 /**
