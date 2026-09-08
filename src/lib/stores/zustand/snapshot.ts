@@ -12,6 +12,8 @@ export type PreviewTab = any;
 
 export interface WorkspaceSnapshot {
   id: string;
+  /** The project this layout belongs to. Legacy snapshots may omit it. */
+  projectId?: string;
   name: string;
   savedAt: number;
   gridLayout: any;

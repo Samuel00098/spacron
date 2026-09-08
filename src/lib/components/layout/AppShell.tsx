@@ -336,7 +336,7 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
   files: { title: 'Files', icon: <Icon><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></Icon> },
   search: { title: 'Search files', icon: <Icon><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
-  snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
+  snapshots: { title: 'Project Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
   problems: { title: 'Problems', icon: <Icon><circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16.5" x2="12.01" y2="16.5" /></Icon> },
   // Code Review is a right-sidebar utility. Source Control's inline
@@ -1693,7 +1693,7 @@ export default function AppShell() {
       <aside
         className="right-utility-panel right-sidebar bento-card"
         style={{ width: layoutState.rightDrawerWidth }}
-        aria-label="Workspace tools"
+        aria-label="Project tools"
       >
         <div
           className="right-drawer-resize-handle"
@@ -1745,9 +1745,11 @@ export default function AppShell() {
           </button>
         </header>
         <div className="drawer-body">
-          {rightActiveTool
+          {projectSwitching
+            ? <div role="status">Loading project tools…</div>
+            : rightActiveTool
             ? <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
-            : <SidebarContent tab={rightNavigatorTool} />}
+            : <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={rightNavigatorTool} />}
         </div>
       </aside>
     );
@@ -2307,7 +2309,7 @@ export default function AppShell() {
   ].filter((group) => group.items.length > 0);
   const paletteToolGroups: ToolMenuGroup[] = [
     { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
-    { id: 'workspace-tools', label: 'Workspace tools', items: rightNavigatorItems },
+    { id: 'workspace-tools', label: 'Project tools', items: rightNavigatorItems },
     ...toolMenuGroups,
   ];
 
@@ -3212,7 +3214,9 @@ export default function AppShell() {
       (room) => !isPersistentRoomId(room),
     );
 
-    const emptyStageMessage = stageRooms.length === 0 ? 'No open panes' : null;
+    // Agent startup belongs to the active project. A workspace can exist as a
+    // collection before it has a project, and that view must remain blank.
+    const emptyStageMessage = stageRooms.length === 0 && project && !projectSwitching ? 'No open panes' : null;
     const stageIsVacant = stageRooms.length === 0;
 
     const activePreset = resolvePreset(splitPresets[stageRooms.length], stageRooms.length);
@@ -3251,7 +3255,7 @@ export default function AppShell() {
             <div className="stage-empty-cta">
               <strong className="stage-empty-title">Start with agents</strong>
               <span className="stage-empty-copy">
-                Choose the agents you want to work with in this workspace.
+                Choose the agents you want to work with in this project.
               </span>
               <button
                 type="button"

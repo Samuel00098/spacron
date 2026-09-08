@@ -3,14 +3,15 @@ import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
 import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
-import { expandedPaths, selectedPath, selectedPaths } from './explorer';
+import { expandedPaths, selectedPath, selectedPaths, cancelCreate, cancelRename, hideContextMenu } from './explorer';
 import { resetSettingsToDefault } from './settings';
-import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, currentRightDrawerTool, applyRightDrawerTool, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
+import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, sanitiseRightSidebarTab, currentRightDrawerTool, applyRightDrawerTool, rightSidebarTab, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
 import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
 import { isSafePresetId } from '$lib/components/layout/split-layout';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
 import { backendInvoke } from '$lib/services/backend';
+import { resetProjectSearchState } from './projectsearch';
 import type { RemoteConnection } from './remoteWorkspace';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
@@ -62,6 +63,19 @@ export const __setProjectIn = setProjectIn;
 export const activeProjectId = syncWritable<string | null>('activeProjectId', null);
 export const openProjectIds = syncWritable<string[]>('openProjectIds', []); // ordered list of open project tabs
 export const isLoading = syncWritable<boolean>('isLoading', false);
+
+// Search results are returned asynchronously by the backend. Clear the shared
+// search surface at the project boundary so a query/result from project A can
+// never appear in project B while the right sidebar stays mounted.
+let lastSearchProjectId = get(activeProjectId);
+activeProjectId.subscribe((projectId) => {
+  if (projectId === lastSearchProjectId) return;
+  lastSearchProjectId = projectId;
+  resetProjectSearchState();
+  cancelCreate();
+  cancelRename();
+  hideContextMenu();
+});
 
 export const activeProject = derived(
   [projects, activeProjectId],
@@ -240,6 +254,8 @@ interface ProjectWorkspaceState {
     terminalRoomOpen: boolean;
     /** Which right-drawer tool this project had open, or null for closed. */
     rightDrawerTool: RightDrawerTool | null;
+    /** The last tab selected in the unified right sidebar for this project. */
+    rightSidebarTab: string;
     lastAuxView: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -304,6 +320,7 @@ function bindProjectAutosave() {
     expandedPaths,
     selectedPath,
     layout,
+    rightSidebarTab,
     // The Terminal room's open/closed state is its own store, not a `layout`
     // field, so without it here closing the Terminal never scheduled a save —
     // and the per-project room list the Projects panel reads went stale.
@@ -399,6 +416,7 @@ interface PersistedProjectState {
      * drawer was pure app-global state and followed you between projects.
      */
     rightDrawerTool?: string | null;
+    rightSidebarTab?: string;
     lastAuxView?: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -490,6 +508,7 @@ function saveProjectStateToStorage(projectId: string) {
       sketchVisible: currentLayout.sketchVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
+      rightSidebarTab: get(rightSidebarTab),
       lastAuxView: currentLayout.lastAuxView,
       editorSplitPreview: currentLayout.editorSplitPreview,
       auxPanelWidth: currentLayout.auxPanelWidth,
@@ -653,6 +672,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       sketchVisible: Boolean(l.sketchVisible),
       terminalRoomOpen: l.terminalRoomOpen === undefined ? true : Boolean(l.terminalRoomOpen),
       rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
+      rightSidebarTab: sanitiseRightSidebarTab(l.rightSidebarTab ?? l.rightDrawerTool),
       lastAuxView: typeof l.lastAuxView === 'string' ? l.lastAuxView : undefined,
       editorSplitPreview: Boolean(l.editorSplitPreview),
       auxPanelWidth: typeof l.auxPanelWidth === 'number' ? Math.max(180, Math.min(2000, l.auxPanelWidth)) : 550,
@@ -774,6 +794,7 @@ export function saveProjectState(projectId: string) {
       sketchVisible: get(layout).sketchVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
+      rightSidebarTab: get(rightSidebarTab),
       lastAuxView: get(layout).lastAuxView,
       editorSplitPreview: get(layout).editorSplitPreview,
       auxPanelWidth: get(layout).auxPanelWidth,
@@ -914,6 +935,9 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       // `applyRightDrawerTool` (not `setRightDrawerTool`) so closing the drawer
       // doesn't drag `activeView` back to the terminal.
       applyRightDrawerTool(cached.layout.rightDrawerTool ?? null);
+      rightSidebarTab.set(
+        sanitiseRightSidebarTab(cached.layout.rightSidebarTab ?? cached.layout.rightDrawerTool),
+      );
 
       // The Terminal room is not a `LayoutState` flag, so the patch above can't
       // carry it — restore it on its own or closing it leaks across projects.
@@ -1016,6 +1040,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           leftPanelWidth: 310,
           rightDrawerWidth: 380,
         }));
+        rightSidebarTab.set('files');
       } else {
         layout.update((l) => ({
           ...l,
@@ -1044,6 +1069,9 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           leftPanelWidth: persisted.layout!.leftPanelWidth ?? 310,
           rightDrawerWidth: persisted.layout!.rightDrawerWidth ?? 380,
         }));
+        rightSidebarTab.set(
+          sanitiseRightSidebarTab(persisted.layout!.rightSidebarTab ?? persisted.layout!.rightDrawerTool),
+        );
         terminalRoomOpen.set(persisted.layout.terminalRoomOpen ?? true);
         restoredLayout = true;
       }

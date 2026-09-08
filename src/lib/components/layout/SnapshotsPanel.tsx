@@ -7,6 +7,8 @@ import {
   type WorkspaceSnapshot,
 } from '$lib/stores/snapshot';
 import { useSnapshotStore } from '$lib/stores/zustand/snapshot';
+import { activeProjectId } from '$lib/stores/workspace';
+import { useStore } from '$lib/react/useStore';
 import { showToast } from '$lib/stores/notification';
 import './SnapshotsPanel.css';
 
@@ -104,7 +106,9 @@ function UrlIcon() {
 }
 
 export default function SnapshotsPanel() {
-  const list = useSnapshotStore((s) => s.snapshots);
+  const projectId = useStore(activeProjectId);
+  const allSnapshots = useSnapshotStore((s) => s.snapshots);
+  const list = allSnapshots.filter((snapshot) => snapshot.projectId === projectId);
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -112,12 +116,14 @@ export default function SnapshotsPanel() {
   const [editingName, setEditingName] = useState('');
 
   function handleSave() {
-    if (saving) return;
+    if (saving || !projectId) return;
     setSaving(true);
     try {
       const snapshot = saveSnapshot(newName);
       showToast(`Saved "${snapshot.name}"`, 'success');
       setNewName('');
+    } catch (error) {
+      showToast(String(error), 'error');
     } finally {
       setSaving(false);
     }
@@ -160,7 +166,7 @@ export default function SnapshotsPanel() {
   return (
     <div className="snapshots-panel">
       <div className="panel-header">
-        <span className="panel-title">Workspace Snapshots</span>
+        <span className="panel-title">Project Snapshots</span>
       </div>
 
       <div className="save-section">
@@ -174,7 +180,7 @@ export default function SnapshotsPanel() {
             if (event.key === 'Enter') handleSave();
           }}
         />
-        <button className="save-btn" onClick={handleSave} disabled={saving}>
+        <button className="save-btn" onClick={handleSave} disabled={saving || !projectId}>
           {saving ? '...' : 'Save'}
         </button>
       </div>

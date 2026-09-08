@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { get, type Writable } from '$lib/stores/storeCompat';
+import { type Writable } from '$lib/stores/storeCompat';
 import { jumpToLine, openFile } from '$lib/stores/editor';
 import {
   searchCaseSensitive,
@@ -11,8 +10,10 @@ import {
   searchResults,
   searchUseRegex,
   searchWholeWord,
+  runProjectSearch,
 } from '$lib/stores/projectsearch';
-import type { SearchFileResult, SearchMatch, SearchResponse } from '$lib/stores/zustand/projectsearch';
+import type { SearchFileResult, SearchMatch } from '$lib/stores/zustand/projectsearch';
+import { activeProjectId } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
 import './SearchPanel.css';
 
@@ -44,6 +45,7 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 }
 
 export default function SearchPanel() {
+  const projectId = useStore(activeProjectId);
   const query = useStore(searchQuery);
   const caseSensitive = useStore(searchCaseSensitive);
   const wholeWord = useStore(searchWholeWord);
@@ -55,33 +57,8 @@ export default function SearchPanel() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const inputRef = useRef<HTMLInputElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   async function runSearch() {
-    const currentQuery = get(searchQuery);
-    if (!currentQuery) {
-      searchResults.set(null);
-      searchError.set(null);
-      searchLoading.set(false);
-      return;
-    }
-
-    searchLoading.set(true);
-    searchError.set(null);
-    try {
-      const response = await invoke<SearchResponse>('search_in_project', {
-        query: currentQuery,
-        caseSensitive: get(searchCaseSensitive),
-        wholeWord: get(searchWholeWord),
-        useRegex: get(searchUseRegex),
-        includeGlob: get(searchInclude).trim() || null,
-      });
-      searchResults.set(response);
-    } catch (err) {
-      searchError.set(String(err));
-      searchResults.set(null);
-    } finally {
-      searchLoading.set(false);
-    }
+    await runProjectSearch(projectId);
   }
 
   function scheduleSearch() {
@@ -111,6 +88,13 @@ export default function SearchPanel() {
     await openFile(file.path);
     jumpToLine.set({ path: file.path, line: match.line });
   }
+
+  useEffect(() => {
+    setCollapsed({});
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [projectId]);
 
   useEffect(() => {
     inputRef.current?.focus();

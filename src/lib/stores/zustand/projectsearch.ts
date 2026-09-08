@@ -32,7 +32,7 @@ interface ProjectSearchState {
   __set: (key: string, value: unknown) => void;
 }
 
-export const useProjectSearchStore = create<ProjectSearchState>((set) => ({
+export const DEFAULT_PROJECT_SEARCH_STATE = {
   searchQuery: '',
   searchCaseSensitive: false,
   searchWholeWord: false,
@@ -41,6 +41,10 @@ export const useProjectSearchStore = create<ProjectSearchState>((set) => ({
   searchResults: null,
   searchLoading: false,
   searchError: null,
+} satisfies Pick<ProjectSearchState, 'searchQuery' | 'searchCaseSensitive' | 'searchWholeWord' | 'searchUseRegex' | 'searchInclude' | 'searchResults' | 'searchLoading' | 'searchError'>;
+
+export const useProjectSearchStore = create<ProjectSearchState>((set) => ({
+  ...DEFAULT_PROJECT_SEARCH_STATE,
   isFloatingSearchOpen: false,
   __set: (key, value) => set({ [key]: value } as any),
 }));

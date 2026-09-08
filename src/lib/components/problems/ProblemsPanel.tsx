@@ -8,8 +8,8 @@
  * the editor has opened this session, not a cold whole-project analysis. The
  * empty state says so rather than implying the project is clean.
  */
-import { useMemo, useState } from 'react';
-import { activeProject } from '$lib/stores/workspace';
+import { useEffect, useMemo, useState } from 'react';
+import { activeProject, activeProjectId } from '$lib/stores/workspace';
 import { openFile, jumpToLine } from '$lib/stores/editor';
 import { enableLsp } from '$lib/stores/settings';
 import { useStore } from '$lib/react/useStore';
@@ -102,12 +102,21 @@ function worstStatus(
 export default function ProblemsPanel() {
   const byFile = useStore(diagnosticsByFile);
   const project = useStore(activeProject);
+  const projectId = useStore(activeProjectId);
   const lspEnabled = useStore(enableLsp);
   const status = useStore(lspStatus);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [muted, setMuted] = useState<Partial<Record<DiagnosticSeverity, boolean>>>({});
   const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    // These are panel controls, but they describe the current project's
+    // diagnostics. Do not carry a filter or collapsed file from another one.
+    setCollapsed({});
+    setMuted({});
+    setQuery('');
+  }, [projectId]);
 
   const root = project?.root_path ?? null;
 

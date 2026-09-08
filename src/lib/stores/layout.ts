@@ -73,6 +73,14 @@ export const rightSidebarVisible = writable(true);
 export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 export type RightSidebarNavigatorTab = (typeof RIGHT_SIDEBAR_NAVIGATOR_TABS)[number];
 export type RightSidebarTab = RightSidebarNavigatorTab | RightDrawerTool;
+export function sanitiseRightSidebarTab(
+  value: unknown,
+  fallback: RightSidebarTab = 'files',
+): RightSidebarTab {
+  return ([...RIGHT_SIDEBAR_NAVIGATOR_TABS, ...RIGHT_DRAWER_TOOLS] as readonly string[]).includes(value as string)
+    ? value as RightSidebarTab
+    : fallback;
+}
 /** The last selected tab in the unified right sidebar, preserved while closed. */
 export const rightSidebarTab = writable<RightSidebarTab>('files');
 

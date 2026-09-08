@@ -46,12 +46,13 @@ pub struct SearchResponse {
     pub truncated: bool,
 }
 
-/// Search across every open project root for `query`, honouring .gitignore.
+/// Search the explicitly selected project for `query`, honouring .gitignore.
 ///
 /// `include_glob` is an optional comma-separated list of globs (e.g.
 /// `*.rs, src/**/*.ts`); when present only matching files are scanned.
 #[tauri::command]
 pub async fn search_in_project(
+    project_id: String,
     query: String,
     case_sensitive: bool,
     whole_word: bool,
@@ -67,9 +68,16 @@ pub async fn search_in_project(
         });
     }
 
-    let projects = state.workspace_manager.list_projects();
+    // Resolve the request's project before starting I/O. The active project
+    // may change while the search runs; never widen to all open roots.
+    let projects: Vec<_> = state
+        .workspace_manager
+        .list_projects()
+        .into_iter()
+        .filter(|project| project.id == project_id)
+        .collect();
     if projects.is_empty() {
-        return Err("No project is open. Open a project folder first.".to_string());
+        return Err("The selected project is no longer open.".to_string());
     }
 
     // Build the matcher: escape the query unless the user opted into regex,

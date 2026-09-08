@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { get, type Writable } from '$lib/stores/storeCompat';
+import { type Writable } from '$lib/stores/storeCompat';
 import { jumpToLine, openFile } from '$lib/stores/editor';
 import {
   searchCaseSensitive,
@@ -12,8 +11,10 @@ import {
   searchUseRegex,
   searchWholeWord,
   isFloatingSearchOpen,
+  runProjectSearch,
 } from '$lib/stores/projectsearch';
-import type { SearchFileResult, SearchMatch, SearchResponse } from '$lib/stores/zustand/projectsearch';
+import type { SearchFileResult, SearchMatch } from '$lib/stores/zustand/projectsearch';
+import { activeProjectId } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
 import './FloatingSearch.css';
 
@@ -45,6 +46,7 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 }
 
 export default function FloatingSearch() {
+  const projectId = useStore(activeProjectId);
   const isOpen = useStore(isFloatingSearchOpen);
   const query = useStore(searchQuery);
   const caseSensitive = useStore(searchCaseSensitive);
@@ -77,32 +79,9 @@ export default function FloatingSearch() {
   }, [results, collapsed]);
 
   async function runSearch() {
-    const currentQuery = get(searchQuery);
-    if (!currentQuery) {
-      searchResults.set(null);
-      searchError.set(null);
-      searchLoading.set(false);
-      return;
-    }
-
-    searchLoading.set(true);
-    searchError.set(null);
-    try {
-      const response = await invoke<SearchResponse>('search_in_project', {
-        query: currentQuery,
-        caseSensitive: get(searchCaseSensitive),
-        wholeWord: get(searchWholeWord),
-        useRegex: get(searchUseRegex),
-        includeGlob: get(searchInclude).trim() || null,
-      });
-      searchResults.set(response);
+    if (await runProjectSearch(projectId)) {
       isKeyboardSelectionRef.current = true;
       setSelectedIndex(0);
-    } catch (err) {
-      searchError.set(String(err));
-      searchResults.set(null);
-    } finally {
-      searchLoading.set(false);
     }
   }
 
@@ -136,6 +115,14 @@ export default function FloatingSearch() {
   }
 
   // 1. Initial reset and focus when search is opened
+  useEffect(() => {
+    setCollapsed({});
+    setSelectedIndex(0);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [projectId]);
+
   useEffect(() => {
     if (!isOpen) return;
     isKeyboardSelectionRef.current = true;

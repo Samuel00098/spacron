@@ -17,6 +17,12 @@ import type { Workspace } from '$lib/types/workspace';
  * coming back.
  */
 describe('persisted stage arrangement', () => {
+  it('restores each project right-sidebar tab and migrates legacy utility state', () => {
+    expect(sanitise({ layout: { rightSidebarTab: 'search' } })?.layout?.rightSidebarTab).toBe('search');
+    expect(sanitise({ layout: { rightSidebarTab: 'git' } })?.layout?.rightSidebarTab).toBe('git');
+    expect(sanitise({ layout: { rightDrawerTool: 'review' } })?.layout?.rightSidebarTab).toBe('review');
+    expect(sanitise({ layout: { rightSidebarTab: 'unknown' } })?.layout?.rightSidebarTab).toBe('files');
+  });
   it('brings the tiling and the primary room back', () => {
     const state = sanitise({
       openFiles: [],

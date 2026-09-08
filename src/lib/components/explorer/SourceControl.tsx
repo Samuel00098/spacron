@@ -188,6 +188,12 @@ export default function SourceControl() {
   }, [allSelected, selectedCount]);
 
   useEffect(() => {
+    // The cache is project-keyed, but these transient controls are not. Reset
+    // them before the new project's refresh completes so a commit selection,
+    // staged-path marker, or publish dialog cannot appear under another repo.
+    refreshGenerationRef.current += 1;
+    statusRequestGenerationRef.current += 1;
+    historyRequestGenerationRef.current += 1;
     if (projectId) {
       // Don't clear the cached status/history — keep showing the last-known
       // state while a background refresh runs, so the panel never flashes empty.
@@ -200,11 +206,22 @@ export default function SourceControl() {
       clearCommitGrace();
       setSelectedFiles(new Set());
       setKnownFiles(new Set());
+      setStagedPaths(new Set());
+      setStagingBusy(new Set());
       setExpandedFile(null);
+      setPublishOpen(false);
+      setPublishName('');
+      setPublishDesc('');
+      setPublishError(null);
+      setPublishCopied(false);
       void refreshAll();
       void refreshBranches(projectId);
     } else {
       setExpandedFile(null);
+      setSelectedFiles(new Set());
+      setKnownFiles(new Set());
+      setStagedPaths(new Set());
+      setStagingBusy(new Set());
       setErrorMsg(null);
     }
   }, [projectId]);
