@@ -68,15 +68,16 @@ const defaultLayout: LayoutState = {
 // exclusive among themselves (one drawer body at a time) but, unlike the aux
 // rooms, opening one does NOT disturb the main rooms (editor/preview/etc.) or
 // the active view — the drawer is a right-edge overlay you pop open and dismiss.
-// Order here is the drawer's TAB order, not its precedence — Fleet leads because
-// it is the panel you keep open while agents run.
-export const RIGHT_DRAWER_TOOLS = ['fleet', 'toolbox', 'http', 'db', 'containers', 'env', 'mobile'] as const;
+// Order here is the drawer's TAB order, not its precedence — Code Review leads
+// the utility group, while Fleet remains the panel you keep open while agents run.
+export const RIGHT_DRAWER_TOOLS = ['review', 'fleet', 'toolbox', 'http', 'db', 'containers', 'env', 'mobile'] as const;
 export type RightDrawerTool = (typeof RIGHT_DRAWER_TOOLS)[number];
 
 // The tools whose open state is a persisted aux flag on LayoutState. 'env' is
 // handled separately — its open state is the transient `envManagerOpen` flag
 // (kept in sync below so the drawer stays single-body).
 const AUX_DRAWER_FLAGS: Record<Exclude<RightDrawerTool, 'env'>, keyof LayoutState> = {
+  review: 'reviewVisible',
   fleet: 'fleetVisible',
   toolbox: 'toolboxVisible',
   http: 'httpVisible',
@@ -114,6 +115,7 @@ export function rightDrawerToolOf(l: {
   httpVisible: boolean;
   dbVisible: boolean;
   containersVisible: boolean;
+  reviewVisible: boolean;
   envManagerOpen: boolean;
   mobileVisible: boolean;
   fleetVisible: boolean;
@@ -122,6 +124,7 @@ export function rightDrawerToolOf(l: {
   if (l.httpVisible) return 'http';
   if (l.dbVisible) return 'db';
   if (l.containersVisible) return 'containers';
+  if (l.reviewVisible) return 'review';
   if (l.envManagerOpen) return 'env';
   if (l.mobileVisible) return 'mobile';
   // Last on purpose. `fleetVisible` is opened by things other than the drawer's
@@ -318,6 +321,11 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   },
 
   setActiveView: (view: ActiveView) => {
+    if (view === 'review') {
+      // Code Review is a right-sidebar utility rather than a center room.
+      getState().setRightDrawerTool('review');
+      return;
+    }
     set((l) => {
       if (view === 'terminal') {
         const next: LayoutState = { ...l, activeView: 'terminal' as const };
@@ -331,11 +339,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       }
       if (view === 'preview') {
         const next: LayoutState = { ...l, activeView: 'preview' as const, lastAuxView: 'preview' as const, previewVisible: true };
-        persistLayout(next);
-        return next;
-      }
-      if (view === 'review') {
-        const next: LayoutState = { ...l, activeView: 'review' as const, lastAuxView: 'review' as const, reviewVisible: true };
         persistLayout(next);
         return next;
       }
@@ -444,13 +447,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   },
 
   toggleReviewVisible: () => {
-    set((l) => {
-      const next: LayoutState = l.reviewVisible
-        ? { ...l, reviewVisible: false, activeView: 'terminal' as const }
-        : { ...l, reviewVisible: true, lastAuxView: 'review' as const, editorVisible: false, previewVisible: false, httpVisible: false, tasksVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'review' as const };
-      persistLayout(next);
-      return next;
-    });
+    getState().setRightDrawerTool(getState().reviewVisible ? null : 'review');
   },
 
   toggleHttpVisible: () => {
@@ -543,7 +540,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   setRightDrawerTool: (tool: RightDrawerTool | null) => {
     if (tool === null) {
       set((l) => {
-        const next = { ...l, activeView: 'terminal' as const, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false, fleetVisible: false };
+        const next = { ...l, activeView: 'terminal' as const, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, mobileVisible: false, fleetVisible: false };
         persistLayout(next);
         return next;
       });
@@ -553,6 +550,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
           ...l,
           activeView: tool as ActiveView,
           lastAuxView: tool as ActiveView,
+          reviewVisible: tool === 'review',
           httpVisible: tool === 'http',
           dbVisible: tool === 'db',
           containersVisible: tool === 'containers',

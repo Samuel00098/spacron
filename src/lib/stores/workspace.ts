@@ -123,7 +123,6 @@ function collectOpenRoomIds(): string[] {
   if (get(terminalRoomOpen)) rooms.push('terminal');
   if (l.editorVisible) rooms.push('editor');
   if (l.previewVisible) rooms.push('preview');
-  if (l.reviewVisible) rooms.push('review');
   if (l.tasksVisible) rooms.push('tasks');
   // Sketch is app-global rather than per-project (see per-project-persistence),
   // so a background project keeps whatever it was left with — the same way the
@@ -171,7 +170,6 @@ projects.subscribe((map) => {
     if (l.terminalRoomOpen !== false) rooms.push('terminal');
     if (l.editorVisible) rooms.push('editor');
     if (l.previewVisible) rooms.push('preview');
-    if (l.reviewVisible) rooms.push('review');
     if (l.tasksVisible) rooms.push('tasks');
     // No `sketch`: it is app-global, so a saved project never carried one.
     setProjectRooms(projectId, rooms);

@@ -1,5 +1,5 @@
 /**
- * Code Review — the full-window review surface.
+ * Code Review — the unified right-sidebar review utility.
  *
  * Master-detail in one panel: the changed-file list on the left, the selected
  * file's diff filling the rest. It used to be two components — this one showing
@@ -7,9 +7,9 @@
  * *and* its own copy of the diff. They duplicated `parseDiff`, `makeSplitRows`,
  * both diff tables and ~550 lines of CSS between them, disagreed on syntax
  * highlighting, and rendered the same diff twice when both were open. A
- * two-column diff also cannot be read in a drawer: at ~350px each side gets
- * about 35 characters. Merged 2026-07-26; the drawer keeps `HunkDiffView` inside
- * Source Control, which is a different job (stage while you commit).
+ * The responsive layout keeps the changed-file list and diff usable at the
+ * sidebar width. Source Control's inline `HunkDiffView` remains a different
+ * job (reviewing a single hunk while you commit).
  */
 import { useEffect, useRef, useState, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';

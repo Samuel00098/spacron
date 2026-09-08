@@ -321,6 +321,10 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
     title: 'Mobile Emulator',
     icon: <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>,
   },
+  review: {
+    title: 'Code Review',
+    icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon>,
+  },
 };
 
 // The left rail intentionally stays small: Workspaces plus the global Task and
@@ -335,8 +339,8 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
   snapshots: { title: 'Workspace Snapshots', icon: <Icon><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /><circle cx="12" cy="10" r="3" /></Icon> },
   snippets: { title: 'Shell Snippets', icon: <Icon><path d="M4 17l6-6-6-6M12 19h8" /></Icon> },
   problems: { title: 'Problems', icon: <Icon><circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16.5" x2="12.01" y2="16.5" /></Icon> },
-  // No `review` here — Code Review is a center room, reachable from the room
-  // dock. Source Control's inline HunkDiffView covers the drawer-sized case.
+  // Code Review is a right-sidebar utility. Source Control's inline
+  // HunkDiffView covers the drawer-sized case for individual hunks.
 };
 
 // The first group in the right sidebar is the workspace navigator. The
@@ -344,8 +348,7 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
 const RIGHT_NAVIGATOR_TOOLS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type RightNavigatorTool = (typeof RIGHT_NAVIGATOR_TOOLS)[number];
 
-// The RIGHT drawer hosts the layout-backed tools (RIGHT_DRAWER_TOOLS: Toolbox /
-// HTTP / DB / Containers / Env).
+// The RIGHT drawer hosts the layout-backed tools (including Code Review).
 type RightTool = RightDrawerTool;
 const RIGHT_TOOLS_ALL: RightTool[] = [...RIGHT_DRAWER_TOOLS];
 const RIGHT_TOOL_META: Record<RightTool, { title: string; icon: React.ReactNode }> = {
@@ -744,10 +747,9 @@ export default function AppShell() {
       [
         { id: 'editor' as const, visible: layoutState.editorVisible },
         { id: 'preview' as const, visible: layoutState.previewVisible },
-        { id: 'review' as const, visible: layoutState.reviewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
         { id: 'sketch' as const, visible: layoutState.sketchVisible },
-        // Right utility drawer: fleet/toolbox/http/db/containers/env/mobile +
+        // Right utility drawer: review/fleet/toolbox/http/db/containers/env/mobile +
         // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
         // pop-up. None of those are rooms in the ambient grid.
       ].filter((panel) => panel.visible),
@@ -1805,6 +1807,10 @@ export default function AppShell() {
   }
 
   function togglePanelRoom(id: AuxPanelId) {
+    if (id === 'review') {
+      toggleRightTool('review');
+      return;
+    }
     const isOpen = Boolean(layoutState[PANEL_VISIBILITY_KEYS[id]]);
     if (isOpen && activeRoom !== id) {
       focusRoom(id);
@@ -2189,17 +2195,6 @@ export default function AppShell() {
       active: layoutState.previewVisible,
       onClick: () => togglePanelRoom('preview'),
       icon: <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>,
-    },
-    {
-      // Code Review had no launcher here while it was a left-drawer tab — the
-      // tab was the way in. When the tab was removed (it became this center
-      // room) the only entry point left was the Ctrl+Shift+R shortcut, so the
-      // panel existed with no visible way to open it.
-      id: 'review',
-      title: 'Code Review',
-      active: layoutState.reviewVisible,
-      onClick: () => togglePanelRoom('review'),
-      icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon>,
     },
     {
       id: 'http',

@@ -259,20 +259,24 @@
   gap: 4px;
 }
 
-/* The right sidebar has two ordered tool groups: workspace navigation first,
-   then the existing utility tools. Keeping each group on its own row makes all
-   controls reachable without widening the sidebar. */
+/* The right sidebar has one ordered, horizontally movable tool line: workspace
+   navigation first, then the existing utility tools. */
 .app-shell .right-sidebar-tool-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .app-shell .right-sidebar-tool-tabs .drawer-tabs {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 3px;
+  flex: 0 0 auto;
 }
 
 .app-shell .right-sidebar-tool-tabs .drawer-tab-btn {
@@ -281,8 +285,9 @@
 }
 
 .app-shell .right-sidebar-tool-divider {
-  height: 1px;
-  width: 100%;
+  width: 1px;
+  height: 24px;
+  flex: 0 0 1px;
   background: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
@@ -910,7 +915,7 @@
 }
 
 /* ── Tinted panels (Windows / macOS only) ─────────────────────────────────
-   Every room (editor, terminal, preview, review, http, db, containers, toolbox,
+   Every room (editor, terminal, preview, http, db, containers, toolbox,
    tasks, youtube, env, workspace) and both utility sidebars (incl. the file
    explorer) share ONE tint here, so panel surfaces are uniform no matter which
    component paints inside them. Any content that paints its own background (a

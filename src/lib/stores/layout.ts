@@ -119,11 +119,24 @@ export function openRightSidebar() {
     useLayoutStore.getState().setRightDrawerTool(null);
   }
 }
-export function setActiveView(view: ActiveView) { withTransition(() => { useLayoutStore.getState().setActiveView(view); }); }
+export function setActiveView(view: ActiveView) {
+  withTransition(() => {
+    if (view === 'review') rightSidebarVisible.set(true);
+    useLayoutStore.getState().setActiveView(view);
+  });
+}
 export function showTerminal() { withTransition(() => { useLayoutStore.getState().showTerminal(); }); }
 export function toggleEditorVisible() { withTransition(() => { useLayoutStore.getState().toggleEditorVisible(); }); }
 export function togglePreviewVisible() { withTransition(() => { useLayoutStore.getState().togglePreviewVisible(); }); }
-export function toggleReviewVisible() { withTransition(() => { useLayoutStore.getState().toggleReviewVisible(); }); }
+export function toggleReviewVisible() {
+  withTransition(() => {
+    // Code Review is a right-sidebar utility now. Make sure a command or
+    // shortcut can reveal the unified sidebar even when it was previously
+    // closed.
+    if (!useLayoutStore.getState().reviewVisible) rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleReviewVisible();
+  });
+}
 export function toggleHttpVisible() { withTransition(() => { useLayoutStore.getState().toggleHttpVisible(); }); }
 export function toggleTasksVisible() { withTransition(() => { useLayoutStore.getState().toggleTasksVisible(); }); }
 export function toggleFleetVisible() { withTransition(() => { useLayoutStore.getState().toggleFleetVisible(); }); }

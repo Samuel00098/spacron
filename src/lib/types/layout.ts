@@ -2,8 +2,8 @@ export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settin
 
 export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'youtube' | 'env' | 'fleet' | 'mobile' | 'sketch';
 
-// 'review' was removed 2026-07-26: Code Review is a full center panel now, not a
-// drawer tab. A two-column diff is unreadable at drawer width.
+// Code Review remains an ActiveView for persisted-state compatibility, but the
+// visible panel is now hosted by the unified right-sidebar utility drawer.
 export type SidebarTab = 'projects' | 'files' | 'search' | 'git' | 'snapshots' | 'history' | 'snippets' | 'problems';
 
 // Sections of the Settings modal. Lives here rather than in the component so
@@ -46,4 +46,3 @@ export interface LayoutState {
   leftPanelWidth: number; // width of the left utility panel (Files/Search/Git/Snapshots/Snippets/Review)
   rightDrawerWidth: number; // width of the right utility panel (Toolbox/HTTP/DB/Containers/Env)
 }
-
