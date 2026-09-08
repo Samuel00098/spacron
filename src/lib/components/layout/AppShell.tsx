@@ -71,7 +71,9 @@ import {
   toggleContainersVisible,
   toggleToolboxVisible,
   RIGHT_DRAWER_TOOLS,
+  RIGHT_SIDEBAR_NAVIGATOR_TABS,
   rightSidebarVisible,
+  rightSidebarTab as rightSidebarTabStore,
   toggleYoutubeVisible,
   openQuickCapture,
   openAgentSpawn,
@@ -88,6 +90,7 @@ import { startProxy, stopProxy } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
+import { closeUsagePanel } from '$lib/stores/usage';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -617,7 +620,6 @@ export default function AppShell() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [leftPanelResizing, setLeftPanelResizing] = useState(false);
   const [rightDrawerResizing, setRightDrawerResizing] = useState(false);
-  const [rightNavigatorTool, setRightNavigatorTool] = useState<RightNavigatorTool>('files');
   /** Terminal-room close awaiting confirmation, because it will kill live shells. */
   const [pendingTerminalClose, setPendingTerminalClose] = useState<
     { room: 'terminal' | 'dev-terminal'; count: number } | null
@@ -1509,8 +1511,15 @@ export default function AppShell() {
   // The left rail is deliberately limited to Workspaces and the two global
   // room launchers. File/navigation panels live in the right sidebar.
   const leftDrawerOpen = layoutState.sidebarVisible;
+  useEffect(() => {
+    if (!leftDrawerOpen) closeUsagePanel();
+  }, [leftDrawerOpen]);
   const leftActiveTool: LeftDrawerTool | null = leftDrawerOpen ? 'projects' : null;
   const leftDrawerTools: readonly LeftDrawerTool[] = ['projects'];
+  const rightSidebarTab = useStore(rightSidebarTabStore);
+  const rightNavigatorTool: RightNavigatorTool = (RIGHT_SIDEBAR_NAVIGATOR_TABS as readonly string[]).includes(rightSidebarTab)
+    ? rightSidebarTab as RightNavigatorTool
+    : 'files';
   const rightNavigatorTools: readonly RightNavigatorTool[] = RIGHT_NAVIGATOR_TOOLS.filter(
     (tool) => tool !== 'snapshots' || showSnapshotsTab,
   );
@@ -1518,7 +1527,7 @@ export default function AppShell() {
 
   useEffect(() => {
     if (!showSnapshotsTab && rightNavigatorTool === 'snapshots') {
-      setRightNavigatorTool('files');
+      rightSidebarTabStore.set('files');
     }
   }, [rightNavigatorTool, showSnapshotsTab]);
 
@@ -1526,6 +1535,7 @@ export default function AppShell() {
     persistLayoutPatch({ sidebarVisible: true, sidebarTab: tool as SidebarTab });
   }
   function closeLeftDrawer() {
+    closeUsagePanel();
     persistLayoutPatch({ sidebarVisible: false });
   }
   function toggleLeftTool(tool: LeftDrawerTool) {
@@ -1605,6 +1615,7 @@ export default function AppShell() {
           <ProjectHUD />
         </div>
 
+        <UsagePanel />
         <footer className="left-sidebar-footer">
           <UsageCounter />
           <button
@@ -1626,15 +1637,22 @@ export default function AppShell() {
   // existing layout-backed utilities follow them in the same sidebar.
   const rightActiveTool: RightTool | null = rightDrawerToolOf(layoutState);
   const rightDrawerOpen = rightActiveTool !== null;
+  useEffect(() => {
+    // Shortcuts and restored project state can open a utility without going
+    // through this sidebar's tab button. Keep the shared last-tab memory in
+    // sync with those paths too.
+    if (rightActiveTool) rightSidebarTabStore.set(rightActiveTool);
+  }, [rightActiveTool]);
 
   function selectRightNavigatorTool(tool: RightNavigatorTool) {
     rightSidebarVisible.set(true);
-    setRightNavigatorTool(tool);
-    closeRightUtility();
+    rightSidebarTabStore.set(tool);
+    useLayoutStore.getState().setRightDrawerTool(null);
   }
 
   function selectRightTool(tool: RightTool) {
     rightSidebarVisible.set(true);
+    rightSidebarTabStore.set(tool);
     useLayoutStore.getState().setRightDrawerTool(tool);
   }
   function closeRightUtility() {
@@ -1645,7 +1663,10 @@ export default function AppShell() {
     closeRightUtility();
   }
   function toggleRightTool(tool: RightTool) {
-    if (rightActiveTool === tool) closeRightUtility();
+    if (rightActiveTool === tool) {
+      closeRightUtility();
+      rightSidebarTabStore.set('files');
+    }
     else selectRightTool(tool);
   }
 
@@ -1696,6 +1717,15 @@ export default function AppShell() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              className={`right-sidebar-agent-action${layoutState.agentSpawnOpen ? ' active' : ''}`}
+              onClick={() => openAgentSpawn()}
+              aria-pressed={layoutState.agentSpawnOpen}
+            >
+              <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+              <span>New Agents</span>
+            </button>
           </div>
           <button
             className="drawer-close-btn"
@@ -1711,19 +1741,6 @@ export default function AppShell() {
             ? <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
             : <SidebarContent tab={rightNavigatorTool} />}
         </div>
-        <UsagePanel />
-        <footer className="right-sidebar-footer">
-          <UsageCounter />
-          <button
-            type="button"
-            className="left-sidebar-settings-btn"
-            onClick={() => openSettings()}
-            title="Settings"
-            aria-label="Settings"
-          >
-            <Icon><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></Icon>
-          </button>
-        </footer>
       </aside>
     );
   }

@@ -1,8 +1,13 @@
 import { flushSync } from 'react-dom';
 import { viewTransitionsReliable } from '$lib/utils/tauri';
-import { writable, type Writable } from '$lib/stores/storeCompat';
+import { get, writable, type Writable } from '$lib/stores/storeCompat';
 import type { LayoutState, ActiveView, SidebarTab } from '$lib/types/layout';
-import { useLayoutStore, rightDrawerToolOf as rightDrawerToolOfState } from './zustand/layout';
+import {
+  RIGHT_DRAWER_TOOLS,
+  useLayoutStore,
+  rightDrawerToolOf as rightDrawerToolOfState,
+  type RightDrawerTool,
+} from './zustand/layout';
 
 export type { ActiveView, SidebarTab };
 
@@ -65,6 +70,11 @@ export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
 /** Whether the unified right-hand tools sidebar is mounted. */
 export const rightSidebarVisible = writable(true);
+export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
+export type RightSidebarNavigatorTab = (typeof RIGHT_SIDEBAR_NAVIGATOR_TABS)[number];
+export type RightSidebarTab = RightSidebarNavigatorTab | RightDrawerTool;
+/** The last selected tab in the unified right sidebar, preserved while closed. */
+export const rightSidebarTab = writable<RightSidebarTab>('files');
 
 // The Home (welcome) screen is an OVERLAY, not a route. Navigating home used to
 // null `activeWorkspaceId`, which unmounted the whole workspace tree — every
@@ -99,6 +109,16 @@ export function toggleSidebar() { withTransition(() => { useLayoutStore.getState
 export function setSidebarVisible(visible: boolean) { withTransition(() => { useLayoutStore.getState().setSidebarVisible(visible); }); }
 export function setRightSidebarVisible(visible: boolean) { rightSidebarVisible.set(visible); }
 export function toggleRightSidebar() { rightSidebarVisible.update((visible) => !visible); }
+export function setRightSidebarTab(tab: RightSidebarTab) { rightSidebarTab.set(tab); }
+export function openRightSidebar() {
+  rightSidebarVisible.set(true);
+  const tab = get(rightSidebarTab);
+  if ((RIGHT_DRAWER_TOOLS as readonly string[]).includes(tab)) {
+    useLayoutStore.getState().setRightDrawerTool(tab as RightDrawerTool);
+  } else {
+    useLayoutStore.getState().setRightDrawerTool(null);
+  }
+}
 export function setActiveView(view: ActiveView) { withTransition(() => { useLayoutStore.getState().setActiveView(view); }); }
 export function showTerminal() { withTransition(() => { useLayoutStore.getState().showTerminal(); }); }
 export function toggleEditorVisible() { withTransition(() => { useLayoutStore.getState().toggleEditorVisible(); }); }

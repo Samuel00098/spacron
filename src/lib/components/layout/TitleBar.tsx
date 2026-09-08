@@ -5,8 +5,7 @@ import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
   homeScreenOpen,
   openQuickCapture,
-  RIGHT_DRAWER_TOOLS,
-  rightDrawerToolOf,
+  openRightSidebar,
   rightSidebarVisible,
   setRightDrawerTool,
   setRightSidebarVisible,
@@ -40,7 +39,6 @@ export default function TitleBar() {
   const homeOpen = useStore(homeScreenOpen);
   const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
-  const rightDrawerTool = useLayoutStore((s) => rightDrawerToolOf(s));
   const rightSidebarOpen = useStore(rightSidebarVisible);
 
   async function minimize() {
@@ -87,8 +85,7 @@ export default function TitleBar() {
       setRightSidebarVisible(false);
       setRightDrawerTool(null);
     } else {
-      setRightSidebarVisible(true);
-      setRightDrawerTool(rightDrawerTool ?? RIGHT_DRAWER_TOOLS[0]);
+      openRightSidebar();
     }
   }
 

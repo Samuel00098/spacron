@@ -707,6 +707,17 @@
   color: var(--text-primary, #e8e8ec);
 }
 
+.asm-placement-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.asm-placement-card:disabled:hover {
+  background: var(--bg-primary, rgba(255, 255, 255, 0.03));
+  border-color: var(--border, rgba(255, 255, 255, 0.09));
+  color: var(--text-secondary, #b0b0c2);
+}
+
 :root.light-theme .asm-placement-card:hover {
   background: #f8f9fa;
   border-color: rgba(0, 0, 0, 0.22);

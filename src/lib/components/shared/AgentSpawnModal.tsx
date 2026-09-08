@@ -13,6 +13,7 @@ import {
   type DetectedAgent,
 } from '$lib/stores/usage';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -65,6 +66,53 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const [spawnPlacements, setSpawnPlacements] = useState<Map<string, AgentPlacement>>(new Map());
   const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
+  const [gitRepositoryAvailable, setGitRepositoryAvailable] = useState<boolean | null>(null);
+
+  // A newly-created blank project is a real folder but is not a Git
+  // repository. Worktrees require a repository and a resolved HEAD, while a
+  // main-repo agent works correctly in an empty folder.
+  useEffect(() => {
+    let cancelled = false;
+    const projectId = project?.id;
+    if (!projectId || !isTauriRuntime()) {
+      setGitRepositoryAvailable(projectId ? true : false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setGitRepositoryAvailable(null);
+    void invoke('workspace_git_status', { projectId })
+      .then(() => {
+        if (!cancelled) setGitRepositoryAvailable(true);
+      })
+      .catch(() => {
+        if (!cancelled) setGitRepositoryAvailable(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.id]);
+
+  const defaultPlacement = gitRepositoryAvailable === true
+    ? defaultAgentPlacement()
+    : 'main';
+
+  useEffect(() => {
+    if (gitRepositoryAvailable !== false) return;
+    setSpawnPlacements((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [command, placement] of next) {
+        if (placement === 'worktree') {
+          next.set(command, 'main');
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [gitRepositoryAvailable]);
 
   // One-click sign-in: close picker, open CLI in terminal to complete login
   const openSignIn = (command: string, name: string) => {
@@ -137,7 +185,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     setSpawnPlacements((prev) => {
       if (prev.has(command)) return prev;
       const next = new Map(prev);
-      next.set(command, defaultAgentPlacement());
+      next.set(command, defaultPlacement);
       return next;
     });
     setSpawnCounts((prev) => {
@@ -179,7 +227,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       setSpawnPlacements((prev) => {
         if (!prev.has(command)) {
           const next = new Map(prev);
-          next.set(command, defaultAgentPlacement());
+          next.set(command, defaultPlacement);
           return next;
         }
         return prev;
@@ -207,7 +255,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       }))
     );
     const placements = plan.map(
-      (item) => spawnPlacements.get(item.key) ?? defaultAgentPlacement()
+      (item) => spawnPlacements.get(item.key) ?? defaultPlacement
     );
 
     onclose();
@@ -225,7 +273,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
     try {
       for (const [index, { key: cmd }] of plan.entries()) {
-        const skipWorktree = placements[index] === 'main';
+        const skipWorktree = placements[index] !== 'worktree' || gitRepositoryAvailable !== true;
         const name = pickAssistantName(takenNames);
         if (!skipWorktree && !projectId) throw new Error('Open a project first to create an isolated worktree.');
         const worktree = projectId && !skipWorktree
@@ -280,7 +328,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, spawnPlacements, spawnPresets, project, isDev, onclose]);
+  }, [spawnCounts, spawnPlacements, spawnPresets, defaultPlacement, gitRepositoryAvailable, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && totalSpawnCount > 0) {
@@ -295,8 +343,8 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   }
 
   const activePlacement = activePreset
-    ? spawnPlacements.get(activePreset.command) ?? defaultAgentPlacement()
-    : defaultAgentPlacement();
+    ? spawnPlacements.get(activePreset.command) ?? defaultPlacement
+    : defaultPlacement;
 
   return (
     <div
@@ -575,6 +623,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                   aria-checked={activePlacement === 'worktree'}
                   className={`asm-placement-card${activePlacement === 'worktree' ? ' selected' : ''}`}
                   onClick={() => setSpawnPlacement(activePreset.command, 'worktree')}
+                  disabled={gitRepositoryAvailable !== true}
                 >
                   <div className="asm-placement-card-header">
                     <span className="asm-placement-radio" aria-hidden="true">
@@ -599,7 +648,11 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                     </svg>
                     <strong>Isolated repo</strong>
                   </div>
-                  <small>Dedicated worktree &amp; branch</small>
+                  <small>
+                    {gitRepositoryAvailable === false
+                      ? 'Unavailable: this project is not a Git repository'
+                      : 'Dedicated worktree & branch'}
+                  </small>
                 </button>
               </div>
             </div>
