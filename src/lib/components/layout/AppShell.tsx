@@ -1617,6 +1617,15 @@ export default function AppShell() {
 
         <UsagePanel />
         <footer className="left-sidebar-footer">
+          <button
+            type="button"
+            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
+            onClick={() => openAgentSpawn()}
+            aria-pressed={layoutState.agentSpawnOpen}
+          >
+            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+            <span>New Agent</span>
+          </button>
           <UsageCounter />
           <button
             type="button"
@@ -1717,15 +1726,6 @@ export default function AppShell() {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className={`right-sidebar-agent-action${layoutState.agentSpawnOpen ? ' active' : ''}`}
-              onClick={() => openAgentSpawn()}
-              aria-pressed={layoutState.agentSpawnOpen}
-            >
-              <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-              <span>New Agents</span>
-            </button>
           </div>
           <button
             className="drawer-close-btn"

@@ -286,35 +286,6 @@
   background: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-.app-shell .right-sidebar-agent-action {
-  min-height: 30px;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-
-.app-shell .right-sidebar-agent-action:hover,
-.app-shell .right-sidebar-agent-action.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 17%, transparent);
-}
-
-.app-shell .right-sidebar-agent-action svg {
-  width: 14px;
-  height: 14px;
-}
-
 .app-shell .left-utility-panel .drawer-tab-btn,
 .app-shell .right-utility-panel .drawer-tab-btn,
 .app-shell .utility-drawer .drawer-tab-btn {
@@ -3084,7 +3055,7 @@ html.is-webkitgtk .app-shell .composer-strip {
   padding: 6px 8px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
   flex: 0 0 auto;
 }
