@@ -3055,7 +3055,7 @@ html.is-webkitgtk .app-shell .composer-strip {
   padding: 6px 8px;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 6px;
   flex: 0 0 auto;
 }
