@@ -2299,7 +2299,11 @@ export default function AppShell() {
   // navigation is split between the small left rail and the right sidebar.
   const toolMenuGroups: ToolMenuGroup[] = [
     { id: 'rooms', label: 'Rooms', items: roomLauncherItems },
-    { id: 'utilities', label: 'Utilities', items: [...drawerToolItems, mediaPlayerItem] },
+    {
+      id: 'utilities',
+      label: 'Utilities',
+      items: [...rightNavigatorItems, ...drawerToolItems, mediaPlayerItem],
+    },
   ].filter((group) => group.items.length > 0);
   const paletteToolGroups: ToolMenuGroup[] = [
     { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
