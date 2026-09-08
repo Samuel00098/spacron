@@ -3248,7 +3248,21 @@ export default function AppShell() {
           aria-label={emptyStageMessage ?? undefined}
         >
           {emptyStageMessage !== null && (
-            <p className="stage-empty-msg">{emptyStageMessage}</p>
+            <div className="stage-empty-cta">
+              <strong className="stage-empty-title">Start with agents</strong>
+              <span className="stage-empty-copy">
+                Choose the agents you want to work with in this workspace.
+              </span>
+              <button
+                type="button"
+                className="stage-empty-agent-btn"
+                onClick={() => openAgentSpawn()}
+                aria-label="Choose agents"
+              >
+                <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+                <span>Choose Agents</span>
+              </button>
+            </div>
           )}
           {persistentStageRooms.map((room) => {
             const { className, style } = stagePaneProps(room);
