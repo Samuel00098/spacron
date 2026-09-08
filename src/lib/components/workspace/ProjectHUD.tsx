@@ -501,7 +501,7 @@ export default function ProjectHUD() {
     <div className="projects-sidebar-panel">
       {/* Top Header Toolbar */}
       <div className="projects-panel-header">
-        <span className="projects-panel-title">Projects</span>
+            <span className="projects-panel-title">Workspaces</span>
         <div className="projects-header-actions">
           <button
             type="button"
@@ -510,8 +510,8 @@ export default function ProjectHUD() {
               setShowNewCollection(true);
               setTimeout(() => newCollectionInputRef.current?.focus(), 50);
             }}
-            title="New Collection"
-            aria-label="New Collection"
+            title="New Workspace"
+            aria-label="New Workspace"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -559,7 +559,7 @@ export default function ProjectHUD() {
             ref={inputRef}
             type="text"
             className="projects-search-input"
-            placeholder="Filter projects or collections…"
+            placeholder="Filter projects or workspaces…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -581,14 +581,14 @@ export default function ProjectHUD() {
         </div>
       </div>
 
-      {/* Inline New Collection Creator (if opened via header button) */}
+      {/* Inline New Workspace Creator (if opened via header button) */}
       {showNewCollection && (
         <form className="projects-new-collection-inline" onSubmit={handleCreateCollection}>
           <input
             ref={newCollectionInputRef}
             type="text"
             className="projects-inline-input"
-            placeholder="New Collection name…"
+            placeholder="New Workspace name…"
             value={newWsName}
             onChange={(e) => setNewWsName(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && setShowNewCollection(false)}
@@ -654,7 +654,7 @@ export default function ProjectHUD() {
                     className="projects-collection-title"
                     onClick={() => toggleCollapsed(ws.id)}
                     aria-expanded={!isCollapsed}
-                    title={isCollapsed ? 'Expand collection' : 'Collapse collection'}
+                    title={isCollapsed ? 'Expand workspace' : 'Collapse workspace'}
                   >
                     <svg className="projects-collection-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="6 9 12 15 18 9" />
@@ -672,8 +672,8 @@ export default function ProjectHUD() {
                     type="button"
                     className="projects-action-btn"
                     onClick={() => startRename(ws.id, ws.name)}
-                    title="Rename collection"
-                    aria-label="Rename collection"
+                    title="Rename workspace"
+                    aria-label="Rename workspace"
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -690,8 +690,8 @@ export default function ProjectHUD() {
                       }
                       newFolderPromptOpen.set(true);
                     }}
-                    title="New folder in collection"
-                    aria-label="New folder in collection"
+                      title="New folder in workspace"
+                      aria-label="New folder in workspace"
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -709,8 +709,8 @@ export default function ProjectHUD() {
                       }
                       await openProject();
                     }}
-                    title="Add existing project to collections"
-                    aria-label="Add existing project to collections"
+                      title="Add existing project to workspaces"
+                      aria-label="Add existing project to workspaces"
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <line x1="12" y1="5" x2="12" y2="19" />
@@ -722,12 +722,12 @@ export default function ProjectHUD() {
                     type="button"
                     className="projects-action-btn danger"
                     onClick={() => {
-                      if (confirm(`Delete collection "${ws.name}"? (Your project files will not be deleted)`)) {
+                      if (confirm(`Delete workspace "${ws.name}"? (Your project files will not be deleted)`)) {
                         deleteCollection(ws.id);
                       }
                     }}
-                    title="Delete collection"
-                    aria-label="Delete collection"
+                    title="Delete workspace"
+                    aria-label="Delete workspace"
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <polyline points="3 6 5 6 21 6" />
@@ -866,8 +866,8 @@ export default function ProjectHUD() {
                               type="button"
                               className="hud-card-action-btn"
                               onClick={(e) => toggleMoveMenu(e, p.path)}
-                              title="Move to collection..."
-                              aria-label="Move to collection..."
+                              title="Move to workspace..."
+                              aria-label="Move to workspace..."
                             >
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <circle cx="12" cy="12" r="1" />
@@ -880,8 +880,8 @@ export default function ProjectHUD() {
                               type="button"
                               className="hud-card-action-btn hover-danger"
                               onClick={() => removeProjectFromCollection(ws.id, p.path)}
-                              title="Remove project from collection"
-                              aria-label="Remove project from collection"
+                              title="Remove project from workspace"
+                              aria-label="Remove project from workspace"
                             >
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -892,7 +892,7 @@ export default function ProjectHUD() {
                             {/* Move to another workspace popup menu */}
                             {showWsMenuId === p.path && (
                               <div className="hud-move-menu">
-                                <div className="hud-move-menu-label">Move to collection</div>
+                                <div className="hud-move-menu-label">Move to workspace</div>
                                 {workspaces
                                   .filter((other) => other.id !== ws.id)
                                   .map((other) => (
@@ -906,7 +906,7 @@ export default function ProjectHUD() {
                                     </button>
                                   ))}
                                 {workspaces.filter((other) => other.id !== ws.id).length === 0 && (
-                                  <div className="hud-move-menu-empty">No other collections</div>
+                                  <div className="hud-move-menu-empty">No other workspaces</div>
                                 )}
                               </div>
                             )}
@@ -983,7 +983,7 @@ export default function ProjectHUD() {
 
                   {wsProjects.length === 0 && !search && (
                     <div className="projects-collection-empty">
-                      <span>No projects in this collection</span>
+                      <span>No projects in this workspace</span>
                     </div>
                   )}
                 </div>
@@ -1016,7 +1016,7 @@ export default function ProjectHUD() {
                   setTimeout(() => newCollectionInputRef.current?.focus(), 50);
                 }}
               >
-                Create Collection
+                Create Workspace
               </button>
             )}
           </div>

@@ -71,6 +71,7 @@ import {
   toggleContainersVisible,
   toggleToolboxVisible,
   RIGHT_DRAWER_TOOLS,
+  rightSidebarVisible,
   toggleYoutubeVisible,
   openQuickCapture,
   openAgentSpawn,
@@ -87,7 +88,6 @@ import { startProxy, stopProxy } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
-import { closeUsagePanel } from '$lib/stores/usage';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -320,14 +320,12 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
   },
 };
 
-// Tools hosted in the LEFT utility drawer — the sidebar-content tabs, backed by
-// `sidebarTab`. Order = tab-strip / dock order.
+// The left rail intentionally stays small: Workspaces plus the global Task and
+// Sketch rooms. The file/navigation tools are hosted by the right sidebar.
 const LEFT_DRAWER_TOOLS = ['projects', 'files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
-const LEFT_PRIMARY_TOOLS: readonly LeftDrawerTool[] = ['projects', 'files', 'search', 'git', 'problems'];
-const LEFT_SECONDARY_TOOLS: readonly LeftDrawerTool[] = ['snapshots', 'snippets'];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
-  projects: { title: 'Projects', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
+  projects: { title: 'Workspaces', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
   files: { title: 'Files', icon: <Icon><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></Icon> },
   search: { title: 'Search files', icon: <Icon><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
@@ -337,6 +335,11 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
   // No `review` here — Code Review is a center room, reachable from the room
   // dock. Source Control's inline HunkDiffView covers the drawer-sized case.
 };
+
+// The first group in the right sidebar is the workspace navigator. The
+// existing utility tools follow it in the same sidebar.
+const RIGHT_NAVIGATOR_TOOLS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
+type RightNavigatorTool = (typeof RIGHT_NAVIGATOR_TOOLS)[number];
 
 // The RIGHT drawer hosts the layout-backed tools (RIGHT_DRAWER_TOOLS: Toolbox /
 // HTTP / DB / Containers / Env).
@@ -614,6 +617,7 @@ export default function AppShell() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [leftPanelResizing, setLeftPanelResizing] = useState(false);
   const [rightDrawerResizing, setRightDrawerResizing] = useState(false);
+  const [rightNavigatorTool, setRightNavigatorTool] = useState<RightNavigatorTool>('files');
   /** Terminal-room close awaiting confirmation, because it will kill live shells. */
   const [pendingTerminalClose, setPendingTerminalClose] = useState<
     { room: 'terminal' | 'dev-terminal'; count: number } | null
@@ -1501,24 +1505,27 @@ export default function AppShell() {
     useLayoutStore.getState().setRightDrawerWidth(useLayoutStore.getState().rightDrawerWidth);
   }
 
-  // --- LEFT utility drawer (workspace navigation) -------------------------
-  // Sidebar-content tabs only. Open == sidebarVisible; switching tabs only swaps
-  // the body (the frame stays mounted), so there's no close/reopen glitch.
+  // --- LEFT workspace rail -------------------------------------------------
+  // The left rail is deliberately limited to Workspaces and the two global
+  // room launchers. File/navigation panels live in the right sidebar.
   const leftDrawerOpen = layoutState.sidebarVisible;
+  const leftActiveTool: LeftDrawerTool | null = leftDrawerOpen ? 'projects' : null;
+  const leftDrawerTools: readonly LeftDrawerTool[] = ['projects'];
+  const rightNavigatorTools: readonly RightNavigatorTool[] = RIGHT_NAVIGATOR_TOOLS.filter(
+    (tool) => tool !== 'snapshots' || showSnapshotsTab,
+  );
+  const rightSidebarOpen = useStore(rightSidebarVisible);
+
   useEffect(() => {
-    if (!leftDrawerOpen) closeUsagePanel();
-  }, [leftDrawerOpen]);
-  const leftActiveTool: LeftDrawerTool | null =
-    layoutState.sidebarVisible && (LEFT_DRAWER_TOOLS as readonly string[]).includes(layoutState.sidebarTab)
-      ? (layoutState.sidebarTab as LeftDrawerTool)
-      : null;
-  const leftDrawerTools = LEFT_DRAWER_TOOLS.filter((t) => t !== 'snapshots' || showSnapshotsTab);
+    if (!showSnapshotsTab && rightNavigatorTool === 'snapshots') {
+      setRightNavigatorTool('files');
+    }
+  }, [rightNavigatorTool, showSnapshotsTab]);
 
   function selectLeftTool(tool: LeftDrawerTool) {
     persistLayoutPatch({ sidebarVisible: true, sidebarTab: tool as SidebarTab });
   }
   function closeLeftDrawer() {
-    closeUsagePanel();
     persistLayoutPatch({ sidebarVisible: false });
   }
   function toggleLeftTool(tool: LeftDrawerTool) {
@@ -1559,7 +1566,7 @@ export default function AppShell() {
       <aside
         className="left-utility-panel left-sidebar bento-card"
         style={{ width: layoutState.leftPanelWidth }}
-        aria-label="Workspace navigation"
+        aria-label="Workspaces"
       >
         <div
           className="left-drawer-resize-handle"
@@ -1569,7 +1576,7 @@ export default function AppShell() {
         />
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
-            <span className="left-sidebar-eyebrow">Navigator</span>
+            <span className="left-sidebar-eyebrow">Workspaces</span>
             <strong className="left-sidebar-project" title={project?.root_path ?? undefined}>
               {project?.name ?? 'Workspace'}
             </strong>
@@ -1584,40 +1591,19 @@ export default function AppShell() {
           </button>
         </header>
 
-        <div className="left-sidebar-quick-actions">
-          <button
-            type="button"
-            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
-            onClick={() => {
-              if (layoutState.agentSpawnOpen) closeAgentSpawn();
-              else openAgentSpawn();
-            }}
-            aria-pressed={layoutState.agentSpawnOpen}
-          >
-            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-            <span>New agent</span>
-          </button>
-        </div>
-
-        <nav className="left-sidebar-nav" aria-label="Workspace tools">
-          <span className="left-sidebar-section-label">Workspace</span>
-          {LEFT_PRIMARY_TOOLS.filter((tool) => leftDrawerTools.includes(tool)).map(renderNavItem)}
+        <nav className="left-sidebar-nav" aria-label="Workspaces and global views">
+          <span className="left-sidebar-section-label">Workspaces</span>
+          {leftDrawerTools.map(renderNavItem)}
           {[tasksItem, sketchItem].map(renderRoomNavItem)}
-          <span className="left-sidebar-section-label secondary">More</span>
-          <div className="left-sidebar-secondary-grid">
-            {LEFT_SECONDARY_TOOLS.filter((tool) => leftDrawerTools.includes(tool)).map(renderNavItem)}
-          </div>
         </nav>
 
         <div className="left-sidebar-context-label" role="heading" aria-level={2}>
           <span aria-hidden="true">{leftActiveTool ? LEFT_TOOL_META[leftActiveTool].icon : null}</span>
-          <span>{leftActiveTool ? LEFT_TOOL_META[leftActiveTool].title : 'Workspace'}</span>
+          <span>Workspace</span>
         </div>
         <div className="drawer-body">
-          <SidebarContent tab={layoutState.sidebarTab} />
+          <ProjectHUD />
         </div>
-
-        <UsagePanel />
 
         <footer className="left-sidebar-footer">
           <UsageCounter />
@@ -1635,31 +1621,41 @@ export default function AppShell() {
     );
   }
 
-  // --- RIGHT utility drawer (summoned tools) ------------------------------
-  // The layout-backed tools (Toolbox/HTTP/DB/Containers/Env). One derived
-  // "active tool" + one selection handler that updates every backing flag
-  // together (React batches them) → switching only swaps the body, no glitch.
+  // --- RIGHT workspace tools sidebar --------------------------------------
+  // Files/search/source control/problems/snippets are the first group. The
+  // existing layout-backed utilities follow them in the same sidebar.
   const rightActiveTool: RightTool | null = rightDrawerToolOf(layoutState);
   const rightDrawerOpen = rightActiveTool !== null;
 
+  function selectRightNavigatorTool(tool: RightNavigatorTool) {
+    rightSidebarVisible.set(true);
+    setRightNavigatorTool(tool);
+    closeRightUtility();
+  }
+
   function selectRightTool(tool: RightTool) {
+    rightSidebarVisible.set(true);
     useLayoutStore.getState().setRightDrawerTool(tool);
   }
-  function closeRightDrawer() {
+  function closeRightUtility() {
     useLayoutStore.getState().setRightDrawerTool(null);
   }
+  function closeRightSidebar() {
+    rightSidebarVisible.set(false);
+    closeRightUtility();
+  }
   function toggleRightTool(tool: RightTool) {
-    if (rightActiveTool === tool) closeRightDrawer();
+    if (rightActiveTool === tool) closeRightUtility();
     else selectRightTool(tool);
   }
 
   function renderRightUtilityPanel() {
-    if (!rightDrawerOpen || !rightActiveTool) return null;
+    if (!rightSidebarOpen) return null;
     return (
       <aside
-        className="right-utility-panel bento-card"
+        className="right-utility-panel right-sidebar bento-card"
         style={{ width: layoutState.rightDrawerWidth }}
-        aria-label="Tools"
+        aria-label="Workspace tools"
       >
         <div
           className="right-drawer-resize-handle"
@@ -1671,32 +1667,63 @@ export default function AppShell() {
           role="separator"
           aria-orientation="vertical"
         />
-        <header className="drawer-header">
-          <div className="drawer-tabs">
-            {RIGHT_TOOLS_ALL.map((tool) => (
-              <button
-                key={tool}
-                className={`drawer-tab-btn${rightActiveTool === tool ? ' active' : ''}`}
-                onClick={() => selectRightTool(tool)}
-                title={RIGHT_TOOL_META[tool].title}
-                aria-label={RIGHT_TOOL_META[tool].title}
-              >
-                {RIGHT_TOOL_META[tool].icon}
-              </button>
-            ))}
+        <header className="drawer-header right-sidebar-header">
+          <div className="right-sidebar-tool-tabs">
+            <div className="drawer-tabs" aria-label="Workspace navigation tools">
+              {rightNavigatorTools.map((tool) => (
+                <button
+                  key={tool}
+                  className={`drawer-tab-btn${!rightDrawerOpen && rightNavigatorTool === tool ? ' active' : ''}`}
+                  onClick={() => selectRightNavigatorTool(tool)}
+                  title={LEFT_TOOL_META[tool].title}
+                  aria-label={LEFT_TOOL_META[tool].title}
+                >
+                  {LEFT_TOOL_META[tool].icon}
+                </button>
+              ))}
+            </div>
+            <div className="right-sidebar-tool-divider" aria-hidden="true" />
+            <div className="drawer-tabs" aria-label="Utility tools">
+              {RIGHT_TOOLS_ALL.map((tool) => (
+                <button
+                  key={tool}
+                  className={`drawer-tab-btn${rightActiveTool === tool ? ' active' : ''}`}
+                  onClick={() => selectRightTool(tool)}
+                  title={RIGHT_TOOL_META[tool].title}
+                  aria-label={RIGHT_TOOL_META[tool].title}
+                >
+                  {RIGHT_TOOL_META[tool].icon}
+                </button>
+              ))}
+            </div>
           </div>
           <button
             className="drawer-close-btn"
-            onClick={() => closeRightDrawer()}
-            title="Close panel"
-            aria-label="Close panel"
+            onClick={() => closeRightSidebar()}
+            title="Close right sidebar"
+            aria-label="Close right sidebar"
           >
             <XIcon />
           </button>
         </header>
         <div className="drawer-body">
-          <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
+          {rightActiveTool
+            ? <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
+            : <SidebarContent tab={rightNavigatorTool} />}
         </div>
+        <UsagePanel />
+        <footer className="right-sidebar-footer">
+          <UsageCounter />
+          <button
+            type="button"
+            className="left-sidebar-settings-btn"
+            onClick={() => openSettings()}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <Icon><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></Icon>
+          </button>
+        </footer>
       </aside>
     );
   }
@@ -2220,13 +2247,19 @@ export default function AppShell() {
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
 
-  // Command-palette launchers for the LEFT utility drawer's tools. These stay
-  // searchable without duplicating the Navigator inside the Tools popover.
+  // Command-palette launchers for the left workspace rail.
   const leftNavDockItems: ActivityItem[] = leftDrawerTools.map((tool) => ({
     id: tool,
     title: LEFT_TOOL_META[tool].title,
     active: leftActiveTool === tool,
     onClick: () => toggleLeftTool(tool),
+    icon: LEFT_TOOL_META[tool].icon,
+  }));
+  const rightNavigatorItems: ActivityItem[] = rightNavigatorTools.map((tool) => ({
+    id: tool,
+    title: LEFT_TOOL_META[tool].title,
+    active: !rightDrawerOpen && rightNavigatorTool === tool,
+    onClick: () => selectRightNavigatorTool(tool),
     icon: LEFT_TOOL_META[tool].icon,
   }));
 
@@ -2245,13 +2278,14 @@ export default function AppShell() {
   const roomLauncherItems = panelItems.filter((item) => !drawerToolIds.has(item.id));
 
   // The prompt-bar Tools menu contains room and utility launchers. Workspace
-  // navigation remains exclusively in the left Navigator.
+  // navigation is split between the small left rail and the right sidebar.
   const toolMenuGroups: ToolMenuGroup[] = [
     { id: 'rooms', label: 'Rooms', items: roomLauncherItems },
     { id: 'utilities', label: 'Utilities', items: [...drawerToolItems, mediaPlayerItem] },
   ].filter((group) => group.items.length > 0);
   const paletteToolGroups: ToolMenuGroup[] = [
     { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
+    { id: 'workspace-tools', label: 'Workspace tools', items: rightNavigatorItems },
     ...toolMenuGroups,
   ];
 
@@ -3236,8 +3270,10 @@ export default function AppShell() {
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
                 '--overlay-clear': `${overlaysHeight + 12}px`,
-                '--left-nav-space': leftDrawerOpen ? `${layoutState.leftPanelWidth + 20}px` : '0px',
-                '--right-drawer-space': rightDrawerOpen ? `${layoutState.rightDrawerWidth + 20}px` : '0px',
+                '--left-nav-space': `${leftDrawerOpen ? layoutState.leftPanelWidth + 20 : 0}px`,
+                '--right-drawer-space': `${
+                  rightSidebarOpen ? layoutState.rightDrawerWidth + 20 : 0
+                }px`,
               } as React.CSSProperties}
             >
               {resizing && <div className={`resize-overlay${auxRowResizing ? ' row-resize' : ''}`} />}

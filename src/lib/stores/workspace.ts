@@ -1293,7 +1293,7 @@ export function createNewWorkspace(name?: string) {
   const id = `ws-${Date.now()}`;
   const newWorkspace: Workspace = {
     id,
-    name: name?.trim() || 'New Collection',
+    name: name?.trim() || 'New Workspace',
     project_paths: [],
     active_project_path: null,
     last_opened: Date.now().toString(),
@@ -1750,7 +1750,7 @@ export async function openProject() {
   const selected = await open({
     directory: true,
     multiple: false,
-    title: 'Add Folder to Collection',
+    title: 'Add Folder to Workspace',
   });
   if (selected) {
     await addFolderToWorkspace(selected);

@@ -702,7 +702,7 @@ export interface ShortcutAction {
 export const shortcutActions: ShortcutAction[] = [
   { id: 'commandPalette', label: 'Command Palette', category: 'View' },
   { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
-  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', category: 'View' },
+  { id: 'toggleProjectHUD', label: 'Toggle Workspaces Sidebar', category: 'View' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
   { id: 'newWorkspace',   label: 'New Workspace',   category: 'Workspace' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     category: 'View' },
@@ -741,7 +741,7 @@ export const shortcutActions: ShortcutAction[] = [
 export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
   { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
-  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
+  { id: 'toggleProjectHUD', label: 'Toggle Workspaces Sidebar', keys: 'Ctrl+K' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
   { id: 'newWorkspace',   label: 'New Workspace',   keys: 'Ctrl+N' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },

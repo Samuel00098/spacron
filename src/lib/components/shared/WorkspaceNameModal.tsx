@@ -87,7 +87,7 @@ export default function WorkspaceNameModal() {
       className="backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="New Collection"
+      aria-label="New Workspace"
       tabIndex={-1}
       ref={backdropRef}
       onClick={handleBackdropClick}
@@ -98,7 +98,7 @@ export default function WorkspaceNameModal() {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
-          <span>New Collection</span>
+          <span>New Workspace</span>
         </div>
 
         <input
@@ -107,7 +107,7 @@ export default function WorkspaceNameModal() {
           onChange={(e) => setNameInput(e.target.value)}
           className="name-input"
           type="text"
-          placeholder="Collection name…"
+          placeholder="Workspace name…"
           onKeyDown={handleKeyDown}
         />
 

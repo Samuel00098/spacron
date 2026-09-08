@@ -259,6 +259,33 @@
   gap: 4px;
 }
 
+/* The right sidebar has two ordered tool groups: workspace navigation first,
+   then the existing utility tools. Keeping each group on its own row makes all
+   controls reachable without widening the sidebar. */
+.app-shell .right-sidebar-tool-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-shell .right-sidebar-tool-tabs .drawer-tabs {
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.app-shell .right-sidebar-tool-tabs .drawer-tab-btn {
+  width: 29px;
+  height: 29px;
+}
+
+.app-shell .right-sidebar-tool-divider {
+  height: 1px;
+  width: 100%;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
 .app-shell .left-utility-panel .drawer-tab-btn,
 .app-shell .right-utility-panel .drawer-tab-btn,
 .app-shell .utility-drawer .drawer-tab-btn {
@@ -3143,6 +3170,55 @@ html.is-webkitgtk .app-shell .composer-strip {
   border-radius: inherit;
   background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Status/settings belong with the rest of the right-side utilities. Keep the
+   left rail limited to Workspaces, Task, and Sketch. */
+.app-shell .left-sidebar-footer {
+  display: none;
+}
+
+.app-shell .right-sidebar-footer {
+  min-height: 44px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.app-shell .right-sidebar-footer .usage-dock-sidebar {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.app-shell .right-sidebar-footer .left-sidebar-settings-btn {
+  margin-left: auto;
+}
+
+.app-shell .right-sidebar .usage-panel {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-height: min(240px, 32%);
+  flex: 0 1 auto;
+  z-index: auto;
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(
+    ellipse at 12% 8%,
+    color-mix(in srgb, var(--accent) 16%, transparent),
+    transparent 68%
+  );
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  animation: none;
+}
+
+.app-shell .right-sidebar .usage-panel::after {
+  display: none;
 }
 
 /* The full-height Bento navigator now carries status controls at its foot. The

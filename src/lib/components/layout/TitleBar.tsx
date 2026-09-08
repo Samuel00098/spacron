@@ -7,7 +7,9 @@ import {
   openQuickCapture,
   RIGHT_DRAWER_TOOLS,
   rightDrawerToolOf,
+  rightSidebarVisible,
   setRightDrawerTool,
+  setRightSidebarVisible,
   toggleSidebar,
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
@@ -39,6 +41,7 @@ export default function TitleBar() {
   const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightDrawerTool = useLayoutStore((s) => rightDrawerToolOf(s));
+  const rightSidebarOpen = useStore(rightSidebarVisible);
 
   async function minimize() {
     await win?.minimize();
@@ -80,7 +83,13 @@ export default function TitleBar() {
   }
 
   function toggleRightSidebar() {
-    setRightDrawerTool(rightDrawerTool ? null : RIGHT_DRAWER_TOOLS[0]);
+    if (rightSidebarOpen) {
+      setRightSidebarVisible(false);
+      setRightDrawerTool(null);
+    } else {
+      setRightSidebarVisible(true);
+      setRightDrawerTool(rightDrawerTool ?? RIGHT_DRAWER_TOOLS[0]);
+    }
   }
 
   return (
@@ -218,11 +227,11 @@ export default function TitleBar() {
                 intact when closing and reopen the default drawer tool when
                 the drawer is summoned from the titlebar. */}
             <button
-              className={`icon-btn sidebar-toggle-btn${rightDrawerTool ? ' active' : ''}`}
+              className={`icon-btn sidebar-toggle-btn${rightSidebarOpen ? ' active' : ''}`}
               onClick={toggleRightSidebar}
-              aria-label={rightDrawerTool ? 'Hide right sidebar' : 'Show right sidebar'}
-              aria-pressed={rightDrawerTool !== null}
-              title={rightDrawerTool ? 'Hide right sidebar' : 'Show right sidebar'}
+              aria-label={rightSidebarOpen ? 'Hide right sidebar' : 'Show right sidebar'}
+              aria-pressed={rightSidebarOpen}
+              title={rightSidebarOpen ? 'Hide right sidebar' : 'Show right sidebar'}
             >
               <svg
                 width="15"

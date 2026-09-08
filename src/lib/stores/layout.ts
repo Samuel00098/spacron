@@ -63,6 +63,8 @@ export const quickCaptureOpen = writable(false);
 export const envManagerOpen = writable(false);
 export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
+/** Whether the unified right-hand tools sidebar is mounted. */
+export const rightSidebarVisible = writable(true);
 
 // The Home (welcome) screen is an OVERLAY, not a route. Navigating home used to
 // null `activeWorkspaceId`, which unmounted the whole workspace tree — every
@@ -95,6 +97,8 @@ export function openEnvManager() { withTransition(() => { useLayoutStore.getStat
 export function closeEnvManager() { withTransition(() => { useLayoutStore.getState().closeEnvManager(); }); }
 export function toggleSidebar() { withTransition(() => { useLayoutStore.getState().toggleSidebar(); }); }
 export function setSidebarVisible(visible: boolean) { withTransition(() => { useLayoutStore.getState().setSidebarVisible(visible); }); }
+export function setRightSidebarVisible(visible: boolean) { rightSidebarVisible.set(visible); }
+export function toggleRightSidebar() { rightSidebarVisible.update((visible) => !visible); }
 export function setActiveView(view: ActiveView) { withTransition(() => { useLayoutStore.getState().setActiveView(view); }); }
 export function showTerminal() { withTransition(() => { useLayoutStore.getState().showTerminal(); }); }
 export function toggleEditorVisible() { withTransition(() => { useLayoutStore.getState().toggleEditorVisible(); }); }

@@ -71,7 +71,7 @@ export default function EmptyWorkspace() {
         </svg>
       </div>
 
-      <h3 className="empty-title">Empty Collection</h3>
+      <h3 className="empty-title">Empty Workspace</h3>
       <p className="empty-desc">
         Add one or more project folders to start coding, tracking git changes, and previewing your work.
       </p>
