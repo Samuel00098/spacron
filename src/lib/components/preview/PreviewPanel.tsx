@@ -61,6 +61,7 @@ import {
 import { promptBarInput, promptBarImage, focusPromptBar } from '$lib/stores/terminal';
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import { activeProject } from '$lib/stores/workspace';
+import { activeTheme } from '$lib/stores/theme';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 
 
@@ -71,6 +72,7 @@ type ViewportZoom = 'fit' | number;
 
 /** Which rows the console shows. 'log' means "everything that isn't an issue". */
 type ConsoleFilter = 'all' | 'error' | 'warn' | 'log';
+type PreviewThemeMode = 'system' | 'light' | 'dark';
 
 const DEFAULT_VIEWPORT = findPreset(DEFAULT_PHONE_PRESET) ?? VIEWPORT_PRESETS[0];
 
@@ -307,8 +309,16 @@ function getInspectorScript(): string {
   }, true);
   window.addEventListener('message', e => {
     if(e.source!==window.parent)return;
-    if((e.data||{}).type!=='forge-inspector:set')return;
-    setEnabled(Boolean(e.data.enabled));
+    const data = e.data || {};
+    if(data.type==='forge-preview:theme'){
+      const mode = data.theme==='light' ? 'light' : 'dark';
+      document.documentElement.dataset.spacronPreviewTheme = mode;
+      document.documentElement.style.colorScheme = mode;
+      window.dispatchEvent(new CustomEvent('spacron-preview-theme-change', { detail: { theme: mode } }));
+      return;
+    }
+    if(data.type!=='forge-inspector:set')return;
+    setEnabled(Boolean(data.enabled));
   });
   setEnabled(false);
 })();`;
@@ -326,6 +336,7 @@ export default function PreviewPanel() {
   const isConnectingValue = useStore(isConnecting);
   const browsingHistoryValue = useStore(browsingHistory);
   const project = useStore(activeProject);
+  const appThemeValue = useStore(activeTheme);
 
   const iframeElementsRef = useRef<Record<string, HTMLIFrameElement | undefined>>({});
   const previewContentRef = useRef<HTMLDivElement>(null);
@@ -337,6 +348,8 @@ export default function PreviewPanel() {
   const [inputUrl, setInputUrl] = useState(() => previewAddressBarValue(currentUrlValue));
   const [inspectMode, setInspectMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showPreviewThemeMenu, setShowPreviewThemeMenu] = useState(false);
+  const [previewThemeMode, setPreviewThemeMode] = useProjectPanelState<PreviewThemeMode>('preview.themeMode', 'system');
   // Responsive/device mode. The viewport is a plain rectangle of an exact
   // CSS-pixel size (what every browser's responsive mode does) — the page sees a
   // real 390px-wide viewport, so its media queries and vh units behave for real.
@@ -359,6 +372,12 @@ export default function PreviewPanel() {
   const [consoleQuery, setConsoleQuery] = useProjectPanelState('preview.consoleQuery', '');
   const [preserveConsoleLog, setPreserveConsoleLog] = useProjectPanelState('preview.preserveConsoleLog', false);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
+
+  const appThemeMode: 'light' | 'dark' =
+    appThemeValue?.type ??
+    (typeof document !== 'undefined' && document.documentElement.classList.contains('light-theme') ? 'light' : 'dark');
+  const effectivePreviewTheme: 'light' | 'dark' = previewThemeMode === 'system' ? appThemeMode : previewThemeMode;
+  const previewThemeLabel = previewThemeMode === 'system' ? `Follow app (${effectivePreviewTheme})` : previewThemeMode;
 
   // One slow-load timer per tab: a single shared timer meant navigating in one
   // tab cancelled another tab's pending "still loading" feedback.
@@ -460,6 +479,17 @@ export default function PreviewPanel() {
       return proxyPortForOrigin ? `http://127.0.0.1:${proxyPortForOrigin}` : null;
     },
     [localDevProxyPortsValue],
+  );
+
+  const getPreviewTargetOrigin = useCallback(
+    (tab: { url: string }): string | null => {
+      const normalized = normalizeUrl(tab.url);
+      if (normalized === 'about:blank') return null;
+      const localDev = parseLocalDevUrl(normalized);
+      if (localDev) return getLocalDevProxyOrigin(localDev);
+      return proxyPortRef.current ? `http://127.0.0.1:${proxyPortRef.current}` : null;
+    },
+    [getLocalDevProxyOrigin],
   );
 
   const buildIframeSrc = useCallback(
@@ -787,6 +817,30 @@ export default function PreviewPanel() {
     );
   }, [getActiveIframeElement, getLocalDevProxyOrigin]);
 
+  const postPreviewTheme = useCallback(
+    (tabId?: string) => {
+      const id = tabId ?? activeTabRef.current?.id;
+      const tab = (tabsRef.current || []).find((item) => item.id === id);
+      const iframe = id ? iframeElementsRef.current[id] : undefined;
+      if (!tab || !iframe?.contentWindow) return;
+      const targetOrigin = getPreviewTargetOrigin(tab);
+      if (!targetOrigin) return;
+      iframe.contentWindow.postMessage(
+        {
+          type: 'forge-preview:theme',
+          theme: effectivePreviewTheme,
+          parentOrigin: window.location.origin,
+        },
+        targetOrigin,
+      );
+    },
+    [effectivePreviewTheme, getPreviewTargetOrigin],
+  );
+
+  useEffect(() => {
+    for (const tab of tabs || []) postPreviewTheme(tab.id);
+  }, [tabs, postPreviewTheme]);
+
   // Inject the inspector script directly into the iframe when the proxy hasn't
   // done it (e.g. external URLs or proxy not yet ready).
   const injectInspectorIfNeeded = useCallback(() => {
@@ -913,8 +967,9 @@ export default function PreviewPanel() {
       if (activeTabRef.current?.id === tabId) {
         postInspectorState();
       }
+      postPreviewTheme(tabId);
     },
-    [updateTabLoadState, clearLoadFeedbackTimer, postInspectorState],
+    [updateTabLoadState, clearLoadFeedbackTimer, postInspectorState, postPreviewTheme],
   );
 
   const handleIframeError = useCallback(
@@ -1487,6 +1542,16 @@ export default function PreviewPanel() {
     return () => window.removeEventListener('click', handleWindowClickForHistory);
   }, [showHistory]);
 
+  useEffect(() => {
+    const handleWindowClickForPreviewTheme = (e: MouseEvent) => {
+      if (!showPreviewThemeMenu) return;
+      const target = e.target as HTMLElement;
+      if (!target.closest('.preview-theme-wrap')) setShowPreviewThemeMenu(false);
+    };
+    window.addEventListener('click', handleWindowClickForPreviewTheme);
+    return () => window.removeEventListener('click', handleWindowClickForPreviewTheme);
+  }, [showPreviewThemeMenu]);
+
   // When the user navigates to an external absolute URL, ensure the background
   // proxy server is running (for iframe embedding) but do NOT change proxyStarted.
   // proxyStarted only controls local dev server forwarding.
@@ -1530,7 +1595,11 @@ export default function PreviewPanel() {
   }, [currentUrlValue]);
 
   return (
-    <div className="preview-panel">
+    <div
+      className="preview-panel"
+      data-preview-theme-mode={effectivePreviewTheme}
+      data-preview-theme-source={previewThemeMode}
+    >
       <div className="preview-tabs">
         <div className="preview-tab-list" ref={tabListRef}>
           {(tabs || []).map((tab) => (
@@ -1662,6 +1731,89 @@ export default function PreviewPanel() {
               </span>
             )}
           </button>
+
+          <div className="preview-theme-wrap">
+            <button
+              className={`nav-btn preview-theme-btn${showPreviewThemeMenu ? ' active' : ''}`}
+              onClick={() =>
+                setPreviewThemeMode((previous) => {
+                  const current = previous === 'system' ? effectivePreviewTheme : previous;
+                  return current === 'dark' ? 'light' : 'dark';
+                })
+              }
+              title={`Switch preview theme (currently ${previewThemeLabel})`}
+              aria-label={`Switch preview theme (currently ${previewThemeLabel})`}
+            >
+              {effectivePreviewTheme === 'dark' ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              )}
+            </button>
+            <button
+              className={`nav-btn preview-theme-options-btn${showPreviewThemeMenu ? ' active' : ''}`}
+              onClick={() => setShowPreviewThemeMenu((previous) => !previous)}
+              title="Preview theme options"
+              aria-label="Preview theme options"
+              aria-expanded={showPreviewThemeMenu}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {showPreviewThemeMenu && (
+              <div className="preview-theme-menu" role="menu" aria-label="Preview theme">
+                <div className="preview-theme-menu-title">Preview theme</div>
+                <button
+                  className={`preview-theme-option${previewThemeMode === 'system' ? ' active' : ''}`}
+                  onClick={() => {
+                    setPreviewThemeMode('system');
+                    setShowPreviewThemeMenu(false);
+                  }}
+                  role="menuitemradio"
+                  aria-checked={previewThemeMode === 'system'}
+                >
+                  <span className="preview-theme-option-icon">⌘</span>
+                  <span>
+                    Follow app
+                    <small>{appThemeMode === 'dark' ? 'Dark right now' : 'Light right now'}</small>
+                  </span>
+                  {previewThemeMode === 'system' && <span className="preview-theme-check">✓</span>}
+                </button>
+                <button
+                  className={`preview-theme-option${previewThemeMode === 'light' ? ' active' : ''}`}
+                  onClick={() => {
+                    setPreviewThemeMode('light');
+                    setShowPreviewThemeMenu(false);
+                  }}
+                  role="menuitemradio"
+                  aria-checked={previewThemeMode === 'light'}
+                >
+                  <span className="preview-theme-option-icon">☼</span>
+                  <span>Light</span>
+                  {previewThemeMode === 'light' && <span className="preview-theme-check">✓</span>}
+                </button>
+                <button
+                  className={`preview-theme-option${previewThemeMode === 'dark' ? ' active' : ''}`}
+                  onClick={() => {
+                    setPreviewThemeMode('dark');
+                    setShowPreviewThemeMenu(false);
+                  }}
+                  role="menuitemradio"
+                  aria-checked={previewThemeMode === 'dark'}
+                >
+                  <span className="preview-theme-option-icon">◐</span>
+                  <span>Dark</span>
+                  {previewThemeMode === 'dark' && <span className="preview-theme-check">✓</span>}
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Screenshot */}
           <button

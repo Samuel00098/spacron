@@ -178,6 +178,146 @@
   color: var(--info);
 }
 
+/* The preview can be themed independently of the shell. These values are
+   intentionally scoped to the preview panel so choosing Light or Dark here
+   never changes the application theme. */
+.preview-panel[data-preview-theme-source='light'] {
+  color-scheme: light;
+  --bg-primary: #f8fafc;
+  --bg-secondary: #eef2f7;
+  --bg-tertiary: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --border: rgba(15, 23, 42, 0.14);
+  --bg-hover: rgba(15, 23, 42, 0.08);
+  --accent-light: rgba(124, 106, 247, 0.14);
+  background: #f8fafc;
+}
+
+.preview-panel[data-preview-theme-source='dark'] {
+  color-scheme: dark;
+  --bg-primary: #101116;
+  --bg-secondary: #181a22;
+  --bg-tertiary: #232633;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --border: rgba(226, 232, 240, 0.14);
+  --bg-hover: rgba(226, 232, 240, 0.1);
+  --accent-light: rgba(124, 106, 247, 0.2);
+  background: #101116;
+}
+
+.preview-panel[data-preview-theme-source='light'] .preview-tabs,
+.preview-panel[data-preview-theme-source='light'] .browser-bar,
+.preview-panel[data-preview-theme-source='dark'] .preview-tabs,
+.preview-panel[data-preview-theme-source='dark'] .browser-bar {
+  background: var(--bg-primary);
+}
+
+.preview-panel[data-preview-theme-source='light'] .preview-content,
+.preview-panel[data-preview-theme-source='dark'] .preview-content {
+  background: var(--bg-secondary);
+}
+
+.preview-theme-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.preview-theme-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.preview-theme-options-btn {
+  width: 16px;
+  margin-left: -4px;
+  border-radius: 0 6px 6px 0;
+}
+
+.preview-theme-btn + .preview-theme-options-btn {
+  border-left: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.preview-theme-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 80;
+  width: 188px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-primary) 96%, transparent);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.preview-theme-menu-title {
+  padding: 4px 8px 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.preview-theme-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.preview-theme-option:hover,
+.preview-theme-option.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.preview-theme-option > span:nth-child(2) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.preview-theme-option small {
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
+.preview-theme-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--accent);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.preview-theme-check {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .preview-panel .nav-btn.spinning svg { animation: spin 0.7s linear infinite; }
 

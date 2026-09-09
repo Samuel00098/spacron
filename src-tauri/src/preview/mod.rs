@@ -261,6 +261,27 @@ html, body {
   scroll-behavior: auto;
 }
 </style>"#;
+
+// Theme is a parent-controlled signal, not a forced rewrite of the preview
+// application's CSS. The namespaced data attribute, color-scheme, and custom
+// event let a preview opt into the mode without allowing the shell to mutate
+// arbitrary page styles across the iframe boundary.
+const PREVIEW_THEME_FLAG: &str = "spacron-preview-theme";
+const PREVIEW_THEME_SNIPPET: &str = r#"<script data-spacron-preview-theme>
+(() => {
+    if (window.__spacronPreviewTheme) return;
+    window.__spacronPreviewTheme = true;
+    window.addEventListener('message', (event) => {
+        if (event.source !== window.parent) return;
+        const data = event.data || {};
+        if (data.type !== 'forge-preview:theme') return;
+        const theme = data.theme === 'light' ? 'light' : 'dark';
+        document.documentElement.dataset.spacronPreviewTheme = theme;
+        document.documentElement.style.colorScheme = theme;
+        window.dispatchEvent(new CustomEvent('spacron-preview-theme-change', { detail: { theme } }));
+    });
+})();
+</script>"#;
 // Tiny, self-contained scroll-position bridge injected into *every* proxied HTML
 // page (local dev and external alike). The preview iframe is cross-origin to the
 // app, so the parent cannot read or set the document's scroll directly — this
@@ -2758,6 +2779,11 @@ async fn build_preview_response(
         // Likewise the media bridge — it is the only way the parent can see or
         // restore <video>/<audio> position across the origin boundary.
         let injected = inject_media_script(&injected);
+        // The parent shell controls the preview mode through a narrow,
+        // namespaced postMessage bridge. This is injected for local and
+        // external proxied pages alike; pages may opt into the data attribute
+        // or custom event without the shell rewriting their design.
+        let injected = inject_preview_theme_script(&injected);
         // Local dev pages need the location half of the nav rewriter (the link
         // rewriting half is pointless when the page is already same-origin with
         // the proxy). The meta carries the dev-server URL the proxy fetched, so
@@ -2869,6 +2895,24 @@ fn inject_inspector_script(html: &str) -> String {
     }
 
     if let Some(index) = html.rfind("</body>") {
+        let mut output = String::with_capacity(html.len() + injection.len() + 16);
+        output.push_str(&html[..index]);
+        output.push_str(&injection);
+        output.push_str(&html[index..]);
+        return output;
+    }
+
+    format!("{}{}", injection, html)
+}
+
+fn inject_preview_theme_script(html: &str) -> String {
+    if html.contains(PREVIEW_THEME_FLAG) || html.contains(PREVIEW_THEME_SNIPPET) {
+        return html.to_string();
+    }
+
+    let injection = format!("{}\n<!-- spacron-preview-theme -->", PREVIEW_THEME_SNIPPET);
+
+    if let Some(index) = html.rfind("</head>") {
         let mut output = String::with_capacity(html.len() + injection.len() + 16);
         output.push_str(&html[..index]);
         output.push_str(&injection);
@@ -3290,7 +3334,7 @@ mod tests {
         consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
         html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
         inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
-        inject_viewport_edge_style, local_file_error, preview_error_response,
+        inject_preview_theme_script, inject_viewport_edge_style, local_file_error, preview_error_response,
         proxy_request_allowed, wants_html_error,
         LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
     };
@@ -3371,6 +3415,17 @@ mod tests {
         assert!(injected.contains("margin: 0"));
         assert!(injected.contains("overscroll-behavior: none"));
         assert_eq!(inject_viewport_edge_style(&injected), injected);
+    }
+
+    #[test]
+    fn preview_theme_bridge_injects_into_head_and_is_idempotent() {
+        let html = "<!doctype html><html><head><title>t</title></head><body></body></html>";
+        let injected = inject_preview_theme_script(html);
+        let head_end = injected.find("</head>").unwrap();
+        assert!(injected[..head_end].contains("<script data-spacron-preview-theme>"));
+        assert!(injected.contains("forge-preview:theme"));
+        assert!(injected.contains("data-spacron-preview-theme"));
+        assert_eq!(inject_preview_theme_script(&injected), injected);
     }
 
     #[test]
