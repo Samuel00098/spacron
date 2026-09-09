@@ -1,13 +1,7 @@
 /**
- * A "live" indicator replacing manual refresh buttons: a pulsing dot plus the
- * cadence of the surface that owns it — a countdown to the next auto-refresh,
- * or a static "Live · updates every Ns" label where the cadence is too fast to
- * count down (the resource panel's 2s poll).
- *
- * The dot is a state-carrying loop, not decoration: while it pulses the data
- * on screen is being kept fresh without the user doing anything. It is
- * therefore exempted from the global reduced-motion freeze in global.css,
- * like the reconnect dot and the fleet status dot.
+ * A compact text status replacing manual refresh buttons: a countdown to the
+ * next auto-refresh, or a static "Live" label where the cadence is too fast to
+ * count down. Label-only tickers intentionally remain static text.
  */
 
 import { useEffect, useState } from 'react';
@@ -71,8 +65,7 @@ export default function LiveTicker({
 
   return (
     <span className={`live-ticker${labelOnly ? ' label-only' : ''}`} title={text}>
-      <i className="live-ticker-dot" aria-hidden="true" />
-      {text}
+      <span className="live-ticker-label">{text}</span>
     </span>
   );
 }

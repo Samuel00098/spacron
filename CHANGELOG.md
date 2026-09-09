@@ -3,6 +3,43 @@
 All notable changes to Spacron will be documented here.
 
 
+## [v4.0.0] - 2026-09-09
+
+Spacron 4.0 makes the desktop shell more intentional from the first screen onward. New projects open as blank workspaces, project tools have a clearer home in the sidebars, and the preview keeps its important controls available across responsive layouts. The release also brings theme-aware preview behavior and smoother shell interactions while preserving the saved layout and state of existing projects.
+
+### Added
+
+- **Blank project workspaces** — new local and remote projects now start without an inherited terminal, editor, room, or agent. A dedicated empty-workspace surface gives users a clear starting point, with agent access available on demand through the New Agent and Start with agents actions.
+- **Project-scoped workspace tools** — Files, Search, Source Control, Problems, Snapshots, Snippets, and related tools are organized in the project sidebar, while global workspace and room actions remain available from the main navigation. Sidebar tabs and tool state remain associated with the active project.
+- **A more focused agent entry point** — the New Agent action is available from the left sidebar, with the agent starter shown only where it applies to the current project instead of appearing as an unsolicited startup step.
+- **Preview theme sync and overrides** — the preview can follow the application theme or use its own Light/Dark override. The preview bridge now carries the selected theme into the rendered page while keeping the application chrome readable.
+- **Searchable appearance and interface settings** — Settings can be searched directly, with separate UI and editor font sizing, accent-color controls, built-in appearance previews, and custom background options. The UI scale is applied without unexpectedly changing the editor or terminal text size.
+- **Projects and workspaces management** — the Projects surface distinguishes standalone projects from grouped workspaces, supports creating, moving, collapsing, filtering, and removing entries, and shows the rooms, running sessions, and recent tasks associated with each project.
+- **Voice and transcription feedback** — the prompt bar and transcription indicator now expose listening, speaking, sleeping, and transcript activity more clearly, including word counts and a colored live spectrum meter.
+- **Interactive stage layouts** — split panes can be rearranged directly, layout controls adapt to the available space, and pane resizing keeps terminal dimensions synchronized after animated changes.
+- **Preview element handoff** — selected preview elements can be sent to the active agent as context, and transcription can target editable fields inside the preview when one is focused.
+
+### Changed
+
+- **Workspace navigation** — the left rail is focused on navigation and agent entry points, while project work tools live together in the right sidebar. Code Review and other utility actions are grouped with the tools where they are used.
+- **Responsive preview controls** — the address/search bar now occupies a dedicated full-width row below the browser and device controls, so it remains visible in narrow and intermediate layouts. The Dev control stays aligned to the far right and remains compact at small widths.
+- **Shell interaction and presentation** — panel expansion and the left sidebar open smoothly, the Spacron wordmark has a slightly larger treatment, and theme-aware surfaces keep the shell consistent across Light and Dark modes.
+- **Theme and background behavior** — custom wallpapers remain user-owned when switching between built-in Light and Dark appearances, while accent colors and readable foregrounds are recalculated for the active surface. Theme transitions and appearance previews are now consistent across the desktop shell and preview.
+- **Project dashboard presentation** — project cards expose active agents, terminals, rooms, and task status without requiring the project to be active first; workspace groups can be collapsed and their state is retained.
+- **Voice prompt layout** — voice controls, staged files/images, transcription state, and agent actions stay organized as the prompt bar changes between compact and expanded modes.
+
+### Fixed
+
+- **State leaking into new projects** — blank projects no longer restore stale rooms or running workspace surfaces from another project, while saved project layouts continue to restore when they exist.
+- **Cross-project tool state** — project-scoped tools and search state no longer silently follow the previous project when the active project changes.
+- **Preview controls disappearing on smaller layouts** — the search field and development control remain reachable when the preview switches to a compact viewport.
+- **UI scaling and terminal geometry** — changing interface size no longer distorts the intended editor/terminal font settings, and terminal panes receive a follow-up resize after layout or font transitions.
+- **Stale project summaries** — project cards can restore persisted task summaries and do not lose the visible history of projects that are not currently active.
+
+### Security
+
+- **Narrow preview bridges** — preview theme and input messages are accepted only from the expected preview source and origin, keeping cross-origin preview communication limited to the actions Spacron explicitly supports.
+
 ## [v3.0.2] - 2026-09-05
 
 Spacron 3.0.2 makes isolated agent worktrees safe to operate throughout their lifecycle. An isolated launch can no longer silently fall back to the main checkout, agent edits are snapshotted before review operations, and cleanup refuses to forget a checkout when Git cannot prove that it is safe to remove.

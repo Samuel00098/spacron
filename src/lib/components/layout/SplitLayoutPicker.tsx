@@ -362,16 +362,20 @@ export default function SplitLayoutPicker({
     if (!triggerEl.current) return;
     const r = triggerEl.current.getBoundingClientRect();
     const width = popoverEl.current?.offsetWidth ?? 220;
+    const height = popoverEl.current?.offsetHeight ?? 360;
 
     const left = Math.max(
       EDGE_MARGIN,
       Math.min(r.left, window.innerWidth - width - EDGE_MARGIN),
     );
 
+    const openBelow = r.top < height && window.innerHeight - r.bottom >= height;
     setPopoverStyle({
       position: 'fixed',
       left: `${left}px`,
-      bottom: `${Math.max(EDGE_MARGIN, window.innerHeight - r.top + GAP)}px`,
+      ...(openBelow
+        ? { top: `${Math.min(window.innerHeight - height - EDGE_MARGIN, r.bottom + GAP)}px` }
+        : { bottom: `${Math.max(EDGE_MARGIN, window.innerHeight - r.top + GAP)}px` }),
       zIndex: 1100,
     });
   }, []);

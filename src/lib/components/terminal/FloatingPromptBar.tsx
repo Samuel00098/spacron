@@ -10,9 +10,14 @@ import {
 } from '$lib/stores/terminal';
 import { showToast } from '$lib/stores/notification';
 import {
+  primeTranscriptionTargetTracking,
   startBarTranscription,
   transcriptionState,
+  transcriptionLevel,
+  transcriptionWordCount,
 } from '$lib/services/transcription-hotkey';
+import SpectrumVisualizer, { type SpectrumPhase } from './SpectrumVisualizer.tsx';
+import TranscriptionIndicator from './TranscriptionIndicator.tsx';
 import { createAltTapGesture } from '$lib/services/alt-tap-gesture';
 import {
   isRealtimeVoiceSupported,
@@ -140,6 +145,12 @@ interface FloatingPromptBarProps {
 export default function FloatingPromptBar({
   trailingControls,
 }: FloatingPromptBarProps = {}) {
+  useEffect(() => {
+    // Install before the bar's mic can steal focus from a page input inside
+    // Preview. The page focus bridge itself is delivered through this window.
+    primeTranscriptionTargetTracking();
+  }, []);
+
   const $activeProject = useStore(activeProject);
   const $orchestratorTasks = useStore(orchestratorTasks);
   const $chatMessages = useStore(chatMessages);
@@ -147,6 +158,8 @@ export default function FloatingPromptBar({
   const $promptBarImage = useStore(promptBarImage);
   const $promptBarFocusRequest = useStore(promptBarFocusRequest);
   const $promptBarVoiceModeRequest = useStore(promptBarVoiceModeRequest);
+  const $transcriptionLevel = useStore(transcriptionLevel);
+  const $transcriptionWordCount = useStore(transcriptionWordCount);
   // Read the live binding rather than hardcoding "F9" — the hint has to follow
   // whatever the user rebinds the dictation key to in Settings.
   const $shortcuts = useStore(userShortcuts);
@@ -183,6 +196,7 @@ export default function FloatingPromptBar({
   }, []);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
+  const [voicePhase, setVoicePhase] = useState<SpectrumPhase>('idle');
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
   // Alt-to-voice is a deliberate act: the shortcut only fires once the user has
@@ -429,6 +443,7 @@ export default function FloatingPromptBar({
     setVoiceSleeping(false);
     setIsListening(false);
     setIsRefining(false);
+    setVoicePhase('idle');
     // Null the session ref BEFORE stopping so the session's onEnded callback
     // (which fires from stop()) sees it gone and doesn't re-enter this teardown.
     const realtimeSession = realtimeSessionRef.current;
@@ -514,6 +529,7 @@ export default function FloatingPromptBar({
       agentVoiceModeActive.set(true);
       realtimeActiveRef.current = true;
       setIsRefining(true); // "thinking" orb while the call connects
+      setVoicePhase('thinking');
 
       const model = get(
         provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel
@@ -543,6 +559,7 @@ export default function FloatingPromptBar({
             instructions: REALTIME_VOICE_INSTRUCTIONS,
             callbacks: {
               onStateChange: (state) => {
+                setVoicePhase(state);
                 setIsRefining(state === 'connecting' || state === 'thinking');
                 setIsListening(state === 'listening');
               },
@@ -1214,13 +1231,13 @@ export default function FloatingPromptBar({
 
   return (
     <div
-      className={`floating-prompt-shell ${isActive ? 'active' : 'collapsed'}`}
+      className={`floating-prompt-shell ${isActive ? 'active' : 'collapsed'}${isVoiceActive ? ' voice-active' : ''}${transcribing ? ' transcribing' : ''}`}
       ref={shellElRef}
     >
       {isActive && (
         <>
           <div
-            className={`floating-prompt-bar agent-mode${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isVoiceActive ? ' voice-active' : ''}`}
+            className={`floating-prompt-bar agent-mode${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isVoiceActive ? ' voice-active' : ''}${transcribing ? ' transcribing' : ''}`}
             id="floating-prompt-bar"
             ref={barElRef}
             onDragEnter={handleInternalDragEnter}
@@ -1251,138 +1268,73 @@ export default function FloatingPromptBar({
                 Drop file to add as context
               </div>
             )}
-            {isVoiceActive && (
-              <div className="voice-mode-inner">
-                <div className="voice-mode-row">
-                  <div
-                    className={`orb-wrap ${
-                      voiceSleeping
-                        ? 'sleeping'
-                        : isListening
+            {isVoiceActive ? (
+              /* --- VOICE MODE: Redesigned floating pill with dynamic spectrum --- */
+              <div className="voice-spectrum-pill">
+                <div
+                  className={`voice-pill-indicator ${
+                    voiceSleeping
+                      ? 'sleeping'
+                      : voicePhase === 'speaking'
+                        ? 'speaking'
+                        : voicePhase === 'listening'
                           ? 'listening'
-                          : isRefining || agentSending
-                            ? 'thinking'
-                            : 'idle'
-                    }`}
-                  >
-                    {isListening && (
-                      <>
-                        <div className="voice-ring voice-ring-a"></div>
-                        <div className="voice-ring voice-ring-b"></div>
-                      </>
-                    )}
-                    <div className="orb">
-                      {voiceSleeping ? (
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                        </svg>
-                      ) : isListening ? (
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                          <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                          <line x1="12" x2="12" y1="19" y2="22" />
-                        </svg>
-                      ) : isRefining || agentSending ? (
-                        <svg
-                          className="spin"
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                        >
-                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                        </svg>
-                      ) : (
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                          <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
-                          <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-
-                  <div
-                    className={`voice-eq ${
-                      isListening
-                        ? 'listening'
-                        : isRefining || agentSending
-                          ? 'thinking'
-                          : 'idle'
-                    }`}
-                  >
-                    {Array.from({ length: 16 }).map((_, i) => {
-                      const c = (16 - 1) / 2;
-                      const d = Math.abs(i - c) / c;
-                      return (
-                        <div
-                          key={i}
-                          className="voice-eq-bar"
-                          style={
-                            {
-                              '--dur': `${280 + ((i * 137) % 420)}ms`,
-                              '--dly': `${(i * 83) % 360}ms`,
-                              '--max': (0.22 + (1 - d * d) * 0.78).toFixed(2),
-                            } as React.CSSProperties
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-
-                  <button
-                    className="voice-close-btn"
-                    onClick={stopAgentVoice}
-                    aria-label="End voice mode"
-                    title="End voice mode"
-                  >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
+                          : 'thinking'
+                  }`}
+                  title={
+                    voiceSleeping
+                      ? 'Sleeping (say "wake up" to resume)'
+                      : voicePhase === 'speaking'
+                        ? 'Speaking…'
+                        : voicePhase === 'listening'
+                          ? 'Listening…'
+                          : 'Thinking…'
+                  }
+                >
+                  <span className="voice-indicator-dot" />
+                  <span className="voice-indicator-text">
+                    {voiceSleeping
+                      ? 'Sleeping'
+                      : voicePhase === 'speaking'
+                        ? 'Speaking'
+                        : voicePhase === 'listening'
+                          ? 'Listening'
+                          : 'Thinking'}
+                  </span>
                 </div>
+
+                <div className="voice-spectrum-track">
+                  <SpectrumVisualizer
+                    phase={voiceSleeping ? 'sleeping' : voicePhase}
+                    barCount={32}
+                    glow={true}
+                    height={32}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="voice-pill-close-btn"
+                  onClick={stopAgentVoice}
+                  aria-label="End voice mode"
+                  title="End voice mode (Esc)"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
-            )}
-            {!voiceModeActive && (
+            ) : (
+              /* --- NORMAL & TRANSCRIBING MODE --- */
               <>
                 <button
                   className={`voice-toggle agent-voice${transcribing ? ' listening' : ''}`}
@@ -1428,271 +1380,190 @@ export default function FloatingPromptBar({
                     </svg>
                   )}
                 </button>
+
+                <div className="prompt-copy">
+                  <div className="prompt-meta">
+                    {hasStagedContent && (
+                      <div className="staged-prompt">
+                        <span className="staged-prompt-label">Staged</span>
+                        <p
+                          className="staged-prompt-text"
+                          title={inputValue || undefined}
+                        >
+                          {hasPromptText
+                            ? inputValue
+                            : `${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}`}
+                        </p>
+                        <div className="staged-prompt-actions">
+                          <button
+                            type="button"
+                            className="staged-prompt-btn send"
+                            onClick={sendStagedPrompt}
+                            disabled={!canSend}
+                            title={
+                              canSend
+                                ? 'Send to the agent'
+                                : 'Open a project to send'
+                            }
+                          >
+                            Send
+                          </button>
+                          <button
+                            type="button"
+                            className="staged-prompt-btn clear"
+                            onClick={clearStagedPrompt}
+                            title="Discard"
+                            aria-label="Discard staged prompt"
+                          >
+                            <svg
+                              width="9"
+                              height="9"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                            >
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {transcribing ? (
+                      <div className="transcribe-pill-inner">
+                        <div className="transcribe-spectrum-track">
+                          <SpectrumVisualizer
+                            phase="listening"
+                            audioLevel={$transcriptionLevel}
+                            barCount={18}
+                            glow={true}
+                            height={24}
+                          />
+                        </div>
+                        <div className="transcribe-pill-info">
+                          <span className="transcribe-live-badge">Listening…</span>
+                          {$transcriptionWordCount > 0 && (
+                            <span className="transcribe-word-count">
+                              {$transcriptionWordCount} word{$transcriptionWordCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                          <span className="transcribe-pill-hint">
+                            <kbd>{transcribeKey}</kbd> to send · <kbd>Esc</kbd>
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="transcript-empty">
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                          <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
+                          <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                        </svg>
+                        <span>
+                          <kbd>{transcribeKey}</kbd> or mic = dictate into the
+                          text input
+                          {' · '}
+                          <kbd>Alt</kbd> = voice conversation
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {pastedImages.length > 0 && (
+                    <div className="image-chips">
+                      {pastedImages.map((img, i) => (
+                        <div className="image-chip" key={img.objectUrl}>
+                          <img
+                            src={img.objectUrl}
+                            alt="Pasted image"
+                            className="chip-thumb"
+                            onClick={() => setExpandedImage(img.objectUrl)}
+                            title="Click to view full size"
+                          />
+                          <button
+                            className="chip-remove"
+                            onClick={() => removeImage(i)}
+                            title="Remove image"
+                            aria-label="Remove image"
+                          >
+                            <svg
+                              width="7"
+                              height="7"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3.5"
+                              strokeLinecap="round"
+                            >
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {pastedFiles.length > 0 && (
+                    <div className="file-chips">
+                      {pastedFiles.map((file, i) => (
+                        <div className="file-chip" key={file.path}>
+                          <svg
+                            className="file-chip-icon"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                          </svg>
+                          <span className="file-chip-name" title={file.path}>
+                            {file.name}
+                          </span>
+                          <button
+                            className="chip-remove"
+                            onClick={() => removeFile(i)}
+                            title="Remove file"
+                            aria-label="Remove file"
+                          >
+                            <svg
+                              width="7"
+                              height="7"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3.5"
+                              strokeLinecap="round"
+                            >
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </>
             )}
-
-            <div className="prompt-copy">
-              <div className="prompt-meta">
-                {/* Text handed over from elsewhere in the app (Preview's "add
-                    element to prompt", a spawned agent's goal). It has no text
-                    box to sit in, so it is shown here — send it as it stands, or
-                    speak and the transcript is merged onto it. */}
-                {hasStagedContent && (
-                  <div className="staged-prompt">
-                    <span className="staged-prompt-label">Staged</span>
-                    <p
-                      className="staged-prompt-text"
-                      title={inputValue || undefined}
-                    >
-                      {hasPromptText
-                        ? inputValue
-                        : `${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}`}
-                    </p>
-                    <div className="staged-prompt-actions">
-                      <button
-                        type="button"
-                        className="staged-prompt-btn send"
-                        onClick={sendStagedPrompt}
-                        disabled={!canSend}
-                        title={
-                          canSend
-                            ? 'Send to the agent'
-                            : 'Open a project to send'
-                        }
-                      >
-                        Send
-                      </button>
-                      <button
-                        type="button"
-                        className="staged-prompt-btn clear"
-                        onClick={clearStagedPrompt}
-                        title="Discard"
-                        aria-label="Discard staged prompt"
-                      >
-                        <svg
-                          width="9"
-                          height="9"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3"
-                          strokeLinecap="round"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {/* "Now playing" — one moment at a time, no history */}
-                <div className="voice-transcript" ref={transcriptElRef}>
-                  {(() => {
-                    // Only show content while voice mode is active;
-                    // clears to the idle hint as soon as voice ends.
-                    if (!voiceModeActive) {
-                      // Transcription mode's live state shows here too: the
-                      // service owns the capture, the bar just mirrors it.
-                      if (transcribing) {
-                        return (
-                          <p className="transcript-now user draft">
-                            Listening… <kbd>{transcribeKey}</kbd> or{' '}
-                            <kbd>Esc</kbd> to finish
-                            {' · '}
-                            <kbd>Ctrl</kbd>+<kbd>Esc</kbd> to discard
-                          </p>
-                        );
-                      }
-                      return (
-                        <div className="transcript-empty">
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
-                          >
-                            <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
-                            <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
-                          </svg>
-                          <span>
-                            <kbd>{transcribeKey}</kbd> or mic = dictate into the
-                            text input
-                            {' · '}
-                            <kbd>Alt</kbd> = voice conversation
-                          </span>
-                        </div>
-                      );
-                    }
-                    // 1. Voice is sleeping — show moon icon and hint
-                    if (voiceSleeping) {
-                      return (
-                        <div className="transcript-now sleeping">
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                          </svg>
-                          <span>
-                            Sleeping. Say &ldquo;wake up&rdquo; to resume.
-                          </span>
-                        </div>
-                      );
-                    }
-                    // 2. Assistant message exists — show it (also reached while
-                    //    the call listens, so the reply stays readable until the
-                    //    user starts the next turn)
-                    const lastMsg = projectChatMessages.at(-1);
-                    if (lastMsg?.role === 'assistant') {
-                      if (lastMsg.pending) {
-                        return (
-                          <span className="orc-typing">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        );
-                      }
-                      if (lastMsg.completion) {
-                        const icon =
-                          lastMsg.completion.status === 'done'
-                            ? '✅'
-                            : lastMsg.completion.status === 'failed'
-                              ? '❌'
-                              : '⚠️';
-                        const verb =
-                          lastMsg.completion.status === 'done'
-                            ? 'finished'
-                            : lastMsg.completion.status === 'failed'
-                              ? 'failed'
-                              : 'needs input';
-                        return (
-                          <p className="transcript-now assistant">
-                            {icon}{' '}
-                            {formatAgentIdentity(lastMsg.completion.agentName, lastMsg.completion.agentType)}{' '}
-                            {verb}:{' '}
-                            {lastMsg.completion.taskTitle}
-                          </p>
-                        );
-                      }
-                      const displayText = stripMarkdown(
-                        lastMsg.text.split('\n\n🔍')[0]
-                      );
-                      return (
-                        <p className="transcript-now assistant">
-                          {displayText}
-                        </p>
-                      );
-                    }
-                    // 3. Mic open but nothing said yet / no message yet
-                    if (isListening) {
-                      return (
-                        <p className="transcript-now user draft">Listening…</p>
-                      );
-                    }
-                    return (
-                      <span className="orc-typing">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {pastedImages.length > 0 && (
-                <div className="image-chips">
-                  {pastedImages.map((img, i) => (
-                    <div className="image-chip" key={img.objectUrl}>
-                      <img
-                        src={img.objectUrl}
-                        alt="Pasted image"
-                        className="chip-thumb"
-                        onClick={() => setExpandedImage(img.objectUrl)}
-                        title="Click to view full size"
-                      />
-                      <button
-                        className="chip-remove"
-                        onClick={() => removeImage(i)}
-                        title="Remove image"
-                        aria-label="Remove image"
-                      >
-                        <svg
-                          width="7"
-                          height="7"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {pastedFiles.length > 0 && (
-                <div className="file-chips">
-                  {pastedFiles.map((file, i) => (
-                    <div className="file-chip" key={file.path}>
-                      <svg
-                        className="file-chip-icon"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                      <span className="file-chip-name" title={file.path}>
-                        {file.name}
-                      </span>
-                      <button
-                        className="chip-remove"
-                        onClick={() => removeFile(i)}
-                        title="Remove file"
-                        aria-label="Remove file"
-                      >
-                        <svg
-                          width="7"
-                          height="7"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
 
             {/* Layout and Tools stay put in voice mode: they sit at the tail of
                 the bar either way, so switching modes never shuffles them. */}
@@ -1728,6 +1599,8 @@ export default function FloatingPromptBar({
           )}
         </button>
       )}
+
+      <TranscriptionIndicator />
 
       {expandedImage && (
         <div

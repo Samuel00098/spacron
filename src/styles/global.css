@@ -16,6 +16,10 @@
 :root {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', Consolas, monospace;
+  /* Application chrome scale. Editor and terminal components set their own
+     typography and are intentionally not driven by this value. */
+  --ui-font-size: 14px;
+  --ui-font-scale: 1;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
@@ -264,8 +268,8 @@ html.bg-palette-light:not(.has-bg-media) {
 :root {
   /* ── Core Palette ───────────────────────── */
   --bg-primary:      #000000;
-  --bg-secondary:    #08080a;
-  --bg-tertiary:     #121215;
+  --bg-secondary:    #141416;
+  --bg-tertiary:     #1e1e22;
   --bg-hover:        rgba(255, 255, 255, 0.05);
   --bg-active:       rgba(255, 255, 255, 0.09);
   --bg-glass:        rgba(255, 255, 255, 0.02);
@@ -299,7 +303,7 @@ html.bg-palette-light:not(.has-bg-media) {
   --role-reviewer:   #22d3ee;
 
   /* ── Borders & Surfaces ─────────────────── */
-  --border:          rgba(255, 255, 255, 0.08);
+  --border:          rgba(255, 255, 255, 0.07);
   --border-subtle:   rgba(255, 255, 255, 0.04);
   --focus-ring:      rgba(255, 255, 255, 0.45);
   --border-focus:    var(--focus-ring);
@@ -337,17 +341,17 @@ html.bg-palette-light:not(.has-bg-media) {
   --terminal-surface-rgb: 0, 0, 0;
 
   /* ── TitleBar ───────────────────────────── */
-  --titlebar-bg:     #08080a;
+  --titlebar-bg:     #141416;
   --titlebar-text:   #ffffff;
-  --titlebar-border: rgba(255, 255, 255, 0.05);
+  --titlebar-border: rgba(255, 255, 255, 0.06);
 
   /* ── Activity Bar ───────────────────────── */
-  --activitybar-bg:        #08080a;
-  --activitybar-border:    rgba(255, 255, 255, 0.05);
+  --activitybar-bg:        #141416;
+  --activitybar-border:    rgba(255, 255, 255, 0.06);
 
   /* ── Sidebar ────────────────────────────── */
-  --sidebar-bg:      #08080a;
-  --sidebar-border:  rgba(255, 255, 255, 0.06);
+  --sidebar-bg:      #141416;
+  --sidebar-border:  rgba(255, 255, 255, 0.07);
 
   /* ── Editor ─────────────────────────────── */
   --editor-bg:       #000000;
@@ -355,17 +359,17 @@ html.bg-palette-light:not(.has-bg-media) {
 
   /* ── Tabs ───────────────────────────────── */
   --tab-active-bg:   #000000;
-  --tab-inactive-bg: #08080a;
-  --tab-border:      rgba(255, 255, 255, 0.06);
+  --tab-inactive-bg: #141416;
+  --tab-border:      rgba(255, 255, 255, 0.07);
 
   /* ── Panel / Terminal ───────────────────── */
   --panel-bg:        #000000;
-  --panel-border:    rgba(255, 255, 255, 0.06);
+  --panel-border:    rgba(255, 255, 255, 0.07);
   --terminal-bg:     #000000;
 
   /* ── Input / Form ───────────────────────── */
-  --input-bg:        #0d0d10;
-  --input-border:    rgba(255, 255, 255, 0.12);
+  --input-bg:        #18181c;
+  --input-border:    rgba(255, 255, 255, 0.10);
   --input-focus-border: var(--focus-ring);
 
   /* ── Buttons ────────────────────────────── */
@@ -374,8 +378,8 @@ html.bg-palette-light:not(.has-bg-media) {
   --button-text:     var(--on-accent);
 
   /* ── Status Bar ─────────────────────────── */
-  --statusbar-bg:    #08080a;
-  --statusbar-border:rgba(255, 255, 255, 0.05);
+  --statusbar-bg:    #141416;
+  --statusbar-border:rgba(255, 255, 255, 0.06);
   --statusbar-text:  #a1a1aa;
 
   /* ── Syntax ─────────────────────────────── */
@@ -455,15 +459,15 @@ html.bg-palette-light:not(.has-bg-media) {
 
 .theme-transitioning,
 .theme-transitioning * {
-  transition: background-color var(--dur-base) var(--ease-standard),
-    background       var(--dur-base) var(--ease-standard),
-    border-color     var(--dur-base) var(--ease-standard),
-    box-shadow       var(--dur-base) var(--ease-standard),
-    color            var(--dur-base) var(--ease-standard),
-    stroke           var(--dur-base) var(--ease-standard),
-    fill             var(--dur-base) var(--ease-standard),
-    outline-color    var(--dur-base) var(--ease-standard),
-    caret-color      var(--dur-base) var(--ease-standard) !important;
+  transition: background-color 420ms var(--ease-standard),
+    background       420ms var(--ease-standard),
+    border-color     420ms var(--ease-standard),
+    box-shadow       420ms var(--ease-standard),
+    color            420ms var(--ease-standard),
+    stroke           420ms var(--ease-standard),
+    fill             420ms var(--ease-standard),
+    outline-color    420ms var(--ease-standard),
+    caret-color      420ms var(--ease-standard) !important;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -482,9 +486,9 @@ html {
 body::before {
   content: '';
   position: fixed;
-  /* Overscan by the blur radius so blurred edges never reveal a transparent
-     fringe at the window border. */
-  inset: calc(-3 * var(--user-bg-blur, 0px));
+  /* Keep the wallpaper's cover frame fixed. Blur changes the image pixels, not
+     the layout box, so increasing blur does not make the image look zoomed in. */
+  inset: 0;
   z-index: -2;
   background-image: var(--user-bg-image, none);
   background-size: cover;
@@ -535,14 +539,9 @@ html.has-bg-media body::after {
      Readability now rests on the panels' own backdrop blur and the text halo
      rules further down, not on this wash. */
   background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.10) !important;
-  /* The accent "halo" blooms from the base rule above wash big soft circles of
-     theme colour across the wallpaper. With an image active they read as a
-     coloured haze over it, so cut them to about a third here — the no-image
-     liquid-glass look keeps its full-strength blooms. */
-  background-image:
-    radial-gradient(135% 115% at 10% -12%, color-mix(in srgb, var(--accent) 6%, transparent) 0%, transparent 50%),
-    radial-gradient(120% 100% at 100% 0%, color-mix(in srgb, var(--accent-hover, var(--accent)) 4%, transparent) 0%, transparent 48%),
-    radial-gradient(110% 130% at 50% 118%, color-mix(in srgb, var(--accent) 3%, transparent) 0%, transparent 60%);
+  /* Keep the wallpaper neutral: accent colour belongs to controls and focus
+     states, never to the image or page-level background wash. */
+  background-image: none;
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -619,14 +618,10 @@ body::after {
   position: fixed;
   inset: 0;
   z-index: -1;
-  /* Liquid-glass frosted base: deeper blur, richer saturation, and layered
-     accent blooms that create a luminous depth effect. The subtle gradient
-     overlay adds the "liquid" sheen — a hallmark of Apple's glass aesthetic. */
+  /* Liquid-glass frosted base: the neutral wash preserves the selected solid
+     theme or image without allowing the user accent to bleed into it. */
   background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-base, 0.48));
   background-image:
-    radial-gradient(135% 115% at 10% -12%, color-mix(in srgb, var(--accent) 18%, transparent) 0%, transparent 50%),
-    radial-gradient(120% 100% at 100% 0%, color-mix(in srgb, var(--accent-hover, var(--accent)) 12%, transparent) 0%, transparent 48%),
-    radial-gradient(110% 130% at 50% 118%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, transparent 50%, rgba(255, 255, 255, 0.01) 100%);
   pointer-events: none;
   transition: background-color var(--dur-slow) var(--ease-standard);
@@ -1142,14 +1137,14 @@ input:focus {
 .usage-dock,
 .inbox-panel,
 .floating-youtube {
-  --panel-edge-w: 2px;
+  --panel-edge-w: 1px;
   --panel-edge-lap: 7s;
   /* The accent is a graphite, not a hue (see
      `.spacron/memory/accent-and-icon-treatment.md`), so this reads as a light
      sweeping the rim rather than a coloured chase. */
-  --panel-edge-core: color-mix(in srgb, var(--accent) 45%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 18%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.08);
+  --panel-edge-core: color-mix(in srgb, var(--accent) 14%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 5%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.04);
 }
 
 :root.light-theme .app-shell .room-panel,
@@ -1163,7 +1158,7 @@ input:focus {
 :root.light-theme .floating-youtube {
   /* The accent is a dark slate in light themes, so the light itself flips to
      dark automatically — only the always-on base ring has to be told. */
-  --panel-edge-base: rgba(0, 0, 0, 0.06);
+  --panel-edge-base: rgba(0, 0, 0, 0.04);
 }
 
 /* The project HUD is deliberately absent from this list: it is a full-attention
@@ -1271,7 +1266,7 @@ input:focus {
 .floating-youtube,
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar {
-  --panel-edge-w: 1.5px;
+  --panel-edge-w: 1px;
   --panel-edge-lap: 9s;
 }
 
@@ -1284,7 +1279,7 @@ input:focus {
     color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
   border-radius: var(--bento-radius, 16px);
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
@@ -1477,7 +1472,6 @@ textarea,
   .orc-typing-sm span,
   .rs-dot.rs-reconnecting,
   .fc-status-dot,
-  .live-ticker-dot,
   .orb,
   .voice-ring,
   .voice-eq-bar,

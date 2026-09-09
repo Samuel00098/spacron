@@ -131,8 +131,11 @@ export function hasBackgroundImage(): boolean {
 
 /** The active theme's own wallpaper, when it declares one. */
 function activeThemeBackground(): string | null {
-  const theme = (useThemeStore.getState() as { activeTheme?: { backgroundImage?: string } })
+  const theme = (useThemeStore.getState() as { activeTheme?: { id?: string; backgroundImage?: string } })
     .activeTheme;
+  // Forge Light/Dark are solid monochrome modes. Ignore wallpaper fields that
+  // may have been persisted by an older build.
+  if (theme?.id === 'forge-light' || theme?.id === 'forge-dark') return null;
   return theme?.backgroundImage || null;
 }
 
@@ -149,9 +152,11 @@ export function userBackgroundActive(): boolean {
 export function applyBackgroundImage(): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
+  const theme = useThemeStore.getState().activeTheme;
+  // A custom wallpaper belongs to the user, not to a preset theme. It remains
+  // available when switching between the solid Light and Dark appearances.
   const active = userBackgroundActive();
   const version = ++backgroundAppearanceVersion;
-  const theme = useThemeStore.getState().activeTheme;
   const themeType = theme?.type ?? 'dark';
 
   if (active) {

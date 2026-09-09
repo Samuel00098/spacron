@@ -98,7 +98,7 @@
 .hdv-hunk-action:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--accent-color, var(--border));
+  border-color: var(--accent);
 }
 
 .hdv-hunk-action:disabled {
@@ -142,8 +142,8 @@
 /* A ticked line is what "Stage selection" will take, so it has to be legible at
    a glance against both the green and the red row backgrounds. */
 .hdv-line.selected {
-  background: var(--accent-soft, rgba(96, 165, 250, 0.22));
-  border-left-color: var(--accent-color, #60a5fa);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 22%, transparent));
+  border-left-color: var(--accent);
 }
 
 .hdv-gutter {

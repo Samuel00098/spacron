@@ -2099,6 +2099,26 @@ export function isAgentSession(session: TerminalSessionInfo | null | undefined):
   return Boolean(session.agentPreset);
 }
 
+/**
+ * Resolve the agent input that should receive context injected by another
+ * surface, such as Preview's element inspector. Prefer the explicitly focused
+ * agent, then the active pane's agent, and finally the most recently activated
+ * running agent in the current project. Shell sessions are never targeted.
+ */
+export function getActiveAgentSessionId(): number | null {
+  const candidates = [...get(sessions), ...get(devSessions)].filter(
+    (session) => session.isRunning && isAgentSession(session),
+  );
+  if (candidates.length === 0) return null;
+
+  const candidateIds = new Set(candidates.map((session) => session.id));
+  for (const preferredId of [get(manualPromptTargetId), get(activeSessionId), get(devActiveSessionId)]) {
+    if (preferredId !== null && candidateIds.has(preferredId)) return preferredId;
+  }
+
+  return [...candidates].sort((a, b) => (b.lastActivatedAt ?? 0) - (a.lastActivatedAt ?? 0))[0]?.id ?? null;
+}
+
 const RUNNING_PROCESS_ROLES = new Set(['server', 'build']);
 
 export function sessionHasRunningProcess(session: TerminalSessionInfo | null | undefined): boolean {

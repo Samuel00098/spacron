@@ -33,12 +33,13 @@
 .titlebar .titlebar-brand {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 10px 0 14px;
+  gap: 8px;
+  padding: 0 12px 0 14px;
   -webkit-app-region: no-drag;
   app-region: no-drag;
   z-index: 2;
   flex-shrink: 0;
+  cursor: default;
 }
 
 .titlebar .titlebar-icon {
@@ -60,10 +61,16 @@
 }
 
 .titlebar .titlebar-name {
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--titlebar-text);
-  letter-spacing: 0.3px;
+  color: var(--titlebar-text, #ffffff);
+  letter-spacing: -0.2px;
+  line-height: 1;
+  opacity: 0.92;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Navigation buttons */
@@ -125,6 +132,93 @@
 }
 
 
+
+.titlebar .titlebar-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  max-width: 260px;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
+}
+
+.titlebar .titlebar-project-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.titlebar .titlebar-project-pill:active {
+  transform: scale(0.98);
+}
+
+.titlebar .titlebar-project-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.titlebar .titlebar-project-pill:hover .titlebar-project-icon {
+  color: var(--accent);
+}
+
+.titlebar .titlebar-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+
+.titlebar .titlebar-project-chevron {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  opacity: 0.6;
+  flex-shrink: 0;
+  margin-left: 1px;
+}
+
+.titlebar .titlebar-project-pill:hover .titlebar-project-chevron {
+  opacity: 1;
+}
+
+.titlebar .titlebar-project-pill.empty {
+  border-style: dashed;
+  color: var(--text-muted);
+  gap: 8px;
+}
+
+.titlebar .titlebar-project-pill.empty:hover {
+  border-style: solid;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.titlebar .titlebar-project-kbd {
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
 
 .titlebar .titlebar-no-project {
   font-size: 12.5px;

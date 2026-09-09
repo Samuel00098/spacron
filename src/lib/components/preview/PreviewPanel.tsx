@@ -58,7 +58,7 @@ import {
   saveScrollPosition,
   getScrollPosition,
 } from '$lib/stores/previewHistory';
-import { promptBarInput, promptBarImage, focusPromptBar } from '$lib/stores/terminal';
+import { promptBarImage, focusPromptBar, getActiveAgentSessionId, requestTerminalInput } from '$lib/stores/terminal';
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import { activeProject } from '$lib/stores/workspace';
 import { activeTheme } from '$lib/stores/theme';
@@ -183,13 +183,10 @@ function normalizeUrl(url: string): string {
     return 'https://' + trimmed;
   }
 
-  // Search if it doesn't look like a URL. Use DuckDuckGo's server-rendered HTML
-  // endpoint (html.duckduckgo.com/html), NOT the main duckduckgo.com SPA: the
-  // SPA fetches results via cross-origin XHR to links.duckduckgo.com, which the
-  // path-rewriting preview proxy can't serve, so the results page stays blank.
-  // The HTML endpoint returns plain <a> links that navigate fine through the
-  // proxy. (Google CAPTCHAs proxied requests, so it's unusable here.)
-  return 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(trimmed);
+  // Search if it doesn't look like a URL. Use Brave Search's server-rendered
+  // results page so the preview gets useful content without depending on a
+  // client-side search app or cross-origin result requests.
+  return 'https://search.brave.com/search?q=' + encodeURIComponent(trimmed);
 }
 
 function isAbsoluteUrl(url: string): boolean {
@@ -267,7 +264,7 @@ function getInspectorScript(): string {
   const ensureOverlay = () => {
     if (overlay) return;
     overlay = document.createElement('div');
-    Object.assign(overlay.style, { position:'fixed', pointerEvents:'none', zIndex:'2147483646', border:'2px solid #7c6af7', background:'rgba(124,106,247,0.12)', borderRadius:'4px', boxSizing:'border-box', display:'none' });
+    Object.assign(overlay.style, { position:'fixed', pointerEvents:'none', zIndex:'2147483646', border:'2px solid var(--accent)', background:'color-mix(in srgb, var(--accent) 12%, transparent)', borderRadius:'4px', boxSizing:'border-box', display:'none' });
     label = document.createElement('div');
     Object.assign(label.style, { position:'fixed', zIndex:'2147483647', padding:'6px 8px', borderRadius:'999px', background:'rgba(16,16,20,0.92)', color:'#fff', font:'12px system-ui,sans-serif', pointerEvents:'none', display:'none' });
     document.documentElement.appendChild(overlay);
@@ -312,8 +309,14 @@ function getInspectorScript(): string {
     const data = e.data || {};
     if(data.type==='forge-preview:theme'){
       const mode = data.theme==='light' ? 'light' : 'dark';
-      document.documentElement.dataset.spacronPreviewTheme = mode;
-      document.documentElement.style.colorScheme = mode;
+      const root = document.documentElement;
+      root.dataset.spacronPreviewTheme = mode;
+      root.classList.toggle('spacron-preview-theme-light', mode === 'light');
+      root.classList.toggle('spacron-preview-theme-dark', mode === 'dark');
+      root.style.colorScheme = mode;
+      root.style.setProperty('--spacron-preview-theme', mode);
+      if (document.body) document.body.style.colorScheme = mode;
+      (window as Window & { spacronPreviewTheme?: 'light' | 'dark' }).spacronPreviewTheme = mode;
       window.dispatchEvent(new CustomEvent('spacron-preview-theme-change', { detail: { theme: mode } }));
       return;
     }
@@ -933,22 +936,22 @@ export default function PreviewPanel() {
     [getActiveIframeElement],
   );
 
-  const addElementToPrompt = useCallback(
-    async (info: SelectedElementInfo) => {
-      const text = buildElementPrompt(info).trim();
-      const dataUrl = await captureElementScreenshot(info);
-      if (text) promptBarInput.set(text);
-      if (dataUrl) {
-        const tag = info.tag.toLowerCase();
-        addImageToPrompt(dataUrl, `element-${tag}-${Date.now()}.png`);
-        showToast('Element and screenshot added to prompt bar', 'success');
-      } else if (text) {
-        showToast('Element added, but screenshot capture failed', 'warning');
-      }
-      revealPromptBar();
-    },
-    [captureElementScreenshot, addImageToPrompt, revealPromptBar],
-  );
+  const addElementToAgent = useCallback((info: SelectedElementInfo) => {
+    const text = buildElementPrompt(info).trim();
+    const sessionId = getActiveAgentSessionId();
+    if (!text) return;
+    if (sessionId === null) {
+      showToast('No active agent input is available', 'warning');
+      return;
+    }
+
+    // This deliberately sends only text to the focused agent's xterm input.
+    // It does not submit the message, create a screenshot attachment, or stage
+    // anything in the voice-only floating prompt bar.
+    requestTerminalInput(sessionId, text);
+    setSelectedElementInfo(null);
+    showToast('Element added to the active agent input', 'success');
+  }, []);
 
   const handleIframeLoad = useCallback(
     (tabId: string) => {
@@ -1002,6 +1005,47 @@ export default function PreviewPanel() {
       const sourceTabId = Object.entries(iframeElementsRef.current).find(
         ([, iframe]) => iframe?.contentWindow === event.source,
       )?.[0];
+
+      // Editable-page bridge: the proxied document owns its inputs, so it
+      // reports focus and performs insertion through postMessage. Validate the
+      // proxy origin before exposing either event to the transcription service.
+      if (event.data.type === 'forge-preview:focus') {
+        if (!sourceTabId) return;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
+        if (!expectedOrigin || event.origin !== expectedOrigin) return;
+        if (activeTabRef.current?.id !== sourceTabId) return;
+        const iframe = iframeElementsRef.current[sourceTabId];
+        if (!iframe) return;
+        window.dispatchEvent(
+          new CustomEvent('spacron-preview-focus', {
+            detail: {
+              iframe,
+              origin: expectedOrigin,
+              editable: Boolean(event.data.editable),
+            },
+          }),
+        );
+        return;
+      }
+
+      if (event.data.type === 'forge-preview:insert-text-result') {
+        if (!sourceTabId) return;
+        const expectedOrigin = expectedOriginForTab(sourceTabId);
+        if (!expectedOrigin || event.origin !== expectedOrigin) return;
+        const iframe = iframeElementsRef.current[sourceTabId];
+        if (!iframe) return;
+        window.dispatchEvent(
+          new CustomEvent('spacron-preview-insert-text-result', {
+            detail: {
+              iframe,
+              origin: expectedOrigin,
+              requestId: event.data.requestId,
+              ok: Boolean(event.data.ok),
+            },
+          }),
+        );
+        return;
+      }
 
       // Address-bar / history bridge: external pages (served from the background
       // proxy) post their real URL on every load and in-page history change.
@@ -1163,10 +1207,10 @@ export default function PreviewPanel() {
       inspectModeRef.current = false;
       postInspectorState();
       if (info?.selector) {
-        void addElementToPrompt(info);
+        void addElementToAgent(info);
       }
     },
-    [expectedOriginForTab, postInspectorState, addElementToPrompt, updateTabLoadState, clearLoadFeedbackTimer],
+    [expectedOriginForTab, postInspectorState, addElementToAgent, updateTabLoadState, clearLoadFeedbackTimer],
   );
 
   const handleInputKeydown = useCallback(
@@ -1706,7 +1750,7 @@ export default function PreviewPanel() {
           <button
             className={`nav-btn inspect-btn${inspectMode ? ' active' : ''}`}
             onClick={toggleInspectMode}
-            title={inspectMode ? 'Exit Add Element to Chat' : 'Add Element to Chat'}
+            title={inspectMode ? 'Exit Add Element to Agent' : 'Add Element to Agent'}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 3l7 18 2.5-7.5L20 13 3 3z" />
@@ -1901,26 +1945,6 @@ export default function PreviewPanel() {
           </button>
         </div>
 
-        <form className="address-bar" onSubmit={handleNavigate}>
-          <span className={`protocol-badge ${protocolBadge.toLowerCase()}`}>{protocolBadge}</span>
-          <input
-            type="text"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            placeholder="Enter URL or search…"
-            className="address-input"
-            onKeyDown={handleInputKeydown}
-            onClick={(e) => (e.target as HTMLInputElement).select()}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <button type="submit" className="go-btn" title="Navigate">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-          </button>
-        </form>
-
         <span
           className="preview-trust-pill"
           title="External pages load through Spacron's embedded proxy. Local dev preview uses the active project's configured port."
@@ -2087,6 +2111,30 @@ export default function PreviewPanel() {
         </div>
       )}
 
+      {/* Keep the address/search field in its own full-width row. It stays
+          visible below the browser and device controls at every preview width. */}
+      <div className="preview-address-row">
+        <form className="address-bar" onSubmit={handleNavigate}>
+          <span className={`protocol-badge ${protocolBadge.toLowerCase()}`}>{protocolBadge}</span>
+          <input
+            type="text"
+            value={inputUrl}
+            onChange={(e) => setInputUrl(e.target.value)}
+            placeholder="Enter URL or search…"
+            className="address-input"
+            onKeyDown={handleInputKeydown}
+            onClick={(e) => (e.target as HTMLInputElement).select()}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button type="submit" className="go-btn" title="Navigate">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
       {getActiveTabLoadState().isLoading && (
         <div className="loading-bar">
           <div className="loading-progress"></div>
@@ -2120,11 +2168,11 @@ export default function PreviewPanel() {
               {selectedElementInfo.tag} {selectedElementInfo.rect.width}x{selectedElementInfo.rect.height}
             </span>
           </div>
-          <button className="inspect-add-btn" onClick={() => selectedElementInfo && addElementToPrompt(selectedElementInfo)}>
+          <button className="inspect-add-btn" onClick={() => selectedElementInfo && addElementToAgent(selectedElementInfo)}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            Add to prompt
+            Add to agent input
           </button>
           <button
             className="inspect-copy-btn"
@@ -2286,7 +2334,7 @@ export default function PreviewPanel() {
                   // background proxy is started BEFORE the URL is set. External
                   // pages only render through the proxy; without this the page
                   // stays blank until a later effect happens to start it.
-                  void navigateTo('https://html.duckduckgo.com/html/');
+                  void navigateTo('https://search.brave.com/');
                 }}
                 title="Open browser"
               >

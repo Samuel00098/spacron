@@ -4,6 +4,7 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  padding-bottom: 18px;
 }
 
 /* Permission mode control */
@@ -96,16 +97,24 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: min(700px, calc(100% - 36px));
+  margin-inline: auto;
 }
 
 .agents-roster-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
   gap: 16px;
   /* Optical alignment: the hint lines up with the first row's brand mark, which
-     starts 14px in from the card edge. */
-  padding: 0 2px 0 2px;
+     starts 14px in from the card edge. Live owns a normal-flow grid column so
+     it cannot overlap the roster while the pane scrolls or reflows. */
+  padding: 0 6px;
+}
+
+.agents-roster-head .live-ticker {
+  justify-self: end;
+  margin-top: 3px;
 }
 
 .agents-roster-hint {

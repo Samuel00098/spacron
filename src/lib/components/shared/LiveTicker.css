@@ -1,7 +1,6 @@
 .live-ticker {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: inline-block;
+  flex: 0 0 auto;
   font-size: 11px;
   font-weight: 400;
   line-height: 1;
@@ -15,26 +14,7 @@
   font-weight: 600;
 }
 
-.live-ticker-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success, #4ade80);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--success, #4ade80) 45%, transparent);
-  animation: live-ticker-pulse 1.6s var(--ease-out, ease) infinite;
-}
-
-@keyframes live-ticker-pulse {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success, #4ade80) 45%, transparent);
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.65;
-  }
-  100% {
-    box-shadow: 0 0 0 4px transparent;
-    opacity: 1;
-  }
+.live-ticker-label {
+  display: block;
+  min-width: max-content;
 }

@@ -164,7 +164,17 @@ function isXtermHelper(el: HTMLElement): boolean {
 
 type EditableTarget =
   | { kind: 'input'; el: HTMLInputElement | HTMLTextAreaElement }
-  | { kind: 'rich'; el: HTMLElement };
+  | { kind: 'rich'; el: HTMLElement }
+  | { kind: 'preview'; iframe: HTMLIFrameElement; origin: string };
+
+type PreviewInsertWaiter = {
+  target: Extract<EditableTarget, { kind: 'preview' }>;
+  resolve: (ok: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+let previewTarget: Extract<EditableTarget, { kind: 'preview' }> | null = null;
+const previewInsertWaiters = new Map<string, PreviewInsertWaiter>();
 
 /** The focused element, if spoken text can be typed straight into it. */
 function focusedEditableTarget(): EditableTarget | null {
@@ -184,7 +194,29 @@ function focusedEditableTarget(): EditableTarget | null {
  * rich editors take `execCommand('insertText')`, which every WebView engine
  * still honours for caret insertion.
  */
-function insertIntoEditable(target: EditableTarget, text: string): boolean {
+function insertIntoEditable(target: EditableTarget, text: string): boolean | Promise<boolean> {
+  if (target.kind === 'preview') {
+    const contentWindow = target.iframe.contentWindow;
+    if (!contentWindow || !target.origin) return false;
+    const requestId = `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        previewInsertWaiters.delete(requestId);
+        resolve(false);
+      }, 1500);
+      previewInsertWaiters.set(requestId, { target, resolve, timer });
+      try {
+        contentWindow.postMessage(
+          { type: 'forge-preview:insert-text', requestId, text },
+          target.origin,
+        );
+      } catch {
+        clearTimeout(timer);
+        previewInsertWaiters.delete(requestId);
+        resolve(false);
+      }
+    });
+  }
   try {
     if (target.kind === 'input') {
       const el = target.el;
@@ -245,6 +277,53 @@ let focusTrackerInstalled = false;
 let lastPointerDownEl: HTMLElement | null = null;
 let tabbedFocus = false;
 
+function handlePreviewFocusEvent(event: Event): void {
+  const detail = (event as CustomEvent).detail as {
+    iframe?: HTMLIFrameElement;
+    origin?: string;
+    editable?: boolean;
+  } | null;
+  const iframe = detail?.iframe;
+  const origin = typeof detail?.origin === 'string' ? detail.origin : '';
+  if (!iframe || !origin) return;
+  const target: Extract<EditableTarget, { kind: 'preview' }> = {
+    kind: 'preview',
+    iframe,
+    origin,
+  };
+  if (detail?.editable) {
+    previewTarget = target;
+    retargetDuringCapture(target, iframe);
+  } else if (previewTarget?.iframe === iframe) {
+    // Blurring the iframe to click the floating mic is the expected start
+    // gesture. Keep the page target long enough for startListening to snapshot
+    // it; a generic parent button must not erase the user's caret.
+    if (starting || phase === 'listening') return;
+    previewTarget = null;
+    if (targetField?.kind === 'preview' && targetField.iframe === iframe) {
+      targetField = null;
+      targetSessionId = null;
+    }
+  }
+}
+
+function handlePreviewInsertResultEvent(event: Event): void {
+  const detail = (event as CustomEvent).detail as {
+    iframe?: HTMLIFrameElement;
+    origin?: string;
+    requestId?: string;
+    ok?: boolean;
+  } | null;
+  const requestId = typeof detail?.requestId === 'string' ? detail.requestId : '';
+  if (!requestId) return;
+  const waiter = previewInsertWaiters.get(requestId);
+  if (!waiter) return;
+  if (waiter.target.iframe !== detail?.iframe || waiter.target.origin !== detail?.origin) return;
+  clearTimeout(waiter.timer);
+  previewInsertWaiters.delete(requestId);
+  waiter.resolve(Boolean(detail?.ok));
+}
+
 /** Did the user themselves put the caret on `el`, with the gesture that just
  *  happened? Tab always counts. A pointer counts when it landed on the surface
  *  itself — clicking a button that then opens a dialog and focuses a field in it
@@ -301,6 +380,7 @@ function installFocusTracker() {
       // Focus landed inside a terminal: the caret is there now, so a field
       // remembered from earlier must stop claiming the next transcript.
       if (isXtermHelper(el)) {
+        previewTarget = null;
         lastEditableEl = null;
         retargetDuringCapture(null, el);
         return;
@@ -314,18 +394,37 @@ function installFocusTracker() {
       // A landing that is neither a text surface nor a terminal leaves the
       // target alone — that is the mic-button/toast case the snapshot exists for.
       if (target) {
+        previewTarget = null;
         lastEditableEl = target;
         retargetDuringCapture(target, el);
       }
     },
     true,
   );
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('spacron-preview-focus', handlePreviewFocusEvent);
+    window.addEventListener('spacron-preview-insert-text-result', handlePreviewInsertResultEvent);
+  }
   focusTrackerInstalled = true;
+}
+
+/** Install the focus bridge before a toolbar button can steal iframe focus. */
+export function primeTranscriptionTargetTracking(): void {
+  installFocusTracker();
 }
 
 /** Drop a remembered field that has since been unmounted. */
 function liveEditable(target: EditableTarget | null): EditableTarget | null {
   if (!target) return null;
+  if (target.kind === 'preview') {
+    const iframeIsLive = target.iframe.isConnected && target.iframe.classList.contains('is-active');
+    if (!iframeIsLive) {
+      if (previewTarget?.iframe === target.iframe) previewTarget = null;
+      if (targetField?.kind === 'preview' && targetField.iframe === target.iframe) targetField = null;
+      return null;
+    }
+    return target;
+  }
   if (!target.el.isConnected) {
     if (lastEditableEl === target) lastEditableEl = null;
     return null;
@@ -336,7 +435,8 @@ function liveEditable(target: EditableTarget | null): EditableTarget | null {
 /** Where a capture started: the element under the caret NOW, else the last one. */
 function resolveEditableTarget(): EditableTarget | null {
   installFocusTracker();
-  return focusedEditableTarget() ?? liveEditable(lastEditableEl);
+  const preview = previewTarget && liveEditable(previewTarget);
+  return preview ?? focusedEditableTarget() ?? liveEditable(lastEditableEl);
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -456,6 +556,7 @@ function cleanTranscript(raw: string, allowNewLines: boolean): string | null {
  * hold the caret, and a missing label must never cost the user their words.
  */
 function describeField(target: EditableTarget): string {
+  if (target.kind === 'preview') return 'Preview page input';
   const el = target.el as HTMLElement & { placeholder?: string; name?: string };
   try {
     const aria = el.getAttribute?.('aria-label')?.trim();
@@ -554,7 +655,7 @@ async function deliver(): Promise<void> {
     // the capture started, or the one the user deliberately clicked into since.
     // Incidental focus moves never get here — see `retargetDuringCapture`.
     if (field) {
-      if (!insertIntoEditable(field, finalText)) {
+      if (!(await insertIntoEditable(field, finalText))) {
         showToast('Could not insert the transcript at the cursor.', 'error');
       }
       return;

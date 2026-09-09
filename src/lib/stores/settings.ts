@@ -671,6 +671,10 @@ export function setAiModel(provider: AiProviderId, modelId: string) {
 
 // UI Scaling
 export const uiZoom = persistentWritable('uiZoom', 100);
+// UI font size is intentionally separate from the editor font size above. It
+// changes application chrome and settings text while leaving code and terminal
+// typography under their own controls.
+export const uiFontSize = persistentWritable('uiFontSize', 14);
 
 // Layout navigation
 // A horizontal trackpad swipe (or shift + mouse wheel) slides between the
@@ -702,7 +706,7 @@ export interface ShortcutAction {
 export const shortcutActions: ShortcutAction[] = [
   { id: 'commandPalette', label: 'Command Palette', category: 'View' },
   { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
-  { id: 'toggleProjectHUD', label: 'Toggle Workspaces Sidebar', category: 'View' },
+  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', category: 'View' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
   { id: 'newWorkspace',   label: 'New Workspace',   category: 'Workspace' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     category: 'View' },
@@ -741,7 +745,7 @@ export const shortcutActions: ShortcutAction[] = [
 export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
   { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
-  { id: 'toggleProjectHUD', label: 'Toggle Workspaces Sidebar', keys: 'Ctrl+K' },
+  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
   { id: 'newWorkspace',   label: 'New Workspace',   keys: 'Ctrl+N' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },
@@ -874,6 +878,8 @@ export function matchShortcut(e: KeyboardEvent, shortcutKeys: string): boolean {
 
 // Appearance / Theme
 export const appearance = persistentWritable<'system' | 'light' | 'dark'>('appearance', 'system');
+// Empty means use the selected theme's default accent.
+export const accentColor = persistentWritable<string>('accentColor', '');
 
 // Global interface transparency (0 = solid, 100 = most see-through). Controls the
 // frost/glass opacity of every surface — works with or without a background image,
@@ -984,11 +990,13 @@ export function updateSetting(key: string, value: unknown) {
     case 'aiModelByProvider': aiModelByProvider.set(value as Record<string, string>); break;
     case 'aiBaseUrlByProvider': aiBaseUrlByProvider.set(value as Record<string, string>); break;
     case 'uiZoom':           uiZoom.set(value as number); break;
+    case 'uiFontSize':       uiFontSize.set(value as number); break;
     case 'swipeNavigationEnabled': swipeNavigationEnabled.set(value as boolean); break;
     case 'formatOnSave':     formatOnSave.set(value as boolean); break;
     case 'autoSave':         autoSave.set(value as boolean); break;
     case 'closeBehavior':    closeBehavior.set(value as CloseBehavior); break;
     case 'appearance':       appearance.set(value as 'system' | 'light' | 'dark'); break;
+    case 'accentColor':      accentColor.set(value as string); break;
     case 'onboardingCompleted': onboardingCompleted.set(value as boolean); break;
     case 'terminalShell':    terminalShell.set(value as string); break;
     case 'terminalFontSize': terminalFontSize.set(value as number); break;
@@ -1031,11 +1039,13 @@ export function resetSettingsToDefault() {
   xaiRealtimeVoice.set('eve');
   announceAgentCompletions.set(true);
   uiZoom.set(100);
+  uiFontSize.set(14);
   swipeNavigationEnabled.set(true);
   formatOnSave.set(true);
   autoSave.set(false);
   userShortcuts.set(defaultShortcuts);
   appearance.set('system');
+  accentColor.set('');
   interfaceTransparency.set(0);
   backgroundImageEnabled.set(false);
   backgroundImageOpacity.set(100);

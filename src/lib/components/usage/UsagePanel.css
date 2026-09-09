@@ -87,9 +87,9 @@
 
 .usage-head {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
   gap: 8px;
   padding: 10px 13px;
   border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
@@ -114,7 +114,13 @@
 .usage-head-actions {
   display: flex;
   align-items: center;
+  justify-self: end;
   gap: 3px;
+}
+
+.usage-head-actions .live-ticker {
+  flex: 0 0 auto;
+  margin: 6px 0 0;
 }
 
 .usage-close {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
-import { homeScreenOpen } from '$lib/stores/layout';
+
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
   usageState,
@@ -50,12 +50,8 @@ export default function UsageCounter() {
   const { providers, loading } = useStore(usageState);
   const panelOpen = useStore(isUsagePanelOpen);
 
-  // Home is an overlay over the live workspace, so `workspaceId` stays set while
-  // it's up. Match the titlebar's workspace-tool gate so the dock disappears on
-  // the welcome and home screens rather than floating over them.
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const homeOpen = useStore(homeScreenOpen);
-  const showDock = Boolean(workspaceId) && !homeOpen;
+  const showDock = Boolean(workspaceId);
 
   // One owner for the schedule. Idempotent, so mounting twice is harmless, and
   // gated on the dock being live so a workspace-less window doesn't spend the

@@ -514,7 +514,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
       <div
         className="code-editor-container"
         style={{
-          '--editor-font-size': `${fontSizeValue}px`,
+          '--editor-font-size': `calc(${fontSizeValue}px / var(--ui-font-scale, 1))`,
           '--editor-font-family': resolvedFontFamilyValue,
         } as React.CSSProperties}
         ref={editorContainerRef}

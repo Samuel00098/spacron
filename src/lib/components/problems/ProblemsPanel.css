@@ -142,7 +142,7 @@
 
 .pp-empty-action:hover {
   background: var(--bg-hover);
-  border-color: var(--accent-color);
+  border-color: var(--accent);
 }
 
 /* ─── File group ─────────────────────────────────── */

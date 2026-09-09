@@ -131,6 +131,19 @@
   flex-shrink: 0;
 }
 
+/* The address/search field is deliberately a separate bottom row. Keeping it
+   out of the crowded control flex line means it cannot collapse or disappear
+   when the preview switches between responsive, phone, and tablet widths. */
+.preview-panel .preview-address-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 34%, transparent);
+}
+
 .preview-panel .nav-group {
   display: flex;
   gap: 2px;
@@ -191,7 +204,7 @@
   --text-muted: #64748b;
   --border: rgba(15, 23, 42, 0.14);
   --bg-hover: rgba(15, 23, 42, 0.08);
-  --accent-light: rgba(124, 106, 247, 0.14);
+  --accent-light: color-mix(in srgb, var(--accent) 14%, transparent);
   background: #f8fafc;
 }
 
@@ -205,7 +218,7 @@
   --text-muted: #94a3b8;
   --border: rgba(226, 232, 240, 0.14);
   --bg-hover: rgba(226, 232, 240, 0.1);
-  --accent-light: rgba(124, 106, 247, 0.2);
+  --accent-light: color-mix(in srgb, var(--accent) 20%, transparent);
   background: #101116;
 }
 
@@ -322,7 +335,8 @@
 .preview-panel .nav-btn.spinning svg { animation: spin 0.7s linear infinite; }
 
 .preview-panel .address-bar {
-  flex: 1;
+  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -405,6 +419,7 @@
   gap: 6px;
   flex-shrink: 0;
   min-width: 0;
+  margin-left: auto;
 }
 
 .preview-panel .label {
@@ -453,6 +468,7 @@
   align-items: center;
   gap: 5px;
   height: 28px;
+  min-width: 0;
   padding: 0 10px;
   border-radius: 6px;
   font-size: 11px;
@@ -464,6 +480,11 @@
   transition: background var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
   white-space: nowrap;
   flex-shrink: 0;
+}
+.preview-panel .proxy-btn-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .preview-panel .proxy-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .preview-panel .proxy-btn:active:not(:disabled) { transform: scale(0.97); }
@@ -1332,12 +1353,6 @@
     order: 1;
   }
 
-  .preview-panel .address-bar {
-    order: 2;
-    flex: 1;
-    min-width: 140px;
-  }
-
   .preview-panel .open-external-btn {
     order: 3;
   }
@@ -1357,21 +1372,13 @@
 
   .preview-panel .proxy-settings {
     order: 7;
-    margin-left: auto;
   }
 }
 
-/* Once the preview is narrower than a typical split pane, give navigation its
-   own full-width row. The controls may wrap above it, but the URL/search field
-   never gets squeezed into a hard-to-find sliver when the room is minimized. */
+/* Once the preview is narrower than a typical split pane, keep the compact
+   status pill out of the controls row. The URL/search field already owns its
+   full-width row below the controls. */
 @container (max-width: 620px) {
-  .preview-panel .address-bar {
-    order: 8;
-    flex: 1 1 100%;
-    width: 100%;
-    max-width: 100%;
-  }
-
   .preview-panel .preview-trust-pill {
     display: none;
   }
@@ -1419,22 +1426,13 @@
     display: none;
   }
 
-  /* Row 1: main-nav + proxy-settings */
+  /* Keep the browser controls compact; the address row is always below them. */
   .preview-panel .main-nav {
     order: 1;
   }
 
   .preview-panel .proxy-settings {
     order: 2;
-    margin-left: auto;
-  }
-
-  /* Row 2: Address bar alone */
-  .preview-panel .address-bar {
-    order: 3;
-    flex: 1 1 100%;
-    width: 100%;
-    margin-top: 2px;
   }
 
   .preview-panel .open-external-btn {
@@ -1617,7 +1615,7 @@
   color: var(--text-primary);
 }
 .preview-panel .terminal-toggle-btn.active {
-  background: rgba(6, 182, 212, 0.15);
-  color: #06b6d4;
-  border-color: rgba(6, 182, 212, 0.3);
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }

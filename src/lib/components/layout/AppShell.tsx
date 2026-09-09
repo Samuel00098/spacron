@@ -18,7 +18,6 @@ import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 
 import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
-import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
 import ToolsMenu, { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
 import {
@@ -31,6 +30,7 @@ import {
   type SplitPresetId,
 } from '$lib/components/layout/split-layout';
 import SplitLayoutPicker from '$lib/components/layout/SplitLayoutPicker.tsx';
+import Dropdown from '$lib/components/shared/Dropdown.tsx';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import AgentWorktreeBadge from '$lib/components/orchestrator/AgentWorktreeBadge.tsx';
@@ -88,7 +88,7 @@ import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
-import { matchShortcut } from '$lib/stores/settings';
+import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
 import {
@@ -109,7 +109,6 @@ import {
   commandHistory,
 } from '$lib/stores/terminal';
 import { toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
-import TranscriptionIndicator from '$lib/components/terminal/TranscriptionIndicator.tsx';
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
@@ -138,6 +137,7 @@ type AuxPanelId =
   | 'sketch';
 
 type AgentRoomId = `agent:${number}`;
+
 type RoomId = 'workspace' | 'terminal' | 'dev-terminal' | AuxPanelId | AgentRoomId;
 type AmbientLayout = 'focus' | 'development' | 'gallery' | 'vibe' | 'preview';
 
@@ -502,10 +502,12 @@ export default function AppShell() {
   // actually changes, so without this an agent promoted into the focus screen
   // keeps the size it had as a small side card and leaves an empty band. The
   // double rAF lets the new DOM settle before TerminalPane re-measures.
-  function notifyPanesResized() {
+  function notifyPanesResized(forcePtyResize = false) {
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        document.dispatchEvent(new CustomEvent('pane-resize-end'));
+        document.dispatchEvent(new CustomEvent('pane-resize-end', {
+          detail: { forcePtyResize },
+        }));
       }),
     );
   }
@@ -516,7 +518,7 @@ export default function AppShell() {
     // rAF regularly landed on the OLD layout, so the panes refit to the size they
     // were leaving and then held stale, wrongly-fitted pixels until something
     // else happened to resize them.
-    void withTransition(action).then(notifyPanesResized);
+    void withTransition(action).then(() => notifyPanesResized(true));
   }
 
   /**
@@ -537,7 +539,7 @@ export default function AppShell() {
    */
   function withStageRetile(action: () => void) {
     action();
-    notifyPanesResized();
+    notifyPanesResized(true);
   }
 
   // Selector-narrowed subscription: return only the layout fields this shell
@@ -577,12 +579,18 @@ export default function AppShell() {
     ),
   );
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const workspaceName = useWorkspaceStore((s) => {
+    const workspace = s.recentWorkspaces.find((entry) => entry.id === s.activeWorkspaceId);
+    if (!workspace) return null;
+    const isWorkspace = workspace.is_workspace || workspace.project_paths.length > 1;
+    return isWorkspace ? workspace.name : null;
+  });
   // Home is an overlay on top of the still-mounted workspace (see
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
   // so it is the only thing rendered.
   const homeOpen = useStore(homeScreenOpen);
-  const showWelcome = !workspaceId || homeOpen;
-  const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
+    const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
+  const currentAppearance = useStore(appearance);
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
@@ -594,6 +602,16 @@ export default function AppShell() {
     if (activeProjectIdValue && !ids.includes(activeProjectIdValue)) ids.push(activeProjectIdValue);
     return ids;
   }, [openProjectIdList, activeProjectIdValue]);
+
+  const nextAppearance = currentAppearance === 'light'
+    ? 'dark'
+    : currentAppearance === 'dark'
+    ? 'system'
+    : 'light';
+
+  function cycleAppearance() {
+    appearance.set(nextAppearance);
+  }
   const shortcuts = useSettingsStore((s) => s.userShortcuts);
   const currentActiveSessionId = useStore(activeSessionId);
   const activeSessionIdRef = useRef(currentActiveSessionId);
@@ -633,6 +651,7 @@ export default function AppShell() {
   const [auxEditorHeight, setAuxEditorHeight] = useState(layoutState.auxEditorHeight);
   const [focusedRoom, setFocusedRoom] = useState<RoomId | null>('terminal');
   const [expandedRoom, setExpandedRoom] = useState<RoomId | null>(null);
+  const [stageExpansionMotion, setStageExpansionMotion] = useState<'expanding' | 'collapsing' | null>(null);
   const [minimizedRooms, setMinimizedRooms] = useState<Set<RoomId>>(() => new Set());
   const [ambientLayout, setAmbientLayout] = useState<AmbientLayout>('gallery');
   // Each ambient layout keeps its own minimize/focus state so switching modes
@@ -656,6 +675,17 @@ export default function AppShell() {
   // `.spacron/memory/split-room-slots.md`.
   const [splitSlots, setSplitSlots] = useState<RoomId[]>([]);
   const [splitPresets, setSplitPresets] = useState<Record<number, SplitPresetId>>({});
+  const [draggingRoom, setDraggingRoom] = useState<RoomId | null>(null);
+  const [dragOverRoom, setDragOverRoom] = useState<RoomId | null>(null);
+  const roomDragRef = useRef<{
+    id: RoomId;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    overRoom: RoomId | null;
+  } | null>(null);
+  const roomDragClickGuardRef = useRef(false);
   const lastActiveRoomRef = useRef<RoomId | null>(null);
   // The room the user last actually touched — a click or a focus anywhere inside
   // its pane, not just a title-bar "focus this room" press. In Split this is what
@@ -814,7 +844,7 @@ export default function AppShell() {
   useEffect(() => {
     const wasSwitching = prevProjectSwitchingRef.current;
     prevProjectSwitchingRef.current = projectSwitching;
-    if (wasSwitching && !projectSwitching) notifyPanesResized();
+    if (wasSwitching && !projectSwitching) notifyPanesResized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectSwitching]);
 
@@ -909,8 +939,18 @@ export default function AppShell() {
    * used to be until something else happened to resize it.
    */
   function setStageExpansion(next: RoomId | null) {
+    setStageExpansionMotion(next === null ? 'collapsing' : 'expanding');
     withStageRetile(() => setExpandedRoom(next));
   }
+
+  // Let the short visual settle finish before removing its class. Keeping the
+  // retile itself immediate preserves the terminal refit invariant above; the
+  // motion is only a paint-layer treatment on the newly arranged stage.
+  useEffect(() => {
+    if (stageExpansionMotion === null) return;
+    const timer = window.setTimeout(() => setStageExpansionMotion(null), 320);
+    return () => window.clearTimeout(timer);
+  }, [stageExpansionMotion]);
 
   // What the stage looked like before "Tile all agents" took it over, so a
   // second press puts it back instead of stranding the user in a tiling they
@@ -1139,13 +1179,13 @@ export default function AppShell() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Keep the left navigator available at narrow widths. It is a user-owned
+  // choice now: the close button/title-bar toggle can hide it, but resizing the
+  // window must not silently change that choice underneath them.
   useEffect(() => {
     if (windowWidth < 500 || document.hidden) return;
     const effectiveWindowWidth = windowWidth / (zoom / 100);
     if (effectiveWindowWidth < 640) {
-      if (layoutState.sidebarVisible) {
-        useLayoutStore.setState({ sidebarVisible: false });
-      }
       return;
     }
 
@@ -1577,7 +1617,10 @@ export default function AppShell() {
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
-        style={{ width: layoutState.leftPanelWidth }}
+        style={{
+          width: 'var(--left-sidebar-width)',
+          '--left-sidebar-width': `${layoutState.leftPanelWidth}px`,
+        } as React.CSSProperties}
         aria-label="Workspaces"
       >
         <div
@@ -1588,10 +1631,17 @@ export default function AppShell() {
         />
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
-            <span className="left-sidebar-eyebrow">Workspaces</span>
-            <strong className="left-sidebar-project" title={project?.root_path ?? undefined}>
-              {project?.name ?? 'Workspace'}
-            </strong>
+            <span className="left-sidebar-app-name">Spacron</span>
+            {workspaceName && (
+              <span className="left-sidebar-workspace" title={workspaceName}>
+                {workspaceName}
+              </span>
+            )}
+            {project && (
+              <span className="left-sidebar-project" title={project?.root_path ?? undefined}>
+                {project.name}
+              </span>
+            )}
           </div>
           <button
             className="left-sidebar-collapse-btn"
@@ -1635,6 +1685,29 @@ export default function AppShell() {
         <UsagePanel />
         <footer className="left-sidebar-footer">
           <UsageCounter />
+          <button
+            type="button"
+            className="left-sidebar-theme-btn"
+            onClick={cycleAppearance}
+            title={`Appearance: ${currentAppearance}. Click to switch.`}
+            aria-label={`Appearance: ${currentAppearance}. Click to switch.`}
+          >
+            <Icon>
+              {currentAppearance === 'system' ? (
+                <>
+                  <rect x="3" y="4" width="18" height="12" rx="2" />
+                  <path d="M8 20h8M12 16v4" />
+                </>
+              ) : currentAppearance === 'light' ? (
+                <>
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </>
+              ) : (
+                <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.7 6.7 0 0 0 21 12.8Z" />
+              )}
+            </Icon>
+          </button>
           <button
             type="button"
             className="left-sidebar-settings-btn"
@@ -1965,6 +2038,24 @@ export default function AppShell() {
     });
   }
 
+  /**
+   * Reconcile a remembered Split arrangement with rooms opened while another
+   * layout was active. Focus and Agent/Fleet views can change the active room
+   * without changing `splitSlots`, so restoring the old array alone can hide a
+   * live agent that was opened in the meantime.
+   */
+  function reconcileSplitSlots(seed: RoomId[], focused: RoomId | null = focusedRoom): RoomId[] {
+    const candidates = [
+      ...(focused ? [focused] : []),
+      ...openRooms.filter(isAgentRoomId),
+      ...seed,
+      ...openRooms,
+    ];
+    return Array.from(new Set(candidates))
+      .filter((room) => openRooms.includes(room) && !isFullscreenRoom(room))
+      .slice(0, SPLIT_MAX_PANES);
+  }
+
   // Take a room off the Split stage. It stays open and reachable — only its
   // slot goes away. Removing the active room hands focus to a remaining pane so
   // `splitRooms` doesn't just splice it straight back in at the front.
@@ -2006,9 +2097,11 @@ export default function AppShell() {
     if (rightActiveTool === 'fleet' && prev?.drawer !== 'fleet') {
       useLayoutStore.getState().applyRightDrawerTool(prev?.drawer ?? null);
     }
-    // Falls back to `[]` — the unarranged sentinel — when there is nothing to
-    // restore (a reload, or the stage happening to already be the agent set).
-    withStageRetile(() => setSplitSlots(prev?.slots ?? []));
+    // Restore the old arrangement, but merge in rooms opened while Agent mode
+    // was active. Otherwise a newly opened agent remains live yet disappears
+    // as soon as the previous Split slots are put back.
+    const restoredSlots = reconcileSplitSlots(prev?.slots ?? [], prev?.focused ?? focusedRoom);
+    withStageRetile(() => setSplitSlots(restoredSlots));
     if (prev && prev.ambient !== ambientLayout) {
       // Changing mode is enough on its own: switchAmbientLayout restores that
       // mode's own saved focus, which is exactly the room it was showing.
@@ -2040,6 +2133,107 @@ export default function AppShell() {
       [next[from], next[to]] = [next[to], next[from]];
       setSplitSlots(next);
     });
+  }
+
+  /**
+   * Split room arrangement is intentionally pointer-driven rather than HTML5
+   * drag-and-drop. Tauri's WebView2 file-drop bridge disables the browser DnD
+   * pipeline, while pointer capture keeps a room header draggable even when the
+   * cursor crosses another pane or leaves the stage.
+   */
+  function findStagePane(room: RoomId): HTMLElement | null {
+    const stage = roomsTableRef.current;
+    if (!stage) return null;
+    return Array.from(stage.querySelectorAll<HTMLElement>('.stage-pane[data-room-id]'))
+      .find((pane) => pane.dataset.roomId === room) ?? null;
+  }
+
+  function beginRoomDrag(id: RoomId, event: React.PointerEvent<HTMLElement>) {
+    if (
+      event.button !== 0 ||
+      ambientLayout !== 'gallery' ||
+      stageExpandedRoom !== null ||
+      splitRooms.length < 2 ||
+      (event.target as HTMLElement).closest('.room-actions')
+    ) {
+      return;
+    }
+
+    roomDragClickGuardRef.current = false;
+    roomDragRef.current = {
+      id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      overRoom: null,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingRoom(id);
+  }
+
+  function moveRoomDrag(event: React.PointerEvent<HTMLElement>) {
+    const drag = roomDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 6) return;
+    drag.moved = true;
+    event.preventDefault();
+
+    const pane = findStagePane(drag.id);
+    if (pane) {
+      pane.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`;
+      pane.style.zIndex = '20';
+    }
+
+    const candidate = document.elementsFromPoint(event.clientX, event.clientY)
+      .map((element) => element.closest<HTMLElement>('.stage-pane[data-room-id]'))
+      .find((pane) => pane && pane.dataset.roomId !== drag.id)
+      ?.dataset.roomId;
+    const nextOver = candidate && candidate !== drag.id && isKnownRoomId(candidate) && splitRooms.includes(candidate)
+      ? candidate
+      : null;
+    if (drag.overRoom !== nextOver) {
+      drag.overRoom = nextOver;
+      setDragOverRoom(nextOver);
+    }
+  }
+
+  function endRoomDrag(event: React.PointerEvent<HTMLElement>) {
+    const drag = roomDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const pane = findStagePane(drag.id);
+    if (pane) {
+      pane.style.transform = '';
+      pane.style.zIndex = '';
+    }
+
+    if (drag.moved) {
+      roomDragClickGuardRef.current = true;
+      window.setTimeout(() => {
+        roomDragClickGuardRef.current = false;
+      }, 320);
+    }
+
+    if (drag.moved && drag.overRoom) {
+      const from = splitRooms.indexOf(drag.id);
+      const to = splitRooms.indexOf(drag.overRoom);
+      if (from >= 0 && to >= 0 && from !== to) {
+        const next = [...splitRooms];
+        [next[from], next[to]] = [next[to], next[from]];
+        withStageRetile(() => setSplitSlots(next));
+      }
+    }
+
+    roomDragRef.current = null;
+    setDraggingRoom(null);
+    setDragOverRoom(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
 
@@ -2430,7 +2624,7 @@ export default function AppShell() {
       { tab: 'voice', name: 'Settings: Voice' },
       { tab: 'terminal', name: 'Settings: Terminal' },
       { tab: 'agents', name: 'Settings: Agents' },
-      { tab: 'stats', name: 'Settings: Stats' },
+      { tab: 'stats', name: 'Settings: Usage' },
       { tab: 'shortcuts', name: 'Settings: Shortcuts' },
       { tab: 'about', name: 'Settings: About' },
     ];
@@ -2727,7 +2921,7 @@ export default function AppShell() {
         key={id}
         className={`room-panel bento-card${featured ? ' featured active-glow' : ''}${
           isWorking ? ' is-working' : ''
-        }`}
+        }${draggingRoom === id ? ' room-dragging' : ''}`}
         data-room-id={id}
         style={{ viewTransitionName: `spacron-room-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}` } as React.CSSProperties}
         // Capture phase, and a ref rather than state: this fires on every click
@@ -2737,10 +2931,22 @@ export default function AppShell() {
         onMouseDownCapture={() => { lastInteractedRoomRef.current = id; }}
         onFocusCapture={() => { lastInteractedRoomRef.current = id; }}
       >
-        <header className="room-header">
+        <header
+          className="room-header"
+          onPointerDown={(event) => beginRoomDrag(id, event)}
+          onPointerMove={moveRoomDrag}
+          onPointerUp={endRoomDrag}
+          onPointerCancel={endRoomDrag}
+        >
           <button
             className={`room-title${agentSession || roomGlyph ? ' has-brand' : ''}`}
-            onClick={() => focusRoom(id)}
+            onClick={() => {
+              if (roomDragClickGuardRef.current) {
+                roomDragClickGuardRef.current = false;
+                return;
+              }
+              focusRoom(id);
+            }}
             title={
               isThisExpanded
                 ? `${title} (expanded)`
@@ -2852,6 +3058,9 @@ export default function AppShell() {
       layoutSwitchTimerRef.current = null;
     }
     setLayoutSwitching(false);
+    // The immediate switch signal already sends the PTY repaint kick. Keep
+    // this trailing backstop refit-only so a 360 ms settle pass cannot make a
+    // second visible SIGWINCH/flicker in a live agent TUI.
     notifyPanesResized();
   }
 
@@ -2976,6 +3185,15 @@ export default function AppShell() {
     } else {
       setFocusedRoom(saved.focused);
       setMinimizedRooms(saved.minimized);
+      if (nextLayout === 'gallery') {
+        // Focus/agent mode can change the active room without touching the
+        // Split arrangement. Reconcile here so returning to Split never loses
+        // a panel that was opened while the user was focused on another one.
+        // Agents get priority because they are the live rooms the agent view
+        // is expected to carry across; the existing slot order remains the
+        // stable order for everything else.
+        setSplitSlots(reconcileSplitSlots(splitSlots, saved.focused));
+      }
     }
 
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -3011,7 +3229,7 @@ export default function AppShell() {
       // `notifyPanesResized` already double-rAFs, so this measures after the
       // browser has laid the new grid out. Safe to run during the entrance: only
       // `opacity` animates, never geometry, so the box read here is final.
-      notifyPanesResized();
+      notifyPanesResized(true);
 
       if (prefersReducedMotion) {
         setLayoutSwitching(false);
@@ -3023,170 +3241,6 @@ export default function AppShell() {
       // first fit raced). It is now a backstop, not the only fit.
       layoutSwitchTimerRef.current = window.setTimeout(finishLayoutSwitch, 360);
     });
-  }
-
-  function renderSplitSwitcher() {
-    const isExpanded = stageExpandedRoom !== null;
-    const atCap = splitRooms.length >= SPLIT_MAX_PANES;
-    return (
-      <aside className="split-switcher" aria-label="Arrange split panes">
-        <div className="split-switcher-head">
-          <span className="split-switcher-count">
-            <span className="split-count-full">
-              {isExpanded
-                ? `1 of ${visibleRooms.length} (expanded)`
-                : `${splitRooms.length} of ${SPLIT_MAX_PANES} panes`}
-            </span>
-            <span className="split-count-compact">
-              {isExpanded
-                ? `1/${visibleRooms.length} exp`
-                : `${splitRooms.length}/${SPLIT_MAX_PANES}`}
-            </span>
-          </span>
-          {!isExpanded && splitRooms.length >= 2 && (
-            <SplitLayoutPicker
-              count={splitRooms.length}
-              activePreset={resolvePreset(splitPresets[splitRooms.length], splitRooms.length)}
-              onSelectPreset={(presetId) => {
-                withStageRetile(() => {
-                  setSplitPresets((prev) => ({
-                    ...prev,
-                    [splitRooms.length]: presetId,
-                  }));
-                });
-              }}
-            />
-          )}
-        </div>
-        <div className="split-switcher-rooms">
-          {visibleRooms.map((room) => {
-            const slot = splitRooms.indexOf(room);
-            const onStage = slot >= 0;
-            const isPrimary = isExpanded ? room === stageExpandedRoom : room === activeRoom;
-            // Full-stage-only rooms have no slot, so none of the slot controls
-            // (reorder, take off the split, add to the split) mean anything for
-            // them. Their pill is a plain "go here".
-            const fullscreenOnly = isFullscreenRoom(room);
-            return (
-              <div
-                key={room}
-                className={`split-switch-item${onStage ? ' on-stage' : ''}${isPrimary ? ' primary' : ''}`}
-              >
-                <button
-                  type="button"
-                  className="split-switch-summary"
-                  onClick={() => {
-                    if (fullscreenOnly) {
-                      // Already the room on stage — there is nothing to restore
-                      // it to, so the pill is inert rather than misleading.
-                      if (room !== forcedFullscreenRoom) focusRoom(room);
-                    } else if (isExpanded) {
-                      if (room === stageExpandedRoom) {
-                        setStageExpansion(null);
-                      } else {
-                        // `focusRoom` carries the expansion across on its own
-                        // now, so this is a plain focus — setting both here
-                        // would fight it (and refit every pane twice).
-                        focusRoom(room);
-                      }
-                    } else {
-                      if (onStage) focusRoom(room);
-                      else addRoomToSplit(room);
-                    }
-                  }}
-                  title={
-                    fullscreenOnly
-                      ? room === forcedFullscreenRoom
-                        ? `${roomTitle(room)} is on stage`
-                        : `Open ${roomTitle(room)} full stage`
-                      : isExpanded
-                      ? isPrimary
-                        ? `${roomTitle(room)} is currently expanded. Click to restore the split grid.`
-                        : `Show ${roomTitle(room)} full stage`
-                      : !onStage
-                        ? `Add ${roomTitle(room)} to the split`
-                        : isPrimary
-                          ? `${roomTitle(room)} is the primary pane`
-                          : `Make ${roomTitle(room)} the primary pane`
-                  }
-                >
-                  <span className="split-switch-slot" aria-hidden="true">
-                    {onStage ? slot + 1 : ''}
-                  </span>
-                  <span className="split-switch-icon" aria-hidden="true">{roomIcon(room)}</span>
-                  <span className="split-switch-copy">
-                    <span className="split-switch-name">{roomTitle(room)}</span>
-                    <span className="split-switch-role">
-                      {room === forcedFullscreenRoom
-                        ? 'Full stage'
-                        : isExpanded && isPrimary
-                        ? 'Expanded'
-                        : onStage
-                          ? (isPrimary ? `Pane ${slot + 1} · primary` : `Pane ${slot + 1}`)
-                          : roomKind(room)}
-                    </span>
-                  </span>
-                </button>
-                <span className="split-target-actions">
-                  {fullscreenOnly ? null : onStage ? (
-                    <>
-                      <button
-                        type="button"
-                        className="split-target-btn icon"
-                        onClick={() => moveSplitSlot(room, -1)}
-                        disabled={slot === 0}
-                        title={`Move ${roomTitle(room)} earlier`}
-                        aria-label={`Move ${roomTitle(room)} earlier`}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="15 18 9 12 15 6" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="split-target-btn icon"
-                        onClick={() => moveSplitSlot(room, 1)}
-                        disabled={slot === splitRooms.length - 1}
-                        title={`Move ${roomTitle(room)} later`}
-                        aria-label={`Move ${roomTitle(room)} later`}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="9 18 15 12 9 6" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="split-target-btn icon danger"
-                        onClick={() => {
-                          if (expandedRoom === room) setStageExpansion(null);
-                          removeRoomFromSplit(room);
-                        }}
-                        disabled={splitRooms.length <= 1}
-                        title={`Take ${roomTitle(room)} off the split`}
-                        aria-label={`Take ${roomTitle(room)} off the split`}
-                      >
-                        <XIcon />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="split-target-btn"
-                      onClick={() => addRoomToSplit(room)}
-                      disabled={atCap}
-                      title={atCap ? `Split is full (${SPLIT_MAX_PANES} panes)` : `Add ${roomTitle(room)} to the split`}
-                      aria-label={`Add ${roomTitle(room)} to the split`}
-                    >
-                      Add
-                    </button>
-                  )}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-    );
   }
 
   function renderAmbientLayout() {
@@ -3225,11 +3279,31 @@ export default function AppShell() {
         ? getSplitStageStyle(activePreset, stageRooms.length)
         : { className: '', style: undefined };
 
+    const expandedRoomOptions = isExpanded
+      ? visibleRooms.map((room) => ({
+          value: room,
+          label: roomTitle(room),
+          sublabel: room === stageExpandedRoom ? 'Expanded' : roomKind(room),
+        }))
+      : [];
+
     const stageModifier = isExpanded
       ? ' stage-expanded'
       : isSplit
         ? ` ${stagePresetClass}`
         : '';
+    const openAgentCount = openRooms.filter(isAgentRoomId).length;
+    const isAgentMode = fleetArrangementActive && openAgentCount > 0;
+    const layoutCountLabel = isAgentMode
+      ? `${openAgentCount} agent${openAgentCount === 1 ? '' : 's'} open`
+      : isExpanded
+        ? `1 of ${visibleRooms.length} expanded`
+        : `${stageRooms.length} of ${SPLIT_MAX_PANES} panels`;
+    const layoutCountCompact = isAgentMode
+      ? `${openAgentCount}`
+      : isExpanded
+        ? `1/${visibleRooms.length}`
+        : `${stageRooms.length}/${SPLIT_MAX_PANES}`;
 
     function stagePaneProps(room: RoomId) {
       const hidden = !stageRoomSet.has(room);
@@ -3239,39 +3313,89 @@ export default function AppShell() {
           ? getSplitPaneStyle(activePreset, index, stageRooms.length)
           : undefined;
       return {
-        className: `stage-pane${hidden ? ' stage-hidden' : ''}`,
+        className: `stage-pane${hidden ? ' stage-hidden' : ''}${draggingRoom === room ? ' room-dragging' : ''}${dragOverRoom === room ? ' room-drag-over' : ''}`,
         style: hidden ? undefined : paneStyle,
       };
     }
 
     return (
       <>
+        {((isExpanded || isSplit) && visibleRooms.length > 0) && (
+          <div
+            className={`split-layout-control${isExpanded ? ' expanded-layout-control' : ''}`}
+            aria-label={isExpanded ? 'Expanded panel controls' : 'Split layout controls'}
+          >
+            <span className="split-layout-mode-label">{isAgentMode ? 'Agents' : isSplit ? 'Split' : 'Focus'}</span>
+            <span className="split-layout-count" aria-label={isAgentMode ? layoutCountLabel : `${stageRooms.length} of ${SPLIT_MAX_PANES} panels open`}>
+              <span className="split-layout-count-full">{layoutCountLabel}</span>
+              <span className="split-layout-count-compact">
+                {layoutCountCompact}
+              </span>
+            </span>
+            {isExpanded ? (
+              expandedRoomOptions.length > 1 && (
+                <div className="split-expanded-room-picker">
+                  <Dropdown
+                    options={expandedRoomOptions}
+                    value={stageExpandedRoom ?? ''}
+                    onChange={(room) => focusRoom(room as RoomId)}
+                    ariaLabel="Change expanded panel"
+                  />
+                </div>
+              )
+            ) : stageRooms.length >= 2 ? (
+              <SplitLayoutPicker
+                count={stageRooms.length}
+                activePreset={activePreset}
+                onSelectPreset={(presetId) => {
+                  withStageRetile(() => {
+                    setSplitPresets((prev) => ({
+                      ...prev,
+                      [stageRooms.length]: presetId,
+                    }));
+                  });
+                }}
+              />
+            ) : null}
+          </div>
+        )}
         <div
-          className={`focused-room stage-layers${stageModifier}${stageIsVacant ? ' empty-stage' : ''}`}
+          className={`focused-room stage-layers${stageModifier}${stageExpansionMotion ? ` stage-${stageExpansionMotion}` : ''}${stageIsVacant ? ' empty-stage' : ''}`}
           style={!isExpanded && isSplit ? stagePresetStyle : undefined}
           aria-label={emptyStageMessage ?? undefined}
         >
-          {emptyStageMessage !== null && (
+          {stageIsVacant && (
             <div className="stage-empty-cta">
-              <strong className="stage-empty-title">Start with agents</strong>
+              <strong className="stage-empty-title">{project ? 'Start with agents' : 'Spacron'}</strong>
               <span className="stage-empty-copy">
-                Choose the agents you want to work with in this project.
+                {project
+                  ? 'Choose the agents you want to work with in this project.'
+                  : 'Open a project folder or select one from the left sidebar to start working.'}
               </span>
               <button
                 type="button"
                 className="stage-empty-agent-btn"
-                onClick={() => openAgentSpawn()}
-                aria-label="Choose agents"
+                onClick={() => (project ? openAgentSpawn() : void openProject())}
+                aria-label={project ? 'Choose agents' : 'Open project'}
               >
-                <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-                <span>Choose Agents</span>
+                {project ? (
+                  <>
+                    <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+                    <span>Choose Agents</span>
+                  </>
+                ) : (
+                  <>
+                    <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>
+                    <span>Open Project</span>
+                  </>
+                )}
               </button>
             </div>
           )}
           {persistentStageRooms.map((room) => {
             const { className, style } = stagePaneProps(room);
             return (
-              <div key={room} className={className} style={style}>
+              <div key={room} className={className} style={style} data-room-id={room}>
                 {renderRoomFrame(room, true)}
               </div>
             );
@@ -3279,13 +3403,12 @@ export default function AppShell() {
           {nonPersistentStageRooms.map((room) => {
             const { className, style } = stagePaneProps(room);
             return (
-              <div key={room} className={className} style={style}>
+              <div key={room} className={className} style={style} data-room-id={room}>
                 {renderRoomFrame(room, true)}
               </div>
             );
           })}
         </div>
-        {(isSplit || isExpanded) && visibleRooms.length > 0 && renderSplitSwitcher()}
       </>
     );
   }
@@ -3304,8 +3427,7 @@ export default function AppShell() {
             visibility, never display, so the panes keep their measured size and
             are instantly correct when Home closes. */}
         <div className="zoom-content">
-        {workspaceId && (
-          <div className={`workspace-layer${homeOpen ? ' home-hidden' : ''}`} inert={homeOpen}>
+        <div className="workspace-layer">
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
@@ -3321,11 +3443,7 @@ export default function AppShell() {
               <div className="rooms-content-horizontal">
                 {renderLeftUtilityPanel()}
 
-                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${
-                  ((ambientLayout === 'gallery' || stageExpandedRoom !== null) && visibleRooms.length > 0)
-                    ? ' has-room-switcher'
-                    : ''
-                }${layoutSwitching ? ' layout-switching' : ''}${
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
                   (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
                   (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                     ? ` ${ambientLayout}-solo`
@@ -3360,15 +3478,6 @@ export default function AppShell() {
               </div>
             </div>
           </div>
-        )}
-
-        {showWelcome && (
-          <div className={`welcome-fullpage${workspaceId ? ' over-workspace' : ''}`}>
-            <div className="welcome-main">
-              <WelcomeScreen />
-            </div>
-          </div>
-        )}
         </div>
 
         {/* Free-floating YouTube pop-up. Mounted at the app root (outside the
@@ -3408,7 +3517,6 @@ export default function AppShell() {
           />
         )}
 
-        <TranscriptionIndicator />
       </div>
     </div>
   );

@@ -1,0 +1,17 @@
+.spectrum-visualizer-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 60px;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: none;
+}
+
+.spectrum-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

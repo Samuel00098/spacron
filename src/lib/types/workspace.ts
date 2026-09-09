@@ -24,4 +24,5 @@ export interface Workspace {
   project_paths: string[];
   active_project_path: string | null;
   last_opened: string;
+  is_workspace?: boolean;
 }

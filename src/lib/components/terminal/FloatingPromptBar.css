@@ -10,11 +10,19 @@
   gap: 10px;
   pointer-events: none;
   opacity: 1;
-  transition: opacity var(--dur-base) var(--ease-out);
+  transition: width 280ms cubic-bezier(0.16, 1, 0.3, 1), opacity var(--dur-base) var(--ease-out);
 }
 
 .floating-prompt-shell.active {
   opacity: 1;
+}
+
+.floating-prompt-shell.voice-active {
+  width: min(520px, calc(100% - 40px));
+}
+
+.floating-prompt-shell.transcribing {
+  width: min(640px, calc(100% - 40px));
 }
 
 .floating-prompt-shell.collapsed {
@@ -72,26 +80,24 @@
 }
 
 .floating-prompt-shell .floating-prompt-bar {
-  pointer-events: auto;
-}
-
-.floating-prompt-shell .floating-prompt-bar {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 24px;
+  gap: 12px;
+  padding: 10px 18px;
+  min-height: 52px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 9999px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 35%, transparent 65%),
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   box-shadow:
-    0 22px 50px -24px rgba(0, 0, 0, 0.72),
-    0 10px 22px -18px color-mix(in srgb, var(--accent) 34%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 48px -18px rgba(0, 0, 0, 0.72),
+    0 10px 22px -16px color-mix(in srgb, var(--accent) 32%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 -1px 0 rgba(0, 0, 0, 0.16);
   transition: border-color var(--dur-base) var(--ease-out),
     box-shadow var(--dur-base) var(--ease-out),
@@ -771,216 +777,226 @@
 }
 
 .floating-prompt-shell .floating-prompt-bar.voice-active {
-  border-color: color-mix(in srgb, var(--accent) 80%, var(--border)) !important;
-  animation: agentBarGlow 2s ease-in-out infinite !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  background:
+    radial-gradient(ellipse at 50% 50%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, color-mix(in srgb, var(--accent) 8%, transparent) 50%, transparent 80%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 40%, transparent 70%),
+    color-mix(in srgb, var(--bg-secondary) 88%, transparent) !important;
+  animation: voicePillAura 3.5s ease-in-out infinite alternate !important;
 }
 
-/* In voice-active mode the orb strip sits on the LEFT;
-   .prompt-copy (transcript + controls) fills the rest — nothing is hidden. */
-/* Compact orb strip: orb icon + stop button stacked vertically */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner {
+.floating-prompt-shell .floating-prompt-bar.transcribing {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  background:
+    radial-gradient(ellipse at 30% 50%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, color-mix(in srgb, var(--accent) 8%, transparent) 50%, transparent 80%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 40%, transparent 70%),
+    color-mix(in srgb, var(--bg-secondary) 88%, transparent) !important;
+  box-shadow:
+    0 22px 52px -16px rgba(0, 0, 0, 0.75),
+    0 0 28px -6px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 0 45px -10px color-mix(in srgb, var(--accent) 22%, transparent),
+    inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
+}
+
+@keyframes voicePillAura {
+  0% {
+    box-shadow:
+      0 24px 60px -16px rgba(0, 0, 0, 0.78),
+      0 0 30px -6px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 0 45px -10px color-mix(in srgb, var(--accent) 20%, transparent),
+      inset 0 1px 1px rgba(255, 255, 255, 0.2);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 26px 64px -16px rgba(0, 0, 0, 0.82),
+      0 0 38px -4px color-mix(in srgb, var(--accent) 38%, transparent),
+      0 0 55px -8px color-mix(in srgb, var(--accent) 26%, transparent),
+      inset 0 1px 1px rgba(255, 255, 255, 0.25);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 24px 60px -16px rgba(0, 0, 0, 0.78),
+      0 0 32px -6px color-mix(in srgb, var(--accent) 32%, transparent),
+      0 0 48px -10px color-mix(in srgb, var(--accent) 25%, transparent),
+      inset 0 1px 1px rgba(255, 255, 255, 0.2);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+}
+
+/* Voice mode spectrum pill interior */
+.floating-prompt-shell .voice-spectrum-pill {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  flex: 1;
   animation: voice-inner-in 200ms ease both;
 }
 
 @keyframes voice-inner-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
-.floating-prompt-shell .floating-prompt-bar .voice-mode-row {
+.floating-prompt-shell .voice-pill-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.floating-prompt-shell .voice-pill-indicator .voice-indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+.floating-prompt-shell .voice-pill-indicator.listening {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  background: color-mix(in srgb, #ef4444 14%, var(--bg-secondary));
+}
+.floating-prompt-shell .voice-pill-indicator.listening .voice-indicator-dot {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+  animation: transcription-dot-pulse 1s ease-in-out infinite;
+}
+
+.floating-prompt-shell .voice-pill-indicator.speaking {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-secondary));
+}
+.floating-prompt-shell .voice-pill-indicator.speaking .voice-indicator-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 85%, transparent);
+  animation: transcription-dot-pulse 0.7s ease-in-out infinite;
+}
+
+.floating-prompt-shell .voice-pill-indicator.thinking {
+  border-color: rgba(168, 85, 247, 0.45);
+  color: #d8b4fe;
+  background: color-mix(in srgb, #a855f7 14%, var(--bg-secondary));
+}
+.floating-prompt-shell .voice-pill-indicator.thinking .voice-indicator-dot {
+  background: #a855f7;
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.75);
+  animation: transcription-dot-pulse 0.9s ease-in-out infinite;
+}
+
+.floating-prompt-shell .voice-pill-indicator.sleeping {
+  border-color: var(--border);
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.floating-prompt-shell .voice-pill-indicator.sleeping .voice-indicator-dot {
+  background: var(--text-muted);
+}
+
+.floating-prompt-shell .voice-spectrum-track {
+  flex: 1;
+  min-width: 100px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.floating-prompt-shell .voice-eq {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 24px;
-  min-width: 32px;
-  max-width: 60px;
-}
-
-.floating-prompt-shell .voice-eq-bar {
-  width: 3px;
-  height: 24px;
-  border-radius: 2px 2px 1px 1px;
-  transform-origin: 50% 100%;
-  transform: scaleY(0.05);
-  will-change: transform;
-}
-
-.floating-prompt-shell .voice-eq.idle .voice-eq-bar {
-  background: var(--text-muted);
-  opacity: 0.3;
-  animation: fbar-idle var(--dur) ease-in-out var(--dly) infinite alternate;
-}
-
-.floating-prompt-shell .voice-eq.listening .voice-eq-bar {
-  background: #f87171;
-  opacity: 1;
-  animation: fbar-live var(--dur) ease-in-out var(--dly) infinite alternate;
-}
-
-.floating-prompt-shell .voice-eq.speaking .voice-eq-bar {
-  background: var(--accent);
-  opacity: 0.85;
-  animation: fbar-mid var(--dur) ease-in-out var(--dly) infinite alternate;
-}
-
-.floating-prompt-shell .voice-eq.thinking .voice-eq-bar {
-  background: var(--text-secondary);
-  opacity: 0.25;
-  animation: fbar-think var(--dur) ease-in-out var(--dly) infinite alternate;
-}
-
-@keyframes fbar-idle  { from{transform:scaleY(.04)} to{transform:scaleY(calc(var(--max)*.25))} }
-@keyframes fbar-live  { from{transform:scaleY(.04)} to{transform:scaleY(var(--max))} }
-@keyframes fbar-mid   { from{transform:scaleY(.1)}  to{transform:scaleY(calc(var(--max)*.8))} }
-@keyframes fbar-think { from{transform:scaleY(.04)} to{transform:scaleY(calc(var(--max)*.35))} }
-
-.floating-prompt-shell .voice-waveform {
-  height: 3px;
-  min-width: 50px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  justify-content: center;
   overflow: hidden;
-  flex-shrink: 1;
 }
 
-.floating-prompt-shell .voice-waveform-fill {
-  height: 100%;
-  border-radius: 2px;
-  background: var(--accent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
-  transition: width var(--dur-instant) var(--ease-out);
-  min-width: 2px;
-}
-
-/* Orb — container for ring + orb */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb-wrap {
-  position: relative;
+.floating-prompt-shell .voice-pill-close-btn {
   width: 28px;
   height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-/* Ripple rings — listening only */
-.floating-prompt-shell .voice-ring {
-  position: absolute;
   border-radius: 50%;
-  border: 1.5px solid rgba(239,68,68,.5);
-  width: 22px;
-  height: 22px;
-  animation: voice-ring-ripple 2s ease-out infinite;
-  pointer-events: none;
-}
-.floating-prompt-shell .voice-ring-b { animation-delay: .9s; }
-
-@keyframes voice-ring-ripple {
-  0%   { width: 22px;  height: 22px;  opacity: .6; }
-  100% { width: 52px; height: 52px; opacity: 0; }
-}
-
-/* Orb base */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .orb {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--dur-slower) var(--ease-out), box-shadow var(--dur-slower) var(--ease-out), color var(--dur-slower) var(--ease-out);
-  z-index: 2;
-}
-
-/* Orb states */
-.floating-prompt-shell .orb-wrap.idle .orb {
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary) 84%);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
-  color: var(--accent);
-  animation: voice-pulse-idle 3.5s ease-in-out infinite;
-}
-.floating-prompt-shell .orb-wrap.listening .orb {
-  background: color-mix(in srgb, #ef4444 32%, var(--bg-secondary) 68%);
-  box-shadow: 0 0 20px rgba(239,68,68,.5), 0 0 48px rgba(239,68,68,.18);
-  color: #fca5a5;
-  animation: voice-pulse-listen .9s ease-in-out infinite;
-}
-.floating-prompt-shell .orb-wrap.speaking .orb {
-  background: color-mix(in srgb, var(--accent) 42%, var(--bg-secondary) 58%);
-  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 48%, transparent);
-  color: white;
-  animation: voice-pulse-speak 1.6s ease-in-out infinite;
-}
-.floating-prompt-shell .orb-wrap.thinking .orb {
-  background: color-mix(in srgb, var(--text-muted) 12%, var(--bg-secondary) 88%);
-  box-shadow: 0 0 12px rgba(107,114,128,.1);
-  color: var(--text-secondary);
-  opacity: 0.6;
-}
-.floating-prompt-shell .orb-wrap.sleeping .orb {
-  background: color-mix(in srgb, var(--text-muted) 8%, var(--bg-secondary) 92%);
-  color: var(--text-muted);
-  opacity: 0.5;
-}
-
-@keyframes voice-pulse-idle   { 0%,100%{transform:scale(1);opacity:.85} 50%{transform:scale(1.04);opacity:1} }
-@keyframes voice-pulse-listen { 0%,100%{transform:scale(1)}              50%{transform:scale(1.09)}             }
-@keyframes voice-pulse-speak  { 0%,100%{transform:scale(1)}              50%{transform:scale(1.055)}            }
-
-.floating-prompt-shell .voice-transcript {
-  font-size: 11px;
-}
-
-/* Close button — small, below the orb */
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .voice-close-btn {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
   border: 1px solid var(--border);
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
   color: var(--text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
-.floating-prompt-shell .floating-prompt-bar .voice-mode-inner .voice-close-btn:hover {
+.floating-prompt-shell .voice-pill-close-btn:hover {
+  background: color-mix(in srgb, #ef4444 20%, var(--bg-secondary));
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+  transform: scale(1.05);
+}
+
+/* Transcribe mode spectrum inside the pill */
+.floating-prompt-shell .transcribe-pill-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  animation: voice-inner-in 160ms ease both;
+}
+
+.floating-prompt-shell .transcribe-spectrum-track {
+  width: 130px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.floating-prompt-shell .transcribe-pill-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.floating-prompt-shell .transcribe-live-badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #67e8f9;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.floating-prompt-shell .transcribe-word-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+
+.floating-prompt-shell .transcribe-pill-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.floating-prompt-shell .transcribe-pill-hint kbd {
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
   background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-@keyframes agentBarGlow {
-  0%, 100% {
-    box-shadow:
-      var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65)),
-      inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
-      0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent),
-      0 0 20px -2px color-mix(in srgb, var(--accent) 30%, transparent),
-      0 0 40px -8px color-mix(in srgb, var(--accent) 20%, transparent);
-  }
-  50% {
-    box-shadow:
-      var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65)),
-      inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
-      0 0 0 2.5px color-mix(in srgb, var(--accent) 70%, transparent),
-      0 0 36px 0px color-mix(in srgb, var(--accent) 50%, transparent),
-      0 0 60px -4px color-mix(in srgb, var(--accent) 30%, transparent);
-  }
+  font-size: 10px;
+  color: var(--text-secondary);
 }
 
 /* Voice button in agent mode */
@@ -1382,4 +1398,3 @@
     inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
     inset 0 -1px 0 rgba(0, 0, 0, 0.14);
 }
-

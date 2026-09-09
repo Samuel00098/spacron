@@ -38,6 +38,7 @@ import { requestNotificationPermission } from '$lib/stores/notification';
 import { maybeAutoReconnectRemote, hydrateRemoteTokens } from '$lib/stores/remoteWorkspace';
 import {
   uiZoom,
+  uiFontSize,
   fontSize,
   resolvedFontFamily,
   userShortcuts,
@@ -192,14 +193,22 @@ export default function App() {
       document.documentElement.style.setProperty('--ui-zoom-percent', `${zoom}`);
     });
 
+    const unsubscribeUiFontSize = uiFontSize.subscribe((size) => {
+      const safeSize = Math.max(12, Math.min(20, Number(size) || 14));
+      document.documentElement.style.setProperty('--ui-font-size', `${safeSize}px`);
+      document.documentElement.style.setProperty('--ui-font-scale', `${safeSize / 14}`);
+    });
+
     // Publish the editor typeface globally. Plenty of surfaces outside the
     // editor render code (diffs, problems, the source-control panel) and already
     // ask for `var(--editor-font-family)` — but CodeEditor only sets it inline on
     // its own container, so every one of them silently fell back to plain
     // `monospace` at whatever hardcoded size it picked. Setting both vars on the
-    // root is what makes those existing references resolve.
+    // root is what makes those existing references resolve. Divide the size by
+    // the UI scale because .app-shell scales the complete chrome; code text
+    // remains controlled by the editor font-size setting.
     const unsubscribeFontSize = fontSize.subscribe((size) => {
-      document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
+      document.documentElement.style.setProperty('--editor-font-size', `calc(${size}px / var(--ui-font-scale, 1))`);
     });
     const unsubscribeFontFamily = resolvedFontFamily.subscribe((family) => {
       document.documentElement.style.setProperty('--editor-font-family', family);
@@ -233,6 +242,7 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('keydown', handleKeyDown);
       unsubscribeZoom();
+      unsubscribeUiFontSize();
       unsubscribeFontSize();
       unsubscribeFontFamily();
       unlistenClose?.();

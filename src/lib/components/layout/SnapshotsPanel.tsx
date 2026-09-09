@@ -50,7 +50,7 @@ function EmptyIllustration() {
       <circle cx="32" cy="33" r="5" stroke="var(--accent)" strokeWidth="1.5" />
       <circle cx="41" cy="27" r="1.5" fill="var(--text-muted)" />
       <g className="animated-layout-box" style={{ animation: 'floating-sub 5s ease-in-out infinite' }}>
-        <rect x="14" y="12" width="10" height="8" rx="1.5" fill="rgba(6, 182, 212, 0.15)" stroke="var(--accent)" strokeWidth="1" />
+        <rect x="14" y="12" width="10" height="8" rx="1.5" fill="var(--accent-light)" stroke="var(--accent)" strokeWidth="1" />
         <line x1="19" y1="12" x2="19" y2="20" stroke="var(--accent)" strokeWidth="0.8" />
       </g>
       <g className="animated-layout-box-2" style={{ animation: 'floating-sub 5s ease-in-out infinite 2s' }}>

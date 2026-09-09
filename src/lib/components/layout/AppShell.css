@@ -1,11 +1,8 @@
 .app-shell {
   display: flex;
   flex-direction: column;
-  /* 100% of #app, which is inverse-sized against the global `zoom` so it always
-     equals the window exactly. 100vw/100vh here would NOT be compensated by the
-     ancestor zoom and would overflow the screen when the UI scales up. */
-  height: 100%;
   width: 100%;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -19,11 +16,15 @@
 
 .app-shell .zoom-content {
   --zoom-factor: calc(var(--ui-zoom-percent, 100) / 100);
-  zoom: var(--zoom-factor);
+  /* UI font scaling belongs to the workspace content, not the native/title
+     bar above it. Keep the existing UI zoom independent and combine the two
+     only at this content boundary. */
+  --app-ui-scale: var(--ui-font-scale, 1);
+  zoom: calc(var(--zoom-factor) * var(--app-ui-scale));
   /* Re-derive the zoom-corrected viewport units (see #app in global.css) so
      descendants also divide out the user zoom level applied here. */
-  --app-vw: calc(1vw / (var(--ui-scale, 1) * var(--zoom-factor)));
-  --app-vh: calc(1vh / (var(--ui-scale, 1) * var(--zoom-factor)));
+  --app-vw: calc(1vw / (var(--ui-scale, 1) * var(--zoom-factor) * var(--app-ui-scale)));
+  --app-vh: calc(1vh / (var(--ui-scale, 1) * var(--zoom-factor) * var(--app-ui-scale)));
   width: 100%;
   height: 100%;
   display: flex;
@@ -411,15 +412,6 @@
   gap: 16px;
 }
 
-/* A saved project can reopen Focus with one room expanded to the full stage.
-   In that state the Split switcher is still rendered so the other open rooms
-   remain reachable. Give it an explicit second row; otherwise Focus's single
-   1fr row makes the switcher an implicit overflow row below the clipped table. */
-.app-shell .rooms-table.ambient-focus.has-room-switcher {
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 12px;
-}
-
 /* The stage is a raised, rounded card — sitting flush against the left drawer
    reads as one merged slab. Inset it by the same 16px the stage uses for its own
    gap so the drawer stays visually separate.
@@ -587,11 +579,121 @@
 .app-shell .rooms-table.ambient-gallery {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
   padding: 8px;
   padding-bottom: var(--overlay-clear);
+}
+
+/* The Split layout control lives in the stage chrome instead of consuming a
+   bottom strip. Reserve a slim top band so it never sits over a room header or
+   steals the room's close/maximize controls. */
+.app-shell .rooms-table.ambient-gallery:has(.split-layout-control),
+.app-shell .rooms-table.ambient-focus:has(.split-layout-control) {
+  padding-top: 46px;
+}
+
+.app-shell .split-layout-control {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.app-shell .split-layout-count {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 35px)) saturate(var(--glass-saturate, 180%));
+}
+
+.app-shell .split-layout-mode-label {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 2px;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.app-shell .split-expanded-room-picker {
+  width: min(190px, 24vw);
+  min-width: 130px;
+}
+
+.app-shell .split-expanded-room-picker .dropdown,
+.app-shell .split-expanded-room-picker .dd-trigger {
+  width: 100%;
+}
+
+.app-shell .split-expanded-room-picker .dd-trigger {
+  height: 26px;
+  min-width: 0;
+  border-color: color-mix(in srgb, var(--accent) 14%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.app-shell .split-expanded-room-picker .dd-trigger:hover:not(:disabled),
+.app-shell .split-expanded-room-picker .dd-trigger.open {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text-primary);
+}
+
+.app-shell .split-layout-count-compact {
+  display: none;
+}
+
+:root.light-theme .app-shell .split-layout-count {
+  background: rgb(var(--bg-secondary-rgb, 240, 240, 246));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (max-width: 900px) {
+  .app-shell .split-layout-count {
+    padding: 0 7px;
+    font-size: 9px;
+  }
+
+  .app-shell .split-layout-count-full {
+    display: none;
+  }
+
+  .app-shell .split-layout-count-compact {
+    display: inline;
+  }
+
+  .app-shell .split-layout-mode-label {
+    display: none;
+  }
+
+  .app-shell .split-expanded-room-picker {
+    width: min(170px, 34vw);
+  }
 }
 
 /* The empty-stage action renders INSIDE the persistent stage (so nothing
@@ -719,6 +821,27 @@
   border-radius: 12px;
   overflow: clip;
 }
+
+/* Split rooms are rearranged from their headers. Keep the interaction quiet:
+   the dragged pane lifts above its neighbours, the destination gets a soft
+   accent ring, and the live terminal never changes size while it follows the
+   pointer. */
+.app-shell .stage-pane.room-dragging {
+  z-index: 20;
+  transition: none !important;
+}
+
+.app-shell .stage-pane.room-drag-over > .room-panel {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 72%, transparent),
+    0 18px 42px -18px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
+}
+
+.app-shell .room-panel.room-dragging,
+.app-shell .room-panel.room-dragging:hover {
+  transform: none;
+}
 /* visibility (not display:none) keeps the hidden pane laid out at full size, so
    its terminal never reflows to zero and is instantly correct when reshown.
    `clip-path` makes that unconditional: `visibility: hidden` is inherited and a
@@ -757,6 +880,26 @@
   visibility: hidden;
   pointer-events: none;
   clip-path: inset(50%);
+}
+
+/* Retiling remains immediate for terminal measurement, but give the visible
+   pane a paint-only settle pass so expanding/collapsing reads as intentional
+   motion instead of a hard geometry jump. Clip-path avoids scaling live text
+   and terminal canvases while the stage moves between grid and full-stage. */
+.app-shell .focused-room.stage-layers.stage-expanding > .stage-pane:not(.stage-hidden),
+.app-shell .focused-room.stage-layers.stage-collapsing > .stage-pane:not(.stage-hidden) {
+  animation: stage-expansion-settle var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes stage-expansion-settle {
+  from {
+    opacity: 0.82;
+    clip-path: inset(1.8% round 12px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 round 12px);
+  }
 }
 
 /* Split view reuses the very same persistent stage — the identical mounted xterm
@@ -1034,18 +1177,18 @@
    is live" is answered by the same cue that separates them. */
 .app-shell .room-panel.featured::after {
   --panel-edge-lap: 5s;
-  --panel-edge-w: 2px;
-  --panel-edge-core: color-mix(in srgb, var(--accent) 55%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 24%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.12);
+  --panel-edge-w: 1px;
+  --panel-edge-core: color-mix(in srgb, var(--accent) 20%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 7%, transparent);
+  --panel-edge-base: rgba(255, 255, 255, 0.06);
 }
 
 /* The side drawers sit flush against the window edge, where half the ring is
    off-screen chrome — keep them quieter than the rooms. */
 .app-shell .left-utility-panel::after,
 .app-shell .right-utility-panel::after {
-  --panel-edge-core: color-mix(in srgb, var(--accent) 30%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 10%, transparent);
+  --panel-edge-core: color-mix(in srgb, var(--accent) 12%, transparent);
+  --panel-edge-glow: color-mix(in srgb, var(--accent) 4%, transparent);
   --panel-edge-lap: 9s;
 }
 
@@ -1053,7 +1196,7 @@
 /* Light theme flips the base ring dark for every panel in `global.css`; only
    the featured room's brighter base needs its own light-mode value. */
 :root.light-theme .app-shell .room-panel.featured::after {
-  --panel-edge-base: rgba(0, 0, 0, 0.09);
+  --panel-edge-base: rgba(0, 0, 0, 0.05);
 }
 
 .app-shell .room-header {
@@ -1066,6 +1209,19 @@
   padding: 0 10px 0 13px;
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-secondary) 54%, transparent);
+}
+
+/* Pointer events, not HTML5 draggable, keep this working in the Tauri window.
+   Action buttons remain their own hit targets and are excluded in AppShell. */
+.app-shell .ambient-gallery .stage-layers:not(.stage-expanded) .room-header {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.app-shell .ambient-gallery .stage-layers:not(.stage-expanded) .room-header:active,
+.app-shell .room-panel.room-dragging .room-header {
+  cursor: grabbing;
 }
 
 
@@ -1183,6 +1339,16 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Room movement is header-only. Keep every control inside a live room
+     explicitly interactive, including Preview's iframe and its resize handles. */
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+  touch-action: auto;
+}
+
+.app-shell .room-content :where(button, input, textarea, select, a, [role='button'], [contenteditable='true']) {
+  pointer-events: auto;
 }
 
 .app-shell .room-stack {
@@ -2418,13 +2584,14 @@
 }
 
 .app-shell .composer-strip .floating-prompt-shell {
-  position: static;
+  position: relative;
   left: auto;
   bottom: auto;
   transform: none;
   width: 100%;
   margin: 0 auto;
   pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .app-shell .composer-strip .floating-prompt-bar {
@@ -2433,6 +2600,8 @@
   min-height: 54px;
   padding: 8px 10px 8px 12px;
   animation: shell-composer-in 0.16s var(--ease-out) both;
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 
 /* Tail of the prompt bar, between the input and Send: the layout actions that
@@ -2469,8 +2638,10 @@
 .app-shell .composer-strip .attach-toggle,
 .app-shell .composer-strip .voice-toggle,
 .app-shell .composer-strip .agent-toggle,
+.app-shell .composer-strip .voice-pill-close-btn,
 .app-shell .composer-strip .send-btn {
   border-radius: 9px;
+  touch-action: manipulation;
 }
 
 .app-shell .composer-strip .send-btn {
@@ -2861,9 +3032,24 @@ html.is-webkitgtk .app-shell .composer-strip {
   border-radius: var(--bento-radius, 16px);
   font-family: var(--font-sans);
   font-synthesis: none;
+  animation: left-sidebar-in var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes left-sidebar-in {
+  from {
+    width: 0;
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    width: var(--left-sidebar-width);
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .app-shell .left-sidebar-header {
+  position: relative;
   min-height: 48px;
   padding: 7px 9px 6px 12px;
   display: flex;
@@ -2876,8 +3062,36 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .left-sidebar-heading {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 0 48px;
   min-width: 0;
   gap: 2px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.app-shell .left-sidebar-app-name {
+  font-family: var(--font-sans);
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  line-height: 1.15;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.app-shell .left-sidebar-workspace {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-shell .left-sidebar-eyebrow,
@@ -2890,16 +3104,18 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar-project {
+  max-width: 100%;
   overflow: hidden;
-  color: var(--text-primary);
-  font-size: 11.5px;
-  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .app-shell .left-sidebar-collapse-btn,
+.app-shell .left-sidebar-theme-btn,
 .app-shell .left-sidebar-settings-btn {
   width: 30px;
   height: 30px;
@@ -2914,10 +3130,13 @@ html.is-webkitgtk .app-shell .composer-strip {
   color: var(--text-secondary);
   cursor: pointer;
   opacity: 1;
+  position: relative;
+  z-index: 1;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-shell .left-sidebar-collapse-btn:hover,
+.app-shell .left-sidebar-theme-btn:hover,
 .app-shell .left-sidebar-settings-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -3121,6 +3340,10 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar-footer .left-sidebar-settings-btn {
+  margin-left: 0;
+}
+
+.app-shell .left-sidebar-footer .left-sidebar-theme-btn {
   margin-left: auto;
 }
 

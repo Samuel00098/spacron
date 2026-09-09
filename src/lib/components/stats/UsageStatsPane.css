@@ -7,10 +7,9 @@
 
 /* ── Toolbar ── */
 .stats-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: flex-end;
-  justify-content: space-between;
   gap: 12px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border-subtle, var(--border));
@@ -45,6 +44,7 @@
 .stats-actions {
   display: flex;
   align-items: center;
+  justify-self: end;
   gap: 10px;
 }
 
@@ -57,6 +57,22 @@
   align-items: flex-end;
   gap: 2px;
   min-width: 0;
+}
+
+.stats-refresh-meta .live-ticker {
+  flex: 0 0 auto;
+  min-height: 13px;
+}
+
+@media (max-width: 720px) {
+  .stats-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-actions {
+    justify-self: stretch;
+    justify-content: space-between;
+  }
 }
 
 .stats-action-btn {

@@ -51,6 +51,12 @@
   animation: settingsScaleUp 0.3s var(--ease-spring);
   view-transition-name: spacron-settings-modal;
   isolation: isolate;
+  /* Settings is portaled outside .app-shell, so give it the same application
+     scale explicitly. The editor and terminal are not inside this surface. */
+  font-size: 14px;
+  zoom: var(--ui-font-scale, 1);
+  width: min(1060px, calc(100% / var(--ui-font-scale, 1)));
+  height: min(780px, calc(100% / var(--ui-font-scale, 1)));
 }
 
 /* Light-theme modal gets a brighter, crisper shadow */
@@ -77,7 +83,8 @@
   justify-content: space-between;
   flex-shrink: 0;
   min-height: 72px;
-  padding: 16px 24px;
+  padding: 18px 26px;
+  gap: 20px;
   border-bottom: 1px solid var(--border);
   /* Transparent so the modal's frosted-glass surface reads across the header. */
   background: transparent;
@@ -99,6 +106,121 @@
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text-primary);
+}
+
+.settings-search-wrap {
+  position: relative;
+  flex: 1 1 320px;
+  max-width: 420px;
+  margin-left: auto;
+}
+
+.settings-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.settings-search-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 36px 0 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.settings-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.settings-search-input:focus {
+  border-color: var(--input-focus-border, var(--accent));
+  background: var(--bg-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.settings-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.settings-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+}
+
+.settings-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-search-result:hover,
+.settings-search-result:focus-visible {
+  background: var(--accent-light);
+  outline: none;
+}
+
+.settings-search-result span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-search-result small {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.settings-search-empty {
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .settings-close {
@@ -124,7 +246,12 @@
   color: var(--text-primary);
   background: var(--bg-active);
   border-color: var(--border-focus);
-  transform: rotate(90deg);
+  transform: scale(1.06);
+}
+
+.settings-close:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 2px;
 }
 
 /* ── Body layout ── */
@@ -199,7 +326,7 @@
 .settings-panel {
   min-width: 0;
   min-height: 0;
-  padding: 24px;
+  padding: 28px;
   overflow-y: auto;
   overscroll-behavior: none;
   /* Transparent so the modal's frosted-glass surface reads across the content. */
@@ -226,7 +353,7 @@
 /* ── Section Cards ── */
 .settings-card {
   max-width: 760px;
-  margin: 0 0 20px;
+  margin: 0 0 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 12px);
   background: var(--bg-hover) !important;
@@ -238,7 +365,7 @@
 
 .settings-card h3 {
   margin: 0;
-  padding: 12px 18px;
+  padding: 15px 22px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
   font-size: 11px;
@@ -258,11 +385,11 @@
 /* ── Control rows ── */
 .settings-control-row {
   display: grid;
-  grid-template-columns: minmax(160px, 250px) minmax(220px, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(180px, 270px) minmax(240px, 1fr);
+  gap: 28px;
   align-items: center;
-  min-height: 56px;
-  padding: 14px 18px;
+  min-height: 70px;
+  padding: 18px 22px;
   border-bottom: 1px solid var(--border-subtle, var(--border));
   transition: background-color var(--dur-fast) var(--ease-out);
 }
@@ -290,10 +417,10 @@
 .settings-control-copy small,
 .settings-danger-row small {
   display: block;
-  margin-top: 3px;
+  margin-top: 6px;
   color: var(--text-muted);
   font-size: 11.5px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .settings-control {
@@ -301,6 +428,7 @@
   align-items: center;
   justify-content: flex-start;
   min-width: 0;
+  padding-block: 2px;
 }
 
 /* ── Form Inputs ── */
@@ -659,6 +787,15 @@
   font-size: 12px;
 }
 
+/* Section explanations need a visible breathing space below the card heading.
+   The Agents tab uses these paragraphs before each group, and its inline
+   margin reset should not pull the copy back against the heading. */
+.settings-card-body > .shell-hint {
+  margin-top: 0 !important;
+  margin-bottom: 14px !important;
+  padding: 14px 22px 0;
+}
+
 .settings-danger-row {
   display: flex;
   align-items: center;
@@ -672,15 +809,16 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-  padding-bottom: 4px;
+  padding: 18px 22px 14px;
 }
 
 .appearance-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 20px 12px;
+  gap: 8px;
+  min-height: 156px;
+  padding: 12px;
   background: var(--bg-primary);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-lg, 12px);
@@ -719,9 +857,131 @@
   color: var(--accent);
 }
 
+/* CSS previews keep the built-in modes image-free while making their surface
+   treatment easy to distinguish at a glance. */
+.appearance-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 62px;
+  padding: 8px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  overflow: hidden;
+  opacity: 0.95;
+}
+
+.appearance-preview-light { color: #000; background: #fff; }
+.appearance-preview-dark { color: #fff; background: #000; }
+.appearance-preview-system {
+  color: #000;
+  background: linear-gradient(90deg, #fff 0 50%, #000 50% 100%);
+}
+
+.appearance-preview-top {
+  display: block;
+  width: 42%;
+  height: 5px;
+  border-radius: 99px;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.appearance-preview-body {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.appearance-preview-body span {
+  display: block;
+  width: 18%;
+  height: 35%;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.appearance-preview-body span:nth-child(2) { height: 62%; opacity: 0.8; }
+.appearance-preview-body span:nth-child(3) { height: 48%; opacity: 0.65; }
+
+.appearance-preview-system .appearance-preview-top,
+.appearance-preview-system .appearance-preview-body {
+  color: #666;
+  mix-blend-mode: difference;
+}
+
 .appearance-label {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+.appearance-detail {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+/* ── Accent picker ── */
+.accent-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.accent-color-input {
+  position: relative;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.accent-color-input input {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  padding: 0 !important;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.accent-color-input span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.accent-swatches {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.accent-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.accent-swatch:hover,
+.accent-swatch.selected {
+  box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 3px var(--accent);
+  transform: scale(1.08);
 }
 
 /* ── Option Cards (close behavior etc.) ── */
@@ -991,6 +1251,15 @@
   .settings-overlay { padding: 10px; }
 
   .settings-modal { height: min(860px, 100%); }
+
+  .settings-header { flex-wrap: wrap; }
+
+  .settings-search-wrap {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    margin-left: 0;
+  }
 
   .settings-body { grid-template-columns: 1fr; }
 
@@ -1735,10 +2004,11 @@
 
 /* Local Models Tab */
 .local-models-info {
-  padding: 0 14px 10px;
+  padding: 14px 22px 12px;
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.4;
+  text-align: center;
 }
 
 .local-models-list {

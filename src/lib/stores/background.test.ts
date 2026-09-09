@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from './storeCompat';
 
 /**
  * Precedence between the user's own wallpaper and a preset theme's built-in one.
@@ -96,6 +97,20 @@ const THEMED = {
 };
 
 describe('user background vs theme background', () => {
+  it.each(['forge-light', 'forge-dark'])('keeps the user wallpaper available in %s', async (id) => {
+    const { background, settings, theme } = await bootWith('/home/me/wallpaper.png');
+    settings.backgroundImageEnabled.set(true);
+    background.applyBackgroundImage();
+    expect(dom.bgImage()).toContain('wallpaper.png');
+
+    theme.applyThemeToCSS({ ...THEMED, id } as never);
+
+    expect(dom.bgImage()).toContain('wallpaper.png');
+    expect(dom.hasClass('has-bg-image')).toBe(true);
+    expect(dom.hasClass('has-bg-media')).toBe(true);
+    expect(get(settings.backgroundImageEnabled)).toBe(true);
+  });
+
   it("keeps the user's wallpaper when a theme with its own is applied", async () => {
     const { background, settings, theme } = await bootWith('/home/me/wallpaper.png');
     settings.backgroundImageEnabled.set(true);

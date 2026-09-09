@@ -6,6 +6,15 @@ import {
 } from '$lib/services/transcription-hotkey';
 import './TranscriptionIndicator.css';
 
+// Colors mapped across the meter bars to create a vibrant spectrum
+const SPECTRUM_BAR_COLORS = [
+  '#00f5d4', // electric mint cyan
+  '#3b82f6', // cobalt blue
+  '#8b5cf6', // vivid violet
+  '#ec4899', // hot pink
+  '#fb923c', // sunset coral
+];
+
 // Bars are struck at different fractions of the level so the meter reads as a
 // waveform rather than five copies of one value. Centre bar is the tallest.
 const BAR_WEIGHTS = [0.45, 0.75, 1, 0.8, 0.5];
@@ -41,14 +50,21 @@ export default function TranscriptionIndicator() {
     <div className={`transcription-indicator ${state}`} role="status" aria-live="polite">
       {listening ? (
         <span className="meter" aria-hidden="true">
-          {BAR_WEIGHTS.map((weight, index) => (
-            <span
-              key={index}
-              className="bar"
-              // 18% keeps a resting bar visible, so "silent" still looks alive.
-              style={{ transform: `scaleY(${0.18 + amplitude * weight * 0.82})` }}
-            />
-          ))}
+          {BAR_WEIGHTS.map((weight, index) => {
+            const color = SPECTRUM_BAR_COLORS[index % SPECTRUM_BAR_COLORS.length];
+            return (
+              <span
+                key={index}
+                className="bar"
+                // 18% keeps a resting bar visible, so "silent" still looks alive.
+                style={{
+                  transform: `scaleY(${0.18 + amplitude * weight * 0.82})`,
+                  backgroundColor: color,
+                  boxShadow: `0 0 6px ${color}88`,
+                }}
+              />
+            );
+          })}
         </span>
       ) : (
         <span className="dot" />

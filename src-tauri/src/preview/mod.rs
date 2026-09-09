@@ -276,8 +276,14 @@ const PREVIEW_THEME_SNIPPET: &str = r#"<script data-spacron-preview-theme>
         const data = event.data || {};
         if (data.type !== 'forge-preview:theme') return;
         const theme = data.theme === 'light' ? 'light' : 'dark';
-        document.documentElement.dataset.spacronPreviewTheme = theme;
-        document.documentElement.style.colorScheme = theme;
+        const root = document.documentElement;
+        root.dataset.spacronPreviewTheme = theme;
+        root.classList.toggle('spacron-preview-theme-light', theme === 'light');
+        root.classList.toggle('spacron-preview-theme-dark', theme === 'dark');
+        root.style.colorScheme = theme;
+        root.style.setProperty('--spacron-preview-theme', theme);
+        if (document.body) document.body.style.colorScheme = theme;
+        window.spacronPreviewTheme = theme;
         window.dispatchEvent(new CustomEvent('spacron-preview-theme-change', { detail: { theme } }));
     });
 })();
@@ -415,6 +421,99 @@ const MEDIA_SNIPPET: &str = r#"<script data-spacron-media-sync>
     const ready = () => { if (findMedia()) post({ type: 'forge-preview:media-ready' }); };
     if (document.readyState === 'complete') ready();
     else window.addEventListener('load', ready);
+})();
+</script>"#;
+
+const INPUT_FLAG: &str = "spacron-input-bridge";
+// Focus and text-insertion bridge for the active page inside Preview. The app
+// shell cannot inspect a cross-origin iframe directly, so the page reports its
+// own focused editable and performs the insertion when asked. The parent still
+// validates every message against the iframe's expected proxy origin before it
+// reaches the transcription service.
+const INPUT_SNIPPET: &str = r#"<script data-spacron-input-bridge>
+(() => {
+    if (window.__spacronInputBridge) return;
+    window.__spacronInputBridge = true;
+    let parentOrigin = '';
+
+    const post = (message) => {
+        try { parent.postMessage(message, '*'); } catch (e) {}
+    };
+
+    const isEditable = (element) => {
+        if (!element || element.nodeType !== 1) return false;
+        if (element instanceof HTMLInputElement) {
+            return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(element.type);
+        }
+        return element instanceof HTMLTextAreaElement || Boolean(element.isContentEditable);
+    };
+
+    const focusedEditable = () => isEditable(document.activeElement) ? document.activeElement : null;
+
+    const reportFocus = () => {
+        post({ type: 'forge-preview:focus', editable: Boolean(focusedEditable()) });
+    };
+
+    const dispatchInput = (element, text) => {
+        try {
+            element.dispatchEvent(new InputEvent('input', {
+                bubbles: true,
+                composed: true,
+                inputType: 'insertText',
+                data: text,
+            }));
+        } catch (e) {
+            try { element.dispatchEvent(new Event('input', { bubbles: true })); } catch (ignored) {}
+        }
+        try { element.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+    };
+
+    const insertText = (text) => {
+        const element = focusedEditable();
+        if (!element || !text) return false;
+        try {
+            if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+                const start = typeof element.selectionStart === 'number' ? element.selectionStart : element.value.length;
+                const end = typeof element.selectionEnd === 'number' ? element.selectionEnd : start;
+                element.setRangeText(text, start, end, 'end');
+                dispatchInput(element, text);
+                return true;
+            }
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) return false;
+            const inserted = document.execCommand('insertText', false, text);
+            if (inserted) dispatchInput(element, text);
+            return inserted;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    document.addEventListener('focusin', reportFocus, true);
+    document.addEventListener('focusout', () => setTimeout(reportFocus, 0), true);
+    document.addEventListener('pointerdown', () => setTimeout(reportFocus, 0), true);
+
+    window.addEventListener('message', (event) => {
+        if (event.source !== window.parent) return;
+        if (!parentOrigin) parentOrigin = event.origin;
+        if (event.origin !== parentOrigin) return;
+        const data = event.data || {};
+        if (data.type !== 'forge-preview:insert-text') return;
+        const requestId = typeof data.requestId === 'string' ? data.requestId : '';
+        const text = typeof data.text === 'string' ? data.text : '';
+        post({
+            type: 'forge-preview:insert-text-result',
+            requestId,
+            ok: insertText(text),
+        });
+    });
+
+    const reportInitialFocus = () => setTimeout(reportFocus, 0);
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportInitialFocus, { once: true });
+    } else {
+        reportInitialFocus();
+    }
 })();
 </script>"#;
 
@@ -2779,6 +2878,10 @@ async fn build_preview_response(
         // Likewise the media bridge — it is the only way the parent can see or
         // restore <video>/<audio> position across the origin boundary.
         let injected = inject_media_script(&injected);
+        // The input bridge lets transcription target an editable inside the
+        // proxied page without reaching across the iframe boundary from the
+        // parent shell.
+        let injected = inject_input_script(&injected);
         // The parent shell controls the preview mode through a narrow,
         // namespaced postMessage bridge. This is injected for local and
         // external proxied pages alike; pages may opt into the data attribute
@@ -3106,6 +3209,10 @@ fn inject_media_script(html: &str) -> String {
     inject_late(html, MEDIA_FLAG, MEDIA_SNIPPET)
 }
 
+fn inject_input_script(html: &str) -> String {
+    inject_late(html, INPUT_FLAG, INPUT_SNIPPET)
+}
+
 fn inject_scroll_script(html: &str) -> String {
     if html.contains(SCROLL_FLAG) {
         return html.to_string();
@@ -3333,10 +3440,10 @@ mod tests {
     use super::{
         consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
         html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
-        inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
+        inject_input_script, inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
         inject_preview_theme_script, inject_viewport_edge_style, local_file_error, preview_error_response,
         proxy_request_allowed, wants_html_error,
-        LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
+        INPUT_FLAG, INPUT_SNIPPET, LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
     };
     use axum::http::{HeaderMap, StatusCode};
 
@@ -3425,6 +3532,8 @@ mod tests {
         assert!(injected[..head_end].contains("<script data-spacron-preview-theme>"));
         assert!(injected.contains("forge-preview:theme"));
         assert!(injected.contains("data-spacron-preview-theme"));
+        assert!(injected.contains("spacron-preview-theme-dark"));
+        assert!(injected.contains("--spacron-preview-theme"));
         assert_eq!(inject_preview_theme_script(&injected), injected);
     }
 
@@ -3442,6 +3551,12 @@ mod tests {
         let injected = inject_media_script(html);
         assert!(injected.contains("<script data-spacron-media-sync>"));
         assert_eq!(inject_media_script(&injected), injected);
+
+        let injected = inject_input_script(html);
+        assert!(injected.contains("<script data-spacron-input-bridge>"));
+        assert!(injected.contains("forge-preview:focus"));
+        assert!(injected.contains("forge-preview:insert-text"));
+        assert_eq!(inject_input_script(&injected), injected);
     }
 
     #[test]
@@ -3453,6 +3568,7 @@ mod tests {
         let headless = "<p>bare</p>";
         assert!(inject_late(headless, MEDIA_FLAG, MEDIA_SNIPPET).starts_with("<p>bare</p>"));
         assert!(inject_late(headless, MEDIA_FLAG, MEDIA_SNIPPET).contains(MEDIA_FLAG));
+        assert!(inject_late(headless, INPUT_FLAG, INPUT_SNIPPET).contains(INPUT_FLAG));
     }
 
     #[test]

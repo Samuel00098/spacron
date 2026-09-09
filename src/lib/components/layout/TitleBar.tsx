@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { saveProjectState } from '$lib/stores/workspace';
+import { saveProjectState, toggleProjectHUD, openProject } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
-  homeScreenOpen,
   openQuickCapture,
   openRightSidebar,
   rightSidebarVisible,
@@ -31,13 +30,12 @@ export default function TitleBar() {
 
   // Reactive store reads — the React equivalent of `$store`.
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
+  const projectsMap = useWorkspaceStore((s) => s.projects);
+  const activeProject = activeProjectId ? projectsMap.get(activeProjectId) : null;
   const goBackEnabled = useStore(canGoBack);
   const goForwardEnabled = useStore(canGoForward);
-  // Home is an overlay over the live workspace, so `workspaceId` stays set while
-  // it's up. Workspace-scoped tools (switcher, capture, search, settings) key off
-  // this instead so they disappear on the welcome screen too.
-  const homeOpen = useStore(homeScreenOpen);
-  const showWorkspaceTools = Boolean(workspaceId) && !homeOpen;
+  const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightSidebarOpen = useStore(rightSidebarVisible);
 
@@ -63,15 +61,7 @@ export default function TitleBar() {
     }
   }
 
-  // Home is an overlay over the live workspace, not a teardown. Nulling
-  // `activeWorkspaceId` here used to unmount every room — disposing each xterm
-  // and forcing a reattach-by-replay on return, which broke running agents'
-  // rendering. Raising the overlay leaves every PTY view mounted and fitted.
-  function goHome() {
-    const pid = useWorkspaceStore.getState().activeProjectId;
-    if (pid) saveProjectState(pid);
-    homeScreenOpen.set(true);
-  }
+
 
   async function goBack() {
     await navigateBack();
@@ -125,23 +115,8 @@ export default function TitleBar() {
         </div>
       </div>
 
-      {/* Navigation: Home, sidebar, Back, Forward */}
+      {/* Navigation: Sidebar, Back, Forward */}
       <div className="titlebar-nav">
-        <button className="nav-btn" onClick={goHome} aria-label="Go to home" title="Home">
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 12L12 3l9 9" />
-            <path d="M9 21V12h6v9" />
-          </svg>
-        </button>
         {showWorkspaceTools && (
           <button
             className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
@@ -209,11 +184,49 @@ export default function TitleBar() {
         </button>
       </div>
 
-      {/* Centre drag region */}
+      {/* Centre drag region with active project pill */}
       <div
         className="titlebar-center"
         data-tauri-drag-region
-      />
+      >
+        {activeProject ? (
+          <button
+            type="button"
+            className="titlebar-project-pill"
+            onClick={toggleProjectHUD}
+            title={`${activeProject.name} — Click to switch project (${formatShortcutLabel('Ctrl+K')})`}
+            aria-label={`Active project: ${activeProject.name}. Click to switch project.`}
+          >
+            <span className="titlebar-project-icon" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </span>
+            <span className="titlebar-project-name">{activeProject.name}</span>
+            <span className="titlebar-project-chevron" aria-hidden="true">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="titlebar-project-pill empty"
+            onClick={() => void openProject()}
+            title={`Open Project (${formatShortcutLabel('Ctrl+O')})`}
+            aria-label="Open Project"
+          >
+            <span className="titlebar-project-icon" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </span>
+            <span className="titlebar-project-name">Open Project</span>
+            <kbd className="titlebar-project-kbd">{formatShortcutLabel('Ctrl+O')}</kbd>
+          </button>
+        )}
+      </div>
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right">

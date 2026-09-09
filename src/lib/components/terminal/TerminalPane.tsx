@@ -47,6 +47,7 @@ import {
   resolvedFontFamily,
   terminalShell,
   terminalRenderer,
+  uiFontSize,
 } from '$lib/stores/settings';
 import { activeTheme } from '$lib/stores/theme';
 import { setActiveView, showTerminal } from '$lib/stores/layout';
@@ -59,6 +60,11 @@ import { AGENT_ATTENTION_PATTERN } from '$lib/services/orchestrator/agent-signal
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
 import './TerminalPane.css';
+
+function terminalFontSizeForUiScale(size: number, uiSize: number): number {
+  const scale = Math.max(12, Math.min(20, Number(uiSize) || 14)) / 14;
+  return size / scale;
+}
 
 const ROLE_PRESETS = [
   { label: 'Server', color: 'var(--role-server)' },
@@ -209,6 +215,7 @@ function TerminalPane({
   const activeThemeValue = useStore(activeTheme);
   const fontFamily = useStore(resolvedFontFamily);
   const fontSize = useStore(terminalFontSize);
+  const uiFontSizeValue = useStore(uiFontSize);
   const cursorStyle = useStore(terminalCursorStyle);
   const scrollback = useStore(terminalScrollback);
   const configuredShell = useStore(terminalShell);
@@ -242,6 +249,12 @@ function TerminalPane({
   // keeping one timer prevents stale callbacks from competing with the newest
   // grid and making the terminal visibly jump between geometries.
   const settledFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A layout switch can leave the xterm grid at the same integer dimensions
+  // even though the agent pane was hidden/revealed or moved between stage
+  // arrangements. In that case xterm has nothing to emit through onResize, so
+  // the child TUI may keep its old frame. Keep the repaint kick cancellable so
+  // rapid layout changes cannot restore an obsolete PTY size after a newer fit.
+  const ptyResizeKickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentShellRef = useRef<string | null>(null);
   const isActiveRef = useRef(isActive);
   const seenDevUrlsRef = useRef<Set<string>>(new Set());
@@ -776,14 +789,19 @@ function TerminalPane({
   // We reproduce that manual resize: briefly shrink the PTY by one row, then
   // restore it — a genuine size change the TUI reacts to by redrawing. xterm
   // itself stays at its fitted size, so reverting immediately resyncs the two.
-  function forceReattachRepaint() {
+  function forcePtyRepaint() {
     const term = termRef.current;
     if (!term) return;
     const cols = term.cols;
     const rows = term.rows;
     if (!cols || !rows || rows < MIN_ROWS + 1) return;
+    if (ptyResizeKickTimerRef.current !== null) {
+      clearTimeout(ptyResizeKickTimerRef.current);
+      ptyResizeKickTimerRef.current = null;
+    }
     resizeSession(sessionId, rows - 1, cols);
-    setTimeout(() => {
+    ptyResizeKickTimerRef.current = setTimeout(() => {
+      ptyResizeKickTimerRef.current = null;
       const t = termRef.current;
       if (!t) return;
       resizeSession(sessionId, t.rows, t.cols);
@@ -1075,7 +1093,7 @@ function TerminalPane({
       // tables behind the proposed API, and `loadAddon` throws without this.
       allowProposedApi: true,
       scrollback: get(terminalScrollback),
-      fontSize: get(terminalFontSize),
+      fontSize: terminalFontSizeForUiScale(get(terminalFontSize), get(uiFontSize)),
       fontFamily: get(resolvedFontFamily),
       fontWeight: 400,
       fontWeightBold: 700,
@@ -1201,7 +1219,7 @@ function TerminalPane({
       // glyph atlas on every screen switch. A plain refresh gets the same repaint
       // without throwing away cached glyphs; the theme effect below owns the surface.
       //
-      // Note this must stay a *client-side* repaint: forceReattachRepaint() would also
+      // Note this must stay a *client-side* repaint: forcePtyRepaint() would also
       // redraw, but it does so by round-tripping a real PTY resize, which would fire
       // SIGWINCH at the shell on every TUI enter/exit.
       term.buffer.onBufferChange(() => term.refresh(0, term.rows - 1));
@@ -1246,7 +1264,7 @@ function TerminalPane({
       requestAnimationFrame(() =>
         requestAnimationFrame(async () => {
           await fitAfterFonts();
-          if (isReattach) forceReattachRepaint();
+          if (isReattach) forcePtyRepaint();
         }),
       );
 
@@ -1307,16 +1325,23 @@ function TerminalPane({
         }
       });
 
-      // Observe the fit host, not the padded container: it is the exact box
-      // FitAddon measures, so every resize it reports is one fit can honor.
+      // Observe the fit host, not just the padded container: it is the exact
+      // box FitAddon measures, so every resize it reports is one fit can honor.
+      // The container is observed as a second signal because a parent grid or
+      // visibility-layer transition can resize the flex chain without always
+      // delivering a child-content notification in WebView2/WebKitGTK.
       resizeObserver = new ResizeObserver(scheduleFit);
       resizeObserver.observe(fitHost);
+      resizeObserver.observe(container);
     })();
 
     // A layout change the pane cannot observe for itself (a room promoted into
     // focus, a pane revealed from `visibility: hidden`). Drop any live frame
     // still queued and fit at full weight against the final layout.
-    function onResizeEnd() {
+    function onResizeEnd(event: Event) {
+      const forcePtyResize = Boolean(
+        (event as CustomEvent<{ forcePtyResize?: boolean }>).detail?.forcePtyResize,
+      );
       if (fitRafRef.current !== null) {
         cancelAnimationFrame(fitRafRef.current);
         fitRafRef.current = null;
@@ -1332,6 +1357,12 @@ function TerminalPane({
         // Fleet comes back clean instead of corrupted.
         forceRedraw();
         setTimeout(forceRedraw, 80);
+        // xterm only emits onResize when its integer grid changes. A layout
+        // switch can reveal the same-sized grid in a new arrangement, while a
+        // full-screen child TUI still needs a SIGWINCH to redraw its viewport.
+        // Do this only for explicit layout/retile signals, never for ordinary
+        // font/DPI or container resize work.
+        if (forcePtyResize) forcePtyRepaint();
       });
     }
     document.addEventListener('pane-resize-end', onResizeEnd);
@@ -1491,6 +1522,7 @@ function TerminalPane({
       unsubInput();
       if (fitRafRef.current !== null) cancelAnimationFrame(fitRafRef.current);
       if (settledFitTimerRef.current !== null) clearTimeout(settledFitTimerRef.current);
+      if (ptyResizeKickTimerRef.current !== null) clearTimeout(ptyResizeKickTimerRef.current);
       resizeObserver?.disconnect();
       container.removeEventListener('mousedown', handleTerminalLinkMouseDown, true);
       container.removeEventListener('mouseup', handleTerminalLinkMouseUp, true);
@@ -1559,9 +1591,10 @@ function TerminalPane({
       if (cancelled || !termRef.current) return;
 
       const t = termRef.current;
-      const fontChanged = t.options.fontFamily !== fontFamily || t.options.fontSize !== fontSize;
+      const effectiveFontSize = terminalFontSizeForUiScale(fontSize, uiFontSizeValue);
+      const fontChanged = t.options.fontFamily !== fontFamily || t.options.fontSize !== effectiveFontSize;
       t.options.fontFamily = fontFamily;
-      t.options.fontSize = fontSize;
+      t.options.fontSize = effectiveFontSize;
       t.options.cursorStyle = cursorStyle;
       t.options.scrollback = scrollback;
       t.options.windowsPty = windowsPty;
@@ -1585,7 +1618,7 @@ function TerminalPane({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fontFamily, fontSize, cursorStyle, scrollback, windowsPty]);
+  }, [fontFamily, fontSize, uiFontSizeValue, cursorStyle, scrollback, windowsPty]);
 
   useEffect(() => {
     if (termRef.current) {

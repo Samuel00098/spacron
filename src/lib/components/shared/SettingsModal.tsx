@@ -13,6 +13,7 @@ import {
   agentWorktrees,
   aiProvider,
   aiProviders,
+  accentColor,
   appearance,
   autoSave,
   autoStageAgentChanges,
@@ -52,6 +53,7 @@ import {
   terminalScrollback,
   terminalShell,
   uiZoom,
+  uiFontSize,
   userShortcuts,
   vimMode,
   voiceAiProvider,
@@ -135,10 +137,68 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
-  { id: 'stats', label: 'Stats', kicker: 'Usage and cost' },
+  { id: 'stats', label: 'Usage', kicker: 'Model usage and cost' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map' },
   { id: 'about', label: 'About', kicker: 'Version and reset' },
 ];
+
+type SettingsSearchEntry = {
+  id: string;
+  tab: Tab;
+  section: string;
+  label: string;
+  keywords?: string;
+  target?: 'row' | 'section';
+};
+
+const settingsSearchEntries: SettingsSearchEntry[] = [
+  { id: 'editor-font-size', tab: 'general', section: 'Editor', label: 'Font size', keywords: 'editor text code' },
+  { id: 'editor-font-family', tab: 'general', section: 'Editor', label: 'Font family', keywords: 'editor terminal typeface' },
+  { id: 'tab-size', tab: 'general', section: 'Editor', label: 'Tab size', keywords: 'spaces indentation' },
+  { id: 'word-wrap', tab: 'general', section: 'Editor', label: 'Word wrap' },
+  { id: 'format-on-save', tab: 'general', section: 'Editor', label: 'Format on save' },
+  { id: 'auto-save', tab: 'general', section: 'Editor', label: 'Auto save', keywords: 'automatic save' },
+  { id: 'language-server', tab: 'general', section: 'Editor', label: 'Language server', keywords: 'lsp' },
+  { id: 'minimap', tab: 'general', section: 'Editor', label: 'Minimap' },
+  { id: 'vim-mode', tab: 'general', section: 'Editor', label: 'Vim mode' },
+  { id: 'hidden-files', tab: 'general', section: 'Workspace', label: 'Show hidden files', keywords: 'dot files explorer' },
+  { id: 'snapshots', tab: 'general', section: 'Workspace', label: 'Show Workspace Snapshots', keywords: 'sidebar history' },
+  { id: 'notifications', tab: 'general', section: 'Workspace', label: 'Notifications', keywords: 'alerts agents' },
+  { id: 'appearance-mode', tab: 'appearance', section: 'Theme', label: 'Appearance mode', keywords: 'light dark system theme', target: 'section' },
+  { id: 'ui-zoom', tab: 'appearance', section: 'Appearance', label: 'UI zoom', keywords: 'scale size interface' },
+  { id: 'ui-font-size', tab: 'appearance', section: 'Appearance', label: 'UI font size', keywords: 'application text size' },
+  { id: 'accent-color', tab: 'appearance', section: 'Appearance', label: 'Accent color', keywords: 'colour highlight brand' },
+  { id: 'custom-background', tab: 'appearance', section: 'Background', label: 'Custom background', keywords: 'wallpaper image' },
+  { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
+  { id: 'ai-provider', tab: 'models', section: 'Primary provider', label: 'Provider', keywords: 'ai model service' },
+  { id: 'ai-api-key', tab: 'models', section: 'Primary provider', label: 'API key', keywords: 'token secret credentials', target: 'section' },
+  { id: 'ai-model', tab: 'models', section: 'Primary provider', label: 'Model', keywords: 'ai completion' },
+  { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
+  { id: 'local-speech-models', tab: 'models', section: 'Local Speech-to-Text (STT)', label: 'Local Speech-to-Text', keywords: 'offline private voice dictation', target: 'section' },
+  { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
+  { id: 'smart-voice-detection', tab: 'voice', section: 'Voice input', label: 'Smart voice detection', keywords: 'vad speaking silence' },
+  { id: 'voice-refinement', tab: 'voice', section: 'Voice refinement', label: 'Voice refinement', keywords: 'transcript cleanup' },
+  { id: 'conversation-engine', tab: 'voice', section: 'Conversation engine', label: 'Conversation engine', keywords: 'realtime voice assistant', target: 'section' },
+  { id: 'terminal-font-size', tab: 'terminal', section: 'Appearance', label: 'Font size', keywords: 'terminal text' },
+  { id: 'terminal-cursor', tab: 'terminal', section: 'Appearance', label: 'Cursor', keywords: 'terminal caret' },
+  { id: 'terminal-renderer', tab: 'terminal', section: 'Appearance', label: 'Renderer', keywords: 'terminal webgl canvas dom' },
+  { id: 'terminal-scrollback', tab: 'terminal', section: 'Appearance', label: 'Scrollback', keywords: 'terminal history lines' },
+  { id: 'default-shell', tab: 'terminal', section: 'Default shell', label: 'Default shell', keywords: 'terminal command prompt', target: 'section' },
+  { id: 'agent-isolation', tab: 'agents', section: 'Isolation & changes', label: 'Isolate agents in worktrees', keywords: 'git branches checkout' },
+  { id: 'auto-stage', tab: 'agents', section: 'Isolation & changes', label: 'Auto-stage agent changes', keywords: 'git review' },
+  { id: 'stay-awake', tab: 'agents', section: 'Power', label: 'Stay awake while agents work', keywords: 'sleep idle power' },
+  { id: 'browser-tools', tab: 'agents', section: 'Browser', label: 'Browser tools', keywords: 'web agent' },
+  { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
+  { id: 'usage-stats', tab: 'stats', section: 'Usage', label: 'Usage', keywords: 'model tokens spending statistics cost', target: 'section' },
+  { id: 'keyboard-shortcuts', tab: 'shortcuts', section: 'Keyboard shortcuts', label: 'Keyboard shortcuts', keywords: 'hotkeys keymap', target: 'section' },
+  { id: 'custom-shortcuts', tab: 'shortcuts', section: 'Add custom navigation shortcut', label: 'Add custom navigation shortcut', keywords: 'hotkeys commands', target: 'section' },
+  { id: 'version', tab: 'about', section: 'Spacron', label: 'Version', keywords: 'release changelog', target: 'section' },
+  { id: 'factory-reset', tab: 'about', section: 'Maintenance', label: 'Factory reset', keywords: 'erase restore defaults', target: 'section' },
+];
+
+function settingsSearchKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '-');
+}
 
 const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
   { id: 'webspeech', label: 'System speech' },
@@ -148,6 +208,15 @@ const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
   { id: 'ollama', label: 'Ollama' },
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'local', label: 'Local Offline (Whisper/Parakeet)' },
+];
+
+const accentPresets = [
+  { value: '#000000', label: 'Graphite' },
+  { value: '#2563eb', label: 'Blue' },
+  { value: '#7c3aed', label: 'Violet' },
+  { value: '#0f766e', label: 'Teal' },
+  { value: '#c2410c', label: 'Orange' },
+  { value: '#be123c', label: 'Rose' },
 ];
 
 function classNames(...parts: Array<string | false | null | undefined>) {
@@ -373,7 +442,7 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="settings-control-row">
+    <div className="settings-control-row" data-settings-key={settingsSearchKey(title)}>
       <div className="settings-control-copy">
         <span>{title}</span>
         {detail && <small>{detail}</small>}
@@ -385,7 +454,7 @@ function SettingRow({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="settings-card">
+    <section className="settings-card" data-settings-section={settingsSearchKey(title)}>
       <h3>{title}</h3>
       <div className="settings-card-body">{children}</div>
     </section>
@@ -495,6 +564,32 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>(
     () => useLayoutStore.getState().settingsInitialTab ?? 'general',
   );
+  const [settingsQuery, setSettingsQuery] = useState('');
+
+  const settingsSearchResults = useMemo(() => {
+    const query = settingsQuery.trim().toLowerCase();
+    if (!query) return [];
+    return settingsSearchEntries
+      .filter((entry) => {
+        const haystack = `${entry.label} ${entry.section} ${entry.tab} ${entry.keywords ?? ''}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, 8);
+  }, [settingsQuery]);
+
+  function selectSettingsSearchResult(result: SettingsSearchEntry) {
+    setActiveTab(result.tab);
+    setSettingsQuery('');
+    window.setTimeout(() => {
+      const modal = document.querySelector('.settings-modal');
+      if (!modal) return;
+      const attribute = result.target === 'section' ? 'data-settings-section' : 'data-settings-key';
+      const key = settingsSearchKey(result.target === 'section' ? result.section : result.label);
+      const target = Array.from(modal.querySelectorAll<HTMLElement>(`[${attribute}]`))
+        .find((element) => element.getAttribute(attribute) === key);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 0);
+  }
 
   // Which half of the Voice tab is showing. History lives INSIDE that tab
   // rather than as a tenth top-level tab — it is voice output, not its own
@@ -751,6 +846,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const keepAwake = useStore(keepAwakeState);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
+  const currentUiFontSize = useStore(uiFontSize);
+  const currentAccentColor = useStore(accentColor);
   const currentFormatOnSave = useStore(formatOnSave);
   const currentAutoSave = useStore(autoSave);
   const currentAppearance = useStore(appearance);
@@ -786,6 +883,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const grokRealtimeVoice = useStore(xaiRealtimeVoice);
   const announceCompletions = useStore(announceAgentCompletions);
   const baseUrls = useStore(aiBaseUrlByProvider);
+  const defaultAccentColor = currentActiveTheme?.colors?.accent ?? (currentAppearance === 'dark' ? '#ffffff' : '#000000');
+  const displayedAccentColor = currentAccentColor || defaultAccentColor;
 
   const providerDef = getProviderDef(provider);
   const models = providerLiveModels[provider] ?? providerDef.models;
@@ -1250,10 +1349,63 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       <div className="settings-modal" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="settings-header">
           <div>
-            <span className="settings-eyebrow">Preferences</span>
             <h2 id="settings-title">Settings</h2>
           </div>
-          <button className="settings-close" onClick={onclose} aria-label="Close settings">x</button>
+          <div className="settings-search-wrap">
+            <svg className="settings-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+              <path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            <input
+              className="settings-search-input"
+              value={settingsQuery}
+              onChange={(event) => setSettingsQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setSettingsQuery('');
+                if (event.key === 'Enter' && settingsSearchResults[0]) {
+                  event.preventDefault();
+                  selectSettingsSearchResult(settingsSearchResults[0]);
+                }
+              }}
+              placeholder="Search settings"
+              aria-label="Search settings"
+              autoComplete="off"
+            />
+            {settingsQuery && (
+              <button
+                type="button"
+                className="settings-search-clear"
+                onClick={() => setSettingsQuery('')}
+                aria-label="Clear settings search"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+            {settingsQuery && (
+              <div className="settings-search-results" role="listbox" aria-label="Matching settings">
+                {settingsSearchResults.length > 0 ? settingsSearchResults.map((result) => (
+                  <button
+                    type="button"
+                    className="settings-search-result"
+                    key={result.id}
+                    onClick={() => selectSettingsSearchResult(result)}
+                  >
+                    <span>{result.label}</span>
+                    <small>{tabs.find((tab) => tab.id === result.tab)?.label ?? result.tab} · {result.section}</small>
+                  </button>
+                )) : (
+                  <p className="settings-search-empty">No matching settings</p>
+                )}
+              </div>
+            )}
+          </div>
+          <button className="settings-close" type="button" onClick={onclose} aria-label="Close settings" title="Close settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
         </header>
 
         <div className="settings-body">
@@ -1469,23 +1621,32 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               <>
                 <Section title="Theme">
                   {/* Appearance mode — visual cards */}
-                  <div className="appearance-cards" style={{ padding: '16px 18px 10px' }}>
+                  <div className="appearance-cards">
                     {([
-                      { id: 'system' as const, label: 'System',
+                      { id: 'system' as const, label: 'System', detail: 'Follow device',
                         icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> },
-                      { id: 'light'  as const, label: 'Light',
+                      { id: 'light'  as const, label: 'Light', detail: 'Bright surfaces',
                         icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg> },
-                      { id: 'dark'   as const, label: 'Dark',
+                      { id: 'dark'   as const, label: 'Dark', detail: 'Dimmed surfaces',
                         icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg> },
-                    ]).map(({ id, label, icon }) => (
+                    ]).map(({ id, label, detail, icon }) => (
                       <button
                         key={id}
                         type="button"
                         className={`appearance-card${currentAppearance === id ? ' selected' : ''}`}
                         onClick={() => appearance.set(id)}
                       >
+                        <span className={`appearance-preview appearance-preview-${id}`} aria-hidden="true">
+                          <span className="appearance-preview-top" />
+                          <span className="appearance-preview-body">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                        </span>
                         <span className="appearance-icon">{icon}</span>
                         <span className="appearance-label">{label}</span>
+                        <small className="appearance-detail">{detail}</small>
                       </button>
                     ))}
                   </div>
@@ -1497,10 +1658,47 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button className="num-btn-reset" onClick={() => uiZoom.set(100)}>Reset</button>
                     </div>
                   </SettingRow>
+                  <SettingRow title="UI font size" detail={`${currentUiFontSize}px · editor stays unchanged`}>
+                    <div className="num-control">
+                      <button className="num-btn" onClick={() => uiFontSize.set(Math.max(12, currentUiFontSize - 1))} aria-label="Decrease UI font size">−</button>
+                      <span className="num-val">{currentUiFontSize}px</span>
+                      <button className="num-btn" onClick={() => uiFontSize.set(Math.min(20, currentUiFontSize + 1))} aria-label="Increase UI font size">+</button>
+                      <button className="num-btn-reset" onClick={() => uiFontSize.set(14)}>Reset</button>
+                    </div>
+                  </SettingRow>
+                  <SettingRow title="Accent color" detail={currentAccentColor ? `${currentAccentColor} · custom` : `${defaultAccentColor} · theme default`}>
+                    <div className="accent-picker">
+                      <label className="accent-color-input" title="Choose accent color">
+                        <input
+                          type="color"
+                          value={displayedAccentColor}
+                          onChange={(event) => accentColor.set(event.target.value)}
+                          aria-label="Choose accent color"
+                        />
+                        <span style={{ backgroundColor: displayedAccentColor }} />
+                      </label>
+                      <div className="accent-swatches" aria-label="Accent color presets">
+                        {accentPresets.map((preset) => (
+                          <button
+                            key={preset.value}
+                            type="button"
+                            className={classNames('accent-swatch', currentAccentColor === preset.value && 'selected')}
+                            style={{ backgroundColor: preset.value }}
+                            onClick={() => accentColor.set(preset.value)}
+                            aria-label={preset.label}
+                            title={preset.label}
+                          />
+                        ))}
+                      </div>
+                      {currentAccentColor && (
+                        <button className="num-btn-reset" onClick={() => accentColor.set('')}>Theme default</button>
+                      )}
+                    </div>
+                  </SettingRow>
                 </Section>
 
                 <Section title="Background">
-                  <SettingRow title="Custom background" detail="Show your own image behind the interface. It replaces the theme's wallpaper while it's on, and is always fully solid.">
+                  <SettingRow title="Custom background" detail="Show your own image behind the interface. It overrides the solid or theme background while enabled and remains available in Light and Dark mode.">
                     <div className="bg-actions">
                       <button className="bg-btn" onClick={chooseBackgroundImage}>
                         {bgPresent ? 'Change…' : 'Choose…'}

@@ -161,6 +161,20 @@ export function getProjectOrchestratorTasks(projectId: string) {
   return derived(orchestratorTasks, ($all) => $all.filter((t) => t.projectId === projectId));
 }
 
+/** Read durable task history without loading the rest of the orchestrator runtime. */
+export async function readProjectOrchestratorTaskSummaries(project: { id: string; root_path: string }): Promise<OrchestratorTask[]> {
+  try {
+    const raw = await readProjectState(project.id, project.root_path, 'orchestrator.json');
+    const parsed = JSON.parse(raw ?? '');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((task) => normalizeLoadedTask(task as Partial<PersistedTask>))
+      .filter((task): task is OrchestratorTask => task !== null);
+  } catch {
+    return [];
+  }
+}
+
 // projectId → root_path so flushes can write without the full project object.
 const projectPaths = new Map<string, string>();
 

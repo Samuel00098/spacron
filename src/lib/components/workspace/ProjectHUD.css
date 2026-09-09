@@ -179,7 +179,7 @@
   padding: 8px 6px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -491,20 +491,34 @@
 .hud-move-menu {
   position: absolute;
   top: 100%;
-  right: 4px;
+  right: 2px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, transparent 55%),
-    rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
-  border-radius: 8px;
+    linear-gradient(135deg, color-mix(in srgb, var(--text-primary) 9%, transparent), transparent 58%),
+    color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 20%, transparent);
+  border-radius: 11px;
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.5),
-    0 12px 28px rgba(0, 0, 0, 0.5);
-  padding: 6px;
+    0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent),
+    0 14px 34px rgba(0, 0, 0, 0.46),
+    0 3px 10px rgba(0, 0, 0, 0.24);
+  padding: 7px;
   z-index: 100;
-  min-width: 140px;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  min-width: 178px;
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}
+
+.hud-move-menu::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  right: 13px;
+  width: 9px;
+  height: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 20%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--text-primary) 20%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  transform: rotate(45deg);
 }
 
 .hud-move-menu-label {
@@ -512,15 +526,17 @@
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
-  padding: 2px 6px 6px;
-  letter-spacing: 0.5px;
+  padding: 2px 7px 7px;
+  letter-spacing: 0.075em;
 }
 
 .hud-move-menu-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   width: 100%;
   text-align: left;
-  padding: 5px 8px;
+  padding: 7px 8px;
   font-size: 11.5px;
   border-radius: 4px;
   border: none;
@@ -535,6 +551,10 @@
 
 .hud-move-menu-item:hover {
   background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.hud-move-menu-item:hover svg {
   color: var(--accent);
 }
 
@@ -764,6 +784,89 @@
   color: var(--text-primary);
 }
 
+.project-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.project-task-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 5px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.project-task-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.project-task-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.project-task-row.status-complete .project-task-status {
+  color: var(--success);
+}
+
+.project-task-row.status-in-progress .project-task-status {
+  color: var(--warning);
+}
+
+.project-task-row.status-blocked .project-task-status,
+.project-task-row.status-failed .project-task-status,
+.project-task-row.status-cancelled .project-task-status {
+  color: var(--error, #ef4444);
+}
+
+.project-task-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-move-menu-item svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.project-task-state {
+  color: var(--text-muted);
+  font-size: 9.5px;
+  flex-shrink: 0;
+}
+
+.project-task-more {
+  display: block;
+  padding: 1px 5px 0 24px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
 /* ── Dragging a project between collections ───────────────────────────────── */
 .project-sidebar-card.dragging {
   opacity: 0.45;
@@ -782,4 +885,192 @@
   border-radius: 1px;
   background: var(--accent);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+/* ── Workspace and Section Groups (Project-by-Project Architecture) ─────── */
+
+.projects-section-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.projects-workspaces-group {
+  order: -1;
+}
+
+.projects-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 2px;
+  min-height: 22px;
+}
+
+.projects-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+}
+
+.projects-section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.projects-section-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.projects-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.projects-section-empty-hint {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.projects-header-btn.mini {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+/* Inline New Workspace Form */
+.projects-new-ws-inline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.project-sidebar-card-task-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Workspace Group Card */
+.projects-workspace-card {
+  margin: 2px 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+  overflow: visible;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.projects-workspace-card:hover {
+  border-color: color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+}
+
+.projects-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-radius: 6px 6px 0 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.projects-workspace-header:hover {
+  background: var(--bg-hover);
+}
+
+.projects-workspace-header.active {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.projects-workspace-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.projects-workspace-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.projects-workspace-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.projects-workspace-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.projects-workspace-count {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.projects-workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.projects-workspace-card:hover .projects-workspace-actions,
+.projects-workspace-actions:focus-within {
+  opacity: 1;
+}
+
+.projects-workspace-body {
+  padding: 3px 4px 6px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.projects-workspace-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
 }

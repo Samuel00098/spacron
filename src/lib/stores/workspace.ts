@@ -1323,6 +1323,7 @@ export function createNewWorkspace(name?: string) {
     project_paths: [],
     active_project_path: null,
     last_opened: Date.now().toString(),
+    is_workspace: true,
   };
 
   recentWorkspaces.update((ws) => [newWorkspace, ...ws]);
@@ -1677,7 +1678,23 @@ export function switchToProject(projectId: string) {
 }
 
 export async function openProjectByPath(path: string) {
-  await addFolderToWorkspace(path);
+  const wsList = get(recentWorkspaces);
+  const existing = wsList.find((w) => (w.project_paths || []).includes(path) || w.active_project_path === path);
+  if (existing) {
+    await openWorkspace(existing.id);
+    return;
+  }
+  const id = `proj-${Date.now()}`;
+  const newWorkspace: Workspace = {
+    id,
+    name: getFilename(path),
+    project_paths: [path],
+    active_project_path: path,
+    last_opened: Date.now().toString(),
+    is_workspace: false,
+  };
+  recentWorkspaces.update((ws) => [newWorkspace, ...ws]);
+  await openWorkspace(id);
 }
 
 // ── Remote workspace root (Step 4 of docs/remote-workspace.md) ─────────────
@@ -1776,10 +1793,10 @@ export async function openProject() {
   const selected = await open({
     directory: true,
     multiple: false,
-    title: 'Add Folder to Workspace',
+    title: 'Open Project Folder',
   });
-  if (selected) {
-    await addFolderToWorkspace(selected);
+  if (selected && typeof selected === 'string') {
+    await openProjectByPath(selected);
   }
 }
 
@@ -1818,7 +1835,13 @@ export async function resetAllApplicationState() {
 }
 
 export async function initializeWorkspaces() {
-  const wsId = get(activeWorkspaceId);
+  let wsId = get(activeWorkspaceId);
+  if (!wsId) {
+    const recents = get(recentWorkspaces);
+    if (recents && recents.length > 0 && recents[0]?.id) {
+      wsId = recents[0].id;
+    }
+  }
   if (wsId) {
     await openWorkspace(wsId);
   }
@@ -1830,45 +1853,6 @@ export function renameWorkspace(workspaceId: string, newName: string) {
   );
 }
 
-export function moveProjectToWorkspace(projectPath: string, targetWorkspaceId: string) {
-  const currentWsId = get(activeWorkspaceId);
-  if (!currentWsId || currentWsId === targetWorkspaceId) return;
-
-  const folderName = getFilename(projectPath);
-
-  recentWorkspaces.update((list) =>
-    list.map((w) => {
-      if (w.id === currentWsId) {
-        // Source workspace keeps its name; only its project list changes.
-        const paths = w.project_paths.filter((p) => p !== projectPath);
-        return {
-          ...w,
-          project_paths: paths,
-          active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
-        };
-      }
-      if (w.id === targetWorkspaceId) {
-        const paths = w.project_paths.includes(projectPath) ? w.project_paths : [...w.project_paths, projectPath];
-        // Only auto-name the target if it's still an unnamed placeholder.
-        let newName = w.name;
-        if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name === 'Empty Collection' || w.name === 'Empty Workspace' || w.name.trim() === '') {
-          newName = folderName;
-        }
-        return { ...w, name: newName, project_paths: paths };
-      }
-      return w;
-    })
-  );
-
-  // Close the project in the current workspace if it's open
-  const currentProjects = get(projects);
-  for (const [id, proj] of currentProjects) {
-    if (proj.root_path === projectPath) {
-      closeProject(id);
-      break;
-    }
-  }
-}
 
 /**
  * Move a project into another collection, landing it before `beforePath` (or at
@@ -1920,36 +1904,141 @@ export function moveProjectBetweenCollections(
   });
 }
 
-export function removeProjectFromCollection(workspaceId: string, projectPath: string) {
-  const activeWsId = get(activeWorkspaceId);
-  const allProjects = get(projects);
-  const activeProj = Array.from(allProjects.values()).find((p) => p.root_path === projectPath);
+export async function removeProjectFromCollection(workspaceId: string, projectPath: string) {
+  const list = get(recentWorkspaces);
+  const ws = list.find((w) => w.id === workspaceId);
+  if (!ws) return;
 
-  if (workspaceId === activeWsId && activeProj) {
-    closeProject(activeProj.id);
+  const remainingPaths = (ws.project_paths || []).filter((x) => x !== projectPath);
+  if (remainingPaths.length === 0) {
+    await deleteCollection(workspaceId);
   } else {
     recentWorkspaces.update((wsList) =>
       wsList.map((w) => {
         if (w.id === workspaceId) {
-          const paths = w.project_paths.filter((x) => x !== projectPath);
           return {
             ...w,
-            project_paths: paths,
-            active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
+            project_paths: remainingPaths,
+            active_project_path: w.active_project_path === projectPath ? remainingPaths[0] : w.active_project_path,
           };
         }
         return w;
       })
     );
+    if (get(activeWorkspaceId) === workspaceId && ws.active_project_path === projectPath) {
+      const allProjects = get(projects);
+      const nextProj = Array.from(allProjects.values()).find((p) => p.root_path === remainingPaths[0]);
+      if (nextProj) {
+        switchToProject(nextProj.id);
+      }
+    }
   }
 }
 
-export function deleteCollection(workspaceId: string) {
-  recentWorkspaces.update((wsList) => wsList.filter((w) => w.id !== workspaceId));
-  if (get(activeWorkspaceId) === workspaceId) {
+export async function deleteCollection(workspaceId: string) {
+  const currentWsId = get(activeWorkspaceId);
+  const list = get(recentWorkspaces);
+  const remaining = list.filter((w) => w.id !== workspaceId);
+  recentWorkspaces.set(remaining);
+
+  if (currentWsId === workspaceId) {
     activeWorkspaceId.set(null);
     clearAllStores();
     projects.set(new Map());
     openProjectIds.set([]);
+    setActiveTerminalProject(null);
+    import('@tauri-apps/api/core').then(({ invoke }) => {
+      invoke('workspace_set_active', { projectId: null }).catch((e) => {
+        console.error('Failed to clear active project on backend:', e);
+      });
+    });
+  }
+}
+
+export function moveProjectToWorkspace(projectPath: string, targetWorkspaceId: string) {
+  const currentWsId = get(activeWorkspaceId);
+  const folderName = getFilename(projectPath);
+
+  recentWorkspaces.update((list) => {
+    return list.map((w) => {
+      if (w.id === targetWorkspaceId) {
+        const paths = [...(w.project_paths || [])];
+        if (!paths.includes(projectPath)) paths.push(projectPath);
+        let newName = w.name;
+        if (w.name === 'New Collection' || w.name === 'New Workspace' || w.name === 'Empty Collection' || w.name === 'Empty Workspace' || w.name.trim() === '') {
+          newName = folderName;
+        }
+        return {
+          ...w,
+          name: newName,
+          project_paths: paths,
+          active_project_path: projectPath,
+        };
+      }
+      if (w.project_paths?.includes(projectPath)) {
+        const paths = w.project_paths.filter((p) => p !== projectPath);
+        return {
+          ...w,
+          project_paths: paths,
+          active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
+        };
+      }
+      return w;
+    }).filter((w) => w.is_workspace || (w.project_paths && w.project_paths.length > 0));
+  });
+
+  if (currentWsId && currentWsId !== targetWorkspaceId) {
+    const currentProjects = get(projects);
+    for (const [id, proj] of currentProjects) {
+      if (proj.root_path === projectPath) {
+        closeProject(id);
+        break;
+      }
+    }
+  }
+}
+
+export function moveProjectToStandalone(projectPath: string, fromWorkspaceId?: string) {
+  recentWorkspaces.update((list) => {
+    const updated = list.map((w) => {
+      if ((!fromWorkspaceId || w.id === fromWorkspaceId) && w.project_paths?.includes(projectPath)) {
+        const paths = w.project_paths.filter((p) => p !== projectPath);
+        return {
+          ...w,
+          project_paths: paths,
+          active_project_path: w.active_project_path === projectPath ? (paths[0] ?? null) : w.active_project_path,
+        };
+      }
+      return w;
+    });
+    const alreadyExists = updated.some((w) => !w.is_workspace && w.project_paths?.includes(projectPath));
+    if (!alreadyExists) {
+      const standaloneWs: Workspace = {
+        id: `proj-${Date.now()}`,
+        name: getFilename(projectPath),
+        project_paths: [projectPath],
+        active_project_path: projectPath,
+        last_opened: Date.now().toString(),
+        is_workspace: false,
+      };
+      return [standaloneWs, ...updated];
+    }
+    return updated;
+  });
+}
+
+export async function addProjectToWorkspace(workspaceId: string) {
+  if (!isTauriRuntime()) return;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: 'Select Project Folder to Add',
+  });
+  if (selected && typeof selected === 'string') {
+    moveProjectToWorkspace(selected, workspaceId);
+    if (get(activeWorkspaceId) === workspaceId) {
+      await addFolderToWorkspace(selected);
+    }
   }
 }

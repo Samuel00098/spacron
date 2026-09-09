@@ -1,22 +1,26 @@
 .transcription-indicator {
-  position: fixed;
-  /* Centered above the floating prompt bar / composer strip. */
+  position: absolute;
+  /* The indicator lives inside FloatingPromptBar, so it follows the bar when
+     the bar is dragged or re-anchored instead of tracking the viewport. */
   left: 50%;
-  bottom: 92px;
+  bottom: calc(100% + 10px);
   transform: translateX(-50%);
   z-index: 300;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(239, 68, 68, 0.28);
-  background: color-mix(in srgb, var(--bg-secondary) 86%, transparent);
-  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
+  padding: 7px 15px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background:
+    radial-gradient(ellipse at 50% 50%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, color-mix(in srgb, var(--accent) 8%, transparent) 50%, transparent 85%),
+    color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  backdrop-filter: blur(var(--glass-blur, 24px)) saturate(var(--glass-saturate, 160%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 24px)) saturate(var(--glass-saturate, 160%));
   box-shadow:
-    var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65)),
-    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13));
+    var(--glass-shadow, 0 20px 50px -15px rgba(0, 0, 0, 0.7)),
+    0 0 24px -4px color-mix(in srgb, var(--accent) 25%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
   pointer-events: none;
   animation: transcription-indicator-in 140ms ease;
 }
@@ -29,17 +33,23 @@
 }
 
 .transcription-indicator.listening {
-  border-color: rgba(239, 68, 68, 0.4);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow:
+    0 20px 50px -15px rgba(0, 0, 0, 0.7),
+    0 0 28px -4px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 0 40px -8px color-mix(in srgb, var(--accent) 20%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .transcription-indicator.listening .dot {
-  background: #ef4444;
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.7);
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 80%, transparent);
   animation: transcription-dot-pulse 1s ease-in-out infinite;
 }
 
 .transcription-indicator.processing .dot {
-  background: var(--accent, #22d3c7);
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 80%, transparent);
   animation: transcription-dot-pulse 0.6s ease-in-out infinite;
 }
 
@@ -50,16 +60,15 @@
 .transcription-indicator .meter {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 2.5px;
   height: 14px;
   flex-shrink: 0;
 }
 
 .transcription-indicator .meter .bar {
-  width: 2.5px;
+  width: 3px;
   height: 100%;
-  border-radius: 2px;
-  background: #ef4444;
+  border-radius: 999px;
   transform-origin: center;
   transition: transform 90ms ease-out;
 }
