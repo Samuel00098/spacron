@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish, for example v0.4.1'
+        description: 'Release tag to publish, for example 4.0.0 or v4.0.0'
         required: true
         type: string
 
@@ -32,8 +33,8 @@ jobs:
           # `inputs.tag` and `github.ref_name` are NEVER interpolated into bash
           # directly — the value crosses into the shell only via this env var
           # after the regex passes.
-          if [[ ! "$TAG_CANDIDATE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid release tag: '$TAG_CANDIDATE' (expected v<major>.<minor>.<patch>)" >&2
+          if [[ ! "$TAG_CANDIDATE" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: '$TAG_CANDIDATE' (expected <major>.<minor>.<patch> with an optional v prefix)" >&2
             exit 1
           fi
           echo "tag=$TAG_CANDIDATE" >> "$GITHUB_OUTPUT"
