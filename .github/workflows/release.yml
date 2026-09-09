@@ -86,6 +86,10 @@ jobs:
       # compromise of an action's repo can't change what this workflow runs.
       # Update deliberately: bump to the new tag's SHA after review.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # Workflow dispatch runs from the branch containing this workflow;
+          # release artifacts must instead be built from the requested tag.
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Install Linux dependencies
         if: matrix.os == 'linux'
