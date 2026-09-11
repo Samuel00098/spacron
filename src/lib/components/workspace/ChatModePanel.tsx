@@ -4,6 +4,7 @@ import { useStore } from '$lib/react/useStore';
 import {
   agentForcedAgent,
   chatMessages,
+  clearProjectChat,
   getDispatchableAgents,
   orchestratorTasks,
   sendChatMessage,
@@ -11,6 +12,8 @@ import {
 } from '$lib/stores/orchestrator';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import './ChatModePanel.css';
+
+const CHAT_MODE_PROTOTYPE_RESET_KEY = 'spacron_chat_mode_prototype_reset_v1';
 
 function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -58,7 +61,10 @@ export default function ChatModePanel() {
   const allTasks = useStore(orchestratorTasks);
   const forcedAgent = useStore(agentForcedAgent);
   const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
+  const [pendingSendCount, setPendingSendCount] = useState(0);
+  const [composerCentered, setComposerCentered] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const composerRef = useRef<HTMLFormElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const messages = useMemo(
@@ -81,20 +87,57 @@ export default function ChatModePanel() {
 
   useEffect(() => {
     setDraft('');
+    setComposerCentered(false);
   }, [project?.id]);
+
+  useEffect(() => {
+    if (!composerCentered) return;
+    const frame = window.requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      const composer = composerRef.current;
+      if (!panel || !composer) return;
+      const panelRect = panel.getBoundingClientRect();
+      const composerRect = composer.getBoundingClientRect();
+      const target = panel.scrollTop
+        + composerRect.top
+        - panelRect.top
+        - (panel.clientHeight - composerRect.height) / 2;
+      const maxScroll = Math.max(0, panel.scrollHeight - panel.clientHeight);
+      panel.scrollTo({
+        top: Math.min(maxScroll, Math.max(0, target)),
+        behavior: 'smooth',
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [composerCentered]);
+
+  // The first Chat-mode prototype shipped with seeded/demo conversation rows.
+  // Clear that one-time fixture for the current project so this room starts as
+  // a real workspace. Later conversations remain durable and user-controlled.
+  useEffect(() => {
+    if (!project) return;
+    try {
+      if (window.localStorage.getItem(CHAT_MODE_PROTOTYPE_RESET_KEY)) return;
+      clearProjectChat(project.id);
+      window.localStorage.setItem(CHAT_MODE_PROTOTYPE_RESET_KEY, '1');
+    } catch {
+      // If storage is unavailable, leave the live conversation untouched.
+    }
+  }, [project]);
 
   async function submit() {
     const text = draft.trim();
-    if (!project || !text || sending) return;
+    if (!project || !text) return;
     setDraft('');
-    setSending(true);
+    setComposerCentered(false);
+    setPendingSendCount((count) => count + 1);
     try {
       await sendChatMessage(project.id, project.root_path, text, {
         forcedAgent,
         projectName: project.name,
       });
     } finally {
-      setSending(false);
+      setPendingSendCount((count) => Math.max(0, count - 1));
     }
   }
 
@@ -106,31 +149,26 @@ export default function ChatModePanel() {
   }
 
   return (
-    <section className="chat-mode-panel" aria-label="Chat room">
+    <section
+      ref={panelRef}
+      className={`chat-mode-panel${composerCentered ? ' is-composing' : ''}`}
+      aria-label="Chat room"
+    >
       <div className="chat-mode-room-header">
         <div className="chat-mode-room-title">
           <span className="chat-mode-room-icon" aria-hidden="true">✦</span>
           <span className="chat-mode-room-kind">chat</span>
           <strong>Chat</strong>
         </div>
-        <span className="chat-mode-room-state">Project conversation</span>
+        <div className="chat-mode-room-actions">
+          <span className="chat-mode-room-state">Project conversation</span>
+          {project && (
+            <button type="button" onClick={() => clearProjectChat(project.id)}>
+              Clear
+            </button>
+          )}
+        </div>
       </div>
-      <header className="chat-mode-header">
-        <div>
-          <span className="chat-mode-eyebrow">Chat mode</span>
-          <h1>{project ? `Talk to your project` : 'Open a project to start chatting'}</h1>
-          <p>
-            {project
-              ? 'Describe the work and Spacron will route it to the right agent.'
-              : 'Your live terminals are waiting behind this view.'}
-          </p>
-        </div>
-        <div className="chat-mode-context">
-          <span className="chat-mode-context-label">Project context</span>
-          <strong>{project?.name ?? 'No project selected'}</strong>
-          {project && <span>{project.root_path}</span>}
-        </div>
-      </header>
 
       <div className="chat-mode-body">
         <div ref={scrollRef} className="chat-mode-transcript" aria-live="polite">
@@ -166,31 +204,39 @@ export default function ChatModePanel() {
           )}
         </div>
 
-        <aside className="chat-mode-activity" aria-label="Agent activity">
-          <div className="chat-mode-activity-heading">
-            <span>Activity</span>
-            <span className="chat-mode-live-mark">Live</span>
+        <aside className="chat-mode-sidecar">
+          <div className="chat-mode-context">
+            <span className="chat-mode-context-label">Project context</span>
+            <strong>{project?.name ?? 'No project selected'}</strong>
+            {project && <span>{project.root_path}</span>}
           </div>
-          {tasks.length === 0 ? (
-            <p className="chat-mode-activity-empty">Agent work will appear here.</p>
-          ) : (
-            <div className="chat-mode-task-list">
-              {tasks.map((task) => (
-                <div key={task.id} className="chat-mode-task">
-                  <span className={`chat-mode-task-status ${task.status}`} />
-                  <div>
-                    <strong>{task.name || getAgentDisplayName(task.agentPreset) || 'Agent'}</strong>
-                    <span>{task.title}</span>
-                  </div>
-                  <em>{statusLabel(task.status)}</em>
-                </div>
-              ))}
+          <div className="chat-mode-activity" aria-label="Agent activity">
+            <div className="chat-mode-activity-heading">
+              <span>Activity</span>
+              <span className="chat-mode-live-mark">Live</span>
             </div>
-          )}
+            {tasks.length === 0 ? (
+              <p className="chat-mode-activity-empty">Agent work will appear here.</p>
+            ) : (
+              <div className="chat-mode-task-list">
+                {tasks.map((task) => (
+                  <div key={task.id} className="chat-mode-task">
+                    <span className={`chat-mode-task-status ${task.status}`} />
+                    <div>
+                      <strong>{task.name || getAgentDisplayName(task.agentPreset) || 'Agent'}</strong>
+                      <span>{task.title}</span>
+                    </div>
+                    <em>{statusLabel(task.status)}</em>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 
       <form
+        ref={composerRef}
         className="chat-mode-composer"
         onSubmit={(event) => {
           event.preventDefault();
@@ -199,24 +245,29 @@ export default function ChatModePanel() {
       >
         <textarea
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setDraft(value);
+            if (value.trim() && !composerCentered) setComposerCentered(true);
+          }}
+          onFocus={() => setComposerCentered(true)}
           onKeyDown={onComposerKeyDown}
           placeholder={project ? 'Ask Spacron to do something…' : 'Select a project first'}
-          disabled={!project || sending}
+          disabled={!project}
           rows={2}
           aria-label="Chat message"
         />
         <div className="chat-mode-composer-footer">
           <label>
             <span>Route to</span>
-            <select value={forcedAgent} onChange={(event) => agentForcedAgent.set(event.target.value)} disabled={!project || sending}>
+            <select value={forcedAgent} onChange={(event) => agentForcedAgent.set(event.target.value)} disabled={!project}>
               <option value="auto">Auto</option>
               {agents.map((agent) => <option key={agent.command} value={agent.command}>{agent.name}</option>)}
             </select>
           </label>
           <span className="chat-mode-shortcut">Ctrl/Cmd + Enter to send</span>
-          <button type="submit" className="chat-mode-send" disabled={!project || !draft.trim() || sending}>
-            {sending ? 'Working…' : 'Send'}
+          <button type="submit" className="chat-mode-send" disabled={!project || !draft.trim()}>
+            {pendingSendCount > 0 ? `Send (${pendingSendCount} active)` : 'Send'}
           </button>
         </div>
       </form>
