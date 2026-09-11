@@ -185,7 +185,10 @@ function TranscriptionRow({ entry }: { entry: TranscriptionEntry }) {
 }
 
 function ConversationRow({ entry }: { entry: ConversationEntry }) {
-  const [open, setOpen] = useState(false);
+  // Conversation history is primarily a record of both sides of the exchange.
+  // Keep the turns visible when the user opens the Conversations view instead
+  // of making them discover a second Transcript click for every call.
+  const [open, setOpen] = useState(true);
   const duration = entry.endedAt ? entry.endedAt - entry.startedAt : 0;
   const meta = [
     ENGINE_LABELS[entry.engine] ?? entry.engine,
@@ -259,7 +262,7 @@ export default function VoiceHistoryPanel() {
   const conversations = useStore(conversationHistory);
   const retention = useStore(voiceHistoryRetention);
 
-  const [kind, setKind] = useState<HistoryKind>('transcriptions');
+  const [kind, setKind] = useState<HistoryKind>('conversations');
   const [preset, setPreset] = useState<VoiceHistoryRangePreset>('all');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
