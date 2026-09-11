@@ -346,6 +346,17 @@ export function getProjectThreads(projectId: string) {
   return derived(chatThreadState, (state) => state.threadsByProject[projectId] ?? []);
 }
 
+export function getChatThread(threadId: string): ChatThread | null {
+  return Object.values(get(chatThreadState).threadsByProject)
+    .flat()
+    .find((thread) => thread.id === threadId) ?? null;
+}
+
+export function findThreadIdForTask(projectId: string, taskId: string): string | null {
+  return (get(chatThreadState).threadsByProject[projectId] ?? [])
+    .find((thread) => thread.taskId === taskId)?.id ?? null;
+}
+
 export function getThreadMessages(threadId: string) {
   return derived(chatThreadState, (state) => state.messagesByThread[threadId] ?? []);
 }

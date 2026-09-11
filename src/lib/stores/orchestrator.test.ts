@@ -178,6 +178,7 @@ import { cleanupStaleWorktrees, trackedWorktrees, reclaimProjectWorktrees, orche
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
+import { chatThreadState, createChatThread, resetChatThreadsForTests } from '$lib/stores/chatThreads';
 
 function resetMocks() {
   invoke.mockReset();
@@ -270,6 +271,7 @@ describe('orchestrator terminal leasing', () => {
   afterEach(() => {
     orchestratorTasks.set([]);
     chatMessages.set({});
+    resetChatThreadsForTests();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
@@ -641,12 +643,14 @@ describe('orchestrator chat actions', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     orchestratorTasks.set([]);
+    resetChatThreadsForTests();
     resetMocks();
   });
 
   afterEach(() => {
     orchestratorTasks.set([]);
     chatMessages.set({});
+    resetChatThreadsForTests();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
@@ -1124,6 +1128,38 @@ describe('orchestrator chat actions', () => {
     expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, 'run the tests');
     expect(spawnAgentPreset).not.toHaveBeenCalled();
     expect(get(orchestratorTasks)).toHaveLength(1);
+  });
+
+  it('routes a follow-up from a thread directly to its live task', async () => {
+    resetChatThreadsForTests();
+    const seed = createOrchestratorTask('project-1', 'Original goal', 'claude', 'Backend');
+    const thread = createChatThread('project-1', {
+      title: 'Backend thread',
+      agentName: 'Backend',
+      agentPreset: 'claude',
+      taskId: seed.id,
+      sessionId: 42,
+    }, 100);
+    orchestratorTasks.set([{ ...seed, status: 'in-progress', assignedSessionId: 42, startedAt: 1 }]);
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
+    routeOrchestratorRequest.mockClear();
+
+    await sendChatMessage('project-1', '/repo', 'Please run the tests again', { threadId: thread.id });
+
+    expect(routeOrchestratorRequest).not.toHaveBeenCalled();
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, 'Please run the tests again');
+    const state = get(chatThreadState);
+    const messages = state.messagesByThread[thread.id];
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ role: 'user', text: 'Please run the tests again' });
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      pending: false,
+      text: 'Sent to Backend.',
+      dispatchedTaskId: seed.id,
+      dispatched: [{ taskId: seed.id, agent: 'claude', name: 'Backend', via: 'send' }],
+    });
   });
 
   it('resumes a blocked task directly and sends the reply automatically', async () => {

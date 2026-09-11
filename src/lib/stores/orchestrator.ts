@@ -91,8 +91,12 @@ import { autoStageAgentChanges } from '$lib/stores/settings';
 import {
   appendLegacyChatMessage,
   clearProjectThreadMessages,
+  findThreadIdForTask,
   findThreadIdForMessage,
+  getChatThread,
   patchThreadMessage,
+  updateChatThread,
+  type ChatThreadStatus,
 } from '$lib/stores/chatThreads';
 import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } from '$lib/stores/agentPlacement';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
@@ -183,6 +187,39 @@ export async function readProjectOrchestratorTaskSummaries(project: { id: string
 
 // projectId → root_path so flushes can write without the full project object.
 const projectPaths = new Map<string, string>();
+const threadIdByTaskId = new Map<string, string>();
+
+function threadStatusForTask(task: OrchestratorTask): ChatThreadStatus {
+  switch (task.status) {
+    case 'in-progress': return 'working';
+    case 'blocked': return 'needs-input';
+    case 'complete': return 'complete';
+    case 'failed':
+    case 'cancelled': return 'failed';
+    case 'todo': return 'draft';
+  }
+}
+
+function threadIdForTask(task: OrchestratorTask, preferredThreadId?: string): string | null {
+  const known = preferredThreadId ?? threadIdByTaskId.get(task.id) ?? findThreadIdForTask(task.projectId, task.id);
+  if (known) threadIdByTaskId.set(task.id, known);
+  return known ?? null;
+}
+
+function syncChatThreadTask(task: OrchestratorTask, preferredThreadId?: string): void {
+  const threadId = threadIdForTask(task, preferredThreadId);
+  if (!threadId) return;
+  const now = Date.now();
+  updateChatThread(threadId, {
+    taskId: task.id,
+    sessionId: task.assignedSessionId ?? task.lastSessionId ?? null,
+    agentName: task.name ?? null,
+    agentPreset: task.agentPreset ?? null,
+    status: threadStatusForTask(task),
+    updatedAt: now,
+    lastActivityAt: now,
+  });
+}
 
 type PersistedTask = Omit<Partial<OrchestratorTask>, 'status'> & {
   id: string;
@@ -1323,13 +1360,16 @@ async function completeLeasedTask(
     silent,
   };
 
+  syncChatThreadTask(updated);
+  const completionThreadId = threadIdForTask(updated) ?? undefined;
+
   appendChat(task.projectId, {
     id: chatMsgId,
     role: 'assistant',
     text: '',
     ts: Date.now(),
     completion: completionData,
-  });
+  }, completionThreadId);
 
   if (willSummarize && updated.transcript) {
     const projectId = task.projectId;
@@ -2055,6 +2095,51 @@ export function clearProjectChat(projectId: string) {
   chatMessages.update((all) => ({ ...all, [projectId]: [] }));
 }
 
+async function sendThreadFollowUp(
+  projectId: string,
+  rootPath: string,
+  threadId: string,
+  task: OrchestratorTask,
+  text: string,
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now() }, threadId);
+  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, threadId);
+
+  try {
+    const sent = await sendFollowUpToAgent(task, text, rootPath);
+    const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
+    syncChatThreadTask(latestTask, threadId);
+    if (!sent) {
+      patchChat(projectId, assistantId, {
+        text: `I couldn't reach ${task.name?.trim() || getAgentDisplayName(task.agentPreset) || 'the running agent'}.`,
+        pending: false,
+      });
+      return;
+    }
+
+    patchChat(projectId, assistantId, {
+      text: `Sent to ${task.name?.trim() || getAgentDisplayName(task.agentPreset) || 'the running agent'}.`,
+      pending: false,
+      dispatched: [{
+        taskId: task.id,
+        agent: task.agentPreset ?? 'agent',
+        name: task.name ?? null,
+        via: 'send',
+      }],
+      dispatchedTaskId: task.id,
+      dispatchedAgent: task.agentPreset ?? null,
+    });
+  } catch (err) {
+    console.error('Failed to send thread follow-up:', err);
+    patchChat(projectId, assistantId, {
+      text: 'I couldn’t deliver that follow-up to the agent.',
+      pending: false,
+    });
+  }
+}
+
 /**
  * Soft session reset: stop the task(s) currently running and clear the chat
  * transcript, while KEEPING the brain's learned memory and evolving profile.
@@ -2641,7 +2726,7 @@ function resolveRunningTaskByName(projectId: string, target: string): Orchestrat
 }
 
 /** Push a prompt to a running agent's live terminal; if blocked, reopen it and send automatically. */
-async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootPath: string): Promise<boolean> {
+export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootPath: string): Promise<boolean> {
   if (task.assignedSessionId != null) {
     const live = getTerminalProjectState(task.projectId).sessions.find((s) => s.id === task.assignedSessionId);
     // Adopted agents have no `ownerTaskId` lease (see leasedSessionLive); a live
@@ -2652,7 +2737,8 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
       shouldContinue: () => leasedSessionLive(task.id, task.assignedSessionId!),
     });
     if (!sent) return false;
-    patchTask(task.id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
+    const updated = patchTask(task.id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
+    if (updated) syncChatThreadTask(updated);
     logTaskActivity(task.id, 'follow-up', prompt);
     return true;
   }
@@ -2673,7 +2759,7 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
   // keep the terminal layer's own exit toast suppressed.
   markOrchestratorTrackedSession(sessionId);
 
-  patchTask(task.id, (current) => ({
+  const resumedTask = patchTask(task.id, (current) => ({
     ...current,
     status: 'in-progress',
     agentPreset: task.agentPreset,
@@ -2684,6 +2770,7 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
     failureReason: null,
     promptSentAt: null,
   }));
+  if (resumedTask) syncChatThreadTask(resumedTask);
 
   const agentName = getAgentDisplayName(task.agentPreset) ?? task.agentPreset;
   logTaskActivity(task.id, 'dispatch', `Resumed ${agentName}.`);
@@ -2700,7 +2787,8 @@ async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootP
     { shouldContinue: () => leasedSessionLive(task.id, sessionId) }
   );
   if (!sent) return false;
-  patchTask(task.id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
+  const updated = patchTask(task.id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
+  if (updated) syncChatThreadTask(updated);
   logTaskActivity(task.id, 'follow-up', prompt);
 
   void (async () => {
@@ -2828,15 +2916,33 @@ export async function sendChatMessage(
   const trimmed = text.trim();
   if (!trimmed || !projectId) return;
 
+  const chatThreadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
+  const threadTask = chatThreadId
+    ? (() => {
+        const thread = getChatThread(chatThreadId);
+        return thread?.taskId
+          ? get(orchestratorTasks).find((task) => task.id === thread.taskId) ?? null
+          : null;
+      })()
+    : null;
+  if (
+    chatThreadId &&
+    threadTask &&
+    ((threadTask.status === 'in-progress' && threadTask.assignedSessionId != null) || threadTask.status === 'blocked')
+  ) {
+    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed);
+    return;
+  }
+
   const access = await detectAgentAccess();
   if (!access.ready) {
-    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, opts?.threadId);
+    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
     appendChat(projectId, {
       id: msgId(),
       role: 'assistant',
       text: getAgentAccessBlockedMessage(),
       ts: Date.now(),
-    }, opts?.threadId);
+    }, chatThreadId);
     return;
   }
 
@@ -2858,9 +2964,9 @@ export async function sendChatMessage(
   const knowledgeLines = getKnowledgeLines(projectId);
   const llmConfig = getConversationLlmConfig();
 
-  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, opts?.threadId);
+  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
   const assistantId = msgId();
-  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, opts?.threadId);
+  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, chatThreadId);
 
   let result: RouteResult;
   const forced = opts?.forcedAgent && opts.forcedAgent !== 'auto'
@@ -3097,6 +3203,10 @@ export async function sendChatMessage(
       skipWorktree,
       action.panelTaskId ?? null
     );
+    if (chatThreadId) {
+      threadIdByTaskId.set(task.id, chatThreadId);
+      syncChatThreadTask(task, chatThreadId);
+    }
 
     // Post the claim so later spawns in this same plan see it as live.
     if (wantedFiles.length) {
@@ -3120,6 +3230,9 @@ export async function sendChatMessage(
       // Launch failed (no free terminal pane) — remove the orphaned task record.
       deleteOrchestratorTask(task.id);
       showToast(`Could not start ${getAgentDisplayName(action.agent) ?? action.agent}, because no terminal is available`, 'error', 5000);
+    } else if (chatThreadId) {
+      const launchedTask = get(orchestratorTasks).find((entry) => entry.id === task.id);
+      if (launchedTask) syncChatThreadTask(launchedTask, chatThreadId);
     }
 
     spawnEntries.push({ task, sessionId, rawPrompt: action.prompt ?? '', agent: action.agent, persistent, watchTurn: !persistent, name });
