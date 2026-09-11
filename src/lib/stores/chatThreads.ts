@@ -9,6 +9,7 @@ import type {
   ChatThread,
   ChatThreadState,
   ChatThreadStatus,
+  ChatProviderId,
 } from '$lib/types/chat';
 
 export type {
@@ -20,6 +21,7 @@ export type {
   ChatThread,
   ChatThreadState,
   ChatThreadStatus,
+  ChatProviderId,
 } from '$lib/types/chat';
 
 export const CHAT_THREADS_STORAGE_KEY = 'spacron_chat_threads_v1';
@@ -60,6 +62,10 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asProvider(value: unknown): ChatProviderId | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function asLegacyMessages(value: unknown): LegacyChatMessage[] {
@@ -199,6 +205,8 @@ function createDefaultThread(projectId: string, messages: ChatMessage[], now: nu
     title: 'General',
     agentName: lastMessage?.completion?.agentName ?? null,
     agentPreset: null,
+    provider: null,
+    model: null,
     taskId: lastMessage?.completion?.taskId ?? null,
     sessionId: null,
     status,
@@ -255,6 +263,8 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     title: asString(raw.title) || 'New thread',
     agentName: asString(raw.agentName),
     agentPreset: asString(raw.agentPreset),
+    provider: asProvider(raw.provider),
+    model: asString(raw.model),
     taskId: asString(raw.taskId),
     sessionId: asNumber(raw.sessionId),
     status: validStatus,
@@ -403,7 +413,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'taskId' | 'sessionId'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'taskId' | 'sessionId'>> = {},
   now = Date.now(),
 ): ChatThread {
   const id = `chat-thread-${now}-${Math.random().toString(36).slice(2, 8)}`;
@@ -413,6 +423,8 @@ export function createChatThread(
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
+    provider: overrides.provider ?? null,
+    model: overrides.model ?? null,
     taskId: overrides.taskId ?? null,
     sessionId: overrides.sessionId ?? null,
     status: 'draft',

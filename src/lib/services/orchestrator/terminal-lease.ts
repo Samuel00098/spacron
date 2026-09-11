@@ -14,6 +14,7 @@ import {
   prepareTurnSignals,
 } from '$lib/services/orchestrator/agent-hook-signals';
 import { onSessionExit } from '$lib/stores/terminal';
+import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
 
 export interface LeaseOrchestratorTerminalArgs {
   agentCommand: string;
@@ -25,6 +26,19 @@ export interface LeaseOrchestratorTerminalArgs {
   /** Focus this terminal after launching. Pass false to spawn in the background
    *  (keeps the primary agent stationary when launching several at once). */
   activate?: boolean;
+  /** Provider-native model id selected in the Chat composer. */
+  model?: string | null;
+}
+
+const MODEL_FLAG_AGENTS = new Set(['codex', 'claude', 'cursor-agent', 'grok', 'opencode', 'pi']);
+
+function withAgentModel(command: string, model?: string | null): string {
+  const value = model?.trim() ?? '';
+  // Model ids come from the provider catalogue. Keep this guard here as a
+  // second line of defence before a value is interpolated into a shell command.
+  if (!value || value === 'default' || !/^[A-Za-z0-9._:/-]+$/.test(value)) return command;
+  if (!MODEL_FLAG_AGENTS.has(agentExecutable(command)) || /(?:^|\s)--model(?:=|\s)/.test(command)) return command;
+  return `${command} --model ${value}`;
 }
 
 /**
@@ -80,8 +94,9 @@ export async function leaseOrchestratorTerminal(args: LeaseOrchestratorTerminalA
   // part of the command line. A null here just means this CLI can't emit
   // sentinels (or the channel failed to open), and the watcher falls back to
   // scanning output — so it is never a reason to abandon the spawn.
-  const prepared = await prepareTurnSignals(args.agentCommand);
-  const command = prepared?.command ?? args.agentCommand;
+  const requestedCommand = withAgentModel(args.agentCommand, args.model);
+  const prepared = await prepareTurnSignals(requestedCommand);
+  const command = prepared?.command ?? requestedCommand;
 
   const sessionId = await spawnAgentPreset(command, args.cwd, { activate, skipAutoBrief: true });
   if (sessionId == null) {

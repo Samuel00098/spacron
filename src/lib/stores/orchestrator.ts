@@ -1569,7 +1569,7 @@ export async function launchOrchestratorTask(
   id: string,
   agentCommand: string,
   cwd: string,
-  autoRunOrOpts: boolean | { autoRun?: boolean; watchTurn?: boolean; activate?: boolean; holdGoal?: boolean } = true
+  autoRunOrOpts: boolean | { autoRun?: boolean; watchTurn?: boolean; activate?: boolean; holdGoal?: boolean; model?: string | null } = true
 ): Promise<number | null> {
   // 4th arg stays boolean-compatible (= autoRun). Persistent agents pass
   // `{ watchTurn: false }` so they don't auto-complete after one turn — they
@@ -1582,6 +1582,7 @@ export async function launchOrchestratorTask(
   const watchTurn = opts.watchTurn ?? true;
   const activate = opts.activate ?? true;
   const holdGoal = opts.holdGoal ?? false;
+  const model = opts.model?.trim() || null;
 
   const task = get(orchestratorTasks).find((t) => t.id === id);
   if (!task) return null;
@@ -1617,6 +1618,7 @@ export async function launchOrchestratorTask(
       taskTitle: task.title,
       name: task.name,
       activate,
+      model,
     });
     if (sessionId == null) {
       showToast(worktree ? 'Could not start the agent in its isolated worktree. The worktree was kept; retry the launch.' : 'Could not start the agent terminal', 'error');
@@ -2911,6 +2913,9 @@ export async function sendChatMessage(
     voiceConversation?: boolean;
     panelTaskId?: string;
     threadId?: string;
+    /** Agent provider alias, e.g. `codex` or `cursor-agent`. */
+    provider?: string;
+    model?: string;
   }
 ): Promise<void> {
   const trimmed = text.trim();
@@ -2962,6 +2967,9 @@ export async function sendChatMessage(
   const taskPanel = getProjectTaskPanelLines(projectId);
   const mailboxLines = getMailboxLines(projectId);
   const knowledgeLines = getKnowledgeLines(projectId);
+  // The routing brain remains on the configured app LLM. Chat provider/model
+  // selections belong to the agent adapter and must never be interpreted as
+  // OpenAI/Anthropic-style API provider ids.
   const llmConfig = getConversationLlmConfig();
 
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
@@ -2969,13 +2977,14 @@ export async function sendChatMessage(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, chatThreadId);
 
   let result: RouteResult;
-  const forced = opts?.forcedAgent && opts.forcedAgent !== 'auto'
-    ? agents.find((a) => a.command === opts.forcedAgent)
+  const selectedAgent = opts?.provider?.trim() || opts?.forcedAgent;
+  const forced = selectedAgent && selectedAgent !== 'auto'
+    ? agents.find((a) => a.command === selectedAgent)
     : null;
   if (forced) {
     result = {
       reply: `Handing this to ${forced.name}.`,
-      actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed, panelTaskId: opts?.panelTaskId ?? null }],
+      actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
       viaLLM: false,
     };
   } else {
@@ -3006,7 +3015,16 @@ export async function sendChatMessage(
   // Never pair executing actions with a "want me to?" reply — the actions run
   // right below, so the reply must state what's happening, not ask permission.
   if (result.actions.length) {
-    result = { ...result, reply: declarativeReply(result.actions, result.reply) };
+    const selectedModel = opts?.model?.trim();
+    result = {
+      ...result,
+      reply: declarativeReply(result.actions, result.reply),
+      actions: selectedModel && selectedAgent
+        ? result.actions.map((action) => action.kind === 'spawn' && action.agent === selectedAgent
+          ? { ...action, model: selectedModel }
+          : action)
+        : result.actions,
+    };
   }
 
   patchChat(projectId, assistantId, { text: result.reply, pending: false });
@@ -3224,6 +3242,7 @@ export async function sendChatMessage(
       autoRun: false,
       holdGoal: true,
       activate: !multiSpawn || isPrimary,
+      model: action.model,
     });
 
     if (sessionId == null) {

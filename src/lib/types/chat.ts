@@ -30,6 +30,11 @@ export type ChatMessageType =
 
 export type ChatMessageRole = 'user' | 'assistant' | 'orchestrator' | 'system';
 
+/** Provider instance/alias used by Chat mode (for example `codex` or
+ * `cursor-agent`). This is deliberately not an AI Models provider id: agent
+ * providers own their model and permission capabilities. */
+export type ChatProviderId = string;
+
 export type ChatInlineRequestType = 'approval' | 'choice' | 'text' | 'terminal' | 'dismiss';
 
 export interface ChatInlineOption {
@@ -99,6 +104,9 @@ export interface ChatThread {
   title: string;
   agentName: string | null;
   agentPreset: string | null;
+  /** Explicit agent-provider choices. Null means use the provider default. */
+  provider: ChatProviderId | null;
+  model: string | null;
   taskId: string | null;
   sessionId: number | null;
   status: ChatThreadStatus;

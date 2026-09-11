@@ -5,14 +5,21 @@ import {
   agentForcedAgent,
   clearProjectChat,
   getDispatchableAgents,
+  orchestratorTasks,
   sendChatMessage,
 } from '$lib/stores/orchestrator';
-import { getAgentDisplayName } from '$lib/stores/terminal';
+import { allProjectSessions, getAgentDisplayName } from '$lib/stores/terminal';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
+import {
+  getAgentProviderCapabilities,
+  isChatAgentProvider,
+} from '$lib/services/agent-provider-catalogue';
 import {
   chatThreadState,
   createChatThread,
   ensureProjectThread,
   setThreadDraft,
+  updateChatThread,
   type ChatMessage,
   type ChatThread,
 } from '$lib/stores/chatThreads';
@@ -99,6 +106,8 @@ export default function ChatModePanel() {
   const project = useStore(activeProject);
   const threadState = useStore(chatThreadState);
   const forcedAgent = useStore(agentForcedAgent);
+  const liveTasks = useStore(orchestratorTasks);
+  const liveSessions = useStore(allProjectSessions);
   const [draft, setDraft] = useState('');
   const [pendingSendCount, setPendingSendCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +129,47 @@ export default function ChatModePanel() {
     () => (project ? getDispatchableAgents(project.id) : []),
     [project],
   );
+  const chatAgents = useMemo(
+    () => agents.filter((agent) => isChatAgentProvider(agent.command)),
+    [agents],
+  );
+  const selectedProvider = activeThread?.provider ?? activeThread?.agentPreset ??
+    (forcedAgent !== 'auto' ? forcedAgent : chatAgents[0]?.command ?? '');
+
+  const providerOptions = useMemo<DropdownOption[]>(() => {
+    const available = [...chatAgents];
+    if (selectedProvider !== 'auto' && selectedProvider && !available.some((agent) => agent.command === selectedProvider)) {
+      available.push({ command: selectedProvider, name: getAgentDisplayName(selectedProvider) ?? selectedProvider });
+    }
+    return available.map((agent) => {
+      const task = liveTasks
+        .filter((entry) => entry.projectId === project?.id && entry.agentPreset === agent.command)
+        .sort((a, b) => (b.completedAt ?? b.startedAt ?? b.createdAt ?? 0) - (a.completedAt ?? a.startedAt ?? a.createdAt ?? 0))[0];
+      const session = liveSessions.find((entry) => entry.projectId === project?.id && entry.agentPreset === agent.command && entry.isRunning);
+      const status = task?.status === 'in-progress' || session ? 'Working' : task?.status === 'blocked' ? 'Needs input' : task?.status === 'complete' ? 'Complete' : 'Ready';
+      const taskTitle = task?.title || session?.taskSummary || session?.paneTitle;
+      return {
+        value: agent.command,
+        label: agent.name,
+        sublabel: `${status}${taskTitle ? ` · ${taskTitle}` : ''}${session ? ' · terminal' : ''}`,
+      };
+    });
+  }, [chatAgents, liveSessions, liveTasks, project?.id, selectedProvider]);
+
+  const providerCapabilities = getAgentProviderCapabilities(selectedProvider);
+  const selectedModel = activeThread?.model ?? providerCapabilities.models[0]?.id ?? 'default';
+
+  const modelOptions = useMemo<DropdownOption[]>(() => {
+    const models = providerCapabilities.models;
+    const withSelected = models.some((model) => model.id === selectedModel)
+      ? models
+      : [{ id: selectedModel, label: selectedModel, description: 'Selected by the provider', free: false }, ...models];
+    return withSelected.map((model) => ({
+      value: model.id,
+      label: model.label,
+      sublabel: model.free ? 'Free' : model.description,
+    }));
+  }, [providerCapabilities.models, selectedModel]);
 
   useEffect(() => {
     if (project) ensureProjectThread(project.id);
@@ -144,12 +194,17 @@ export default function ChatModePanel() {
     if (!project || !activeThread || !text) return;
     setDraft('');
     setThreadDraft(activeThread.id, '');
+    // A send commits the effective provider/model to this thread. Until then,
+    // a fresh thread continues to follow its selected agent's defaults.
+    updateChatThread(activeThread.id, { provider: selectedProvider, agentPreset: selectedProvider, model: selectedModel });
     setPendingSendCount((count) => count + 1);
     try {
       await sendChatMessage(project.id, project.root_path, text, {
-        forcedAgent,
+        forcedAgent: selectedProvider,
         projectName: project.name,
         threadId: activeThread.id,
+        provider: selectedProvider,
+        model: selectedModel,
       });
     } finally {
       setPendingSendCount((count) => Math.max(0, count - 1));
@@ -258,13 +313,32 @@ export default function ChatModePanel() {
           aria-label="Chat message"
         />
         <div className="chat-mode-composer-footer">
-          <label>
-            <span>Route to</span>
-            <select value={forcedAgent} onChange={(event) => agentForcedAgent.set(event.target.value)} disabled={!project}>
-              <option value="auto">Auto</option>
-              {agents.map((agent) => <option key={agent.command} value={agent.command}>{agent.name}</option>)}
-            </select>
-          </label>
+          <div className="chat-mode-composer-control model-provider">
+            <span>Provider</span>
+            <Dropdown
+              value={selectedProvider}
+              options={providerOptions}
+              onChange={(value) => {
+                const nextModel = getAgentProviderCapabilities(value).models[0]?.id ?? 'default';
+                agentForcedAgent.set(value);
+                if (activeThread) updateChatThread(activeThread.id, { provider: value, agentPreset: value, model: nextModel });
+              }}
+              ariaLabel="Chat provider"
+              disabled={!project}
+            />
+          </div>
+          <div className="chat-mode-composer-control model">
+            <span>Model · provider catalogue</span>
+            <Dropdown
+              value={selectedModel}
+              options={modelOptions}
+              onChange={(value) => {
+                if (activeThread) updateChatThread(activeThread.id, { provider: selectedProvider, model: value });
+              }}
+              ariaLabel="Chat model"
+              disabled={!project}
+            />
+          </div>
           <span className="chat-mode-shortcut">Ctrl/Cmd + Enter to send</span>
           <button type="submit" className="chat-mode-send" disabled={!project || !draft.trim()}>
             {pendingSendCount > 0 ? `Send (${pendingSendCount} active)` : 'Send'}
