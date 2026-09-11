@@ -30,7 +30,7 @@ import {
   readProjectOrchestratorTaskSummaries,
   type OrchestratorTask,
 } from '$lib/stores/orchestrator';
-import { setInteractionMode } from '$lib/stores/interactionMode';
+import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import {
   chatThreadState,
   createChatThread,
@@ -170,6 +170,7 @@ export default function ProjectHUD() {
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
   const allChatThreads = useStore(chatThreadState);
+  const currentInteractionMode = useStore(interactionMode);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
 
   const projectIdByPath = useMemo(() => {
@@ -609,13 +610,13 @@ export default function ProjectHUD() {
                 </span>
               )}
 
-              {!isExpanded && projectSessions.length > 0 && (
+              {!isExpanded && currentInteractionMode === 'cli' && projectSessions.length > 0 && (
                 <span className="project-sidebar-card-agents" title={`${projectSessions.length} sessions`}>
                   <span className={`hud-status-dot${workingCount > 0 ? ' working' : ''}`} />
                   {projectSessions.length}
                 </span>
               )}
-              {!isExpanded && allProjectTasks.length > 0 && (
+              {!isExpanded && currentInteractionMode === 'cli' && allProjectTasks.length > 0 && (
                 <span className="project-sidebar-card-task-count" title={`${allProjectTasks.length} tasks`}>
                   {allProjectTasks.length} task{allProjectTasks.length === 1 ? '' : 's'}
                 </span>
@@ -714,10 +715,8 @@ export default function ProjectHUD() {
         {/* Expanded Contents */}
         {isExpanded && p.path && (
           <div className="project-contents">
-            {!hasOpenContents && chatRows.length === 0 && (
-              <div className="project-contents-empty">Nothing open in this project</div>
-            )}
-            <div className="project-contents-section project-threads-section">
+            {currentInteractionMode === 'chat' && (
+              <div className="project-contents-section project-threads-section">
               <div className="project-contents-label project-threads-label">
                 <span>Threads</span>
                 <button
@@ -778,6 +777,11 @@ export default function ProjectHUD() {
                 </div>
               )}
             </div>
+            )}
+            {currentInteractionMode === 'cli' && !hasOpenContents && (
+              <div className="project-contents-empty">Nothing open in this project</div>
+            )}
+            {currentInteractionMode === 'cli' && <>
             {projectSessions.length > 0 && (
               <div className="project-contents-section">
                 <div className="project-contents-label">Running</div>
@@ -862,6 +866,7 @@ export default function ProjectHUD() {
                 </div>
               </div>
             )}
+            </>}
           </div>
         )}
       </div>
