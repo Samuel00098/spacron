@@ -30,6 +30,15 @@ import {
   readProjectOrchestratorTaskSummaries,
   type OrchestratorTask,
 } from '$lib/stores/orchestrator';
+import { setInteractionMode } from '$lib/stores/interactionMode';
+import {
+  chatThreadState,
+  createChatThread,
+  selectChatThread,
+  type ChatThread,
+  type ChatThreadStatus,
+} from '$lib/stores/chatThreads';
+import { getAgentDisplayName } from '$lib/stores/terminal';
 import { requestRoomControl } from '$lib/stores/layoutControl';
 import './ProjectHUD.css';
 
@@ -75,6 +84,54 @@ interface ProjectItem {
   isInsideWorkspace?: boolean;
 }
 
+interface ChatSidebarRow {
+  id: string;
+  projectId: string;
+  title: string;
+  agentName: string;
+  provider: string;
+  status: ChatThreadStatus;
+  unreadCount: number;
+  thread: ChatThread | null;
+  task: OrchestratorTask | null;
+  session: TerminalSessionInfo | null;
+}
+
+function threadStatusFromTask(task: OrchestratorTask): ChatThreadStatus {
+  switch (task.status) {
+    case 'in-progress': return 'working';
+    case 'blocked': return 'needs-input';
+    case 'complete': return 'complete';
+    case 'failed':
+    case 'cancelled': return 'failed';
+    case 'todo': return 'draft';
+  }
+}
+
+function chatStatusLabel(status: ChatThreadStatus): string {
+  switch (status) {
+    case 'working': return 'Working';
+    case 'needs-input': return 'Needs input';
+    case 'complete': return 'Done';
+    case 'failed': return 'Failed';
+    case 'archived': return 'Archived';
+    case 'draft': return 'New';
+    case 'idle': return 'Idle';
+  }
+}
+
+function chatStatusRank(status: ChatThreadStatus): number {
+  switch (status) {
+    case 'working': return 0;
+    case 'needs-input': return 1;
+    case 'draft': return 2;
+    case 'idle': return 3;
+    case 'complete': return 4;
+    case 'failed': return 5;
+    case 'archived': return 6;
+  }
+}
+
 export default function ProjectHUD() {
   const rawWorkspaces = useWorkspaceStore((s) => s.recentWorkspaces) || [];
   const activeWsId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -112,6 +169,7 @@ export default function ProjectHUD() {
   const crossProjectSessions = useStore(allProjectSessions);
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
+  const allChatThreads = useStore(chatThreadState);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
 
   const projectIdByPath = useMemo(() => {
@@ -356,6 +414,30 @@ export default function ProjectHUD() {
     await handleOpen(wsId, path);
   }
 
+  async function openChatThread(
+    wsId: string,
+    path: string,
+    row: ChatSidebarRow | null,
+  ) {
+    const projectId = projectIdByPath.get(path);
+    if (!projectId) return;
+
+    let threadId = row?.thread?.id ?? null;
+    if (!threadId) {
+      const thread = createChatThread(projectId, {
+        title: row?.title,
+        agentName: row?.agentName || null,
+        agentPreset: row?.task?.agentPreset ?? row?.session?.agentPreset ?? null,
+        taskId: row?.task?.id ?? null,
+        sessionId: row?.session?.id ?? row?.task?.assignedSessionId ?? null,
+      });
+      threadId = thread.id;
+    }
+    selectChatThread(projectId, threadId);
+    await handleOpen(wsId, path);
+    setInteractionMode('chat');
+  }
+
   // Render a project card
   function renderProjectCard(p: ProjectItem, parentWorkspaceId?: string) {
     const gitInfo = p.isActive && activeProjId ? branchInfo[activeProjId] : null;
@@ -367,7 +449,89 @@ export default function ProjectHUD() {
       .sort((a, b) => (b.completedAt ?? b.startedAt ?? b.createdAt) - (a.completedAt ?? a.startedAt ?? a.createdAt))
       .slice(0, 5);
     const workingCount = projectSessions.filter((s) => s.isExecuting).length;
-    const hasContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
+    const storedThreads = projectId ? allChatThreads.threadsByProject[projectId] ?? [] : [];
+    const activeThreadId = projectId ? allChatThreads.activeThreadByProject[projectId] ?? null : null;
+    const taskById = new Map(allProjectTasks.map((task) => [task.id, task]));
+    const sessionById = new Map(projectSessions.map((session) => [session.id, session]));
+    const storedTaskIds = new Set(storedThreads.map((thread) => thread.taskId).filter((id): id is string => !!id));
+    const storedSessionIds = new Set(storedThreads.map((thread) => thread.sessionId).filter((id): id is number => id != null));
+    const chatRows: ChatSidebarRow[] = storedThreads.map((thread) => {
+      const task = thread.taskId ? taskById.get(thread.taskId) ?? null : null;
+      const session = thread.sessionId != null
+        ? sessionById.get(thread.sessionId) ?? null
+        : task?.assignedSessionId != null
+          ? sessionById.get(task.assignedSessionId) ?? null
+          : null;
+      let status = thread.status;
+      if (task) {
+        status = task.status === 'in-progress' && !session ? 'idle' : threadStatusFromTask(task);
+      } else if (session?.isExecuting) {
+        status = 'working';
+      } else if (status === 'working') {
+        status = 'idle';
+      }
+      const agentPreset = thread.agentPreset ?? task?.agentPreset ?? session?.agentPreset ?? null;
+      const agentName = thread.agentName
+        ?? task?.name
+        ?? (session ? getSessionPromptTargetLabel(session, projectSessions) : null)
+        ?? getAgentDisplayName(agentPreset)
+        ?? 'Agent';
+      return {
+        id: thread.id,
+        projectId: thread.projectId,
+        title: thread.title,
+        agentName,
+        provider: getAgentDisplayName(agentPreset) ?? agentPreset ?? 'Spacron',
+        status,
+        unreadCount: thread.unreadCount,
+        thread,
+        task,
+        session,
+      };
+    });
+    for (const task of allProjectTasks) {
+      if (storedTaskIds.has(task.id)) continue;
+      const session = task.assignedSessionId != null ? sessionById.get(task.assignedSessionId) ?? null : null;
+      const agentPreset = task.agentPreset ?? session?.agentPreset ?? null;
+      chatRows.push({
+        id: `task:${task.id}`,
+        projectId: task.projectId,
+        title: task.title,
+        agentName: task.name ?? (session ? getSessionPromptTargetLabel(session, projectSessions) : null) ?? getAgentDisplayName(agentPreset) ?? 'Agent',
+        provider: getAgentDisplayName(agentPreset) ?? agentPreset ?? 'Spacron',
+        status: task.status === 'in-progress' && !session ? 'idle' : threadStatusFromTask(task),
+        unreadCount: 0,
+        thread: null,
+        task,
+        session,
+      });
+    }
+    for (const session of projectSessions) {
+      if (!isAgentSession(session) || storedSessionIds.has(session.id)) continue;
+      if (allProjectTasks.some((task) => task.assignedSessionId === session.id)) continue;
+      const agentPreset = session.agentPreset ?? null;
+      chatRows.push({
+        id: `session:${session.id}`,
+        projectId: session.projectId,
+        title: session.taskSummary || getSessionPaneDisplayTitle(session, projectSessions) || 'Agent session',
+        agentName: getSessionPromptTargetLabel(session, projectSessions),
+        provider: getAgentDisplayName(agentPreset) ?? agentPreset ?? 'Spacron',
+        status: session.isExecuting ? 'working' : 'idle',
+        unreadCount: 0,
+        thread: null,
+        task: null,
+        session,
+      });
+    }
+    chatRows.sort((a, b) => {
+      const rank = chatStatusRank(a.status) - chatStatusRank(b.status);
+      if (rank !== 0) return rank;
+      const aActivity = a.thread?.lastActivityAt ?? a.task?.completedAt ?? a.task?.startedAt ?? a.task?.createdAt ?? a.session?.lastActivatedAt ?? 0;
+      const bActivity = b.thread?.lastActivityAt ?? b.task?.completedAt ?? b.task?.startedAt ?? b.task?.createdAt ?? b.session?.lastActivatedAt ?? 0;
+      return bActivity - aActivity;
+    });
+    const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
+    const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
     const isExpanded = p.path ? expandedProjects.has(p.path) : false;
     const showMoveMenu = activeMoveMenuPath === p.path;
 
@@ -550,9 +714,70 @@ export default function ProjectHUD() {
         {/* Expanded Contents */}
         {isExpanded && p.path && (
           <div className="project-contents">
-            {!hasContents && (
+            {!hasOpenContents && chatRows.length === 0 && (
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
+            <div className="project-contents-section project-threads-section">
+              <div className="project-contents-label project-threads-label">
+                <span>Threads</span>
+                <button
+                  type="button"
+                  className="project-new-thread-btn"
+                  onClick={() => void openChatThread(p.workspaceId, p.path, null)}
+                  title="New chat thread"
+                  aria-label={`New chat thread in ${p.name}`}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </div>
+              {chatRows.length === 0 ? (
+                <span className="project-threads-empty">No threads yet</span>
+              ) : (
+                <div className="project-thread-list">
+                  {chatRows.map((row) => {
+                    const isSelected = row.thread?.id === activeThreadId;
+                    const terminalSession = row.session
+                      ?? (row.task?.assignedSessionId != null ? sessionById.get(row.task.assignedSessionId) ?? null : null);
+                    return (
+                      <div key={row.id} className={`project-thread-row-wrap${isSelected ? ' selected' : ''}`}>
+                        <button
+                          type="button"
+                          className={`project-thread-row status-${row.status}`}
+                          onClick={() => void openChatThread(p.workspaceId, p.path, row)}
+                          title={`${row.title} — ${chatStatusLabel(row.status)}`}
+                        >
+                          <span className="project-thread-status" aria-hidden="true" />
+                          <span className="project-thread-copy">
+                            <strong>{row.agentName}</strong>
+                            <span>{row.title}</span>
+                          </span>
+                          <span className="project-thread-provider">{row.provider}</span>
+                          {row.unreadCount > 0 && <span className="project-thread-unread" title={`${row.unreadCount} unread`} />}
+                          <span className="project-thread-state">{chatStatusLabel(row.status)}</span>
+                        </button>
+                        {terminalSession && (
+                          <button
+                            type="button"
+                            className="project-thread-terminal-btn"
+                            onClick={() => void openRoom(p.workspaceId, p.path, `agent:${terminalSession.id}`)}
+                            title="Open agent terminal"
+                            aria-label={`Open terminal for ${row.agentName}`}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="4 17 10 11 4 5" />
+                              <line x1="12" y1="19" x2="20" y2="19" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             {projectSessions.length > 0 && (
               <div className="project-contents-section">
                 <div className="project-contents-label">Running</div>
