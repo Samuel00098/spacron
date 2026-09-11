@@ -208,9 +208,21 @@ Each row should show:
 Selecting a row should open the matching Chat thread in Chat mode. A separate
 action should remain available to open the underlying CLI terminal.
 
-The first version should use simple ordering by active status and recent
-activity. Pinning, manual reordering, archiving, and filtering can follow after
-the core flow is stable.
+### Thread lifecycle actions
+
+Thread rows should expose the standard conversation actions without leaving
+Chat mode:
+
+- Create a new thread
+- Edit or rename a thread
+- Pin or unpin a thread
+- Delete a thread with confirmation
+- Keep the active-thread selection valid after deletion, choosing the nearest
+  remaining thread or creating a fresh empty thread when none remain
+
+The first version should use simple ordering by pinned state, active status,
+and recent activity. Manual reordering, archiving, and filtering can follow
+after the core flow is stable.
 
 ## Main chat panel
 
@@ -234,6 +246,7 @@ The composer should include:
 
 - Multiline text input
 - Themed agent/thread selector
+- Provider selector and model selector inside the composer
 - Send button
 - Dictation/transcription button
 - Realtime voice mode button
@@ -256,6 +269,23 @@ Each option may include:
 
 The selector chooses the current conversation target. It should not merely
 choose a provider preset for a new spawn.
+
+### Provider and model selection
+
+Provider and model are separate composer controls. The user must be able to
+choose the exact model for the next message, including free models exposed by
+OpenAI-compatible providers and models from other configured providers. The
+composer should:
+
+- Show providers available to the current installation/configuration.
+- Update the model options when the provider changes.
+- Prefer the live provider model catalogue when available, with curated models
+  as a fallback.
+- Mark free models clearly when the provider reports that metadata.
+- Preserve the selected provider/model with the thread composer or draft, while
+  falling back to the global AI settings for new threads.
+- Pass the selected provider and model through the orchestrator request so the
+  choice affects the message being sent, rather than only changing display.
 
 ### Sending behavior
 
@@ -358,6 +388,8 @@ the new thread model ships.
 - Add thread rows below expanded projects.
 - Show live agent/task status.
 - Add new-thread action.
+- Add thread rename/edit, pin/unpin, and delete actions.
+- Preserve a valid active-thread selection after delete.
 - Select and restore the active thread.
 - Keep CLI terminal actions available separately.
 
@@ -380,6 +412,11 @@ the new thread model ships.
 ### Phase 4 — Themed composer controls
 
 - Replace the native agent selector with the shared `Dropdown`.
+- Add composer-level provider and model selectors.
+- Load live model catalogues when available and fall back to curated models.
+- Mark free models and pass the selected provider/model into the orchestrator.
+- Persist the composer’s provider/model choice per thread, with global defaults
+  for new threads.
 - Add provider/status metadata to options.
 - Test dark, light, system, and custom theme states.
 - Add keyboard navigation and accessible labels.
