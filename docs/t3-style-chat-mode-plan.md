@@ -19,6 +19,24 @@ Switching modes changes the presentation, not the underlying work. Running
 agents, terminal sessions, projects, tasks, and conversations must remain live
 and available when the user switches between CLI and Chat mode.
 
+## CLI freeze boundary
+
+The existing CLI mode is considered complete and is out of scope for this
+project. The implementation must not redesign, refactor, or otherwise change:
+
+- Terminal pane layout or resizing
+- PTY creation, lifetime, fitting, repainting, or input delivery
+- Agent CLI launch commands or provider detection
+- Terminal session stores or session restoration
+- CLI room behavior, terminal shortcuts, or terminal-specific voice targeting
+- Existing agent worktree, lease, or terminal lifecycle behavior
+
+Chat work must be implemented in Chat-mode components, thread/message stores,
+and narrowly scoped orchestration/voice integration seams. An AppShell change
+is allowed only when it is strictly necessary to switch surfaces without
+unmounting the existing CLI rooms. If the existing mode switch already
+provides that seam, AppShell and all terminal code should remain unchanged.
+
 The current interaction-mode switch and the mounted CLI/chat surfaces are the
 starting point for this separation. The existing terminal instances must stay
 mounted while the visible surface changes.
@@ -428,6 +446,7 @@ The work is ready for normal use when:
 The first release will not attempt to:
 
 - Replace the native CLI experience.
+- Change the existing CLI model or terminal workspace behavior.
 - Parse every provider’s terminal output into perfect structured events.
 - Create a separate realtime audio channel for every CLI agent.
 - Add cross-device thread synchronization.
@@ -435,4 +454,3 @@ The first release will not attempt to:
 - Automatically merge or publish agent work.
 
 Those can be considered after the core project/thread/chat/CLI split is stable.
-
