@@ -113,8 +113,12 @@ export function openAgentSpawn() { useLayoutStore.getState().openAgentSpawn(); }
 export function closeAgentSpawn() { useLayoutStore.getState().closeAgentSpawn(); }
 export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }
 export function closeEnvManager() { withTransition(() => { useLayoutStore.getState().closeEnvManager(); }); }
-export function toggleSidebar() { withTransition(() => { useLayoutStore.getState().toggleSidebar(); }); }
-export function setSidebarVisible(visible: boolean) { withTransition(() => { useLayoutStore.getState().setSidebarVisible(visible); }); }
+// Sidebar visibility changes resize the live Chat/CLI stage but do not change
+// the presentation mode. Keep them out of the document-wide View Transition:
+// its snapshot can briefly paint the mounted CLI layer over Chat while the
+// stage width is settling.
+export function toggleSidebar() { useLayoutStore.getState().toggleSidebar(); }
+export function setSidebarVisible(visible: boolean) { useLayoutStore.getState().setSidebarVisible(visible); }
 export function setRightSidebarVisible(visible: boolean) { rightSidebarVisible.set(visible); }
 export function toggleRightSidebar() { rightSidebarVisible.update((visible) => !visible); }
 export function setRightSidebarTab(tab: RightSidebarTab) { rightSidebarTab.set(tab); }
