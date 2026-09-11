@@ -594,12 +594,31 @@
 }
 
 .app-shell .rooms-table.interaction-chat > .cli-mode-layer {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
-  clip-path: inset(50%);
+  clip-path: inset(100%);
+  overflow: hidden;
+}
+
+/* The CLI layer normally uses `display: contents` so its rooms participate in
+   the ambient grid. In Chat mode it becomes an explicit hidden stage instead;
+   this prevents composited preview iframes from flashing through during a
+   sidebar resize/close while keeping the live room subtree mounted. */
+.app-shell .rooms-table.interaction-chat > .cli-mode-layer > .focused-room {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .app-shell .rooms-table.interaction-chat > .chat-mode-panel {
+  z-index: 100;
+  isolation: isolate;
   pointer-events: auto;
 }
 
