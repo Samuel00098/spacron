@@ -101,9 +101,6 @@ export default function ChatModePanel() {
   const forcedAgent = useStore(agentForcedAgent);
   const [draft, setDraft] = useState('');
   const [pendingSendCount, setPendingSendCount] = useState(0);
-  const [composerCentered, setComposerCentered] = useState(false);
-  const panelRef = useRef<HTMLElement | null>(null);
-  const composerRef = useRef<HTMLFormElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const threads = useMemo(
@@ -131,7 +128,6 @@ export default function ChatModePanel() {
   useEffect(() => {
     if (!activeThread) return;
     setDraft(activeThread.draft);
-    setComposerCentered(false);
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -141,36 +137,13 @@ export default function ChatModePanel() {
 
   useEffect(() => {
     setDraft(activeThread?.draft ?? '');
-    setComposerCentered(false);
   }, [project?.id]);
-
-  useEffect(() => {
-    if (!composerCentered) return;
-    const frame = window.requestAnimationFrame(() => {
-      const panel = panelRef.current;
-      const composer = composerRef.current;
-      if (!panel || !composer) return;
-      const panelRect = panel.getBoundingClientRect();
-      const composerRect = composer.getBoundingClientRect();
-      const target = panel.scrollTop
-        + composerRect.top
-        - panelRect.top
-        - (panel.clientHeight - composerRect.height) / 2;
-      const maxScroll = Math.max(0, panel.scrollHeight - panel.clientHeight);
-      panel.scrollTo({
-        top: Math.min(maxScroll, Math.max(0, target)),
-        behavior: 'smooth',
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [composerCentered]);
 
   async function submit() {
     const text = draft.trim();
     if (!project || !activeThread || !text) return;
     setDraft('');
     setThreadDraft(activeThread.id, '');
-    setComposerCentered(false);
     setPendingSendCount((count) => count + 1);
     try {
       await sendChatMessage(project.id, project.root_path, text, {
@@ -192,8 +165,7 @@ export default function ChatModePanel() {
 
   return (
     <section
-      ref={panelRef}
-      className={`chat-mode-panel${composerCentered ? ' is-composing' : ''}`}
+      className="chat-mode-panel"
       aria-label="Chat room"
     >
       <div className="chat-mode-room-header">
@@ -266,7 +238,6 @@ export default function ChatModePanel() {
       </div>
 
       <form
-        ref={composerRef}
         className="chat-mode-composer"
         onSubmit={(event) => {
           event.preventDefault();
@@ -279,9 +250,7 @@ export default function ChatModePanel() {
             const value = event.target.value;
             setDraft(value);
             if (activeThread) setThreadDraft(activeThread.id, value);
-            if (value.trim() && !composerCentered) setComposerCentered(true);
           }}
-          onFocus={() => setComposerCentered(true)}
           onKeyDown={onComposerKeyDown}
           placeholder={project ? 'Ask Spacron to do something…' : 'Select a project first'}
           disabled={!project}
