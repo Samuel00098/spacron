@@ -43,6 +43,7 @@ import HttpClientPanel from '$lib/components/http/HttpClientPanelLazy.tsx';
 import ReviewPanel from '$lib/components/review/ReviewPanelLazy.tsx';
 import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
+import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
 import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
@@ -91,6 +92,7 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
+import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -578,6 +580,7 @@ export default function AppShell() {
       }),
     ),
   );
+  const currentInteractionMode = useStore(interactionMode);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const workspaceName = useWorkspaceStore((s) => {
     const workspace = s.recentWorkspaces.find((entry) => entry.id === s.activeWorkspaceId);
@@ -1666,6 +1669,30 @@ export default function AppShell() {
             <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
             <span>New Agent</span>
           </button>
+        </div>
+
+        <div className="left-sidebar-mode-switch" role="group" aria-label="Workspace mode">
+          <span className="left-sidebar-mode-label">Workspace mode</span>
+          <div className="left-sidebar-mode-buttons">
+            <button
+              type="button"
+              className={currentInteractionMode === 'cli' ? 'active' : ''}
+              onClick={() => setInteractionMode('cli')}
+              aria-pressed={currentInteractionMode === 'cli'}
+            >
+              <span aria-hidden="true">›_</span>
+              CLI
+            </button>
+            <button
+              type="button"
+              className={currentInteractionMode === 'chat' ? 'active' : ''}
+              onClick={() => setInteractionMode('chat')}
+              aria-pressed={currentInteractionMode === 'chat'}
+            >
+              <span aria-hidden="true">✦</span>
+              Chat
+            </button>
+          </div>
         </div>
 
         <nav className="left-sidebar-nav" aria-label="Workspaces and global views">
@@ -3427,7 +3454,7 @@ export default function AppShell() {
             visibility, never display, so the panes keep their measured size and
             are instantly correct when Home closes. */}
         <div className="zoom-content">
-        <div className="workspace-layer">
+        <div className={`workspace-layer${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}`}>
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
@@ -3443,20 +3470,23 @@ export default function AppShell() {
               <div className="rooms-content-horizontal">
                 {renderLeftUtilityPanel()}
 
-                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}${
                   (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
                   (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                     ? ` ${ambientLayout}-solo`
                     : ''
                 }`} aria-label="Spacron ambient layout">
-                  {renderAmbientLayout()}
+                  <div className="cli-mode-layer">
+                    {renderAmbientLayout()}
+                  </div>
+                  {currentInteractionMode === 'chat' && <ChatModePanel />}
                 </main>
 
                 {renderRightUtilityPanel()}
               </div>
 
               {/* Minimalist room stack anchored at workspace level — independent of sidebar toggle */}
-              {renderMinimizedRooms()}
+              {currentInteractionMode === 'cli' && renderMinimizedRooms()}
 
               <div ref={overlaysRef} className="workspace-overlays">
               {/* The room dock used to sit here as its own strip. Its launchers

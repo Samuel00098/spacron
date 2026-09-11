@@ -586,6 +586,23 @@
   padding-bottom: var(--overlay-clear);
 }
 
+/* Interaction mode is a presentation layer over the existing room stage. The
+   CLI rooms stay mounted underneath Chat mode so PTYs, xterm scrollback, and
+   agent processes survive a switch; only the painted surface changes. */
+.app-shell .rooms-table > .cli-mode-layer {
+  display: contents;
+}
+
+.app-shell .rooms-table.interaction-chat > .cli-mode-layer {
+  visibility: hidden;
+  pointer-events: none;
+  clip-path: inset(50%);
+}
+
+.app-shell .rooms-table.interaction-chat > .chat-mode-panel {
+  pointer-events: auto;
+}
+
 /* The Split layout control lives in the stage chrome instead of consuming a
    bottom strip. Reserve a slim top band so it never sits over a room header or
    steals the room's close/maximize controls. */
@@ -3341,6 +3358,72 @@ html.is-webkitgtk .app-shell .composer-strip {
 
 .app-shell .left-sidebar-footer .left-sidebar-settings-btn {
   margin-left: 0;
+}
+
+.app-shell .left-sidebar-mode-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 8px 9px;
+  flex: 0 0 auto;
+}
+
+.app-shell .left-sidebar-mode-label {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.app-shell .left-sidebar-mode-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-secondary) 48%, transparent);
+}
+
+.app-shell .left-sidebar-mode-buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 27px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .left-sidebar-mode-buttons button:hover {
+  color: var(--text-primary);
+}
+
+.app-shell .left-sidebar-mode-buttons button.active {
+  background: color-mix(in srgb, var(--accent) 17%, var(--bg-secondary));
+  color: var(--text-primary);
+  box-shadow: var(--depth-pressed);
+}
+
+.app-shell .left-sidebar-mode-buttons button span {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.app-shell .workspace-layer.interaction-chat .workspace-overlays {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .app-shell .left-sidebar-footer .left-sidebar-theme-btn {
