@@ -30,7 +30,7 @@ import {
   readProjectOrchestratorTaskSummaries,
   type OrchestratorTask,
 } from '$lib/stores/orchestrator';
-import { interactionMode } from '$lib/stores/interactionMode';
+import { setInteractionMode } from '$lib/stores/interactionMode';
 import {
   chatThreadState,
   createChatThread,
@@ -170,7 +170,6 @@ export default function ProjectHUD() {
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
   const allChatThreads = useStore(chatThreadState);
-  const currentInteractionMode = useStore(interactionMode);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
 
   const projectIdByPath = useMemo(() => {
@@ -182,7 +181,7 @@ export default function ProjectHUD() {
   const sessionsByProject = useMemo(() => {
     const byProject = new Map<string, TerminalSessionInfo[]>();
     for (const session of crossProjectSessions) {
-      if (!session.isRunning) continue;
+      if (!session.isRunning || session.hidden) continue;
       const list = byProject.get(session.projectId);
       if (list) list.push(session);
       else byProject.set(session.projectId, [session]);
@@ -436,6 +435,7 @@ export default function ProjectHUD() {
     }
     selectChatThread(projectId, threadId);
     await handleOpen(wsId, path);
+    setInteractionMode('chat');
   }
 
   // Render a project card
@@ -609,13 +609,13 @@ export default function ProjectHUD() {
                 </span>
               )}
 
-              {!isExpanded && currentInteractionMode !== 'cli' && projectSessions.length > 0 && (
+              {!isExpanded && projectSessions.length > 0 && (
                 <span className="project-sidebar-card-agents" title={`${projectSessions.length} sessions`}>
                   <span className={`hud-status-dot${workingCount > 0 ? ' working' : ''}`} />
                   {projectSessions.length}
                 </span>
               )}
-              {!isExpanded && currentInteractionMode !== 'cli' && allProjectTasks.length > 0 && (
+              {!isExpanded && allProjectTasks.length > 0 && (
                 <span className="project-sidebar-card-task-count" title={`${allProjectTasks.length} tasks`}>
                   {allProjectTasks.length} task{allProjectTasks.length === 1 ? '' : 's'}
                 </span>
@@ -714,10 +714,10 @@ export default function ProjectHUD() {
         {/* Expanded Contents */}
         {isExpanded && p.path && (
           <div className="project-contents">
-            {currentInteractionMode !== 'cli' && !hasOpenContents && chatRows.length === 0 && (
+            {!hasOpenContents && chatRows.length === 0 && (
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
-            {currentInteractionMode === 'cli' && <div className="project-contents-section project-threads-section">
+            <div className="project-contents-section project-threads-section">
               <div className="project-contents-label project-threads-label">
                 <span>Threads</span>
                 <button
@@ -777,8 +777,7 @@ export default function ProjectHUD() {
                   })}
                 </div>
               )}
-            </div>}
-            {currentInteractionMode !== 'cli' && <>
+            </div>
             {projectSessions.length > 0 && (
               <div className="project-contents-section">
                 <div className="project-contents-label">Running</div>
@@ -863,7 +862,6 @@ export default function ProjectHUD() {
                 </div>
               </div>
             )}
-            </>}
           </div>
         )}
       </div>
