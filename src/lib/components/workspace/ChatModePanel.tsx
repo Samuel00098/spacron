@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+// Initialise the versioned thread store when Chat mode is loaded. Its startup
+// path performs the one-time legacy-chat migration without changing the live
+// CLI/orchestrator message API used by the current surface.
+import '$lib/stores/chatThreads';
 import {
   agentForcedAgent,
   chatMessages,
@@ -12,8 +16,6 @@ import {
 } from '$lib/stores/orchestrator';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import './ChatModePanel.css';
-
-const CHAT_MODE_PROTOTYPE_RESET_KEY = 'spacron_chat_mode_prototype_reset_v1';
 
 function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -110,20 +112,6 @@ export default function ChatModePanel() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [composerCentered]);
-
-  // The first Chat-mode prototype shipped with seeded/demo conversation rows.
-  // Clear that one-time fixture for the current project so this room starts as
-  // a real workspace. Later conversations remain durable and user-controlled.
-  useEffect(() => {
-    if (!project) return;
-    try {
-      if (window.localStorage.getItem(CHAT_MODE_PROTOTYPE_RESET_KEY)) return;
-      clearProjectChat(project.id);
-      window.localStorage.setItem(CHAT_MODE_PROTOTYPE_RESET_KEY, '1');
-    } catch {
-      // If storage is unavailable, leave the live conversation untouched.
-    }
-  }, [project]);
 
   async function submit() {
     const text = draft.trim();
