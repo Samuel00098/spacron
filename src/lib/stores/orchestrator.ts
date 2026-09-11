@@ -88,6 +88,12 @@ import {
   type TrackedWorktree,
 } from '$lib/services/orchestrator/worktree-reconciler';
 import { autoStageAgentChanges } from '$lib/stores/settings';
+import {
+  appendLegacyChatMessage,
+  clearProjectThreadMessages,
+  findThreadIdForMessage,
+  patchThreadMessage,
+} from '$lib/stores/chatThreads';
 import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } from '$lib/stores/agentPlacement';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
@@ -1958,7 +1964,8 @@ export function appendVoiceExchangeMessage(projectId: string, role: 'user' | 'as
   return id;
 }
 
-function appendChat(projectId: string, msg: ChatMessage) {
+function appendChat(projectId: string, msg: ChatMessage, threadId?: string) {
+  appendLegacyChatMessage(projectId, msg, threadId);
   chatMessages.update((all) => {
     // Trim only at the hard safety cap. Normal shrinking is done by
     // compactProjectChat, which summarizes the oldest chunk instead of dropping
@@ -2035,6 +2042,8 @@ async function compactProjectChat(projectId: string) {
 }
 
 function patchChat(projectId: string, id: string, patch: Partial<ChatMessage>) {
+  const threadId = findThreadIdForMessage(projectId, id);
+  if (threadId) patchThreadMessage(threadId, id, patch as Record<string, unknown>);
   chatMessages.update((all) => {
     const list = (all[projectId] ?? []).map((m) => (m.id === id ? { ...m, ...patch } : m));
     return { ...all, [projectId]: list };
@@ -2042,6 +2051,7 @@ function patchChat(projectId: string, id: string, patch: Partial<ChatMessage>) {
 }
 
 export function clearProjectChat(projectId: string) {
+  clearProjectThreadMessages(projectId);
   chatMessages.update((all) => ({ ...all, [projectId]: [] }));
 }
 
@@ -2812,6 +2822,7 @@ export async function sendChatMessage(
     forcedAgent?: string;
     voiceConversation?: boolean;
     panelTaskId?: string;
+    threadId?: string;
   }
 ): Promise<void> {
   const trimmed = text.trim();
@@ -2819,13 +2830,13 @@ export async function sendChatMessage(
 
   const access = await detectAgentAccess();
   if (!access.ready) {
-    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() });
+    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, opts?.threadId);
     appendChat(projectId, {
       id: msgId(),
       role: 'assistant',
       text: getAgentAccessBlockedMessage(),
       ts: Date.now(),
-    });
+    }, opts?.threadId);
     return;
   }
 
@@ -2847,9 +2858,9 @@ export async function sendChatMessage(
   const knowledgeLines = getKnowledgeLines(projectId);
   const llmConfig = getConversationLlmConfig();
 
-  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() });
+  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, opts?.threadId);
   const assistantId = msgId();
-  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true });
+  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, opts?.threadId);
 
   let result: RouteResult;
   const forced = opts?.forcedAgent && opts.forcedAgent !== 'auto'

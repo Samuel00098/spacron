@@ -127,6 +127,48 @@
   color: var(--text-primary);
 }
 
+.app-shell .chat-mode-thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(1120px, 100%);
+  margin: 14px auto 0;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--bg-secondary) 42%, transparent);
+}
+
+.app-shell .chat-mode-thread-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.app-shell .chat-mode-thread-kicker {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.app-shell .chat-mode-thread-heading strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .chat-mode-thread-heading span:last-child,
+.app-shell .chat-mode-thread-count {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .app-shell .chat-mode-context-label {
   color: var(--accent) !important;
   font-size: 9px !important;
@@ -151,8 +193,7 @@
 
 .app-shell .chat-mode-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 270px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
   padding-top: 16px;
@@ -318,6 +359,46 @@
 .app-shell .chat-mode-completion.failed { border-color: var(--danger, #f87171); }
 .app-shell .chat-mode-completion.blocked { border-color: var(--warning, #fbbf24); }
 
+.app-shell .chat-mode-inline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 11px;
+  padding: 9px 10px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.app-shell .chat-mode-inline-card > span,
+.app-shell .chat-mode-inline-card > strong {
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.app-shell .chat-mode-inline-card.request {
+  border-color: var(--warning, #fbbf24);
+}
+
+.app-shell .chat-mode-inline-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.app-shell .chat-mode-inline-options button {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+}
+
 .app-shell .chat-mode-activity {
   padding: 13px;
   flex: 1 1 auto;
@@ -392,6 +473,6 @@
 @media (max-width: 820px) {
   .app-shell .chat-mode-panel { padding: 0 16px 18px; }
   .app-shell .chat-mode-room-header { margin-left: 0; margin-right: 0; }
-  .app-shell .chat-mode-body { grid-template-columns: minmax(0, 1fr); }
-  .app-shell .chat-mode-sidecar { max-height: 190px; }
+  .app-shell .chat-mode-thread-header { margin-left: 0; margin-right: 0; }
+  .app-shell .chat-mode-thread-heading { flex-wrap: wrap; }
 }

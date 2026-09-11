@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
 import {
+  appendLegacyChatMessage,
   appendThreadMessage,
   chatThreadState,
+  clearProjectThreadMessages,
   createChatThread,
+  patchThreadMessage,
   migrateLegacyChat,
   resetChatThreadsForTests,
   selectChatThread,
@@ -126,5 +129,29 @@ describe('chat thread state', () => {
     const state = get(chatThreadState);
     expect(state.messagesByThread[thread.id]).toHaveLength(1);
     expect(state.threadsByProject['project-a'][0]).toMatchObject({ status: 'working', lastActivityAt: 110 });
+  });
+
+  it('mirrors legacy updates into the explicitly selected thread', () => {
+    const first = createChatThread('project-a', { title: 'First' }, 100);
+    const second = createChatThread('project-a', { title: 'Second' }, 200);
+
+    expect(appendLegacyChatMessage('project-a', {
+      id: 'message-a',
+      role: 'assistant',
+      text: 'Working',
+      ts: 210,
+      pending: true,
+    }, first.id)).toBe(first.id);
+    expect(patchThreadMessage(first.id, 'message-a', { text: 'Done', pending: false })).toBe(true);
+
+    const state = get(chatThreadState);
+    expect(state.messagesByThread[first.id]).toHaveLength(1);
+    expect(state.messagesByThread[first.id][0]).toMatchObject({ text: 'Done', pending: false });
+    expect(state.messagesByThread[second.id]).toHaveLength(0);
+    expect(state.threadsByProject['project-a'].find((thread) => thread.id === first.id)?.status).toBe('idle');
+
+    clearProjectThreadMessages('project-a');
+    expect(get(chatThreadState).messagesByThread[first.id]).toHaveLength(0);
+    expect(get(chatThreadState).messagesByThread[second.id]).toHaveLength(0);
   });
 });

@@ -67,15 +67,6 @@ const ROOM_LABELS: Record<string, string> = {
   sketch: 'Sketch',
 };
 
-const TASK_STATUS_LABELS: Record<OrchestratorTask['status'], string> = {
-  todo: 'Queued',
-  'in-progress': 'Working',
-  complete: 'Done',
-  blocked: 'Needs input',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-};
-
 interface ProjectItem {
   workspaceId: string;
   name: string;
@@ -446,9 +437,6 @@ export default function ProjectHUD() {
     const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
     const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
     const allProjectTasks = projectId ? tasksByProject.get(projectId) ?? [] : [];
-    const projectTasks = [...allProjectTasks]
-      .sort((a, b) => (b.completedAt ?? b.startedAt ?? b.createdAt) - (a.completedAt ?? a.startedAt ?? a.createdAt))
-      .slice(0, 5);
     const workingCount = projectSessions.filter((s) => s.isExecuting).length;
     const storedThreads = projectId ? allChatThreads.threadsByProject[projectId] ?? [] : [];
     const activeThreadId = projectId ? allChatThreads.activeThreadByProject[projectId] ?? null : null;
@@ -807,44 +795,6 @@ export default function ProjectHUD() {
                     </button>
                   );
                 })}
-              </div>
-            )}
-
-            {projectTasks.length > 0 && (
-              <div className="project-contents-section">
-                <div className="project-contents-label">Recent tasks</div>
-                <div className="project-task-list">
-                  {projectTasks.map((task) => {
-                    const liveSession = task.assignedSessionId != null
-                      ? projectSessions.find((session) => session.id === task.assignedSessionId && session.isRunning)
-                      : undefined;
-                    return (
-                      <button
-                        key={task.id}
-                        type="button"
-                        className={`project-task-row status-${task.status}`}
-                        onClick={() => {
-                          if (liveSession) {
-                            void openRoom(p.workspaceId, p.path, `agent:${liveSession.id}`);
-                          } else {
-                            focusRoomAfterSwitch('fleet');
-                            void handleOpen(p.workspaceId, p.path);
-                          }
-                        }}
-                        title={`${task.title} — ${TASK_STATUS_LABELS[task.status]}`}
-                      >
-                        <span className="project-task-status" aria-hidden="true">
-                          {task.status === 'complete' ? '✓' : task.status === 'failed' || task.status === 'cancelled' ? '!' : task.status === 'blocked' ? '?' : '·'}
-                        </span>
-                        <span className="project-task-title">{task.title}</span>
-                        <span className="project-task-state">{TASK_STATUS_LABELS[task.status]}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                {allProjectTasks.length > projectTasks.length && (
-                  <span className="project-task-more">+{allProjectTasks.length - projectTasks.length} older</span>
-                )}
               </div>
             )}
 

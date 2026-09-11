@@ -358,6 +358,28 @@ export function getActiveThreadId(projectId: string): string | null {
     : null;
 }
 
+/** Return the selected thread, creating the migration-compatible General
+ * thread for projects that have no chat history yet. */
+export function ensureProjectThread(projectId: string, now = Date.now()): ChatThread {
+  const state = get(chatThreadState);
+  const existing = (state.threadsByProject[projectId] ?? []).find(
+    (thread) => thread.id === state.activeThreadByProject[projectId],
+  ) ?? state.threadsByProject[projectId]?.[0];
+  if (existing) {
+    if (state.activeThreadByProject[projectId] !== existing.id) selectChatThread(projectId, existing.id);
+    return existing;
+  }
+
+  const thread = createDefaultThread(projectId, [], now);
+  chatThreadState.update((current) => ({
+    ...current,
+    threadsByProject: { ...current.threadsByProject, [projectId]: [thread] },
+    messagesByThread: { ...current.messagesByThread, [thread.id]: [] },
+    activeThreadByProject: { ...current.activeThreadByProject, [projectId]: thread.id },
+  }));
+  return thread;
+}
+
 export function selectChatThread(projectId: string, threadId: string): boolean {
   const belongsToProject = (get(chatThreadState).threadsByProject[projectId] ?? []).some((thread) => thread.id === threadId);
   if (!belongsToProject) return false;
@@ -451,6 +473,101 @@ export function appendThreadMessage(message: ChatMessage): boolean {
     ),
   }));
   return true;
+}
+
+/** Mirror one legacy orchestrator message into its owning thread. */
+export function appendLegacyChatMessage(
+  projectId: string,
+  raw: unknown,
+  threadId?: string,
+): string | null {
+  const state = get(chatThreadState);
+  const targetId = threadId && (state.threadsByProject[projectId] ?? []).some((thread) => thread.id === threadId)
+    ? threadId
+    : ensureProjectThread(projectId).id;
+  const existing = state.messagesByThread[targetId] ?? [];
+  const message = migrateMessage(
+    targetId,
+    isRecord(raw) ? raw as LegacyChatMessage : {},
+    existing.length,
+    Date.now(),
+  );
+  if (existing.some((entry) => entry.id === message.id)) return targetId;
+  appendThreadMessage(message);
+  return targetId;
+}
+
+export function findThreadIdForMessage(projectId: string, messageId: string): string | null {
+  const state = get(chatThreadState);
+  const thread = (state.threadsByProject[projectId] ?? []).find((entry) =>
+    (state.messagesByThread[entry.id] ?? []).some((message) => message.id === messageId),
+  );
+  return thread?.id ?? null;
+}
+
+export function patchThreadMessage(threadId: string, messageId: string, patch: Partial<ChatMessage>): boolean {
+  let patched = false;
+  chatThreadState.update((state) => {
+    const messages = state.messagesByThread[threadId] ?? [];
+    const currentMessage = messages.find((message) => message.id === messageId);
+    if (!currentMessage) return state;
+    patched = true;
+    const nextMessage = { ...currentMessage, ...patch, threadId };
+    const nextStatus: ChatThreadStatus | null = nextMessage.completion
+      ? nextMessage.completion.status === 'blocked'
+        ? 'needs-input'
+        : nextMessage.completion.status === 'failed'
+          ? 'failed'
+          : 'complete'
+      : patch.dispatched?.length
+        ? 'working'
+        : patch.pending === false
+          ? 'idle'
+          : null;
+    return {
+      ...state,
+      messagesByThread: {
+        ...state.messagesByThread,
+        [threadId]: messages.map((message) => message.id === messageId ? nextMessage : message),
+      },
+      threadsByProject: nextStatus
+        ? Object.fromEntries(
+            Object.entries(state.threadsByProject).map(([projectId, threads]) => [
+              projectId,
+              threads.map((thread) => thread.id === threadId
+                ? { ...thread, status: nextStatus, updatedAt: nextMessage.ts, lastActivityAt: nextMessage.ts }
+                : thread),
+            ]),
+          )
+        : state.threadsByProject,
+    };
+  });
+  return patched;
+}
+
+export function clearProjectThreadMessages(projectId: string): void {
+  chatThreadState.update((state) => {
+    const threads = state.threadsByProject[projectId] ?? [];
+    if (!threads.length) return state;
+    const ids = new Set(threads.map((thread) => thread.id));
+    const messagesByThread = { ...state.messagesByThread };
+    for (const id of ids) messagesByThread[id] = [];
+    return {
+      ...state,
+      messagesByThread,
+      threadsByProject: {
+        ...state.threadsByProject,
+        [projectId]: threads.map((thread) => ({
+          ...thread,
+          status: 'draft' as ChatThreadStatus,
+          taskId: null,
+          sessionId: null,
+          updatedAt: Date.now(),
+          lastActivityAt: Date.now(),
+        })),
+      },
+    };
+  });
 }
 
 export function resetChatThreadsForTests(): void {

@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
-// Initialise the versioned thread store when Chat mode is loaded. Its startup
-// path performs the one-time legacy-chat migration without changing the live
-// CLI/orchestrator message API used by the current surface.
-import '$lib/stores/chatThreads';
 import {
   agentForcedAgent,
-  chatMessages,
   clearProjectChat,
   getDispatchableAgents,
-  orchestratorTasks,
   sendChatMessage,
-  type ChatMessage,
 } from '$lib/stores/orchestrator';
 import { getAgentDisplayName } from '$lib/stores/terminal';
+import {
+  chatThreadState,
+  createChatThread,
+  ensureProjectThread,
+  setThreadDraft,
+  type ChatMessage,
+  type ChatThread,
+} from '$lib/stores/chatThreads';
 import './ChatModePanel.css';
 
 function formatTime(timestamp: number): string {
@@ -41,6 +42,18 @@ function statusLabel(status: string): string {
   }
 }
 
+function threadStatusLabel(status: ChatThread['status'] | undefined): string {
+  switch (status) {
+    case 'working': return 'Working';
+    case 'needs-input': return 'Needs input';
+    case 'complete': return 'Complete';
+    case 'failed': return 'Failed';
+    case 'draft': return 'Draft';
+    case 'archived': return 'Archived';
+    default: return 'Ready';
+  }
+}
+
 function MessageBody({ text, pending }: { text: string; pending?: boolean }) {
   if (pending && !text.trim()) {
     return <span className="chat-mode-pending"><i /> <i /> <i /></span>;
@@ -57,10 +70,34 @@ function MessageBody({ text, pending }: { text: string; pending?: boolean }) {
   );
 }
 
+function InlineCard({ message }: { message: ChatMessage }) {
+  if (message.type === 'plan' || message.type === 'activity' || message.type === 'orchestrator') {
+    return (
+      <div className={`chat-mode-inline-card ${message.type}`}>
+        <span>{message.type === 'plan' ? 'Plan' : 'Activity'}</span>
+        <MessageBody text={message.text} />
+      </div>
+    );
+  }
+  if ((message.type === 'approval' || message.type === 'input') && message.inlineRequest) {
+    return (
+      <div className={`chat-mode-inline-card request ${message.type}`}>
+        <strong>{message.type === 'approval' ? 'Approval needed' : 'Input needed'}</strong>
+        <MessageBody text={message.inlineRequest.prompt} />
+        {message.inlineRequest.options?.length ? (
+          <div className="chat-mode-inline-options">
+            {message.inlineRequest.options.map((option) => <button key={option.id} type="button" disabled>{option.label}</button>)}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  return null;
+}
+
 export default function ChatModePanel() {
   const project = useStore(activeProject);
-  const allMessages = useStore(chatMessages);
-  const allTasks = useStore(orchestratorTasks);
+  const threadState = useStore(chatThreadState);
   const forcedAgent = useStore(agentForcedAgent);
   const [draft, setDraft] = useState('');
   const [pendingSendCount, setPendingSendCount] = useState(0);
@@ -69,13 +106,18 @@ export default function ChatModePanel() {
   const composerRef = useRef<HTMLFormElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const messages = useMemo(
-    () => (project ? allMessages[project.id] ?? [] : []),
-    [allMessages, project],
+  const threads = useMemo(
+    () => (project ? threadState.threadsByProject[project.id] ?? [] : []),
+    [project, threadState.threadsByProject],
   );
-  const tasks = useMemo(
-    () => (project ? allTasks.filter((task) => task.projectId === project.id).slice(-5).reverse() : []),
-    [allTasks, project],
+  const activeThread = useMemo(() => {
+    if (!project) return null;
+    const activeId = threadState.activeThreadByProject[project.id];
+    return threads.find((thread) => thread.id === activeId) ?? threads[0] ?? null;
+  }, [project, threadState.activeThreadByProject, threads]);
+  const messages = useMemo(
+    () => (activeThread ? threadState.messagesByThread[activeThread.id] ?? [] : []),
+    [activeThread, threadState.messagesByThread],
   );
   const agents = useMemo(
     () => (project ? getDispatchableAgents(project.id) : []),
@@ -83,12 +125,22 @@ export default function ChatModePanel() {
   );
 
   useEffect(() => {
+    if (project) ensureProjectThread(project.id);
+  }, [project?.id]);
+
+  useEffect(() => {
+    if (!activeThread) return;
+    setDraft(activeThread.draft);
+    setComposerCentered(false);
+  }, [activeThread?.id]);
+
+  useEffect(() => {
     const element = scrollRef.current;
     if (element) element.scrollTop = element.scrollHeight;
   }, [messages.length]);
 
   useEffect(() => {
-    setDraft('');
+    setDraft(activeThread?.draft ?? '');
     setComposerCentered(false);
   }, [project?.id]);
 
@@ -115,14 +167,16 @@ export default function ChatModePanel() {
 
   async function submit() {
     const text = draft.trim();
-    if (!project || !text) return;
+    if (!project || !activeThread || !text) return;
     setDraft('');
+    setThreadDraft(activeThread.id, '');
     setComposerCentered(false);
     setPendingSendCount((count) => count + 1);
     try {
       await sendChatMessage(project.id, project.root_path, text, {
         forcedAgent,
         projectName: project.name,
+        threadId: activeThread.id,
       });
     } finally {
       setPendingSendCount((count) => Math.max(0, count - 1));
@@ -149,13 +203,23 @@ export default function ChatModePanel() {
           <strong>Chat</strong>
         </div>
         <div className="chat-mode-room-actions">
-          <span className="chat-mode-room-state">Project conversation</span>
+          <span className="chat-mode-room-state">{project?.name ?? 'No project selected'}</span>
           {project && (
-            <button type="button" onClick={() => clearProjectChat(project.id)}>
-              Clear
-            </button>
+            <>
+              <button type="button" onClick={() => createChatThread(project.id)}>New thread</button>
+              <button type="button" onClick={() => clearProjectChat(project.id)}>Clear</button>
+            </>
           )}
         </div>
+      </div>
+
+      <div className="chat-mode-thread-header">
+        <div className="chat-mode-thread-heading">
+          <span className="chat-mode-thread-kicker">Project thread</span>
+          <strong>{activeThread?.title ?? 'New thread'}</strong>
+          <span>{activeThread?.agentName || (activeThread?.agentPreset ? getAgentDisplayName(activeThread.agentPreset) : 'Auto')} · {threadStatusLabel(activeThread?.status)}</span>
+        </div>
+        <span className="chat-mode-thread-count">{threads.length} thread{threads.length === 1 ? '' : 's'}</span>
       </div>
 
       <div className="chat-mode-body">
@@ -167,13 +231,20 @@ export default function ChatModePanel() {
               <p>Ask for a change, a review, an explanation, or a new agent.</p>
               <div className="chat-mode-suggestions">
                 {['Summarize this project', 'Check the current Git status', 'Open an agent to help me'].map((suggestion) => (
-                  <button key={suggestion} type="button" onClick={() => setDraft(suggestion)}>
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => {
+                      setDraft(suggestion);
+                      if (activeThread) setThreadDraft(activeThread.id, suggestion);
+                    }}
+                  >
                     {suggestion}
                   </button>
                 ))}
+                </div>
               </div>
-            </div>
-          ) : (
+            ) : (
             messages.map((message) => (
               <article key={message.id} className={`chat-mode-message ${message.role}`}>
                 <div className="chat-mode-message-meta">
@@ -181,6 +252,7 @@ export default function ChatModePanel() {
                   <time>{formatTime(message.ts)}</time>
                 </div>
                 <MessageBody text={message.text} pending={message.pending} />
+                <InlineCard message={message} />
                 {message.completion && (
                   <div className={`chat-mode-completion ${message.completion.status}`}>
                     <strong>{message.completion.taskTitle}</strong>
@@ -191,36 +263,6 @@ export default function ChatModePanel() {
             ))
           )}
         </div>
-
-        <aside className="chat-mode-sidecar">
-          <div className="chat-mode-context">
-            <span className="chat-mode-context-label">Project context</span>
-            <strong>{project?.name ?? 'No project selected'}</strong>
-            {project && <span>{project.root_path}</span>}
-          </div>
-          <div className="chat-mode-activity" aria-label="Agent activity">
-            <div className="chat-mode-activity-heading">
-              <span>Activity</span>
-              <span className="chat-mode-live-mark">Live</span>
-            </div>
-            {tasks.length === 0 ? (
-              <p className="chat-mode-activity-empty">Agent work will appear here.</p>
-            ) : (
-              <div className="chat-mode-task-list">
-                {tasks.map((task) => (
-                  <div key={task.id} className="chat-mode-task">
-                    <span className={`chat-mode-task-status ${task.status}`} />
-                    <div>
-                      <strong>{task.name || getAgentDisplayName(task.agentPreset) || 'Agent'}</strong>
-                      <span>{task.title}</span>
-                    </div>
-                    <em>{statusLabel(task.status)}</em>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
       </div>
 
       <form
@@ -236,6 +278,7 @@ export default function ChatModePanel() {
           onChange={(event) => {
             const value = event.target.value;
             setDraft(value);
+            if (activeThread) setThreadDraft(activeThread.id, value);
             if (value.trim() && !composerCentered) setComposerCentered(true);
           }}
           onFocus={() => setComposerCentered(true)}
