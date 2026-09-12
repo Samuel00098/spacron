@@ -1634,7 +1634,6 @@ export default function AppShell() {
         />
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
-            <span className="left-sidebar-app-name">Spacron</span>
             {workspaceName && (
               <span className="left-sidebar-workspace" title={workspaceName}>
                 {workspaceName}

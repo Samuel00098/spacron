@@ -118,29 +118,32 @@ export default function TitleBar() {
       {/* Navigation: Sidebar, Back, Forward */}
       <div className="titlebar-nav">
         {showWorkspaceTools && (
-          <button
-            className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
-            onClick={toggleSidebar}
-            aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
-            aria-pressed={sidebarVisible}
-            title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          <>
+            <button
+              className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
+              onClick={toggleSidebar}
+              aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+              aria-pressed={sidebarVisible}
+              title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
             >
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M9 4v16" />
-              <path d="M6 8h1M6 12h1M6 16h1" />
-            </svg>
-          </button>
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+                <path d="M6 8h1M6 12h1M6 16h1" />
+              </svg>
+            </button>
+            <span className="titlebar-name titlebar-nav-brand" aria-label="Spacron">Spacron</span>
+          </>
         )}
         <button
           className="nav-btn tb-collapse-2"

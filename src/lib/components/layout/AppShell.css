@@ -3598,36 +3598,8 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar-header {
-  isolation: isolate;
-}
-
-/* Keep the smoky accent atmosphere local to the brand lockup. It follows the
-   current accent while staying soft enough that the wordmark remains crisp. */
-.app-shell .left-sidebar-header::before {
-  content: '';
-  position: absolute;
-  inset: 4px 32px;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: 18px;
-  background: radial-gradient(ellipse 72% 110% at 50% 50%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 72%);
-  filter: blur(7px);
-  opacity: 0.9;
-}
-
-.app-shell .left-sidebar-heading {
-  z-index: 1;
-}
-
-.app-shell .left-sidebar-header {
   min-height: 60px;
   padding: 12px 10px 10px 14px;
-}
-
-.app-shell .left-sidebar-app-name {
-  font-size: 21px;
-  font-weight: 800;
-  letter-spacing: -0.045em;
 }
 
 .app-shell .left-sidebar-quick-actions {
