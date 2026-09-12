@@ -8,7 +8,7 @@
   min-height: 0;
   padding: 0 clamp(14px, 2vw, 32px) 18px;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: var(--sidebar-bg, var(--bg-secondary));
   border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent) 18%);
   border-radius: var(--bento-radius, 16px);
   box-shadow: var(--glass-shadow, 0 24px 60px rgba(0, 0, 0, 0.26));
@@ -183,6 +183,25 @@
   padding-top: 16px;
 }
 
+/* An empty room is a landing state: keep the prompt under the welcome copy
+   instead of making the composer feel detached from the room. Once a thread
+   has messages, the body returns to a normal scrolling transcript. */
+.app-shell .chat-mode-body.is-empty {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.app-shell .chat-mode-transcript.is-empty {
+  width: min(980px, 100%);
+  height: auto;
+  overflow: visible;
+  border-color: transparent;
+  background: transparent;
+}
+
 .app-shell .chat-mode-sidecar {
   display: flex;
   flex-direction: column;
@@ -212,6 +231,15 @@
   height: 100%;
   min-height: 260px;
   text-align: center;
+}
+
+.app-shell .chat-mode-panel.empty .chat-mode-empty {
+  min-height: 0;
+}
+
+.app-shell .chat-mode-panel.empty .chat-mode-composer {
+  margin-top: 18px;
+  margin-bottom: auto;
 }
 
 .app-shell .chat-mode-empty-icon {
@@ -428,19 +456,19 @@
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent) 18%);
   border-radius: 12px;
-  background: var(--bg-primary);
+  background: var(--sidebar-bg, var(--bg-secondary));
   color: var(--text-primary);
   color-scheme: dark;
 }
 
 :root.light-theme .app-shell .chat-mode-composer {
-  background: #ffffff;
-  color: #000000;
+  background: var(--sidebar-bg, var(--bg-secondary));
+  color: var(--text-primary);
   color-scheme: light;
 }
 
 :root:not(.light-theme) .app-shell .chat-mode-composer {
-  background: var(--bg-primary, #000000);
+  background: var(--sidebar-bg, var(--bg-secondary));
   color: var(--text-primary, #ffffff);
 }
 
@@ -466,9 +494,19 @@
 .app-shell .chat-mode-composer-footer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 3px 2px 0; }
 .app-shell .chat-mode-composer-control { display: flex; flex: 0 1 145px; flex-direction: column; gap: 3px; min-width: 110px; color: var(--text-muted); font-size: 10px; }
 .app-shell .chat-mode-composer-control.model { flex-basis: 190px; }
+.app-shell .chat-mode-composer-control.model .dd-trigger::before {
+  content: '✦';
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+.app-shell .chat-mode-composer-control.model-provider { padding-right: 8px; border-right: 1px solid var(--border); }
 .app-shell .chat-mode-composer-control .dropdown { width: 100%; }
 .app-shell .chat-mode-composer-control .dd-trigger { height: 28px; font-size: 10.5px; }
 .app-shell .chat-mode-composer-control .dd-item-sub { max-width: 170px; }
+.app-shell .chat-mode-control-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.app-shell .chat-mode-model-source { overflow: hidden; color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell .chat-mode-model-source.live { color: var(--success); }
 .app-shell .chat-mode-shortcut { margin-left: auto; color: var(--text-muted); font-size: 10px; }
 .app-shell .chat-mode-send { padding: 5px 9px; border: 0; border-radius: 7px; background: var(--accent); color: var(--accent-contrast, #fff); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
 .app-shell .chat-mode-send:disabled { opacity: 0.45; cursor: default; }

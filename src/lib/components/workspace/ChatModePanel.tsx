@@ -13,7 +13,9 @@ import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import {
   getAgentProviderCapabilities,
   isChatAgentProvider,
+  type AgentProviderModel,
 } from '$lib/services/agent-provider-catalogue';
+import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import {
   chatThreadState,
   createChatThread,
@@ -110,6 +112,8 @@ export default function ChatModePanel() {
   const liveSessions = useStore(allProjectSessions);
   const [draft, setDraft] = useState('');
   const [pendingSendCount, setPendingSendCount] = useState(0);
+  const [liveModelsByProvider, setLiveModelsByProvider] = useState<Record<string, AgentProviderModel[]>>({});
+  const [loadingModelsFor, setLoadingModelsFor] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const threads = useMemo(
@@ -157,10 +161,33 @@ export default function ChatModePanel() {
   }, [chatAgents, liveSessions, liveTasks, project?.id, selectedProvider]);
 
   const providerCapabilities = getAgentProviderCapabilities(selectedProvider);
-  const selectedModel = activeThread?.model ?? providerCapabilities.models[0]?.id ?? 'default';
+  const liveModels = liveModelsByProvider[selectedProvider] ?? [];
+  const availableModels = liveModels.length ? liveModels : providerCapabilities.models;
+  const selectedModel = activeThread?.model ?? availableModels[0]?.id ?? 'default';
+
+  useEffect(() => {
+    if (!selectedProvider || liveModelsByProvider[selectedProvider] || !project) return;
+    let cancelled = false;
+    setLoadingModelsFor(selectedProvider);
+    void loadLiveAgentProviderModels(selectedProvider)
+      .then((models) => {
+        if (cancelled) return;
+        setLiveModelsByProvider((current) => ({ ...current, [selectedProvider]: models }));
+        if (models.length && activeThread && (!activeThread.model || activeThread.model === 'default')) {
+          updateChatThread(activeThread.id, { model: models[0].id });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) console.warn(`[chat] Could not load live models for ${selectedProvider}:`, error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModelsFor((current) => current === selectedProvider ? null : current);
+      });
+    return () => { cancelled = true; };
+  }, [activeThread, liveModelsByProvider, project, selectedProvider]);
 
   const modelOptions = useMemo<DropdownOption[]>(() => {
-    const models = providerCapabilities.models;
+    const models = availableModels;
     const withSelected = models.some((model) => model.id === selectedModel)
       ? models
       : [{ id: selectedModel, label: selectedModel, description: 'Selected by the provider', free: false }, ...models];
@@ -169,7 +196,15 @@ export default function ChatModePanel() {
       label: model.label,
       sublabel: model.free ? 'Free' : model.description,
     }));
-  }, [providerCapabilities.models, selectedModel]);
+  }, [availableModels, selectedModel]);
+
+  const modelSource = loadingModelsFor === selectedProvider
+    ? 'Loading live models…'
+    : liveModels.length
+      ? 'Live from CLI'
+      : getAgentProviderCapabilities(selectedProvider).models.length
+        ? 'CLI default'
+        : 'Unavailable';
 
   useEffect(() => {
     if (project) ensureProjectThread(project.id);
@@ -221,7 +256,7 @@ export default function ChatModePanel() {
 
   return (
     <section
-      className="chat-mode-panel"
+      className={`chat-mode-panel${messages.length === 0 ? ' empty' : ''}`}
       aria-label="Chat room"
     >
       <div className="chat-mode-room-header">
@@ -250,8 +285,8 @@ export default function ChatModePanel() {
         <span className="chat-mode-thread-count">{threads.length} thread{threads.length === 1 ? '' : 's'}</span>
       </div>
 
-      <div className="chat-mode-body">
-        <div ref={scrollRef} className="chat-mode-transcript" aria-live="polite">
+      <div className={`chat-mode-body${messages.length === 0 ? ' is-empty' : ''}`}>
+        <div ref={scrollRef} className={`chat-mode-transcript${messages.length === 0 ? ' is-empty' : ''}`} aria-live="polite">
           {messages.length === 0 ? (
             <div className="chat-mode-empty">
               <div className="chat-mode-empty-icon" aria-hidden="true">✦</div>
@@ -315,7 +350,7 @@ export default function ChatModePanel() {
         />
         <div className="chat-mode-composer-footer">
           <div className="chat-mode-composer-control model-provider">
-            <span>Provider</span>
+            <span className="chat-mode-control-label">Agent</span>
             <Dropdown
               value={selectedProvider}
               options={providerOptions}
@@ -329,12 +364,15 @@ export default function ChatModePanel() {
             />
           </div>
           <div className="chat-mode-composer-control model">
-            <span>Model · provider catalogue</span>
+            <span className="chat-mode-control-label">
+              <span>Model</span>
+              <span className={`chat-mode-model-source${liveModels.length ? ' live' : ''}`}>{modelSource}</span>
+            </span>
             <Dropdown
               value={selectedModel}
               options={modelOptions}
               onChange={(value) => {
-                if (activeThread) updateChatThread(activeThread.id, { provider: selectedProvider, model: value });
+                if (activeThread) updateChatThread(activeThread.id, { provider: selectedProvider, agentPreset: selectedProvider, model: value });
               }}
               ariaLabel="Chat model"
               disabled={!project}
