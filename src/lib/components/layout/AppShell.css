@@ -3216,6 +3216,21 @@ html.is-webkitgtk .app-shell .composer-strip {
   background: color-mix(in srgb, var(--accent) 17%, transparent);
 }
 
+.app-shell .left-sidebar-new-agent:disabled {
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.48;
+  filter: saturate(0.35);
+}
+
+.app-shell .left-sidebar-new-agent:disabled:hover,
+.app-shell .left-sidebar-new-agent:disabled.active {
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
 .app-shell .left-sidebar-new-agent svg {
   width: 14px;
   height: 14px;

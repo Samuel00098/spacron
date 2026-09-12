@@ -1655,21 +1655,6 @@ export default function AppShell() {
           </button>
         </header>
 
-        <div className="left-sidebar-quick-actions">
-          <button
-            type="button"
-            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
-            onClick={() => {
-              if (layoutState.agentSpawnOpen) closeAgentSpawn();
-              else openAgentSpawn();
-            }}
-            aria-pressed={layoutState.agentSpawnOpen}
-          >
-            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-            <span>New Agent</span>
-          </button>
-        </div>
-
         <div className="left-sidebar-mode-switch" role="group" aria-label="Workspace mode">
           <span className="left-sidebar-mode-label">Workspace mode</span>
           <div className="left-sidebar-mode-buttons">
@@ -1692,6 +1677,23 @@ export default function AppShell() {
               Chat
             </button>
           </div>
+        </div>
+
+        <div className="left-sidebar-quick-actions">
+          <button
+            type="button"
+            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
+            onClick={() => {
+              if (layoutState.agentSpawnOpen) closeAgentSpawn();
+              else openAgentSpawn();
+            }}
+            disabled={currentInteractionMode === 'chat'}
+            title={currentInteractionMode === 'chat' ? 'Switch to CLI mode to start a new agent' : 'Start a new agent'}
+            aria-pressed={layoutState.agentSpawnOpen}
+          >
+            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
+            <span>New Agent</span>
+          </button>
         </div>
 
         <nav className="left-sidebar-nav" aria-label="Workspaces and global views">
