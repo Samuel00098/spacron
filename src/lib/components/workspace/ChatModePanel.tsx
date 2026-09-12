@@ -205,6 +205,7 @@ export default function ChatModePanel() {
         threadId: activeThread.id,
         provider: selectedProvider,
         model: selectedModel,
+        chatMode: true,
       });
     } finally {
       setPendingSendCount((count) => Math.max(0, count - 1));

@@ -102,6 +102,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } fro
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
+import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
 import {
   getProjectMemoryLines,
   loadProjectMemory,
@@ -149,6 +150,7 @@ import {
   setActiveSession,
   getSessionOutputBuffer,
   getSessionOutputLength,
+  getSessionOutputSince,
   getActiveTerminalProjectId,
   allProjectSessions,
 } from '$lib/stores/terminal';
@@ -1509,6 +1511,7 @@ function sendGoalToLeasedTask(
   goal: string,
   agentCommand: string,
   watchTurn: boolean,
+  chatThreadId?: string,
 ): void {
   void (async () => {
     try {
@@ -1522,11 +1525,19 @@ function sendGoalToLeasedTask(
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
       if (!sent) return;
+      // Chat mode keeps the task leased between turns. The regular task watcher
+      // is intentionally disabled for those sessions, so arm a separate
+      // response watcher that streams the cleaned PTY output into the thread
+      // without completing/releasing the task.
+      const responseStart = getSessionOutputLength(sessionId);
       patchTask(id, (current) =>
         current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current
       );
       logTaskActivity(id, 'goal', goal);
       showToast('Sent goal to ' + (getAgentDisplayName(agentCommand) ?? agentCommand), 'info', 3000);
+      if (chatThreadId) {
+        watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart);
+      }
       if (!watchTurn) return;
       const outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(id, sessionId),
@@ -2097,12 +2108,87 @@ export function clearProjectChat(projectId: string) {
   chatMessages.update((all) => ({ ...all, [projectId]: [] }));
 }
 
+// A T3 thread receives structured provider deltas. Spacron's chat-capable
+// agents still speak through their existing PTYs, so this adapter keeps the
+// same user-visible contract by turning the new PTY output since the prompt
+// into one streamed assistant message. The terminal remains mounted and is
+// still the source of truth; Chat is a projection of that live session.
+const chatTurnWatchers = new Map<number, Promise<void>>();
+
+function chatResponseText(sessionId: number, outputStart: number): string {
+  return captureTranscript(getSessionOutputSince(sessionId, outputStart), MAX_TRANSCRIPT_CHARS);
+}
+
+async function waitForChatTurn(sessionId: number): Promise<void> {
+  const pending = chatTurnWatchers.get(sessionId);
+  if (pending) await pending;
+}
+
+function watchChatAgentResponse(
+  taskId: string,
+  sessionId: number,
+  threadId: string,
+  agentCommand: string,
+  outputStart: number,
+): void {
+  const responseId = msgId();
+  const task = get(orchestratorTasks).find((entry) => entry.id === taskId);
+  const projectId = getChatThread(threadId)?.projectId ?? task?.projectId;
+  if (!projectId) return;
+  appendChat(
+    projectId,
+    { id: responseId, role: 'assistant', text: '', ts: Date.now(), pending: true },
+    threadId,
+  );
+
+  const watch = (async () => {
+    const publish = (pending: boolean) => {
+      const text = chatResponseText(sessionId, outputStart);
+      if (text) patchChat(projectId, responseId, { text, pending });
+    };
+    const timer = setInterval(() => publish(true), 500);
+    try {
+      const outcome = await getAgentAdapter(sessionId).watchTurn({
+        shouldContinue: () => leasedSessionLive(taskId, sessionId),
+        agentCommand,
+      });
+      if (outcome.kind === 'aborted') {
+        const current = get(orchestratorTasks).find((entry) => entry.id === taskId);
+        if (current?.status === 'in-progress') {
+          patchChat(projectId, responseId, {
+            text: 'The agent session ended before it returned a chat response. Check its terminal.',
+            pending: false,
+          });
+        }
+        return;
+      }
+      publish(false);
+      const finalText = chatResponseText(sessionId, outputStart);
+      if (!finalText) {
+        patchChat(projectId, responseId, {
+          text: outcome.kind === 'blocked' ? outcome.reason : 'The agent returned no readable chat text. Check its terminal.',
+          pending: false,
+        });
+      }
+      updateChatThread(threadId, { status: 'idle', updatedAt: Date.now(), lastActivityAt: Date.now() });
+    } finally {
+      clearInterval(timer);
+    }
+  })();
+
+  chatTurnWatchers.set(sessionId, watch);
+  void watch.finally(() => {
+    if (chatTurnWatchers.get(sessionId) === watch) chatTurnWatchers.delete(sessionId);
+  });
+}
+
 async function sendThreadFollowUp(
   projectId: string,
   rootPath: string,
   threadId: string,
   task: OrchestratorTask,
   text: string,
+  chatMode = false,
 ): Promise<void> {
   const userId = msgId();
   const assistantId = msgId();
@@ -2110,6 +2196,9 @@ async function sendThreadFollowUp(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, threadId);
 
   try {
+    const sessionId = task.assignedSessionId;
+    if (chatMode && sessionId != null) await waitForChatTurn(sessionId);
+    const responseStart = sessionId == null ? 0 : getSessionOutputLength(sessionId);
     const sent = await sendFollowUpToAgent(task, text, rootPath);
     const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
     syncChatThreadTask(latestTask, threadId);
@@ -2133,6 +2222,9 @@ async function sendThreadFollowUp(
       dispatchedTaskId: task.id,
       dispatchedAgent: task.agentPreset ?? null,
     });
+    if (chatMode && sessionId != null && task.agentPreset) {
+      watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, responseStart);
+    }
   } catch (err) {
     console.error('Failed to send thread follow-up:', err);
     patchChat(projectId, assistantId, {
@@ -2916,12 +3008,16 @@ export async function sendChatMessage(
     /** Agent provider alias, e.g. `codex` or `cursor-agent`. */
     provider?: string;
     model?: string;
+    /** Keep the selected agent session alive and project its replies into Chat. */
+    chatMode?: boolean;
   }
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed || !projectId) return;
 
   const chatThreadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
+  const chatThread = chatThreadId ? getChatThread(chatThreadId) : null;
+  const chatMode = opts?.chatMode === true || Boolean(chatThread?.provider && isChatAgentProvider(chatThread.provider));
   const threadTask = chatThreadId
     ? (() => {
         const thread = getChatThread(chatThreadId);
@@ -2935,7 +3031,7 @@ export async function sendChatMessage(
     threadTask &&
     ((threadTask.status === 'in-progress' && threadTask.assignedSessionId != null) || threadTask.status === 'blocked')
   ) {
-    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed);
+    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode);
     return;
   }
 
@@ -3179,7 +3275,7 @@ export async function sendChatMessage(
     // skip the turn watcher so it stays addressable. Persistence keys off a
     // real name, before we apply an auto-name below — an auto-name must
     // not make a one-shot task persistent.
-    const persistent = !!explicitName || !action.prompt;
+    const persistent = chatMode || !!explicitName || !action.prompt;
     // Every spawned agent gets a friendly human name so it's easy to address.
     const name = explicitName ?? pickAssistantName(usedNames);
 
@@ -3291,7 +3387,7 @@ export async function sendChatMessage(
       patchTask(task.id, (t) => ({ ...t, goal }));
     }
     if (rawPrompt) {
-      sendGoalToLeasedTask(task.id, sessionId, goal, agent, watchTurn);
+      sendGoalToLeasedTask(task.id, sessionId, goal, agent, watchTurn, chatMode ? chatThreadId : undefined);
     } else {
       // No task yet (persistent/named agent) — deliver the standing brief so every
       // spawned agent is briefed (a no-op for rules-file agents, already briefed
