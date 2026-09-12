@@ -119,6 +119,7 @@ export default function TitleBar() {
       <div className="titlebar-nav">
         {showWorkspaceTools && (
           <>
+            <span className="titlebar-name titlebar-nav-brand" aria-label="Spacron">Spacron</span>
             <button
               className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
               onClick={toggleSidebar}
@@ -142,7 +143,6 @@ export default function TitleBar() {
                 <path d="M6 8h1M6 12h1M6 16h1" />
               </svg>
             </button>
-            <span className="titlebar-name titlebar-nav-brand" aria-label="Spacron">Spacron</span>
           </>
         )}
         <button
