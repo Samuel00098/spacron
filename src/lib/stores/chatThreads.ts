@@ -505,7 +505,7 @@ export function toggleChatThreadPinned(threadId: string): boolean {
   return updateChatThread(threadId, { pinned: !thread.pinned, updatedAt: Date.now() });
 }
 
-/** Remove a thread and keep the project's active selection usable. */
+/** Remove a thread without silently creating a replacement conversation. */
 export function deleteChatThread(threadId: string): boolean {
   let deleted = false;
   chatThreadState.update((state) => {
@@ -523,18 +523,15 @@ export function deleteChatThread(threadId: string): boolean {
     deleted = true;
     const currentThreads = state.threadsByProject[ownerProjectId] ?? [];
     const remaining = currentThreads.filter((thread) => thread.id !== threadId);
-    const nextThreads = remaining.length
-      ? remaining
-      : [createDefaultThread(ownerProjectId, [], Date.now())];
+    const nextThreads = remaining;
     const activeId = state.activeThreadByProject[ownerProjectId];
-    const nextActiveId = activeId === threadId || !nextThreads.some((thread) => thread.id === activeId)
-      ? nextThreads[Math.min(Math.max(removedIndex, 0), nextThreads.length - 1)].id
-      : activeId;
+    const nextActiveId = nextThreads.length === 0
+      ? null
+      : activeId === threadId || !nextThreads.some((thread) => thread.id === activeId)
+        ? nextThreads[Math.min(Math.max(removedIndex, 0), nextThreads.length - 1)].id
+        : activeId;
     const messagesByThread = { ...state.messagesByThread };
     delete messagesByThread[threadId];
-    for (const thread of nextThreads) {
-      if (!messagesByThread[thread.id]) messagesByThread[thread.id] = [];
-    }
     return {
       ...state,
       threadsByProject: { ...state.threadsByProject, [ownerProjectId]: nextThreads },
@@ -587,9 +584,14 @@ export function appendLegacyChatMessage(
   threadId?: string,
 ): string | null {
   const state = get(chatThreadState);
-  const targetId = threadId && (state.threadsByProject[projectId] ?? []).some((thread) => thread.id === threadId)
-    ? threadId
-    : ensureProjectThread(projectId).id;
+  if (threadId && !(state.threadsByProject[projectId] ?? []).some((thread) => thread.id === threadId)) {
+    // A task can finish after its Chat thread was deleted. Do not resurrect a
+    // default thread just to hold late output for a conversation the user chose
+    // to remove.
+    return null;
+  }
+  const targetId = threadId ?? (state.threadsByProject[projectId] ?? [])[0]?.id;
+  if (!targetId) return null;
   const existing = state.messagesByThread[targetId] ?? [];
   const message = migrateMessage(
     targetId,

@@ -196,7 +196,7 @@ describe('chat thread state', () => {
     expect(get(chatThreadState).messagesByThread[thread.id][0].inlineRequest?.answer).toBe('staging');
   });
 
-  it('supports lifecycle actions and selects a fresh thread after deleting the last one', () => {
+  it('supports lifecycle actions without recreating a deleted last thread', () => {
     const first = createChatThread('project-a', { title: 'First' }, 100);
     expect(renameChatThread(first.id, '  Renamed   thread  ')).toBe(true);
     expect(toggleChatThreadPinned(first.id)).toBe(true);
@@ -207,10 +207,9 @@ describe('chat thread state', () => {
 
     expect(deleteChatThread(first.id)).toBe(true);
     const state = get(chatThreadState);
-    const replacement = state.threadsByProject['project-a'][0];
-    expect(replacement.title).toBe('General');
-    expect(state.activeThreadByProject['project-a']).toBe(replacement.id);
-    expect(state.messagesByThread[replacement.id]).toEqual([]);
+    expect(state.threadsByProject['project-a']).toEqual([]);
+    expect(state.activeThreadByProject['project-a']).toBeNull();
+    expect(Object.keys(state.messagesByThread)).toEqual([]);
   });
 
   it('keeps the nearest thread active when deleting one from a project', () => {
@@ -239,5 +238,17 @@ describe('chat thread state', () => {
     expect(get(chatThreadState).messagesByThread[thread.id][0].attachments).toEqual([
       { id: 'file-a', name: 'notes.md', type: 'text/markdown', size: 42, text: '# Notes' },
     ]);
+  });
+
+  it('does not recreate a thread when late output targets a deleted thread', () => {
+    const thread = createChatThread('project-a', {}, 100);
+    expect(deleteChatThread(thread.id)).toBe(true);
+    expect(appendLegacyChatMessage('project-a', {
+      id: 'late-message',
+      role: 'assistant',
+      text: 'The old agent finished.',
+      ts: 120,
+    }, thread.id)).toBeNull();
+    expect(get(chatThreadState).threadsByProject['project-a']).toEqual([]);
   });
 });

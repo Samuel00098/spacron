@@ -19,7 +19,6 @@ import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import {
   chatThreadState,
   createChatThread,
-  ensureProjectThread,
   patchThreadMessage,
   setThreadDraft,
   updateChatThread,
@@ -255,10 +254,6 @@ export default function ChatModePanel() {
       : getAgentProviderCapabilities(selectedProvider).models.length
         ? 'CLI default'
         : 'Unavailable';
-
-  useEffect(() => {
-    if (project) ensureProjectThread(project.id);
-  }, [project?.id]);
 
   useEffect(() => {
     if (!activeThread) return;
