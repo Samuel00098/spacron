@@ -78,6 +78,8 @@ function threadIdForProject(projectId: string): string {
 }
 
 function messageType(message: LegacyChatMessage): ChatMessageType {
+  const inlineRequest = copyInlineRequest(message.inlineRequest);
+  if (inlineRequest) return inlineRequest.type === 'approval' ? 'approval' : 'input';
   if (isRecord(message.completion)) {
     const completionStatus = message.completion.status;
     return completionStatus === 'failed' ? 'failure' : 'completion';
@@ -166,7 +168,7 @@ function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number,
   const ts = asNumber(raw.ts) ?? now;
   const knownKeys = new Set([
     'id', 'role', 'text', 'ts', 'pending', 'dispatched', 'dispatchedTaskId',
-    'dispatchedAgent', 'reconSummary', 'completion',
+    'dispatchedAgent', 'reconSummary', 'completion', 'inlineRequest',
   ]);
   const legacy = Object.fromEntries(Object.entries(raw).filter(([key]) => !knownKeys.has(key)));
   return {
@@ -182,6 +184,7 @@ function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number,
     dispatchedAgent: asString(raw.dispatchedAgent),
     reconSummary: asString(raw.reconSummary),
     completion: copyCompletion(raw.completion),
+    inlineRequest: copyInlineRequest(raw.inlineRequest),
     ...(Object.keys(legacy).length ? { legacy } : {}),
   };
 }
@@ -536,7 +539,9 @@ export function patchThreadMessage(threadId: string, messageId: string, patch: P
     if (!currentMessage) return state;
     patched = true;
     const nextMessage = { ...currentMessage, ...patch, threadId };
-    const nextStatus: ChatThreadStatus | null = nextMessage.completion
+    const nextStatus: ChatThreadStatus | null = nextMessage.inlineRequest
+      ? nextMessage.inlineRequest.answeredAt ? 'working' : 'needs-input'
+      : nextMessage.completion
       ? nextMessage.completion.status === 'blocked'
         ? 'needs-input'
         : nextMessage.completion.status === 'failed'

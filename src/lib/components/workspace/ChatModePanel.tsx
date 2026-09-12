@@ -20,6 +20,7 @@ import {
   chatThreadState,
   createChatThread,
   ensureProjectThread,
+  patchThreadMessage,
   setThreadDraft,
   updateChatThread,
   type ChatMessage,
@@ -111,6 +112,7 @@ export default function ChatModePanel() {
   const liveTasks = useStore(orchestratorTasks);
   const liveSessions = useStore(allProjectSessions);
   const [draft, setDraft] = useState('');
+  const [requestDraft, setRequestDraft] = useState('');
   const [pendingSendCount, setPendingSendCount] = useState(0);
   const [liveModelsByProvider, setLiveModelsByProvider] = useState<Record<string, AgentProviderModel[]>>({});
   const [loadingModelsFor, setLoadingModelsFor] = useState<string | null>(null);
@@ -164,6 +166,14 @@ export default function ChatModePanel() {
   const liveModels = liveModelsByProvider[selectedProvider] ?? [];
   const availableModels = liveModels.length ? liveModels : providerCapabilities.models;
   const selectedModel = activeThread?.model ?? availableModels[0]?.id ?? 'default';
+  const pendingRequestMessage = useMemo(
+    () => [...messages].reverse().find((message) =>
+      (message.type === 'approval' || message.type === 'input') &&
+      message.inlineRequest && !message.inlineRequest.answeredAt,
+    ) ?? null,
+    [messages],
+  );
+  const pendingRequest = pendingRequestMessage?.inlineRequest ?? null;
 
   useEffect(() => {
     if (!selectedProvider || liveModelsByProvider[selectedProvider] || !project) return;
@@ -213,6 +223,7 @@ export default function ChatModePanel() {
   useEffect(() => {
     if (!activeThread) return;
     setDraft(activeThread.draft);
+    setRequestDraft('');
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -224,7 +235,30 @@ export default function ChatModePanel() {
     setDraft(activeThread?.draft ?? '');
   }, [project?.id]);
 
+  async function answerPendingRequest(answer: string) {
+    const trimmedAnswer = answer.trim();
+    if (!project || !activeThread || !pendingRequestMessage || !pendingRequest || !trimmedAnswer) return;
+    const answeredAt = Date.now();
+    patchThreadMessage(activeThread.id, pendingRequestMessage.id, {
+      inlineRequest: { ...pendingRequest, answer: trimmedAnswer, answeredAt },
+    });
+    updateChatThread(activeThread.id, { status: 'working', updatedAt: answeredAt, lastActivityAt: answeredAt });
+    setRequestDraft('');
+    await sendChatMessage(project.id, project.root_path, trimmedAnswer, {
+      forcedAgent: activeThread.provider ?? selectedProvider,
+      projectName: project.name,
+      threadId: activeThread.id,
+      provider: activeThread.provider ?? selectedProvider,
+      model: activeThread.model ?? selectedModel,
+      chatMode: true,
+    });
+  }
+
   async function submit() {
+    if (pendingRequest) {
+      await answerPendingRequest(requestDraft);
+      return;
+    }
     const text = draft.trim();
     if (!project || !activeThread || !text) return;
     setDraft('');
@@ -335,15 +369,36 @@ export default function ChatModePanel() {
           void submit();
         }}
       >
+        {pendingRequest && (
+          <div className="chat-mode-pending-request" role="alert">
+            <div className="chat-mode-pending-request-copy">
+              <strong>{pendingRequest.type === 'approval' ? 'Approval needed' : 'The agent needs your input'}</strong>
+              <MessageBody text={pendingRequest.prompt} />
+            </div>
+            {pendingRequest.options?.length ? (
+              <div className="chat-mode-pending-request-options">
+                {pendingRequest.options.map((option) => (
+                  <button key={option.id} type="button" onClick={() => void answerPendingRequest(option.label)}>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
         <textarea
-          value={draft}
+          value={pendingRequest ? requestDraft : draft}
           onChange={(event) => {
             const value = event.target.value;
-            setDraft(value);
-            if (activeThread) setThreadDraft(activeThread.id, value);
+            if (pendingRequest) {
+              setRequestDraft(value);
+            } else {
+              setDraft(value);
+              if (activeThread) setThreadDraft(activeThread.id, value);
+            }
           }}
           onKeyDown={onComposerKeyDown}
-          placeholder={project ? 'Ask Spacron to do something…' : 'Select a project first'}
+          placeholder={pendingRequest?.placeholder || (project ? 'Ask Spacron to do something…' : 'Select a project first')}
           disabled={!project}
           rows={2}
           aria-label="Chat message"
@@ -379,8 +434,8 @@ export default function ChatModePanel() {
             />
           </div>
           <span className="chat-mode-shortcut">Ctrl/Cmd + Enter to send</span>
-          <button type="submit" className="chat-mode-send" disabled={!project || !draft.trim()}>
-            {pendingSendCount > 0 ? `Send (${pendingSendCount} active)` : 'Send'}
+          <button type="submit" className="chat-mode-send" disabled={!project || !(pendingRequest ? requestDraft.trim() : draft.trim())}>
+            {pendingRequest ? 'Continue' : pendingSendCount > 0 ? `Send (${pendingSendCount} active)` : 'Send'}
           </button>
         </div>
       </form>

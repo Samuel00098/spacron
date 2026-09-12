@@ -69,6 +69,57 @@
   width: min(980px, 100%);
   margin: 0 auto;
 }
+
+.app-shell .chat-mode-pending-request {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--warning, #fbbf24) 45%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warning, #fbbf24) 8%, var(--bg-secondary));
+}
+
+.app-shell .chat-mode-pending-request-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.app-shell .chat-mode-pending-request-copy strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.app-shell .chat-mode-pending-request-copy .chat-mode-message-text {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.app-shell .chat-mode-pending-request-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.app-shell .chat-mode-pending-request-options button {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--warning, #fbbf24) 45%, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.app-shell .chat-mode-pending-request-options button:hover {
+  background: color-mix(in srgb, var(--warning, #fbbf24) 14%, transparent);
+}
 .app-shell .chat-mode-context span,
 .app-shell .chat-mode-activity-empty {
   margin: 0;

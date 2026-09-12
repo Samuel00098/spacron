@@ -68,6 +68,7 @@ import {
 } from '$lib/services/orchestrator/agent-turn-watch';
 import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
 import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
+import type { ChatInlineRequest, ChatMessageType } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -1955,6 +1956,7 @@ export interface ChatMessage {
   text: string;
   ts: number;
   pending?: boolean;
+  type?: ChatMessageType;
   /** Agents this turn touched. Newer field; legacy single fields kept for old chats. */
   dispatched?: DispatchRef[];
   dispatchedTaskId?: string | null;
@@ -1963,6 +1965,7 @@ export interface ChatMessage {
   reconSummary?: string | null;
   /** Structured agent completion summary card. */
   completion?: CompletionSummary | null;
+  inlineRequest?: ChatInlineRequest | null;
 }
 
 const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
@@ -2162,11 +2165,29 @@ function watchChatAgentResponse(
         }
         return;
       }
+      if (outcome.kind === 'blocked') {
+        const finalText = chatResponseText(sessionId, outputStart);
+        const inlineRequest: ChatInlineRequest = {
+          id: `chat-request-${responseId}`,
+          type: 'text',
+          prompt: outcome.reason,
+          taskId,
+          sessionId,
+        };
+        patchChat(projectId, responseId, {
+          type: 'input',
+          text: finalText,
+          pending: false,
+          inlineRequest,
+        });
+        updateChatThread(threadId, { status: 'needs-input', updatedAt: Date.now(), lastActivityAt: Date.now() });
+        return;
+      }
       publish(false);
       const finalText = chatResponseText(sessionId, outputStart);
       if (!finalText) {
         patchChat(projectId, responseId, {
-          text: outcome.kind === 'blocked' ? outcome.reason : 'The agent returned no readable chat text. Check its terminal.',
+          text: 'The agent returned no readable chat text. Check its terminal.',
           pending: false,
         });
       }

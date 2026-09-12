@@ -154,4 +154,42 @@ describe('chat thread state', () => {
     expect(get(chatThreadState).messagesByThread[first.id]).toHaveLength(0);
     expect(get(chatThreadState).messagesByThread[second.id]).toHaveLength(0);
   });
+
+  it('promotes an unanswered inline request to needs-input and clears it when answered', () => {
+    const thread = createChatThread('project-a', {}, 100);
+    appendLegacyChatMessage('project-a', {
+      id: 'request-message',
+      role: 'assistant',
+      text: '',
+      ts: 110,
+      inlineRequest: {
+        id: 'request-a',
+        type: 'text',
+        prompt: 'Which environment should I use?',
+        taskId: 'task-a',
+        sessionId: 7,
+      },
+    }, thread.id);
+
+    expect(get(chatThreadState).threadsByProject['project-a'][0].status).toBe('needs-input');
+    expect(get(chatThreadState).messagesByThread[thread.id][0]).toMatchObject({
+      type: 'input',
+      inlineRequest: { id: 'request-a', prompt: 'Which environment should I use?' },
+    });
+
+    patchThreadMessage(thread.id, 'request-message', {
+      inlineRequest: {
+        id: 'request-a',
+        type: 'text',
+        prompt: 'Which environment should I use?',
+        taskId: 'task-a',
+        sessionId: 7,
+        answer: 'staging',
+        answeredAt: 120,
+      },
+    });
+
+    expect(get(chatThreadState).threadsByProject['project-a'][0].status).toBe('working');
+    expect(get(chatThreadState).messagesByThread[thread.id][0].inlineRequest?.answer).toBe('staging');
+  });
 });
