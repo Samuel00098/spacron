@@ -3591,38 +3591,32 @@ html.is-webkitgtk .app-shell .composer-strip {
 /* ── Sidebar refinement pass ──────────────────────────────────────────────
    Keep the existing navigation model, but give each rail a calmer rhythm:
    the brand and primary action breathe first, navigation is grouped in one
-   band, and the content area starts on a clear boundary. The smoke layer is
-   deliberately behind the controls so the accent adds atmosphere without
-   tinting text or reducing contrast. */
+   band, and the content area starts on a clear boundary. */
 .app-shell .left-utility-panel.left-sidebar,
 .app-shell .right-utility-panel.right-sidebar {
   isolation: isolate;
 }
 
-.app-shell .left-utility-panel.left-sidebar::before,
-.app-shell .right-utility-panel.right-sidebar::before {
+.app-shell .left-sidebar-header {
+  isolation: isolate;
+}
+
+/* Keep the smoky accent atmosphere local to the brand lockup. It follows the
+   current accent while staying soft enough that the wordmark remains crisp. */
+.app-shell .left-sidebar-header::before {
   content: '';
   position: absolute;
-  inset: 0;
+  inset: 4px 32px;
   z-index: 0;
   pointer-events: none;
-  border-radius: inherit;
-  background:
-    radial-gradient(ellipse 74% 30% at 0% 0%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 76%),
-    radial-gradient(ellipse 62% 34% at 100% 100%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 78%);
-  opacity: 0.8;
+  border-radius: 18px;
+  background: radial-gradient(ellipse 72% 110% at 50% 50%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 72%);
+  filter: blur(7px);
+  opacity: 0.9;
 }
 
-.app-shell .left-sidebar > *,
-.app-shell .right-sidebar > * {
-  position: relative;
+.app-shell .left-sidebar-heading {
   z-index: 1;
-}
-
-.app-shell .left-sidebar > .left-drawer-resize-handle,
-.app-shell .right-sidebar > .right-drawer-resize-handle {
-  position: absolute;
-  z-index: 3;
 }
 
 .app-shell .left-sidebar-header {
@@ -3694,8 +3688,7 @@ html.is-webkitgtk .app-shell .composer-strip {
 
 .app-shell .left-sidebar .drawer-body {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 30%),
-    radial-gradient(ellipse 78% 38% at 0% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 78%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 30%);
 }
 
 .app-shell .left-sidebar .projects-panel-header {
@@ -3770,8 +3763,7 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .right-sidebar .drawer-body {
   padding: 7px 0 12px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 28%),
-    radial-gradient(ellipse 78% 38% at 100% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 78%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 28%);
 }
 
 @media (max-height: 760px) {
