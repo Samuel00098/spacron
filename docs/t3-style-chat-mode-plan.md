@@ -1,6 +1,6 @@
 # T3-style Chat Mode for Spacron
 
-Status: Planning
+Status: Implemented in Chat mode; realtime voice intentionally excluded by product decision. Final native smoke testing remains.
 
 This document describes the step-by-step plan for adding a project-scoped,
 T3-style chat experience to Spacron while preserving the existing CLI mode.
@@ -57,7 +57,7 @@ Main panel
   ├─ Thread header and selected agent
   ├─ User and agent messages
   ├─ Plans, tool activity, approvals, and questions inline
-  └─ Thread composer with agent, dictation, and voice controls
+  └─ Thread composer with agent, dictation, and file attachments
 ```
 
 Each thread represents a focused task or conversation. A user can switch to a
@@ -249,7 +249,7 @@ The composer should include:
 - Provider selector and model selector inside the composer
 - Send button
 - Dictation/transcription button
-- Realtime voice mode button
+- File attachment button with removable attachment chips
 - Working/queued state
 - Keyboard shortcut hint
 
@@ -322,7 +322,7 @@ The UI must not invent an agent response from a missing transcript. When only
 status is known, it should say that the agent is working or waiting and offer
 the terminal view.
 
-## Voice and transcription
+## Dictation and attachments
 
 ### Dictation
 
@@ -337,26 +337,13 @@ Add a microphone button inside the thread composer:
 The existing global transcription shortcut remains available. The chat button
 is simply a direct entry point that guarantees the composer is the target.
 
-### Realtime voice mode
+### File attachments
 
-Add a separate voice conversation button inside the composer.
-
-- Show connecting, listening, thinking, speaking, and error states.
-- Prevent duplicate realtime sessions.
-- Preserve the existing voice history behavior.
-- Include the active project, thread, and selected agent in the voice context.
-- Route coding requests through the same orchestrator path as text chat.
-- Append spoken user and assistant turns to the active thread.
-
-The initial version should treat realtime voice as a conversation with
-Spacron’s voice orchestrator. The orchestrator can then route work to the
-selected agent. Direct speech-to-speech sessions with arbitrary CLI agents are
-not assumed to be available.
-
-Spacron’s existing voice implementation already follows this separation:
-transcription is speech-to-text, while voice conversation is realtime
-speech-to-speech. We should reuse that logic rather than create a second audio
-pipeline.
+The composer accepts up to five files at a time, with a per-file size limit.
+Text-like files are read into bounded prompt context and every attachment is
+kept on the user message so the thread remains auditable. Binary files retain
+their name, type, and size without being copied into local storage as a large
+blob; the agent can still be directed to inspect them from the project.
 
 ## Persistence and migration
 
@@ -428,13 +415,12 @@ the new thread model ships.
 - Insert and preserve draft text correctly.
 - Test cancel, retry, pause, and target-field behavior.
 
-### Phase 6 — Realtime voice
+### Phase 6 — Attachments and integration hardening
 
-- Extract reusable voice-session control from the floating prompt bar.
-- Add start/stop voice button to the Chat composer.
-- Connect voice transcripts to the active thread.
-- Pass selected thread/agent context to the orchestrator.
-- Preserve voice history and prevent duplicate sessions.
+- Keep attachment metadata with user messages and thread persistence.
+- Pass bounded text-file context through both new dispatches and live-agent
+  follow-ups.
+- Keep the existing realtime voice implementation out of Chat mode.
 
 ### Phase 7 — Polish and verification
 
@@ -473,10 +459,12 @@ The work is ready for normal use when:
 - Running agents produce visible, correctly attributed activity and responses.
 - The agent selector is visually correct in every application theme.
 - Dictation inserts into the active composer draft.
-- Voice mode starts, speaks, stops, and records the correct thread.
+- File attachments remain visible on the user message and readable text reaches
+  the selected agent as prompt context.
 - Reloading restores projects, threads, messages, and drafts.
 - `npm run check`, `npm run build`, and `npm test -- --run` pass.
-- Manual native desktop testing confirms terminal liveness and microphone flow.
+- Manual native desktop testing confirms terminal liveness, dictation targeting,
+  and file attachment flow.
 
 ## Scope boundaries
 
@@ -485,7 +473,8 @@ The first release will not attempt to:
 - Replace the native CLI experience.
 - Change the existing CLI model or terminal workspace behavior.
 - Parse every provider’s terminal output into perfect structured events.
-- Create a separate realtime audio channel for every CLI agent.
+- Add realtime voice controls to Chat mode; dictation is the only voice input
+  exposed by the Chat composer.
 - Add cross-device thread synchronization.
 - Add complex thread splitting or multi-pane chat layouts.
 - Automatically merge or publish agent work.

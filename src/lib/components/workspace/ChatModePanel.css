@@ -459,6 +459,72 @@
   color: var(--text-muted);
   font: inherit;
   font-size: 10px;
+  cursor: pointer;
+}
+
+.app-shell .chat-mode-inline-options button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell .chat-mode-message-attachments,
+.app-shell .chat-mode-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.app-shell .chat-mode-message-attachments {
+  margin-top: 10px;
+}
+
+.app-shell .chat-mode-attachment-list {
+  padding: 4px 6px 6px;
+}
+
+.app-shell .chat-mode-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.app-shell .chat-mode-attachment-chip > span:not([aria-hidden]) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .chat-mode-attachment-chip > span[aria-hidden] {
+  color: var(--accent);
+}
+
+.app-shell .chat-mode-attachment-chip small {
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.app-shell .chat-mode-attachment-chip button {
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-shell .chat-mode-attachment-chip button:hover {
+  color: var(--text-primary);
 }
 
 .app-shell .chat-mode-activity {
@@ -543,6 +609,28 @@
 
 .app-shell .chat-mode-composer textarea::placeholder { color: var(--text-muted); }
 .app-shell .chat-mode-composer-footer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 3px 2px 0; }
+.app-shell .chat-mode-file-input { display: none; }
+.app-shell .chat-mode-composer-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.app-shell .chat-mode-composer-icon-btn:hover,
+.app-shell .chat-mode-composer-icon-btn.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.app-shell .chat-mode-composer-icon-btn:disabled { opacity: 0.45; cursor: default; }
 .app-shell .chat-mode-composer-control { display: flex; flex: 0 1 145px; flex-direction: column; gap: 3px; min-width: 110px; color: var(--text-muted); font-size: 10px; }
 .app-shell .chat-mode-composer-control.model { flex-basis: 190px; }
 .app-shell .chat-mode-composer-control.model .dd-trigger::before {

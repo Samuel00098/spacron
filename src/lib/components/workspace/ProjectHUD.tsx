@@ -34,7 +34,10 @@ import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode
 import {
   chatThreadState,
   createChatThread,
+  deleteChatThread,
+  renameChatThread,
   selectChatThread,
+  toggleChatThreadPinned,
   type ChatThread,
   type ChatThreadStatus,
 } from '$lib/stores/chatThreads';
@@ -134,6 +137,7 @@ export default function ProjectHUD() {
   const [showNewWs, setShowNewWs] = useState(false);
   const [newWsName, setNewWsName] = useState('');
   const [activeMoveMenuPath, setActiveMoveMenuPath] = useState<string | null>(null);
+  const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
 
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
     try {
@@ -513,6 +517,8 @@ export default function ProjectHUD() {
       });
     }
     chatRows.sort((a, b) => {
+      const pinnedRank = Number(Boolean(b.thread?.pinned)) - Number(Boolean(a.thread?.pinned));
+      if (pinnedRank !== 0) return pinnedRank;
       const rank = chatStatusRank(a.status) - chatStatusRank(b.status);
       if (rank !== 0) return rank;
       const aActivity = a.thread?.lastActivityAt ?? a.task?.completedAt ?? a.task?.startedAt ?? a.task?.createdAt ?? a.session?.lastActivatedAt ?? 0;
@@ -745,6 +751,64 @@ export default function ProjectHUD() {
                           {row.unreadCount > 0 && <span className="project-thread-unread" title={`${row.unreadCount} unread`} />}
                           <span className="project-thread-state">{chatStatusLabel(row.status)}</span>
                         </button>
+                        {row.thread && (
+                          <div className="project-thread-actions">
+                            <button
+                              type="button"
+                              className="project-thread-action-btn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setThreadMenuId((current) => current === row.thread?.id ? null : row.thread?.id ?? null);
+                              }}
+                              title="Thread actions"
+                              aria-label={`Actions for ${row.title}`}
+                              aria-expanded={threadMenuId === row.thread.id}
+                            >
+                              <span aria-hidden="true">•••</span>
+                            </button>
+                            {threadMenuId === row.thread.id && (
+                              <div className="project-thread-action-menu" role="menu">
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const title = window.prompt('Rename thread', row.thread?.title ?? '');
+                                    if (title != null) renameChatThread(row.thread!.id, title);
+                                    setThreadMenuId(null);
+                                  }}
+                                >
+                                  Rename
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    toggleChatThreadPinned(row.thread!.id);
+                                    setThreadMenuId(null);
+                                  }}
+                                >
+                                  {row.thread.pinned ? 'Unpin' : 'Pin'}
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="danger"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (window.confirm(`Delete “${row.thread?.title ?? 'this thread'}”?`)) {
+                                      deleteChatThread(row.thread!.id);
+                                    }
+                                    setThreadMenuId(null);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {terminalSession && (
                           <button
                             type="button"

@@ -68,7 +68,7 @@ import {
 } from '$lib/services/orchestrator/agent-turn-watch';
 import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
 import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
-import type { ChatInlineRequest, ChatMessageType } from '$lib/types/chat';
+import type { ChatAttachment, ChatInlineRequest, ChatMessageType } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -1966,6 +1966,7 @@ export interface ChatMessage {
   /** Structured agent completion summary card. */
   completion?: CompletionSummary | null;
   inlineRequest?: ChatInlineRequest | null;
+  attachments?: ChatAttachment[];
 }
 
 const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
@@ -2111,6 +2112,15 @@ export function clearProjectChat(projectId: string) {
   chatMessages.update((all) => ({ ...all, [projectId]: [] }));
 }
 
+function buildAttachmentPrompt(text: string, attachments: ChatAttachment[]): string {
+  if (!attachments.length) return text;
+  const context = attachments.map((attachment) => {
+    const header = `\n--- Attached file: ${attachment.name} (${attachment.type || 'file'}) ---`;
+    return attachment.text ? `${header}\n${attachment.text}\n--- End attached file ---` : `${header}\nThe file is attached in the Chat message metadata; inspect it from the project if needed.\n--- End attached file ---`;
+  }).join('\n');
+  return `${text}\n\nThe user attached these files. Use their contents as context when relevant:${context}`;
+}
+
 // A T3 thread receives structured provider deltas. Spacron's chat-capable
 // agents still speak through their existing PTYs, so this adapter keeps the
 // same user-visible contract by turning the new PTY output since the prompt
@@ -2210,17 +2220,18 @@ async function sendThreadFollowUp(
   task: OrchestratorTask,
   text: string,
   chatMode = false,
+  attachments: ChatAttachment[] = [],
 ): Promise<void> {
   const userId = msgId();
   const assistantId = msgId();
-  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now() }, threadId);
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, threadId);
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, threadId);
 
   try {
     const sessionId = task.assignedSessionId;
     if (chatMode && sessionId != null) await waitForChatTurn(sessionId);
     const responseStart = sessionId == null ? 0 : getSessionOutputLength(sessionId);
-    const sent = await sendFollowUpToAgent(task, text, rootPath);
+    const sent = await sendFollowUpToAgent(task, buildAttachmentPrompt(text, attachments), rootPath);
     const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
     syncChatThreadTask(latestTask, threadId);
     if (!sent) {
@@ -3031,6 +3042,7 @@ export async function sendChatMessage(
     model?: string;
     /** Keep the selected agent session alive and project its replies into Chat. */
     chatMode?: boolean;
+    attachments?: ChatAttachment[];
   }
 ): Promise<void> {
   const trimmed = text.trim();
@@ -3052,13 +3064,14 @@ export async function sendChatMessage(
     threadTask &&
     ((threadTask.status === 'in-progress' && threadTask.assignedSessionId != null) || threadTask.status === 'blocked')
   ) {
-    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode);
+    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode, opts?.attachments ?? []);
     return;
   }
 
   const access = await detectAgentAccess();
   if (!access.ready) {
-    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
+    const blockedAttachments = opts?.attachments ?? [];
+    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments: blockedAttachments }, chatThreadId);
     appendChat(projectId, {
       id: msgId(),
       role: 'assistant',
@@ -3089,7 +3102,9 @@ export async function sendChatMessage(
   // OpenAI/Anthropic-style API provider ids.
   const llmConfig = getConversationLlmConfig();
 
-  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
+  const attachments = opts?.attachments ?? [];
+  const promptText = buildAttachmentPrompt(trimmed, attachments);
+  appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments }, chatThreadId);
   const assistantId = msgId();
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, chatThreadId);
 
@@ -3101,12 +3116,12 @@ export async function sendChatMessage(
   if (forced) {
     result = {
       reply: `Handing this to ${forced.name}.`,
-      actions: [{ kind: 'spawn', agent: forced.command, prompt: trimmed, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
+        actions: [{ kind: 'spawn', agent: forced.command, prompt: promptText, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
       viaLLM: false,
     };
   } else {
     try {
-      result = await routeOrchestratorRequest(trimmed, agents, {
+      result = await routeOrchestratorRequest(promptText, agents, {
         projectName: opts?.projectName,
         projectRoot: rootPath,
         recentUserMessages,

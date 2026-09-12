@@ -56,6 +56,15 @@ export interface ChatInlineRequest {
   answer?: string | null;
 }
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  /** Text content is retained for prompt context; binary files keep metadata only. */
+  text?: string;
+}
+
 export interface ChatDispatchReference {
   taskId: string;
   agent: string;
@@ -94,6 +103,7 @@ export interface ChatMessage {
   reconSummary?: string | null;
   completion?: ChatCompletion | null;
   inlineRequest?: ChatInlineRequest | null;
+  attachments?: ChatAttachment[];
   /** Fields not understood by the first migration remain recoverable here. */
   legacy?: Record<string, unknown>;
 }

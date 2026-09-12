@@ -25,7 +25,9 @@ import {
   updateChatThread,
   type ChatMessage,
   type ChatThread,
+  type ChatAttachment,
 } from '$lib/stores/chatThreads';
+import { abortTranscription, startBarTranscription, transcriptionState } from '$lib/services/transcription-hotkey';
 import './ChatModePanel.css';
 
 function formatTime(timestamp: number): string {
@@ -64,6 +66,35 @@ function threadStatusLabel(status: ChatThread['status'] | undefined): string {
   }
 }
 
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENT_TEXT = 120_000;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function looksTextual(file: File): boolean {
+  return file.type.startsWith('text/') || /\.(md|mdx|txt|json|jsonc|js|jsx|ts|tsx|css|scss|html|xml|yaml|yml|toml|rs|py|go|java|c|cpp|h|hpp|sql|sh|ps1)$/i.test(file.name);
+}
+
+async function toChatAttachment(file: File): Promise<ChatAttachment> {
+  const attachment: ChatAttachment = {
+    id: `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: file.name,
+    type: file.type || 'application/octet-stream',
+    size: file.size,
+  };
+  if (looksTextual(file)) {
+    const text = await file.text();
+    attachment.text = text.length > MAX_ATTACHMENT_TEXT
+      ? `${text.slice(0, MAX_ATTACHMENT_TEXT)}\n\n[Attachment truncated at ${MAX_ATTACHMENT_TEXT.toLocaleString()} characters.]`
+      : text;
+  }
+  return attachment;
+}
+
 function MessageBody({ text, pending }: { text: string; pending?: boolean }) {
   if (pending && !text.trim()) {
     return <span className="chat-mode-pending"><i /> <i /> <i /></span>;
@@ -80,7 +111,7 @@ function MessageBody({ text, pending }: { text: string; pending?: boolean }) {
   );
 }
 
-function InlineCard({ message }: { message: ChatMessage }) {
+function InlineCard({ message, onOption }: { message: ChatMessage; onOption?: (label: string) => void }) {
   if (message.type === 'plan' || message.type === 'activity' || message.type === 'orchestrator') {
     return (
       <div className={`chat-mode-inline-card ${message.type}`}>
@@ -96,7 +127,11 @@ function InlineCard({ message }: { message: ChatMessage }) {
         <MessageBody text={message.inlineRequest.prompt} />
         {message.inlineRequest.options?.length ? (
           <div className="chat-mode-inline-options">
-            {message.inlineRequest.options.map((option) => <button key={option.id} type="button" disabled>{option.label}</button>)}
+            {message.inlineRequest.options.map((option) => (
+              <button key={option.id} type="button" onClick={() => onOption?.(option.label)} disabled={!onOption}>
+                {option.label}
+              </button>
+            ))}
           </div>
         ) : null}
       </div>
@@ -111,12 +146,17 @@ export default function ChatModePanel() {
   const forcedAgent = useStore(agentForcedAgent);
   const liveTasks = useStore(orchestratorTasks);
   const liveSessions = useStore(allProjectSessions);
+  const transcriptionPhase = useStore(transcriptionState);
   const [draft, setDraft] = useState('');
   const [requestDraft, setRequestDraft] = useState('');
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [pendingSendCount, setPendingSendCount] = useState(0);
   const [liveModelsByProvider, setLiveModelsByProvider] = useState<Record<string, AgentProviderModel[]>>({});
   const [loadingModelsFor, setLoadingModelsFor] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const threads = useMemo(
     () => (project ? threadState.threadsByProject[project.id] ?? [] : []),
@@ -224,6 +264,7 @@ export default function ChatModePanel() {
     if (!activeThread) return;
     setDraft(activeThread.draft);
     setRequestDraft('');
+    setAttachments([]);
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -254,15 +295,49 @@ export default function ChatModePanel() {
     });
   }
 
+  async function handleFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setAttachmentBusy(true);
+    try {
+      const next: ChatAttachment[] = [];
+      for (const file of Array.from(files).slice(0, 5)) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          console.warn(`[chat] Skipping ${file.name}: attachment exceeds ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
+          continue;
+        }
+        try {
+          next.push(await toChatAttachment(file));
+        } catch (error) {
+          console.warn(`[chat] Could not read attachment ${file.name}:`, error);
+        }
+      }
+      setAttachments((current) => [...current, ...next].slice(0, 5));
+    } finally {
+      setAttachmentBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  function toggleDictation() {
+    textareaRef.current?.focus();
+    if (transcriptionPhase === 'listening') {
+      abortTranscription();
+      return;
+    }
+    startBarTranscription();
+  }
+
   async function submit() {
     if (pendingRequest) {
       await answerPendingRequest(requestDraft);
       return;
     }
-    const text = draft.trim();
+    const text = draft.trim() || (attachments.length ? 'Please review the attached files.' : '');
     if (!project || !activeThread || !text) return;
     setDraft('');
     setThreadDraft(activeThread.id, '');
+    const messageAttachments = attachments;
+    setAttachments([]);
     // A send commits the effective provider/model to this thread. Until then,
     // a fresh thread continues to follow its selected agent's defaults.
     updateChatThread(activeThread.id, { provider: selectedProvider, agentPreset: selectedProvider, model: selectedModel });
@@ -275,6 +350,7 @@ export default function ChatModePanel() {
         provider: selectedProvider,
         model: selectedModel,
         chatMode: true,
+        attachments: messageAttachments,
       });
     } finally {
       setPendingSendCount((count) => Math.max(0, count - 1));
@@ -349,7 +425,21 @@ export default function ChatModePanel() {
                   <time>{formatTime(message.ts)}</time>
                 </div>
                 <MessageBody text={message.text} pending={message.pending} />
-                <InlineCard message={message} />
+                <InlineCard
+                  message={message}
+                  onOption={message.id === pendingRequestMessage?.id ? (option) => void answerPendingRequest(option) : undefined}
+                />
+                {message.attachments?.length ? (
+                  <div className="chat-mode-message-attachments">
+                    {message.attachments.map((attachment) => (
+                      <span key={attachment.id} className="chat-mode-attachment-chip">
+                        <span aria-hidden="true">↗</span>
+                        {attachment.name}
+                        <small>{formatBytes(attachment.size)}</small>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {message.completion && (
                   <div className={`chat-mode-completion ${message.completion.status}`}>
                     <strong>{message.completion.taskTitle}</strong>
@@ -386,7 +476,27 @@ export default function ChatModePanel() {
             ) : null}
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="chat-mode-attachment-list" aria-label="Attached files">
+            {attachments.map((attachment) => (
+              <span key={attachment.id} className="chat-mode-attachment-chip">
+                <span aria-hidden="true">↗</span>
+                <span>{attachment.name}</span>
+                <small>{formatBytes(attachment.size)}</small>
+                <button
+                  type="button"
+                  onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== attachment.id))}
+                  aria-label={`Remove ${attachment.name}`}
+                  title={`Remove ${attachment.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
+          ref={textareaRef}
           value={pendingRequest ? requestDraft : draft}
           onChange={(event) => {
             const value = event.target.value;
@@ -403,7 +513,35 @@ export default function ChatModePanel() {
           rows={2}
           aria-label="Chat message"
         />
+        <input
+          ref={fileInputRef}
+          className="chat-mode-file-input"
+          type="file"
+          multiple
+          onChange={(event) => void handleFiles(event.target.files)}
+          aria-label="Attach files"
+        />
         <div className="chat-mode-composer-footer">
+          <button
+            type="button"
+            className="chat-mode-composer-icon-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!project || attachmentBusy || attachments.length >= 5}
+            title="Attach files"
+            aria-label="Attach files"
+          >
+            {attachmentBusy ? '…' : '＋'}
+          </button>
+          <button
+            type="button"
+            className={`chat-mode-composer-icon-btn${transcriptionPhase === 'listening' ? ' active' : ''}`}
+            onClick={toggleDictation}
+            disabled={!project || transcriptionPhase === 'processing'}
+            title={transcriptionPhase === 'listening' ? 'Stop dictation' : 'Dictate message'}
+            aria-label={transcriptionPhase === 'listening' ? 'Stop dictation' : 'Dictate message'}
+          >
+            {transcriptionPhase === 'listening' ? '■' : '●'}
+          </button>
           <div className="chat-mode-composer-control model-provider">
             <span className="chat-mode-control-label">Agent</span>
             <Dropdown
@@ -434,7 +572,7 @@ export default function ChatModePanel() {
             />
           </div>
           <span className="chat-mode-shortcut">Ctrl/Cmd + Enter to send</span>
-          <button type="submit" className="chat-mode-send" disabled={!project || !(pendingRequest ? requestDraft.trim() : draft.trim())}>
+          <button type="submit" className="chat-mode-send" disabled={!project || !(pendingRequest ? requestDraft.trim() : draft.trim() || attachments.length)}>
             {pendingRequest ? 'Continue' : pendingSendCount > 0 ? `Send (${pendingSendCount} active)` : 'Send'}
           </button>
         </div>

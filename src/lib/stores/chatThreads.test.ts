@@ -6,11 +6,14 @@ import {
   chatThreadState,
   clearProjectThreadMessages,
   createChatThread,
+  deleteChatThread,
   patchThreadMessage,
   migrateLegacyChat,
+  renameChatThread,
   resetChatThreadsForTests,
   selectChatThread,
   setThreadDraft,
+  toggleChatThreadPinned,
 } from './chatThreads';
 
 beforeEach(() => {
@@ -191,5 +194,50 @@ describe('chat thread state', () => {
 
     expect(get(chatThreadState).threadsByProject['project-a'][0].status).toBe('working');
     expect(get(chatThreadState).messagesByThread[thread.id][0].inlineRequest?.answer).toBe('staging');
+  });
+
+  it('supports lifecycle actions and selects a fresh thread after deleting the last one', () => {
+    const first = createChatThread('project-a', { title: 'First' }, 100);
+    expect(renameChatThread(first.id, '  Renamed   thread  ')).toBe(true);
+    expect(toggleChatThreadPinned(first.id)).toBe(true);
+    expect(get(chatThreadState).threadsByProject['project-a'][0]).toMatchObject({
+      title: 'Renamed thread',
+      pinned: true,
+    });
+
+    expect(deleteChatThread(first.id)).toBe(true);
+    const state = get(chatThreadState);
+    const replacement = state.threadsByProject['project-a'][0];
+    expect(replacement.title).toBe('General');
+    expect(state.activeThreadByProject['project-a']).toBe(replacement.id);
+    expect(state.messagesByThread[replacement.id]).toEqual([]);
+  });
+
+  it('keeps the nearest thread active when deleting one from a project', () => {
+    const first = createChatThread('project-a', { title: 'First' }, 100);
+    const second = createChatThread('project-a', { title: 'Second' }, 200);
+    const third = createChatThread('project-a', { title: 'Third' }, 300);
+    selectChatThread('project-a', second.id);
+
+    expect(deleteChatThread(second.id)).toBe(true);
+    expect(get(chatThreadState).activeThreadByProject['project-a']).toBe(third.id);
+    expect(get(chatThreadState).threadsByProject['project-a'].map((thread) => thread.id)).toEqual([first.id, third.id]);
+  });
+
+  it('keeps file attachments on the user message in the selected thread', () => {
+    const thread = createChatThread('project-a', {}, 100);
+    appendThreadMessage({
+      id: 'attachment-message',
+      threadId: thread.id,
+      type: 'user',
+      role: 'user',
+      text: 'Review this',
+      ts: 110,
+      attachments: [{ id: 'file-a', name: 'notes.md', type: 'text/markdown', size: 42, text: '# Notes' }],
+    });
+
+    expect(get(chatThreadState).messagesByThread[thread.id][0].attachments).toEqual([
+      { id: 'file-a', name: 'notes.md', type: 'text/markdown', size: 42, text: '# Notes' },
+    ]);
   });
 });

@@ -10,6 +10,7 @@ import type {
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
+  ChatAttachment,
 } from '$lib/types/chat';
 
 export type {
@@ -22,6 +23,7 @@ export type {
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
+  ChatAttachment,
 } from '$lib/types/chat';
 
 export const CHAT_THREADS_STORAGE_KEY = 'spacron_chat_threads_v1';
@@ -163,12 +165,29 @@ function copyInlineRequest(value: unknown): ChatMessage['inlineRequest'] {
   };
 }
 
+function copyAttachments(value: unknown): ChatAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value
+    .filter(isRecord)
+    .map((entry) => {
+      const id = asString(entry.id);
+      const name = asString(entry.name);
+      const type = asString(entry.type);
+      const size = asNumber(entry.size);
+      if (!id || !name || !type || size == null) return null;
+      const text = asString(entry.text);
+      return { id, name, type, size, ...(text != null ? { text } : {}) } satisfies ChatAttachment;
+    })
+    .filter((entry): entry is ChatAttachment => entry !== null);
+  return attachments.length ? attachments : undefined;
+}
+
 function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number, now: number): ChatMessage {
   const id = asString(raw.id) ?? `${threadId}-message-${index}`;
   const ts = asNumber(raw.ts) ?? now;
   const knownKeys = new Set([
     'id', 'role', 'text', 'ts', 'pending', 'dispatched', 'dispatchedTaskId',
-    'dispatchedAgent', 'reconSummary', 'completion', 'inlineRequest',
+    'dispatchedAgent', 'reconSummary', 'completion', 'inlineRequest', 'attachments',
   ]);
   const legacy = Object.fromEntries(Object.entries(raw).filter(([key]) => !knownKeys.has(key)));
   return {
@@ -185,6 +204,7 @@ function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number,
     reconSummary: asString(raw.reconSummary),
     completion: copyCompletion(raw.completion),
     inlineRequest: copyInlineRequest(raw.inlineRequest),
+    attachments: copyAttachments(raw.attachments),
     ...(Object.keys(legacy).length ? { legacy } : {}),
   };
 }
@@ -327,6 +347,7 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
           reconSummary: asString(message.reconSummary),
           completion: copyCompletion(message.completion),
           inlineRequest: copyInlineRequest(message.inlineRequest),
+          attachments: copyAttachments(message.attachments),
           ...(legacy ? { legacy } : {}),
         } satisfies ChatMessage;
       });
@@ -410,6 +431,12 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
   chatThreadState.update((state) => ({
     ...state,
     activeThreadByProject: { ...state.activeThreadByProject, [projectId]: threadId },
+    threadsByProject: {
+      ...state.threadsByProject,
+      [projectId]: (state.threadsByProject[projectId] ?? []).map((thread) =>
+        thread.id === threadId ? { ...thread, unreadCount: 0 } : thread,
+      ),
+    },
   }));
   return true;
 }
@@ -464,6 +491,58 @@ export function updateChatThread(threadId: string, patch: Partial<ChatThread>): 
     return updated ? { ...state, threadsByProject } : state;
   });
   return updated;
+}
+
+export function renameChatThread(threadId: string, title: string): boolean {
+  const nextTitle = title.trim().replace(/\s+/g, ' ').slice(0, 120);
+  if (!nextTitle) return false;
+  return updateChatThread(threadId, { title: nextTitle, updatedAt: Date.now() });
+}
+
+export function toggleChatThreadPinned(threadId: string): boolean {
+  const thread = getChatThread(threadId);
+  if (!thread) return false;
+  return updateChatThread(threadId, { pinned: !thread.pinned, updatedAt: Date.now() });
+}
+
+/** Remove a thread and keep the project's active selection usable. */
+export function deleteChatThread(threadId: string): boolean {
+  let deleted = false;
+  chatThreadState.update((state) => {
+    let ownerProjectId: string | null = null;
+    let removedIndex = -1;
+    for (const [projectId, threads] of Object.entries(state.threadsByProject)) {
+      const index = threads.findIndex((thread) => thread.id === threadId);
+      if (index >= 0) {
+        ownerProjectId = projectId;
+        removedIndex = index;
+        break;
+      }
+    }
+    if (!ownerProjectId) return state;
+    deleted = true;
+    const currentThreads = state.threadsByProject[ownerProjectId] ?? [];
+    const remaining = currentThreads.filter((thread) => thread.id !== threadId);
+    const nextThreads = remaining.length
+      ? remaining
+      : [createDefaultThread(ownerProjectId, [], Date.now())];
+    const activeId = state.activeThreadByProject[ownerProjectId];
+    const nextActiveId = activeId === threadId || !nextThreads.some((thread) => thread.id === activeId)
+      ? nextThreads[Math.min(Math.max(removedIndex, 0), nextThreads.length - 1)].id
+      : activeId;
+    const messagesByThread = { ...state.messagesByThread };
+    delete messagesByThread[threadId];
+    for (const thread of nextThreads) {
+      if (!messagesByThread[thread.id]) messagesByThread[thread.id] = [];
+    }
+    return {
+      ...state,
+      threadsByProject: { ...state.threadsByProject, [ownerProjectId]: nextThreads },
+      messagesByThread,
+      activeThreadByProject: { ...state.activeThreadByProject, [ownerProjectId]: nextActiveId },
+    };
+  });
+  return deleted;
 }
 
 export function setThreadDraft(threadId: string, draft: string): boolean {
