@@ -539,9 +539,12 @@ html.has-bg-media body::after {
      Readability now rests on the panels' own backdrop blur and the text halo
      rules further down, not on this wash. */
   background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.10) !important;
-  /* Keep the wallpaper neutral: accent colour belongs to controls and focus
-     states, never to the image or page-level background wash. */
-  background-image: none;
+  /* Let the selected accent add a very soft, smoky depth behind the glass.
+     The image remains the dominant background; this only gives the shell a
+     gentle colour atmosphere that follows theme changes. */
+  background-image:
+    radial-gradient(ellipse 56% 44% at 3% 8%, rgba(var(--accent-rgb, 174, 182, 194), 0.09), transparent 74%),
+    radial-gradient(ellipse 48% 42% at 97% 90%, rgba(var(--accent-rgb, 174, 182, 194), 0.06), transparent 76%);
 }
 
 /* Dark-theme scrim: a dark semi-transparent wash */
@@ -622,6 +625,8 @@ body::after {
      theme or image without allowing the user accent to bleed into it. */
   background-color: rgba(var(--bg-primary-rgb, 24, 24, 30), var(--frost-base, 0.48));
   background-image:
+    radial-gradient(ellipse 58% 48% at 4% 8%, rgba(var(--accent-rgb, 174, 182, 194), 0.13), transparent 72%),
+    radial-gradient(ellipse 52% 46% at 96% 88%, rgba(var(--accent-rgb, 174, 182, 194), 0.09), transparent 74%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, transparent 50%, rgba(255, 255, 255, 0.01) 100%);
   pointer-events: none;
   transition: background-color var(--dur-slow) var(--ease-standard);

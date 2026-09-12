@@ -174,7 +174,8 @@
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-right: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-right-color: rgba(255, 255, 255, 0.13);
   box-shadow:
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
@@ -188,7 +189,8 @@
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-left-color: rgba(255, 255, 255, 0.13);
   box-shadow:
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
@@ -208,7 +210,8 @@
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-right-color: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.08);
+  border-right-color: rgba(0, 0, 0, 0.12);
 }
 
 :root.light-theme .app-shell .right-utility-panel {
@@ -217,7 +220,8 @@
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-left-color: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.08);
+  border-left-color: rgba(0, 0, 0, 0.12);
 }
 
 .app-shell .right-drawer-resize-handle {
@@ -3581,5 +3585,214 @@ html.is-webkitgtk .app-shell .composer-strip {
 
   .app-shell .left-sidebar-section-label {
     padding-top: 4px;
+  }
+}
+
+/* ── Sidebar refinement pass ──────────────────────────────────────────────
+   Keep the existing navigation model, but give each rail a calmer rhythm:
+   the brand and primary action breathe first, navigation is grouped in one
+   band, and the content area starts on a clear boundary. The smoke layer is
+   deliberately behind the controls so the accent adds atmosphere without
+   tinting text or reducing contrast. */
+.app-shell .left-utility-panel.left-sidebar,
+.app-shell .right-utility-panel.right-sidebar {
+  isolation: isolate;
+}
+
+.app-shell .left-utility-panel.left-sidebar::before,
+.app-shell .right-utility-panel.right-sidebar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 74% 30% at 0% 0%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 76%),
+    radial-gradient(ellipse 62% 34% at 100% 100%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 78%);
+  opacity: 0.8;
+}
+
+.app-shell .left-sidebar > *,
+.app-shell .right-sidebar > * {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell .left-sidebar > .left-drawer-resize-handle,
+.app-shell .right-sidebar > .right-drawer-resize-handle {
+  position: absolute;
+  z-index: 3;
+}
+
+.app-shell .left-sidebar-header {
+  min-height: 60px;
+  padding: 12px 10px 10px 14px;
+}
+
+.app-shell .left-sidebar-app-name {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+}
+
+.app-shell .left-sidebar-quick-actions {
+  padding: 3px 10px 11px;
+}
+
+.app-shell .left-sidebar-new-agent {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.app-shell .left-sidebar-mode-switch {
+  gap: 7px;
+  padding: 0 10px 13px;
+}
+
+.app-shell .left-sidebar-mode-buttons {
+  min-height: 33px;
+  padding: 3px;
+  border-radius: 10px;
+}
+
+.app-shell .left-sidebar-mode-buttons button {
+  height: 29px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.app-shell .left-sidebar-nav {
+  gap: 1px;
+  padding: 9px 9px 11px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.app-shell .left-sidebar-section-label {
+  padding: 0 7px 5px;
+}
+
+.app-shell .left-sidebar-nav-item {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.app-shell .left-sidebar-context-label {
+  min-height: 35px;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--bg-primary) 14%, transparent);
+  border-top-color: color-mix(in srgb, var(--border) 80%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.app-shell .left-sidebar .drawer-body {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 30%),
+    radial-gradient(ellipse 78% 38% at 0% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 78%);
+}
+
+.app-shell .left-sidebar .projects-panel-header {
+  padding: 11px 12px 8px;
+}
+
+.app-shell .left-sidebar .projects-search-section {
+  padding: 0 12px 11px;
+}
+
+.app-shell .left-sidebar .projects-panel-body {
+  gap: 12px;
+  padding: 11px 10px 14px;
+}
+
+.app-shell .left-sidebar .projects-section-header {
+  padding: 2px 5px 5px;
+}
+
+.app-shell .left-sidebar .project-sidebar-card {
+  padding: 9px 9px;
+  border-radius: 10px;
+}
+
+.app-shell .left-sidebar .project-contents {
+  margin-top: 8px;
+}
+
+.app-shell .left-sidebar-footer {
+  min-height: 51px;
+  padding: 9px 10px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* The right drawer keeps navigation and utilities in separate rows. This
+   prevents a long, undifferentiated icon strip and gives the close control a
+   stable home while still keeping every tool one click away. */
+.app-shell .right-sidebar-header {
+  align-items: flex-start;
+  padding: 12px 10px 10px;
+}
+
+.app-shell .right-sidebar-tool-tabs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  overflow: visible;
+  padding-top: 1px;
+}
+
+.app-shell .right-sidebar-tool-tabs .drawer-tabs {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.app-shell .right-sidebar-tool-divider {
+  width: 100%;
+  height: 1px;
+  margin: 1px 0;
+}
+
+.app-shell .right-sidebar-tool-tabs .drawer-tab-btn {
+  width: 31px;
+  height: 31px;
+  border-radius: 8px;
+}
+
+.app-shell .right-sidebar-header .drawer-close-btn {
+  margin-top: -1px;
+}
+
+.app-shell .right-sidebar .drawer-body {
+  padding: 7px 0 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 28%),
+    radial-gradient(ellipse 78% 38% at 100% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 78%);
+}
+
+@media (max-height: 760px) {
+  .app-shell .left-sidebar-header {
+    min-height: 52px;
+    padding-top: 8px;
+  }
+
+  .app-shell .left-sidebar-quick-actions {
+    padding-bottom: 8px;
+  }
+
+  .app-shell .left-sidebar-mode-switch {
+    padding-bottom: 9px;
+  }
+
+  .app-shell .left-sidebar-nav-item {
+    height: 27px;
+  }
+
+  .app-shell .right-sidebar-header {
+    padding-top: 8px;
   }
 }
