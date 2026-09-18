@@ -8,6 +8,7 @@ import { showToast } from './notification';
 import { formatCode } from '$lib/utils/formatter';
 import { formatOnSave, autoSave } from './settings';
 import { setActiveView } from './layout';
+import { setInteractionMode } from './interactionMode';
 import { useEditorStore } from './zustand/editor';
 
 // ── Zustand-backed writables ──
@@ -131,7 +132,7 @@ export function detectLanguage(path: string): string {
     case 'md': case 'markdown': return 'markdown';
     case 'py': return 'python';
     case 'java': return 'java';
-    case 'c': case 'cpp': case 'cc': case 'cxx': case 'h': case 'hpp': case 'hxx': return 'cpp';
+    case 'c': case 'cpp': case 'cc': case 'cxx': case 'h': case 'hpp': case 'hxx': case 'ino': return 'cpp';
     case 'cs': return 'csharp';
     case 'svelte': return 'svelte';
     case 'toml': return 'toml';
@@ -148,6 +149,17 @@ export function detectLanguage(path: string): string {
 
 // ── Functions using Zustand-backed writables ──
 
+// Opening a file is always an explicit "show me this" gesture — an explorer
+// click, a search hit, a diagnostic, or the orchestrator acting on "open X".
+// In conversational mode the editor sits underneath the chat overlay, so
+// switching the active view alone opens the file invisibly and the click
+// appears dead. Dropping to Code mode first makes the file actually seen;
+// the conversation (and its threads) persists, one click away in the sidebar.
+function revealEditor() {
+  setInteractionMode('cli');
+  setActiveView('editor');
+}
+
 export async function openFile(path: string) {
   const generation = editorGeneration;
   const currentOpenFiles = get(openFiles);
@@ -155,7 +167,7 @@ export async function openFile(path: string) {
 
   if (currentOpenFiles.includes(path)) {
     activeFile.set(path);
-    setActiveView('editor');
+    revealEditor();
     return;
   }
 
@@ -184,7 +196,7 @@ export async function openFile(path: string) {
     fileCache.update((c) => { const next = new Map(c); next.set(path, editorFile); return next; });
     openFiles.update((files) => [...files, path]);
     activeFile.set(path);
-    setActiveView('editor');
+    revealEditor();
   } catch (err: any) {
     console.error('Failed to open file:', err);
     showToast(`Failed to open file: ${err?.message || err}`, 'error');

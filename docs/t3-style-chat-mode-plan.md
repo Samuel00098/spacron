@@ -1,6 +1,10 @@
-# T3-style Chat Mode for Spacron
+# T3-style Conversational Mode for Spacron
 
-Status: Implemented in Chat mode; realtime voice intentionally excluded by product decision. Final native smoke testing remains.
+Status: Revised for orchestrator conversational mode. Conversational mode is the
+user-facing interface to the existing Spacron orchestrator, with multiple
+independent conversations inside each project. Each conversation keeps its own
+transcript, draft, AI provider, model, and access policy while sharing the
+project's tasks, agents, memory, and knowledge.
 
 This document describes the step-by-step plan for adding a project-scoped,
 T3-style chat experience to Spacron while preserving the existing CLI mode.
@@ -245,30 +249,13 @@ consuming the whole lower edge of the room.
 The composer should include:
 
 - Multiline text input
-- Themed agent/thread selector
-- Provider selector and model selector inside the composer
+- Themed AI provider and model selectors inside the composer
+- Per-thread Default or Full agent-access selector
 - Send button
 - Dictation/transcription button
 - File attachment button with removable attachment chips
 - Working/queued state
 - Keyboard shortcut hint
-
-### Agent selector
-
-Do not use a native `<select>` as the final control. Use the shared themed
-`Dropdown` component so the menu matches light mode, dark mode, custom themes,
-focus styles, and the application’s existing picker language.
-
-Each option may include:
-
-- Agent name
-- Provider
-- Current status
-- Current task title
-- Whether it is running in a terminal
-
-The selector chooses the current conversation target. It should not merely
-choose a provider preset for a new spawn.
 
 ### Provider and model selection
 
@@ -282,17 +269,23 @@ composer should:
 - Prefer the live provider model catalogue when available, with curated models
   as a fallback.
 - Mark free models clearly when the provider reports that metadata.
-- Preserve the selected provider/model with the thread composer or draft, while
-  falling back to the global AI settings for new threads.
+- Preserve the selected provider/model with the conversation, while falling
+  back to the last composer choice for new conversations.
 - Pass the selected provider and model through the orchestrator request so the
   choice affects the message being sent, rather than only changing display.
+
+Settings manages provider connections and API keys; it does not select the
+orchestrator model. API providers call their native endpoint. ChatGPT-plan
+access is a separate Codex-account connector because ChatGPT subscriptions and
+OpenAI API billing are separate. OpenCode Go uses its subscription API key.
+Reasoning is provider-default and is not exposed in the composer.
 
 ### Sending behavior
 
 - Sending to a new thread routes through the orchestrator and creates/attaches
   an agent task.
-- Sending to a running thread sends a follow-up directly to its live agent
-  session.
+- Every message first returns to the orchestrator brain. The orchestrator may
+  send a follow-up to a live agent, open another agent, or answer directly.
 - Sending to another agent while the first is working is allowed.
 - The composer is disabled only when there is no valid project/target or the
   draft is empty—not simply because another message is pending.
@@ -400,6 +393,7 @@ the new thread model ships.
 
 - Replace the native agent selector with the shared `Dropdown`.
 - Add composer-level provider and model selectors.
+- Add per-thread Default and Full access selectors.
 - Load live model catalogues when available and fall back to curated models.
 - Mark free models and pass the selected provider/model into the orchestrator.
 - Persist the composer’s provider/model choice per thread, with global defaults

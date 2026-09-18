@@ -65,6 +65,9 @@ export type TerminalSessionInfo = {
   briefed?: boolean;
   lastActivatedAt?: number;
   role?: string | null;
+  // Internal background sessions (e.g. embedded status probes). Never take a
+  // pane, never show in the session-tab bar, and their exit is silent.
+  hidden?: boolean;
   cwd?: string | null;
   taskSummary?: string | null;
   lastExitCode?: number | null;
@@ -739,6 +742,18 @@ function detectAgentPresetFromCommand(command: string): string | null {
 // run through detection would clobber that flag and double-schedule the brief.
 const suppressAgentDetection = new Set<number>();
 
+/**
+ * Temporarily suppress typed-command agent detection on a session.
+ * Used during programmatic writes so the CLI command doesn't trigger
+ * auto-detection state changes.
+ */
+export function suppressSessionAgentDetection(id: number): () => void {
+  suppressAgentDetection.add(id);
+  return () => {
+    suppressAgentDetection.delete(id);
+  };
+}
+
 // Processes raw input sent to a session (manual keystrokes and programmatic
 // writes alike) to (a) auto-detect when an AI agent CLI is launched and
 // (b) flag the session as "executing" the moment a non-empty command is
@@ -960,7 +975,10 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   // the watch noticing would otherwise keep the machine awake for nothing.
   agentSessionClosed(id);
 
-  if (isAgent) {
+  if (session?.hidden) {
+    // Hidden sessions (background probes) are invisible by contract: no pane,
+    // no tab, and no exit announcement.
+  } else if (isAgent) {
     // Exit is the other way an agent's work ends (the turn watcher covers agents
     // that stay in their REPL). Pair the chime with the completion card the
     // orchestrator writes on exit, so the cue is the same however the agent was
@@ -1018,9 +1036,10 @@ function registerPtySession(
   // toward `Terminal N` made the two bleed together: a spawned agent with no
   // explicit title landed as "Terminal 1", and the user's first real shell then
   // came up as "Terminal 2". Agents fall back to their tool's display name and
-  // never take a terminal number; shells count only other shells.
+  // never take a terminal number; shells count only other shells. Hidden
+  // sessions (background probes) are invisible, so they count toward nothing.
   const shellCount = getProjectState(owningProjectId, isDev).sessions
-    .filter((session) => !isAgentSession(session)).length;
+    .filter((session) => !isAgentSession(session) && !session.hidden).length;
   const fallbackTitle = agentPreset
     ? getAgentDisplayName(agentPreset) ?? agentPreset
     : `Terminal ${shellCount + 1}`;
@@ -1041,6 +1060,7 @@ function registerPtySession(
     taskSummary: metadata.taskSummary ?? existing?.taskSummary ?? null,
     ownerTaskId: existing?.ownerTaskId ?? null,
     worktree: metadata.worktree ?? existing?.worktree ?? null,
+    hidden: metadata.hidden ?? existing?.hidden ?? false,
   };
 
   updateProjectState(owningProjectId, (state) => ({
@@ -1048,7 +1068,9 @@ function registerPtySession(
     sessions: existing
       ? state.sessions.map((session) => (session.id === pty.id ? info : session))
       : [...state.sessions, info],
-    activeSessionId: pty.id,
+    // Hidden sessions stay out of the way entirely — they must not steal the
+    // active highlight from the terminal the user is actually looking at.
+    activeSessionId: info.hidden ? state.activeSessionId : pty.id,
   }), isDev);
 
   // Register with MCP server so other agents can discover this one
@@ -1203,6 +1225,8 @@ export async function createTerminalSession(
     extraEnv?: Record<string, string>;
     initialCols?: number;
     initialRows?: number;
+    /** Hidden background session — no pane, no tab, silent exit. */
+    hidden?: boolean;
   }
 ): Promise<number | null> {
   const assignPane = opts?.assignPane ?? true;
@@ -1352,7 +1376,7 @@ export async function createTerminalSession(
     if (statusChannel) {
       attachTurnSignals(pty.id, { command: '', channelId: statusChannel.channelId });
     }
-    registerPtySession(pty, owningProjectId, resolvedCwd, targetPaneIndex, { agentPreset }, assignPane, isDev);
+    registerPtySession(pty, owningProjectId, resolvedCwd, targetPaneIndex, { agentPreset, hidden: opts?.hidden }, assignPane, isDev);
     return pty.id;
   } catch (err) {
     console.error('Failed to create terminal session:', err);
@@ -1536,6 +1560,17 @@ export async function sendAgentPromptDirect(sessionId: number, text: string): Pr
   return deliverPromptRaw(sessionId, text);
 }
 
+/** Answer an explicit line-input prompt, without TUI paste framing or a task charter. */
+export async function sendAgentInputLine(sessionId: number, text: string): Promise<boolean> {
+  const pty = ptyInstances.get(sessionId);
+  if (!pty || !text.trim() || /[\r\n\x00-\x1f\x7f]/.test(text)) return false;
+  try {
+    await pty.write(`${text}\r`);
+    setSessionExecuting(sessionId, true);
+    return true;
+  } catch { return false; }
+}
+
 async function deliverPromptRaw(sessionId: number, text: string): Promise<boolean> {
   const pty = ptyInstances.get(sessionId);
   if (!pty) return false;
@@ -1665,6 +1700,7 @@ export type RestoredSessionMetadata = {
   // persisted), so dropping this only blinded the UI — and left the worktree
   // orphaned, since cleanup on close keys off this field.
   worktree?: WorktreeInfo | null;
+  hidden?: boolean;
 };
 
 export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessionMetadata) {
@@ -1686,6 +1722,7 @@ export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessi
         role,
         taskSummary: metadata.taskSummary ?? x.taskSummary ?? x.taskSummary ?? null,
         worktree: metadata.worktree ?? x.worktree ?? null,
+        hidden: metadata.hidden ?? x.hidden ?? false,
         briefed: agentPreset ? false : x.briefed,
         isExecuting: false,
         lastExitCode: null,
@@ -2130,7 +2167,7 @@ export function sessionHasRunningProcess(session: TerminalSessionInfo | null | u
 export async function ensureIdleOrCreateTerminal(rootPath: string, projectId: string, isDev = false): Promise<number | null> {
   const sessions = getProjectState(projectId, isDev).sessions;
   const reusable = sessions.filter(
-    (s) => s.isRunning && !s.agentPreset && !s.ownerTaskId && !sessionHasRunningProcess(s)
+    (s) => s.isRunning && !s.agentPreset && !s.ownerTaskId && !s.hidden && !sessionHasRunningProcess(s)
   );
   const shell = reusable.find((s) => !s.isExecuting) ?? reusable[0];
   if (shell) return shell.id;
@@ -2348,6 +2385,11 @@ export async function spawnAgentPreset(
      * session resolves the active project as before.
      */
     projectId?: string;
+    /** Chat-only permission override. Undefined preserves the established CLI
+     * global/per-agent setting; an empty string explicitly launches supervised. */
+    permissionArgsOverride?: string;
+    /** Provider-native model/reasoning flags for this one Chat session. */
+    runtimeArgs?: string;
     /**
      * Run against the new session before the CLI is launched. Used to attach a
      * worktree, which has to be registered while the pane is still empty — the
@@ -2377,7 +2419,11 @@ export async function spawnAgentPreset(
   };
   const permissionMode = get(agentPermissionMode);
   const launchCommand = resolveAgentLaunchCommand(command, launchOverrides);
-  const launchArgs = resolveAgentLaunchArgs(command, permissionMode, launchOverrides);
+  const defaultLaunchArgs = resolveAgentLaunchArgs(command, permissionMode, launchOverrides);
+  const launchArgs = opts?.permissionArgsOverride === undefined
+    ? defaultLaunchArgs
+    : opts.permissionArgsOverride.trim();
+  const runtimeArgs = opts?.runtimeArgs?.trim() ?? '';
   const launchEnv = resolveAgentLaunchEnv(command, permissionMode, launchOverrides);
 
   // Point the CLI at the selected account's config directory. Empty for the
@@ -2421,7 +2467,7 @@ export async function spawnAgentPreset(
   // `command` (not `launchCommand`) stays the preset key for detection, rules
   // files and display names; only the line written to the PTY carries the
   // resolved command + permission args + MCP flags.
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${mcpFlags}`;
 
   agentLaunchStartLengths.set(sessionId, getSessionOutputLength(sessionId));
   suppressAgentDetection.add(sessionId);

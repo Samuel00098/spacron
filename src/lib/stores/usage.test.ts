@@ -32,6 +32,8 @@ function provider(partial: Partial<ProviderUsage> = {}): ProviderUsage {
     plan: 'max',
     account: null,
     windows: [],
+    resetCreditsAvailable: null,
+    resetCredits: [],
     error: null,
     note: null,
     fetchedAt: 0,

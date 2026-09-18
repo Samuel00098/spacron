@@ -63,4 +63,17 @@ describe('detectAgentAccess', () => {
       message: getAgentAccessBlockedMessage(),
     });
   });
+
+  it('does not unlock Chat through a different provider when Composer selected one', async () => {
+    providerApiKeyExists.mockImplementation(async (provider: string) => provider === 'groq');
+
+    await expect(detectAgentAccess({ preferredProvider: 'openrouter' })).resolves.toEqual({
+      ready: false,
+      via: 'none',
+      providerId: null,
+      message: 'OpenRouter is not connected. Add the OpenRouter API key in Settings, then retry.',
+    });
+    expect(providerApiKeyExists).toHaveBeenCalledTimes(1);
+    expect(providerApiKeyExists).toHaveBeenCalledWith('openrouter', undefined);
+  });
 });

@@ -64,6 +64,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 const ENGINE_LABELS: Record<string, string> = {
   'openai-realtime': 'GPT Realtime',
+  'openai-live': 'GPT Live',
   'xai-realtime': 'Grok Realtime',
 };
 

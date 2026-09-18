@@ -2,6 +2,7 @@ import { useStore } from '$lib/react/useStore';
 import {
   transcriptionLevel,
   transcriptionState,
+  transcriptionTarget,
   transcriptionWordCount,
 } from '$lib/services/transcription-hotkey';
 import './TranscriptionIndicator.css';
@@ -41,7 +42,12 @@ export default function TranscriptionIndicator() {
   const state = useStore(transcriptionState);
   const level = useStore(transcriptionLevel);
   const words = useStore(transcriptionWordCount);
+  const target = useStore(transcriptionTarget);
   if (state === 'idle') return null;
+
+  // Dictation aimed at the chat composer has its own indicator inside that
+  // composer (mode-contextual by design) — never render both.
+  if (target?.kind === 'chat') return null;
 
   const listening = state === 'listening';
   const amplitude = Math.min(1, Math.max(0, level / LEVEL_FULL_SCALE));
@@ -71,8 +77,11 @@ export default function TranscriptionIndicator() {
       )}
       {/* Processing covers the final STT drain (and the optional AI polish), so
         * "Sending to terminal" was a promise the label couldn't keep — it also
-        * showed while dictating into a text field. */}
-      <span className="label">{listening ? 'Listening' : 'Transcribing…'}</span>
+        * showed while dictating into a text field. The target label closes the
+        * gap the other way: which terminal / which field the words are going to. */}
+      <span className="label">
+        {listening ? `Listening${target ? ` · ${target.label}` : ''}` : 'Transcribing…'}
+      </span>
       {words > 0 && (
         <span className="count">
           {words} word{words === 1 ? '' : 's'}

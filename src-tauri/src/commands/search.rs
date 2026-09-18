@@ -58,6 +58,8 @@ pub async fn search_in_project(
     whole_word: bool,
     use_regex: bool,
     include_glob: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<SearchResponse, String> {
     if query.is_empty() {
@@ -100,6 +102,8 @@ pub async fn search_in_project(
     tokio::task::spawn_blocking(move || {
         let mut files: Vec<SearchFileResult> = Vec::new();
         let mut total_matches = 0usize;
+        let mut skipped = 0usize;
+        let page_limit = limit.unwrap_or(MAX_TOTAL_MATCHES).clamp(1, MAX_TOTAL_MATCHES);
         let mut truncated = false;
 
         'roots: for project in &projects {
@@ -108,6 +112,7 @@ pub async fn search_in_project(
             let mut builder = WalkBuilder::new(root);
             // Search dotfiles (.github, .env.example, …) but never descend into .git.
             builder
+                .sort_by_file_path(|a, b| a.cmp(b))
                 .hidden(false)
                 .git_ignore(true)
                 .git_global(true)
@@ -157,6 +162,7 @@ pub async fn search_in_project(
                 let mut file_matches: Vec<SearchMatch> = Vec::new();
                 for (idx, line) in content.lines().enumerate() {
                     for m in matcher.find_iter(line) {
+                        if skipped < offset.unwrap_or(0) { skipped += 1; continue; }
                         let column = line[..m.start()].chars().count() + 1;
                         let length = line[m.start()..m.end()].chars().count();
                         let text = if line.chars().count() > MAX_LINE_LEN {
@@ -171,8 +177,8 @@ pub async fn search_in_project(
                             text,
                         });
                         total_matches += 1;
-                        if file_matches.len() >= MAX_MATCHES_PER_FILE
-                            || total_matches >= MAX_TOTAL_MATCHES
+                        if (offset.is_none() && file_matches.len() >= MAX_MATCHES_PER_FILE)
+                            || total_matches >= page_limit
                         {
                             truncated = true;
                             break;
@@ -193,7 +199,7 @@ pub async fn search_in_project(
                     });
                 }
 
-                if total_matches >= MAX_TOTAL_MATCHES {
+                if total_matches >= page_limit {
                     truncated = true;
                     break 'roots;
                 }

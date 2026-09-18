@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
-import { copyTextToClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
+import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
@@ -47,7 +47,6 @@ import {
   resolvedFontFamily,
   terminalShell,
   terminalRenderer,
-  uiFontSize,
 } from '$lib/stores/settings';
 import { activeTheme } from '$lib/stores/theme';
 import { setActiveView, showTerminal } from '$lib/stores/layout';
@@ -60,11 +59,6 @@ import { AGENT_ATTENTION_PATTERN } from '$lib/services/orchestrator/agent-signal
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
 import './TerminalPane.css';
-
-function terminalFontSizeForUiScale(size: number, uiSize: number): number {
-  const scale = Math.max(12, Math.min(20, Number(uiSize) || 14)) / 14;
-  return size / scale;
-}
 
 const ROLE_PRESETS = [
   { label: 'Server', color: 'var(--role-server)' },
@@ -215,7 +209,6 @@ function TerminalPane({
   const activeThemeValue = useStore(activeTheme);
   const fontFamily = useStore(resolvedFontFamily);
   const fontSize = useStore(terminalFontSize);
-  const uiFontSizeValue = useStore(uiFontSize);
   const cursorStyle = useStore(terminalCursorStyle);
   const scrollback = useStore(terminalScrollback);
   const configuredShell = useStore(terminalShell);
@@ -954,6 +947,104 @@ function TerminalPane({
     term.paste(text);
   }
 
+  // Quote only paths with spaces — agent TUIs resolve a quoted path to the
+  // file, while always-quoting leaves literal quotes the CLI can't open.
+  function quoteTerminalPath(path: string): string {
+    const normalized = path.replace(/\\/g, '/');
+    return normalized.includes(' ') ? `"${normalized}"` : normalized;
+  }
+
+  // Encode raw RGBA clipboard pixels into PNG bytes via a canvas. Used on the
+  // Linux clipboard-image path, where the native plugin hands us raw pixels
+  // rather than an encoded image.
+  function rgbaToPngBytes(
+    rgba: Uint8Array,
+    width: number,
+    height: number
+  ): Promise<Uint8Array | null> {
+    return new Promise((resolve) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        const imageData = new ImageData(
+          new Uint8ClampedArray(rgba.buffer.slice(0, width * height * 4)),
+          width,
+          height
+        );
+        ctx.putImageData(imageData, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            resolve(null);
+            return;
+          }
+          void blob
+            .arrayBuffer()
+            .then((buffer) => resolve(new Uint8Array(buffer)))
+            .catch(() => resolve(null));
+        }, 'image/png');
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  // Save clipboard image bytes to the app scratch dir and paste the resulting
+  // path through xterm (bracketed paste, no trailing Enter). This is the
+  // standard "paste image into a terminal agent" flow — opencode, Claude Code
+  // and similar TUIs read a pasted PNG/JPEG path as an image attachment. The
+  // user presses Enter themselves to send it with their prompt.
+  async function pasteImageBytesAsPath(
+    bytes: Uint8Array,
+    name: string
+  ): Promise<boolean> {
+    try {
+      const savePath = await invoke<string>('save_pasted_image', {
+        name,
+        data: Array.from(bytes),
+      });
+      pasteIntoTerminal(quoteTerminalPath(savePath));
+      return true;
+    } catch (error) {
+      console.error('Failed to paste image into terminal:', error);
+      showToast('Could not paste the image', 'error');
+      return false;
+    }
+  }
+
+  // Clipboard paste that understands images. Text stays the fast path; when
+  // the clipboard holds a bitmap (screenshot, copied picture) it is saved to
+  // the scratch dir and its path is pasted instead, so TUI agents like
+  // opencode receive it as an image attachment. Returns true when anything
+  // was pasted.
+  async function pasteClipboardWithImage(): Promise<boolean> {
+    try {
+      const image = await readImageFromClipboard();
+      if (image) {
+        const png = await rgbaToPngBytes(image.bytes, image.width, image.height);
+        if (png) {
+          await pasteImageBytesAsPath(png, `pasted-image-${Date.now()}.png`);
+          return true;
+        }
+      }
+    } catch {
+      /* fall through to text */
+    }
+    try {
+      const text = await readTextFromClipboard();
+      if (text) {
+        pasteIntoTerminal(text);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
 
   async function restartSession() {
     const paneIdx = get(paneAssignments).indexOf(sessionId);
@@ -975,8 +1066,7 @@ function TerminalPane({
       } catch {}
     } else {
       try {
-        const text = await readTextFromClipboard();
-        pasteIntoTerminal(text);
+        await pasteClipboardWithImage();
       } catch {}
     }
   }
@@ -1085,6 +1175,12 @@ function TerminalPane({
     const fitHost = fitHostRef.current;
     if (!container || !fitHost) return;
 
+    // Held outside the async open block below so the effect cleanup can
+    // remove the DOM listeners even though registration happens after open.
+    let domPasteHandler: ((event: ClipboardEvent) => void) | null = null;
+    let htmlDragOverHandler: ((event: DragEvent) => void) | null = null;
+    let htmlDropHandler: ((event: DragEvent) => void) | null = null;
+
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: get(terminalCursorStyle),
@@ -1093,7 +1189,7 @@ function TerminalPane({
       // tables behind the proposed API, and `loadAddon` throws without this.
       allowProposedApi: true,
       scrollback: get(terminalScrollback),
-      fontSize: terminalFontSizeForUiScale(get(terminalFontSize), get(uiFontSize)),
+      fontSize: get(terminalFontSize),
       fontFamily: get(resolvedFontFamily),
       fontWeight: 400,
       fontWeightBold: 700,
@@ -1130,9 +1226,7 @@ function TerminalPane({
       return true;
     };
     const pasteClipboard = () => {
-      void readTextFromClipboard().then((text) => {
-        pasteIntoTerminal(text);
-      });
+      void pasteClipboardWithImage();
     };
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
@@ -1227,6 +1321,80 @@ function TerminalPane({
       container.addEventListener('mouseup', handleTerminalLinkMouseUp, true);
       container.addEventListener('mouseup', handleTerminalCopyOnSelect);
       container.addEventListener('mousedown', handleTerminalMiddleClickPaste);
+
+      // DOM paste: catches clipboard images (screenshots, copied pictures) that
+      // the text-only key handler above can't see. Files come through
+      // `clipboardData.files`, raw bitmaps through `clipboardData.items`.
+      // Text is left to xterm's own paste path — handling it here too would
+      // double-paste every Ctrl+V.
+      const handleDomPaste = (event: ClipboardEvent) => {
+        const clipboard = event.clipboardData;
+        if (!clipboard) return;
+        const files = Array.from(clipboard.files ?? []).filter((file) =>
+          file.type.startsWith('image/')
+        );
+        const itemFile = !files.length
+          ? Array.from(clipboard.items ?? [])
+              .find((item) => item.type.startsWith('image/'))
+              ?.getAsFile()
+          : null;
+        const imageFile = files[0] ?? itemFile;
+        if (!imageFile) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void (async () => {
+          try {
+            const buffer = new Uint8Array(await imageFile.arrayBuffer());
+            const ext = imageFile.type.includes('jpeg') || imageFile.type.includes('jpg')
+              ? 'jpg'
+              : imageFile.type.includes('gif')
+                ? 'gif'
+                : imageFile.type.includes('webp')
+                  ? 'webp'
+                  : 'png';
+            await pasteImageBytesAsPath(buffer, `pasted-image-${Date.now()}.${ext}`);
+          } catch (error) {
+            console.error('Failed to paste image into terminal:', error);
+          }
+        })();
+      };
+      container.addEventListener('paste', handleDomPaste as EventListener);
+
+      // HTML5 file drops: the fallback for non-Tauri runtimes (plain-browser
+      // dev sessions) where `onDragDropEvent` never fires. In Tauri the OS
+      // handler below owns drops, so this only acts when files are present.
+      const handleHtmlFileDrop = (event: DragEvent) => {
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void (async () => {
+          const paths: string[] = [];
+          for (const file of Array.from(files)) {
+            try {
+              // Real OS paths aren't exposed in the browser; persist the bytes
+              // so the agent gets a real file it can read.
+              const buffer = new Uint8Array(await file.arrayBuffer());
+              const savePath = await invoke<string>('save_pasted_image', {
+                name: (file as File).name || `dropped-file-${Date.now()}`,
+                data: Array.from(buffer),
+              });
+              paths.push(quoteTerminalPath(savePath));
+            } catch (error) {
+              console.error('Failed to drop file into terminal:', error);
+            }
+          }
+          if (paths.length) pasteIntoTerminal(paths.join(' '));
+        })();
+      };
+      const handleHtmlDragOver = (event: DragEvent) => {
+        if (event.dataTransfer?.types?.includes('Files')) event.preventDefault();
+      };
+      container.addEventListener('dragover', handleHtmlDragOver);
+      container.addEventListener('drop', handleHtmlFileDrop);
+      domPasteHandler = handleDomPaste as unknown as (event: ClipboardEvent) => void;
+      htmlDragOverHandler = handleHtmlDragOver;
+      htmlDropHandler = handleHtmlFileDrop;
 
       const existingBuffer = getSessionOutputBuffer(sessionId);
       // A non-empty buffer means this pane is reattaching to a session that was
@@ -1528,6 +1696,9 @@ function TerminalPane({
       container.removeEventListener('mouseup', handleTerminalLinkMouseUp, true);
       container.removeEventListener('mouseup', handleTerminalCopyOnSelect);
       container.removeEventListener('mousedown', handleTerminalMiddleClickPaste);
+      if (domPasteHandler) container.removeEventListener('paste', domPasteHandler as EventListener);
+      if (htmlDragOverHandler) container.removeEventListener('dragover', htmlDragOverHandler);
+      if (htmlDropHandler) container.removeEventListener('drop', htmlDropHandler);
       unregisterDataCallback(sessionId);
       unregisterExitCallback(sessionId);
       // Dispose the WebGL addon before the terminal so its GPU context is
@@ -1591,7 +1762,7 @@ function TerminalPane({
       if (cancelled || !termRef.current) return;
 
       const t = termRef.current;
-      const effectiveFontSize = terminalFontSizeForUiScale(fontSize, uiFontSizeValue);
+      const effectiveFontSize = fontSize;
       const fontChanged = t.options.fontFamily !== fontFamily || t.options.fontSize !== effectiveFontSize;
       t.options.fontFamily = fontFamily;
       t.options.fontSize = effectiveFontSize;
@@ -1618,7 +1789,7 @@ function TerminalPane({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fontFamily, fontSize, uiFontSizeValue, cursorStyle, scrollback, windowsPty]);
+  }, [fontFamily, fontSize, cursorStyle, scrollback, windowsPty]);
 
   useEffect(() => {
     if (termRef.current) {

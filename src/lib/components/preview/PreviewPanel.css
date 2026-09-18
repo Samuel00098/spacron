@@ -436,13 +436,15 @@
 }
 
 .preview-panel .port-input {
-  width: 62px;
+  width: 76px;
   height: 32px;
+  padding: 0 7px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-primary);
   font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
   text-align: center;
   outline: none;
   font-family: inherit;
@@ -1372,6 +1374,9 @@
 
   .preview-panel .proxy-settings {
     order: 7;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
   }
 }
 
@@ -1450,7 +1455,7 @@
 
 @container (max-width: 280px) {
   .preview-panel .port-input {
-    width: 48px;
+    width: 64px;
   }
   .preview-panel .detect-btn {
     display: none;

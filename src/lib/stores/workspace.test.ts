@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   __sanitisePersistedProjectState as sanitise,
+  __rebaseProjectPathValues as rebaseProjectPathValues,
   __setProjectIn as setProjectIn,
   moveProjectBetweenCollections,
 } from './workspace';
@@ -369,5 +370,26 @@ describe('projects map writes', () => {
     expect(replaced).not.toBe(second);
     expect([...replaced.keys()]).toEqual(['p1', 'p2']);
     expect(replaced.get('p1')).not.toBe(second.get('p1'));
+  });
+});
+
+describe('project root rename path migration', () => {
+  it('rebases nested persisted paths without touching unrelated paths', () => {
+    const oldRoot = 'C:\\work\\before';
+    const newRoot = 'C:\\work\\after';
+    const migrated = rebaseProjectPathValues({
+      activeFile: 'C:\\work\\before\\src\\main.ts',
+      expandedPaths: new Set(['C:\\work\\before\\src']),
+      cache: new Map([['C:\\work\\before\\README.md', { path: 'D:\\other\\file.ts' }]]),
+    }, oldRoot, newRoot) as {
+      activeFile: string;
+      expandedPaths: Set<string>;
+      cache: Map<string, { path: string }>;
+    };
+
+    expect(migrated.activeFile).toBe('C:\\work\\after\\src\\main.ts');
+    expect([...migrated.expandedPaths]).toEqual(['C:\\work\\after\\src']);
+    expect([...migrated.cache.keys()]).toEqual(['C:\\work\\after\\README.md']);
+    expect([...migrated.cache.values()][0]?.path).toBe('D:\\other\\file.ts');
   });
 });

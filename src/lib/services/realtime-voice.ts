@@ -9,8 +9,7 @@ import { downsamplePcmChunks, requestMicrophoneStream } from '$lib/services/voic
  * server-side. First audio typically lands well under a second after the user
  * stops speaking — the whole point of offering these engines.
  *
- * Two providers, two transports, one shared event protocol (xAI's Voice Agent
- * API is OpenAI Realtime-compatible):
+ * Three engines, two transports, and shared lifecycle handling:
  *
  * - 'openai' — WebRTC. The SDP offer/answer is exchanged in Rust
  *   (`openai_realtime_connect`) so the API key never reaches the renderer and
@@ -19,9 +18,11 @@ import { downsamplePcmChunks, requestMicrophoneStream } from '$lib/services/voic
  * - 'xai' (Grok) — WebSocket to wss://api.x.ai/v1/realtime (allowed by CSP),
  *   authenticated with a minutes-lived client secret minted in Rust
  *   (`xai_realtime_client_secret`), streaming 24 kHz PCM16 both ways.
+ * - 'openai-live' — WebRTC to OpenAI GPT-Live. Rust creates the session with
+ *   client delegation; the renderer returns delegation results to the session.
  */
 
-export type RealtimeVoiceProvider = 'openai' | 'xai';
+export type RealtimeVoiceProvider = 'openai' | 'xai' | 'openai-live';
 
 export type RealtimeVoiceState = 'connecting' | 'listening' | 'thinking' | 'speaking';
 
@@ -74,7 +75,7 @@ function getAudioContextCtor(): (new () => AudioContext) | null {
 
 export function isRealtimeVoiceSupported(provider: RealtimeVoiceProvider = 'openai'): boolean {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false;
-  if (provider === 'openai') return typeof RTCPeerConnection === 'function';
+  if (provider === 'openai' || provider === 'openai-live') return typeof RTCPeerConnection === 'function';
   // xAI streams raw PCM over a WebSocket and plays replies via Web Audio.
   return typeof WebSocket === 'function' && !!getAudioContextCtor();
 }
@@ -96,6 +97,22 @@ const ORCHESTRATOR_TOOL = {
     required: ['request'],
   },
 } as const;
+
+// System instructions for the realtime speech-to-speech engines. The model
+// converses on its own and delegates real work to the orchestrator via the
+// spacron_orchestrator tool. Shared by the floating bar and the chat composer,
+// so the voice persona is identical no matter where the call was started.
+export const REALTIME_VOICE_INSTRUCTIONS = [
+  "You are Spacron's voice assistant. The user is a developer talking to you hands-free inside Spacron, a desktop app that orchestrates AI coding agents (Claude Code, Codex, Gemini and others) working in terminals on the user's projects.",
+  'Personality: a sharp, friendly pair-programming partner. Sound natural and conversational — contractions, brief reactions, no corporate filler.',
+  'Keep spoken replies short: one to three sentences unless the user asks for detail. Never read code, file paths, or long output aloud verbatim — summarize what it means instead.',
+  'EXCEPTION — when the user explicitly asks you to READ OUT an agent\'s output ("read out what <agent> produced", "read me that output" — where <agent> is whatever name they used), the orchestrator returns the agent\'s actual transcript. Read it out to them properly rather than summarizing it — that is what they asked for. Speak it naturally: skip escape codes and progress bars, say file paths as words, and describe code by what it does instead of spelling it character by character.',
+  'IMPORTANT for that case: the orchestrator decides to return a full transcript by the WORDING of your request, so keep the read-out intent in it. Phrase it as "Read out <agent name>\'s output" (or "Read out the last agent\'s output" when they did not name one). If you rewrite it into "what did <agent> say?" you will get a short summary back instead of the transcript the user asked to hear.',
+  'Whenever the user wants project work done or asked about — spawning or closing agents, giving an agent a task, checking progress or output, navigating the app — call the spacron_orchestrator tool with a clear standalone request, then relay its answer conversationally. For casual conversation, just talk; do not call the tool.',
+  'Calling the tool executes the request immediately — there is no separate confirmation step after it. When the user clearly asked for something, call the tool right away instead of only saying you will. Only ask a clarifying question first when the request is ambiguous or destructive (like closing agents).',
+  'WHERE AGENTS RUN — every new agent runs either in an isolated git worktree (its own branch; edits do not appear in the main checkout until merged) or in the main repo (edits visible immediately; needed for git tag/push). Resolve this BEFORE calling the tool: if the user said where ("in a worktree", "in the main repo", "no worktree"), keep those exact words in the request you send. If they did not say and you are spawning an agent, ask them first — "isolated worktree, or the main repo?" — then call the tool with their answer included. Carry it per agent: "open one Claude Code in a worktree and another in the main repo" must go through as one request naming both placements.',
+  'If a tool result is long, give the gist and offer to go deeper — unless it came from an explicit read-out request, which you read through as described above.',
+].join('\n');
 
 // xAI's realtime API speaks 24 kHz mono PCM16 in both directions.
 const XAI_AUDIO_RATE = 24_000;
@@ -134,6 +151,7 @@ type RealtimeEvent = {
   name?: string;
   call_id?: string;
   arguments?: string;
+  delegation?: { id?: string };
   error?: { message?: string };
   response?: { status?: string; status_details?: { error?: { message?: string } } };
 };
@@ -153,6 +171,9 @@ export async function startRealtimeVoiceSession(options: {
   let state: RealtimeVoiceState = 'connecting';
   // Assistant transcript accumulated across deltas for the current utterance.
   let assistantBuf = '';
+  let liveUserBuf = '';
+  let liveAssistantBuf = '';
+  let liveDelegationContext: string[] = [];
   // Turn bookkeeping for announcements: an injected response.create while a
   // response is active (or the user is mid-utterance) errors out / talks over,
   // so background updates queue until the call is idle.
@@ -253,6 +274,15 @@ export async function startRealtimeVoiceSession(options: {
     if (responseActive || userSpeaking || announcementQueue.length === 0) return;
     const text = announcementQueue.shift()!;
     announcementInFlight = text;
+    if (provider === 'openai-live') {
+      send({
+        type: 'session.commentary.append',
+        delegation_id: null,
+        content: `Background update from Spacron: ${text}. Relay this in one short spoken sentence.`,
+      });
+      announcementInFlight = null;
+      return;
+    }
     send({
       type: 'conversation.item.create',
       item: {
@@ -319,6 +349,59 @@ export async function startRealtimeVoiceSession(options: {
         break;
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript?.trim()) callbacks.onUserTranscript?.(event.transcript.trim());
+        break;
+      case 'session.started':
+        channelReady = true;
+        setState('listening');
+        flushAnnouncements();
+        break;
+      case 'session.input_transcript.delta':
+        liveUserBuf += event.delta ?? '';
+        break;
+      case 'session.output_transcript.delta':
+        liveAssistantBuf += event.delta ?? '';
+        setState('speaking');
+        if (liveAssistantBuf) callbacks.onAssistantTranscript?.(liveAssistantBuf, false);
+        break;
+      case 'session.delegation.created':
+        if (event.delegation?.id && callbacks.onOrchestratorCommand) {
+          const request = [...liveDelegationContext, liveUserBuf.trim()]
+            .filter(Boolean)
+            .slice(-6)
+            .join('\n');
+          if (liveUserBuf.trim()) callbacks.onUserTranscript?.(liveUserBuf.trim());
+          liveUserBuf = '';
+          void callbacks.onOrchestratorCommand(request || 'Handle the latest user request.')
+            .then((output) => {
+              if (ended) return;
+              send({
+                type: 'session.commentary.append',
+                delegation_id: event.delegation!.id,
+                content: output.slice(0, 8_000),
+              });
+              liveDelegationContext = [...liveDelegationContext, request].slice(-6);
+            })
+            .catch((error) => callbacks.onError?.(
+              `GPT Live delegation failed: ${error instanceof Error ? error.message : String(error)}`,
+            ));
+        }
+        break;
+      case 'session.output_transcript.done': {
+        const text = (event.transcript ?? liveAssistantBuf).trim();
+        liveAssistantBuf = '';
+        if (text) {
+          liveDelegationContext = [...liveDelegationContext, text].slice(-6);
+          callbacks.onAssistantTranscript?.(text, true);
+        }
+        break;
+      }
+      case 'session.output_audio.done':
+        if (liveAssistantBuf.trim()) {
+          const text = liveAssistantBuf.trim();
+          liveAssistantBuf = '';
+          liveDelegationContext = [...liveDelegationContext, text].slice(-6);
+          callbacks.onAssistantTranscript?.(text, true);
+        }
         break;
       case 'response.created':
         responseActive = true;
@@ -401,7 +484,9 @@ export async function startRealtimeVoiceSession(options: {
     throw new Error(
       provider === 'openai'
         ? 'Realtime voice needs WebRTC, which this runtime does not support.'
-        : 'Realtime voice needs WebSocket + Web Audio, which this runtime does not support.',
+        : provider === 'openai-live'
+          ? 'GPT Live voice needs WebRTC, which this runtime does not support.'
+          : 'Realtime voice needs WebSocket + Web Audio, which this runtime does not support.',
     );
   }
 
@@ -412,7 +497,7 @@ export async function startRealtimeVoiceSession(options: {
   mic = streamOrError;
 
   try {
-    if (provider === 'openai') {
+    if (provider === 'openai' || provider === 'openai-live') {
       pc = new RTCPeerConnection();
       audioEl = new Audio();
       audioEl.autoplay = true;
@@ -444,9 +529,11 @@ export async function startRealtimeVoiceSession(options: {
       };
       dc.onmessage = (event) => handleRawMessage(event.data);
       dc.onopen = () => {
-        channelReady = true;
-        setState('listening');
-        flushAnnouncements();
+        if (provider === 'openai') {
+          channelReady = true;
+          setState('listening');
+          flushAnnouncements();
+        }
       };
 
       pc.onconnectionstatechange = () => {
@@ -464,13 +551,12 @@ export async function startRealtimeVoiceSession(options: {
         throw new Error('Could not create a valid SDP offer.');
       }
 
-      const answerSdp = await invoke<string>('openai_realtime_connect', {
-        offerSdp: localSdp,
-        model,
-        voice,
-        instructions,
-        tools: [ORCHESTRATOR_TOOL],
-      });
+      const answerSdp = await invoke<string>(
+        provider === 'openai' ? 'openai_realtime_connect' : 'openai_live_connect',
+        provider === 'openai'
+          ? { offerSdp: localSdp, model, voice, instructions, tools: [ORCHESTRATOR_TOOL] }
+          : { offerSdp: localSdp, model, voice, instructions },
+      );
       if (ended) throw new Error('Voice session was cancelled.');
       await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } else {
@@ -584,4 +670,3 @@ export async function startRealtimeVoiceSession(options: {
     announce,
   };
 }
-

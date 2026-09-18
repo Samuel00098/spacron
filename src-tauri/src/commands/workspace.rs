@@ -197,6 +197,30 @@ fn validate_relative_path(file_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_project_folder_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Folder name cannot be empty.".to_string());
+    }
+    if name.chars().count() > 255 {
+        return Err("Folder name is too long.".to_string());
+    }
+    if name.contains('\0')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.starts_with('-')
+        || name == "."
+        || name == ".."
+        || name.contains("..")
+        || name.chars().any(|character| character.is_control())
+        || name.contains(|character: char| {
+            matches!(character, ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+    {
+        return Err("Folder name contains invalid characters.".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn workspace_open_project(path: String, state: State<AppState>) -> Result<Project, String> {
     let root_path =
@@ -220,29 +244,9 @@ pub fn workspace_create_project(
     state: State<AppState>,
 ) -> Result<Project, String> {
     let name = name.trim();
-    if name.is_empty() {
-        return Err("Folder name cannot be empty.".to_string());
-    }
-    if name.chars().count() > 255 {
-        return Err("Folder name is too long.".to_string());
-    }
-    // A single new folder — reject separators, parent refs, leading dashes, and
-    // control characters so this can only ever create one directory under `parent`.
-    if name.contains('\0')
-        || name.contains('/')
-        || name.contains('\\')
-        || name.starts_with('-')
-        || name == "."
-        || name == ".."
-        || name.contains("..")
-        || name.chars().any(|c| c.is_control())
-    {
-        return Err("Folder name contains invalid characters.".to_string());
-    }
-    // Characters that are illegal in Windows filenames (and best avoided elsewhere).
-    if name.contains(|c: char| matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
-        return Err("Folder name contains invalid characters.".to_string());
-    }
+    // A single folder name only: separators, traversal, control characters,
+    // and platform-invalid filename characters are rejected.
+    validate_project_folder_name(name)?;
 
     let parent_path = std::fs::canonicalize(PathBuf::from(&parent))
         .map(crate::commands::clean_path_buf)
@@ -271,6 +275,19 @@ pub fn workspace_create_project(
         .workspace_manager
         .open_project(root_path)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_rename_project(
+    project_id: String,
+    new_name: String,
+    state: State<AppState>,
+) -> Result<Project, String> {
+    let new_name = new_name.trim();
+    validate_project_folder_name(new_name)?;
+    state
+        .workspace_manager
+        .rename_project(&project_id, new_name)
 }
 
 #[tauri::command]

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getAgentProviderCapabilities,
+  getAgentProviderLaunchOptions,
   isChatAgentProvider,
   mergeAgentProviderModels,
   parseLiveAgentModels,
@@ -17,12 +18,41 @@ describe('agent provider catalogue', () => {
   it('exposes provider-native model choices and preserves live capability ids', () => {
     const codex = getAgentProviderCapabilities('codex');
     expect(codex.models.map((model) => model.id)).toEqual(['default']);
+    expect(getAgentProviderCapabilities('claude').models.map((model) => model.id))
+      .toEqual(['default', 'fable', 'opus', 'sonnet']);
 
     expect(mergeAgentProviderModels('codex', [
       { id: 'vendor/new-model', label: 'New model', description: 'Reported by the agent.' },
     ])).toEqual([
       { id: 'vendor/new-model', label: 'New model', description: 'Reported by the agent.', free: undefined },
     ]);
+  });
+
+  it('maps Chat access and reasoning choices to provider-native launch flags', () => {
+    expect(getAgentProviderLaunchOptions('codex', {
+      model: 'gpt-5.6-sol',
+      accessMode: 'auto-edits',
+      reasoningEffort: 'high',
+    })).toEqual({
+      permissionArgs: '--sandbox workspace-write --ask-for-approval on-request',
+      runtimeArgs: '--model gpt-5.6-sol -c model_reasoning_effort=high',
+    });
+
+    expect(getAgentProviderLaunchOptions('claude', {
+      accessMode: 'full-access',
+      reasoningEffort: 'xhigh',
+    })).toEqual({
+      permissionArgs: '--permission-mode bypassPermissions',
+      runtimeArgs: '--effort xhigh',
+    });
+  });
+
+  it('preserves CLI defaults for inherit and rejects unsafe model values', () => {
+    expect(getAgentProviderLaunchOptions('cursor-agent', {
+      model: 'model; Remove-Item anything',
+      accessMode: 'inherit',
+      reasoningEffort: 'high',
+    })).toEqual({ permissionArgs: undefined, runtimeArgs: '' });
   });
 
   it('parses the installed Cursor and Grok model list formats', () => {

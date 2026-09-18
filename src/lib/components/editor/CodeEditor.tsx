@@ -67,7 +67,7 @@ const customTheme = EditorView.theme({
     backgroundColor: "transparent",
     height: "100%",
     fontSize: "var(--editor-font-size, 13.5px)",
-    fontFamily: "var(--editor-font-family, monospace)",
+    fontFamily: "var(--editor-font-family, var(--font-mono))",
   },
   ".cm-scroller": {
     fontFamily: "inherit",
@@ -514,7 +514,7 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
       <div
         className="code-editor-container"
         style={{
-          '--editor-font-size': `calc(${fontSizeValue}px / var(--ui-font-scale, 1))`,
+          '--editor-font-size': `${fontSizeValue}px`,
           '--editor-font-family': resolvedFontFamilyValue,
         } as React.CSSProperties}
         ref={editorContainerRef}

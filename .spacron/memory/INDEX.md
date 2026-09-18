@@ -23,8 +23,11 @@ short enough that it says what the note is *about*, never what it says.
 - [transcript-quality](transcript-quality.md) — the two cleanup stages for dictated text, and why the deterministic one stays conservative
 - [voice-history](voice-history.md) — the two durable voice logs, and where retention lives
 - [prompt-bar-is-voice-only](prompt-bar-is-voice-only.md) — the floating bar has no text input; staged prompts replace it
+- [chat-mode-voice-and-dictation](chat-mode-voice-and-dictation.md) — Alt gesture and dictation capture are single-owner; `transcriptionTarget` picks which surface reports
 
 ## Workspace shell, rooms & visuals
+
+- [image-attach-delivery](image-attach-delivery.md) — how pasted/dropped images reach TUI agents and composers, and why preview URLs stay ephemeral
 
 - [html5-dnd-dead-in-tauri](html5-dnd-dead-in-tauri.md) — HTML5 drag-and-drop never fires in the Tauri window; use pointer events
 - [modal-containing-block-gotcha](modal-containing-block-gotcha.md) — `backdrop-filter` breaks `position: fixed`; which modals must portal to body
@@ -45,6 +48,8 @@ short enough that it says what the note is *about*, never what it says.
 - [edge-light-gating](edge-light-gating.md) — the traveling edge light runs only while a room is working
 - [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`
 - [resource-monitor-removed](resource-monitor-removed.md) — the CPU/RAM chip and its Rust side are deleted; `sysinfo` stays
+- [embedded-command-sentinel](embedded-command-sentinel.md) — completion sentinel is on a fresh line, per-run token, shell-dialect aware; interactive runs are unwrapped
+- [hidden-background-sessions](hidden-background-sessions.md) — hidden terminal sessions must be filtered from every user-facing surface; the one entry point and the one kill path
 
 ## Remote workspace & mobile
 
@@ -55,7 +60,11 @@ short enough that it says what the note is *about*, never what it says.
 
 ## AI providers & model requests
 
+- [chatgpt-subscription-auth](chatgpt-subscription-auth.md) — ChatGPT sign-in drives `codex login`; tokens stay the CLI's business
+- [live-model-list-refresh](live-model-list-refresh.md) — why failed model fetches must never be cached as empty lists
 - [model-request-param-dialects](model-request-param-dialects.md) — why `run_completion` negotiates request shape from the provider's own error
+- [orchestrator-bare-ack-net](orchestrator-bare-ack-net.md) — the two-layer guard (brain prompt rule + round-0 auto-read re-route) that stops the assistant replying with a promise and doing nothing; extended for deferral replies and follow-up ("okay") turns
+- [orchestrator-tool-calling](orchestrator-tool-calling.md) — the provider-agnostic FINAL vs tool_calls loop and where the executor lives; recovery-flag inventory and turn-completion contract; update_todos 5-state plan tool and its honesty invariants
 
 ## Security & confinement
 

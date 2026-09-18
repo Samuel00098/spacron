@@ -43,6 +43,7 @@ export default function AccountSwitcher({
 }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [hintExpanded, setHintExpanded] = useState(false);
   const [draft, setDraft] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
   const project = useStore(activeProject);
@@ -71,6 +72,12 @@ export default function AccountSwitcher({
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pointerdown', onPointerDown, true);
     };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setHintExpanded(false);
+    }
   }, [open]);
 
   // Nothing to switch between and nothing to add — this provider doesn't do
@@ -126,7 +133,7 @@ export default function AccountSwitcher({
       extraEnv: env,
       toast:
         accountId === DEFAULT_ACCOUNT_ID
-          ? `Signing in to ${providerName}. Complete the login in the terminal.`
+          ? `Signing in to ${providerName}. Complete the login in the agent panel.`
           : `Signing in to ${providerName} as this account. The login writes into its own directory, not your default one.`,
     });
     // No refresh here on purpose: `runAgentSignIn` re-scans when the sign-in
@@ -223,11 +230,17 @@ export default function AccountSwitcher({
             </button>
           )}
 
-          <p className="account-switch-hint">
+          <button
+            className={`account-switch-hint${hintExpanded ? ' is-expanded' : ''}`}
+            type="button"
+            title="Show the full account setup information"
+            aria-expanded={hintExpanded}
+            onClick={() => setHintExpanded((expanded) => !expanded)}
+          >
             Adding one opens {providerName}'s own login in a terminal, pointed at
             a fresh config directory. Spacron never writes your credentials, it
             only decides which directory the CLI writes them to.
-          </p>
+          </button>
         </div>
       )}
     </div>

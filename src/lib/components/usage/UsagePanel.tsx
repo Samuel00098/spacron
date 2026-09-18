@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
@@ -54,6 +54,15 @@ function relativeAge(fetchedAt: number, now: number): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
+function describeCreditExpiry(expiresAtIso: string | null, now: number): string {
+  if (!expiresAtIso) return 'no expiry';
+  const at = Date.parse(expiresAtIso);
+  if (Number.isNaN(at)) return 'expiry unavailable';
+  const days = Math.ceil((at - now) / 86_400_000);
+  if (days <= 0) return 'expires now';
+  return `expires in ${days}d`;
+}
+
 function ProviderRow({
   provider,
   now,
@@ -98,6 +107,25 @@ function ProviderRow({
               overage credits, an unmetered model. Rendered under the meters
               rather than instead of them, since both are true at once. */}
           {provider.note && <p className="usage-row-note">{provider.note}</p>}
+          {provider.resetCreditsAvailable != null && (
+            <details className="usage-row-credits">
+              <summary>
+                {provider.resetCreditsAvailable === 0
+                  ? 'No reset credits available'
+                  : `${provider.resetCreditsAvailable} reset credit${provider.resetCreditsAvailable === 1 ? '' : 's'} available`}
+              </summary>
+              {provider.resetCredits.length > 0 && (
+                <ul className="usage-row-credit-list">
+                  {provider.resetCredits.map((credit) => (
+                    <li key={credit.id}>
+                      <span>{credit.resetType ?? 'Rate-limit reset'}</span>
+                      <span>{describeCreditExpiry(credit.expiresAtIso, now)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
         </>
       ) : (
         <p className="usage-row-note">
@@ -139,6 +167,8 @@ export default function UsagePanel() {
   const { providers, loading, lastFetchedAt } = useStore(usageState);
   const accounts = useStore(accountsState);
   const panelRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ y: number; height: number; maxHeight: number } | null>(null);
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
 
   // Accounts and linked sessions change far less often than the meters, so they
   // load when the panel opens rather than on the usage poll.
@@ -173,14 +203,61 @@ export default function UsagePanel() {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) setDragHeight(null);
+  }, [open]);
+
+  function onDragStart(e: ReactPointerEvent<HTMLButtonElement>) {
+    if (!panelRef.current) return;
+    const rect = panelRef.current.getBoundingClientRect();
+    dragStartRef.current = {
+      y: e.clientY,
+      height: rect.height,
+      maxHeight: Math.max(rect.height, rect.bottom - 8),
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onDragMove(e: ReactPointerEvent<HTMLButtonElement>) {
+    const start = dragStartRef.current;
+    if (!start) return;
+    const next = start.height + start.y - e.clientY;
+    setDragHeight(Math.max(start.height, Math.min(start.maxHeight, next)));
+  }
+
+  function onDragEnd(e: ReactPointerEvent<HTMLButtonElement>) {
+    dragStartRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
+
   if (!open) return null;
 
   const now = Date.now();
   const reporting = providers.filter(hasNumbers);
 
   return (
-    <section id="sidebar-usage-details" className="usage-panel" ref={panelRef} aria-label="Agent usage">
+    <section
+      id="sidebar-usage-details"
+      className="usage-panel"
+      ref={panelRef}
+      aria-label="Agent usage"
+      style={dragHeight ? { height: `${dragHeight}px`, maxHeight: `${dragHeight}px` } : undefined}
+    >
       <header className="usage-head">
+        <button
+          className="usage-drag-handle"
+          type="button"
+          aria-label="Drag usage panel upward"
+          title="Drag upward"
+          onPointerDown={onDragStart}
+          onPointerMove={onDragMove}
+          onPointerUp={onDragEnd}
+          onPointerCancel={onDragEnd}
+        >
+          <span aria-hidden="true" />
+        </button>
         <span className="usage-title">
           <span className="usage-title-glyph" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -196,6 +273,7 @@ export default function UsagePanel() {
             </span>
           )}
         </span>
+        <span className="usage-subtitle">Capacity across your coding agents</span>
         <div className="usage-head-actions">
           <LiveTicker
             intervalMs={PANEL_POLL_INTERVAL_MS}

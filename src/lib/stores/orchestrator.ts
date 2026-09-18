@@ -1,3 +1,5 @@
+import { loadAgentCheckpoint, saveAgentCheckpoint, deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoints';
+import { filePage } from '$lib/services/orchestrator/agent-transport';
 import { writable, get, derived } from '$lib/stores/storeCompat';
 import { useOrchestratorStore } from './zustand/orchestrator';
 import { invoke } from '@tauri-apps/api/core';
@@ -25,6 +27,7 @@ import { loadJson } from '$lib/utils/storage';
 import {
   routeOrchestratorRequest,
   ADMIN_KEYWORD_RE,
+  detectStatedPlacement,
   type AgentChoice,
   type RouteResult,
   type RouteLlmConfig,
@@ -32,17 +35,22 @@ import {
   type AgentTranscriptRead,
   type RunningAgentRef,
   type OrchestratorAction,
+  type SpawnPlacement,
 } from '$lib/services/orchestrator-brain';
 import { detectAgentAccess, getAgentAccessBlockedMessage } from '$lib/services/agent-access';
-import { reconnoiter } from '$lib/services/orchestrator/recon';
+import { reconnoiter, buildProjectTree, readProjectFilesForContext } from '$lib/services/orchestrator/recon';
+import { agentInputRequest, isPromiseOnlyReply, isDeferredCompletionReply, cleanOrchestratorReply, formatTurnSummary, composeTurnReply, parseTodoList, mergeTodoItems, advanceTodoItems, findOmittedPlanItems, todoMarkerStatus, todoIsDone, formatDocumentsIndexBlock, MAX_PLAN_ITEMS, type ChatTurnTodoItem, type DocumentsIndexEntry } from '$lib/services/orchestrator/chat-turn';
+import { toolArgStr, toolArgNum, toolArgBool, toolArgStrArr, BRAIN_TOOL_OUTPUT_CAP, BRAIN_REVIEW_OUTPUT_CAP, type BrainMode, type BrainToolCall, type BrainToolResult } from '$lib/services/orchestrator/brain-tools';
 import {
   aiProvider,
   currentAiModel,
   isLocalProvider,
+  getProviderDef,
   getProviderBaseUrl,
   announceAgentCompletions,
+  type AiProviderId,
 } from '$lib/stores/settings';
-import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import { isProviderApiKeyConfiguredLocal, providerApiKeyExists } from '$lib/services/ai-keychain';
 import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
 import { playNudge } from '$lib/services/nudge';
 import {
@@ -68,7 +76,7 @@ import {
 } from '$lib/services/orchestrator/agent-turn-watch';
 import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
 import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
-import type { ChatAttachment, ChatInlineRequest, ChatMessageType } from '$lib/types/chat';
+import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -90,13 +98,26 @@ import {
 } from '$lib/services/orchestrator/worktree-reconciler';
 import { autoStageAgentChanges } from '$lib/stores/settings';
 import {
+  buildEmbeddedCommand,
+  detectShellKind,
+  parseEmbeddedExitCode,
+  EMBEDDED_DONE_PREFIX,
+} from '$lib/services/embeddedCommand';
+import {
   appendLegacyChatMessage,
   clearProjectThreadMessages,
   findThreadIdForTask,
   findThreadIdForMessage,
   getChatThread,
+  getThreadMessageSnapshot,
   patchThreadMessage,
+  moveThreadMessageToEnd,
+  removeThreadMessagesFrom,
+  removeThreadMessage,
   updateChatThread,
+  setChatTurnTicker,
+  advanceChatTurnTicker,
+  clearChatTurnTicker,
   type ChatThreadStatus,
 } from '$lib/stores/chatThreads';
 import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } from '$lib/stores/agentPlacement';
@@ -537,13 +558,6 @@ export function getTaskTranscript(task: OrchestratorTask): string {
 // A leased agent finishing a turn isn't a process exit (the REPL stays alive),
 // so we detect it from output signals and reconcile the task here.
 
-function isAiAvailable(): boolean {
-  const p = get(aiProvider);
-  const local = isLocalProvider(p);
-  const base = local ? getProviderBaseUrl(p) : '';
-  return (!local || !!base) && (local || isProviderApiKeyConfiguredLocal(p));
-}
-
 /**
  * The LLM that powers the orchestrator brain — always the main AI provider and
  * model configured under AI / Models.
@@ -554,18 +568,65 @@ function isAiAvailable(): boolean {
  * talks to, so giving spoken turns a second brain only meant two things to
  * configure and two ways for them to disagree.
  */
-function getConversationLlmConfig(): RouteLlmConfig {
-  const provider = get(aiProvider);
+function getConversationLlmConfig(overrides?: { provider?: AiProviderId; model?: string; sessionId?: string }): RouteLlmConfig {
+  const provider = overrides?.provider ?? get(aiProvider);
   const local = isLocalProvider(provider);
   const baseUrl = local ? getProviderBaseUrl(provider) : '';
-  return { provider, model: get(currentAiModel), hasApiKey: isProviderApiKeyConfiguredLocal(provider), baseUrl };
+  const model = overrides?.model?.trim() || (provider === get(aiProvider)
+    ? get(currentAiModel)
+    : getProviderDef(provider).defaultModel);
+  return { provider, model, hasApiKey: isProviderApiKeyConfiguredLocal(provider), baseUrl, sessionId: overrides?.sessionId };
+}
+
+function isLlmConfigAvailable(config: RouteLlmConfig): boolean {
+  return isLocalProvider(config.provider)
+    ? Boolean(config.baseUrl)
+    : Boolean(config.hasApiKey);
+}
+
+/**
+ * Agent completion cards can belong to a Chat thread whose provider/model is
+ * different from the global Settings selection. Keep follow-up summaries on
+ * that originating connection; legacy agent-only threads fall back to global
+ * Settings instead of being treated as AI provider ids.
+ */
+function getChatThreadLlmOverrides(threadId?: string): { provider?: AiProviderId; model?: string; sessionId?: string } | undefined {
+  if (!threadId) return undefined;
+  const thread = getChatThread(threadId);
+  const rawProvider = thread?.provider?.trim();
+  if (!rawProvider) return undefined;
+  const provider = rawProvider as AiProviderId;
+  if (getProviderDef(provider).id !== provider) return undefined;
+  return {
+    provider,
+    model: thread?.model?.trim() || undefined,
+    sessionId: threadId,
+  };
+}
+
+/**
+ * Resolve the brain connection at the point a turn is sent. The synchronous
+ * cache is useful for render-time checks, but it can still be empty while the
+ * startup keychain scan is running. A send must wait for the authoritative
+ * existence check so a Composer-selected provider is not mistaken for an
+ * unconfigured one.
+ */
+async function resolveConversationLlmConfig(
+  overrides?: { provider?: AiProviderId; model?: string; sessionId?: string },
+): Promise<RouteLlmConfig> {
+  const config = getConversationLlmConfig(overrides);
+  if (!isLocalProvider(config.provider)) {
+    config.hasApiKey = await providerApiKeyExists(config.provider, { fresh: true });
+  }
+  return config;
 }
 
 const SUMMARY_TRANSCRIPT_CHARS = 3000;
 
 async function generateTranscriptSummary(
   transcript: string,
-  status: CompletionSummary['status']
+  status: CompletionSummary['status'],
+  llmConfig: RouteLlmConfig,
 ): Promise<string> {
   const tail = transcript.length > SUMMARY_TRANSCRIPT_CHARS
     ? transcript.slice(-SUMMARY_TRANSCRIPT_CHARS)
@@ -577,17 +638,15 @@ async function generateTranscriptSummary(
   const systemPrompt =
     `Summarize what a coding agent just did based on its terminal output. ${outcome}\n` +
     `Write 1–2 concise sentences. Name specific files created or modified, commands run, and what was accomplished. Be factual and direct.`;
-  const p = get(aiProvider);
-  const local = isLocalProvider(p);
-  const base = local ? getProviderBaseUrl(p) : '';
-  const model = get(currentAiModel);
+  if (!isLlmConfigAvailable(llmConfig)) return '';
   return await invoke<string>('ai_complete', {
     systemPrompt,
     userText: `Terminal output:\n\n${tail}`,
-    provider: p,
-    model,
+    provider: llmConfig.provider,
+    model: llmConfig.model,
     apiKey: '',
-    baseUrl: base || undefined,
+    baseUrl: llmConfig.baseUrl || undefined,
+    sessionId: llmConfig.sessionId,
   });
 }
 
@@ -1347,7 +1406,12 @@ async function completeLeasedTask(
   }
 
   const chatMsgId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const willSummarize = !!(updated.transcript?.trim()) && isAiAvailable();
+  syncChatThreadTask(updated);
+  const completionThreadId = threadIdForTask(updated) ?? undefined;
+  const summaryLlmConfig = updated.transcript?.trim()
+    ? await resolveConversationLlmConfig(getChatThreadLlmOverrides(completionThreadId))
+    : null;
+  const willSummarize = Boolean(summaryLlmConfig && isLlmConfigAvailable(summaryLlmConfig));
 
   const completionData: CompletionSummary = {
     status: completionStatus,
@@ -1363,9 +1427,6 @@ async function completeLeasedTask(
     silent,
   };
 
-  syncChatThreadTask(updated);
-  const completionThreadId = threadIdForTask(updated) ?? undefined;
-
   appendChat(task.projectId, {
     id: chatMsgId,
     role: 'assistant',
@@ -1374,9 +1435,9 @@ async function completeLeasedTask(
     completion: completionData,
   }, completionThreadId);
 
-  if (willSummarize && updated.transcript) {
+  if (willSummarize && updated.transcript && summaryLlmConfig) {
     const projectId = task.projectId;
-    void generateTranscriptSummary(updated.transcript, completionStatus)
+    void generateTranscriptSummary(updated.transcript, completionStatus, summaryLlmConfig)
       .then((raw) => raw.trim() || null)
       .catch(() => null)
       .then((summary) => {
@@ -1522,24 +1583,22 @@ function sendGoalToLeasedTask(
       // the activity log keep the clean task text either way.
       const task = get(orchestratorTasks).find((t) => t.id === id);
       const message = buildLeasedAgentMessage(goal, agentCommand, task?.name ?? null, task?.projectId, task?.role ?? null);
+      const responseStart = getSessionOutputLength(sessionId);
+      if (chatThreadId) watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart);
       const sent = await sendOrchestratorGoalWhenReady(sessionId, message, {
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
-      if (!sent) return;
-      // Chat mode keeps the task leased between turns. The regular task watcher
-      // is intentionally disabled for those sessions, so arm a separate
-      // response watcher that streams the cleaned PTY output into the thread
-      // without completing/releasing the task.
-      const responseStart = getSessionOutputLength(sessionId);
+      if (!sent) {
+        if (chatThreadId) patchTask(id, (current) => ({ ...current, status: 'failed', failureReason: 'Could not deliver the goal.' }));
+        return;
+      }
+      // Chat owns one watcher, armed before delivery so an immediate report cannot be lost.
       patchTask(id, (current) =>
         current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current
       );
       logTaskActivity(id, 'goal', goal);
       showToast('Sent goal to ' + (getAgentDisplayName(agentCommand) ?? agentCommand), 'info', 3000);
-      if (chatThreadId) {
-        watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart);
-      }
-      if (!watchTurn) return;
+      if (chatThreadId || !watchTurn) return;
       const outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(id, sessionId),
         agentCommand,
@@ -1581,7 +1640,15 @@ export async function launchOrchestratorTask(
   id: string,
   agentCommand: string,
   cwd: string,
-  autoRunOrOpts: boolean | { autoRun?: boolean; watchTurn?: boolean; activate?: boolean; holdGoal?: boolean; model?: string | null } = true
+  autoRunOrOpts: boolean | {
+    autoRun?: boolean;
+    watchTurn?: boolean;
+    activate?: boolean;
+    holdGoal?: boolean;
+    model?: string | null;
+    accessMode?: ChatAccessMode;
+    reasoningEffort?: ChatReasoningEffort;
+  } = true
 ): Promise<number | null> {
   // 4th arg stays boolean-compatible (= autoRun). Persistent agents pass
   // `{ watchTurn: false }` so they don't auto-complete after one turn — they
@@ -1631,6 +1698,8 @@ export async function launchOrchestratorTask(
       name: task.name,
       activate,
       model,
+      accessMode: opts.accessMode,
+      reasoningEffort: opts.reasoningEffort,
     });
     if (sessionId == null) {
       showToast(worktree ? 'Could not start the agent in its isolated worktree. The worktree was kept; retry the launch.' : 'Could not start the agent terminal', 'error');
@@ -1751,7 +1820,7 @@ export async function closeOrchestratorAgent(id: string, note?: string): Promise
 // and manage the task board. These execute the brain's APP actions by calling
 // the relevant stores directly.
 
-function resolveProjectFilePath(path: string, rootPath: string): string {
+export function resolveProjectFilePath(path: string, rootPath: string): string {
   const norm = path.replace(/\\/g, '/').trim();
   // Already absolute (Windows drive or POSIX root)?
   if (/^[a-zA-Z]:\//.test(norm) || norm.startsWith('/')) return norm;
@@ -2022,7 +2091,10 @@ export function appendVoiceExchangeMessage(projectId: string, role: 'user' | 'as
 }
 
 function appendChat(projectId: string, msg: ChatMessage, threadId?: string) {
-  appendLegacyChatMessage(projectId, msg, threadId);
+  // Chat mode is the orchestrator conversation, not a projection of agent
+  // threads. Explicit thread mirroring remains available for legacy callers,
+  // but normal orchestrator messages stay in the project conversation only.
+  if (threadId) appendLegacyChatMessage(projectId, msg, threadId);
   chatMessages.update((all) => {
     // Trim only at the hard safety cap. Normal shrinking is done by
     // compactProjectChat, which summarizes the oldest chunk instead of dropping
@@ -2048,8 +2120,9 @@ function scheduleChatCompact(projectId: string) {
 }
 
 async function compactProjectChat(projectId: string) {
-  const config = getConversationLlmConfig();
-  if (!config.hasApiKey) return;
+  const config = await resolveConversationLlmConfig();
+  const configured = isLocalProvider(config.provider) ? !!config.baseUrl : !!config.hasApiKey;
+  if (!configured) return;
 
   const msgs = get(chatMessages)[projectId];
   if (!msgs || msgs.length < MAX_CHAT_PER_PROJECT) return;
@@ -2116,7 +2189,9 @@ function buildAttachmentPrompt(text: string, attachments: ChatAttachment[]): str
   if (!attachments.length) return text;
   const context = attachments.map((attachment) => {
     const header = `\n--- Attached file: ${attachment.name} (${attachment.type || 'file'}) ---`;
-    return attachment.text ? `${header}\n${attachment.text}\n--- End attached file ---` : `${header}\nThe file is attached in the Chat message metadata; inspect it from the project if needed.\n--- End attached file ---`;
+    if (attachment.text) return `${header}\n${attachment.text}\n--- End attached file ---`;
+    if (attachment.path) return `${header}\nThe binary attachment was saved at ${attachment.path}. Inspect it when relevant.\n--- End attached file ---`;
+    return `${header}\nThe file is attached in the Chat message metadata; inspect it from the project if needed.\n--- End attached file ---`;
   }).join('\n');
   return `${text}\n\nThe user attached these files. Use their contents as context when relevant:${context}`;
 }
@@ -2161,10 +2236,14 @@ function watchChatAgentResponse(
     };
     const timer = setInterval(() => publish(true), 500);
     try {
-      const outcome = await getAgentAdapter(sessionId).watchTurn({
+      let outcome: AgentTurnOutcome;
+      do {
+        outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(taskId, sessionId),
         agentCommand,
-      });
+        });
+        // Silence is not completion. Keep listening for the next output or declared end.
+      } while (outcome.kind === 'finished' && outcome.via === 'inferred' && leasedSessionLive(taskId, sessionId));
       if (outcome.kind === 'aborted') {
         const current = get(orchestratorTasks).find((entry) => entry.id === taskId);
         if (current?.status === 'in-progress') {
@@ -2173,17 +2252,16 @@ function watchChatAgentResponse(
             pending: false,
           });
         }
+        patchChat(projectId, responseId, { pending: false });
+        if (current) syncChatThreadTask(current, threadId);
+        if (current?.status === 'in-progress') updateChatThread(threadId, { status: 'failed' });
         return;
       }
       if (outcome.kind === 'blocked') {
         const finalText = chatResponseText(sessionId, outputStart);
-        const inlineRequest: ChatInlineRequest = {
-          id: `chat-request-${responseId}`,
-          type: 'text',
-          prompt: outcome.reason,
-          taskId,
-          sessionId,
-        };
+        const inlineRequest = agentInputRequest(`chat-request-${responseId}`, outcome.reason, taskId, sessionId, outcome.via === 'inferred');
+        patchTask(taskId, (current) => ({ ...current, status: 'blocked', blockedReason: inlineRequest.prompt }));
+        logTaskActivity(taskId, 'blocked', inlineRequest.prompt);
         patchChat(projectId, responseId, {
           type: 'input',
           text: finalText,
@@ -2191,6 +2269,11 @@ function watchChatAgentResponse(
           inlineRequest,
         });
         updateChatThread(threadId, { status: 'needs-input', updatedAt: Date.now(), lastActivityAt: Date.now() });
+        return;
+      }
+      if (outcome.kind === 'failed') {
+        patchChat(projectId, responseId, { type: 'failure', text: chatResponseText(sessionId, outputStart) || outcome.reason, pending: false });
+        await completeLeasedTask(taskId, sessionId, outcome);
         return;
       }
       publish(false);
@@ -2201,7 +2284,10 @@ function watchChatAgentResponse(
           pending: false,
         });
       }
-      updateChatThread(threadId, { status: 'idle', updatedAt: Date.now(), lastActivityAt: Date.now() });
+      await completeLeasedTask(taskId, sessionId, outcome);
+    } catch (error) {
+      patchChat(projectId, responseId, { type: 'failure', text: `Could not monitor the agent: ${String(error)}`, pending: false });
+      updateChatThread(threadId, { status: 'failed' });
     } finally {
       clearInterval(timer);
     }
@@ -2221,6 +2307,7 @@ async function sendThreadFollowUp(
   text: string,
   chatMode = false,
   attachments: ChatAttachment[] = [],
+  inputMessageId?: string,
 ): Promise<void> {
   const userId = msgId();
   const assistantId = msgId();
@@ -2228,10 +2315,13 @@ async function sendThreadFollowUp(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, threadId);
 
   try {
-    const sessionId = task.assignedSessionId;
-    if (chatMode && sessionId != null) await waitForChatTurn(sessionId);
-    const responseStart = sessionId == null ? 0 : getSessionOutputLength(sessionId);
-    const sent = await sendFollowUpToAgent(task, buildAttachmentPrompt(text, attachments), rootPath);
+    const originalSessionId = task.assignedSessionId;
+    if (chatMode && originalSessionId != null) await waitForChatTurn(originalSessionId);
+    const request = inputMessageId ? getThreadMessageSnapshot(threadId).find((message) => message.id === inputMessageId)?.inlineRequest : null;
+    const deliveryText = request?.options?.find((option) => option.label === text)?.value ?? text;
+    const sent = await sendFollowUpToAgent(task, buildAttachmentPrompt(deliveryText, attachments), rootPath, chatMode, Boolean(inputMessageId), (sessionId) => {
+      if (chatMode && task.agentPreset) watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, getSessionOutputLength(sessionId));
+    }, request?.inputMode === 'line');
     const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
     syncChatThreadTask(latestTask, threadId);
     if (!sent) {
@@ -2239,8 +2329,10 @@ async function sendThreadFollowUp(
         text: `I couldn't reach ${task.name?.trim() || getAgentDisplayName(task.agentPreset) || 'the running agent'}.`,
         pending: false,
       });
+      if (inputMessageId) updateChatThread(threadId, { status: 'needs-input' });
       return;
     }
+    if (inputMessageId) markInlineRequestAnswered(projectId, inputMessageId, text);
 
     patchChat(projectId, assistantId, {
       text: `Sent to ${task.name?.trim() || getAgentDisplayName(task.agentPreset) || 'the running agent'}.`,
@@ -2254,9 +2346,7 @@ async function sendThreadFollowUp(
       dispatchedTaskId: task.id,
       dispatchedAgent: task.agentPreset ?? null,
     });
-    if (chatMode && sessionId != null && task.agentPreset) {
-      watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, responseStart);
-    }
+    syncChatThreadTask(get(orchestratorTasks).find((entry) => entry.id === task.id) ?? latestTask, threadId);
   } catch (err) {
     console.error('Failed to send thread follow-up:', err);
     patchChat(projectId, assistantId, {
@@ -2852,24 +2942,42 @@ function resolveRunningTaskByName(projectId: string, target: string): Orchestrat
 }
 
 /** Push a prompt to a running agent's live terminal; if blocked, reopen it and send automatically. */
-export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootPath: string): Promise<boolean> {
+export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootPath: string, chatMode = false, answeringInput = false, beforeSend?: (sessionId: number) => void, lineInput = false): Promise<boolean> {
   if (task.assignedSessionId != null) {
     const live = getTerminalProjectState(task.projectId).sessions.find((s) => s.id === task.assignedSessionId);
     // Adopted agents have no `ownerTaskId` lease (see leasedSessionLive); a live
     // session is enough to route a follow-up into.
     if (!live?.isRunning || (!task.adopted && live.ownerTaskId !== task.id)) return false;
 
-    const sent = await sendOrchestratorFollowUpWhenReady(task.assignedSessionId, withAgentTaskPanelContext(prompt, task.projectId), {
-      shouldContinue: () => leasedSessionLive(task.id, task.assignedSessionId!),
+    if (chatMode) {
+      patchTask(task.id, (current) => ({ ...current, status: 'in-progress', blockedReason: null }));
+      beforeSend?.(task.assignedSessionId);
+    }
+    const sent = lineInput
+      ? await getAgentAdapter(task.assignedSessionId).sendInputLine(prompt)
+      : await sendOrchestratorFollowUpWhenReady(task.assignedSessionId, answeringInput ? prompt : withAgentTaskPanelContext(prompt, task.projectId), {
+      shouldContinue: () => {
+        const current = get(orchestratorTasks).find((entry) => entry.id === task.id);
+        const session = getTerminalProjectState(task.projectId).sessions.find((entry) => entry.id === task.assignedSessionId);
+        return Boolean(current && (current.status === 'in-progress' || current.status === 'blocked') && current.assignedSessionId === task.assignedSessionId && session?.isRunning && (task.adopted || session.ownerTaskId === task.id));
+      },
     });
-    if (!sent) return false;
-    const updated = patchTask(task.id, (current) => (current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current));
+    if (!sent) {
+      if (chatMode) patchTask(task.id, (current) => ({ ...current, status: task.status, blockedReason: task.blockedReason }));
+      return false;
+    }
+    const updated = patchTask(task.id, (current) => current.status === 'in-progress' ? { ...current, promptSentAt: Date.now() } : current);
     if (updated) syncChatThreadTask(updated);
     logTaskActivity(task.id, 'follow-up', prompt);
     return true;
   }
 
   if (task.status !== 'blocked' || !task.agentPreset) return false;
+
+  const chatThread = (() => {
+    const threadId = threadIdForTask(task);
+    return threadId ? getChatThread(threadId) : null;
+  })();
 
   const sessionId = await leaseOrchestratorTerminal({
     agentCommand: task.agentPreset,
@@ -2879,6 +2987,9 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
     taskId: task.id,
     taskTitle: task.title,
     name: task.name,
+    model: chatThread?.model,
+    accessMode: chatThread?.accessMode,
+    reasoningEffort: chatThread?.reasoningEffort,
   });
   if (sessionId == null) return false;
   // The exit handler will write the completion card for this resumed session;
@@ -2907,9 +3018,10 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
   // them), so it just needs the resume prompt; a paste agent needs the charter
   // wrapped around it, exactly like an initial dispatch. The activity log below
   // still records the clean prompt, not the message text.
+  beforeSend?.(sessionId);
   const sent = await sendOrchestratorFollowUpWhenReady(
     sessionId,
-    buildLeasedAgentMessage(prompt, task.agentPreset, task.name ?? null, task.projectId),
+    buildLeasedAgentMessage(chatMode ? `Original goal: ${task.goal}\n\nPrevious request: ${task.blockedReason ?? ''}\n\nUser reply: ${prompt}` : prompt, task.agentPreset, task.name ?? null, task.projectId),
     { shouldContinue: () => leasedSessionLive(task.id, sessionId) }
   );
   if (!sent) return false;
@@ -2917,7 +3029,7 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
   if (updated) syncChatThreadTask(updated);
   logTaskActivity(task.id, 'follow-up', prompt);
 
-  void (async () => {
+  if (!chatMode) void (async () => {
     const outcome = await getAgentAdapter(sessionId).watchTurn({
       shouldContinue: () => leasedSessionLive(task.id, sessionId),
       agentCommand: task.agentPreset ?? undefined,
@@ -3017,6 +3129,467 @@ function declarativeReply(actions: OrchestratorAction[], reply: string): string 
 }
 
 /**
+ * True when an empty-actions reply needs the user's answer before useful or
+ * safe progress can continue. Conversational assistants often end an answer
+ * with an optional offer ("Would you like more detail?"); turning every such
+ * offer into an input gate makes Chat feel blocked when it is not.
+ */
+function looksLikeBlockingQuestion(reply: string, explicitlyRequired = false): boolean {
+  const trimmed = reply.trim();
+  if (!trimmed) return false;
+  if (explicitlyRequired) return true;
+  if (/(?:^|[.!?]\s+)(?:would you like|want me to|should i|shall i|can i|do you want me to|what else can i|how can i help|what would you like me to)\b/i.test(trimmed)
+    || /\b(?:need anything else|anything else)\b/i.test(trimmed)) {
+    return false;
+  }
+  // Without an explicit needsInput flag, only an actual question can become
+  // an input card. Informational errors often contain words such as "choose",
+  // "provide", or "required" but are instructions, not questions. Turning
+  // those into cards makes a harmless "okay" submit a second, context-free
+  // turn instead of leaving the error visible for the user to fix.
+  if (!/[?]\s*$/.test(trimmed)) return false;
+  if (/\b(?:need|required|missing|blocked|waiting for|cannot proceed|can't proceed|before i can|to continue|to proceed|provide|specify|choose|select)\b/i.test(trimmed)) {
+    return true;
+  }
+  if (!/[?]\s*$/.test(trimmed)) return false;
+  return /^(?:which|what|where|who|when|how|please\s+(?:provide|specify|choose|select))\b/i.test(trimmed);
+}
+
+function markInlineRequestAnswered(
+  projectId: string,
+  messageId: string,
+  answer: string,
+): void {
+  const threadId = findThreadIdForMessage(projectId, messageId);
+  const list = get(chatMessages)[projectId] ?? [];
+  const current = (threadId ? getThreadMessageSnapshot(threadId) : list).find((message) => message.id === messageId);
+  const request = current?.inlineRequest;
+  if (!request || request.answeredAt) return;
+  const nextRequest: ChatInlineRequest = {
+    ...request,
+    answeredAt: Date.now(),
+    answer,
+  };
+  patchChat(projectId, messageId, { inlineRequest: nextRequest });
+  if (threadId) {
+    updateChatThread(threadId, {
+      status: 'working',
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
+  }
+}
+
+type SendChatOpts = {
+  projectName?: string;
+  forcedAgent?: string;
+  voiceConversation?: boolean;
+  /** Text conversational panel — Composer prompts + conversational brain. */
+  conversationalMode?: boolean;
+  panelTaskId?: string;
+  threadId?: string;
+  /** Legacy agent provider alias used by older agent-session chats. */
+  provider?: string;
+  model?: string;
+  /** AI provider/model that power this turn's orchestrator brain. */
+  orchestratorProvider?: AiProviderId;
+  orchestratorModel?: string;
+  accessMode?: ChatAccessMode;
+  reasoningEffort?: ChatReasoningEffort;
+  /** Keep the selected agent session alive and project its replies into Chat. */
+  chatMode?: boolean;
+  attachments?: ChatAttachment[];
+  /**
+   * Resend anchor: when set, the message with this id (a user bubble being
+   * resent after an edit) and every message after it are discarded atomically
+   * with the new turn's appends — the stale reply is overwritten in place
+   * instead of lingering next to a duplicate bubble, and the transcript never
+   * paints the shrunken intermediate state (the composer bounce).
+   */
+  resendFromMessageId?: string;
+};
+
+/**
+ * High-signal files to read automatically when the brain answered with only a
+ * bare acknowledgement and the user actually asked for project work or an
+ * overview. Reading these gives a re-routed model something real to summarize
+ * instead of re-promising. Matched by file name against the already-built
+ * project tree, so it stays correct for most project shapes.
+ */
+function pickProjectOverviewFiles(treeLines: string[]): string[] {
+  const wanted = [
+    'package.json',
+    'Cargo.toml',
+    'pyproject.toml',
+    'go.mod',
+    'README.md',
+    'readme.md',
+    'src/index.ts',
+    'src/index.tsx',
+    'src/main.ts',
+    'src/main.rs',
+    'src/main.py',
+    'src/App.tsx',
+  ];
+  const present = wanted.filter((name) => {
+    const base = name.split('/').pop() as string;
+    return treeLines.some((line) => {
+      // Tree lines are formatted like "[file] package.json" / "[dir] src".
+      const relative = line.trim().replace(/^\[(?:file|dir)\]\s*/, '');
+      return relative === base || relative.endsWith('/' + base) || relative.endsWith('\\' + base);
+    });
+  });
+  // Never read the lockfile or node_modules by accident; keep it to the first
+  // few high-value files.
+  return [...new Set(present)].slice(0, 3);
+}
+
+/** True when a message is short chatter with no actual request to act. */
+function isConversationalChatter(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (t.length < 8) return true;
+  return /^(hi|hello|hey|thanks|thank you|ok|okay|sure|cool|got it|great|nice|awesome|yes|no|yeah|nah|yep|nope|bye|goodbye|see you|cya|lol|whats up|what's up)\b/i.test(t);
+}
+
+// ─── Brain direct-tool helpers (OpenCode-style fast-path, coordinator-first) ──
+
+/**
+ * Normalise a brain-supplied path to a repo-relative `a/b/c` form, or null
+ * when it must be refused. Same jail rules as `readProjectFilesForContext`:
+ * no absolute paths, no parent traversal, no drive letters — plus never
+ * anything under `.git/` for writes. The backend's `require_in_roots` is the
+ * second lock on the same door.
+ */
+function sanitiseBrainRepoPath(raw: string): string | null {
+  const path = String(raw ?? '').trim();
+  const parts = path.split(/[\\/]/);
+  if (!path || /^[\\/]/.test(path) || path.includes(':') || parts.some((part) => part === '..' || part.toLowerCase() === '.git')) return null;
+  const clean = parts.filter((part) => part && part !== '.').join('/');
+  if (!clean) return null;
+  return clean;
+}
+
+/** Join a repo-relative clean path onto an absolute root (either separator). */
+function joinRootPath(root: string, clean: string): string {
+  const sep = root.includes('\\') ? '\\' : '/';
+  const base = root.replace(/[\\/]+$/, '');
+  return `${base}${sep}${clean.split('/').join(sep)}`;
+}
+
+function escapeGlobRegExp(s: string): string {
+  return s.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Minimal glob → RegExp: `**` spans separators, `*`/`?` stay within one
+ * segment. Case-insensitive, matched against `/`-separated relative paths.
+ */
+function globToRegExp(pattern: string): RegExp | null {
+  try {
+    const norm = pattern.trim().split(/[\\/]/).filter(Boolean).join('/');
+    if (!norm) return null;
+    let re = '';
+    let i = 0;
+    while (i < norm.length) {
+      const c = norm[i];
+      if (c === '*') {
+        if (norm[i + 1] === '*') {
+          // `**/` = zero or more directories; trailing `**` = anything.
+          if (norm[i + 2] === '/') {
+            re += '(?:.*/)?';
+            i += 3;
+          } else {
+            re += '.*';
+            i += 2;
+          }
+        } else {
+          re += '[^/]*';
+          i += 1;
+        }
+      } else if (c === '?') {
+        re += '[^/]';
+        i += 1;
+      } else {
+        re += escapeGlobRegExp(c);
+        i += 1;
+      }
+    }
+    return new RegExp(`^${re}$`, 'i');
+  } catch {
+    return null;
+  }
+}
+
+const BRAIN_GLOB_SKIP_DIRS = new Set(['node_modules', '.git', '.spacron', 'dist', 'build', '.next', '__pycache__', 'target', 'coverage', 'out', '.turbo', '.cache', '.parcel-cache', '.vscode', '.idea']);
+
+/** Tauri's fs_read_dir payload uses `is_dir`; retain compatibility with the old `type` shape. */
+interface BrainDirectoryEntry {
+  name: string;
+  is_dir?: boolean;
+  type?: string;
+}
+
+function isBrainDirectoryEntry(item: BrainDirectoryEntry): boolean {
+  return item.is_dir === true || item.type === 'dir';
+}
+
+/**
+ * Walk the project via `fs_read_dir` and return repo-relative paths matching
+ * the glob. Depth- and count-capped so a `**` pattern can't blow up the turn.
+ * A pattern with no `/` (e.g. `*.json`) matches basenames at any depth — the
+ * convenient reading for a coordinator that doesn't know where things live.
+ */
+async function globFilesForBrain(rootPath: string, pattern: string, max: number): Promise<string[]> {
+  const matcher = globToRegExp(pattern);
+  if (!matcher) return [];
+  return backendInvoke<string[]>('fs_glob_files', { rootPath, pattern: matcher.source, matchAnywhere: !pattern.includes('/') && !pattern.includes('\\'), max });
+}
+
+const BRAIN_REVIEW_MAX_FILES = 120;
+const BRAIN_REVIEW_FILE_CHARS = 6000;
+const BRAIN_REVIEW_TOTAL_CHARS = BRAIN_REVIEW_OUTPUT_CAP;
+const BRAIN_REVIEW_SKIP_NAMES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']);
+const BRAIN_REVIEW_TEXT_EXTENSIONS = new Set([
+  '.astro', '.bat', '.c', '.cc', '.cmd', '.cpp', '.css', '.go', '.gql', '.graphql', '.h', '.hpp', '.html',
+  '.java', '.js', '.jsx', '.json', '.kt', '.less', '.md', '.mjs', '.mts',
+  '.php', '.ps1', '.py', '.rs', '.scss', '.sh', '.sql', '.svg', '.svelte', '.toml', '.ts', '.tsx', '.txt',
+  '.vue', '.xml', '.yaml', '.yml',
+]);
+const BRAIN_REVIEW_BINARY_EXTENSIONS = new Set([
+  '.7z', '.avi', '.bmp', '.class', '.dll', '.doc', '.docx', '.eot', '.exe', '.gif', '.ico', '.jar', '.jpeg',
+  '.jpg', '.mov', '.mp3', '.mp4', '.otf', '.pdf', '.png', '.so', '.tar', '.ttf', '.wasm', '.webp', '.woff',
+  '.woff2', '.zip',
+]);
+
+function isLikelyBrainReviewText(path: string): boolean {
+  const name = path.split('/').pop()?.toLowerCase() ?? '';
+  if (BRAIN_REVIEW_SKIP_NAMES.has(name)) return false;
+  if (name === '.env.example') return true;
+  if (name.endsWith('.min.js') || name.endsWith('.min.css') || name.endsWith('.map')) return false;
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return true;
+  const ext = name.slice(dot);
+  if (BRAIN_REVIEW_BINARY_EXTENSIONS.has(ext)) return false;
+  return BRAIN_REVIEW_TEXT_EXTENSIONS.has(ext);
+}
+
+/**
+ * Index the project's docs/ folder at turn start: title (first markdown
+ * heading or filename) plus a one-line excerpt per file. This is the folder
+ * local CLI agents already store their documents in, and where the brain is
+ * told to write its own plans and reports. A legacy Documents/ folder is
+ * indexed too so nothing previously written becomes invisible. Purely
+ * additive context — every failure is swallowed so a missing or unreadable
+ * docs folder can never block a turn.
+ */
+async function readDocumentsIndexForBrain(rootPath: string): Promise<string | null> {
+  try {
+    const discovered = [
+      ...(await globFilesForBrain(rootPath, 'docs/**/*.md', 40)),
+      ...(await globFilesForBrain(rootPath, 'Documents/**/*.md', 40)),
+    ];
+    // Client-side filter too: defensive against backends that ignore the
+    // pattern, and keeps stray paths out of the index. Case-insensitive
+    // de-dupe (Windows/macOS filesystems treat Docs/ and docs/ alike).
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const candidate of Array.isArray(discovered) ? discovered : []) {
+      const lower = candidate.toLowerCase();
+      if ((!candidate.startsWith('docs/') && !candidate.startsWith('Documents/')) || !lower.endsWith('.md') || seen.has(lower)) continue;
+      seen.add(lower);
+      paths.push(candidate);
+      if (paths.length >= 24) break;
+    }
+    if (!paths.length) return null;
+    const entries: DocumentsIndexEntry[] = [];
+    for (const path of paths.slice(0, 24)) {
+      try {
+        const raw = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, path) });
+        const text = typeof raw === 'string' ? raw : String(raw ?? '');
+        const lines = text.split('\n').map((line) => line.trim());
+        const heading = lines.find((line) => /^#\s+\S/.test(line));
+        const title = heading
+          ? heading.replace(/^#\s+/, '')
+          : path.split('/').pop()!.replace(/[-_]/g, ' ').replace(/\.md$/i, '');
+        const bodyStart = lines.findIndex((line) => line && !line.startsWith('#'));
+        const excerpt = bodyStart >= 0 ? lines[bodyStart] : undefined;
+        entries.push({ path, title, ...(excerpt ? { excerpt } : {}) });
+      } catch { /* unreadable file: index the rest */ }
+    }
+    return formatDocumentsIndexBlock(entries);
+  } catch {
+    return null;
+  }
+}
+
+/** Read a bounded, source-oriented project snapshot for same-turn reviews. */
+async function readProjectForBrain(rootPath: string, requestedMax: number, offset = 0): Promise<string> {
+  const maxFiles = Math.max(1, Math.min(Math.floor(requestedMax), BRAIN_REVIEW_MAX_FILES));
+  const discovered = await globFilesForBrain(rootPath, '**/*', offset + maxFiles * 2);
+  const candidates = discovered.filter(isLikelyBrainReviewText).slice(offset, offset + maxFiles);
+  const loaded = await Promise.all(candidates.map(async (path) => {
+    try {
+      const content = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, path) });
+      const text = typeof content === 'string' ? content : String(content ?? '');
+      if (text.includes('\u0000')) return null;
+      return { path, text };
+    } catch {
+      return null;
+    }
+  }));
+
+  let chars = 0;
+  let readCount = 0;
+  let truncated = false;
+  const sections: string[] = [];
+  for (const item of loaded) {
+    if (!item) continue;
+    if (chars >= BRAIN_REVIEW_TOTAL_CHARS) {
+      truncated = true;
+      break;
+    }
+    const remaining = BRAIN_REVIEW_TOTAL_CHARS - chars;
+    const content = item.text.slice(0, Math.min(BRAIN_REVIEW_FILE_CHARS, remaining));
+    const fileTruncated = content.length < item.text.length;
+    if (fileTruncated) truncated = true;
+    sections.push(`--- ${item.path}${fileTruncated ? ' (truncated)' : ''} ---\n${content}`);
+    chars += content.length;
+    readCount += 1;
+  }
+
+  const header = `For further files use glob_files with offset; for full file contents use read_file with start_line. Next review offset=${offset + readCount}. Broad project snapshot: read ${readCount} of ${candidates.length} relevant text file(s), ${chars} characters${truncated || discovered.length > candidates.length ? '. Some files were omitted or truncated for safety.' : '.'}`;
+  return [header, ...sections, 'Review this source before replying. Give the user the concrete findings and suggested changes in this same turn.'].join('\n\n').slice(0, BRAIN_REVIEW_TOTAL_CHARS);
+}
+
+// ─── Brain synchronous command runs (OpenCode `bash` parity) ────────────────
+
+export const BRAIN_RUN_POLL_MS = 300;
+export const BRAIN_RUN_DEFAULT_TIMEOUT_MS = 90_000;
+export const BRAIN_RUN_MAX_TIMEOUT_MS = 300_000;
+
+export interface BrainRunResult {
+  /** Process exit code. Null when the session closed first or no terminal. */
+  exitCode: number | null;
+  /** Raw PTY output since the command was sent (sentinel lines included). */
+  output: string;
+  /** True when the timeout fired before the completion sentinel arrived. */
+  timedOut: boolean;
+  elapsedMs: number;
+}
+
+/**
+ * Run one shell command for the brain and wait for it to finish, OpenCode-
+ * `bash`-style: exit code plus output, in the same turn.
+ *
+ * Reuses the sentinel protocol from `embeddedCommand`/`embeddedRun` (wrap the
+ * command so the shell echoes `__SPACRON_EMBEDDED_DONE_<token>_<code>__`, poll
+ * for it) but project-scoped: a dedicated HIDDEN session on this projectId /
+ * rootPath, killed the moment the command settles, so the user's visible
+ * terminals are never polluted and focus never moves. No toasts, no store
+ * chips — the result goes back to the model as tool output.
+ */
+export async function runBrainCommand(
+  projectId: string,
+  rootPath: string,
+  command: string,
+  timeoutMs: number = BRAIN_RUN_DEFAULT_TIMEOUT_MS,
+  signal?: AbortSignal,
+  onOutput?: (output: string) => void,
+): Promise<BrainRunResult> {
+  signal?.throwIfAborted();
+  const startedAt = Date.now();
+  const timeout = timeoutMs === 0 ? 0 : Number.isFinite(timeoutMs)
+    ? Math.max(1000, timeoutMs)
+    : BRAIN_RUN_DEFAULT_TIMEOUT_MS;
+  const elapsed = () => Date.now() - startedAt;
+  const isDev = get(layoutSnapshot).ambient === 'development';
+
+  let sessionId: number | null = null;
+  try {
+    sessionId = await createTerminalSession(rootPath || undefined, undefined, projectId, {
+      isDev,
+      assignPane: false,
+      hidden: true,
+    });
+  } catch {
+    sessionId = null;
+  }
+  if (sessionId == null) {
+    return { exitCode: null, output: '', timedOut: false, elapsedMs: elapsed() };
+  }
+  const sid: number = sessionId;
+  if (signal?.aborted) { await killSession(sid); signal.throwIfAborted(); }
+
+  const wrapper = buildEmbeddedCommand(command, detectShellKind());
+  const outputStart = getSessionOutputLength(sid);
+  sendPromptToSession(sid, wrapper.text);
+
+  try {
+    return await new Promise<BrainRunResult>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const finish = (partial: Omit<BrainRunResult, 'elapsedMs'>) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearInterval(timer);
+        if (killer) clearTimeout(killer);
+        signal?.removeEventListener('abort', abort);
+        unlisten();
+        resolve({ ...partial, elapsedMs: elapsed() });
+      };
+      const unlisten = onSessionExit((info) => {
+        if (info.sessionId === sid) {
+          finish({ exitCode: null, output: getSessionOutputSince(sid, outputStart), timedOut: false });
+        }
+      });
+      const abort = () => finish({ exitCode: null, output: getSessionOutputSince(sid, outputStart), timedOut: false });
+      const killer = timeout ? setTimeout(() => {
+        finish({ exitCode: null, output: getSessionOutputSince(sid, outputStart), timedOut: true });
+      }, timeout) : null;
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) { abort(); return; }
+      timer = setInterval(() => {
+        const output = getSessionOutputSince(sid, outputStart);
+        onOutput?.(output);
+        const exitCode = parseEmbeddedExitCode(output, wrapper.match);
+        if (exitCode !== null) {
+          finish({ exitCode, output, timedOut: false });
+        }
+      }, BRAIN_RUN_POLL_MS);
+    });
+  } finally {
+    try {
+      await killSession(sid);
+    } catch {
+      // Session already gone (or a mocked kill) — the result stands.
+    }
+  }
+}
+
+/** Drop the sentinel protocol lines (typed echo + executed echo) from a run. */
+function stripBrainRunSentinels(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !line.includes(EMBEDDED_DONE_PREFIX))
+    .join('\n');
+}
+
+/**
+ * Render a finished brain run as compact tool output: status header plus the
+ * ANSI-stripped tail, capped for the model prompt. Pure — unit-tested.
+ */
+export function formatBrainRunResult(command: string, result: BrainRunResult): string {
+  const secs = (result.elapsedMs / 1000).toFixed(1);
+  const status = result.timedOut
+    ? `TIMEOUT after ${secs}s (no completion — narrow the command or raise timeout_s)`
+    : result.exitCode === null
+      ? `SESSION CLOSED after ${secs}s before the command completed`
+      : `exit ${result.exitCode} in ${secs}s`;
+  const body = stripBrainRunSentinels(captureTranscript(result.output, BRAIN_TOOL_OUTPUT_CAP)).trim() || '(no output)';
+  return `${status}: \`${command.slice(0, 200)}\`\n${body}`.slice(0, BRAIN_TOOL_OUTPUT_CAP + 256);
+}
+
+/**
  * Talk to the orchestrator. Appends the user message, asks the brain how to
  * route it (LLM when configured, heuristic otherwise), replies, and — when the
  * brain decides to act — creates a task and launches the chosen agent.
@@ -3027,55 +3600,306 @@ function declarativeReply(actions: OrchestratorAction[], reply: string): string 
  * confirmation hold. If the user should be asked first, the brain asks with an
  * empty actions array and acts on the next turn.
  */
+const brainApprovals = new Map<string, (approved: boolean) => void>();
+/** Short-lived per-root project-tree cache so consecutive turns skip the FS walk. */
+const projectTreeCache = new Map<string, { tree: string; builtAt: number }>();
+/**
+ * Test hook: clear per-turn module caches (project-tree TTL cache, message
+ * queues, drain locks) so tests with different FS mocks for the same root
+ * never inherit a previous test's cached tree.
+ */
+export function resetOrchestratorCachesForTests(): void {
+  projectTreeCache.clear();
+  chatQueues.clear();
+  drainingChatThreads.clear();
+  chatMessageQueues.set({});
+}
+const answeringChatRequests = new Set<string>();
+interface BrainJob { owner: string; controller: AbortController; output: string; result?: BrainRunResult; error?: string }
+const brainJobs = new Map<string, BrainJob>();
+const activeBrainTurns = new Map<string, AbortController>();
+export function stopChatTurn(threadId: string): void {
+  activeBrainTurns.get(threadId)?.abort();
+  for (const job of brainJobs.values()) if (job.owner === threadId && !job.result) job.controller.abort();
+  clearChatTurnTicker(threadId);
+}
+
+// ─── Chat message queue ────────────────────────────────────────────────────
+// Sending while a turn runs ENQUEUES instead of dropping the message: FIFO
+// order, one turn at a time, drained automatically. Any queued message can be
+// promoted to the front AND interrupt the running turn — that is steering.
+
+export interface QueuedChatMessage {
+  id: string;
+  projectId: string;
+  rootPath: string;
+  text: string;
+  ts: number;
+  opts: SendChatOpts;
+}
+
+/** Live queue snapshots per thread, for the composer's queued-messages UI. */
+export const chatMessageQueues = writable<Record<string, QueuedChatMessage[]>>({});
+
+const chatQueues = new Map<string, QueuedChatMessage[]>();
+const drainingChatThreads = new Set<string>();
+
+function notifyChatQueueListeners(threadId: string): void {
+  chatMessageQueues.update((all) => {
+    const queue = chatQueues.get(threadId) ?? [];
+    if (!queue.length) {
+      if (!(threadId in all)) return all;
+      const { [threadId]: _dropped, ...rest } = all;
+      return rest;
+    }
+    return { ...all, [threadId]: [...queue] };
+  });
+}
+
+/** Snapshot of what is still waiting to run in a thread. */
+export function getQueuedChatMessages(threadId: string): QueuedChatMessage[] {
+  return [...(chatQueues.get(threadId) ?? [])];
+}
+
+/** Drop one queued message (the user removed it before it ran). */
+export function removeQueuedChatMessage(threadId: string, id: string): void {
+  const queue = chatQueues.get(threadId);
+  if (!queue) return;
+  chatQueues.set(threadId, queue.filter((entry) => entry.id !== id));
+  notifyChatQueueListeners(threadId);
+}
+
+/** Move one queued message to the front of the queue (answer it next). */
+export function promoteQueuedChatMessage(threadId: string, id: string): void {
+  const queue = chatQueues.get(threadId);
+  const index = queue?.findIndex((entry) => entry.id === id) ?? -1;
+  if (!queue || index <= 0) return;
+  const [entry] = queue.splice(index, 1);
+  queue.unshift(entry);
+  notifyChatQueueListeners(threadId);
+}
+
+/**
+ * Steering: answer THIS message next even though a turn is already running.
+ * Moves the queued message to the front and stops the in-flight turn, so the
+ * drain loop starts the steered message immediately.
+ */
+export function steerQueuedChatMessage(threadId: string, id: string): void {
+  promoteQueuedChatMessage(threadId, id);
+  if (activeBrainTurns.has(threadId)) stopChatTurn(threadId);
+}
+
+async function drainChatQueue(threadId: string): Promise<void> {
+  if (!threadId || drainingChatThreads.has(threadId)) return;
+  drainingChatThreads.add(threadId);
+  try {
+    for (;;) {
+      const queue = chatQueues.get(threadId);
+      const next = queue?.shift();
+      notifyChatQueueListeners(threadId);
+      if (!next) break;
+      if (!getChatThread(threadId)) {
+        chatQueues.delete(threadId);
+        notifyChatQueueListeners(threadId);
+        break;
+      }
+      try {
+        await sendChatMessage(next.projectId, next.rootPath, next.text, next.opts);
+      } catch (error) {
+        console.error('Queued chat turn failed:', error);
+      }
+    }
+  } finally {
+    drainingChatThreads.delete(threadId);
+  }
+}
+
+/**
+ * Send a chat message through the queue: while a turn runs (or other messages
+ * are waiting), the message joins the queue and runs in order; otherwise it
+ * starts immediately. Returns the queue entry so the UI can offer steering.
+ */
+export async function enqueueChatMessage(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  opts: SendChatOpts,
+): Promise<QueuedChatMessage | null> {
+  const trimmed = text.trim();
+  if (!trimmed || !projectId) return null;
+  const threadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
+  const busy = (threadId && drainingChatThreads.has(threadId)) || (threadId && activeBrainTurns.has(threadId));
+  const entry: QueuedChatMessage = {
+    id: crypto.randomUUID(),
+    projectId,
+    rootPath,
+    text: trimmed,
+    ts: Date.now(),
+    opts,
+  };
+  if (threadId && busy) {
+    const queue = chatQueues.get(threadId) ?? [];
+    queue.push(entry);
+    chatQueues.set(threadId, queue);
+    notifyChatQueueListeners(threadId);
+    return entry;
+  }
+  await drainChatQueueWith(entry, threadId);
+  return entry;
+}
+
+async function drainChatQueueWith(first: QueuedChatMessage, threadId: string | undefined): Promise<void> {
+  if (threadId) {
+    chatQueues.set(threadId, [first, ...(chatQueues.get(threadId) ?? [])]);
+    notifyChatQueueListeners(threadId);
+    await drainChatQueue(threadId);
+    return;
+  }
+  // No thread (legacy project-level chat): run inline as before.
+  try {
+    await sendChatMessage(first.projectId, first.rootPath, first.text, first.opts);
+  } catch (error) {
+    console.error('Chat turn failed:', error);
+  }
+}
+
+
 export async function sendChatMessage(
   projectId: string,
   rootPath: string,
   text: string,
-  opts?: {
-    projectName?: string;
-    forcedAgent?: string;
-    voiceConversation?: boolean;
-    panelTaskId?: string;
-    threadId?: string;
-    /** Agent provider alias, e.g. `codex` or `cursor-agent`. */
-    provider?: string;
-    model?: string;
-    /** Keep the selected agent session alive and project its replies into Chat. */
-    chatMode?: boolean;
-    attachments?: ChatAttachment[];
-  }
+  opts?: SendChatOpts,
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed || !projectId) return;
 
   const chatThreadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
   const chatThread = chatThreadId ? getChatThread(chatThreadId) : null;
-  const chatMode = opts?.chatMode === true || Boolean(chatThread?.provider && isChatAgentProvider(chatThread.provider));
+  if (opts?.threadId && (!chatThread || chatThread.projectId !== projectId)) return;
+  if (chatThreadId) clearChatTurnTicker(chatThreadId);
+
+  // Resend-after-edit: logically the transcript already ends at the edited
+  // bubble — everything from the anchor onwards is stale and will be replaced
+  // by this turn. Reads below use the pre-anchor snapshot so routing decisions
+  // (pending inputs, follow-up vs fresh turn) ignore the discarded tail, while
+  // the physical removal is deferred to `applyResendTruncation`, which always
+  // runs synchronously back-to-back with the new turn's appends so the UI
+  // paints the swap in a single frame instead of flashing the shrunken
+  // transcript first (the composer jumping up and back down).
+  const resendAnchorId = chatThreadId ? opts?.resendFromMessageId : undefined;
+  const preResendSnapshot = chatThreadId ? getThreadMessageSnapshot(chatThreadId) : [];
+  const resendAnchorIndex = resendAnchorId
+    ? preResendSnapshot.findIndex((message) => message.id === resendAnchorId)
+    : -1;
+  const resendAnchor = resendAnchorIndex >= 0 ? preResendSnapshot[resendAnchorIndex] : null;
+  const resendActive = Boolean(
+    resendAnchor && resendAnchor.role === 'user' && resendAnchor.text.trim() !== trimmed,
+  );
+  // Reads elsewhere in this turn see the transcript as if the stale tail were
+  // already gone (no physical removal yet — that stays deferred for atomicity).
+  const readSnapshot = resendActive ? preResendSnapshot.slice(0, resendAnchorIndex) : preResendSnapshot;
+  let resendApplied = false;
+  function applyResendTruncation(): void {
+    if (resendApplied || !resendActive || !chatThreadId || !resendAnchorId) return;
+    resendApplied = true;
+    const truncation = removeThreadMessagesFrom(chatThreadId, resendAnchorId);
+    if (!truncation) return;
+    const removedIds = new Set(truncation.removedIds);
+    chatMessages.update((all) => {
+      const list = all[projectId] ?? [];
+      if (!list.some((message) => removedIds.has(message.id))) return all;
+      return { ...all, [projectId]: list.filter((message) => !removedIds.has(message.id)) };
+    });
+  }
+
+  const pendingInput = readSnapshot
+    .slice().reverse().find((message) => message.inlineRequest && !message.inlineRequest.answeredAt);
+  if (pendingInput?.inlineRequest?.id.startsWith('brain-approval-')) {
+    const resolve = brainApprovals.get(pendingInput.inlineRequest.id);
+    if (resolve) {
+      applyResendTruncation();
+      appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
+      markInlineRequestAnswered(projectId, pendingInput.id, trimmed);
+      resolve(trimmed === 'Approve');
+    } else {
+      patchChat(projectId, pendingInput.id, { inlineRequest: null, pending: false, type: 'failure', text: 'This approval expired when the app restarted. Send the original request again; no pending operation was executed.' });
+    }
+    return;
+  }
+  const conversationalMode = opts?.conversationalMode === true || opts?.voiceConversation === true;
+  const chatMode = opts?.chatMode === true
+    || opts?.conversationalMode === true
+    || Boolean(chatThread?.provider && isChatAgentProvider(chatThread.provider));
+
   const threadTask = chatThreadId
     ? (() => {
-        const thread = getChatThread(chatThreadId);
-        return thread?.taskId
-          ? get(orchestratorTasks).find((task) => task.id === thread.taskId) ?? null
+    const thread = getChatThread(chatThreadId);
+        const taskId = pendingInput?.inlineRequest?.taskId ?? thread?.taskId;
+        return taskId
+          ? get(orchestratorTasks).find((task) => task.id === taskId && task.projectId === projectId) ?? null
           : null;
       })()
     : null;
   if (
+    chatMode &&
     chatThreadId &&
     threadTask &&
+    (!pendingInput || Boolean(pendingInput.inlineRequest?.taskId)) &&
     ((threadTask.status === 'in-progress' && threadTask.assignedSessionId != null) || threadTask.status === 'blocked')
   ) {
-    await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode, opts?.attachments ?? []);
+    // The stale tail (if any) goes first so the follow-up's own appends land
+    // on the already-truncated transcript in the same frame.
+    applyResendTruncation();
+    // Answering a Composer needs-input card for this thread marks it answered.
+    const pendingInput = (getThreadMessageSnapshot(chatThreadId) ?? [])
+      .slice()
+      .reverse()
+      .find((message) =>
+        (message.type === 'approval' || message.type === 'input')
+        && message.inlineRequest
+        && !message.inlineRequest.answeredAt,
+      );
+    if (answeringChatRequests.has(chatThreadId)) return;
+    answeringChatRequests.add(chatThreadId);
+    try {
+      await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode, opts?.attachments ?? [], pendingInput?.id);
+    } finally { answeringChatRequests.delete(chatThreadId); }
     return;
   }
 
-  const access = await detectAgentAccess();
+  // An inline request that holds no context — the brain's clarifying question,
+  // or an agent-input card whose task was cancelled meanwhile — is answered
+  // simply by sending the reply: mark it answered so the card closes, then
+  // route the answer as a fresh turn below. Reads the pre-anchor snapshot so a
+  // stale request in the discarded tail is never treated as the live one.
+  const unheldPendingInput = readSnapshot
+    .slice()
+    .reverse()
+    .find((message) =>
+      (message.type === 'approval' || message.type === 'input')
+      && message.inlineRequest
+      && !message.inlineRequest.answeredAt,
+    );
+  if (unheldPendingInput?.inlineRequest) {
+    markInlineRequestAnswered(projectId, unheldPendingInput.id, trimmed);
+  }
+
+  // Recheck the selected connection against the OS keychain for every Chat
+  // turn. The startup cache is for UI responsiveness; it must not decide that
+  // a key saved during/after startup is missing and prevent ai_complete from
+  // ever reaching the Rust-side resolver.
+  const access = await detectAgentAccess({
+    fresh: true,
+    preferredProvider: opts?.orchestratorProvider,
+  });
   if (!access.ready) {
     const blockedAttachments = opts?.attachments ?? [];
+    applyResendTruncation();
     appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments: blockedAttachments }, chatThreadId);
     appendChat(projectId, {
       id: msgId(),
       role: 'assistant',
-      text: getAgentAccessBlockedMessage(),
+      text: access.message || getAgentAccessBlockedMessage(),
       ts: Date.now(),
     }, chatThreadId);
     return;
@@ -3089,27 +3913,47 @@ export async function sendChatMessage(
       // Task-panel context is helpful but must never block dispatch.
     }
   }
-  const recentUserMessages = (get(chatMessages)[projectId] ?? [])
-    .filter((m) => !m.pending && m.role === 'user')
+  // Atomic swap point for resends: discard the stale tail and append the new
+  // turn's messages with no await between, so the transcript paints once.
+  applyResendTruncation();
+  const conversation = (chatThreadId
+    ? getThreadMessageSnapshot(chatThreadId)
+    : (get(chatMessages)[projectId] ?? []))
+    .filter((m) => !m.pending && m.type !== 'activity')
+    .map((m) => ({ role: m.role, text: m.text || m.completion?.summary || m.completion?.reason || '' })).slice(-12);
+  const recentUserMessages = conversation
+    .filter((m) => m.role === 'user')
     .map((m) => m.text)
     .slice(-6);
   const taskMemory = buildProjectTaskMemory(projectId);
   const taskPanel = getProjectTaskPanelLines(projectId);
   const mailboxLines = getMailboxLines(projectId);
   const knowledgeLines = getKnowledgeLines(projectId);
-  // The routing brain remains on the configured app LLM. Chat provider/model
-  // selections belong to the agent adapter and must never be interpreted as
-  // OpenAI/Anthropic-style API provider ids.
-  const llmConfig = getConversationLlmConfig();
+  const llmConfig = await resolveConversationLlmConfig({
+    provider: opts?.orchestratorProvider,
+    model: opts?.orchestratorModel,
+    sessionId: chatThreadId,
+  });
 
   const attachments = opts?.attachments ?? [];
   const promptText = buildAttachmentPrompt(trimmed, attachments);
+  if (chatThreadId) {
+    clearChatTurnTicker(chatThreadId);
+  }
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments }, chatThreadId);
   const assistantId = msgId();
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, chatThreadId);
 
   let result: RouteResult;
-  const selectedAgent = opts?.provider?.trim() || opts?.forcedAgent;
+  // Multi-step progress evidence: every completed tool round feeds the live
+  // progress line and, at turn end, the completion-summary card (Phase 3/4).
+  // Cleared per turn so a summary never folds a previous turn's evidence in.
+  let turnEvidence: BrainToolResult[] = [];
+  let turnTodos: ChatTurnTodoItem[] = [];
+  const legacyProviderAgent = opts?.provider && isChatAgentProvider(opts.provider)
+    ? opts.provider.trim()
+    : undefined;
+  const selectedAgent = opts?.forcedAgent || legacyProviderAgent;
   const forced = selectedAgent && selectedAgent !== 'auto'
     ? agents.find((a) => a.command === selectedAgent)
     : null;
@@ -3120,54 +3964,624 @@ export async function sendChatMessage(
       viaLLM: false,
     };
   } else {
+    // Route, but let the brain read project files it asks for before acting: the
+    // LLM answers PROJECT questions itself ("how is auth wired?") by requesting
+    // the relevant files, and we fetch them and re-route — bounded to a couple
+    // of rounds so a read-happy model can't stall the turn. A compact project
+    // tree is always included so the brain can pick exact paths on the first try.
+    const routeWithProjectReads = async (): Promise<RouteResult> => {
+      const turnKey = chatThreadId ?? projectId;
+      if (activeBrainTurns.has(turnKey)) return { reply: 'A turn is already running in this conversation. Stop it before starting another.', actions: [], viaLLM: false, failed: true };
+      const controller = new AbortController();
+      activeBrainTurns.set(turnKey, controller);
+      const checkActive = () => {
+        if (chatThreadId && !getChatThread(chatThreadId)) controller.abort();
+        controller.signal.throwIfAborted();
+      };
+      const MAX_READ_ROUNDS = 3;
+      const projectReads: Array<{ path: string; content: string; truncated: boolean }> = [];
+      const MAX_TURN_EVIDENCE_RESULTS = 400;
+      turnTodos = [];
+      const recordTurnProgress = (results: BrainToolResult[]): void => {
+        turnEvidence = results.slice(-MAX_TURN_EVIDENCE_RESULTS);
+        // Progress surfaces are the live ticker above the composer and the
+        // Work details rows; the assistant bubble stays clean for the final
+        // answer instead of flickering a transient "Read grep_code: …" line.
+        if (!chatThreadId) return;
+        if (turnTodos.length) {
+          const advanced = advanceTodoItems(turnTodos, results);
+          if (advanced.changed) {
+            turnTodos = advanced.todos;
+            advanceChatTurnTicker(chatThreadId, turnTodos);
+          }
+        }
+      };
+      // A model can emit the same read several times in one tool batch. Keep
+      // one in-flight/result promise per stable project-read request so the
+      // filesystem and activity timeline reflect the actual work performed,
+      // rather than one activity per duplicate call.
+      const projectReadCache = new Map<string, Promise<{ output: string; actions?: OrchestratorAction[] }>>();
+      let projectTree: string | null = null;
+      let readRounds = 0;
+      let mutationDeclined = false;
+      // One-shot guard for the authoritative-plan contract: a later
+      // update_todos that silently drops unfinished work is sent back once for
+      // the complete list, and never a second time (see the update_todos case).
+      let planResendRequested = false;
+      // Tool executor: the brain's tool_calls land here. Reads push into
+      // projectReads too so the final turn keeps its source context.
+      // Write tools (write_file/edit_file) are the coordinator fast-path for
+      // SURGICAL changes only — jailed to the project root by the backend's
+      // require_in_roots, plus repo-relative sanitising here. run_command
+      // queues a VISIBLE terminal run (async); wait_for_agent is the
+      // monitor-loop read (WORKING/BLOCKED/COMPLETE) so the brain never
+      // infers done-ness from terminal silence.
+      const executeTool = async (call: BrainToolCall): Promise<{ output: string; actions?: OrchestratorAction[] }> => {
+        switch (call.name) {
+          case 'read_project': {
+            if (!rootPath) return { output: 'error: no active project.' };
+            const maxFiles = toolArgNum(call.args, 'max_files', 80);
+            try {
+              return { output: await readProjectForBrain(rootPath, maxFiles, toolArgNum(call.args, 'offset', 0)) };
+            } catch (error) {
+              return { output: `error: project review read failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'read_file': {
+            const path = sanitiseBrainRepoPath(toolArgStr(call.args, 'path'));
+            if (!path || !rootPath) return { output: 'error: provide a repo-relative path in the active project.' };
+            const content = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, path) });
+            return { output: `${path}\n${filePage(content, toolArgNum(call.args, 'start_line', 1), toolArgNum(call.args, 'line_count', 200), toolArgNum(call.args, 'start_char', 0))}` };
+          }
+          case 'read_tool_result': {
+            const id = toolArgStr(call.args, 'id');
+            const saved = chatThreadId ? getChatThread(chatThreadId)?.agentCheckpoint?.results.slice().reverse().find(r => r.id === id) : undefined;
+            if (!saved) return { output: 'error: result not found in this conversation.' };
+            const offset = toolArgNum(call.args, 'offset', 0);
+            const next = offset + 12000;
+            return { output: `${saved.output.slice(offset, next)}\n${next < saved.output.length ? `Continue: offset=${next}` : 'End of result'}` };
+          }
+          case 'glob_files': {
+            const pattern = toolArgStr(call.args, 'pattern');
+            if (!pattern) return { output: 'error: missing "pattern" argument.' };
+            if (!rootPath) return { output: 'error: no active project.' };
+            const max = Math.max(1, Math.min(toolArgNum(call.args, 'max', 20), 50));
+            try {
+              const offset = toolArgNum(call.args, 'offset', 0);
+              const all = await globFilesForBrain(rootPath, pattern, offset + max + 1);
+              const hits = all.slice(offset, offset + max);
+              if (!hits.length) return { output: `No files match "${pattern}".` };
+              return { output: `Files matching "${pattern}" (${hits.length}):\n${hits.map((h) => `- ${h}`).join('\n')}${all.length > offset + max ? `\nContinue: offset=${offset + max}` : '\nEnd of results'}` };
+            } catch (error) {
+              return { output: `error: glob failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'grep_code': {
+            const query = toolArgStr(call.args, 'query');
+            if (!query) return { output: 'error: missing "query" argument.' };
+            if (!projectId) return { output: 'error: no active project.' };
+            try {
+              const res = await backendInvoke<{ files: Array<{ rel_path: string; matches: Array<{ line: number; column: number; text: string }> }>; total_matches: number; truncated: boolean }>('search_in_project', {
+                projectId,
+                query,
+                case_sensitive: toolArgBool(call.args, 'case_sensitive', false),
+                whole_word: toolArgBool(call.args, 'whole_word', false),
+                use_regex: toolArgBool(call.args, 'use_regex', false),
+                include_glob: toolArgStr(call.args, 'include_glob') || undefined,
+                offset: toolArgNum(call.args, 'offset', 0),
+                limit: Math.min(20, Math.max(1, toolArgNum(call.args, 'max', 20))),
+              });
+              if (!res.files.length) return { output: `No matches for "${query.slice(0, 80)}".` };
+              const lines: string[] = [];
+              for (const f of res.files) {
+                for (const m of f.matches) {
+                  lines.push(`- ${f.rel_path}:${m.line}:${m.column}: ${String(m.text ?? '').slice(0, 160)}`);
+                }
+              }
+              const tail = res.truncated ? `\nContinue: offset=${toolArgNum(call.args, 'offset', 0) + res.total_matches}` : '\nEnd of results';
+              return { output: `${res.total_matches} match(es) in ${res.files.length} file(s):\n${lines.join('\n')}${tail}`.slice(0, BRAIN_TOOL_OUTPUT_CAP) };
+            } catch (error) {
+              return { output: `error: search failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'write_file': {
+            const rawPath = toolArgStr(call.args, 'path');
+            const content = typeof call.args.content === 'string' ? call.args.content : null;
+            if (!rawPath) return { output: 'error: missing "path" argument.' };
+            if (content === null) return { output: 'error: missing "content" argument (full file text).' };
+            if (!rootPath) return { output: 'error: no active project.' };
+            const clean = sanitiseBrainRepoPath(rawPath);
+            if (!clean) return { output: `error: refusing path "${rawPath}" — repo-relative paths only, never outside the project or under .git.` };
+
+            try {
+              checkActive();
+              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content, expectedContent: typeof call.args.expected_content === 'string' ? call.args.expected_content : undefined });
+              return { output: `Wrote ${clean} (${content.length} chars).` };
+            } catch (error) {
+              return { output: `error: write failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'save_document': {
+            const content = typeof call.args.content === 'string' ? call.args.content : null;
+            if (content === null) return { output: 'error: missing "content" argument (full document text).' };
+            const requestedName = toolArgStr(call.args, 'filename');
+            const filename = requestedName || `spacron-document-${new Date().toISOString().slice(0, 10)}.md`;
+            if (!/^[^\\/:*?"<>|]+$/.test(filename) || filename === '.' || filename === '..') {
+              return { output: 'error: invalid filename; use a single filename without folders or path separators.' };
+            }
+            try {
+              checkActive();
+              const savedPath = await invoke<string>('save_document_file', { filename, content });
+              return { output: `Saved ${savedPath} (${content.length} chars).` };
+            } catch (error) {
+              return { output: `error: document save failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'edit_file': {
+            const rawPath = toolArgStr(call.args, 'path');
+            const oldStr = typeof call.args.old_string === 'string' ? call.args.old_string : '';
+            const newStr = typeof call.args.new_string === 'string' ? call.args.new_string : null;
+            if (!rawPath) return { output: 'error: missing "path" argument.' };
+            if (!oldStr) return { output: 'error: missing "old_string" argument (exact text to replace).' };
+            if (newStr === null) return { output: 'error: missing "new_string" argument (may be empty for deletion).' };
+            if (!rootPath) return { output: 'error: no active project.' };
+            const clean = sanitiseBrainRepoPath(rawPath);
+            if (!clean) return { output: `error: refusing path "${rawPath}" — repo-relative paths only, never outside the project or under .git.` };
+            try {
+              const current = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, clean) });
+              let count = 0;
+              let idx = current.indexOf(oldStr);
+              while (idx !== -1 && count < 3) {
+                count += 1;
+                idx = current.indexOf(oldStr, idx + oldStr.length);
+              }
+              if (count === 0) return { output: `error: old_string not found in ${clean} — re-read it and copy the exact text (whitespace included).` };
+              if (count > 1) return { output: `error: old_string matches ${count} times in ${clean} — include more surrounding lines so exactly one occurrence matches.` };
+              const next = current.replace(oldStr, newStr);
+              checkActive();
+              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content: next, expectedContent: current });
+              return { output: `Edited ${clean} (replaced ${oldStr.length} chars).` };
+            } catch (error) {
+              const msg = String(error ?? 'unknown');
+              if (msg.startsWith('error: old_string') || msg.startsWith('error: edit grows')) return { output: msg };
+              return { output: `error: edit failed: ${msg}` };
+            }
+          }
+          case 'run_command': {
+            const command = toolArgStr(call.args, 'command');
+            if (!command) return { output: 'error: missing "command" argument.' };
+
+            // Synchronous OpenCode-`bash` semantics: run hidden in the project
+            // shell and return exit code + output in THIS turn — no next-turn
+            // polling, no visible-terminal queue.
+            const background = toolArgBool(call.args, 'background', false);
+            const timeoutS = toolArgNum(call.args, 'timeout_s', background ? 0 : 90);
+            if (background) {
+              const id = crypto.randomUUID();
+              const job: BrainJob = { owner: turnKey, controller: new AbortController(), output: '' };
+              brainJobs.set(id, job);
+              void runBrainCommand(projectId, rootPath, command, timeoutS * 1000, job.controller.signal, output => { job.output = output; })
+                .then(result => { job.result = result; job.output = result.output; }, error => { job.error = String(error); });
+              return { output: `Started background command ${id}. Use command_status(id) until an exit code is available. It is not complete yet.` };
+            }
+            const res = await runBrainCommand(projectId, rootPath, command, timeoutS * 1000, controller.signal);
+            return { output: formatBrainRunResult(command, res) };
+          }
+          case 'command_status':
+          case 'cancel_command': {
+            const id = toolArgStr(call.args, 'id');
+            const job = brainJobs.get(id);
+            if (!job || job.owner !== turnKey) return { output: 'error: command not found in this conversation (it may have ended when the app closed). Inspect before restarting.' };
+            if (call.name === 'cancel_command') { job.controller.abort(); return { output: 'Cancellation requested.' }; }
+            if (!job.result && !job.error) await new Promise(resolve => setTimeout(resolve, 1000));
+            const offset = toolArgNum(call.args, 'offset', 0);
+            const output = stripBrainRunSentinels(captureTranscript(job.output, job.output.length));
+            const next = offset + 12000;
+            return { output: `${job.error ? `error: ${job.error}` : job.result ? formatBrainRunResult('', { ...job.result, output: '' }) : 'WORKING'}\n${output.slice(offset, next)}\n${next < output.length ? `Continue: offset=${next}` : 'End of current output'}` };
+          }
+          case 'wait_for_agent': {
+            const name = toolArgStr(call.args, 'name');
+            if (!name) return { output: 'error: missing "name" argument.' };
+            const outputs = getAgentOutputRefs(projectId);
+            const hit =
+              outputs.find((o) => (o.name ?? '').toLowerCase() === name.toLowerCase()) ??
+              outputs.find((o) => (o.name ?? '').toLowerCase().includes(name.toLowerCase())) ??
+              outputs.find((o) => o.agent.toLowerCase() === name.toLowerCase());
+            if (hit) {
+              const label = `"${hit.name ?? hit.agent}"`;
+              const tail = hit.recentOutput?.trim().slice(-1500) ?? '(no output captured yet)';
+              if (hit.status === 'in-progress') {
+                return { output: `WORKING: ${label} is still in progress on "${hit.title}". Latest output tail:\n${tail}\n\nSay briefly that it is still working and stop — the next turn re-checks. Do not report completion.` };
+              }
+              if (hit.status === 'blocked') {
+                return { output: `BLOCKED: ${label} is waiting on input for "${hit.title}".${hit.reason ? ` Reason: ${hit.reason}.` : ''} Output tail:\n${tail}\n\nRelay its question to the user via ask_question (target ${label}) and stop. Do not answer for it.` };
+              }
+              if (hit.status === 'complete') {
+                return { output: `COMPLETE: ${label} finished "${hit.title}". Result tail:\n${tail}` };
+              }
+              return { output: `${hit.status.toUpperCase()}: ${label} — "${hit.title}".${hit.reason ? ` Reason: ${hit.reason}.` : ''} Output tail:\n${tail}` };
+            }
+            const running = getRunningAgentRefs(projectId);
+            const live =
+              running.find((r) => (r.name ?? '').toLowerCase() === name.toLowerCase()) ??
+              running.find((r) => (r.name ?? '').toLowerCase().includes(name.toLowerCase()));
+            if (live) {
+              const latest = live.recentOutput?.trim().split('\n').filter(Boolean).pop() ?? '(no output yet)';
+              return { output: `WORKING: "${live.name ?? live.agent}" is live (${live.title}). Latest: ${latest.slice(0, 300)}` };
+            }
+            return { output: `error: no agent found named "${name}". Use list_agents to see who is running.` };
+          }
+          case 'ask_question': {
+            const question = toolArgStr(call.args, 'question');
+            const options = toolArgStrArr(call.args, 'options');
+            const target = toolArgStr(call.args, 'target');
+            if (!question) return { output: 'error: missing "question" argument.' };
+            const opt = options.length ? ` Options: ${options.join(' | ')}.` : '';
+            const tgt = target ? ` For ${target}.` : '';
+            return { output: `question noted — ending turn for user input.${tgt} Q: ${question.slice(0, 500)}${opt}` };
+          }
+          case 'list_terminals': {
+            const sessions = getTerminalProjectState(projectId).sessions.slice(0, 8);
+            if (!sessions.length) return { output: 'No terminals open.' };
+            return {
+              output: sessions
+                .map((s) => {
+                  const label = (s.agentName?.trim() || s.title || `Terminal ${s.id}`).slice(0, 40);
+                  const state = s.isRunning ? (s.isExecuting ? 'busy' : 'idle') : 'exited';
+                  return `- ${label} [${state}]${s.cwd ? ` cwd: ${String(s.cwd).slice(-48)}` : ''}`;
+                })
+                .join('\n'),
+            };
+          }
+          case 'list_agents': {
+            const running = getRunningAgentRefs(projectId);
+            const outputs = getAgentOutputRefs(projectId);
+            const lines: string[] = [];
+            if (running.length) {
+              lines.push(`Running (${running.length}):`);
+              for (const r of running.slice(0, 6)) {
+                lines.push(`- "${(r.name ?? r.agent).slice(0, 32)}" [${r.agent}] — ${r.title.slice(0, 100)}`);
+              }
+            } else lines.push('Running: none');
+            if (outputs.length) {
+              lines.push(`Recent status (${outputs.length}):`);
+              for (const o of outputs.slice(0, 6)) {
+                lines.push(`- "${(o.name ?? o.agent).slice(0, 32)}" [${o.status}] — ${o.title.slice(0, 100)}${o.reason ? ` (${o.reason.slice(0, 90)})` : ''}`);
+              }
+            }
+            return { output: lines.join('\n') };
+          }
+          case 'get_agent_output': {
+            const name = toolArgStr(call.args, 'name');
+            if (!name) return { output: 'error: missing "name" argument.' };
+            const outputs = getAgentOutputRefs(projectId);
+            const hit =
+              outputs.find((o) => (o.name ?? '').toLowerCase() === name.toLowerCase()) ??
+              outputs.find((o) => (o.name ?? '').toLowerCase().includes(name.toLowerCase()));
+            if (hit?.recentOutput?.trim()) {
+              return { output: `"${hit.name ?? hit.agent}" [${hit.status}] — ${hit.title}\n${hit.recentOutput.trim().slice(-3000)}` };
+            }
+            const read = readAgentTranscriptFor(projectId, name);
+            if (read?.text.trim()) return { output: `"${read.name}":\n${read.text.slice(-3000)}` };
+            return { output: `No output found for "${name}".` };
+          }
+          case 'update_todos': {
+            // The model SETS plan state here; the runtime records it rather
+            // than second-guessing content. It still enforces SHAPE: the list
+            // stays small and grouped (the tool contract asks for 3-6 items),
+            // so a disobedient model cannot flood the ticker with one row per
+            // sub-check. Items only count as finished in the final card when
+            // tool evidence exists (Phase 4 guard).
+            const entries = toolArgStrArr(call.args, 'todos');
+            if (!entries.length) return { output: 'error: missing "todos" argument (one entry per task).' };
+            const parsed = entries
+              .map((entry) => {
+                const { status, text } = todoMarkerStatus(entry);
+                const label = text.length > 120 ? `${text.slice(0, 119)}…` : text;
+                if (!label) return null;
+                return { label, done: todoIsDone(status, false), ...(status ? { status } : {}) } as ChatTurnTodoItem;
+              })
+              .filter((item): item is ChatTurnTodoItem => Boolean(item));
+            if (!parsed.length) return { output: 'error: every todo entry was empty after removing status markers.' };
+            let planNote = '';
+            if (chatThreadId) {
+              // The FIRST call of a turn establishes the authoritative plan.
+              // Once that plan has real shape, every later call must re-state
+              // it. A call that silently omits unfinished work is ambiguous —
+              // a paraphrase the matcher missed, a real removal, or a forgotten
+              // row — and guessing is what left the ticker with a partial plan
+              // that grew by one near-duplicate row at a time. So the runtime
+              // asks for the complete list instead. One-shot: the second
+              // offense falls through to the sticky merge below, so a stubborn
+              // model can cost a round but never deadlock the turn.
+              if (!planResendRequested) {
+                const omitted = findOmittedPlanItems(turnTodos, parsed);
+                if (omitted.length > 0) {
+                  planResendRequested = true;
+                  return { output: `error: this plan update omitted ${omitted.length} unfinished item(s) — ${omitted.map((o) => o.label).join('; ')}. The plan is authoritative: re-send the COMPLETE list, repeating every unfinished item and changing only its status markers.` };
+                }
+              }
+              // Sticky merge: the model re-announcing its plan must not churn
+              // the ticker or grow it with paraphrases — mergeTodoItems folds
+              // near-duplicate retellings into the existing row.
+              const mergedPlan = mergeTodoItems(turnTodos, parsed);
+              turnTodos = mergedPlan.todos;
+              setChatTurnTicker(chatThreadId, turnTodos);
+              if (mergedPlan.truncated) {
+                planNote = ` Note: the plan is at its ${MAX_PLAN_ITEMS}-item ceiling; finish or cancel items before adding more.`;
+              }
+            }
+            const inProgress = parsed.filter((item) => item.status === 'in_progress').length;
+            const hint = inProgress > 1 ? ' Note: keep exactly one item in_progress.' : '';
+            return { output: `Recorded ${parsed.length} todo items (${parsed.filter((i) => i.status === 'completed').length} completed).${hint}${planNote}` };
+          }
+          case 'ask_user':
+            return { output: 'question noted — ending turn for user input.' };
+          default:
+            return { output: `error: unknown tool "${(call as { name: string }).name}".` };
+        }
+      };
+      const executeToolWithActivity = async (call: BrainToolCall): Promise<{ output: string; actions?: OrchestratorAction[] }> => {
+        checkActive();
+        // update_todos mutates only turn-local plan state, not the workspace,
+        // so it is available in every profile and never needs approval.
+        const mutating = ['write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command'].includes(call.name);
+        if (call.name === 'update_todos') {
+          // Plan bookkeeping, not workspace work: its state renders live in
+          // the ticker, so it takes no transcript activity card.
+          return executeTool(call);
+        }
+        if (mutating && !rootPath) return { output: 'error: no active project directory.' };
+        if (mutating && mutationDeclined) return { output: 'error: user declined changes this turn. Stop; do not attempt an equivalent operation.' };
+        if (mutating && (opts?.accessMode ?? chatThread?.accessMode) !== 'full-access') {
+          if (!chatThreadId) return { output: 'error: this operation requires Full access or approval in Chat.' };
+          const approvalId = `brain-approval-${msgId()}`;
+          const messageId = msgId();
+          const approved = await new Promise<boolean>((resolve) => {
+            const timeout = setTimeout(() => finish(false), 10 * 60 * 1000);
+            const finish = (value: boolean) => {
+              clearTimeout(timeout);
+              brainApprovals.delete(approvalId);
+              patchChat(projectId, messageId, { inlineRequest: null, text: value ? 'Operation approved.' : 'Operation declined or approval expired.', pending: false });
+              resolve(value);
+            };
+            controller.signal.addEventListener('abort', () => finish(false), { once: true });
+            brainApprovals.set(approvalId, finish);
+            appendChat(projectId, { id: messageId, role: 'assistant', type: 'approval', text: '', ts: Date.now(),
+              inlineRequest: { id: approvalId, type: 'approval', prompt: `Allow this operation?\n\n${call.name}\n\n\`\`\`json\n${JSON.stringify(call.args, null, 2)}\n\`\`\``, options: [{ id: 'approve', label: 'Approve' }, { id: 'deny', label: 'Decline' }] } }, chatThreadId);
+          });
+          if (!approved || !getChatThread(chatThreadId)) {
+            mutationDeclined = true;
+            return { output: 'error: operation not approved. Do not retry it or execute an equivalent operation.' };
+          }
+        }
+        const activityId = msgId();
+        const label = `${call.name}: ${toolArgStr(call.args, 'path') || toolArgStr(call.args, 'command') || toolArgStr(call.args, 'query') || toolArgStr(call.args, 'name') || toolArgStr(call.args, 'pattern') || (call.name === 'read_project' ? 'active project' : '')}`;
+        appendChat(projectId, { id: activityId, role: 'assistant', type: 'activity', text: label, pending: true, ts: Date.now() }, chatThreadId);
+        try {
+          checkActive();
+          const result = await executeTool(call);
+          if (mutating) projectReadCache.clear();
+          const activityCap = call.name === 'read_project' ? BRAIN_REVIEW_OUTPUT_CAP : BRAIN_TOOL_OUTPUT_CAP;
+          patchChat(projectId, activityId, { text: `${label}\n\n${result.output.slice(0, activityCap)}`, pending: false });
+          if (chatThreadId) updateChatThread(chatThreadId, { status: 'working' });
+          return result;
+        } catch (error) {
+          patchChat(projectId, activityId, { text: `${label}\n\nFailed: ${String(error)}`, pending: false });
+          throw error;
+        }
+      };
+      const toolExecutor = async (call: BrainToolCall): Promise<{ output: string; actions?: OrchestratorAction[] }> => {
+        checkActive();
+        const cacheKey = ['read_project', 'read_file', 'glob_files', 'grep_code'].includes(call.name) ? `${call.name}:${JSON.stringify(call.args)}` : null;
+        if (!cacheKey) return executeToolWithActivity(call);
+        const cached = projectReadCache.get(cacheKey);
+        if (cached) return cached;
+        const execution = executeToolWithActivity(call);
+        projectReadCache.set(cacheKey, execution);
+        void execution.then(r => { if (r.output.startsWith('error:')) projectReadCache.delete(cacheKey); }, () => projectReadCache.delete(cacheKey));
+        return execution;
+      };
+      try {
+      while (true) {
+        checkActive();
+        if (projectTree === null) {
+          // Project trees rarely change between consecutive turns; cache the
+          // last walk per project root (30 s TTL) so a follow-up turn doesn't
+          // pay a fresh recursive directory scan before its first LLM call.
+          const cachedTree = projectTreeCache.get(rootPath);
+          if (cachedTree && Date.now() - cachedTree.builtAt < 30_000) {
+            projectTree = cachedTree.tree;
+          } else {
+            try {
+              projectTree = (await buildProjectTree(rootPath)).trim() || '(empty project)';
+            } catch {
+              projectTree = '(could not read project structure)';
+            }
+            projectTreeCache.set(rootPath, { tree: projectTree, builtAt: Date.now() });
+          }
+        }
+        const routed = await routeOrchestratorRequest(promptText, agents, {
+          projectName: opts?.projectName,
+          projectRoot: rootPath,
+          recentUserMessages,
+          conversation,
+          taskMemory,
+          taskPanel,
+          mailbox: mailboxLines,
+          knowledge: knowledgeLines,
+          runningAgents: getRunningAgentRefs(projectId),
+          reviewingAgents: getReviewableAgentRefs(projectId),
+          taskOutputs: getAgentOutputRefs(projectId),
+          readAgentTranscript: (request) => readAgentTranscriptFor(projectId, request),
+          profile: getProfileLines(projectId),
+          appState: getAppContextSnapshot(projectId, rootPath),
+          llmConfig,
+          conversational: conversationalMode,
+          projectTree,
+          projectReads,
+          documentsIndex: rootPath ? await readDocumentsIndexForBrain(rootPath) ?? undefined : undefined,
+          toolExecutor,
+          // Capability profile for this turn: chat threads inherit their access
+          // mode, and conversational/voice turns stay read-only by default.
+          // 'ask' removes every mutating tool from the turn physically.
+          toolProfile: ((): BrainMode => {
+            const mode = opts?.accessMode ?? chatThread?.accessMode;
+            if (mode === 'full-access' || mode === 'auto' || mode === 'auto-edits') return 'full';
+            if (conversationalMode) return 'ask';
+            // Default chat turns keep the brain's full toolkit (it is approval-
+            // gated per mutation); 'supervised'/'inherit' behave identically here.
+            return 'full';
+          })(),
+          onToolRound: (results) => recordTurnProgress(results),
+          // The turn's plan has exactly ONE surface: the live ticker above the
+          // composer, owned exclusively by the model's update_todos calls. The
+          // narration-derived plan card that used to sit in Work details is
+          // gone — it was a second, disagreeing copy of the same plan, and it
+          // is what overpopulated the list with near-duplicate retellings (the
+          // 24-item screenshot bug).
+          signal: controller.signal,
+          nativeTools: true,
+          checkpoint: chatThread?.agentCheckpoint ?? (chatThreadId ? await loadAgentCheckpoint(chatThreadId) : undefined),
+          budgets: chatThread?.agentBudgets,
+          saveCheckpoint: async state => { if (chatThreadId && getChatThread(chatThreadId)) { await saveAgentCheckpoint(chatThreadId, state, () => Boolean(getChatThread(chatThreadId))); updateChatThread(chatThreadId, { agentCheckpoint: state }); } },
+        });
+        if (rootPath && routed.readFiles?.length && readRounds < MAX_READ_ROUNDS) {
+          readRounds += 1;
+          patchChat(projectId, assistantId, { text: 'Reading the project files you asked about…' });
+          const reads = await readProjectFilesForContext(routed.readFiles, rootPath);
+          projectReads.push(...reads);
+          continue;
+        }
+        // Safety net: the FIRST routing pass answered with only a bare
+        // acknowledgement (no readFiles, no actions) to a substantive request —
+        // e.g. "go through the project and report back" came back as
+        // "Absolutely, I'll help you…" and nothing else. Auto-read high-signal
+        // project files and give it one more round with real source to
+        // summarize, so a promise is turned into an actual answer instead of a
+        // dead-ended reply. Only fires when nothing has been read yet: once the
+        // model is actively reading, it is already working the question.
+        if (
+          rootPath &&
+          projectTree &&
+          projectTree !== '(empty project)' &&
+          projectTree !== '(could not read project structure)' &&
+          readRounds === 0 &&
+          routed.actions.length === 0 &&
+          !routed.readFiles?.length &&
+          !routed.needsInput && (isPromiseOnlyReply(routed.reply) || isDeferredCompletionReply(routed.reply)) && !isConversationalChatter(promptText)
+        ) {
+          const overviewFiles = pickProjectOverviewFiles(projectTree.split('\n'));
+          const neverRead = overviewFiles.filter(
+            (path) => !projectReads.some((existing) => existing.path === path)
+          );
+          if (neverRead.length) {
+            readRounds += 1;
+            patchChat(projectId, assistantId, { text: `Reading the project files to answer you…` });
+            const reads = await readProjectFilesForContext(neverRead, rootPath);
+            projectReads.push(...reads);
+            continue;
+          }
+        }
+        if (!routed.actions.length && !routed.needsInput && (isPromiseOnlyReply(routed.reply) || isDeferredCompletionReply(routed.reply))) {
+          return { ...routed, reply: 'I could not complete that request: the model returned a promise instead of a result. Please retry.', failed: true };
+        }
+        return routed;
+      }
+      } finally { activeBrainTurns.delete(turnKey); }
+    };
     try {
-      result = await routeOrchestratorRequest(promptText, agents, {
-        projectName: opts?.projectName,
-        projectRoot: rootPath,
-        recentUserMessages,
-        taskMemory,
-        taskPanel,
-        mailbox: mailboxLines,
-        knowledge: knowledgeLines,
-        runningAgents: getRunningAgentRefs(projectId),
-        reviewingAgents: getReviewableAgentRefs(projectId),
-        taskOutputs: getAgentOutputRefs(projectId),
-        readAgentTranscript: (request) => readAgentTranscriptFor(projectId, request),
-        profile: getProfileLines(projectId),
-        appState: getAppContextSnapshot(projectId, rootPath),
-        llmConfig,
-        conversational: !!opts?.voiceConversation,
-      });
+      result = await routeWithProjectReads();
     } catch (err) {
-      console.error('Orchestrator routing error:', err);
-      result = { reply: 'Something went wrong routing that. Try again.', actions: [], viaLLM: false };
+      // A user stop (or queue-steering interrupt) aborts this signal on
+      // purpose: the turn ends silently instead of scaring the user with an
+      // error bubble, and the queue's drain loop starts the next message.
+      // throwIfAborted surfaces as AbortError; backend cancels mention abort too.
+      const aborted = String(err ?? '').toLowerCase().includes('abort');
+      if (aborted) {
+        result = { reply: '', actions: [], viaLLM: false, failed: true };
+        // The steered/stopped turn never answered: drop its empty pending
+        // bubble instead of leaving a blank row in the transcript.
+        removeThreadMessage(chatThreadId ?? '', assistantId);
+        if (chatThreadId) {
+          clearChatTurnTicker(chatThreadId);
+          updateChatThread(chatThreadId, { turnEndedAt: Date.now(), status: 'idle' as ChatThreadStatus });
+        }
+      } else {
+        console.error('Orchestrator routing error:', err);
+        result = { reply: 'Something went wrong routing that. Try again.', actions: [], viaLLM: false };
+        if (chatThreadId) {
+          clearChatTurnTicker(chatThreadId);
+          updateChatThread(chatThreadId, { turnEndedAt: Date.now() });
+        }
+      }
     }
   }
 
+  if (chatThreadId && !getChatThread(chatThreadId)) return;
   // Never pair executing actions with a "want me to?" reply — the actions run
   // right below, so the reply must state what's happening, not ask permission.
   if (result.actions.length) {
-    const selectedModel = opts?.model?.trim();
+    const selectedModel = selectedAgent ? opts?.model?.trim() : undefined;
     result = {
       ...result,
-      reply: declarativeReply(result.actions, result.reply),
+      reply: cleanOrchestratorReply(declarativeReply(result.actions, result.reply)),
       actions: selectedModel && selectedAgent
         ? result.actions.map((action) => action.kind === 'spawn' && action.agent === selectedAgent
           ? { ...action, model: selectedModel }
           : action)
         : result.actions,
     };
+  } else {
+    result = {
+      ...result,
+      reply: cleanOrchestratorReply(result.reply),
+    };
   }
 
-  patchChat(projectId, assistantId, { text: result.reply, pending: false });
+  // A steered/stopped turn leaves no error bubble behind: its pending row was
+  // already removed in the abort path above.
+  if (result.reply || result.actions.length || !result.failed) {
+    patchChat(projectId, assistantId, { text: result.reply, pending: false });
+    if (chatThreadId) moveThreadMessageToEnd(chatThreadId, assistantId);
+  }
+  if (result.failed && chatThreadId) updateChatThread(chatThreadId, { status: 'failed' });
 
-  // ── Placement gate: isolated worktree or main repo? ────────────────────────
-  // Asked before ANY terminal is leased, on every dispatch that spawns. An agent
-  // working inside an isolated worktree leaves the main checkout untouched, so
-  // deciding this silently is how a user loses track of where the work went.
-  // The dialog answers PER AGENT — a three-agent plan can put one in the main
-  // repo and isolate the other two. Dismissing cancels the spawns only;
-  // send/name/close actions in the same plan still run.
+  // Clarifying questions in conversational mode surface above the Composer.
+  if (
+    conversationalMode
+    && chatThreadId
+    && !opts?.voiceConversation
+    && result.actions.length === 0
+    && looksLikeBlockingQuestion(result.reply, result.needsInput === true)
+  ) {
+    const inlineRequest: ChatInlineRequest = {
+      id: `clarify-${assistantId}`,
+      type: result.inputRequest?.options.length ? 'choice' : 'text',
+      prompt: result.inputRequest?.question ?? result.reply,
+      options: result.inputRequest?.options.map((label, index) => ({ id: String(index + 1), label })),
+      taskId: result.inputRequest?.target ? resolveRunningTaskByName(projectId, result.inputRequest.target)?.id : undefined,
+      sessionId: result.inputRequest?.target ? resolveRunningTaskByName(projectId, result.inputRequest.target)?.assignedSessionId : undefined,
+      placeholder: 'Type your answer…',
+    };
+    patchChat(projectId, assistantId, {
+      type: 'input',
+      inlineRequest,
+    });
+    updateChatThread(chatThreadId, {
+      status: 'needs-input',
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
+    return;
+  }
+
+  // ── Placement: explicit in the request, or the focused placement dialog ───
+  // Placement is important information whenever the orchestrator is about to
+  // start an agent: it changes where edits land and whether parallel work is
+  // safe. Ask in text Chat as well as the legacy CLI path, while preserving
+  // explicit placement the user already stated in their request. Voice keeps
+  // its spoken question below because a modal cannot be used hands-free.
   const plannedSpawns = result.actions.filter(
     (action): action is Extract<OrchestratorAction, { kind: 'spawn' }> => action.kind === 'spawn'
   );
@@ -3180,6 +4594,10 @@ export async function sendChatMessage(
 
   let askedPlacements: AgentPlacement[] | null = null;
   let spawnsAllowed = true;
+
+  const adminSpawn = undecidedSpawns.some(
+    (action) => action.skipWorktree === true || (!!action.prompt && ADMIN_KEYWORD_RE.test(action.prompt))
+  );
 
   if (undecidedSpawns.length && opts?.voiceConversation) {
     // Voice is hands-free: a modal nobody can click would strand the whole
@@ -3199,9 +4617,9 @@ export async function sendChatMessage(
   } else if (undecidedSpawns.length) {
     // The admin/release heuristic no longer decides — it only pre-selects "Main
     // repo" and explains why, since git tag/push can't work from a worktree.
-    const adminSpawn = undecidedSpawns.some(
-      (action) => action.skipWorktree === true || (!!action.prompt && ADMIN_KEYWORD_RE.test(action.prompt))
-    );
+    // This same focused question is used by conversational Chat. That keeps
+    // normal messages friction-free while preventing a hidden worktree default
+    // from breaking projects that are not Git repositories (or have no commit).
     askedPlacements = await requestAgentPlacement({
       agents: undecidedSpawns.map(agentLabel),
       source: 'orchestrator',
@@ -3209,6 +4627,8 @@ export async function sendChatMessage(
       suggestionReason: adminSpawn
         ? 'This reads like a release or admin task (tagging, pushing, version bumps). Those need the main branch, because git tag and push do not work from a worktree.'
         : null,
+      projectId,
+      threadId: chatThreadId,
     });
     if (!askedPlacements) {
       spawnsAllowed = false;
@@ -3218,6 +4638,165 @@ export async function sendChatMessage(
       showToast('Spawn cancelled', 'info', 2500);
     }
   }
+
+  await executeRoutedOrchestratorPlan({
+    projectId,
+    rootPath,
+    result,
+    assistantId,
+    chatThreadId,
+    chatMode,
+    conversationalMode,
+    opts: opts ?? {},
+    askedPlacements,
+    spawnsAllowed,
+    userMessage: trimmed,
+    llmConfig,
+    selectedAgent: selectedAgent ?? undefined,
+    turnEvidence,
+    turnTodos,
+  });
+}
+
+/**
+ * Resend an edited user bubble in place: the edited bubble keeps its position,
+ * everything from it onwards (the stale reply plus any later turns built on
+ * it) is discarded, and a fresh turn runs from the edited text. The new
+ * response therefore overwrites the previous response instead of appearing
+ * alongside a duplicate user message at the end of the transcript.
+ *
+ * The actual removal happens inside `sendChatMessage` (via `resendFromMessageId`),
+ * atomically with the new turn's appends, so the transcript never paints the
+ * shrunken intermediate state. Returns how many later messages were discarded,
+ * or null when the resend did not run (unknown thread/message, non-user
+ * message, or empty/unchanged text).
+ */
+export async function resendEditedChatMessage(
+  projectId: string,
+  rootPath: string,
+  threadId: string,
+  messageId: string,
+  newText: string,
+  opts?: SendChatOpts,
+): Promise<{ removedLaterCount: number } | null> {
+  const trimmed = newText.trim();
+  if (!trimmed || !projectId) return null;
+  const thread = getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return null;
+  const snapshot = getThreadMessageSnapshot(threadId);
+  const index = snapshot.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+  const original = snapshot[index];
+  if (original.role !== 'user') return null;
+  if (trimmed === original.text.trim()) return null;
+
+  const attachments = opts?.attachments
+    ?? (original as { attachments?: ChatAttachment[] }).attachments?.map(({ previewUrl: _preview, ...rest }) => rest)
+    ?? [];
+
+  await sendChatMessage(projectId, rootPath, trimmed, {
+    ...opts,
+    threadId,
+    attachments,
+    resendFromMessageId: messageId,
+  });
+  return { removedLaterCount: Math.max(0, snapshot.length - 1 - index) };
+}
+
+/**
+ * A chat turn whose brain work was interrupted (Stop, reload, crash) leaves an
+ * execution checkpoint behind. This reports whether that checkpoint is stale:
+ * a checkpoint exists AND no brain turn is currently active for the thread.
+ * While a turn runs, the checkpoint is the live loop's state, not debris —
+ * offering resume then would fight the running turn.
+ */
+export function hasResumableTurn(threadId: string): boolean {
+  const thread = getChatThread(threadId);
+  return Boolean(
+    thread?.agentCheckpoint
+    && thread.agentCheckpoint.exchanges.length > 0
+    // A checkpoint saved by a turn that ENDED normally is conversation
+    // memory, not interrupted work. Only a turn that failed, was stopped,
+    // or never reached its end (reload/crash) leaves a resumable checkpoint.
+    && !thread.turnEndedAt
+    && thread.status !== 'needs-input'
+    && !activeBrainTurns.has(threadId)
+  );
+}
+
+/**
+ * Continue interrupted orchestrator work: re-enters the normal chat pipeline
+ * with an explicit user message. The transport constructor accepts the saved
+ * checkpoint, so the model sees its own prior exchanges and tool evidence;
+ * pending mutations were already converted to "outcome unknown — do not
+ * replay" at checkpoint load, so resume cannot duplicate them.
+ */
+export async function resumeOrchestratorTurn(
+  projectId: string,
+  rootPath: string,
+  threadId: string,
+  opts?: SendChatOpts,
+): Promise<void> {
+  const thread = getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return;
+  if (!hasResumableTurn(threadId)) return;
+  updateChatThread(threadId, { turnEndedAt: undefined });
+  await sendChatMessage(projectId, rootPath, 'Continue the interrupted work from your saved execution state. Do not repeat completed steps; finish the remaining work and deliver the result.', {
+    ...opts,
+    threadId,
+  });
+}
+
+/** Drop a stale checkpoint without starting anything (dismiss the resume card). */
+export function dismissResumableTurn(threadId: string): void {
+  const thread = getChatThread(threadId);
+  if (!thread?.agentCheckpoint) return;
+  updateChatThread(threadId, { agentCheckpoint: undefined });
+  void deleteAgentCheckpoint(threadId).catch(() => {});
+}
+
+async function executeRoutedOrchestratorPlan(args: {
+  projectId: string;
+  rootPath: string;
+  result: RouteResult;
+  assistantId: string;
+  chatThreadId?: string;
+  chatMode: boolean;
+  conversationalMode: boolean;
+  opts: SendChatOpts;
+  askedPlacements: AgentPlacement[] | null;
+  spawnsAllowed: boolean;
+  userMessage: string;
+  llmConfig?: RouteLlmConfig;
+  selectedAgent?: string;
+  turnEvidence?: BrainToolResult[];
+  turnTodos?: ChatTurnTodoItem[];
+}): Promise<void> {
+  let {
+    projectId,
+    rootPath,
+    result,
+    assistantId,
+    chatThreadId,
+    chatMode,
+    opts,
+    askedPlacements,
+    spawnsAllowed,
+    userMessage,
+    selectedAgent,
+    turnEvidence = [],
+    turnTodos = [],
+  } = args;
+  const llmConfig = args.llmConfig ?? await resolveConversationLlmConfig({
+    provider: opts.orchestratorProvider,
+    model: opts.orchestratorModel,
+    sessionId: chatThreadId,
+  });
+
+  const plannedSpawns = result.actions.filter(
+    (action): action is Extract<OrchestratorAction, { kind: 'spawn' }> => action.kind === 'spawn'
+  );
+  const undecidedSpawns = plannedSpawns.filter((action) => !action.placement);
 
   /**
    * Where one spawn action runs: what the user stated, else what they answered
@@ -3249,9 +4828,9 @@ export async function sendChatMessage(
     reconPromise = reconnoiter(
       reconCommand,
       rootPath,
-      opts?.projectName ?? 'project',
+      opts.projectName ?? 'project',
       async (sysPrompt, userText) => {
-        const { provider, model, hasApiKey, baseUrl } = llmConfig;
+        const { provider, model, hasApiKey, baseUrl, sessionId } = llmConfig;
         const local = isLocalProvider(provider);
         if ((!local || baseUrl) && (local || hasApiKey)) {
           return await invoke<string>('ai_complete', {
@@ -3261,6 +4840,7 @@ export async function sendChatMessage(
             model,
             apiKey: '',
             baseUrl: baseUrl || undefined,
+            sessionId,
           });
         }
         throw new Error('No AI provider configured');
@@ -3375,6 +4955,8 @@ export async function sendChatMessage(
       holdGoal: true,
       activate: !multiSpawn || isPrimary,
       model: action.model,
+      accessMode: opts.accessMode === 'full-access' ? 'full-access' : undefined,
+      reasoningEffort: action.agent === selectedAgent ? opts.reasoningEffort : undefined,
     });
 
     if (sessionId == null) {
@@ -3482,6 +5064,67 @@ export async function sendChatMessage(
     const patch: Partial<ChatMessage> = { dispatched };
     if (reconSummary != null) patch.reconSummary = reconSummary;
     patchChat(projectId, assistantId, patch);
+    if (chatThreadId) {
+      updateChatThread(chatThreadId, {
+        status: 'working',
+        updatedAt: Date.now(),
+        lastActivityAt: Date.now(),
+      });
+    }
+  }
+
+  // Phase 4 — completion summary + honest status. This point is reached only
+  // by turns that finished their pipeline (FINAL reply, or a claimed result).
+  // With tool evidence this turn, append a summary derived strictly from that
+  // evidence; the thread returns to idle and its checkpoint is demoted to
+  // conversation memory so no phantom resume card appears afterwards.
+  if (chatThreadId && getChatThread(chatThreadId)) {
+    // A checklist may only be folded into the final card when the turn actually
+    // executed tools:todos handed back by a FINAL-without-tools response were
+    // already stripped in the brain; merging them here would paint every box
+    // green for work that never ran (the fake "5/5 done" card).
+    // Plan bookkeeping (update_todos) renders state the model itself declared,
+    // so it is evidence enough to fold the checklist into the final card — but
+    // an all-completed list from a turn that ran NO other tool is the fake
+    // "5/5 done" card arriving through the new tool, and is dropped.
+    const workEvidence = turnEvidence.some((entry) => entry.ok && entry.name !== 'update_todos');
+    const planEvidence = turnTodos.length > 0 && turnEvidence.some((entry) => entry.ok && entry.name === 'update_todos');
+    const allSelfDeclaredDone = turnTodos.length > 0 && turnTodos.every((t) => todoIsDone(t.status, t.done));
+    if (result.todos?.length && workEvidence) {
+      const incoming = parseTodoList('', JSON.stringify({ todos: result.todos }));
+      turnTodos = mergeTodoItems(turnTodos, incoming).todos;
+    }
+    if (turnTodos.length > 0 && !result.failed && (workEvidence || (planEvidence && !allSelfDeclaredDone))) {
+      // At a successful turn end with real work evidence the checklist closes
+      // out: the model returned its final answer, so pending/in_progress items
+      // are finished by that evidence (models routinely forget to re-announce
+      // [x] before FINAL, which used to leave a "Working plan" box lingering
+      // over a finished turn). Explicitly blocked items stay open — their
+      // reason is live state the user must still act on. With plan bookkeeping
+      // but NO other tool evidence, model-declared state stays untouched: a
+      // turn that ran nothing must not paint itself all-green.
+      turnTodos = workEvidence
+        ? turnTodos.map((t) => (t.status === 'blocked' ? t : { ...t, done: true }))
+        : turnTodos.map((t) => (t.status ? t : { ...t, done: false }));
+      advanceChatTurnTicker(chatThreadId, turnTodos);
+    } else {
+      turnTodos = [];
+      clearChatTurnTicker(chatThreadId);
+    }
+    const summaryText = formatTurnSummary(turnEvidence);
+    if (!opts?.voiceConversation) {
+      // turnEvidence lets a turn that did work present itself as a structured
+      // report (files changed + measured verification) instead of one line.
+      patchChat(projectId, assistantId, { text: composeTurnReply(result.reply, summaryText, turnTodos, turnEvidence) });
+    }
+    updateChatThread(chatThreadId, {
+      turnEndedAt: Date.now(),
+      // A failed turn keeps its failed status; idle is only the honest rest
+      // state for a turn that ended without actions and without a blocker.
+      ...(result.actions.length === 0 && !result.needsInput && !result.failed ? { status: 'idle' as ChatThreadStatus } : {}),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
   }
 
   // Evolve the brain: fold any durable insight from this turn into the profile.
@@ -3492,7 +5135,7 @@ export async function sendChatMessage(
     void reflectAndEvolve({
       projectId,
       rootPath,
-      userMessage: trimmed,
+      userMessage,
       reply: result.reply,
       actions: result.actions,
       complete: (systemPrompt, userText) =>

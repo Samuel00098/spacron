@@ -1,7 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
-import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
+import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, setSessionCwd, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths, cancelCreate, cancelRename, hideContextMenu } from './explorer';
 import { resetSettingsToDefault } from './settings';
@@ -68,13 +68,15 @@ export const isLoading = syncWritable<boolean>('isLoading', false);
 // search surface at the project boundary so a query/result from project A can
 // never appear in project B while the right sidebar stays mounted.
 let lastSearchProjectId = get(activeProjectId);
-activeProjectId.subscribe((projectId) => {
-  if (projectId === lastSearchProjectId) return;
-  lastSearchProjectId = projectId;
-  resetProjectSearchState();
-  cancelCreate();
-  cancelRename();
-  hideContextMenu();
+queueMicrotask(() => {
+  activeProjectId.subscribe((projectId) => {
+    if (projectId === lastSearchProjectId) return;
+    lastSearchProjectId = projectId;
+    resetProjectSearchState();
+    cancelCreate();
+    cancelRename();
+    hideContextMenu();
+  });
 });
 
 export const activeProject = derived(
@@ -339,7 +341,7 @@ function bindProjectAutosave() {
   }
 }
 
-bindProjectAutosave();
+queueMicrotask(bindProjectAutosave);
 
 // ── Per-project localStorage persistence ──────────────────────────────────
 
@@ -438,6 +440,40 @@ interface PersistedProjectState {
 function projectStorageKey(projectId: string) {
   return `spacron_project_${projectId}`;
 }
+
+function rebaseProjectPath(path: string, oldRoot: string, newRoot: string): string {
+  const normalizedPath = path.replace(/\\/g, '/');
+  const normalizedRoot = oldRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  const caseInsensitive = /^[a-z]:/i.test(normalizedRoot);
+  const comparablePath = caseInsensitive ? normalizedPath.toLowerCase() : normalizedPath;
+  const comparableRoot = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (comparablePath !== comparableRoot && !comparablePath.startsWith(`${comparableRoot}/`)) return path;
+  const suffix = normalizedPath.slice(normalizedRoot.length);
+  const rebasedSuffix = newRoot.includes('\\') ? suffix.replace(/\//g, '\\') : suffix;
+  return `${newRoot.replace(/[\\/]$/, '')}${rebasedSuffix}`;
+}
+
+function rebaseProjectPathValues(value: unknown, oldRoot: string, newRoot: string): unknown {
+  if (typeof value === 'string') return rebaseProjectPath(value, oldRoot, newRoot);
+  if (Array.isArray(value)) return value.map((entry) => rebaseProjectPathValues(entry, oldRoot, newRoot));
+  if (value instanceof Map) {
+    return new Map(Array.from(value, ([key, entry]) => [
+      rebaseProjectPathValues(key, oldRoot, newRoot),
+      rebaseProjectPathValues(entry, oldRoot, newRoot),
+    ]));
+  }
+  if (value instanceof Set) {
+    return new Set(Array.from(value, (entry) => rebaseProjectPathValues(entry, oldRoot, newRoot)));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, rebaseProjectPathValues(entry, oldRoot, newRoot)]),
+    );
+  }
+  return value;
+}
+
+export const __rebaseProjectPathValues = rebaseProjectPathValues;
 
 /** Remote-workspace projects use a `remote:<id>` project id. Their state lives
  *  on the server and they're never auto-reopened locally, so we keep them out of
@@ -750,7 +786,7 @@ export function saveProjectState(projectId: string) {
       activeColumn: get(activeColumn),
     },
     terminal: {
-      sessions: terminalState.sessions,
+      sessions: terminalState.sessions.filter((session) => !session.hidden),
       activeSessionId: terminalState.activeSessionId,
       gridLayout: terminalState.gridLayout,
       paneAssignments: terminalState.paneAssignments,
@@ -1362,20 +1398,10 @@ export async function openWorkspace(workspaceId: string) {
   // Set as active
   activeWorkspaceId.set(workspaceId);
 
-  // Update last_opened timestamp and move to top of the list
-  recentWorkspaces.update((list) => {
-    const updated = list.map((w) => {
-      if (w.id === workspaceId) {
-        return { ...w, last_opened: Date.now().toString() };
-      }
-      return w;
-    });
-    const ws = updated.find((w) => w.id === workspaceId);
-    if (ws) {
-      return [ws, ...updated.filter((w) => w.id !== workspaceId)];
-    }
-    return updated;
-  });
+  // Update last_opened timestamp without reordering, preserving list position
+  recentWorkspaces.update((list) =>
+    list.map((w) => (w.id === workspaceId ? { ...w, last_opened: Date.now().toString() } : w))
+  );
 
   const wsList = get(recentWorkspaces);
   const targetWs = wsList.find((w) => w.id === workspaceId);
@@ -1853,6 +1879,76 @@ export function renameWorkspace(workspaceId: string, newName: string) {
   );
 }
 
+/** Rename a local project's root folder and rebase every persisted path while
+ * retaining the project id, live terminals, chat history, and panel state. */
+export async function renameProject(projectPath: string, newName: string): Promise<Project> {
+  const name = newName.trim();
+  if (!projectPath || !name) throw new Error('Project name cannot be empty.');
+  const { invoke } = await import('@tauri-apps/api/core');
+  let project = Array.from(get(projects).values()).find((entry) => entry.root_path === projectPath);
+  if (!project) {
+    const opened = await invoke<Project>('workspace_open_project', { path: projectPath });
+    projects.update((current) => setProjectIn(current, opened.id, opened));
+    project = opened;
+  }
+  if (!project) throw new Error('Open this project before renaming it.');
+  if (isRemoteProjectId(project.id)) throw new Error('Remote workspace folders cannot be renamed here.');
+  if (getFilename(project.root_path) === name) return project;
+
+  if (get(activeProjectId) === project.id) saveProjectState(project.id);
+  const renamed = await invoke<Project>('workspace_rename_project', {
+    projectId: project.id,
+    newName: name,
+  });
+  const oldRoot = project.root_path;
+  const newRoot = renamed.root_path;
+
+  const cached = projectStateCache.get(project.id);
+  if (cached) {
+    projectStateCache.set(
+      project.id,
+      rebaseProjectPathValues(cached, oldRoot, newRoot) as ProjectWorkspaceState,
+    );
+  }
+  if (typeof window !== 'undefined') {
+    const key = projectStorageKey(project.id);
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      try {
+        const persisted = JSON.parse(raw) as unknown;
+        localStorage.setItem(key, JSON.stringify(rebaseProjectPathValues(persisted, oldRoot, newRoot)));
+      } catch {
+        // A malformed entry is ignored by the normal restore path as well.
+      }
+    }
+    localStorage.removeItem('spacron_ws_projectDisplayNames');
+  }
+
+  for (const session of getTerminalProjectState(project.id).sessions) {
+    if (session.cwd) setSessionCwd(session.id, rebaseProjectPath(session.cwd, oldRoot, newRoot));
+  }
+  setTerminalProjectRoot(project.id, newRoot);
+  projects.update((current) => setProjectIn(current, renamed.id, renamed));
+  recentWorkspaces.update((list) => list.map((workspace) => {
+    const isRenamedPath = (path: string) => path === oldRoot || path === projectPath;
+    const containedProject = workspace.project_paths.some(isRenamedPath);
+    if (!containedProject) return workspace;
+    const projectPaths = workspace.project_paths.map((path) => isRenamedPath(path) ? newRoot : path);
+    const isStandalone = !workspace.is_workspace && projectPaths.length === 1;
+    return {
+      ...workspace,
+      name: isStandalone ? renamed.name : workspace.name,
+      project_paths: projectPaths,
+      active_project_path: workspace.active_project_path && isRenamedPath(workspace.active_project_path)
+        ? newRoot
+        : workspace.active_project_path,
+    };
+  }));
+
+  if (get(activeProjectId) === project.id) await restoreProjectState(project.id, newRoot);
+  return renamed;
+}
+
 
 /**
  * Move a project into another collection, landing it before `beforePath` (or at
@@ -2041,4 +2137,41 @@ export async function addProjectToWorkspace(workspaceId: string) {
       await addFolderToWorkspace(selected);
     }
   }
+}
+
+/** Reorder items in recentWorkspaces by swapping/moving indices */
+export function reorderRecentWorkspaces(fromIndex: number, toIndex: number) {
+  recentWorkspaces.update((list) => {
+    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length || fromIndex === toIndex) {
+      return list;
+    }
+    const next = [...list];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    return next;
+  });
+}
+
+/** Reorder a project path within a workspace group's project_paths array */
+export function reorderWorkspaceProject(workspaceId: string, fromIndex: number, toIndex: number) {
+  recentWorkspaces.update((list) =>
+    list.map((w) => {
+      if (w.id === workspaceId && w.project_paths) {
+        if (
+          fromIndex < 0 ||
+          fromIndex >= w.project_paths.length ||
+          toIndex < 0 ||
+          toIndex >= w.project_paths.length ||
+          fromIndex === toIndex
+        ) {
+          return w;
+        }
+        const nextPaths = [...w.project_paths];
+        const [moved] = nextPaths.splice(fromIndex, 1);
+        nextPaths.splice(toIndex, 0, moved);
+        return { ...w, project_paths: nextPaths };
+      }
+      return w;
+    })
+  );
 }

@@ -182,9 +182,10 @@ export const closeBehavior = persistentWritable<CloseBehavior>('closeBehavior', 
 // ── AI providers & models ──
 // Voice refinement and AI commit messages route through one of several
 // providers. Each provider has its own API key (or, for local providers, a
-// server URL) and its own model list; the model picker in Settings swaps to the
-// selected provider's models. The Rust backend (`commands/secrets.rs`) calls
-// each provider's native API directly.
+// server URL) and its own model list. Settings manages those connections; the
+// Chat composer selects the provider/model that powers each orchestrator
+// conversation. The Rust backend (`commands/secrets.rs`) calls each provider's
+// native API directly.
 //
 // Local providers (Ollama, LM Studio) run on the user's own machine. They need
 // a base URL instead of an API key and expose OpenAI-compatible endpoints, so
@@ -196,6 +197,18 @@ export type AiProviderId =
   | 'google'
   | 'groq'
   | 'xai'
+  | 'deepseek'
+  | 'mistral'
+  | 'together'
+  | 'fireworks'
+  | 'cerebras'
+  | 'nvidia'
+  | 'moonshot'
+  | 'sambanova'
+  | 'perplexity'
+  | 'cohere'
+  | 'opencode'
+  | 'opencode-go'
   | 'ollama'
   | 'lmstudio'
   | 'local';
@@ -207,6 +220,9 @@ export interface AiModelOption {
   label: string;
   description: string;
   free?: boolean;
+  /** Live catalogues may include models whose protocol is not supported yet. */
+  supported?: boolean;
+  supportReason?: string;
 }
 
 export interface AiProviderDef {
@@ -268,7 +284,7 @@ export const aiProviders: AiProviderDef[] = [
   },
   {
     id: 'openai',
-    label: 'OpenAI',
+    label: 'OpenAI API',
     keyLabel: 'OpenAI API key',
     keyPlaceholder: 'sk-...',
     keyUrl: 'https://platform.openai.com/api-keys',
@@ -278,6 +294,8 @@ export const aiProviders: AiProviderDef[] = [
       { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini', description: 'Improved mini model.' },
       { id: 'gpt-4o', label: 'GPT-4o', description: 'Flagship quality.' },
       { id: 'gpt-4.1', label: 'GPT-4.1', description: 'Highest quality OpenAI option.' },
+      { id: 'gpt-5', label: 'GPT-5', description: 'Newest flagship reasoning model.' },
+      { id: 'gpt-5-mini', label: 'GPT-5 mini', description: 'Cheaper, faster GPT-5.' },
     ],
   },
   {
@@ -290,6 +308,7 @@ export const aiProviders: AiProviderDef[] = [
     models: [
       { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Best balance of quality and speed.' },
       { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', description: 'Cheaper, faster fallback.' },
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Highest quality Gemini option.' },
       { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: 'Older, very cheap.' },
     ],
   },
@@ -303,6 +322,8 @@ export const aiProviders: AiProviderDef[] = [
     models: [
       { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', description: 'Higher quality, still fast.' },
       { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', description: 'Extremely fast and cheap.' },
+      { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', description: 'Open-weight reasoning model.' },
+      { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', description: 'Smaller open-weight model.' },
     ],
   },
   {
@@ -311,15 +332,158 @@ export const aiProviders: AiProviderDef[] = [
     keyLabel: 'xAI API key',
     keyPlaceholder: 'xai-...',
     keyUrl: 'https://console.x.ai/team/default/api-keys',
-    defaultModel: 'grok-4.3',
+    defaultModel: 'grok-4-6',
     models: [
-      { id: 'grok-4.3', label: 'Grok 4.3', description: 'Flagship: most intelligent, fastest, 1M context.' },
-      { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: 'Deep reasoning, 1M context.' },
-      { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning', description: 'Fast responses, 1M context.' },
-      { id: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi-Agent', description: 'Multi-agent orchestration, 1M context.' },
-      { id: 'grok-build-0.1', label: 'Grok Build 0.1', description: 'Fast agentic coding model, 256k context.' },
+      { id: 'grok-4-6', label: 'Grok 4.6', description: 'Newest flagship Grok model.' },
+      { id: 'grok-4', label: 'Grok 4', description: 'Flagship reasoning model.' },
+      { id: 'grok-3', label: 'Grok 3', description: 'Previous-generation flagship.' },
+      { id: 'grok-3-mini', label: 'Grok 3 Mini', description: 'Fast, cheaper Grok 3.' },
       { id: 'grok-2-1212', label: 'Grok 2', description: 'Previous-generation text model.' },
       { id: 'grok-2-vision', label: 'Grok 2 Vision', description: 'Vision-capable Grok model.' },
+    ],
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    keyLabel: 'DeepSeek API key',
+    keyPlaceholder: 'sk-...',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    defaultModel: 'deepseek-chat',
+    models: [
+      { id: 'deepseek-chat', label: 'DeepSeek Chat', description: 'General chat model.' },
+      { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner', description: 'Deep reasoning model.' },
+    ],
+  },
+  {
+    id: 'mistral',
+    label: 'Mistral AI',
+    keyLabel: 'Mistral API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://console.mistral.ai/api-keys',
+    defaultModel: 'mistral-small-latest',
+    models: [
+      { id: 'mistral-small-latest', label: 'Mistral Small', description: 'Fast general-purpose Mistral model.' },
+      { id: 'mistral-medium-latest', label: 'Mistral Medium', description: 'Balanced quality and speed.' },
+      { id: 'mistral-large-latest', label: 'Mistral Large', description: 'Highest quality Mistral model.' },
+      { id: 'codestral-latest', label: 'Codestral', description: 'Mistral coding model.' },
+    ],
+  },
+  {
+    id: 'together',
+    label: 'Together AI',
+    keyLabel: 'Together API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://api.together.ai/settings/api-keys',
+    defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    models: [
+      { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', label: 'Llama 3.3 70B Turbo', description: 'Fast hosted Llama through Together AI.' },
+    ],
+  },
+  {
+    id: 'fireworks',
+    label: 'Fireworks AI',
+    keyLabel: 'Fireworks API key',
+    keyPlaceholder: 'fw_...',
+    keyUrl: 'https://fireworks.ai/account/api-keys',
+    defaultModel: 'accounts/fireworks/models/deepseek-v3p1',
+    models: [
+      { id: 'accounts/fireworks/models/deepseek-v3p1', label: 'DeepSeek V3.1', description: 'Fireworks-hosted reasoning and instruction model.' },
+    ],
+  },
+  {
+    id: 'cerebras',
+    label: 'Cerebras',
+    keyLabel: 'Cerebras API key',
+    keyPlaceholder: 'csk-...',
+    keyUrl: 'https://cloud.cerebras.ai/platform',
+    defaultModel: 'gpt-oss-120b',
+    models: [
+      { id: 'gpt-oss-120b', label: 'GPT-OSS 120B', description: 'High-speed Cerebras inference.' },
+    ],
+  },
+  {
+    id: 'nvidia',
+    label: 'NVIDIA NIM',
+    keyLabel: 'NVIDIA API key',
+    keyPlaceholder: 'nvapi-...',
+    keyUrl: 'https://build.nvidia.com/settings/api-keys',
+    defaultModel: 'deepseek-ai/deepseek-v4-flash',
+    models: [
+      { id: 'deepseek-ai/deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: 'Current NVIDIA-hosted chat model.' },
+    ],
+  },
+  {
+    id: 'moonshot',
+    label: 'Moonshot (Kimi)',
+    keyLabel: 'Moonshot API key',
+    keyPlaceholder: 'sk-...',
+    keyUrl: 'https://platform.moonshot.ai/console/api-keys',
+    defaultModel: 'kimi-k2.6',
+    models: [
+      { id: 'kimi-k2.6', label: 'Kimi K2.6', description: 'Moonshot general and coding model.' },
+    ],
+  },
+  {
+    id: 'sambanova',
+    label: 'SambaNova',
+    keyLabel: 'SambaNova API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://cloud.sambanova.ai/apis',
+    defaultModel: 'Meta-Llama-3.3-70B-Instruct',
+    models: [
+      { id: 'Meta-Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B', description: 'SambaNova-hosted instruction model.' },
+    ],
+  },
+  {
+    id: 'perplexity',
+    label: 'Perplexity',
+    keyLabel: 'Perplexity API key',
+    keyPlaceholder: 'pplx-...',
+    keyUrl: 'https://www.perplexity.ai/settings/api',
+    defaultModel: 'sonar-pro',
+    models: [
+      { id: 'sonar-pro', label: 'Sonar Pro', description: 'Frontier search-grounded model.' },
+      { id: 'sonar', label: 'Sonar', description: 'Fast search-grounded model.' },
+      { id: 'sonar-reasoning-pro', label: 'Sonar Reasoning Pro', description: 'Search-grounded reasoning.' },
+      { id: 'sonar-reasoning', label: 'Sonar Reasoning', description: 'Fast reasoning with search.' },
+    ],
+  },
+  {
+    id: 'cohere',
+    label: 'Cohere',
+    keyLabel: 'Cohere API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://dashboard.cohere.com/api-keys',
+    defaultModel: 'command-a-03-2025',
+    models: [
+      { id: 'command-a-03-2025', label: 'Command A', description: 'Flagship efficient chat model.' },
+      { id: 'command-r-plus-08-2024', label: 'Command R+', description: 'Complex RAG and agentic tasks.' },
+      { id: 'command-r-08-2024', label: 'Command R', description: 'Balanced RAG model.' },
+      { id: 'command-r7b-12-2024', label: 'Command R7B', description: 'Small, fast model.' },
+    ],
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode Zen',
+    keyLabel: 'OpenCode Zen API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://opencode.ai/zen',
+    defaultModel: 'glm-5.3-flash',
+    models: [
+      { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', description: 'OpenCode Zen model using its chat-completions endpoint.' },
+      { id: 'big-pickle', label: 'Big Pickle', description: 'Free OpenCode Zen model.', free: true },
+    ],
+  },
+  {
+    id: 'opencode-go',
+    label: 'OpenCode Go subscription',
+    keyLabel: 'OpenCode Go subscription key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://opencode.ai/go',
+    defaultModel: 'glm-5.3-flash',
+    models: [
+      { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', description: 'Uses the included OpenCode Go subscription allowance.' },
+      { id: 'kimi-k3', label: 'Kimi K3', description: 'Kimi coding model through OpenCode Go.' },
     ],
   },
   {
@@ -501,8 +665,10 @@ export const voiceAiModelByProvider = persistentWritable<Record<string, string>>
  * - 'xai-realtime': the same experience over xAI's Grok Voice Agent API
  *   (OpenAI Realtime-compatible, WebSocket). Requires an xAI API key; billed
  *   flat per minute (~$0.05/min).
+ * - 'openai-live': OpenAI GPT-Live over WebRTC. The voice model delegates
+ *   project work to Spacron's existing orchestrator.
  */
-export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime';
+export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime' | 'openai-live';
 export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'openai-realtime');
 export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
 export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
@@ -526,6 +692,15 @@ export const openaiRealtimeVoiceOptions: VoiceOption[] = [
   { id: 'shimmer', label: 'Shimmer', description: 'Female voice' },
   { id: 'verse', label: 'Verse', description: 'Male voice' },
 ];
+
+export const openaiLiveModel = persistentWritable<string>('openaiLiveModel', 'gpt-live-1');
+export const openaiLiveVoice = persistentWritable<string>('openaiLiveVoice', 'marin');
+
+export const openaiLiveModelOptions: VoiceModelOption[] = [
+  { id: 'gpt-live-1', label: 'GPT Live 1', description: 'Full-duplex voice conversation with delegated project work.' },
+];
+
+export const openaiLiveVoiceOptions: VoiceOption[] = openaiRealtimeVoiceOptions;
 
 export const xaiRealtimeModel = persistentWritable<string>('xaiRealtimeModel', 'grok-voice-latest');
 export const xaiRealtimeVoice = persistentWritable<string>('xaiRealtimeVoice', 'eve');
@@ -603,6 +778,32 @@ export const aiBaseUrlByProvider = persistentWritable<Record<string, string>>('a
 export const aiGhostTextEnabled = persistentWritable('aiGhostTextEnabled', false);
 export const aiCompletionProvider = persistentWritable<AiProviderId>('aiCompletionProvider', 'groq');
 export const aiCompletionModelByProvider = persistentWritable<Record<string, string>>('aiCompletionModelByProvider', {});
+
+// The ChatGPT subscription connector was removed. Reset any persisted
+// selections from older builds so a deleted provider cannot remain active.
+if (typeof window !== 'undefined') {
+  if (String(get(aiProvider)) === 'chatgpt') aiProvider.set('openrouter');
+  if (String(get(aiCompletionProvider)) === 'chatgpt') aiCompletionProvider.set('groq');
+  if (String(get(voiceAiProvider)) === 'chatgpt') voiceAiProvider.set('groq');
+  aiModelByProvider.update((models) => {
+    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
+    const next = { ...models };
+    delete next.chatgpt;
+    return next;
+  });
+  aiCompletionModelByProvider.update((models) => {
+    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
+    const next = { ...models };
+    delete next.chatgpt;
+    return next;
+  });
+  voiceAiModelByProvider.update((models) => {
+    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
+    const next = { ...models };
+    delete next.chatgpt;
+    return next;
+  });
+}
 
 /** Whether a provider runs locally and is configured by URL rather than key. */
 export function isLocalProvider(id: AiProviderId): boolean {
@@ -984,6 +1185,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
     case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
+    case 'openaiLiveModel': openaiLiveModel.set(value as string); break;
+    case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
     case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
     case 'xaiRealtimeVoice': xaiRealtimeVoice.set(value as string); break;
     case 'aiProvider': aiProvider.set(value as AiProviderId); break;
@@ -1035,6 +1238,8 @@ export function resetSettingsToDefault() {
   voiceConversationEngine.set('openai-realtime');
   openaiRealtimeModel.set('gpt-realtime-2.1-mini');
   openaiRealtimeVoice.set('marin');
+  openaiLiveModel.set('gpt-live-1');
+  openaiLiveVoice.set('marin');
   xaiRealtimeModel.set('grok-voice-latest');
   xaiRealtimeVoice.set('eve');
   announceAgentCompletions.set(true);
@@ -1058,4 +1263,3 @@ export function resetSettingsToDefault() {
   terminalFontSize.set(14);
   terminalRenderer.set('canvas');
 }
-

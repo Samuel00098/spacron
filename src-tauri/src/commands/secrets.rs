@@ -7,7 +7,13 @@ use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub mod agent_turn;
+
 const KEYCHAIN_SERVICE: &str = "com.samue.spacron";
+// Spacron was formerly shipped as Soryq. Keep old installations usable after
+// the bundle/service rename; the first successful read below copies the key to
+// the current service without returning it to the renderer.
+const LEGACY_KEYCHAIN_SERVICE: &str = "com.samue.soryq";
 const APP_TITLE: &str = "Spacron";
 
 /// Pooled HTTP clients keyed by their total-timeout (ms).
@@ -53,6 +59,18 @@ const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_STT_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const XAI_URL: &str = "https://api.x.ai/v1/chat/completions";
+const DEEPSEEK_URL: &str = "https://api.deepseek.com/chat/completions";
+const MISTRAL_URL: &str = "https://api.mistral.ai/v1/chat/completions";
+const TOGETHER_URL: &str = "https://api.together.ai/v1/chat/completions";
+const FIREWORKS_URL: &str = "https://api.fireworks.ai/inference/v1/chat/completions";
+const CEREBRAS_URL: &str = "https://api.cerebras.ai/v1/chat/completions";
+const NVIDIA_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MOONSHOT_URL: &str = "https://api.moonshot.ai/v1/chat/completions";
+const SAMBANOVA_URL: &str = "https://api.sambanova.ai/v1/chat/completions";
+const PERPLEXITY_URL: &str = "https://api.perplexity.ai/chat/completions";
+const COHERE_URL: &str = "https://api.cohere.com/compatibility/v1/chat/completions";
+const OPENCODE_URL: &str = "https://opencode.ai/zen/v1/chat/completions";
+const OPENCODE_GO_URL: &str = "https://opencode.ai/zen/go/v1/chat/completions";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const GOOGLE_AUDIO_TRANSCRIPTION_PROMPT: &str = "Transcribe this speech into clean, accurate text. Keep the speaker's exact technical terms, code words, file paths, flags, package names, and URLs. Use natural punctuation and paragraph breaks when they are obvious from the audio. Return only the transcript.";
@@ -84,6 +102,18 @@ const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const GROQ_MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
 const XAI_MODELS_URL: &str = "https://api.x.ai/v1/models";
+const DEEPSEEK_MODELS_URL: &str = "https://api.deepseek.com/models";
+const MISTRAL_MODELS_URL: &str = "https://api.mistral.ai/v1/models";
+const TOGETHER_MODELS_URL: &str = "https://api.together.ai/v1/models";
+const FIREWORKS_MODELS_URL: &str = "https://api.fireworks.ai/inference/v1/models";
+const CEREBRAS_MODELS_URL: &str = "https://api.cerebras.ai/v1/models";
+const NVIDIA_MODELS_URL: &str = "https://integrate.api.nvidia.com/v1/models";
+const MOONSHOT_MODELS_URL: &str = "https://api.moonshot.ai/v1/models";
+const SAMBANOVA_MODELS_URL: &str = "https://api.sambanova.ai/v1/models";
+const PERPLEXITY_MODELS_URL: &str = "https://api.perplexity.ai/models";
+const COHERE_MODELS_URL: &str = "https://api.cohere.com/v1/models";
+const OPENCODE_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
+const OPENCODE_GO_MODELS_URL: &str = "https://opencode.ai/zen/go/v1/models";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const GOOGLE_MODELS_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
@@ -95,6 +125,18 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "google",
     "groq",
     "xai",
+    "deepseek",
+    "mistral",
+    "together",
+    "fireworks",
+    "cerebras",
+    "nvidia",
+    "moonshot",
+    "sambanova",
+    "perplexity",
+    "cohere",
+    "opencode",
+    "opencode-go",
     "ollama",
     "lmstudio",
 ];
@@ -110,6 +152,102 @@ fn is_known_provider(provider: &str) -> bool {
 
 fn is_local_provider(provider: &str) -> bool {
     LOCAL_PROVIDERS.contains(&provider)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionAuth {
+    Bearer,
+    AnthropicApiKey,
+    GoogleApiKey,
+    None,
+}
+
+fn completion_auth(provider: &str) -> CompletionAuth {
+    match provider {
+        "anthropic" => CompletionAuth::AnthropicApiKey,
+        "google" => CompletionAuth::GoogleApiKey,
+        p if is_local_provider(p) => CompletionAuth::None,
+        _ => CompletionAuth::Bearer,
+    }
+}
+
+/// Resolve the request endpoint for every provider supported by `ai_complete`.
+/// Keeping this mapping in one place prevents a newly-added provider from
+/// silently falling through to OpenRouter with the wrong key.
+fn completion_endpoint(provider: &str, base_url: Option<&str>, model: Option<&str>) -> String {
+    match provider {
+        "anthropic" => ANTHROPIC_URL.to_string(),
+        "google" => format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            model.unwrap_or_default()
+        ),
+        "openrouter" => OPENROUTER_URL.to_string(),
+        "openai" => OPENAI_URL.to_string(),
+        "groq" => GROQ_URL.to_string(),
+        "xai" => XAI_URL.to_string(),
+        "deepseek" => DEEPSEEK_URL.to_string(),
+        "mistral" => MISTRAL_URL.to_string(),
+        "together" => TOGETHER_URL.to_string(),
+        "fireworks" => FIREWORKS_URL.to_string(),
+        "cerebras" => CEREBRAS_URL.to_string(),
+        "nvidia" => NVIDIA_URL.to_string(),
+        "moonshot" => MOONSHOT_URL.to_string(),
+        "sambanova" => SAMBANOVA_URL.to_string(),
+        "perplexity" => PERPLEXITY_URL.to_string(),
+        "cohere" => COHERE_URL.to_string(),
+        "opencode" => OPENCODE_URL.to_string(),
+        "opencode-go" => OPENCODE_GO_URL.to_string(),
+        p if is_local_provider(p) => {
+            local_endpoint(base_url.unwrap_or_default(), "chat/completions")
+        }
+        _ => OPENROUTER_URL.to_string(),
+    }
+}
+
+/// Resolve the endpoint used to populate a provider's live model picker.
+fn model_catalogue_endpoint(provider: &str, base_url: Option<&str>) -> String {
+    match provider {
+        "openrouter" => OPENROUTER_MODELS_URL.to_string(),
+        "anthropic" => ANTHROPIC_MODELS_URL.to_string(),
+        "openai" => OPENAI_MODELS_URL.to_string(),
+        "google" => GOOGLE_MODELS_URL.to_string(),
+        "groq" => GROQ_MODELS_URL.to_string(),
+        "xai" => XAI_MODELS_URL.to_string(),
+        "deepseek" => DEEPSEEK_MODELS_URL.to_string(),
+        "mistral" => MISTRAL_MODELS_URL.to_string(),
+        "together" => TOGETHER_MODELS_URL.to_string(),
+        "fireworks" => FIREWORKS_MODELS_URL.to_string(),
+        "cerebras" => CEREBRAS_MODELS_URL.to_string(),
+        "nvidia" => NVIDIA_MODELS_URL.to_string(),
+        "moonshot" => MOONSHOT_MODELS_URL.to_string(),
+        "sambanova" => SAMBANOVA_MODELS_URL.to_string(),
+        "perplexity" => PERPLEXITY_MODELS_URL.to_string(),
+        "cohere" => COHERE_MODELS_URL.to_string(),
+        "opencode" => OPENCODE_MODELS_URL.to_string(),
+        "opencode-go" => OPENCODE_GO_MODELS_URL.to_string(),
+        p if is_local_provider(p) => {
+            local_endpoint(base_url.unwrap_or_default(), "models")
+        }
+        _ => OPENROUTER_MODELS_URL.to_string(),
+    }
+}
+
+fn apply_completion_auth(
+    request: reqwest::RequestBuilder,
+    provider: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    match completion_auth(provider) {
+        CompletionAuth::AnthropicApiKey => request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION),
+        CompletionAuth::GoogleApiKey => request.header("x-goog-api-key", api_key),
+        CompletionAuth::Bearer if !api_key.is_empty() => request.header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {api_key}"),
+        ),
+        CompletionAuth::Bearer | CompletionAuth::None => request,
+    }
 }
 
 /// Validate a user-supplied local server URL before using it as a request base.
@@ -194,6 +332,13 @@ pub struct ModelInfo {
     id: String,
     label: String,
     description: String,
+    /// Whether Spacron can send this model through the selected provider
+    /// adapter. OpenCode publishes several protocol families in one list;
+    /// unsupported entries stay visible so the catalogue is complete, but the
+    /// picker can keep them disabled until their adapter exists.
+    supported: bool,
+    #[serde(rename = "supportReason", skip_serializing_if = "Option::is_none")]
+    support_reason: Option<String>,
 }
 
 /// Trim a provider-supplied description to a single tidy line for the picker.
@@ -226,7 +371,8 @@ fn openai_is_stt_model(id: &str) -> bool {
 /// chat list (see `openai_is_chat_model`'s block list) but are exactly what
 /// the Realtime voice engine's model picker needs to show.
 fn openai_is_realtime_model(id: &str) -> bool {
-    id.to_ascii_lowercase().contains("realtime")
+    let id = id.to_ascii_lowercase();
+    id.contains("realtime") || id.contains("live")
 }
 
 /// xAI doesn't expose a dedicated realtime flag on /v1/models, so match the
@@ -352,10 +498,10 @@ async fn ok_json(response: reqwest::Response, who: &str) -> Result<serde_json::V
 
 /// Redact API-key-shaped substrings from an error body before surfacing it to
 /// the frontend. Covers the key prefixes used by every supported provider:
-/// `sk-` (OpenRouter / OpenAI / Anthropic `sk-ant-`), `AIza` (Google) and
-/// `gsk_` (Groq).
+/// `sk-` (OpenRouter / OpenAI / Anthropic `sk-ant-`), `AIza` (Google),
+/// `gsk_` (Groq) and `pplx-` (Perplexity).
 fn redact_secrets(s: &str) -> String {
-    const PREFIXES: &[&str] = &["sk-", "AIza", "gsk_"];
+    const PREFIXES: &[&str] = &["sk-", "AIza", "gsk_", "xai-", "fw_", "csk-", "nvapi-", "pplx-"];
 
     let mut out = String::new();
     let mut rest = s;
@@ -366,7 +512,6 @@ fn redact_secrets(s: &str) -> String {
             .iter()
             .filter_map(|p| rest.find(p).map(|pos| (pos, p.len())))
             .min_by_key(|&(pos, _)| pos);
-
         let Some((pos, prefix_len)) = next else {
             break;
         };
@@ -578,6 +723,18 @@ fn keychain_entry(provider: &str) -> Result<Entry, String> {
         .map_err(|err| format!("Failed to access the system keychain: {err}"))
 }
 
+fn legacy_keychain_entry(provider: &str) -> Result<Entry, String> {
+    Entry::new(LEGACY_KEYCHAIN_SERVICE, &keychain_username(provider))
+        .map_err(|err| format!("Failed to access the legacy system keychain: {err}"))
+}
+
+fn delete_keychain_entry(entry: Entry, description: &str) -> Result<(), String> {
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(err) => Err(format!("Failed to remove the {description}: {err}")),
+    }
+}
+
 /// Read a provider's API key out of the OS keychain.
 ///
 /// Deliberately **not** a `#[tauri::command]`, and deliberately not `pub`: this
@@ -605,7 +762,25 @@ fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
                 Some(trimmed)
             })
         }
-        Err(KeyringError::NoEntry) => Ok(None),
+        Err(KeyringError::NoEntry) => {
+            // Existing users may still have the key under the pre-rename
+            // service. Read it only on a miss in the current service, then
+            // best-effort copy it forward so subsequent calls use one target.
+            let legacy = legacy_keychain_entry(&provider)?;
+            match legacy.get_password() {
+                Ok(password) => {
+                    let trimmed = password.trim().to_string();
+                    if trimmed.is_empty() {
+                        Ok(None)
+                    } else {
+                        let _ = entry.set_password(&trimmed);
+                        Ok(Some(trimmed))
+                    }
+                }
+                Err(KeyringError::NoEntry) => Ok(None),
+                Err(err) => Err(format!("Failed to read the legacy API key: {err}")),
+            }
+        }
         Err(err) => Err(format!("Failed to read the API key: {err}")),
     }
 }
@@ -615,12 +790,7 @@ pub fn provider_api_key_exists(provider: String) -> Result<bool, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
-    let entry = keychain_entry(&provider)?;
-    match entry.get_password() {
-        Ok(password) => Ok(!password.trim().is_empty()),
-        Err(KeyringError::NoEntry) => Ok(false),
-        Err(err) => Err(format!("Failed to check the API key: {err}")),
-    }
+    Ok(provider_api_key_get(provider)?.is_some())
 }
 
 #[tauri::command]
@@ -632,10 +802,8 @@ pub fn provider_api_key_set(provider: String, api_key: String) -> Result<(), Str
     let entry = keychain_entry(&provider)?;
 
     if api_key.is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-            Err(err) => Err(format!("Failed to remove the API key: {err}")),
-        }
+        delete_keychain_entry(entry, "API key")?;
+        delete_keychain_entry(legacy_keychain_entry(&provider)?, "legacy API key")
     } else {
         entry
             .set_password(&api_key)
@@ -648,11 +816,8 @@ pub fn provider_api_key_delete(provider: String) -> Result<(), String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
-    let entry = keychain_entry(&provider)?;
-    match entry.delete_credential() {
-        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-        Err(err) => Err(format!("Failed to remove the API key: {err}")),
-    }
+    delete_keychain_entry(keychain_entry(&provider)?, "API key")?;
+    delete_keychain_entry(legacy_keychain_entry(&provider)?, "legacy API key")
 }
 
 /// Keychain entry for a remote-workspace token. The token unlocks a shell on a
@@ -959,6 +1124,39 @@ fn strip_inline_reasoning(text: &str) -> String {
     out.trim().to_string()
 }
 
+fn provider_session_id_is_safe(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+/// OpenCode publishes several protocol families in one catalogue. Spacron's
+/// direct adapters currently speak Chat Completions, so do not offer a model
+/// whose documented endpoint is Responses, Anthropic Messages, or Gemini.
+fn opencode_model_uses_chat_completions(provider: &str, model: &str) -> bool {
+    let id = model.to_ascii_lowercase();
+    match provider {
+        "opencode" => [
+            "deepseek-",
+            "minimax-",
+            "glm-",
+            "kimi-",
+            "big-pickle",
+            "mimo-",
+            "ling-",
+            "nemotron-",
+        ]
+        .iter()
+        .any(|prefix| id.starts_with(prefix)),
+        "opencode-go" => ["glm-", "kimi-", "longcat-", "deepseek-", "mimo-", "hy"]
+            .iter()
+            .any(|prefix| id.starts_with(prefix)),
+        _ => true,
+    }
+}
+
 /// Extract the visible answer from an OpenAI-compatible choice.
 ///
 /// Most local models put their answer in `message.content`, but S1-mini's LM
@@ -1012,7 +1210,7 @@ fn embedded_error_message(payload: &serde_json::Value) -> Option<String> {
 /// the same ceiling as the reply — OpenAI's `max_completion_tokens` and
 /// Gemini's `maxOutputTokens` both do.
 fn with_reasoning_headroom(requested: u32) -> u32 {
-    requested.saturating_mul(4).max(4096)
+    requested.saturating_mul(4).max(4096).min(128_000)
 }
 
 /// Run a single-shot system+user completion against the chosen provider and
@@ -1028,15 +1226,17 @@ async fn run_completion(
     user_text: &str,
     temperature: f64,
     max_tokens: u32,
+    session_id: Option<&str>,
 ) -> Result<String, String> {
     let client = shared_http_client(Duration::from_secs(45))?;
 
     match provider {
         "anthropic" => {
-            let response = client
-                .post(ANTHROPIC_URL)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
+            let response = apply_completion_auth(
+                client.post(completion_endpoint(provider, None, None)),
+                provider,
+                api_key,
+            )
                 .json(&json!({
                     "model": model,
                     "max_tokens": max_tokens,
@@ -1075,12 +1275,11 @@ async fn run_completion(
         "google" => {
             // Pass the key via the documented header, never in the URL — the URL
             // shows up in reqwest error strings and any request logging.
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-            );
-            let response = client
-                .post(url)
-                .header("x-goog-api-key", api_key)
+            let response = apply_completion_auth(
+                client.post(completion_endpoint(provider, None, Some(model))),
+                provider,
+                api_key,
+            )
                 .json(&json!({
                     "systemInstruction": { "parts": [ { "text": system_prompt } ] },
                     "contents": [ { "role": "user", "parts": [ { "text": user_text } ] } ],
@@ -1124,19 +1323,10 @@ async fn run_completion(
 
             Ok(content)
         }
-        // OpenAI-compatible: openrouter, openai, groq, ollama, lmstudio.
+        // OpenAI-compatible: OpenRouter, OpenAI, Groq, xAI, the direct hosted
+        // providers, OpenCode, and local Ollama/LM Studio servers.
         _ => {
-            let url = match provider {
-                "openai" => OPENAI_URL.to_string(),
-                "groq" => GROQ_URL.to_string(),
-                "xai" => XAI_URL.to_string(),
-                // Local providers point at the user's own server.
-                p if is_local_provider(p) => {
-                    let base = base_url.unwrap_or_default();
-                    local_endpoint(base, "chat/completions")
-                }
-                _ => OPENROUTER_URL.to_string(),
-            };
+            let url = completion_endpoint(provider, base_url, Some(model));
 
             let shape_key = chat_shape_key(provider, base_url, model);
             let mut shape = cached_chat_shape(&shape_key);
@@ -1153,12 +1343,7 @@ async fn run_completion(
 
                 let mut request = client.post(&url);
 
-                // Local providers default to no authentication; only send the
-                // bearer token when we actually have one.
-                if !api_key.is_empty() {
-                    request = request
-                        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
-                }
+                request = apply_completion_auth(request, provider, api_key);
 
                 // OpenRouter asks for attribution headers; harmless elsewhere
                 // but we only send them where they belong.
@@ -1186,6 +1371,15 @@ async fn run_completion(
                     if is_s1_mini_model(model) && is_local_provider(provider) {
                         fields.insert("chat_template_kwargs".to_string(), json!({ "enable_thinking": false }));
                     }
+                }
+                if provider == "opencode" || provider == "opencode-go" {
+                    request = request.header(reqwest::header::USER_AGENT, "spacron/5.0.0");
+                }
+                if provider == "opencode-go" {
+                    request = request.header(
+                        "x-opencode-session",
+                        session_id.unwrap_or("spacron-app"),
+                    );
                 }
 
                 let response = request.json(&body).send().await.map_err(|err| {
@@ -1283,7 +1477,7 @@ pub async fn ai_refine_prompt(
         return Err("Invalid model id".to_string());
     }
 
-    const MAX_TEXT_LEN: usize = 32_000;
+    const MAX_TEXT_LEN: usize = 128_000;
     // A vocabulary list is user-authored and bounded — a paste accident should
     // not ship a megabyte of text into every refinement request.
     const MAX_VOCABULARY_LEN: usize = 4_000;
@@ -1332,6 +1526,7 @@ pub async fn ai_refine_prompt(
         &text,
         if s1_mini { 0.0 } else { 0.1 },
         max_tokens,
+        None,
     )
     .await?;
 
@@ -1445,7 +1640,6 @@ pub async fn ai_transcribe_audio(
         "openai" => {
             let response = client
                 .post(OPENAI_STT_URL)
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header(reqwest::header::CONTENT_TYPE, "multipart/form-data; boundary=spacron-openai-stt")
                 .body(build_audio_transcription_multipart_body(
                     "spacron-openai-stt",
@@ -1579,6 +1773,7 @@ pub async fn ai_complete(
     model: String,
     api_key: String,
     base_url: Option<String>,
+    session_id: Option<String>,
 ) -> Result<String, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
@@ -1588,8 +1783,15 @@ pub async fn ai_complete(
     if !model_id_is_safe(&model) {
         return Err("Invalid model id".to_string());
     }
+    if provider == "opencode-go"
+        && session_id
+            .as_deref()
+            .is_some_and(|value| !provider_session_id_is_safe(value))
+    {
+        return Err("Invalid provider session id".to_string());
+    }
 
-    const MAX_TEXT_LEN: usize = 32_000;
+    const MAX_TEXT_LEN: usize = 128_000;
 
     let user_text = user_text.trim().to_string();
     if user_text.is_empty() {
@@ -1614,7 +1816,8 @@ pub async fn ai_complete(
         system_prompt,
         &user_text,
         0.3,
-        1024,
+        8192,
+        session_id.as_deref(),
     )
     .await?;
 
@@ -1641,7 +1844,7 @@ pub async fn ai_generate_commit_message(
         return Err("Invalid model id".to_string());
     }
 
-    const MAX_DIFF_LEN: usize = 20_000;
+    const MAX_DIFF_LEN: usize = 80_000;
 
     let diff = diff.trim().to_string();
     if diff.is_empty() {
@@ -1662,6 +1865,7 @@ pub async fn ai_generate_commit_message(
         &diff,
         0.2,
         512,
+        None,
     )
     .await?;
 
@@ -1695,13 +1899,14 @@ pub async fn list_provider_models(
     let mut models = match provider.as_str() {
         "anthropic" => {
             let response = client
-                .get(ANTHROPIC_MODELS_URL)
+                .get(model_catalogue_endpoint(&provider, base_url.as_deref()))
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .send()
                 .await
                 .map_err(|err| safe_request_error("Failed to fetch Anthropic models", err))?;
             let payload = ok_json(response, "Anthropic").await?;
+            agent_turn::remember_metadata(&provider, base_url.as_deref(), &payload);
             let data = payload
                 .get("data")
                 .and_then(|d| d.as_array())
@@ -1728,18 +1933,21 @@ pub async fn list_provider_models(
                     id,
                     label,
                     description: String::new(),
+                    supported: true,
+                    support_reason: None,
                 });
             }
             out
         }
         "google" => {
             let response = client
-                .get(GOOGLE_MODELS_URL)
+                .get(model_catalogue_endpoint(&provider, base_url.as_deref()))
                 .header("x-goog-api-key", &api_key)
                 .send()
                 .await
                 .map_err(|err| safe_request_error("Failed to fetch Google models", err))?;
             let payload = ok_json(response, "Google").await?;
+            agent_turn::remember_metadata(&provider, base_url.as_deref(), &payload);
             let data = payload
                 .get("models")
                 .and_then(|d| d.as_array())
@@ -1780,22 +1988,61 @@ pub async fn list_provider_models(
                     id,
                     label,
                     description: truncate_desc(desc),
+                    supported: true,
+                    support_reason: None,
                 });
             }
             out
         }
         // OpenAI-compatible list endpoints: openrouter, openai, groq, ollama,
         // lmstudio.
-        _ => {
-            let url = match provider.as_str() {
-                "openai" => OPENAI_MODELS_URL.to_string(),
-                "groq" => GROQ_MODELS_URL.to_string(),
-                "xai" => XAI_MODELS_URL.to_string(),
-                p if is_local_provider(p) => {
-                    local_endpoint(base_url.as_deref().unwrap_or_default(), "models")
+        "cohere" => {
+            // Cohere's list endpoint answers `{"models": [{"name": …}]}` rather
+            // than the OpenAI `{"data": [{"id": …}]}` shape, and mixes chat
+            // with embed/rerank models — keep the `command-*` chat family.
+            let response = client
+                .get(model_catalogue_endpoint(&provider, base_url.as_deref()))
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .send()
+                .await
+                .map_err(|err| safe_request_error("Failed to fetch Cohere models", err))?;
+            let payload = ok_json(response, "Cohere").await?;
+            agent_turn::remember_metadata(&provider, base_url.as_deref(), &payload);
+            let data = payload
+                .get("models")
+                .and_then(|d| d.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut out = Vec::new();
+            for item in data {
+                if purpose != ModelPurpose::Chat {
+                    continue;
                 }
-                _ => OPENROUTER_MODELS_URL.to_string(),
-            };
+                let id = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if id.is_empty() || !model_id_is_safe(&id) || !id.starts_with("command") {
+                    continue;
+                }
+                let desc = item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                out.push(ModelInfo {
+                    id: id.clone(),
+                    label: id,
+                    description: truncate_desc(desc),
+                    supported: true,
+                    support_reason: None,
+                });
+            }
+            out
+        }
+        _ => {
+            let url = model_catalogue_endpoint(&provider, base_url.as_deref());
             let mut request = client.get(&url);
             if !api_key.is_empty() {
                 request =
@@ -1811,9 +2058,13 @@ pub async fn list_provider_models(
                 .await
                 .map_err(|err| safe_request_error("Failed to fetch models", err))?;
             let payload = ok_json(response, "Model provider").await?;
+            agent_turn::remember_metadata(&provider, base_url.as_deref(), &payload);
+            // Most OpenAI-compatible providers wrap the catalogue in `data`.
+            // Together returns the array at the top level instead.
             let data = payload
                 .get("data")
                 .and_then(|d| d.as_array())
+                .or_else(|| payload.as_array())
                 .cloned()
                 .unwrap_or_default();
             let mut out = Vec::new();
@@ -1873,6 +2124,12 @@ pub async fn list_provider_models(
                             }
                         }
                     },
+                    "deepseek" | "mistral" | "together" | "fireworks" | "cerebras"
+                    | "nvidia" | "moonshot" | "sambanova" | "perplexity" | "opencode" | "opencode-go" => {
+                        if purpose != ModelPurpose::Chat {
+                            continue;
+                        }
+                    }
                     p if is_local_provider(p) => {
                         // Local providers — no structured metadata, return all
                     }
@@ -1884,6 +2141,7 @@ pub async fn list_provider_models(
                 }
                 let label = item
                     .get("name")
+                    .or_else(|| item.get("display_name"))
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                     .unwrap_or(&id)
@@ -1892,10 +2150,16 @@ pub async fn list_provider_models(
                     .get("description")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                let supported = !matches!(provider.as_str(), "opencode" | "opencode-go")
+                    || opencode_model_uses_chat_completions(&provider, &id);
                 out.push(ModelInfo {
                     id,
                     label,
                     description: truncate_desc(desc),
+                    supported,
+                    support_reason: (!supported).then(|| {
+                        "This model uses an OpenCode protocol that Spacron does not support yet.".to_string()
+                    }),
                 });
             }
             out
@@ -1906,10 +2170,84 @@ pub async fn list_provider_models(
     Ok(models)
 }
 
-/// Allowed voices for the OpenAI Realtime speech-to-speech API.
+/// Allowed voices for OpenAI speech-to-speech APIs.
 const OPENAI_REALTIME_VOICES: &[&str] = &[
     "marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse",
 ];
+
+/// Establish an OpenAI GPT-Live client-delegation WebRTC call.
+///
+/// GPT-Live owns the spoken conversation and emits client delegation events;
+/// Spacron supplies the existing orchestrator as the delegated backend.
+#[tauri::command]
+pub async fn openai_live_connect(
+    offer_sdp: String,
+    model: String,
+    voice: String,
+    instructions: String,
+) -> Result<String, String> {
+    let api_key = resolve_api_key("openai", "")?;
+    let model = model.trim().to_string();
+    if !model_id_is_safe(&model) || !model.to_ascii_lowercase().contains("live") {
+        return Err("Invalid GPT-Live model id".to_string());
+    }
+    let voice = voice.trim().to_lowercase();
+    if !OPENAI_REALTIME_VOICES.contains(&voice.as_str()) {
+        return Err("Invalid voice id".to_string());
+    }
+    let offer_sdp = offer_sdp.trim().to_string();
+    if offer_sdp.len() > 65_536 || !openai_realtime_offer_is_plausible(&offer_sdp) {
+        return Err("Invalid SDP offer".to_string());
+    }
+
+    let session = json!({
+        "model": model,
+        "instructions": instructions,
+        "delegation": { "type": "client" },
+        "audio": {
+            "input": {
+                "transcription": { "model": "gpt-4o-mini-transcribe" }
+            },
+            "output": { "voice": voice }
+        }
+    });
+    let transport = json!({
+        "type": "webrtc",
+        "sdp": format!("{offer_sdp}\r\n")
+    });
+
+    let client = shared_http_client(Duration::from_secs(30))?;
+    let response = client
+        .post("https://api.openai.com/v1/live/sessions")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key))
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .json(&json!({ "session": session, "transport": transport }))
+        .send()
+        .await
+        .map_err(|err| safe_request_error("Failed to contact OpenAI GPT-Live", err))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let preview = redact_secrets(&body.chars().take(300).collect::<String>());
+        return Err(format!("OpenAI GPT-Live session failed ({status}): {preview}"));
+    }
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|err| format!("OpenAI GPT-Live returned an invalid response: {err}"))?;
+    let answer_sdp = payload
+        .get("transport")
+        .and_then(|transport| transport.get("sdp"))
+        .and_then(|sdp| sdp.as_str())
+        .unwrap_or("");
+    if !answer_sdp.trim_start().starts_with("v=") {
+        return Err("OpenAI GPT-Live returned an invalid SDP answer.".to_string());
+    }
+    Ok(answer_sdp.to_string())
+}
 
 /// Establish an OpenAI Realtime (speech-to-speech) WebRTC call.
 ///
@@ -2157,14 +2495,20 @@ mod tests {
         adapt_chat_shape, audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
         build_audio_transcription_multipart_body, extract_anthropic_text, extract_google_text,
         is_known_provider, is_local_provider, local_endpoint, model_id_is_safe,
+        opencode_model_uses_chat_completions,
         openai_is_realtime_model, openrouter_audio_chat_model_is_unsupported, redact_secrets,
-        embedded_error_message, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
+        apply_completion_auth, completion_auth, completion_endpoint, embedded_error_message,
+        model_catalogue_endpoint, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
         strip_inline_reasoning, token_budget_for, with_reasoning_headroom, xai_is_realtime_model,
         openai_compatible_reply_text, is_s1_mini_model, s1_mini_input,
-        ChatParamShape, TokenBudgetField,
+        ChatParamShape, CompletionAuth, TokenBudgetField, ANTHROPIC_MODELS_URL, ANTHROPIC_URL,
+        ANTHROPIC_VERSION,
+        COHERE_MODELS_URL, COHERE_URL, GOOGLE_MODELS_URL, OPENROUTER_MODELS_URL,
+        OPENROUTER_URL, XAI_MODELS_URL, KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE,
+        ModelInfo,
     };
     use serde_json::json;
-    const MAX_TEXT_LEN: usize = 32_000;
+    const MAX_TEXT_LEN: usize = 128_000;
 
     // The verbatim 400 bodies OpenAI returns for a reasoning model. Both knobs
     // have to be renegotiated from the provider's own complaint, because the
@@ -2286,13 +2630,16 @@ mod tests {
 
     #[test]
     fn reasoning_headroom_is_a_ceiling_not_a_shrink() {
-        // Never returns less than asked for, whatever the caller passes.
-        for requested in [0_u32, 1, 512, 1024, 8192, u32::MAX] {
+        // Small requests get the minimum headroom; large requests are capped
+        // at the highest completion ceiling accepted by OpenAI's API.
+        for requested in [0_u32, 1, 512, 1024, 8192] {
             assert!(
                 with_reasoning_headroom(requested) >= requested.max(4096),
                 "shrank {requested}"
             );
         }
+        assert_eq!(with_reasoning_headroom(32_768), 128_000);
+        assert_eq!(with_reasoning_headroom(u32::MAX), 128_000);
     }
 
     fn shape_with(token_field: TokenBudgetField, reasoning_headroom: bool) -> ChatParamShape {
@@ -2442,8 +2789,27 @@ mod tests {
         assert!(is_known_provider("google"));
         assert!(is_known_provider("groq"));
         assert!(is_known_provider("xai"));
+        assert!(is_known_provider("deepseek"));
+        assert!(is_known_provider("mistral"));
+        assert!(is_known_provider("together"));
+        assert!(is_known_provider("fireworks"));
+        assert!(is_known_provider("cerebras"));
+        assert!(is_known_provider("nvidia"));
+        assert!(is_known_provider("moonshot"));
+        assert!(is_known_provider("sambanova"));
+        assert!(is_known_provider("perplexity"));
+        assert!(is_known_provider("cohere"));
+        assert!(is_known_provider("opencode"));
+        assert!(is_known_provider("opencode-go"));
         assert!(is_known_provider("ollama"));
         assert!(is_known_provider("lmstudio"));
+    }
+
+    #[test]
+    fn keychain_service_rename_keeps_a_legacy_migration_target() {
+        assert_eq!(KEYCHAIN_SERVICE, "com.samue.spacron");
+        assert_eq!(LEGACY_KEYCHAIN_SERVICE, "com.samue.soryq");
+        assert_ne!(KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE);
     }
 
     #[test]
@@ -2453,6 +2819,110 @@ mod tests {
         assert!(!is_local_provider("openrouter"));
         assert!(!is_local_provider("anthropic"));
         assert!(!is_local_provider("openai"));
+    }
+
+    #[test]
+    fn every_provider_has_a_completion_and_model_catalogue_route() {
+        let hosted = [
+            ("openrouter", OPENROUTER_URL, OPENROUTER_MODELS_URL),
+            ("openai", super::OPENAI_URL, super::OPENAI_MODELS_URL),
+            ("groq", super::GROQ_URL, super::GROQ_MODELS_URL),
+            ("xai", super::XAI_URL, super::XAI_MODELS_URL),
+            ("deepseek", super::DEEPSEEK_URL, super::DEEPSEEK_MODELS_URL),
+            ("mistral", super::MISTRAL_URL, super::MISTRAL_MODELS_URL),
+            ("together", super::TOGETHER_URL, super::TOGETHER_MODELS_URL),
+            ("fireworks", super::FIREWORKS_URL, super::FIREWORKS_MODELS_URL),
+            ("cerebras", super::CEREBRAS_URL, super::CEREBRAS_MODELS_URL),
+            ("nvidia", super::NVIDIA_URL, super::NVIDIA_MODELS_URL),
+            ("moonshot", super::MOONSHOT_URL, super::MOONSHOT_MODELS_URL),
+            ("sambanova", super::SAMBANOVA_URL, super::SAMBANOVA_MODELS_URL),
+            ("perplexity", super::PERPLEXITY_URL, super::PERPLEXITY_MODELS_URL),
+            ("cohere", COHERE_URL, COHERE_MODELS_URL),
+            ("opencode", super::OPENCODE_URL, super::OPENCODE_MODELS_URL),
+            ("opencode-go", super::OPENCODE_GO_URL, super::OPENCODE_GO_MODELS_URL),
+        ];
+
+        for (provider, completion, models) in hosted {
+            assert!(is_known_provider(provider), "{provider} is not allowlisted");
+            assert_eq!(completion_endpoint(provider, None, None), completion);
+            assert_eq!(model_catalogue_endpoint(provider, None), models);
+            assert_eq!(completion_auth(provider), CompletionAuth::Bearer);
+        }
+
+        assert_eq!(completion_endpoint("anthropic", None, None), ANTHROPIC_URL);
+        assert_eq!(model_catalogue_endpoint("anthropic", None), ANTHROPIC_MODELS_URL);
+        assert_eq!(completion_auth("anthropic"), CompletionAuth::AnthropicApiKey);
+
+        assert_eq!(
+            completion_endpoint("google", None, Some("gemini-2.5-flash")),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        );
+        assert_eq!(model_catalogue_endpoint("google", None), GOOGLE_MODELS_URL);
+        assert_eq!(completion_auth("google"), CompletionAuth::GoogleApiKey);
+
+        assert_eq!(
+            completion_endpoint("ollama", Some("http://localhost:11434/v1"), None),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            model_catalogue_endpoint("lmstudio", Some("http://localhost:1234/v1")),
+            "http://localhost:1234/v1/models"
+        );
+        assert_eq!(completion_auth("ollama"), CompletionAuth::None);
+        assert_eq!(completion_auth("lmstudio"), CompletionAuth::None);
+    }
+
+    #[test]
+    fn every_provider_uses_the_right_auth_header() {
+        let client = reqwest::Client::new();
+        let build = |provider: &str| {
+            apply_completion_auth(
+                client.post("https://example.test/completions"),
+                provider,
+                "test-provider-key",
+            )
+            .build()
+            .unwrap()
+        };
+
+        let bearer = build("openrouter");
+        assert_eq!(
+            bearer
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-provider-key")
+        );
+
+        let anthropic = build("anthropic");
+        assert_eq!(
+            anthropic
+                .headers()
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("test-provider-key")
+        );
+        assert_eq!(
+            anthropic
+                .headers()
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some(ANTHROPIC_VERSION)
+        );
+
+        let google = build("google");
+        assert_eq!(
+            google
+                .headers()
+                .get("x-goog-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("test-provider-key")
+        );
+
+        let local = build("ollama");
+        assert!(local.headers().get(reqwest::header::AUTHORIZATION).is_none());
+        assert!(local.headers().get("x-api-key").is_none());
+        assert!(local.headers().get("x-goog-api-key").is_none());
     }
 
     #[test]
@@ -2599,6 +3069,7 @@ mod tests {
         assert!(openai_is_realtime_model("gpt-realtime-2.1-mini"));
         assert!(!openai_is_realtime_model("gpt-4o-mini"));
         assert!(!openai_is_realtime_model("whisper-1"));
+        assert!(openai_is_realtime_model("gpt-live-1"));
     }
 
     #[test]
@@ -2610,8 +3081,15 @@ mod tests {
     }
 
     #[test]
+    fn xai_chat_catalogue_uses_the_native_live_models_endpoint() {
+        assert_eq!(XAI_MODELS_URL, "https://api.x.ai/v1/models");
+        assert!(!xai_is_realtime_model("grok-4.1"));
+        assert!(!xai_is_realtime_model("grok-4.1-mini"));
+    }
+
+    #[test]
     fn text_length_limit_is_sane() {
-        assert_eq!(MAX_TEXT_LEN, 32_000);
+        assert_eq!(MAX_TEXT_LEN, 128_000);
     }
 
     #[test]
@@ -2643,6 +3121,28 @@ mod tests {
     fn text_exceeding_max_len_would_be_rejected() {
         let text = "a".repeat(MAX_TEXT_LEN + 1);
         assert!(text.len() > MAX_TEXT_LEN);
+    }
+
+    #[test]
+    fn opencode_catalogues_only_offer_models_supported_by_the_selected_endpoint() {
+        assert!(opencode_model_uses_chat_completions("opencode", "glm-5.3-flash"));
+        assert!(!opencode_model_uses_chat_completions("opencode", "gpt-5.6-sol"));
+        assert!(opencode_model_uses_chat_completions("opencode-go", "kimi-k3"));
+        assert!(!opencode_model_uses_chat_completions("opencode-go", "qwen3.8-max"));
+    }
+
+    #[test]
+    fn unsupported_catalogue_entries_keep_capability_metadata() {
+        let entry = ModelInfo {
+            id: "gpt-5.6-sol".into(),
+            label: "gpt-5.6-sol".into(),
+            description: String::new(),
+            supported: false,
+            support_reason: Some("unsupported protocol".into()),
+        };
+        let json = serde_json::to_value(entry).unwrap();
+        assert_eq!(json["supported"], false);
+        assert_eq!(json["supportReason"], "unsupported protocol");
     }
 
     #[test]

@@ -95,6 +95,14 @@ pub struct UsageWindow {
     pub resets_at_epoch_secs: Option<i64>,
 }
 
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetCredit {
+    pub id: String,
+    pub reset_type: Option<String>,
+    pub expires_at_iso: Option<String>,
+}
+
 impl UsageWindow {
     fn new(label: &str, used_percent: f64) -> Self {
         Self {
@@ -174,6 +182,9 @@ pub struct ProviderUsage {
     /// An email or an opaque id — whatever the provider exposes.
     pub account: Option<String>,
     pub windows: Vec<UsageWindow>,
+    /// OpenAI-issued credits that can reset an eligible Codex limit.
+    pub reset_credits_available: Option<u32>,
+    pub reset_credits: Vec<ResetCredit>,
     /// Human-readable failure reason. Never contains a token.
     pub error: Option<String>,
     /// A non-failure explanation for an empty or unusual reading — "this plan
@@ -194,6 +205,8 @@ impl ProviderUsage {
             plan: None,
             account: None,
             windows: Vec::new(),
+            reset_credits_available: None,
+            reset_credits: Vec::new(),
             error: None,
             note: None,
             fetched_at: now_secs(),
@@ -1357,6 +1370,8 @@ fn parse_claude_windows(body: &Value) -> Vec<UsageWindow> {
 // ---------------------------------------------------------------------------
 
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESET_CREDITS_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 async fn fetch_codex(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderUsage {
     let Some(path) = auth_file(spec) else {
@@ -1405,11 +1420,71 @@ async fn fetch_codex(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderU
     usage.plan = body.get("plan_type").and_then(Value::as_str).map(str::to_string);
     usage.account = body.get("email").and_then(Value::as_str).map(str::to_string);
     usage.windows = parse_codex_windows(&body);
+    usage.reset_credits_available = body
+        .get("rate_limit_reset_credits")
+        .and_then(|credits| credits.get("available_count"))
+        .and_then(Value::as_u64)
+        .map(|count| count.min(u32::MAX as u64) as u32);
+    if usage.reset_credits_available.unwrap_or(0) > 0 {
+        if let Some(credits) = fetch_codex_reset_credits(client, token, account_id).await {
+            usage.reset_credits = credits;
+        }
+    }
     if usage.windows.is_empty() {
         usage.status = UsageStatus::Error;
         usage.error = Some("OpenAI reported no rate-limit windows".to_string());
     }
     usage
+}
+
+async fn fetch_codex_reset_credits(
+    client: &reqwest::Client,
+    token: &str,
+    account_id: Option<&str>,
+) -> Option<Vec<ResetCredit>> {
+    let mut request = client
+        .get(CODEX_RESET_CREDITS_URL)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("User-Agent", "codex-cli");
+    if let Some(id) = account_id {
+        request = request.header("chatgpt-account-id", id);
+    }
+
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    Some(parse_codex_reset_credits(&body))
+}
+
+fn parse_codex_reset_credits(body: &Value) -> Vec<ResetCredit> {
+    let Some(credits) = body.get("credits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    credits
+        .iter()
+        .filter(|credit| {
+            credit
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|status| status == "available")
+                .unwrap_or(false)
+        })
+        .filter_map(|credit| {
+            Some(ResetCredit {
+                id: credit.get("id")?.as_str()?.to_string(),
+                reset_type: credit
+                    .get("reset_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                expires_at_iso: credit
+                    .get("expires_at")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
+        })
+        .collect()
 }
 
 /// Codex names its windows only by length, so the label is derived from
@@ -3473,6 +3548,38 @@ mod tests {
         assert_eq!(windows[0].used_percent, 100.0);
         assert_eq!(windows[0].window_minutes, Some(43_200));
         assert_eq!(windows[0].resets_at_epoch_secs, Some(1_787_080_318));
+    }
+
+    #[test]
+    fn parses_available_codex_reset_credits_and_ignores_redeemed_ones() {
+        let body: Value = serde_json::from_str(
+            r#"{
+                "credits": [
+                    {
+                        "id": "RateLimitResetCredit_one",
+                        "reset_type": "weekly",
+                        "status": "available",
+                        "expires_at": "2026-09-30T12:00:00Z"
+                    },
+                    {
+                        "id": "RateLimitResetCredit_two",
+                        "reset_type": "weekly",
+                        "status": "redeemed",
+                        "expires_at": null
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let credits = parse_codex_reset_credits(&body);
+        assert_eq!(credits.len(), 1);
+        assert_eq!(credits[0].id, "RateLimitResetCredit_one");
+        assert_eq!(credits[0].reset_type.as_deref(), Some("weekly"));
+        assert_eq!(
+            credits[0].expires_at_iso.as_deref(),
+            Some("2026-09-30T12:00:00Z")
+        );
     }
 
     #[test]

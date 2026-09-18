@@ -51,12 +51,13 @@
   animation: settingsScaleUp 0.3s var(--ease-spring);
   view-transition-name: spacron-settings-modal;
   isolation: isolate;
-  /* Settings is portaled outside .app-shell, so give it the same application
-     scale explicitly. The editor and terminal are not inside this surface. */
-  font-size: 14px;
-  zoom: var(--ui-font-scale, 1);
-  width: min(1060px, calc(100% / var(--ui-font-scale, 1)));
-  height: min(780px, calc(100% / var(--ui-font-scale, 1)));
+  /* Settings is portaled outside .app-shell, so give it the same UI type
+     directly. Changing UI text size must not resize or zoom the modal. */
+  font-family: var(--font-sans);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: 400;
+  width: min(1060px, 100%);
+  height: min(780px, 100%);
 }
 
 /* Light-theme modal gets a brighter, crisper shadow */
@@ -624,6 +625,10 @@
 }
 
 .settings-github-scope {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
@@ -632,6 +637,7 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 10.5px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .settings-github-actions,
@@ -646,6 +652,26 @@
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+details.settings-github-note summary {
+  cursor: pointer;
+}
+
+details.settings-github-note pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .settings-github-device-row {
@@ -1512,9 +1538,38 @@
   font-weight: 600;
 }
 
+.sselect-option.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sselect-option.disabled small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .sselect-option.selected svg {
   color: var(--accent);
   flex-shrink: 0;
+}
+
+/* Brand marks in selects (provider/model pickers): fixed 16px box so every
+   row lines up whether the mark is an SVG logo or a letter tile. */
+.sselect-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+.sselect-icon .agent-brand-mark,
+.sselect-icon .agent-brand-mark > svg,
+.sselect-icon .agent-brand-mark > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 /* Voice Preview Button */

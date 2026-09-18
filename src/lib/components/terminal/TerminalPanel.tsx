@@ -212,7 +212,7 @@ export default function TerminalPanel({
 
   const totalCells = columns.reduce((sum, column) => sum + column.cells.length, 0);
   const shellSessions = useMemo(
-    () => allSessions.filter((session) => !isAgentSession(session)),
+    () => allSessions.filter((session) => !isAgentSession(session) && !session.hidden),
     [allSessions],
   );
   // Read inside the auto-open timer, which would otherwise close over the

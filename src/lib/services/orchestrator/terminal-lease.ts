@@ -14,7 +14,8 @@ import {
   prepareTurnSignals,
 } from '$lib/services/orchestrator/agent-hook-signals';
 import { onSessionExit } from '$lib/stores/terminal';
-import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
+import { getAgentProviderLaunchOptions } from '$lib/services/agent-provider-catalogue';
+import type { ChatAccessMode, ChatReasoningEffort } from '$lib/types/chat';
 
 export interface LeaseOrchestratorTerminalArgs {
   agentCommand: string;
@@ -28,17 +29,10 @@ export interface LeaseOrchestratorTerminalArgs {
   activate?: boolean;
   /** Provider-native model id selected in the Chat composer. */
   model?: string | null;
-}
-
-const MODEL_FLAG_AGENTS = new Set(['codex', 'claude', 'cursor-agent', 'grok', 'opencode', 'pi']);
-
-function withAgentModel(command: string, model?: string | null): string {
-  const value = model?.trim() ?? '';
-  // Model ids come from the provider catalogue. Keep this guard here as a
-  // second line of defence before a value is interpolated into a shell command.
-  if (!value || value === 'default' || !/^[A-Za-z0-9._:/-]+$/.test(value)) return command;
-  if (!MODEL_FLAG_AGENTS.has(agentExecutable(command)) || /(?:^|\s)--model(?:=|\s)/.test(command)) return command;
-  return `${command} --model ${value}`;
+  /** Chat-only access policy. Undefined/inherit preserves normal CLI settings. */
+  accessMode?: ChatAccessMode;
+  /** Provider-native reasoning effort selected before the session starts. */
+  reasoningEffort?: ChatReasoningEffort;
 }
 
 /**
@@ -94,11 +88,24 @@ export async function leaseOrchestratorTerminal(args: LeaseOrchestratorTerminalA
   // part of the command line. A null here just means this CLI can't emit
   // sentinels (or the channel failed to open), and the watcher falls back to
   // scanning output — so it is never a reason to abandon the spawn.
-  const requestedCommand = withAgentModel(args.agentCommand, args.model);
-  const prepared = await prepareTurnSignals(requestedCommand);
-  const command = prepared?.command ?? requestedCommand;
+  const launchOptions = getAgentProviderLaunchOptions(args.agentCommand, {
+    model: args.model,
+    accessMode: args.accessMode,
+    reasoningEffort: args.reasoningEffort,
+  });
+  const prepared = await prepareTurnSignals(args.agentCommand);
+  const hookArgs = prepared?.command.startsWith(args.agentCommand)
+    ? prepared.command.slice(args.agentCommand.length).trim()
+    : '';
+  const runtimeArgs = [launchOptions.runtimeArgs, hookArgs].filter(Boolean).join(' ');
 
-  const sessionId = await spawnAgentPreset(command, args.cwd, { activate, skipAutoBrief: true });
+  const spawnOptions: Parameters<typeof spawnAgentPreset>[2] = {
+    activate,
+    skipAutoBrief: true,
+  };
+  if (launchOptions.permissionArgs !== undefined) spawnOptions.permissionArgsOverride = launchOptions.permissionArgs;
+  if (runtimeArgs) spawnOptions.runtimeArgs = runtimeArgs;
+  const sessionId = await spawnAgentPreset(args.agentCommand, args.cwd, spawnOptions);
   if (sessionId == null) {
     if (prepared) await discardPreparedTurnSignals(prepared);
     return null;

@@ -69,7 +69,7 @@ export interface ConversationEntry {
   startedAt: number;
   /** Set when the call ends; absent while it is still live. */
   endedAt?: number;
-  /** Engine id — 'openai-realtime' / 'xai-realtime'. */
+  /** Engine id — 'openai-realtime' / 'openai-live' / 'xai-realtime'. */
   engine: string;
   model?: string;
   projectId?: string;

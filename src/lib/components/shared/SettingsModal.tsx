@@ -22,7 +22,6 @@ import {
   backgroundImageOpacity,
   closeBehavior,
   columnSelection,
-  currentAiModel,
   currentVoiceAiModel,
   currentVoiceInputModel,
   defaultShortcuts,
@@ -40,7 +39,6 @@ import {
   notificationsEnabled,
   resetSettingsToDefault,
   shortcutActions,
-  setAiModel,
   setProviderBaseUrl,
   setVoiceAiModel,
   setVoiceInputModel,
@@ -69,6 +67,10 @@ import {
   openaiRealtimeModelOptions,
   openaiRealtimeVoice,
   openaiRealtimeVoiceOptions,
+  openaiLiveModel,
+  openaiLiveModelOptions,
+  openaiLiveVoice,
+  openaiLiveVoiceOptions,
   xaiRealtimeModel,
   xaiRealtimeModelOptions,
   xaiRealtimeVoice,
@@ -91,6 +93,7 @@ import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
 import { AgentBrandMark } from './useAgentBrand';
+import { ProviderBrandMark } from './providerBrands';
 import AgentsPane from '$lib/components/agents/AgentsPane';
 import VoiceHistoryPanel from './VoiceHistoryPanel';
 import UsageStatsPane from '$lib/components/stats/UsageStatsPane';
@@ -133,7 +136,7 @@ type SettingsModalProps = {
 const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'general', label: 'General', kicker: 'Editor and app' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media' },
-  { id: 'models', label: 'AI Models', kicker: 'Providers and keys' },
+  { id: 'models', label: 'AI Connections', kicker: 'Providers and keys' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
@@ -170,9 +173,8 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'accent-color', tab: 'appearance', section: 'Appearance', label: 'Accent color', keywords: 'colour highlight brand' },
   { id: 'custom-background', tab: 'appearance', section: 'Background', label: 'Custom background', keywords: 'wallpaper image' },
   { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
-  { id: 'ai-provider', tab: 'models', section: 'Primary provider', label: 'Provider', keywords: 'ai model service' },
-  { id: 'ai-api-key', tab: 'models', section: 'Primary provider', label: 'API key', keywords: 'token secret credentials', target: 'section' },
-  { id: 'ai-model', tab: 'models', section: 'Primary provider', label: 'Model', keywords: 'ai completion' },
+  { id: 'ai-provider', tab: 'models', section: 'Provider connections', label: 'Provider', keywords: 'ai model service connection' },
+  { id: 'ai-api-key', tab: 'models', section: 'Provider connections', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
   { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
   { id: 'local-speech-models', tab: 'models', section: 'Local Speech-to-Text (STT)', label: 'Local Speech-to-Text', keywords: 'offline private voice dictation', target: 'section' },
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
@@ -223,6 +225,25 @@ function classNames(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
 }
 
+/** Brand mark for an AI provider id, used in every provider/model select. */
+function providerIcon(id: string) {
+  const def = aiProviders.find((item) => item.id === id);
+  return <ProviderBrandMark id={id} label={def?.label ?? id} />;
+}
+
+/** Open a provider/help URL in the system default browser. A plain
+ *  `<a href target="_blank">` is swallowed by the Tauri WebView, so route
+ *  through the backend opener with a window.open fallback. */
+function openExternalUrl(url: string) {
+  void (async () => {
+    try {
+      await invoke('preview_open_in_browser', { url });
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  })();
+}
+
 /** Human-readable byte size, e.g. 654311424 -> "624 MB". */
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -252,12 +273,14 @@ function StyledSelect<T extends string>({
   onChange,
   ariaLabel,
   showSearch = false,
+  renderIcon,
 }: {
   value: T;
-  options: { id: T; label: string }[];
+  options: { id: T; label: string; disabled?: boolean; disabledReason?: string }[];
   onChange: (value: T) => void;
   ariaLabel: string;
   showSearch?: boolean;
+  renderIcon?: (id: T) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
@@ -384,15 +407,25 @@ function StyledSelect<T extends string>({
                   key={opt.id}
                   role="option"
                   aria-selected={opt.id === value}
-                  className={`sselect-option${opt.id === value ? ' selected' : ''}`}
-                  onMouseDown={() => { onChange(opt.id); setOpen(false); }}
+                  aria-disabled={opt.disabled}
+                  className={`sselect-option${opt.id === value ? ' selected' : ''}${opt.disabled ? ' disabled' : ''}`}
+                  title={opt.disabledReason}
+                  onMouseDown={() => {
+                    if (opt.disabled) return;
+                    onChange(opt.id);
+                    setOpen(false);
+                  }}
                 >
+                  {renderIcon && (
+                    <span className="sselect-icon" aria-hidden="true">{renderIcon(opt.id)}</span>
+                  )}
                   {opt.id === value && (
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
                   )}
                   <span>{opt.label}</span>
+                  {opt.disabled && <small>Not supported yet</small>}
                 </li>
               ))
             )}
@@ -412,6 +445,9 @@ function StyledSelect<T extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
       >
+        {renderIcon && (
+          <span className="sselect-icon" aria-hidden="true">{renderIcon(value)}</span>
+        )}
         <span className="sselect-value">{selectedLabel}</span>
         <svg className="sselect-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="6 9 12 15 18 9" />
@@ -428,6 +464,7 @@ function SelectField<T extends string>(props: {
   options: { id: T; label: string }[];
   onChange: (value: T) => void;
   ariaLabel: string;
+  renderIcon?: (id: T) => React.ReactNode;
 }) {
   return <StyledSelect {...props} />;
 }
@@ -466,19 +503,27 @@ function ModelSelect({
   models,
   onChange,
   label,
+  renderIcon,
 }: {
   value: string;
   models: AiModelOption[];
   onChange: (value: string) => void;
   label: string;
+  renderIcon?: (id: string) => React.ReactNode;
 }) {
   return (
     <StyledSelect
       value={value}
-      options={models.map((m) => ({ id: m.id, label: m.label }))}
+      options={models.map((m) => ({
+        id: m.id,
+        label: m.label,
+        disabled: m.supported === false,
+        disabledReason: m.supportReason,
+      }))}
       onChange={onChange}
       ariaLabel={label}
       showSearch={true}
+      renderIcon={renderIcon}
     />
   );
 }
@@ -774,12 +819,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [customKeys, setCustomKeys] = useState('');
   const [customAction, setCustomAction] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+  // This selects which connection card is being managed. It deliberately does
+  // not change the orchestrator: each Chat conversation owns that choice in
+  // its composer.
+  const [provider, setProvider] = useState<AiProviderId>(() => get(aiProvider));
   const [keyExists, setKeyExists] = useState(false);
   const [groqKeyExists, setGroqKeyExists] = useState(false);
   const [openaiKeyExists, setOpenaiKeyExists] = useState(false);
   const [xaiKeyExists, setXaiKeyExists] = useState(false);
   const [providerLiveModels, setProviderLiveModels] = useState<Record<string, AiModelOption[]>>({});
   const [modelLoading, setModelLoading] = useState(false);
+  const [providerModelError, setProviderModelError] = useState('');
   const [localUrlInput, setLocalUrlInput] = useState('');
   const providerLiveModelsRef = useRef<Record<string, AiModelOption[]>>({});
 
@@ -853,8 +903,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAppearance = useStore(appearance);
   const bgEnabled = useStore(backgroundImageEnabled);
   const bgBlur = useStore(backgroundImageBlur);
-  const provider = useStore(aiProvider);
-  const model = useStore(currentAiModel);
   const shortcuts = useStore(userShortcuts);
   const shell = useStore(terminalShell);
   const termFontSize = useStore(terminalFontSize);
@@ -879,6 +927,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const conversationEngine = useStore(voiceConversationEngine);
   const realtimeModel = useStore(openaiRealtimeModel);
   const realtimeVoice = useStore(openaiRealtimeVoice);
+  const liveModel = useStore(openaiLiveModel);
+  const liveVoice = useStore(openaiLiveVoice);
   const grokRealtimeModel = useStore(xaiRealtimeModel);
   const grokRealtimeVoice = useStore(xaiRealtimeVoice);
   const announceCompletions = useStore(announceAgentCompletions);
@@ -887,9 +937,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const displayedAccentColor = currentAccentColor || defaultAccentColor;
 
   const providerDef = getProviderDef(provider);
-  const models = providerLiveModels[provider] ?? providerDef.models;
   const localProvider = isLocalProvider(provider);
-  const selectedModel = models.find((item) => item.id === model) ?? providerDef.models.find((item) => item.id === model);
   const completionDef = getProviderDef(completionProvider);
   const completionModels = completionLiveModels[completionProvider] ?? completionDef.models;
   const completionModel = completionModelMap[completionProvider] || completionDef.defaultModel;
@@ -920,6 +968,14 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     if (!live || live.length === 0) return openaiRealtimeModelOptions;
     const curated = new Map(openaiRealtimeModelOptions.map((m) => [m.id, m]));
     return live.map((m) => curated.get(m.id) ?? m);
+  }, [providerRealtimeModels]);
+
+  const openaiLiveModelsMerged = useMemo(() => {
+    const live = providerRealtimeModels['openai'];
+    if (!live || live.length === 0) return openaiLiveModelOptions;
+    const curated = new Map(openaiLiveModelOptions.map((m) => [m.id, m]));
+    const models = live.filter((m) => m.id.toLowerCase().includes('live'));
+    return (models.length ? models : openaiLiveModelOptions).map((m) => curated.get(m.id) ?? m);
   }, [providerRealtimeModels]);
 
   const xaiRealtimeModelsMerged = useMemo(() => {
@@ -961,27 +1017,37 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     setModelLoading(true);
     try {
       const remote = await listProviderModels(prov);
+      if (remote.length === 0) {
+        throw new Error(`${getProviderDef(prov).label} returned no usable models.`);
+      }
       const curated = new Map(getProviderDef(prov).models.map((m) => [m.id, m]));
       const merged: AiModelOption[] = remote.map((r) => {
         const c = curated.get(r.id);
         return {
           id: r.id,
           label: c?.label ?? r.label ?? r.id,
-          description: c?.description ?? r.description ?? '',
+          description: c?.description ?? '',
           free: c?.free ?? r.id.endsWith(':free'),
+          supported: r.supported,
+          supportReason: r.supportReason,
         };
       });
-      const finalModels = merged.length ? merged : getProviderDef(prov).models;
       setProviderLiveModels((prev) => ({
         ...prev,
-        [prov]: finalModels,
+        [prov]: merged,
       }));
+      if (prov === provider) setProviderModelError('');
     } catch (err) {
       console.error('Failed to load models for provider:', prov, err);
+      if (prov === provider) {
+        setProviderModelError(
+          err instanceof Error ? err.message : 'Could not load the model list.',
+        );
+      }
     } finally {
       setModelLoading(false);
     }
-  }, []);
+  }, [provider]);
 
   const loadCompletionLiveModels = useCallback(async (prov: AiProviderId, force = false) => {
     if (!isTauriRuntime()) return;
@@ -1005,20 +1071,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     
     try {
       const remote = await listProviderModels(prov);
+      if (remote.length === 0) {
+        throw new Error(`${getProviderDef(prov).label} returned no usable models.`);
+      }
       const curated = new Map(getProviderDef(prov).models.map((m) => [m.id, m]));
       const merged: AiModelOption[] = remote.map((r) => {
         const c = curated.get(r.id);
         return {
           id: r.id,
           label: c?.label ?? r.label ?? r.id,
-          description: c?.description ?? r.description ?? '',
+          description: c?.description ?? '',
           free: c?.free ?? r.id.endsWith(':free'),
+          supported: r.supported,
+          supportReason: r.supportReason,
         };
       });
-      const finalModels = merged.length ? merged : getProviderDef(prov).models;
       setCompletionLiveModels((prev) => ({
         ...prev,
-        [prov]: finalModels,
+        [prov]: merged,
       }));
     } catch (err) {
       console.error('Failed to load completion models for provider:', prov, err);
@@ -1042,7 +1112,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
         return {
           id: r.id,
           label: c?.label ?? r.label ?? r.id,
-          description: c?.description ?? r.description ?? '',
+          description: c?.description ?? '',
         };
       });
       if (merged.length) setProviderSttModels((prev) => ({ ...prev, [pid]: merged }));
@@ -1069,7 +1139,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       const merged: AiModelOption[] = remote.map((r) => ({
         id: r.id,
         label: r.label ?? r.id,
-        description: r.description ?? '',
+        description: '',
       }));
       if (merged.length) {
         setProviderRealtimeModels((prev) => ({ ...prev, [prov]: merged }));
@@ -1083,6 +1153,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   useEffect(() => {
     setApiKeyInput('');
+    setProviderModelError('');
     if (!isTauriRuntime()) {
       setKeyExists(false);
       return;
@@ -1208,18 +1279,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       return next;
     });
     showToast(`${providerDef.label} key removed`, 'success');
-  }
-
-  async function refreshModels() {
-    if (!isTauriRuntime()) {
-      showToast('Live model refresh is available in the desktop app.', 'info');
-      return;
-    }
-    await loadLiveModels(provider, true);
-    await loadCompletionLiveModels(completionProvider, true);
-    if (voiceInput !== 'webspeech') await loadSttModels(voiceInput, true);
-    await loadLiveModels(refinementProvider, true);
-    showToast('Model list refreshed', 'success');
   }
 
   async function checkUpdates() {
@@ -1658,7 +1717,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button className="num-btn-reset" onClick={() => uiZoom.set(100)}>Reset</button>
                     </div>
                   </SettingRow>
-                  <SettingRow title="UI font size" detail={`${currentUiFontSize}px · editor stays unchanged`}>
+                  <SettingRow title="UI font size" detail={`${currentUiFontSize}px · editor and terminal stay unchanged`}>
                     <div className="num-control">
                       <button className="num-btn" onClick={() => uiFontSize.set(Math.max(12, currentUiFontSize - 1))} aria-label="Decrease UI font size">−</button>
                       <span className="num-val">{currentUiFontSize}px</span>
@@ -1726,9 +1785,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'models' && (
               <>
-                <Section title="Primary provider">
-                  <SettingRow title="Provider" detail="Main AI provider for orchestration & AI commits">
-                    <SelectField value={provider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={aiProvider.set} ariaLabel="AI provider" />
+                <Section title="Provider connections">
+                  <SettingRow title="Provider" detail="Choose a connection to configure. Pick the orchestrator provider and model in each Chat composer.">
+                    <SelectField value={provider} options={aiProviders.filter((item) => item.id !== 'local').map((item) => ({ id: item.id, label: item.label }))} onChange={(value) => setProvider(value as AiProviderId)} ariaLabel="AI provider connection" renderIcon={providerIcon} />
                   </SettingRow>
 
                   {localProvider ? (
@@ -1758,19 +1817,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <div className="settings-action-row">
                         <button className="settings-primary" onClick={() => void saveKey()} disabled={!apiKeyInput.trim()}>Save key</button>
                         <button className="settings-secondary" onClick={() => void clearKey()} disabled={!keyExists}>Clear key</button>
-                        <a className="settings-link-button" href={providerDef.keyUrl} target="_blank" rel="noreferrer">Open provider</a>
+                        <button className="settings-link-button" onClick={() => openExternalUrl(providerDef.keyUrl)}>Open provider</button>
                       </div>
                     </>
                   )}
 
-                  <SettingRow title="Model" detail={selectedModel?.description}>
-                    <ModelSelect value={model} models={models} onChange={(value) => setAiModel(provider, value)} label="Primary AI model" />
-                  </SettingRow>
-                  <div className="settings-action-row">
-                    <button className="settings-secondary" onClick={() => void refreshModels()} disabled={modelLoading}>
-                      {modelLoading ? 'Refreshing...' : 'Refresh models'}
-                    </button>
-                  </div>
                 </Section>
 
                 <Section title="Inline completion">
@@ -1778,7 +1829,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     <Toggle label="Toggle ghost text" checked={completionEnabled} onChange={aiGhostTextEnabled.set} />
                   </SettingRow>
                   <SettingRow title="Provider">
-                    <SelectField value={completionProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={aiCompletionProvider.set} ariaLabel="Completion provider" />
+                    <SelectField value={completionProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={aiCompletionProvider.set} ariaLabel="Completion provider" renderIcon={providerIcon} />
                   </SettingRow>
                   <SettingRow title="Model">
                     <ModelSelect
@@ -1786,6 +1837,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       models={completionModels}
                       onChange={(value) => aiCompletionModelByProvider.update((map) => ({ ...map, [completionProvider]: value }))}
                       label="Completion model"
+                      renderIcon={() => providerIcon(completionProvider)}
                     />
                   </SettingRow>
                   <div className="settings-action-row">
@@ -1880,7 +1932,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               <>
                 <Section title="Voice input">
                   <SettingRow title="Provider">
-                    <SelectField value={voiceInput} options={voiceInputProviders} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" />
+                    <SelectField value={voiceInput} options={voiceInputProviders} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" renderIcon={providerIcon} />
                   </SettingRow>
                   {voiceInputUsesModelTranscription(voiceInput) && (
                     <>
@@ -1941,10 +1993,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     />
                   </SettingRow>
                   <SettingRow title="Provider">
-                    <SelectField value={refinementProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceAiProvider.set} ariaLabel="Voice refinement provider" />
+                    <SelectField value={refinementProvider} options={aiProviders.map((item) => ({ id: item.id, label: item.label }))} onChange={voiceAiProvider.set} ariaLabel="Voice refinement provider" renderIcon={providerIcon} />
                   </SettingRow>
                   <SettingRow title="Model">
-                    <ModelSelect value={refinementModel} models={refinementModels} onChange={(value) => setVoiceAiModel(refinementProvider, value)} label="Voice refinement model" />
+                    <ModelSelect value={refinementModel} models={refinementModels} onChange={(value) => setVoiceAiModel(refinementProvider, value)} label="Voice refinement model" renderIcon={() => providerIcon(refinementProvider)} />
                   </SettingRow>
                   <div className="settings-action-row">
                     <button className="settings-secondary" onClick={() => void loadLiveModels(refinementProvider, true)} disabled={modelLoading}>
@@ -1958,12 +2010,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Engine"
                     detail={conversationEngine === 'xai-realtime'
                       ? 'One live speech-to-speech call to xAI Grok, with sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
+                      : conversationEngine === 'openai-live'
+                        ? 'OpenAI GPT Live handles the spoken conversation and delegates project work to Spacron’s orchestrator over a full-duplex WebRTC session.'
                       : 'One live speech-to-speech call to OpenAI. Replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'}
                   >
                     <SelectField
                       value={conversationEngine}
                       options={[
                         { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
+                        { id: 'openai-live', label: 'GPT Live (OpenAI)' },
                         { id: 'xai-realtime', label: 'Grok Realtime (xAI)' },
                       ]}
                       onChange={(value) => voiceConversationEngine.set(value as VoiceConversationEngine)}
@@ -1978,6 +2033,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           models={openaiRealtimeModelsMerged}
                           onChange={openaiRealtimeModel.set}
                           label="Realtime model"
+                          renderIcon={() => providerIcon('openai')}
                         />
                       </SettingRow>
                       {openaiKeyExists && (
@@ -2012,6 +2068,44 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       )}
                     </>
                   )}
+                  {conversationEngine === 'openai-live' && (
+                    <>
+                      <SettingRow title="Live model">
+                        <ModelSelect
+                          value={liveModel}
+                          models={openaiLiveModelsMerged}
+                          onChange={openaiLiveModel.set}
+                          label="GPT Live model"
+                          renderIcon={() => providerIcon('openai')}
+                        />
+                      </SettingRow>
+                      {openaiKeyExists && (
+                        <div className="settings-action-row">
+                          <button type="button" className="settings-secondary" onClick={() => void loadRealtimeModels('openai', true)} disabled={realtimeModelLoading}>
+                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
+                          </button>
+                        </div>
+                      )}
+                      <SettingRow title="Voice">
+                        <StyledSelect
+                          value={liveVoice}
+                          options={openaiLiveVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
+                          onChange={openaiLiveVoice.set}
+                          ariaLabel="GPT Live voice"
+                        />
+                      </SettingRow>
+                      {!openaiKeyExists && (
+                        <SettingRow title="OpenAI API key" detail="GPT Live needs an OpenAI API key.">
+                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>
+                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
+                              Add API key
+                            </button>
+                          </div>
+                        </SettingRow>
+                      )}
+                    </>
+                  )}
                   {conversationEngine === 'xai-realtime' && (
                     <>
                       <SettingRow title="Realtime model">
@@ -2020,6 +2114,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           models={xaiRealtimeModelsMerged}
                           onChange={xaiRealtimeModel.set}
                           label="Realtime model"
+                          renderIcon={() => providerIcon('xai')}
                         />
                       </SettingRow>
                       {xaiKeyExists && (

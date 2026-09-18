@@ -73,33 +73,6 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* The wordmark travels with the left-sidebar toggle so the shell keeps one
-   consistent brand anchor even when the sidebar is closed. */
-.titlebar .titlebar-nav-brand {
-  position: relative;
-  isolation: isolate;
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  margin-left: 3px;
-  padding: 0 7px;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.045em;
-  opacity: 1;
-}
-
-.titlebar .titlebar-nav-brand::before {
-  content: '';
-  position: absolute;
-  inset: 5px -2px;
-  z-index: -1;
-  border-radius: 14px;
-  background: radial-gradient(ellipse 72% 110% at 50% 50%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 72%);
-  filter: blur(7px);
-  pointer-events: none;
-}
-
 /* Navigation buttons */
 .titlebar .titlebar-nav {
   display: flex;
@@ -192,6 +165,27 @@
 
 .titlebar .titlebar-project-pill:active {
   transform: scale(0.98);
+}
+
+.titlebar .titlebar-project-pill.static {
+  cursor: default;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.titlebar .titlebar-project-pill.static:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.titlebar .titlebar-project-pill.static:hover .titlebar-project-icon {
+  color: var(--text-muted);
+}
+
+.titlebar .titlebar-project-pill.static:active {
+  transform: none;
 }
 
 .titlebar .titlebar-project-icon {

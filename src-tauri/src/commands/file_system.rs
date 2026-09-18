@@ -604,7 +604,58 @@ pub fn fs_write_file(path: String, content: String, state: State<AppState>) -> R
     write_file(&path, &content, &project_roots(&state))
 }
 
+#[tauri::command(async)]
+pub fn save_document_file(filename: String, content: String) -> Result<String, String> {
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.chars().any(|c| matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return Err("Invalid document filename".to_string());
+    }
+    let directory = dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
+        .ok_or_else(|| "Could not find the user Documents folder".to_string())?;
+    std::fs::create_dir_all(&directory).map_err(|e| sanitize_io_error(e, &directory.to_string_lossy()))?;
+    let path = directory.join(&filename);
+    std::fs::write(&path, content).map_err(|e| sanitize_io_error(e, &path.to_string_lossy()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn write_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
+#[tauri::command(async)]
+pub fn fs_write_file_checked(path: String, content: String, expected_content: Option<String>, state: State<AppState>) -> Result<(), String> {
+    write_file_checked(&path, &content, expected_content.as_deref(), &project_roots(&state))
+}
+
+pub fn write_file_checked(path: &str, content: &str, expected: Option<&str>, roots: &[PathBuf]) -> Result<(), String> {
+    let _guard = write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let p = resolve_path(path)?;
+    require_in_roots(&p, roots)?;
+    match std::fs::read_to_string(&p) {
+        Ok(current) if expected == Some(current.as_str()) => {},
+        Ok(_) => return Err("File changed or overwrite precondition missing; read it again before editing".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && expected.is_none() => {
+            if let Some(parent) = p.parent() { std::fs::create_dir_all(parent).map_err(|e| sanitize_io_error(e, path))?; }
+            use std::io::Write;
+            return std::fs::OpenOptions::new().write(true).create_new(true).open(&p)
+                .and_then(|mut file| file.write_all(content.as_bytes())).map_err(|e| sanitize_io_error(e, path));
+        },
+        Err(e) => return Err(sanitize_io_error(e, path)),
+    }
+    write_file_unlocked(path, content, roots)
+}
+
 pub fn write_file(path: &str, content: &str, roots: &[PathBuf]) -> Result<(), String> {
+    let _guard = write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    write_file_unlocked(path, content, roots)
+}
+
+fn write_file_unlocked(path: &str, content: &str, roots: &[PathBuf]) -> Result<(), String> {
     if content.len() > 100 * 1024 * 1024 {
         return Err("Content too large to write (limit 100 MB)".to_string());
     }
@@ -714,4 +765,55 @@ pub fn get_file_info(path: &str, roots: &[PathBuf]) -> Result<FileEntry, String>
         size: metadata.len(),
         modified,
     })
+}
+
+#[tauri::command(async)]
+pub fn fs_glob_files(root_path: String, pattern: String, match_anywhere: bool, max: usize, state: State<AppState>) -> Result<Vec<String>, String> {
+    glob_files(&root_path, &pattern, match_anywhere, max, &project_roots(&state))
+}
+
+pub fn glob_files(root_path: &str, pattern: &str, match_anywhere: bool, max: usize, roots: &[PathBuf]) -> Result<Vec<String>, String> {
+    let root = require_path(root_path)?;
+    require_in_roots(&root, roots)?;
+    let matcher = regex::Regex::new(pattern).map_err(|e| e.to_string())?;
+    let mut builder = ignore::WalkBuilder::new(&root);
+    builder.hidden(false).follow_links(false).sort_by_file_path(|a,b| a.cmp(b)).filter_entry(|e| {
+        ![".git", "node_modules", "target", "dist", "build", ".next", ".venv"].iter().any(|s| e.file_name() == std::ffi::OsStr::new(s))
+    });
+    let mut paths = Vec::new();
+    for item in builder.build().flatten() {
+        if !item.file_type().is_some_and(|f| f.is_file()) { continue; }
+        let relative = item.path().strip_prefix(&root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+        let candidate = if match_anywhere { relative.rsplit('/').next().unwrap_or(&relative) } else { &relative };
+        if matcher.is_match(candidate) { paths.push(relative); }
+        if paths.len() >= max { break; }
+    }
+    Ok(paths)
+}
+
+#[cfg(test)]
+mod agent_file_tests {
+    use super::*;
+    #[test]
+    fn checked_writes_detect_changes_and_do_not_overwrite_unread_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        let path = dir.path().join("test.txt").to_string_lossy().to_string();
+        write_file_checked(&path, "original", None, &roots).unwrap();
+        assert!(write_file_checked(&path, "overwrite", None, &roots).is_err());
+        std::fs::write(&path, "user change").unwrap();
+        assert!(write_file_checked(&path, "overwrite", Some("original"), &roots).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "user change");
+        write_file_checked(&path, "updated", Some("user change"), &roots).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
+    }
+    #[test]
+    fn glob_reaches_files_beyond_old_depth_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("a/b/c/d/e/f/g/h");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("target.ts"), "test").unwrap();
+        let paths = glob_files(&dir.path().to_string_lossy(), "target[.]ts$", true, 10, &[dir.path().to_path_buf()]).unwrap();
+        assert_eq!(paths, vec!["a/b/c/d/e/f/g/h/target.ts"]);
+    }
 }

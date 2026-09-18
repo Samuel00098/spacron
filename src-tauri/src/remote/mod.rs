@@ -608,6 +608,20 @@ fn dispatch_invoke(cmd: &str, args: Value, roots: &[PathBuf]) -> Result<Value, S
         "fs_create_file" => ok(fs::create_file(&parse::<PathArgs>(args)?.path, roots)?),
         "fs_create_dir" => ok(fs::create_dir(&parse::<PathArgs>(args)?.path, roots)?),
         "fs_delete" => ok(fs::delete(&parse::<PathArgs>(args)?.path, roots)?),
+        "fs_glob_files" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Glob { root_path: String, pattern: String, match_anywhere: bool, max: usize }
+            let a = parse::<Glob>(args)?;
+            ok(fs::glob_files(&a.root_path, &a.pattern, a.match_anywhere, a.max, roots)?)
+        }
+        "fs_write_file_checked" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Checked { path: String, content: String, expected_content: Option<String> }
+            let a = parse::<Checked>(args)?;
+            ok(fs::write_file_checked(&a.path, &a.content, a.expected_content.as_deref(), roots)?)
+        }
         "fs_write_file" => {
             let a = parse::<WriteFileArgs>(args)?;
             ok(fs::write_file(&a.path, &a.content, roots)?)

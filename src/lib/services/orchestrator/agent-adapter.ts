@@ -1,6 +1,7 @@
 import {
   waitForAgentReady,
   sendAgentPromptDirect,
+  sendAgentInputLine,
   writeToSession,
   getSessionOutputBuffer,
   onSessionExit,
@@ -40,6 +41,10 @@ export class AgentAdapter {
 
   sendFollowUp(message: string, opts?: SendOptions): Promise<boolean> {
     return this.sendGoal(message, opts);
+  }
+
+  sendInputLine(text: string): Promise<boolean> {
+    return sendAgentInputLine(this.sessionId, text);
   }
 
   resend(message: string): void {

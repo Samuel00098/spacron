@@ -11,7 +11,9 @@ import {
 import { showToast } from '$lib/stores/notification';
 import {
   primeTranscriptionTargetTracking,
+  sendTranscriptionNow,
   startBarTranscription,
+  toggleChatModeTranscription,
   transcriptionState,
   transcriptionLevel,
   transcriptionWordCount,
@@ -21,6 +23,7 @@ import TranscriptionIndicator from './TranscriptionIndicator.tsx';
 import { createAltTapGesture } from '$lib/services/alt-tap-gesture';
 import {
   isRealtimeVoiceSupported,
+  REALTIME_VOICE_INSTRUCTIONS,
   startRealtimeVoiceSession,
   type RealtimeVoiceSession,
 } from '$lib/services/realtime-voice';
@@ -28,6 +31,8 @@ import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import {
   openaiRealtimeModel,
   openaiRealtimeVoice,
+  openaiLiveModel,
+  openaiLiveVoice,
   userShortcuts,
   voiceConversationEngine,
   xaiRealtimeModel,
@@ -35,6 +40,7 @@ import {
 } from '$lib/stores/settings';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
+import { interactionMode, requestChatVoiceMode } from '$lib/stores/interactionMode';
 import {
   orchestratorTasks,
   sendChatMessage,
@@ -53,22 +59,8 @@ import { formatAgentIdentity } from '$lib/services/orchestrator/inbox';
 import { openSettings } from '$lib/stores/layout';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
+import VoiceInputIcon from '$lib/components/shared/VoiceInputIcon';
 import './FloatingPromptBar.css';
-
-// System instructions for the GPT Realtime speech-to-speech engine. The model
-// converses on its own and delegates real work to the orchestrator via the
-// spacron_orchestrator tool (see realtime-voice.ts).
-const REALTIME_VOICE_INSTRUCTIONS = [
-  "You are Spacron's voice assistant. The user is a developer talking to you hands-free inside Spacron, a desktop app that orchestrates AI coding agents (Claude Code, Codex, Gemini and others) working in terminals on the user's projects.",
-  'Personality: a sharp, friendly pair-programming partner. Sound natural and conversational — contractions, brief reactions, no corporate filler.',
-  'Keep spoken replies short: one to three sentences unless the user asks for detail. Never read code, file paths, or long output aloud verbatim — summarize what it means instead.',
-  'EXCEPTION — when the user explicitly asks you to READ OUT an agent\'s output ("read out what <agent> produced", "read me that output" — where <agent> is whatever name they used), the orchestrator returns the agent\'s actual transcript. Read it out to them properly rather than summarizing it — that is what they asked for. Speak it naturally: skip escape codes and progress bars, say file paths as words, and describe code by what it does instead of spelling it character by character.',
-  'IMPORTANT for that case: the orchestrator decides to return a full transcript by the WORDING of your request, so keep the read-out intent in it. Phrase it as "Read out <agent name>\'s output" (or "Read out the last agent\'s output" when they did not name one). If you rewrite it into "what did <agent> say?" you will get a short summary back instead of the transcript the user asked to hear.',
-  'Whenever the user wants project work done or asked about — spawning or closing agents, giving an agent a task, checking progress or output, navigating the app — call the spacron_orchestrator tool with a clear standalone request, then relay its answer conversationally. For casual conversation, just talk; do not call the tool.',
-  'Calling the tool executes the request immediately — there is no separate confirmation step after it. When the user clearly asked for something, call the tool right away instead of only saying you will. Only ask a clarifying question first when the request is ambiguous or destructive (like closing agents).',
-  'WHERE AGENTS RUN — every new agent runs either in an isolated git worktree (its own branch; edits do not appear in the main checkout until merged) or in the main repo (edits visible immediately; needed for git tag/push). Resolve this BEFORE calling the tool: if the user said where ("in a worktree", "in the main repo", "no worktree"), keep those exact words in the request you send. If they did not say and you are spawning an agent, ask them first — "isolated worktree, or the main repo?" — then call the tool with their answer included. Carry it per agent: "open one Claude Code in a worktree and another in the main repo" must go through as one request naming both placements.',
-  'If a tool result is long, give the gist and offer to go deeper — unless it came from an explicit read-out request, which you read through as described above.',
-].join('\n');
 
 // Per-project state cache
 const barProjectCache = new Map<string, { inputValue: string }>();
@@ -493,10 +485,11 @@ export default function FloatingPromptBar({
   );
 
   const startRealtimeVoiceMode = useCallback(
-    (engine: 'openai-realtime' | 'xai-realtime') => {
+    (engine: 'openai-realtime' | 'xai-realtime' | 'openai-live') => {
       const provider =
-        engine === 'xai-realtime' ? ('xai' as const) : ('openai' as const);
-      const label = provider === 'xai' ? 'Grok Realtime' : 'GPT Realtime';
+        engine === 'xai-realtime' ? ('xai' as const) : engine === 'openai-live' ? ('openai-live' as const) : ('openai' as const);
+      const label = provider === 'xai' ? 'Grok Realtime' : provider === 'openai-live' ? 'GPT Live' : 'GPT Realtime';
+      const keyProvider = provider === 'xai' ? 'xai' : 'openai';
       if (!isRealtimeVoiceSupported(provider)) {
         showToast(
           `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or use Ctrl+Alt+M to dictate instead.`,
@@ -505,9 +498,9 @@ export default function FloatingPromptBar({
         openSettings();
         return;
       }
-      if (!isProviderApiKeyConfiguredLocal(provider)) {
+      if (!isProviderApiKeyConfiguredLocal(keyProvider)) {
         showToast(
-          `${label} needs an ${provider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`,
+          `${label} needs an ${keyProvider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`,
           'warning'
         );
         openSettings();
@@ -532,7 +525,7 @@ export default function FloatingPromptBar({
       setVoicePhase('thinking');
 
       const model = get(
-        provider === 'xai' ? xaiRealtimeModel : openaiRealtimeModel
+        provider === 'xai' ? xaiRealtimeModel : provider === 'openai-live' ? openaiLiveModel : openaiRealtimeModel
       );
       // Opened BEFORE the call connects so the transcript callbacks always have
       // somewhere to land. A call that connects and says nothing is dropped
@@ -554,7 +547,7 @@ export default function FloatingPromptBar({
             provider,
             model,
             voice: get(
-              provider === 'xai' ? xaiRealtimeVoice : openaiRealtimeVoice
+              provider === 'xai' ? xaiRealtimeVoice : provider === 'openai-live' ? openaiLiveVoice : openaiRealtimeVoice
             ),
             instructions: REALTIME_VOICE_INSTRUCTIONS,
             callbacks: {
@@ -726,13 +719,21 @@ export default function FloatingPromptBar({
   // service as Ctrl+Alt+M — one utterance, typed straight into whatever field
   // or terminal held the cursor when it started. No reply is synthesized.
   const toggleTranscriptionMode = useCallback(() => {
+    if (transcribing) {
+      sendTranscriptionNow();
+      return;
+    }
+    if (get(interactionMode) === 'chat') {
+      toggleChatModeTranscription();
+      return;
+    }
     if (!startBarTranscription()) {
       showToast(
         'A transcription is already running. Finish it or press Escape first.',
         'warning'
       );
     }
-  }, []);
+  }, [transcribing]);
 
   // Read an on-disk image into a preview chip. Returns true when the chip was
   // added; false (e.g. file outside the project) lets the caller fall back to a
@@ -796,9 +797,12 @@ export default function FloatingPromptBar({
     [isPointInsideBar]
   );
 
+  const hasTransferFiles = (event: React.DragEvent) =>
+    Array.from(event.dataTransfer?.types ?? []).includes('Files');
+
   const handleInternalDragOver = useCallback(
     (event: React.DragEvent) => {
-      if (!draggedExplorerPath) return;
+      if (!draggedExplorerPath && !hasTransferFiles(event)) return;
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'copy';
@@ -810,7 +814,7 @@ export default function FloatingPromptBar({
 
   const handleInternalDragEnter = useCallback(
     (event: React.DragEvent) => {
-      if (!draggedExplorerPath) return;
+      if (!draggedExplorerPath && !hasTransferFiles(event)) return;
       event.preventDefault();
       updateExplorerDragPoint(event.clientX, event.clientY);
     },
@@ -827,6 +831,59 @@ export default function FloatingPromptBar({
 
   const handleInternalDrop = useCallback(
     (event: React.DragEvent) => {
+      // Real file drops (browser sessions, or file-manager drags where the
+      // webview delivers File objects): persist image bytes to the scratch dir
+      // and chip them; non-images become path chips via the scratch path.
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length) {
+        event.preventDefault();
+        event.stopPropagation();
+        internalDropHandledRef.current = true;
+        queueMicrotask(() => {
+          internalDropHandledRef.current = false;
+        });
+        updateExplorerDragPoint(event.clientX, event.clientY);
+        setIsDragOver(false);
+        setDraggedExplorerPath(null);
+        setLastExplorerDragPoint(null);
+        void (async () => {
+          for (const file of files) {
+            const buffer = new Uint8Array(await file.arrayBuffer());
+            const data = Array.from(buffer);
+            try {
+              const savePath = await invoke<string>('save_pasted_image', {
+                name: file.name || `dropped-file-${Date.now()}`,
+                data,
+              });
+              const normalized = savePath.replace(/\\/g, '/');
+              if (isImagePath(normalized) || file.type.startsWith('image/')) {
+                const objectUrl = URL.createObjectURL(
+                  new Blob([new Uint8Array(buffer)], { type: file.type || 'image/png' })
+                );
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setPastedImages((prev) => [
+                    ...prev,
+                    {
+                      objectUrl,
+                      dataUrl: typeof reader.result === 'string' ? reader.result : '',
+                      name: file.name || 'dropped-image',
+                      diskPath: normalized,
+                    },
+                  ]);
+                };
+                reader.readAsDataURL(new Blob([new Uint8Array(buffer)]));
+              } else {
+                addFileChip(normalized);
+              }
+            } catch (error) {
+              console.error('Failed to attach dropped file:', error);
+            }
+          }
+        })();
+        return;
+      }
+
       const droppedPath =
         draggedExplorerPath ||
         event.dataTransfer?.getData('application/x-spacron-path')?.trim() ||
@@ -861,6 +918,38 @@ export default function FloatingPromptBar({
       isImagePath,
     ]
   );
+
+  // Clipboard image paste onto the bar (Ctrl+V while it has focus). The bar
+  // has no text input, but pasted pixels still need somewhere to land — chip
+  // them like a drop so they ride along with the staged prompt.
+  const handleBarPaste = useCallback((event: React.ClipboardEvent) => {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+      file.type.startsWith('image/')
+    );
+    const itemFile = !files.length
+      ? Array.from(event.clipboardData?.items ?? [])
+          .find((item) => item.type.startsWith('image/'))
+          ?.getAsFile()
+      : null;
+    const imageFile = files[0] ?? itemFile;
+    if (!imageFile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const objectUrl = URL.createObjectURL(imageFile);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPastedImages((prev) => [
+        ...prev,
+        {
+          objectUrl,
+          dataUrl: typeof reader.result === 'string' ? reader.result : '',
+          name: (imageFile as File).name || `pasted-image-${Date.now()}.png`,
+        },
+      ]);
+      setIsExpanded(true);
+    };
+    reader.readAsDataURL(imageFile);
+  }, []);
 
   const lastFocusRequestRef = useRef(0);
   useEffect(() => {
@@ -953,8 +1042,17 @@ export default function FloatingPromptBar({
 
       if (!altTapRef.current.keyup(event) || isRefining) return;
 
+      // A bare Alt tap is the same gesture everywhere, but what it toggles is
+      // mode-dependent. In conversational mode the CLI bar's realtime call is
+      // the wrong target (the bar itself is hidden) — hand the gesture to the
+      // chat composer instead, which owns the visible voice session there.
+      event.preventDefault();
+      if (get(interactionMode) === 'chat') {
+        requestChatVoiceMode();
+        return;
+      }
+
       if (voiceModeActive) {
-        event.preventDefault();
         stopAgentVoice();
         return;
       }
@@ -964,7 +1062,6 @@ export default function FloatingPromptBar({
       // explicit product call — the tradeoff is that a stray tap opens the mic and
       // starts a realtime call, which is why the gesture is a deliberate bare tap
       // (see `alt-tap-gesture.ts`) and not merely "Alt was involved".
-      event.preventDefault();
       toggleAgentVoiceMode();
     },
     [voiceModeActive, isRefining, stopAgentVoice, toggleAgentVoiceMode]
@@ -1244,6 +1341,7 @@ export default function FloatingPromptBar({
             onDragOver={handleInternalDragOver}
             onDragLeave={handleInternalDragLeave}
             onDrop={handleInternalDrop}
+            onPaste={handleBarPaste}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             onFocus={() => setIsFocused(true)}
@@ -1337,48 +1435,32 @@ export default function FloatingPromptBar({
               /* --- NORMAL & TRANSCRIBING MODE --- */
               <>
                 <button
+                  type="button"
                   className={`voice-toggle agent-voice${transcribing ? ' listening' : ''}`}
                   onClick={toggleTranscriptionMode}
                   title={
                     transcribing
-                      ? 'Stop transcribing'
+                      ? 'Stop dictation and insert the transcript'
                       : 'Transcribe: speech to text at the cursor'
                   }
                   aria-label={
                     transcribing
-                      ? 'Stop transcribing'
+                      ? 'Stop dictation and insert the transcript'
                       : 'Transcribe: speech to text at the cursor'
                   }
                 >
                   {transcribing ? (
                     <svg
-                      width="14"
-                      height="14"
+                      width="15"
+                      height="15"
                       viewBox="0 0 24 24"
                       fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                      stroke="none"
+                      aria-hidden="true"
                     >
-                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                      <rect x="5.5" y="5.5" width="13" height="13" rx="1.6" fill="currentColor" />
                     </svg>
-                  ) : (
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
-                      <line x1="12" x2="12" y1="19" y2="22" />
-                    </svg>
-                  )}
+                  ) : <VoiceInputIcon />}
                 </button>
 
                 <div className="prompt-copy">

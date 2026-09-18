@@ -38,6 +38,17 @@ const MAX_RECON_FILES = 8;
 const MAX_TOTAL_RECON_CHARS = 24000;
 const MAX_FILE_READ_CHARS = 8000;
 
+/** Tauri returns `is_dir`; older callers/tests used the former `type` field. */
+interface ProjectDirectoryEntry {
+  name: string;
+  is_dir?: boolean;
+  type?: string;
+}
+
+function isDirectoryEntry(entry: ProjectDirectoryEntry): boolean {
+  return entry.is_dir === true || entry.type === 'dir';
+}
+
 /**
  * Given a workspace root path and a user command, ask the LLM what files
  * and information would be useful to gather, then collect them.
@@ -101,9 +112,9 @@ async function planRecon(
   // Read the top-level directory listing to give the LLM context.
   let projectTree = '';
   try {
-    const entries = await backendInvoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: rootPath });
+    const entries = await backendInvoke<ProjectDirectoryEntry[]>('fs_read_dir', { path: rootPath });
     const limited = entries.filter((e) => !e.name.startsWith('.') && !e.name.startsWith('node_modules')).slice(0, 40);
-    projectTree = limited.map((e) => `  ${e.type === 'dir' ? '[dir]' : '[file]'} ${e.name}`).join('\n');
+    projectTree = limited.map((e) => `  ${isDirectoryEntry(e) ? '[dir]' : '[file]'} ${e.name}`).join('\n');
   } catch {
     projectTree = '(could not read directory)';
   }
@@ -310,14 +321,61 @@ function pathJoin(a: string, b: string): string {
   return `${aEnd}${sep}${bStart}`;
 }
 
+// ─── In-chat project reads (the orchestrator answering questions itself) ─────
+
+/** One file the orchestrator brain asked to see so it can answer from source. */
+export interface ProjectFileRead {
+  /** Repo-relative path, normalised to "/" separators. */
+  path: string;
+  /** The file text, re-capped for the chat prompt and marked when cut. */
+  content: string;
+  /** True when content was truncated to fit the in-chat budget. */
+  truncated: boolean;
+}
+
+const MAX_BRAIN_READ_FILES = 3;
+const MAX_BRAIN_READ_CHARS = 4000;
+
+/**
+ * Fetch a handful of files the orchestrator brain requested (its `readFiles`)
+ * so it can answer a project question itself instead of handing it to an agent.
+ *
+ * The contents land inside the chat prompt, so they are capped far tighter than
+ * a full `ReconFinding`'s budget. Sanitised: absolute paths, parent traversal,
+ * and drive letters are dropped — the brain only ever sees repo-relative files.
+ */
+export async function readProjectFilesForContext(paths: string[], rootPath: string): Promise<ProjectFileRead[]> {
+  const result: ProjectFileRead[] = [];
+  for (const raw of (paths ?? []).slice(0, MAX_BRAIN_READ_FILES)) {
+    const path = String(raw ?? '').trim();
+    const parts = path.split(/[\\/]/);
+    if (!path || /^[\\/]/.test(path) || path.includes(':') || parts.some((part) => part === '..')) continue;
+    const clean = parts.filter((part) => part && part !== '.').join('/');
+    if (!clean) continue;
+    try {
+      const content = await backendInvoke<string>('fs_read_file', { path: pathJoin(rootPath, clean) });
+      if (!content) continue;
+      const truncated = content.length > MAX_BRAIN_READ_CHARS;
+      result.push({
+        path: clean,
+        content: truncated ? `${content.slice(0, MAX_BRAIN_READ_CHARS)}\n… (truncated)` : content,
+        truncated,
+      });
+    } catch {
+      // Missing or unreadable — skip; the brain sees only what we managed to read.
+    }
+  }
+  return result;
+}
+
 /**
  * Build a compact project tree, depth-limited, entry-limited.
  * Only shows source directories and common entry points.
  */
-async function buildProjectTree(
+export async function buildProjectTree(
   rootPath: string,
-  maxDepth: number,
-  maxEntries: number,
+  maxDepth = 2,
+  maxEntries = 50,
 ): Promise<string> {
   const entries: string[] = [];
   const SKIP_DIRS = new Set(['node_modules', '.git', '.spacron', 'dist', 'build', '.next', '__pycache__', 'target', '.vscode', '.idea']);
@@ -326,17 +384,18 @@ async function buildProjectTree(
   async function walk(dir: string, depth: number) {
     if (depth > maxDepth || entries.length >= maxEntries) return;
     try {
-      const items = await backendInvoke<Array<{ name: string; type: string }>>('fs_read_dir', { path: dir });
+      const items = await backendInvoke<ProjectDirectoryEntry[]>('fs_read_dir', { path: dir });
       for (const item of items) {
         if (entries.length >= maxEntries) return;
         if (item.name.startsWith('.')) continue;
-        if (item.type === 'dir' && SKIP_DIRS.has(item.name)) continue;
-        if (item.type !== 'dir' && SKIP_EXT.has(item.name.slice(item.name.lastIndexOf('.')))) continue;
+        const isDir = isDirectoryEntry(item);
+        if (isDir && SKIP_DIRS.has(item.name)) continue;
+        if (!isDir && SKIP_EXT.has(item.name.slice(item.name.lastIndexOf('.')))) continue;
 
         const indent = '  '.repeat(depth);
         const relative = dir === rootPath ? item.name : `${dir.slice(rootPath.length + 1)}/${item.name}`;
-        entries.push(`${indent}${item.type === 'dir' ? '[dir]' : '[file]'} ${relative}`);
-        if (item.type === 'dir') {
+        entries.push(`${indent}${isDir ? '[dir]' : '[file]'} ${relative}`);
+        if (isDir) {
           await walk(`${dir}/${item.name}`, depth + 1);
         }
       }

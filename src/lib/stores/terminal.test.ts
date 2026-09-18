@@ -87,6 +87,7 @@ import {
   applyRestoredSessionMetadata,
   startCommandBlock,
   sendAgentPromptDirect,
+  sendAgentInputLine,
   sendPromptToSession,
   spawnAgentPreset,
   relaunchRestoredAgentSession,
@@ -144,6 +145,29 @@ describe('sessionHasRunningProcess', () => {
   it('ignores roles on a session whose process already exited', () => {
     expect(sessionHasRunningProcess({ ...base, isRunning: false, role: 'Server' } as any)).toBe(false);
     expect(sessionHasRunningProcess(null)).toBe(false);
+  });
+});
+
+describe('Chat terminal line answers', () => {
+  beforeEach(() => setActiveTerminalProject('chat-line-input'));
+  afterEach(() => killAllSessions());
+
+  it('writes one literal line and refuses control characters', async () => {
+    const sessionId = await createTerminalSession();
+    const pty = await vi.mocked(openPty).mock.results.at(-1)!.value;
+    expect(await sendAgentInputLine(sessionId!, 'y')).toBe(true);
+    expect(pty.write).toHaveBeenLastCalledWith('y\r');
+    const count = vi.mocked(pty.write).mock.calls.length;
+    expect(await sendAgentInputLine(sessionId!, 'yes\nrun something')).toBe(false);
+    expect(await sendAgentInputLine(sessionId!, '\x1b[A')).toBe(false);
+    expect(vi.mocked(pty.write).mock.calls.length).toBe(count);
+  });
+
+  it('does not report successful delivery after a PTY write failure', async () => {
+    const sessionId = await createTerminalSession();
+    const pty = await vi.mocked(openPty).mock.results.at(-1)!.value;
+    vi.mocked(pty.write).mockRejectedValueOnce(new Error('Session disconnected'));
+    expect(await sendAgentInputLine(sessionId!, 'n')).toBe(false);
   });
 });
 
@@ -496,6 +520,22 @@ describe('agent launch failure detection', () => {
     );
 
     expect(await waitForAgentReady(sessionId!)).toBe('ready');
+  });
+
+  it('applies Chat-only launch options without changing the saved agent preset', async () => {
+    const sessionId = await spawnAgentPreset('codex', '/repo', {
+      skipAutoBrief: true,
+      permissionArgsOverride: '--sandbox read-only --ask-for-approval on-request',
+      runtimeArgs: '--model gpt-5.6-sol -c model_reasoning_effort=high',
+    });
+    expect(sessionId).not.toBeNull();
+
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
+    expect(mockPty.write).toHaveBeenCalledWith(
+      'codex --sandbox read-only --ask-for-approval on-request --model gpt-5.6-sol -c model_reasoning_effort=high\r',
+    );
+    expect(get(sessions).find((session) => session.id === sessionId)?.agentPreset).toBe('codex');
   });
 });
 

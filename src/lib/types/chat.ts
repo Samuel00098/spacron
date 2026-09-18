@@ -20,7 +20,6 @@ export type ChatMessageType =
   | 'user'
   | 'agent'
   | 'orchestrator'
-  | 'plan'
   | 'activity'
   | 'approval'
   | 'input'
@@ -30,16 +29,23 @@ export type ChatMessageType =
 
 export type ChatMessageRole = 'user' | 'assistant' | 'orchestrator' | 'system';
 
-/** Provider instance/alias used by Chat mode (for example `codex` or
- * `cursor-agent`). This is deliberately not an AI Models provider id: agent
- * providers own their model and permission capabilities. */
+/** AI inference provider used to power this conversation's orchestrator brain. */
 export type ChatProviderId = string;
+
+/** Per-thread agent authority. The composer exposes Default and Full access;
+ * older values remain readable so existing persisted conversations migrate. */
+export type ChatAccessMode = 'inherit' | 'supervised' | 'auto-edits' | 'auto' | 'full-access';
+
+/** Legacy per-agent setting retained only for persisted thread compatibility. */
+export type ChatReasoningEffort = 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export type ChatInlineRequestType = 'approval' | 'choice' | 'text' | 'terminal' | 'dismiss';
 
 export interface ChatInlineOption {
   id: string;
   label: string;
+  /** Exact terminal response for a displayed choice, when different from its label. */
+  value?: string;
   description?: string;
   destructive?: boolean;
 }
@@ -54,6 +60,7 @@ export interface ChatInlineRequest {
   sessionId?: number | null;
   answeredAt?: number | null;
   answer?: string | null;
+  inputMode?: 'prompt' | 'line';
 }
 
 export interface ChatAttachment {
@@ -61,8 +68,12 @@ export interface ChatAttachment {
   name: string;
   type: string;
   size: number;
+  /** Ephemeral path for binary attachments materialized in the app temp area. */
+  path?: string;
   /** Text content is retained for prompt context; binary files keep metadata only. */
   text?: string;
+  /** Ephemeral blob: URL for image thumbnails and click-to-preview. Never persisted. */
+  previewUrl?: string;
 }
 
 export interface ChatDispatchReference {
@@ -109,17 +120,28 @@ export interface ChatMessage {
 }
 
 export interface ChatThread {
+  agentCheckpoint?: import('../services/orchestrator/agent-transport').AgentCheckpoint;
+  agentBudgets?: import('../services/orchestrator/agent-transport').AgentBudgets;
   id: string;
   projectId: string;
   title: string;
   agentName: string | null;
   agentPreset: string | null;
-  /** Explicit agent-provider choices. Null means use the provider default. */
+  /** Explicit orchestrator provider/model. Null means use the app default. */
   provider: ChatProviderId | null;
   model: string | null;
+  accessMode: ChatAccessMode;
+  reasoningEffort: ChatReasoningEffort;
   taskId: string | null;
   sessionId: number | null;
   status: ChatThreadStatus;
+  /**
+   * Set when a brain turn finished normally (FINAL reply, failure, or user
+   * stop). The transport then treats the saved checkpoint as conversation
+   * memory only — not as interrupted work — so the thread never offers to
+   * resume a turn that actually ended.
+   */
+  turnEndedAt?: number;
   createdAt: number;
   updatedAt: number;
   lastActivityAt: number;

@@ -8,12 +8,16 @@ type ExitInfo = { sessionId: number; projectId: string; code: number };
 // (the terminal store chain) are stubbed so the test loads fast and touches
 // nothing outside this module.
 const terminalMocks = vi.hoisted(() => ({
-  ensureIdleOrCreateTerminal: vi.fn(),
+  createTerminalSession: vi.fn(),
   writeToSession: vi.fn(),
   setActiveSession: vi.fn(),
   onSessionExit: vi.fn(),
   refreshUsage: vi.fn(),
   requestRoomControl: vi.fn(),
+  markSessionAgentPreset: vi.fn(),
+  getAgentDisplayName: vi.fn(),
+  updateSessionTitle: vi.fn(),
+  suppressSessionAgentDetection: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('$lib/stores/terminal', () => terminalMocks);
@@ -80,7 +84,7 @@ describe('runAgentSignIn', () => {
   beforeEach(() => {
     exitListeners = [];
     unsubMock = vi.fn();
-    terminalMocks.ensureIdleOrCreateTerminal.mockReset().mockResolvedValue(42);
+    terminalMocks.createTerminalSession.mockReset().mockResolvedValue(42);
     terminalMocks.writeToSession.mockReset();
     terminalMocks.setActiveSession.mockReset();
     terminalMocks.refreshUsage.mockReset();
@@ -89,18 +93,45 @@ describe('runAgentSignIn', () => {
       return unsubMock;
     });
     terminalMocks.requestRoomControl.mockReset();
+    terminalMocks.markSessionAgentPreset.mockReset();
+    terminalMocks.getAgentDisplayName.mockReset();
+    terminalMocks.updateSessionTitle.mockReset();
+    terminalMocks.suppressSessionAgentDetection.mockReset().mockReturnValue(vi.fn());
+  });
+
+  it('creates an isolated agent session with assignPane: false', async () => {
+    await runAgentSignIn({ command: 'claude', name: 'Claude Code', cwd: '/work', projectId: 'p1' });
+    expect(terminalMocks.createTerminalSession).toHaveBeenCalledWith('/work', undefined, 'p1', {
+      assignPane: false,
+      agentPreset: 'claude',
+      isDev: false,
+      extraEnv: undefined,
+    });
+    expect(terminalMocks.markSessionAgentPreset).toHaveBeenCalledWith(42, 'claude', true);
+    expect(terminalMocks.suppressSessionAgentDetection).toHaveBeenCalledWith(42);
+    expect(terminalMocks.writeToSession).toHaveBeenCalledWith(42, 'claude\r');
+  });
+
+  it('brings the dedicated agent room on stage so the sign-in is visible without touching the terminal mosaic', async () => {
+    await runAgentSignIn({ command: 'claude', name: 'Claude Code', cwd: '/work', projectId: 'p1' });
+    expect(terminalMocks.requestRoomControl).toHaveBeenCalledWith('focus', 'agent:42');
+    expect(terminalMocks.setActiveSession).toHaveBeenCalledWith(42);
+  });
+
+  it('passes extraEnv to the isolated session when signing in under a managed account', async () => {
+    const extraEnv = { CLAUDE_CONFIG_DIR: '/home/user/.spacron/accounts/claude/work' };
+    await runAgentSignIn({ command: 'claude', name: 'Claude Code', cwd: '/work', projectId: 'p1', extraEnv });
+    expect(terminalMocks.createTerminalSession).toHaveBeenCalledWith('/work', undefined, 'p1', {
+      assignPane: false,
+      agentPreset: 'claude',
+      isDev: false,
+      extraEnv,
+    });
   });
 
   it('registers a one-shot watch on the sign-in session', async () => {
     await runAgentSignIn({ command: 'claude', name: 'Claude Code', cwd: '/work', projectId: 'p1' });
     expect(exitListeners).toHaveLength(1);
-    expect(terminalMocks.writeToSession).toHaveBeenCalledWith(42, 'claude\r');
-  });
-
-  it('brings the terminal room on stage so the sign-in is visible', async () => {
-    await runAgentSignIn({ command: 'claude', name: 'Claude Code', cwd: '/work', projectId: 'p1' });
-    expect(terminalMocks.requestRoomControl).toHaveBeenCalledWith('focus', 'terminal');
-    expect(terminalMocks.setActiveSession).toHaveBeenCalledWith(42);
   });
 
   it('forces a fresh detection scan shortly after the session exits', async () => {

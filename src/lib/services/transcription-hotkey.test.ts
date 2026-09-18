@@ -113,13 +113,23 @@ vi.mock('$lib/services/voice-input', () => ({
 
 import {
   abortTranscription,
+  toggleChatModeTranscription,
   toggleTerminalTranscription,
+  transcriptionActive,
   transcriptionState,
 } from './transcription-hotkey';
 
 function currentState(): string {
   let value = 'idle';
   transcriptionState.subscribe((v) => {
+    value = v;
+  })();
+  return value;
+}
+
+function currentActive(): boolean {
+  let value = false;
+  transcriptionActive.subscribe((v) => {
     value = v;
   })();
   return value;
@@ -176,6 +186,34 @@ describe('transcription-hotkey', () => {
 
     expect(h.sendAgentPromptDirect).toHaveBeenCalledWith(7, 'run the tests now');
     expect(h.requestTerminalInput).not.toHaveBeenCalled();
+    expect(currentState()).toBe('idle');
+  });
+
+  /**
+   * The "F9 shows nothing" regression: `transcriptionState` only leaves 'idle'
+   * once the mic actually opens, and a slow — or stalled — getUserMedia left
+   * the surface silent. `transcriptionActive` reports the capture the moment
+   * it is committed, so indicators can say "Listening" from the first beat.
+   */
+  it('lights the indicator as soon as a chat-mode capture is committed, before the mic opens', async () => {
+    // A mic that takes a while to open: onStart has not fired (yet).
+    let startResolve!: () => void;
+    h.sessionStart.mockReturnValue(
+      new Promise<void>((resolve) => (startResolve = resolve)),
+    );
+
+    toggleChatModeTranscription();
+    expect(currentActive()).toBe(true); // committed, indicator on now
+    expect(currentState()).toBe('idle'); // still arming
+
+    startResolve();
+    capturedCallbacks!.onStart?.();
+    await flush();
+    expect(currentState()).toBe('listening');
+    expect(currentActive()).toBe(true);
+
+    abortTranscription();
+    expect(currentActive()).toBe(false);
     expect(currentState()).toBe('idle');
   });
 

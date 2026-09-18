@@ -1,0 +1,120 @@
+import type { ReactNode } from 'react';
+import {
+  fallbackAgentBrand,
+  lookupAgentBrand,
+  type AgentBrand,
+} from './agentBrands';
+
+/**
+ * Brand marks for API providers in Settings and the Chat provider/model
+ * picker. Provider connections are not coding agents: a provider must not
+ * silently borrow a similarly named agent mark (Groq is not Grok, and
+ * Mistral is not Mistral Vibe). The local SVGs come from the provider icon
+ * set already used by the project, so the desktop app does not depend on a
+ * network request just to paint a picker.
+ */
+
+const PROVIDER_ASSETS: Record<string, { file: string; color: string }> = {
+  openrouter: { file: 'openrouter', color: '#94A3B8' },
+  deepseek: { file: 'deepseek', color: '#5786FE' },
+  groq: { file: 'groq', color: '#F43E01' },
+  mistral: { file: 'mistral', color: '#FF7000' },
+  together: { file: 'together', color: '#F97316' },
+  fireworks: { file: 'fireworks', color: '#FF6B35' },
+  cerebras: { file: 'cerebras', color: '#F43F5E' },
+  nvidia: { file: 'nvidia', color: '#76B900' },
+  sambanova: { file: 'sambanova', color: '#F97316' },
+  perplexity: { file: 'perplexity', color: '#20B8CD' },
+  cohere: { file: 'cohere', color: '#FF7759' },
+  ollama: { file: 'ollama', color: '#F5A524' },
+  lmstudio: { file: 'lmstudio', color: '#60A5FA' },
+};
+
+// These providers genuinely share their public brand with a bundled mark.
+// Keep this list explicit so a new provider cannot accidentally match an
+// unrelated coding-agent name through the generic name-hint resolver.
+const SHARED_BRANDS: Record<string, { command: string; name: string }> = {
+  openai: { command: 'codex', name: 'Codex' },
+  anthropic: { command: 'claude', name: 'Claude' },
+  google: { command: 'gemini', name: 'Gemini' },
+  xai: { command: 'grok', name: 'Grok' },
+  opencode: { command: 'opencode', name: 'OpenCode' },
+  'opencode-go': { command: 'opencode', name: 'OpenCode' },
+  moonshot: { command: 'kimi', name: 'Kimi' },
+};
+
+function assetMark(file: string, color: string): ReactNode {
+  const source = `url("/provider-icons/${file}.svg")`;
+  return (
+    <span
+      className="provider-brand-asset"
+      style={{
+        display: 'block',
+        width: '100%',
+        height: '100%',
+        backgroundColor: color,
+        WebkitMaskImage: source,
+        maskImage: source,
+        WebkitMaskPosition: 'center',
+        maskPosition: 'center',
+        WebkitMaskRepeat: 'no-repeat',
+        maskRepeat: 'no-repeat',
+        WebkitMaskSize: 'contain',
+        maskSize: 'contain',
+      }}
+    />
+  );
+}
+
+function localMark(): AgentBrand {
+  return {
+    color: '#9CA3AF',
+    mark: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+        <rect x="4" y="5" width="16" height="14" rx="2.5" />
+        <path d="M8 9h8M8 12h5M8 15h8" />
+      </svg>
+    ),
+  };
+}
+
+/** Resolve a provider-specific mark without falling back to a lookalike. */
+export function getProviderBrand(id: string, label: string): AgentBrand {
+  const key = id.trim().toLowerCase();
+  const asset = PROVIDER_ASSETS[key];
+  if (asset) return { color: asset.color, mark: assetMark(asset.file, asset.color) };
+  if (key === 'local') return localMark();
+
+  const shared = SHARED_BRANDS[key];
+  if (shared) {
+    const bundled = lookupAgentBrand(shared.command, shared.name);
+    if (bundled) return bundled;
+  }
+
+  // Unknown/custom ids still get the established fallback treatment, but do
+  // not borrow a provider logo based on a fuzzy label match.
+  return fallbackAgentBrand(id, label);
+}
+
+/** Renders an AI provider mark at the size chosen by its parent container. */
+export function ProviderBrandMark({
+  id,
+  label,
+  className,
+}: {
+  id: string | null | undefined;
+  label: string | null | undefined;
+  className?: string;
+}) {
+  const brand = getProviderBrand(id ?? '', label ?? '');
+  const color = brand.color === 'mono' ? 'var(--text-primary, #e8e8e8)' : brand.color;
+  return (
+    <span
+      className={`agent-brand-mark${className ? ` ${className}` : ''}`}
+      style={{ color }}
+      aria-hidden="true"
+    >
+      {brand.mark}
+    </span>
+  );
+}

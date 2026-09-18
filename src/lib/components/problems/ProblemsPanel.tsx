@@ -169,7 +169,7 @@ export default function ProblemsPanel() {
   return (
     <div className="pp-root">
       <div className="pp-header">
-        <span className="pp-title">PROBLEMS</span>
+        <span className="pp-title">Problems</span>
         <div className="pp-chips">
           {SEVERITY_ORDER.map((severity) => (
             <button

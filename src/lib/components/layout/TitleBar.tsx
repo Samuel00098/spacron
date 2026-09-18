@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { saveProjectState, toggleProjectHUD, openProject } from '$lib/stores/workspace';
+import { saveProjectState, openProject } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
   openQuickCapture,
@@ -118,32 +118,29 @@ export default function TitleBar() {
       {/* Navigation: Sidebar, Back, Forward */}
       <div className="titlebar-nav">
         {showWorkspaceTools && (
-          <>
-            <span className="titlebar-name titlebar-nav-brand" aria-label="Spacron">Spacron</span>
-            <button
-              className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
-              onClick={toggleSidebar}
-              aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
-              aria-pressed={sidebarVisible}
-              title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+          <button
+            className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
+            onClick={toggleSidebar}
+            aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+            aria-pressed={sidebarVisible}
+            title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
             >
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="M9 4v16" />
-                <path d="M6 8h1M6 12h1M6 16h1" />
-              </svg>
-            </button>
-          </>
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+              <path d="M6 8h1M6 12h1M6 16h1" />
+            </svg>
+          </button>
         )}
         <button
           className="nav-btn tb-collapse-2"
@@ -187,31 +184,27 @@ export default function TitleBar() {
         </button>
       </div>
 
-      {/* Centre drag region with active project pill */}
+      {/* Centre drag region with the current project label. Project switching
+          belongs to the Projects sidebar, so this indicator is display-only. */}
       <div
         className="titlebar-center"
         data-tauri-drag-region
       >
         {activeProject ? (
-          <button
-            type="button"
-            className="titlebar-project-pill"
-            onClick={toggleProjectHUD}
-            title={`${activeProject.name} — Click to switch project (${formatShortcutLabel('Ctrl+K')})`}
-            aria-label={`Active project: ${activeProject.name}. Click to switch project.`}
+          <div
+            className="titlebar-project-pill static"
+            title={activeProject.name}
+            aria-label={`Active project: ${activeProject.name}`}
+            role="status"
+            data-tauri-drag-region
           >
-            <span className="titlebar-project-icon" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <span className="titlebar-project-icon" aria-hidden="true" data-tauri-drag-region>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
               </svg>
             </span>
-            <span className="titlebar-project-name">{activeProject.name}</span>
-            <span className="titlebar-project-chevron" aria-hidden="true">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </span>
-          </button>
+            <span className="titlebar-project-name" data-tauri-drag-region>{activeProject.name}</span>
+          </div>
         ) : (
           <button
             type="button"
@@ -221,7 +214,7 @@ export default function TitleBar() {
             aria-label="Open Project"
           >
             <span className="titlebar-project-icon" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
             </span>

@@ -1,5 +1,16 @@
+import { deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoints';
 import { derived, get, writable } from '$lib/stores/storeCompat';
 import { loadJson } from '$lib/utils/storage';
+import { invoke } from '@tauri-apps/api/core';
+import {
+  aiProvider,
+  currentAiModel,
+  isLocalProvider,
+  getProviderDef,
+  getProviderBaseUrl,
+  type AiProviderId,
+} from '$lib/stores/settings';
+import { providerApiKeyExists } from '$lib/services/ai-keychain';
 import type {
   ChatCompletion,
   ChatDispatchReference,
@@ -10,6 +21,8 @@ import type {
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
+  ChatAccessMode,
+  ChatReasoningEffort,
   ChatAttachment,
 } from '$lib/types/chat';
 
@@ -23,6 +36,8 @@ export type {
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
+  ChatAccessMode,
+  ChatReasoningEffort,
   ChatAttachment,
 } from '$lib/types/chat';
 
@@ -70,6 +85,19 @@ function asProvider(value: unknown): ChatProviderId | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function asAccessMode(value: unknown): ChatAccessMode {
+  return value === 'supervised' || value === 'auto-edits' || value === 'auto' || value === 'full-access'
+    ? value
+    : 'inherit';
+}
+
+function asReasoningEffort(value: unknown): ChatReasoningEffort {
+  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' ||
+    value === 'xhigh' || value === 'max' || value === 'ultra'
+    ? value
+    : 'default';
+}
+
 function asLegacyMessages(value: unknown): LegacyChatMessage[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord) as LegacyChatMessage[];
@@ -86,6 +114,7 @@ function messageType(message: LegacyChatMessage): ChatMessageType {
     const completionStatus = message.completion.status;
     return completionStatus === 'failed' ? 'failure' : 'completion';
   }
+  if (message.type === 'activity' || message.type === 'failure' || message.type === 'orchestrator') return message.type;
   if (message.pending === true) return 'agent';
   return message.role === 'user' ? 'user' : 'agent';
 }
@@ -147,7 +176,7 @@ function copyInlineRequest(value: unknown): ChatMessage['inlineRequest'] {
           const optionId = asString(option.id);
           const label = asString(option.label);
           return optionId && label
-            ? { id: optionId, label, description: asString(option.description) ?? undefined, destructive: option.destructive === true }
+            ? { id: optionId, label, value: asString(option.value) ?? undefined, description: asString(option.description) ?? undefined, destructive: option.destructive === true }
             : null;
         })
         .filter((option): option is NonNullable<typeof option> => option !== null)
@@ -162,6 +191,7 @@ function copyInlineRequest(value: unknown): ChatMessage['inlineRequest'] {
     sessionId: asNumber(value.sessionId),
     answeredAt: asNumber(value.answeredAt),
     answer: asString(value.answer),
+    inputMode: value.inputMode === 'line' ? 'line' : 'prompt',
   };
 }
 
@@ -230,6 +260,8 @@ function createDefaultThread(projectId: string, messages: ChatMessage[], now: nu
     agentPreset: null,
     provider: null,
     model: null,
+    accessMode: 'inherit',
+    reasoningEffort: 'default',
     taskId: lastMessage?.completion?.taskId ?? null,
     sessionId: null,
     status,
@@ -257,10 +289,14 @@ export function migrateLegacyChat(legacy: unknown, now = Date.now()): ChatThread
 
   for (const [projectId, rawMessages] of Object.entries(legacy)) {
     if (!projectId) continue;
-    const messages = asLegacyMessages(rawMessages).map((message, index) => {
-      const id = threadIdForProject(projectId);
-      return migrateMessage(id, message, index, now);
-    });
+    const messages = asLegacyMessages(rawMessages)
+      // The narration-derived plan card is deleted — a turn's plan has exactly
+      // one surface now, the update_todos ticker. Old transcripts still carry
+      // these rows; drop them rather than migrate a card nothing produces. Kept
+      // as null-then-filter so `index` still aligns with the raw array for the
+      // id fallback of messages that never had one.
+      .map((message, index) => (message.type === 'plan' ? null : migrateMessage(threadIdForProject(projectId), message, index, now)))
+      .filter((message): message is ChatMessage => message !== null);
     const threadId = threadIdForProject(projectId);
     state.threadsByProject[projectId] = [createDefaultThread(projectId, messages, now)];
     state.messagesByThread[threadId] = messages;
@@ -288,16 +324,24 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     agentPreset: asString(raw.agentPreset),
     provider: asProvider(raw.provider),
     model: asString(raw.model),
+    accessMode: asAccessMode(raw.accessMode),
+    reasoningEffort: asReasoningEffort(raw.reasoningEffort),
     taskId: asString(raw.taskId),
     sessionId: asNumber(raw.sessionId),
     status: validStatus,
     createdAt,
     updatedAt,
     lastActivityAt: asNumber(raw.lastActivityAt) ?? updatedAt,
+    turnEndedAt: asNumber(raw.turnEndedAt) ?? undefined,
     unreadCount: Math.max(0, Math.floor(asNumber(raw.unreadCount) ?? 0)),
     draft: asString(raw.draft) ?? '',
     pinned: raw.pinned === true,
     order: asNumber(raw.order) ?? undefined,
+    agentCheckpoint: isRecord(raw.agentCheckpoint) && Array.isArray(raw.agentCheckpoint.exchanges) && Array.isArray(raw.agentCheckpoint.results)
+      && typeof raw.agentCheckpoint.provider === 'string' && typeof raw.agentCheckpoint.model === 'string' && typeof raw.agentCheckpoint.summary === 'string'
+      ? raw.agentCheckpoint as unknown as ChatThread['agentCheckpoint'] : undefined,
+    agentBudgets: isRecord(raw.agentBudgets) ? Object.fromEntries(Object.entries(raw.agentBudgets).filter(([key, value]) =>
+      (['contextChars', 'outputTokens', 'maxRounds'].includes(key) && typeof value === 'number' && Number.isSafeInteger(value) && value > 0) || (key === 'toolMode' && (value === 'native' || value === 'text')))) : undefined,
   };
 }
 
@@ -326,15 +370,19 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
     if (!Array.isArray(messages)) continue;
     state.messagesByThread[threadId] = messages
       .filter(isRecord)
-      .map((message, index) => {
+      .map((message, index): ChatMessage | null => {
         const type = message.type;
+        // LEGACY: strip the deleted narration-derived plan card (see the note in
+        // migrateLegacyChat). Null-then-filter keeps `index` aligned with the
+        // raw array, so the id fallback never shifts for later messages.
+        if (type === 'plan') return null;
         const role = message.role;
         const legacy = isRecord(message.legacy) ? message.legacy : undefined;
         return {
           id: asString(message.id) ?? `${threadId}-message-${index}`,
           threadId,
           type:
-            type === 'user' || type === 'agent' || type === 'orchestrator' || type === 'plan' ||
+            type === 'user' || type === 'agent' || type === 'orchestrator' ||
             type === 'activity' || type === 'approval' || type === 'input' || type === 'completion' ||
             type === 'failure' || type === 'system' ? type : 'system',
           role: role === 'user' || role === 'assistant' || role === 'orchestrator' || role === 'system' ? role : 'system',
@@ -350,7 +398,8 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
           attachments: copyAttachments(message.attachments),
           ...(legacy ? { legacy } : {}),
         } satisfies ChatMessage;
-      });
+      })
+      .filter((message): message is ChatMessage => message !== null);
   }
   return state;
 }
@@ -358,7 +407,7 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
 function persistState(state: ChatThreadState): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, JSON.stringify(state, (key, value) => key === 'agentCheckpoint' ? undefined : value));
   } catch {
     // Storage is best effort; live state remains usable when quota is full.
   }
@@ -376,6 +425,39 @@ export const chatThreadState = writable<ChatThreadState>(loadInitialState());
 
 chatThreadState.subscribe((state) => persistState(state));
 
+// ── Live turn to-do ticker (ephemeral, never persisted) ───────────────────────
+// When a turn starts executing, its plan prints as a small ticker box above the
+// composer and items check off as tool rounds complete. This is presentation
+// state only: it lives outside `chatThreadState` so refreshes never resurrect a
+// stale checklist. A completed checklist remains visible until the next turn
+// starts, where it is replaced or cleared.
+export interface ChatTurnTicker {
+  threadId: string;
+  items: import('$lib/services/orchestrator/chat-turn').ChatTurnTodoItem[];
+}
+
+export const chatTurnTicker = writable<ChatTurnTicker | null>(null);
+
+/** Start (or replace) the live ticker for a thread's turn. */
+export function setChatTurnTicker(threadId: string, items: ChatTurnTicker['items']): void {
+  chatTurnTicker.set({ threadId, items });
+}
+
+/** Advance the live ticker to the given progress (used while the turn runs). */
+export function advanceChatTurnTicker(threadId: string, items: ChatTurnTicker['items']): void {
+  chatTurnTicker.update((current) => (current && current.threadId === threadId ? { threadId, items } : current));
+}
+
+/** Clear the ticker when its thread's turn ends (or a new turn starts). */
+export function clearChatTurnTicker(threadId?: string): void {
+  chatTurnTicker.update((current) => (current && (!threadId || current.threadId === threadId) ? null : current));
+}
+
+// Back-fill AI summaries for threads that were created before, or without, the
+// AI title generator (their title is still the 'New thread'/'General' placeholder
+// or a first-line snippet from the old behavior).
+void repairThreadSummaries();
+
 export function getProjectThreads(projectId: string) {
   return derived(chatThreadState, (state) => state.threadsByProject[projectId] ?? []);
 }
@@ -387,12 +469,28 @@ export function getChatThread(threadId: string): ChatThread | null {
 }
 
 export function findThreadIdForTask(projectId: string, taskId: string): string | null {
-  return (get(chatThreadState).threadsByProject[projectId] ?? [])
-    .find((thread) => thread.taskId === taskId)?.id ?? null;
+  const state = get(chatThreadState);
+  return (state.threadsByProject[projectId] ?? []).find((thread) => thread.taskId === taskId
+    || (state.messagesByThread[thread.id] ?? []).some((message) => message.dispatched?.some((dispatch) => dispatch.taskId === taskId)))?.id ?? null;
+}
+
+/** Keep the final answer after the activity produced while it was pending. */
+export function moveThreadMessageToEnd(threadId: string, messageId: string): void {
+  chatThreadState.update((state) => {
+    const messages = state.messagesByThread[threadId];
+    const message = messages?.find((entry) => entry.id === messageId);
+    if (!message || messages.at(-1)?.id === messageId) return state;
+    return { ...state, messagesByThread: { ...state.messagesByThread, [threadId]: [...messages.filter((entry) => entry.id !== messageId), message] } };
+  });
 }
 
 export function getThreadMessages(threadId: string) {
   return derived(chatThreadState, (state) => state.messagesByThread[threadId] ?? []);
+}
+
+/** Synchronous snapshot for orchestration code that is already inside a turn. */
+export function getThreadMessageSnapshot(threadId: string): ChatMessage[] {
+  return get(chatThreadState).messagesByThread[threadId] ?? [];
 }
 
 export function getActiveThreadId(projectId: string): string | null {
@@ -443,7 +541,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'taskId' | 'sessionId'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
   now = Date.now(),
 ): ChatThread {
   const id = `chat-thread-${now}-${Math.random().toString(36).slice(2, 8)}`;
@@ -455,6 +553,8 @@ export function createChatThread(
     agentPreset: overrides.agentPreset ?? null,
     provider: overrides.provider ?? null,
     model: overrides.model ?? null,
+    accessMode: overrides.accessMode ?? 'inherit',
+    reasoningEffort: overrides.reasoningEffort ?? 'default',
     taskId: overrides.taskId ?? null,
     sessionId: overrides.sessionId ?? null,
     status: 'draft',
@@ -507,6 +607,7 @@ export function toggleChatThreadPinned(threadId: string): boolean {
 
 /** Remove a thread without silently creating a replacement conversation. */
 export function deleteChatThread(threadId: string): boolean {
+  void deleteAgentCheckpoint(threadId).catch(console.error);
   let deleted = false;
   chatThreadState.update((state) => {
     let ownerProjectId: string | null = null;
@@ -550,6 +651,7 @@ export function appendThreadMessage(message: ChatMessage): boolean {
   const state = get(chatThreadState);
   const thread = Object.values(state.threadsByProject).flat().find((entry) => entry.id === message.threadId);
   if (!thread) return false;
+  const isFirstTitleable = message.role === 'user' && (thread.title === 'New thread' || thread.title === 'General');
   const nextStatus: ChatThreadStatus = message.type === 'failure'
     ? 'failed'
     : message.type === 'approval' || message.type === 'input'
@@ -574,7 +676,182 @@ export function appendThreadMessage(message: ChatMessage): boolean {
       ]),
     ),
   }));
+
+  if (isFirstTitleable && message.text?.trim()) {
+    void generateAiThreadTitle(message.text, thread.provider as AiProviderId | undefined, thread.model || undefined)
+      .then((aiTitle) => {
+        if (!aiTitle) return;
+        renameChatThread(thread.id, aiTitle);
+      })
+      .catch((err) => {
+        console.warn('AI thread title generation failed:', err);
+      });
+  }
+
   return true;
+}
+
+/** Turn the first user message into a compact, readable thread header. */
+export function summarizeThreadMessage(text: string): string {
+  const summary = text
+    .split(/\r?\n/, 1)[0]
+    .replace(/```[\s\S]*?```/g, ' code ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*#{1,6}\s*/, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/[>*_~`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!summary) return '';
+  return summary.length > 80 ? `${summary.slice(0, 77).trimEnd()}…` : summary;
+}
+
+/** Generate a concise, intelligent thread summary title using the configured AI provider. */
+export async function generateAiThreadTitle(
+  text: string,
+  preferredProvider?: AiProviderId,
+  preferredModel?: string,
+): Promise<string> {
+  const provider = preferredProvider ?? get(aiProvider);
+  const providerDef = getProviderDef(provider);
+  // Agent-session providers such as `claude` can still exist in legacy Chat
+  // metadata, but they are not direct API providers for this completion path.
+  if (providerDef.id !== provider) return '';
+  const local = isLocalProvider(provider);
+  const hasKey = local ? true : await providerApiKeyExists(provider, { fresh: true });
+  const baseUrl = local ? getProviderBaseUrl(provider) : '';
+
+  if (!local && !hasKey) {
+    return '';
+  }
+
+  const model = preferredModel?.trim() || (provider === get(aiProvider)
+    ? get(currentAiModel)
+    : providerDef.defaultModel);
+
+  const sample = text.trim().slice(0, 1000);
+  if (!sample) return '';
+
+  const systemPrompt =
+    'You are a title generator. Generate a concise, natural, 3 to 7 word summary or title describing what this chat is about based on the user\'s first message. ' +
+    'Do NOT prefix with "Title:", do NOT wrap in quotes, and do NOT add markdown punctuation or period at the end. Be concise, direct, and helpful.';
+
+  try {
+    const raw = await invoke<string>('ai_complete', {
+      systemPrompt,
+      userText: sample,
+      provider,
+      model,
+      apiKey: '',
+      baseUrl: baseUrl || undefined,
+    });
+    const cleaned = (raw || '')
+      .replace(/^["'`]|["'`]$/g, '')
+      .replace(/^Title:\s*/i, '')
+      .replace(/\r?\n.*$/s, '')
+      .replace(/[.]+$/, '')
+      .trim();
+    return cleaned.length > 70 ? `${cleaned.slice(0, 67).trimEnd()}…` : cleaned;
+  } catch (error) {
+    console.warn('ai_complete failed for thread title generation:', error);
+    return '';
+  }
+}
+
+/**
+ * Give every thread that has a first user message a real AI-generated summary
+ * instead of a placeholder or first-line snippet. Only threads whose title is
+ * still the placeholder ('New thread'/'General') or the old first-line
+ * derivation are regenerated; AI-generated and manually set titles are left
+ * alone, so editing messages in a thread never touches its summary.
+ */
+export async function repairThreadSummaries(): Promise<void> {
+  const state = get(chatThreadState);
+  const jobs: Promise<void>[] = [];
+  for (const threads of Object.values(state.threadsByProject)) {
+    for (const thread of threads) {
+      const firstUser = (state.messagesByThread[thread.id] ?? []).find((message) => message.role === 'user');
+      if (!firstUser?.text?.trim()) continue;
+      const firstLineSnippet = summarizeThreadMessage(firstUser.text);
+      if (thread.title !== 'New thread' && thread.title !== 'General' && firstLineSnippet !== thread.title) {
+        continue;
+      }
+      jobs.push(
+        generateAiThreadTitle(firstUser.text, thread.provider as AiProviderId | undefined, thread.model || undefined)
+          .then((aiTitle) => {
+            if (!aiTitle || !getChatThread(thread.id)) return;
+            renameChatThread(thread.id, aiTitle);
+          })
+          .catch(() => {
+            // Keep the placeholder; the next launch retries.
+          }),
+      );
+    }
+  }
+  await Promise.all(jobs);
+}
+
+/**
+ * Remove one message from a thread. Used by the voice bridge to drop a live
+ * echo row when the orchestrator's own record of the same turn (which
+ * `sendChatMessage` appends) supersedes it — without this, orchestrator voice
+ * turns read twice in the transcript.
+ */
+export function removeThreadMessage(threadId: string, messageId: string): boolean {
+  let removed = false;
+  chatThreadState.update((current) => {
+    const messages = current.messagesByThread[threadId] ?? [];
+    if (!messages.some((entry) => entry.id === messageId)) return current;
+    removed = true;
+    return {
+      ...current,
+      messagesByThread: {
+        ...current.messagesByThread,
+        [threadId]: messages.filter((entry) => entry.id !== messageId),
+      },
+    };
+  });
+  return removed;
+}
+
+/**
+ * Remove a message and every message after it (inclusive truncation). Used by
+ * edit-and-resend so the stale reply to an edited user bubble — and any later
+ * turns built on it — is replaced by the fresh turn instead of lingering
+ * alongside a duplicate user message at the end.
+ * Returns the removed ids (first entry is the anchor itself) or null when the
+ * anchor message is not in the thread.
+ */
+export function removeThreadMessagesFrom(threadId: string, fromMessageId: string): { removedIds: string[]; removedLaterCount: number } | null {
+  let result: { removedIds: string[]; removedLaterCount: number } | null = null;
+  const now = Date.now();
+  chatThreadState.update((current) => {
+    const messages = current.messagesByThread[threadId] ?? [];
+    const index = messages.findIndex((entry) => entry.id === fromMessageId);
+    if (index < 0) return current;
+    const removed = messages.slice(index);
+    result = {
+      removedIds: removed.map((entry) => entry.id),
+      removedLaterCount: Math.max(0, removed.length - 1),
+    };
+    return {
+      ...current,
+      messagesByThread: {
+        ...current.messagesByThread,
+        [threadId]: messages.slice(0, index),
+      },
+      threadsByProject: Object.fromEntries(
+        Object.entries(current.threadsByProject).map(([projectId, threads]) => [
+          projectId,
+          threads.map((thread) => thread.id === threadId
+            ? { ...thread, updatedAt: now, lastActivityAt: now }
+            : thread),
+        ]),
+      ),
+    };
+  });
+  return result;
 }
 
 /** Mirror one legacy orchestrator message into its owning thread. */
@@ -590,12 +867,20 @@ export function appendLegacyChatMessage(
     // to remove.
     return null;
   }
-  const targetId = threadId ?? (state.threadsByProject[projectId] ?? [])[0]?.id;
+  const rawRecord = isRecord(raw) ? raw : {};
+  const completionTaskId = isRecord(rawRecord.completion) ? asString(rawRecord.completion.taskId) : null;
+  const taskId = asString(rawRecord.dispatchedTaskId) ?? completionTaskId;
+  const targetId = threadId
+    ?? (taskId
+      ? (state.threadsByProject[projectId] ?? []).find((thread) => thread.taskId === taskId)?.id
+      : null)
+    ?? state.activeThreadByProject[projectId]
+    ?? (state.threadsByProject[projectId] ?? [])[0]?.id;
   if (!targetId) return null;
   const existing = state.messagesByThread[targetId] ?? [];
   const message = migrateMessage(
     targetId,
-    isRecord(raw) ? raw as LegacyChatMessage : {},
+    rawRecord as LegacyChatMessage,
     existing.length,
     Date.now(),
   );
@@ -630,7 +915,7 @@ export function patchThreadMessage(threadId: string, messageId: string, patch: P
           : 'complete'
       : patch.dispatched?.length
         ? 'working'
-        : patch.pending === false
+        : patch.pending === false && nextMessage.type !== 'activity'
           ? 'idle'
           : null;
     return {
@@ -652,6 +937,36 @@ export function patchThreadMessage(threadId: string, messageId: string, patch: P
     };
   });
   return patched;
+}
+
+/** Edit a stored message in place. The owning thread and its title are left untouched. */
+export function editChatMessage(threadId: string, messageId: string, text: string): boolean {
+  const nextText = text.trim();
+  if (!nextText) return false;
+  let edited = false;
+  const now = Date.now();
+  chatThreadState.update((state) => {
+    const messages = state.messagesByThread[threadId] ?? [];
+    const current = messages.find((message) => message.id === messageId);
+    if (!current || current.role !== 'user') return state;
+    edited = true;
+    const nextMessages = messages.map((message) =>
+      message.id === messageId ? { ...message, text: nextText } : message,
+    );
+    return {
+      ...state,
+      messagesByThread: { ...state.messagesByThread, [threadId]: nextMessages },
+      threadsByProject: Object.fromEntries(
+        Object.entries(state.threadsByProject).map(([projectId, threads]) => [
+          projectId,
+          threads.map((thread) => thread.id === threadId
+            ? { ...thread, updatedAt: now }
+            : thread),
+        ]),
+      ),
+    };
+  });
+  return edited;
 }
 
 export function clearProjectThreadMessages(projectId: string): void {
@@ -677,6 +992,31 @@ export function clearProjectThreadMessages(projectId: string): void {
       },
     };
   });
+}
+
+export function clearChatThreadMessages(threadId: string): boolean {
+  void deleteAgentCheckpoint(threadId).catch(console.error);
+  updateChatThread(threadId, { agentCheckpoint: undefined });
+  const thread = getChatThread(threadId);
+  if (!thread) return false;
+  chatThreadState.update((state) => ({
+    ...state,
+    messagesByThread: { ...state.messagesByThread, [threadId]: [] },
+    threadsByProject: {
+      ...state.threadsByProject,
+      [thread.projectId]: (state.threadsByProject[thread.projectId] ?? []).map((entry) => entry.id === threadId
+        ? {
+            ...entry,
+            status: 'draft' as ChatThreadStatus,
+            taskId: null,
+            sessionId: null,
+            updatedAt: Date.now(),
+            lastActivityAt: Date.now(),
+          }
+        : entry),
+    },
+  }));
+  return true;
 }
 
 export function resetChatThreadsForTests(): void {

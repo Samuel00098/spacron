@@ -2,25 +2,52 @@ import { invoke } from '@tauri-apps/api/core';
 import { isLocalProvider, getProviderBaseUrl, type AiProviderId } from '$lib/stores/settings';
 
 const KNOWN_PROVIDERS: AiProviderId[] = [
-  'openrouter', 'anthropic', 'openai', 'google', 'groq', 'xai', 'ollama', 'lmstudio',
+  'openrouter', 'anthropic', 'openai', 'google', 'groq', 'xai',
+  'deepseek', 'mistral', 'together', 'fireworks', 'cerebras', 'nvidia',
+  'moonshot', 'sambanova', 'perplexity', 'cohere', 'opencode', 'opencode-go', 'ollama', 'lmstudio',
 ];
 
 // In-memory key-existence cache backed by the OS keychain.
 // The frontend deliberately never reads or stores full provider keys.
 const keyExistsCache = new Map<AiProviderId, boolean>();
+// A save/clear can happen while the startup scan is awaiting the OS keychain.
+// Version writes so that an older scan result cannot overwrite a newer user
+// choice when it resumes.
+const keyCacheMutationVersion = new Map<AiProviderId, number>();
 let cacheReady = false;
+let cacheInitialization: Promise<void> | null = null;
+
+function keyMutationVersion(provider: AiProviderId): number {
+  const next = (keyCacheMutationVersion.get(provider) ?? 0) + 1;
+  keyCacheMutationVersion.set(provider, next);
+  return next;
+}
 
 /**
  * Call once at app startup. Migrates any leftover localStorage keys to the OS
  * keychain, then populates the in-memory existence cache from the keychain.
  */
-export async function initApiKeyCache(): Promise<void> {
+export function initApiKeyCache(): Promise<void> {
+  if (cacheInitialization) return cacheInitialization;
+  cacheInitialization = initializeApiKeyCache().catch((error) => {
+    // Permit a later app call to retry if the startup migration or scan failed
+    // before it could establish a usable cache.
+    cacheInitialization = null;
+    throw error;
+  });
+  return cacheInitialization;
+}
+
+async function initializeApiKeyCache(): Promise<void> {
   await migrateLocalStorageToKeychain();
 
   for (const provider of KNOWN_PROVIDERS) {
+    const versionAtStart = keyCacheMutationVersion.get(provider) ?? 0;
     try {
       const exists = await invoke<boolean>('provider_api_key_exists', { provider });
-      keyExistsCache.set(provider, exists);
+      if ((keyCacheMutationVersion.get(provider) ?? 0) === versionAtStart) {
+        keyExistsCache.set(provider, exists);
+      }
     } catch (err) {
       // Don't poison the cache with null on error — leave this provider out so
       // providerApiKeyExists() falls back to a live keychain query instead of
@@ -70,14 +97,37 @@ export function isProviderApiKeyConfiguredLocal(provider: AiProviderId): boolean
   return keyExistsCache.get(provider) ?? false;
 }
 
+/** Options for checking a provider connection. */
+export interface ProviderApiKeyExistsOptions {
+  /** Bypass a cached answer, while still waiting for startup migration first. */
+  fresh?: boolean;
+}
+
 /** True if a key exists in the cache (or the keychain if the cache is not yet ready). */
-export async function providerApiKeyExists(provider: AiProviderId): Promise<boolean> {
+export async function providerApiKeyExists(
+  provider: AiProviderId,
+  options: ProviderApiKeyExistsOptions = {},
+): Promise<boolean> {
+  // App startup starts this asynchronously. A first Chat turn must not query
+  // the keychain before legacy localStorage migration has finished.
+  if (!cacheReady && cacheInitialization) {
+    try {
+      await cacheInitialization;
+    } catch {
+      // The live lookup below still gives the caller the best available answer.
+    }
+  }
+
   // Use the cache only if it's ready AND this provider was successfully loaded into it.
   // Providers that errored during initApiKeyCache are absent from the map (not set to null),
   // so we fall through to a live keychain query for them.
-  if (cacheReady && keyExistsCache.has(provider)) return !!keyExistsCache.get(provider);
+  if (!options.fresh && cacheReady && keyExistsCache.has(provider)) return !!keyExistsCache.get(provider);
+  const versionAtStart = keyCacheMutationVersion.get(provider) ?? 0;
   try {
     const exists = await safeInvoke<boolean>('provider_api_key_exists', { provider });
+    if ((keyCacheMutationVersion.get(provider) ?? 0) !== versionAtStart) {
+      return keyExistsCache.get(provider) ?? exists;
+    }
     keyExistsCache.set(provider, exists);
     return exists;
   } catch {
@@ -92,12 +142,14 @@ export async function saveProviderApiKey(provider: AiProviderId, apiKey: string)
     await clearProviderApiKey(provider);
     return;
   }
+  keyMutationVersion(provider);
   await safeInvoke('provider_api_key_set', { provider, apiKey: normalized });
   keyExistsCache.set(provider, true);
 }
 
 /** Remove from the OS keychain and update the cache. */
 export async function clearProviderApiKey(provider: AiProviderId): Promise<void> {
+  keyMutationVersion(provider);
   await safeInvoke('provider_api_key_delete', { provider });
   keyExistsCache.set(provider, false);
 }
@@ -107,6 +159,9 @@ export interface ProviderModelInfo {
   id: string;
   label: string;
   description: string;
+  /** False means the provider exposed the model, but this adapter cannot run it yet. */
+  supported?: boolean;
+  supportReason?: string;
 }
 
 /**

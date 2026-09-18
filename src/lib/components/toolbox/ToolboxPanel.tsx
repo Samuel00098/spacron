@@ -305,7 +305,7 @@ export default function ToolboxPanel() {
                 <div className="jwt-results">
                   <div className="result-block header-block">
                     <div className="block-title">
-                      <span>HEADER</span>
+                      <span>Header</span>
                       <button className="copy-btn" onClick={() => copyToClipboard(jwtHeader)}>
                         Copy
                       </button>
@@ -315,7 +315,7 @@ export default function ToolboxPanel() {
 
                   <div className="result-block payload-block">
                     <div className="block-title">
-                      <span>PAYLOAD (CLAIMS)</span>
+                      <span>Payload (Claims)</span>
                       <button className="copy-btn" onClick={() => copyToClipboard(jwtPayload)}>
                         Copy
                       </button>
@@ -467,7 +467,7 @@ export default function ToolboxPanel() {
           <div className="scrollable-tab-content scrollable">
             <div className="panel-section epoch-panel">
               <div className="current-epoch-banner">
-                <span className="label">CURRENT EPOCH</span>
+                <span className="label">Current epoch</span>
                 <span className="value">{currentEpoch}</span>
               </div>
 

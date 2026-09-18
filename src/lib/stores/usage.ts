@@ -71,6 +71,12 @@ export interface UsageWindow {
   resetsAtEpochSecs: number | null;
 }
 
+export interface ResetCredit {
+  id: string;
+  resetType: string | null;
+  expiresAtIso: string | null;
+}
+
 export interface ProviderUsage {
   provider: string;
   /** Join key to `AI_AGENT_PRESETS` — drives the row's brand mark. */
@@ -80,6 +86,8 @@ export interface ProviderUsage {
   plan: string | null;
   account: string | null;
   windows: UsageWindow[];
+  resetCreditsAvailable: number | null;
+  resetCredits: ResetCredit[];
   error: string | null;
   /** A non-failure explanation for an empty reading, e.g. "no metered limit". */
   note: string | null;

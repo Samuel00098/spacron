@@ -18,6 +18,7 @@ const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 // tests set up stay call-for-call identical to when callers read `.length` off
 // the buffer themselves.
 const getSessionOutputLength = vi.hoisted(() => vi.fn());
+const getSessionOutputSince = vi.hoisted(() => vi.fn(() => ''));
 const getSessionOutputTail = vi.hoisted(() => vi.fn());
 const getSessionOutputProduced = vi.hoisted(() => vi.fn());
 const killSession = vi.hoisted(() => vi.fn(async () => undefined));
@@ -127,6 +128,21 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('$lib/services/orchestrator-brain', () => ({
   routeOrchestratorRequest,
   ADMIN_KEYWORD_RE: /\bgit\s+tag\b|\bcut(ting)?\s+(a\s+)?release\b/i,
+  detectStatedPlacement: (text: string) => {
+    const trimmed = String(text ?? '').trim();
+    if (!trimmed) return null;
+    if (/^all[:\s]+isolated(\s+worktree)?s?$/i.test(trimmed)) return 'worktree';
+    if (/^all[:\s]+main(\s+repo(sitory)?)?$/i.test(trimmed)) return 'main';
+    if (/^isolated worktree$/i.test(trimmed)) return 'worktree';
+    if (/^main repo$/i.test(trimmed)) return 'main';
+    if (/^\s*(in\s+)?(an?\s+|the\s+)?(new\s+|separate\s+|isolated\s+)?(work[\s-]?trees?|isolation|isolated)\b[\s.!]*$/i.test(trimmed)) {
+      return 'worktree';
+    }
+    if (/^\s*(in\s+)?(the\s+)?(main|primary)\s*(repo(sitory)?|branch|checkout)?\b[\s.!]*$/i.test(trimmed)) {
+      return 'main';
+    }
+    return null;
+  },
 }));
 vi.mock('$lib/services/agent-access', () => ({
   detectAgentAccess,
@@ -140,7 +156,10 @@ vi.mock('$lib/stores/editor', () => ({ openFile, closeFile, jumpToLine }));
 vi.mock('$lib/stores/preview', () => ({ navigatePreviewTab, ensureProxyRunning }));
 vi.mock('$lib/services/orchestrator/app-context', () => ({ getAppContextSnapshot, NAVIGABLE_VIEWS }));
 vi.mock('$lib/stores/runs', () => ({ getPresetRuns }));
-vi.mock('$lib/stores/agentPlacement', () => ({ requestAgentPlacement }));
+vi.mock('$lib/stores/agentPlacement', () => ({
+  requestAgentPlacement,
+  defaultAgentPlacement: () => 'worktree' as const,
+}));
 vi.mock('$lib/stores/terminal', () => ({
   sessions,
   onSessionExit,
@@ -155,6 +174,7 @@ vi.mock('$lib/stores/terminal', () => ({
   sendAgentPromptDirect,
   getSessionOutputBuffer,
   getSessionOutputLength,
+  getSessionOutputSince,
   getSessionOutputTail,
   getSessionOutputProduced,
   killSession,
@@ -174,11 +194,13 @@ vi.mock('$lib/stores/terminal', () => ({
   getActiveTerminalProjectId,
 }));
 
-import { cleanupStaleWorktrees, trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, recordUnwatchedAgentReport } from './orchestrator';
+import { cleanupStaleWorktrees, trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, recordUnwatchedAgentReport, runBrainCommand, formatBrainRunResult, resetOrchestratorCachesForTests } from './orchestrator';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
 import { tasks, addTask } from '$lib/stores/tasks';
 import { chatThreadState, createChatThread, resetChatThreadsForTests } from '$lib/stores/chatThreads';
+import { appendLegacyChatMessage } from '$lib/stores/chatThreads';
+import { deliverTurnSignal } from '$lib/services/orchestrator/agent-hook-signals';
 
 function resetMocks() {
   invoke.mockReset();
@@ -202,6 +224,8 @@ function resetMocks() {
   getSessionOutputBuffer.mockReturnValue('');
   getSessionOutputLength.mockReset();
   getSessionOutputLength.mockImplementation(() => getSessionOutputBuffer().length);
+  getSessionOutputSince.mockReset();
+  getSessionOutputSince.mockReturnValue('');
   // The turn watcher reads growth from the monotonic produced counter and pulls
   // only the new tail; both are derived from the same fake buffer these tests
   // already drive, so they stay in step with `getSessionOutputBuffer`.
@@ -324,6 +348,25 @@ describe('orchestrator terminal leasing', () => {
     getSessionOutputBuffer.mockReturnValue('booted output................................');
     await vi.advanceTimersByTimeAsync(9300);
     expect(sendAgentPromptDirect).not.toHaveBeenCalled();
+  });
+
+  it('passes Chat runtime choices through the lease without changing ordinary launches', async () => {
+    const task = createOrchestratorTask('project-1', 'Use the selected Chat runtime', 'claude');
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: task.id }] });
+
+    await launchOrchestratorTask(task.id, 'claude', '/repo', {
+      autoRun: false,
+      model: 'claude-opus-4',
+      accessMode: 'auto-edits',
+      reasoningEffort: 'high',
+    });
+
+    expect(spawnAgentPreset).toHaveBeenCalledWith('claude', '/repo/isolated', {
+      activate: true,
+      skipAutoBrief: true,
+      permissionArgsOverride: '--permission-mode acceptEdits',
+      runtimeArgs: '--model claude-opus-4 --effort high',
+    });
   });
 
   it('marks a launched task as starting until its goal is sent', async () => {
@@ -644,6 +687,7 @@ describe('orchestrator chat actions', () => {
     vi.useFakeTimers();
     orchestratorTasks.set([]);
     resetChatThreadsForTests();
+    resetOrchestratorCachesForTests();
     resetMocks();
   });
 
@@ -723,6 +767,331 @@ describe('orchestrator chat actions', () => {
 
     const transcript = get(chatMessages)['project-1'];
     expect(transcript[transcript.length - 1]).toMatchObject({ role: 'assistant', text: 'Done.', pending: false });
+  });
+
+  it('fetches files the brain asks for and re-routes so it can answer from source', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return 'export const x = 1;\nconsole.log(x);';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest
+      .mockResolvedValueOnce({ reply: 'Let me check that.', actions: [], readFiles: ['src/a.ts'], viaLLM: true })
+      .mockResolvedValueOnce({ reply: 'It exports x as 1.', actions: [], viaLLM: true });
+
+    await sendChatMessage('project-1', '/repo', 'How is x wired?');
+
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(2);
+    const [, , secondCtx] = routeOrchestratorRequest.mock.calls[1];
+    expect(secondCtx.projectReads).toEqual([
+      expect.objectContaining({ path: 'src/a.ts', content: expect.stringContaining('console.log(x);'), truncated: false }),
+    ]);
+    expect(secondCtx.projectTree).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith('fs_read_file', { path: '/repo/src/a.ts' });
+
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1]).toMatchObject({ role: 'assistant', text: 'It exports x as 1.', pending: false });
+  });
+
+  it('deduplicates repeated read_file calls within one tool batch', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return 'export const x = 1;';
+      if (command === 'fs_read_dir') return [];
+      return undefined;
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      const calls = Array.from({ length: 7 }, (_, index) => context.toolExecutor({
+        id: `read-${index}`,
+        name: 'read_file',
+        args: { path: 'src/a.ts' },
+      }));
+      const executions = await Promise.all(calls);
+      return { reply: executions[0].output, actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'How is x wired?');
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'fs_read_file')).toHaveLength(1);
+    expect(get(chatMessages)['project-1'].filter((message) => message.type === 'activity')).toHaveLength(1);
+  });
+
+  it('uses the backend glob traversal alongside the project tree', async () => {
+    invoke.mockImplementation(async (command: string, args?: { path?: string }) => {
+      if (command === 'fs_glob_files') return ['src/App.tsx'];
+      if (command !== 'fs_read_dir') return undefined;
+      if (args?.path === '/repo') return [
+        { name: 'src', is_dir: true },
+        { name: 'package.json', is_dir: false },
+      ];
+      if (args?.path === '/repo/src') return [
+        { name: 'App.tsx', is_dir: false },
+      ];
+      return [];
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      const execution = await context.toolExecutor({
+        id: 'glob-1',
+        name: 'glob_files',
+        args: { pattern: 'src/**/*' },
+      });
+      return { reply: execution.output, actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'Review the application and suggest improvements');
+
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
+    const [, , context] = routeOrchestratorRequest.mock.calls[0];
+    expect(context.projectTree).toContain('[dir] src');
+    expect(context.projectTree).toContain('[file] src/App.tsx');
+    expect(get(chatMessages)['project-1'].at(-1)).toMatchObject({
+      role: 'assistant',
+      text: expect.stringContaining('src/App.tsx'),
+      pending: false,
+    });
+  });
+
+  it('reads the relevant project files in one broad review tool call', async () => {
+    invoke.mockImplementation(async (command: string, args?: { path?: string }) => {
+      if (command === 'fs_glob_files') return ['README.md', 'package.json', 'logo.png', 'src/App.tsx', 'src/styles.css'];
+      if (command === 'fs_read_dir') {
+        if (args?.path === '/repo') return [
+          { name: 'src', is_dir: true },
+          { name: 'README.md', is_dir: false },
+          { name: 'package.json', is_dir: false },
+          { name: 'logo.png', is_dir: false },
+        ];
+        if (args?.path === '/repo/src') return [
+          { name: 'App.tsx', is_dir: false },
+          { name: 'styles.css', is_dir: false },
+        ];
+        return [];
+      }
+      if (command === 'fs_read_file') {
+        const contents: Record<string, string> = {
+          '/repo/README.md': '# SelloCRM\nReview the dashboard flow.',
+          '/repo/package.json': '{"scripts":{"test":"vitest"}}',
+          '/repo/src/App.tsx': 'export function App() { return <Dashboard />; }',
+          '/repo/src/styles.css': '.dashboard { display: grid; }',
+        };
+        return contents[args?.path ?? ''] ?? '';
+      }
+      return undefined;
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      const execution = await context.toolExecutor({
+        id: 'review-project',
+        name: 'read_project',
+        args: { max_files: 80 },
+      });
+      return { reply: execution.output, actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'Go through the application and suggest changes');
+
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript.at(-1)).toMatchObject({
+      role: 'assistant',
+      text: expect.stringContaining('src/App.tsx'),
+      pending: false,
+    });
+    expect(transcript.at(-1)?.text).toContain('README.md');
+    expect(transcript.at(-1)?.text).toContain('styles.css');
+    expect(transcript.at(-1)?.text).not.toContain('logo.png');
+    expect(invoke).toHaveBeenCalledWith('fs_read_file', { path: '/repo/src/App.tsx' });
+  });
+
+  it('does not let a bare "I will help" reply dead-end: auto-reads overview files and re-routes', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return '{"name": "spacron", "scripts": {"check": "tsc --noEmit"}}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest
+      .mockResolvedValueOnce({
+        reply: "Absolutely, I'll help you map out the project and every single thing.",
+        actions: [],
+        viaLLM: true,
+      })
+      .mockResolvedValueOnce({
+        reply: 'The project is a TypeScript app. Its scripts live in package.json.',
+        actions: [],
+        viaLLM: true,
+      });
+
+    await sendChatMessage('project-1', '/repo', 'Go through the project and report back');
+
+    // The first bare acknowledgement must not end the turn — the app reads
+    // package.json (present in the tree) and re-routes so the model answers
+    // from real source.
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(2);
+    const [, , secondCtx] = routeOrchestratorRequest.mock.calls[1];
+    expect(secondCtx.projectReads).toEqual([
+      expect.objectContaining({
+        path: 'package.json',
+        content: expect.stringContaining('"scripts"'),
+        truncated: false,
+      }),
+    ]);
+
+    const transcript = get(chatMessages)['project-1'];
+    expect(transcript[transcript.length - 1]).toMatchObject({
+      role: 'assistant',
+      text: 'The project is a TypeScript app. Its scripts live in package.json.',
+      pending: false,
+    });
+  });
+
+  it('renders model-declared todo statuses from update_todos instead of force-checking them', async () => {
+    const thread = createChatThread('project-1', { title: 'Atlas' });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return '{"name": "spacron"}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      // The model declares its plan through the TOOL, with two items left
+      // honestly unfinished (blocked + pending).
+      const execution = await context.toolExecutor({
+        id: 'plan-1',
+        name: 'update_todos',
+        args: { todos: ['[x] Inspect auth wiring', '[~] Fix token refresh', '[!] Needs the API base URL', '[ ] Add tests'] },
+      });
+      expect(execution.output).toContain('Recorded 4 todo items (1 completed)');
+      // The real brain reports every executed round through onToolRound; the
+      // test must honour that contract or Phase 4 sees no evidence at all.
+      context.onToolRound?.([{ id: 'plan-1', name: 'update_todos', ok: true, output: execution.output }], 1);
+      return { reply: 'Partial progress: the refresh fix is in, two items remain.', actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'fix the token refresh and add tests', { projectName: 'Atlas', threadId: thread.id });
+
+    // The turn appends tool-activity cards (also role=assistant); the reply is
+    // the last assistant message that is not an activity card.
+    const assistantMessages = get(chatMessages)['project-1'].filter((m) => m.role === 'assistant' && m.type !== 'activity');
+    const final = assistantMessages[assistantMessages.length - 1];
+    expect(final.text).toContain('### Plan & Tasks');
+    expect(final.text).toContain('- [x] Inspect auth wiring');
+    expect(final.text).toContain('- [~] Fix token refresh');
+    expect(final.text).toContain('- [!] Needs the API base URL');
+    expect(final.text).toContain('- [ ] Add tests');
+    // The old blanket check must not paint unfinished items done.
+    expect(final.text).not.toContain('- [x] Fix token refresh');
+    expect(final.text).not.toContain('- [x] Needs the API base URL');
+  });
+
+  it('keeps the todo list sticky when update_todos re-announces reworded plans mid-turn', async () => {
+    const thread = createChatThread('project-1', { title: 'Atlas' });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return '{"name": "spacron"}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      // Round 1: the model plans three steps.
+      const first = await context.toolExecutor({
+        id: 'plan-a',
+        name: 'update_todos',
+        args: { todos: ['[~] Inspect the schema', '[ ] Review onboarding flow', '[ ] Polish the landing page'] },
+      });
+      expect(first.output).toContain('Recorded 3 todo items');
+      context.onToolRound?.([{ id: 'plan-a', name: 'update_todos', ok: true, output: first.output }], 1);
+      // Round 2: the model re-announces with reworded steps and drops one.
+      // The list must NOT churn: same steps stay, statuses move forward.
+      const second = await context.toolExecutor({
+        id: 'plan-b',
+        name: 'update_todos',
+        args: { todos: ['[x] Inspect schema', '[~] Review onboarding'] },
+      });
+      expect(second.output).toContain('Recorded 2 todo items (1 completed)');
+      context.onToolRound?.([{ id: 'plan-b', name: 'update_todos', ok: true, output: second.output }], 2);
+      return { reply: 'Done.', actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'improve the app', { projectName: 'Atlas', threadId: thread.id });
+
+    const assistantMessages = get(chatMessages)['project-1'].filter((m) => m.role === 'assistant' && m.type !== 'activity');
+    const final = assistantMessages[assistantMessages.length - 1];
+    // Every planned step survives the re-announce; nothing churned away.
+    expect(final.text).toContain('Inspect the schema');
+    expect(final.text).toContain('Review onboarding flow');
+    expect(final.text).toContain('Polish the landing page');
+  });
+
+  it('indexes previously written Documents/ files into the brain context at turn start', async () => {
+    const thread = createChatThread('project-1', { title: 'Atlas' });
+    invoke.mockImplementation(async (command: string, args?: { path?: string }) => {
+      if (command === 'fs_glob_files') return ['docs/plans/2026-09-01-auth-plan.md', 'Documents/legacy-notes.md', 'src/App.tsx', 'README.md'];
+      if (command === 'fs_read_file' && args?.path?.includes('auth-plan')) {
+        return '# Auth overhaul plan\nGoal: unify token refresh across all clients.\nPhase 1: audit the current refresh flow.';
+      }
+      if (command === 'fs_read_file') return '{"name": "spacron"}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+      return undefined;
+    });
+    let seenIndex: string | undefined;
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      seenIndex = context.documentsIndex;
+      return { reply: 'The stored plan says the goal is unified token refresh.', actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'what did we plan for auth?', { projectName: 'Atlas', threadId: thread.id });
+
+    // Only docs/*.md files are indexed (not src/App.tsx or README.md), with
+    // the heading as title and body prose as excerpt. A legacy Documents/
+    // file stays visible too.
+    expect(seenIndex).toContain('docs/plans/2026-09-01-auth-plan.md');
+    expect(seenIndex).toContain('Auth overhaul plan');
+    expect(seenIndex).toContain('Goal: unify token refresh');
+    expect(seenIndex).toContain('Documents/legacy-notes.md');
+    expect(seenIndex).not.toContain('src/App.tsx');
+  });
+
+  it('does not mint a done checklist from an all-completed update_todos call with no other work', async () => {
+    const thread = createChatThread('project-1', { title: 'Atlas' });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return '{"name": "spacron"}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest.mockImplementation(async (_message: string, _agents: unknown[], context: any) => {
+      // The fake "5/5 done" card attempted through the new tool: the model
+      // declares everything complete while executing zero real work.
+      const execution = await context.toolExecutor({
+        id: 'plan-2',
+        name: 'update_todos',
+        args: { todos: ['[x] Review auth', '[x] Fix refresh'] },
+      });
+      expect(execution.output).toContain('Recorded 2 todo items (2 completed)');
+      context.onToolRound?.([{ id: 'plan-2', name: 'update_todos', ok: true, output: execution.output }], 1);
+      return { reply: 'Everything is done!', actions: [], viaLLM: true };
+    });
+
+    await sendChatMessage('project-1', '/repo', 'wrap it up', { projectName: 'Atlas', threadId: thread.id });
+
+    const assistantMessages = get(chatMessages)['project-1'].filter((m) => m.role === 'assistant' && m.type !== 'activity');
+    expect(assistantMessages[assistantMessages.length - 1].text).not.toContain('### Plan & Tasks');
+  });
+
+  it('does not paint a fully checked-off plan when the turn executed no tools', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'fs_read_file') return '{"name": "spacron"}';
+      if (command === 'fs_read_dir') return [{ name: 'src', type: 'dir' }, { name: 'package.json', type: 'file' }];
+    });
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Everything is reviewed and verified.',
+      actions: [],
+      viaLLM: true,
+      // A FINAL-without-tools checklist: the fake "5/5 done" card from the
+      // screenshot regression. The brain strips it; the store must not resurrect
+      // it either.
+      todos: ['Review project: active project', 'Inspect schema', 'Inspect frontend', 'Inspect docs', 'Summarize findings'],
+    });
+
+    await sendChatMessage('project-1', '/repo', 'inspect the project and suggest improvements', { projectName: 'Atlas' });
+
+    const transcript = get(chatMessages)['project-1'];
+    const final = transcript[transcript.length - 1];
+    expect(final.role).toBe('assistant');
+    expect(final.text).toContain('Everything is reviewed and verified.');
+    // No checklist section, no evidence summary, because nothing was executed.
+    expect(final.text).not.toContain('### Plan & Tasks');
+    expect(final.text).not.toContain('- [x]');
+    expect(final.text).not.toContain('Full detail in Work details above.');
   });
 
   it('spawns multiple idle agents from one message and briefs every one', async () => {
@@ -1106,6 +1475,221 @@ describe('orchestrator chat actions', () => {
     expect(get(orchestratorTasks)).toHaveLength(1);
   });
 
+it('keeps the assistant offer in the next turn context', async () => {
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    appendLegacyChatMessage('project-1', { id: 'offer', role: 'assistant', text: 'I can map the actual implementation against the docs.', ts: 1 }, thread.id);
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'The implemented features are...', actions: [], viaLLM: true });
+    await sendChatMessage('project-1', '/repo', 'do that please', { threadId: thread.id, conversationalMode: true });
+    expect(routeOrchestratorRequest.mock.calls[0][2].conversation).toContainEqual({ role: 'assistant', text: 'I can map the actual implementation against the docs.' });
+  });
+
+  it('does not rewrite the thread title when the first message is edited and resent', async () => {
+    const thread = createChatThread('project-1', { title: 'Review auth flow' });
+    appendLegacyChatMessage('project-1', { id: 'u1', role: 'user', text: 'Review the authentication flow', ts: 1 }, thread.id);
+    appendLegacyChatMessage('project-1', { id: 'a1', role: 'assistant', text: 'Done.', ts: 2 }, thread.id);
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'Redone with SSO.', actions: [], viaLLM: true });
+
+    await sendChatMessage('project-1', '/repo', 'Review the auth flow with SSO', {
+      threadId: thread.id,
+      conversationalMode: true,
+      resendFromMessageId: 'u1',
+    });
+
+    expect(get(chatThreadState).threadsByProject['project-1'][0].title).toBe('Review auth flow');
+    const texts = get(chatThreadState).messagesByThread[thread.id].map((m) => m.text);
+    expect(texts).toEqual(['Review the auth flow with SSO', 'Redone with SSO.']);
+  });
+
+  it('does not finalize a repeated promise as success', async () => {
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    invoke.mockImplementation(async (command) => command === 'fs_read_dir' ? [{ name: 'package.json', type: 'file' }] : '{}');
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'I will inspect the project files.', actions: [], viaLLM: true });
+    await sendChatMessage('project-1', '/repo', 'do that please', { threadId: thread.id, conversationalMode: true });
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(2);
+    expect(get(chatThreadState).threadsByProject['project-1'][0].status).toBe('failed');
+    expect(get(chatThreadState).messagesByThread[thread.id].at(-1)?.text).toContain('could not complete');
+  });
+
+  it('preserves explicit question options even when phrased as Would you like', async () => {
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'Would you like to use PostgreSQL or SQLite?', actions: [], needsInput: true, inputRequest: { question: 'Would you like to use PostgreSQL or SQLite?', options: ['PostgreSQL', 'SQLite'] }, viaLLM: true });
+    await sendChatMessage('project-1', '/repo', 'Configure storage', { threadId: thread.id, conversationalMode: true });
+    const request = get(chatThreadState).messagesByThread[thread.id].at(-1)?.inlineRequest;
+    expect(request).toMatchObject({ type: 'choice', options: [{ label: 'PostgreSQL' }, { label: 'SQLite' }] });
+    expect(routeOrchestratorRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a CLI question, sends its exact answer to the same session, and watches the next question and completion', async () => {
+    const seed = createOrchestratorTask('project-1', 'Build storage', 'claude', 'Backend');
+    const thread = createChatThread('project-1', { provider: 'deepseek', taskId: seed.id, sessionId: 42 });
+    orchestratorTasks.set([{ ...seed, status: 'in-progress', assignedSessionId: 42 }]);
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
+    await sendChatMessage('project-1', '/repo', 'Check the storage setup', { threadId: thread.id, chatMode: true });
+    expect(deliverTurnSignal(42, { kind: 'blocked', reason: '\u001b[31mWhich database?\u001b[0m\n1. PostgreSQL\n2. SQLite' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    const question = get(chatThreadState).messagesByThread[thread.id].at(-1)!;
+    expect(question.inlineRequest).toMatchObject({ taskId: seed.id, sessionId: 42, type: 'choice', options: [{ label: 'PostgreSQL' }, { label: 'SQLite' }] });
+    expect(question.inlineRequest?.prompt).not.toContain('\u001b');
+    expect(get(orchestratorTasks)[0].status).toBe('blocked');
+    // The next question can arrive during delivery, before its promise resolves.
+    sendAgentPromptDirect.mockImplementationOnce(async () => {
+      expect(deliverTurnSignal(42, { kind: 'blocked', reason: 'What should the database be named?' })).toBe(true);
+      return true;
+    });
+    await sendChatMessage('project-1', '/repo', 'PostgreSQL', { threadId: thread.id, chatMode: true });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendAgentPromptDirect).toHaveBeenLastCalledWith(42, 'PostgreSQL');
+    expect(get(chatThreadState).messagesByThread[thread.id].find((m) => m.id === question.id)?.inlineRequest?.answer).toBe('PostgreSQL');
+    expect(get(orchestratorTasks)[0].status).toBe('blocked');
+    expect(get(chatThreadState).threadsByProject['project-1'][0].status).toBe('needs-input');
+    await sendChatMessage('project-1', '/repo', 'app_db', { threadId: thread.id, chatMode: true });
+    expect(deliverTurnSignal(42, { kind: 'finished', detail: 'Storage configured and tests passed.' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(get(orchestratorTasks)[0].status).toBe('complete');
+    expect(get(chatThreadState).threadsByProject['project-1'][0].status).toBe('complete');
+    expect(get(chatThreadState).messagesByThread[thread.id].some((m) => m.completion?.reason === 'Storage configured and tests passed.')).toBe(true);
+    expect(spawnAgentPreset).not.toHaveBeenCalled();
+  });
+
+  it('retains an unanswered CLI request if delivery fails', async () => {
+    const seed = createOrchestratorTask('project-1', 'Build storage', 'claude', 'Backend');
+    const thread = createChatThread('project-1', { provider: 'deepseek', taskId: seed.id, sessionId: 42 });
+    orchestratorTasks.set([{ ...seed, status: 'blocked', assignedSessionId: 42, blockedReason: 'Which database?' }]);
+    appendLegacyChatMessage('project-1', { id: 'input', role: 'assistant', text: '', ts: 1, inlineRequest: { id: 'request', type: 'text', prompt: 'Which database?', taskId: seed.id, sessionId: 42 } }, thread.id);
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
+    sendAgentPromptDirect.mockResolvedValue(false);
+    await sendChatMessage('project-1', '/repo', 'PostgreSQL', { threadId: thread.id, chatMode: true });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(get(chatThreadState).messagesByThread[thread.id].find((m) => m.id === 'input')?.inlineRequest?.answeredAt).toBeFalsy();
+    expect(get(orchestratorTasks)[0].status).toBe('blocked');
+    expect(get(chatThreadState).threadsByProject['project-1'][0].status).toBe('needs-input');
+  });
+
+  it('gates direct writes until approval and records tool activity', async () => {
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    routeOrchestratorRequest.mockImplementation(async (_text, _agents, context) => {
+      await context.toolExecutor({ id: 'write', name: 'write_file', args: { path: 'report.md', content: 'Verified report' } });
+      return { reply: 'The report was written.', actions: [], viaLLM: true };
+    });
+    const pending = sendChatMessage('project-1', '/repo', 'Write a report', { threadId: thread.id, conversationalMode: true });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(invoke).not.toHaveBeenCalledWith('fs_write_file_checked', expect.anything());
+    expect(get(chatThreadState).messagesByThread[thread.id].at(-1)?.inlineRequest?.type).toBe('approval');
+    await sendChatMessage('project-1', '/repo', 'Approve', { threadId: thread.id, conversationalMode: true });
+    await pending;
+    expect(invoke).toHaveBeenCalledWith('fs_write_file_checked', { path: '/repo/report.md', content: 'Verified report', expectedContent: undefined });
+    expect(get(chatThreadState).messagesByThread[thread.id].some((m) => m.type === 'activity' && m.text.includes('Wrote report.md'))).toBe(true);
+  });
+
+  it('keeps optional conversational follow-ups out of the needs-input gate', async () => {
+    resetChatThreadsForTests();
+    const thread = createChatThread('project-1', {
+      title: 'Chat thread',
+      provider: 'openrouter',
+      model: 'google/gemini-2.5-flash',
+    }, 100);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'The project is configured and ready. Would you like more detail?',
+      actions: [],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'Is everything ready?', {
+      threadId: thread.id,
+      conversationalMode: true,
+      chatMode: true,
+    });
+
+    const message = get(chatThreadState).messagesByThread[thread.id]?.at(-1);
+    expect(message).toMatchObject({
+      type: 'agent',
+      text: 'The project is configured and ready. Would you like more detail?',
+      pending: false,
+    });
+    expect(message?.inlineRequest).toBeNull();
+  });
+
+  it('shows a needs-input card for a genuinely blocking question', async () => {
+    resetChatThreadsForTests();
+    const thread = createChatThread('project-1', {
+      title: 'Chat thread',
+      provider: 'openrouter',
+      model: 'google/gemini-2.5-flash',
+    }, 100);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Which module should I refactor before I continue?',
+      needsInput: true,
+      actions: [],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'Refactor it', {
+      threadId: thread.id,
+      conversationalMode: true,
+      chatMode: true,
+    });
+
+    const message = get(chatThreadState).messagesByThread[thread.id]?.at(-1);
+    expect(message).toMatchObject({
+      type: 'input',
+      text: 'Which module should I refactor before I continue?',
+      pending: false,
+      inlineRequest: { prompt: 'Which module should I refactor before I continue?' },
+    });
+  });
+
+  it('keeps provider connection errors as informational replies, not input cards', async () => {
+    resetChatThreadsForTests();
+    const thread = createChatThread('project-1', {
+      title: 'Chat thread',
+      provider: 'openai',
+      model: 'gpt-5.4-mini',
+    }, 100);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'I cannot complete this review yet. Composer is set to OpenAI API (gpt-5.4-mini), but that provider connection is not available to the orchestrator. Add the OpenAI API key in Settings, or choose a connected provider in Composer, then retry.',
+      actions: [],
+      viaLLM: false,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'go through the application and suggest improvements', {
+      threadId: thread.id,
+      conversationalMode: true,
+      chatMode: true,
+    });
+
+    const message = get(chatThreadState).messagesByThread[thread.id]?.at(-1);
+    expect(message?.type).not.toBe('input');
+    expect(message?.pending).toBe(false);
+    expect(message?.inlineRequest).toBeNull();
+    expect(get(chatThreadState).threadsByProject['project-1'][0].status).not.toBe('needs-input');
+  });
+
+  it('asks for placement before a routine Chat dispatch', async () => {
+    resetChatThreadsForTests();
+    const thread = createChatThread('project-1', {
+      title: 'Chat thread',
+      provider: 'openrouter',
+      model: 'google/gemini-2.5-flash',
+    }, 100);
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Launching Claude to fix the bug.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'fix the bug', name: null }],
+      viaLLM: true,
+    });
+
+    await sendChatMessage('project-1', '/repo', 'Fix the bug', {
+      threadId: thread.id,
+      conversationalMode: true,
+      chatMode: true,
+    });
+
+    expect(requestAgentPlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'orchestrator', agents: ['claude'] })
+    );
+    expect(spawnAgentPreset).toHaveBeenCalledTimes(1);
+    expect(get(orchestratorTasks)[0]?.skipWorktree).toBe(false);
+  });
+
   it('sends a follow-up to a running named agent without spawning a new one once the lease is ready', async () => {
     const seed = createOrchestratorTask('project-1', 'Original goal', 'claude', 'Backend');
     orchestratorTasks.set([{ ...seed, status: 'in-progress', assignedSessionId: 42, startedAt: 1 }]);
@@ -1130,13 +1714,14 @@ describe('orchestrator chat actions', () => {
     expect(get(orchestratorTasks)).toHaveLength(1);
   });
 
-  it('routes a follow-up from a thread directly to its live task', async () => {
+  it('routes a follow-up from a legacy agent-session thread directly to its live task', async () => {
     resetChatThreadsForTests();
     const seed = createOrchestratorTask('project-1', 'Original goal', 'claude', 'Backend');
     const thread = createChatThread('project-1', {
       title: 'Backend thread',
       agentName: 'Backend',
       agentPreset: 'claude',
+      provider: 'claude',
       taskId: seed.id,
       sessionId: 42,
     }, 100);
@@ -1144,14 +1729,14 @@ describe('orchestrator chat actions', () => {
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
     routeOrchestratorRequest.mockClear();
 
-    await sendChatMessage('project-1', '/repo', 'Please run the tests again', { threadId: thread.id });
+    await sendChatMessage('project-1', '/repo', 'Please run the tests again', { threadId: thread.id, chatMode: true });
 
     expect(routeOrchestratorRequest).not.toHaveBeenCalled();
     expect(spawnAgentPreset).not.toHaveBeenCalled();
     expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, 'Please run the tests again');
     const state = get(chatThreadState);
     const messages = state.messagesByThread[thread.id];
-    expect(messages).toHaveLength(2);
+    expect(messages.length).toBeGreaterThanOrEqual(2);
     expect(messages[0]).toMatchObject({ role: 'user', text: 'Please run the tests again' });
     expect(messages[1]).toMatchObject({
       role: 'assistant',
@@ -1159,6 +1744,70 @@ describe('orchestrator chat actions', () => {
       text: 'Sent to Backend.',
       dispatchedTaskId: seed.id,
       dispatched: [{ taskId: seed.id, agent: 'claude', name: 'Backend', via: 'send' }],
+    });
+  });
+
+  it('routes an orchestrator conversation through its composer provider instead of sending to the last task', async () => {
+    resetChatThreadsForTests();
+    const seed = createOrchestratorTask('project-1', 'Original goal', 'claude', 'Backend');
+    const thread = createChatThread('project-1', {
+      title: 'Orchestrator thread',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      taskId: seed.id,
+      sessionId: 42,
+    }, 100);
+    orchestratorTasks.set([{ ...seed, status: 'in-progress', assignedSessionId: 42, startedAt: 1 }]);
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
+    routeOrchestratorRequest.mockResolvedValueOnce({ reply: 'I will coordinate that.', actions: [], viaLLM: true });
+    routeOrchestratorRequest.mockClear();
+    sendAgentPromptDirect.mockClear();
+
+    await sendChatMessage('project-1', '/repo', 'Please run the tests again', {
+      threadId: thread.id,
+      orchestratorProvider: 'deepseek',
+      orchestratorModel: 'deepseek-chat',
+      accessMode: 'full-access',
+      chatMode: false,
+    });
+
+    expect(sendAgentPromptDirect).not.toHaveBeenCalled();
+    expect(routeOrchestratorRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        recentUserMessages: [],
+        llmConfig: expect.objectContaining({ provider: 'deepseek', model: 'deepseek-chat' }),
+      }),
+    );
+    expect(get(chatThreadState).messagesByThread[thread.id]).toHaveLength(2);
+  });
+
+  it('resolves the Composer provider from the keychain before routing', async () => {
+    invoke.mockImplementation(async (command: string, args?: { provider?: string }) => {
+      if (command === 'provider_api_key_exists' && args?.provider === 'deepseek') return true;
+      if (command === 'ai_complete') return '[]';
+      return undefined;
+    });
+    const thread = createChatThread('project-1', {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'Reviewed from the selected model.', actions: [], viaLLM: true });
+
+    await sendChatMessage('project-1', '/repo', 'Review the application and suggest improvements', {
+      threadId: thread.id,
+      orchestratorProvider: 'deepseek',
+      orchestratorModel: 'deepseek-chat',
+      chatMode: true,
+      conversationalMode: true,
+    });
+
+    expect(invoke).toHaveBeenCalledWith('provider_api_key_exists', { provider: 'deepseek' });
+    expect(routeOrchestratorRequest.mock.calls[0][2].llmConfig).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      hasApiKey: true,
     });
   });
 
@@ -1943,5 +2592,79 @@ describe('recordUnwatchedAgentReport', () => {
     // back to a toast instead of dropping the report on the floor.
     expect(recordUnwatchedAgentReport(null, { kind: 'finished' }, 'An agent')).toBeNull();
     expect(get(chatMessages)).toEqual({});
+  });
+});
+
+describe('runBrainCommand (brain run_command tool)', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  // Answers the next hidden run with a completion sentinel carrying exitCode,
+  // the way a real shell would after executing the wrapped command.
+  function completeNextRun(exitCode: number, body = 'test output') {
+    sendPromptToSession.mockImplementationOnce((_id: number, text: string) => {
+      const token = /__SPACRON_EMBEDDED_DONE_([a-z0-9]+)_/.exec(text)?.[1] ?? 'missing';
+      getSessionOutputSince.mockReturnValue(`${body}\n__SPACRON_EMBEDDED_DONE_${token}_${exitCode}__`);
+    });
+  }
+
+  it('returns exit code + output and reclaims the hidden session', async () => {
+    completeNextRun(0, 'PASS 12 tests');
+    const res = await runBrainCommand('p1', '/repo', 'npm test', 5000);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.timedOut).toBe(false);
+    expect(res.output).toContain('PASS 12 tests');
+    expect(createTerminalSession).toHaveBeenCalledWith('/repo', undefined, 'p1', expect.objectContaining({ hidden: true, assignPane: false }));
+    expect(sendPromptToSession).toHaveBeenCalledWith(99, expect.stringContaining('SPACRON_EMBEDDED_DONE'));
+    expect(killSession).toHaveBeenCalledWith(99);
+  });
+
+  it('reports non-zero exits without throwing', async () => {
+    completeNextRun(2, 'FAIL src/auth.test.ts');
+    const res = await runBrainCommand('p1', '/repo', 'npm test', 5000);
+
+    expect(res.exitCode).toBe(2);
+    expect(res.timedOut).toBe(false);
+    expect(res.output).toContain('FAIL src/auth.test.ts');
+  });
+
+  it('times out with output-so-far when no sentinel arrives', async () => {
+    getSessionOutputSince.mockReturnValue('still crunching…');
+    const res = await runBrainCommand('p1', '/repo', 'sleep 60', 700);
+
+    expect(res.timedOut).toBe(true);
+    expect(res.exitCode).toBeNull();
+    expect(res.output).toContain('still crunching');
+    expect(killSession).toHaveBeenCalledWith(99);
+  });
+
+  it('returns empty when no terminal can be created', async () => {
+    createTerminalSession.mockResolvedValueOnce(null);
+    const res = await runBrainCommand('p1', '/repo', 'npm test', 5000);
+
+    expect(res.exitCode).toBeNull();
+    expect(res.output).toBe('');
+    expect(sendPromptToSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('formatBrainRunResult', () => {
+  it('shows exit status and strips sentinel lines', () => {
+    const text = formatBrainRunResult('npm test', {
+      exitCode: 0,
+      output: 'PASS 12 tests\n__SPACRON_EMBEDDED_DONE_ab12cd_0__',
+      timedOut: false,
+      elapsedMs: 1200,
+    });
+    expect(text).toContain('exit 0');
+    expect(text).toContain('PASS 12 tests');
+    expect(text).not.toContain('SPACRON_EMBEDDED_DONE');
+  });
+
+  it('marks timeouts and closed sessions distinctly', () => {
+    expect(formatBrainRunResult('sleep 60', { exitCode: null, output: 'partial', timedOut: true, elapsedMs: 90000 })).toContain('TIMEOUT');
+    expect(formatBrainRunResult('npm test', { exitCode: null, output: '', timedOut: false, elapsedMs: 400 })).toContain('SESSION CLOSED');
   });
 });

@@ -47,6 +47,14 @@ class StubElement {
     this.dispatched.push(event.type);
     return true;
   }
+  /** Programmatic focus, exactly what `toggleChatModeTranscription` performs. */
+  focus() {
+    stubDocument.activeElement = this;
+    focusListeners.forEach((fn) => fn({ target: this }));
+  }
+  getAttributeNames(): string[] {
+    return [];
+  }
 }
 
 class StubInput extends StubElement {
@@ -74,9 +82,14 @@ const focusListeners: FocusListener[] = [];
 const pointerListeners: FocusListener[] = [];
 let keyListeners: KeyListener[] = [];
 
+/** The chat composer, when a chat-mode test needs one on the page. */
+let stubComposerTextarea: StubTextArea | null = null;
+
 const stubDocument = {
   activeElement: null as StubElement | null,
   body: new StubElement(),
+  querySelector: (selector: string) =>
+    selector === '.chat-mode-composer textarea' ? stubComposerTextarea : null,
   addEventListener(type: string, handler: FocusListener | KeyListener) {
     if (type === 'focusin') focusListeners.push(handler as FocusListener);
     if (type === 'pointerdown') pointerListeners.push(handler as FocusListener);
@@ -217,7 +230,7 @@ vi.mock('$lib/services/voice-input', () => ({
   refineVoiceTranscript: (input: string) => input.trim(),
 }));
 
-import { toggleTerminalTranscription } from './transcription-hotkey';
+import { toggleChatModeTranscription, toggleTerminalTranscription } from './transcription-hotkey';
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -232,6 +245,17 @@ async function speak(text: string) {
   await flush();
 }
 
+/** A chat-mode composer on the page — the target `toggleChatModeTranscription`
+ *  must land in even when focus is nowhere near it. */
+function makeComposer() {
+  const form = new StubElement();
+  form.className = 'chat-mode-composer';
+  const textarea = new StubTextArea();
+  textarea.parent = form;
+  stubComposerTextarea = textarea;
+  return { form, textarea };
+}
+
 describe('transcription-hotkey targeting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -244,6 +268,7 @@ describe('transcription-hotkey targeting', () => {
     h.onStartCount.value = 0;
     focus(null);
     stubDocument.activeElement = null;
+    stubComposerTextarea = null;
   });
 
   it('types into the focused text field, leaving the terminal alone', async () => {
@@ -594,5 +619,27 @@ describe('transcription-hotkey targeting', () => {
 
     expect(h.refineVoicePrompt).not.toHaveBeenCalled();
     expect(field.value).toBe('plain and clean');
+  });
+
+  /**
+   * Chat-mode hotkey: pressing F9 in conversational mode aims at the composer
+   * even when focus is nowhere near it — the earlier fallback fed the most
+   * recently activated (and hidden) terminal instead, and no surface said
+   * anything.
+   */
+  it('chat-mode hotkey lands in the composer regardless of where focus is', async () => {
+    const { textarea } = makeComposer();
+    focus(null); // the user pressed F9 away from the composer
+
+    toggleChatModeTranscription();
+    await flush();
+    expect(textarea).toBe(stubDocument.activeElement);
+    captured?.onResult('fix the release notes');
+    await flush();
+    toggleChatModeTranscription(); // end + send
+    await flush();
+
+    expect(textarea.value).toBe('fix the release notes');
+    expect(h.sendAgentPromptDirect).not.toHaveBeenCalled();
   });
 });

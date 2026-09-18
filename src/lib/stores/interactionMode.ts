@@ -32,3 +32,16 @@ export function setInteractionMode(mode: InteractionMode): void {
   if (get(interactionMode) === mode) return;
   interactionMode.set(mode);
 }
+
+/**
+ * Request counter for the conversational-mode voice gesture. The floating bar
+ * owns the bare-Alt tap globally (it stays mounted in both modes); when that
+ * gesture fires while `interactionMode === 'chat'` it increments this counter
+ * instead of launching the CLI bar's own realtime call, and ChatModePanel's
+ * composer consumes it. Kept here, not in the component, so the gesture owner
+ * (FloatingPromptBar) and the listener (ChatModePanel) share one import.
+ */
+export const chatVoiceModeRequest = writable(0);
+export function requestChatVoiceMode(): void {
+  chatVoiceModeRequest.update((n) => n + 1);
+}

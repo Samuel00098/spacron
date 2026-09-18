@@ -24,23 +24,26 @@ export default function UsageMeter({ window, showReset = true, now = Date.now() 
   const severity = severityOf(window.usedPercent);
   const reset = showReset ? describeReset(window, now) : null;
   const percent = Math.round(window.usedPercent);
+  const remaining = Math.max(0, Math.round(100 - window.usedPercent));
 
   return (
     <div className="usage-meter" data-severity={severity}>
-      <span className="usage-meter-label" title={window.label}>
-        {window.label}
-      </span>
+      <div className="usage-meter-heading">
+        <span className="usage-meter-label" title={window.label}>
+          {window.label} window
+        </span>
+        <span className="usage-meter-remaining">{remaining}% left</span>
+      </div>
       <div
         className="usage-meter-track"
         role="progressbar"
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label={`${window.label} usage`}
+        aria-label={`${window.label} window: ${remaining}% remaining`}
       >
-        <span className="usage-meter-fill" style={{ width: `${percent}%` }} />
+        <span className="usage-meter-fill" style={{ width: `${remaining}%` }} />
       </div>
-      <span className="usage-meter-percent">{percent}%</span>
       {reset && (
         <span className="usage-meter-reset" title={reset}>
           {reset}

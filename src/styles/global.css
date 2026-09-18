@@ -1,6 +1,6 @@
-/* Self-hosted fonts (served from static/ → /fonts/). The app CSP is
-   `style-src 'self'` / `font-src 'self'`, which blocks Google Fonts entirely.
-   Inter is Warp's UI face; JetBrains Mono is used for code + terminal. */
+/* App typography uses the operating system's own fonts, matching the native
+   system-font treatment used by Codex. The code/editor token remains
+   monospaced so terminal columns and source indentation stay aligned. */
 @font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-400.woff2') format('woff2'); }
 @font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-500.woff2') format('woff2'); }
 @font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-600.woff2') format('woff2'); }
@@ -10,16 +10,15 @@
 @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/jetbrains-mono-500.woff2') format('woff2'); }
 @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/jetbrains-mono-700.woff2') format('woff2'); }
 
-/* App-wide font tokens. Every panel/UI surface uses --font-sans (Inter);
-   code + terminal opt into --font-mono. Reference these instead of hardcoding a
-   stack so the whole app stays consistent. */
+/* App-wide font tokens. Every panel/UI surface uses --font-sans; code +
+   terminal opt into the matching system monospace token. Reference these
+   instead of hardcoding a stack so the whole app stays consistent. */
 :root {
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', Consolas, monospace;
-  /* Application chrome scale. Editor and terminal components set their own
+  /* Application chrome base size. Editor and terminal components set their own
      typography and are intentionally not driven by this value. */
   --ui-font-size: 14px;
-  --ui-font-scale: 1;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
@@ -52,10 +51,12 @@
   --ease-in:       cubic-bezier(0.4, 0, 1, 1);
 }
 
-/* Belt-and-suspenders: pin the app root to the UI face so every panel inherits
-   Inter even where a component forgot to. Code/terminal re-assert mono below. */
+/* Belt-and-suspenders: pin the app root to the system UI face so every panel
+   inherits it even where a component forgot to. Code/terminal re-assert mono
+   below. */
 #app {
   font-family: var(--font-sans);
+  font-size: var(--ui-font-size, 14px);
 }
 
 :root.solid-theme {
@@ -188,6 +189,81 @@ html.bg-palette-light:not(.has-bg-media) {
 
 :root:not(.solid-theme).light-theme .titlebar .nav-btn:disabled {
   opacity: 0.35 !important;
+}
+
+/* Sidebar visibility controls remain clear on white glass without the
+   optically heavy pure-black treatment used by the previous light override. */
+:root:not(.solid-theme).light-theme .titlebar .sidebar-toggle-btn {
+  color: #4f5868 !important;
+  opacity: 0.9 !important;
+}
+
+:root:not(.solid-theme).light-theme .titlebar .sidebar-toggle-btn svg {
+  stroke-width: 1.65;
+}
+
+:root:not(.solid-theme).light-theme .titlebar .sidebar-toggle-btn:hover:not(:disabled) {
+  color: #303846 !important;
+  opacity: 1 !important;
+}
+
+/* Shared UI typography: Codex keeps application chrome at a calm regular
+   weight, so labels remain legible without making icons or headings shout.
+   CodeMirror, terminals, and preformatted output intentionally sit outside
+   this rule and keep their own type scale. */
+.app-shell,
+.titlebar,
+.utility-drawer,
+.statusbar {
+  font-family: var(--font-sans);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell button,
+.app-shell input,
+.app-shell select,
+.app-shell textarea,
+.titlebar button,
+.utility-drawer button {
+  font-family: inherit;
+  font-weight: 400;
+}
+
+/* Keep the conversational surface and both workspace sidebars on the same
+   Codex-like UI baseline. Individual code, terminal, and data readouts keep
+   their own type scale; ordinary labels and controls stay calm and medium. */
+.app-shell .chat-mode-panel,
+.app-shell .left-sidebar,
+.app-shell .right-sidebar,
+.app-shell .left-utility-panel,
+.app-shell .right-utility-panel,
+.app-shell .file-explorer,
+.app-shell .source-control {
+  font-family: var(--font-sans);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: 400;
+  font-synthesis: none;
+}
+
+.app-shell .chat-mode-panel :is(strong, b),
+.app-shell .left-sidebar :is(strong, b),
+.app-shell .right-sidebar :is(strong, b),
+.app-shell .chat-mode-panel :is(h1, h2, h3, h4, h5, h6),
+.app-shell .left-sidebar :is(h1, h2, h3, h4, h5, h6),
+.app-shell .right-sidebar :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 500;
+}
+
+/* Utility drawers are ordinary application UI, including Explorer and Source
+   Control. Keep their labels regular even where an individual panel used to
+   request a heavier weight. */
+.app-shell .left-utility-panel *,
+.app-shell .right-utility-panel * {
+  font-weight: 400;
 }
 
 /* Ensure titlebar buttons are transparent by default in transparency mode */
@@ -601,16 +677,36 @@ body {
   overflow: hidden;
   overscroll-behavior: none;
   font-family: var(--font-sans);
-  font-size: 17px;
-  /* Medium base weight: hairline 400 text is hard to read over the translucent
-     wallpaper. Elements that set their own (heavier) weight are unaffected. */
-  font-weight: 500;
+  font-size: var(--ui-font-size, 14px);
+  /* Keep the application baseline calm; intentional labels and headings may
+     still opt into a heavier weight locally. */
+  font-weight: 400;
   color: var(--text-primary);
   background-color: transparent;
   position: relative;
   z-index: 0;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* One typography contract for application UI. Component styles historically
+   carried many fixed 9-13px values, which meant the UI font-size control only
+   changed a few containers. UI text now inherits the live root value, while
+   actual editor/terminal output and authored document content keep their own
+   typography controls. The exclusions are descendants as well as roots so a
+   nested span cannot accidentally pick the application size back up. */
+:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-brand):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
+  font-family: var(--font-sans) !important;
+  font-size: inherit !important;
+  font-weight: 400 !important;
+  font-synthesis: none;
+  text-transform: none !important;
+}
+
+/* Retain a small amount of hierarchy without returning to the heavy 600-800
+   weights that made labels look wide and crowded. */
+:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-brand) {
+  font-weight: 500 !important;
 }
 
 body::after {
@@ -1513,9 +1609,9 @@ textarea,
 .xterm-rows,
 .xterm-rows *,
 pre,
-code,
-kbd,
-samp {
+  code,
+  kbd,
+  samp {
   font-family: var(--editor-font-family, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace) !important;
 }
 

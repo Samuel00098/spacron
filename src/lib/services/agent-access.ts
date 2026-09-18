@@ -10,14 +10,27 @@ export interface AgentAccessStatus {
 
 const BLOCKED_MESSAGE = 'To access the agent, add an API key or load a local model into the application.';
 
-export async function detectAgentAccess(): Promise<AgentAccessStatus> {
-  const remoteProviders = aiProviders.filter((provider) => !provider.local);
-  const localProviders = aiProviders.filter((provider) => provider.local);
+export interface AgentAccessOptions {
+  fresh?: boolean;
+  /** When set, verify this Composer-selected connection rather than another provider. */
+  preferredProvider?: AiProviderId;
+}
+
+export async function detectAgentAccess(options?: AgentAccessOptions): Promise<AgentAccessStatus> {
+  const selectedProvider = options?.preferredProvider
+    ? aiProviders.find((provider) => provider.id === options.preferredProvider)
+    : undefined;
+  const providersToCheck = selectedProvider ? [selectedProvider] : aiProviders;
+  const keyCheckOptions = options?.fresh === undefined ? undefined : { fresh: options.fresh };
+  const remoteProviders = providersToCheck
+    .filter((provider) => !provider.local)
+    .sort((left, right) => Number(right.id === options?.preferredProvider) - Number(left.id === options?.preferredProvider));
+  const localProviders = providersToCheck.filter((provider) => provider.local);
 
   const remoteResults = await Promise.all(
     remoteProviders.map(async (provider) => {
       try {
-        return (await providerApiKeyExists(provider.id)) ? provider : null;
+        return (await providerApiKeyExists(provider.id, keyCheckOptions)) ? provider : null;
       } catch {
         return null;
       }
@@ -56,7 +69,9 @@ export async function detectAgentAccess(): Promise<AgentAccessStatus> {
     ready: false,
     via: 'none',
     providerId: null,
-    message: BLOCKED_MESSAGE,
+    message: selectedProvider && !selectedProvider.local
+      ? `${selectedProvider.label} is not connected. Add the ${selectedProvider.keyLabel || `${selectedProvider.label} API key`} in Settings, then retry.`
+      : BLOCKED_MESSAGE,
   };
 }
 

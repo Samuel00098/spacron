@@ -60,6 +60,7 @@ import {
 import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
 import { initMcpBridge } from '$lib/stores/mcpBridge';
+import { applyUiFontSize } from '$lib/services/ui-typography';
 import { ensureWindowUsable, isTauriRuntime } from '$lib/utils/tauri';
 import { isModalOpen } from '$lib/react/useModalFocus';
 
@@ -194,9 +195,7 @@ export default function App() {
     });
 
     const unsubscribeUiFontSize = uiFontSize.subscribe((size) => {
-      const safeSize = Math.max(12, Math.min(20, Number(size) || 14));
-      document.documentElement.style.setProperty('--ui-font-size', `${safeSize}px`);
-      document.documentElement.style.setProperty('--ui-font-scale', `${safeSize / 14}`);
+      applyUiFontSize(size);
     });
 
     // Publish the editor typeface globally. Plenty of surfaces outside the
@@ -204,11 +203,10 @@ export default function App() {
     // ask for `var(--editor-font-family)` — but CodeEditor only sets it inline on
     // its own container, so every one of them silently fell back to plain
     // `monospace` at whatever hardcoded size it picked. Setting both vars on the
-    // root is what makes those existing references resolve. Divide the size by
-    // the UI scale because .app-shell scales the complete chrome; code text
-    // remains controlled by the editor font-size setting.
+    // root is what makes those existing references resolve. Code text remains
+    // controlled by the editor font-size setting, independently of UI text.
     const unsubscribeFontSize = fontSize.subscribe((size) => {
-      document.documentElement.style.setProperty('--editor-font-size', `calc(${size}px / var(--ui-font-scale, 1))`);
+      document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
     });
     const unsubscribeFontFamily = resolvedFontFamily.subscribe((family) => {
       document.documentElement.style.setProperty('--editor-font-family', family);

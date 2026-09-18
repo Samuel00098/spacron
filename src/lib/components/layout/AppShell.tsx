@@ -92,7 +92,7 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
-import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
+import { interactionMode, requestChatVoiceMode, setInteractionMode } from '$lib/stores/interactionMode';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -110,7 +110,7 @@ import {
   allProjectSessions,
   commandHistory,
 } from '$lib/stores/terminal';
-import { toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
+import { toggleChatModeTranscription, toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
 
 import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
@@ -1433,7 +1433,14 @@ export default function AppShell() {
         // openDailyNote removed
         // toggleSketch removed
         case 'launchVoiceMode':
-          launchPromptBarVoiceMode();
+          // Mode-routed like the bare-Alt tap: in conversational mode the CLI
+          // bar (and its hidden realtime call) is the wrong target — hand the
+          // shortcut to the chat composer's voice session instead.
+          if (get(interactionMode) === 'chat') {
+            requestChatVoiceMode();
+          } else {
+            launchPromptBarVoiceMode();
+          }
           break;
         case 'cycleAmbientLayout': {
           // Two reachable arrangements now that Fleet is an action rather than a
@@ -1479,7 +1486,15 @@ export default function AppShell() {
       if (!binding || !matchShortcut(event, binding.keys)) return;
       event.preventDefault();
       event.stopPropagation();
-      toggleTerminalTranscription();
+      // The dictation hotkey is mode-routed: in conversational mode it must aim
+      // at the chat composer (force-focusing it, so the capture can never fall
+      // back to a hidden CLI terminal) — in CLI mode it goes to the caret's
+      // field or the terminal the user is in.
+      if (get(interactionMode) === 'chat') {
+        toggleChatModeTranscription();
+      } else {
+        toggleTerminalTranscription();
+      }
     }
 
     window.addEventListener('keydown', handleTranscriptionKeyDown, true);
@@ -1634,6 +1649,7 @@ export default function AppShell() {
         />
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
+            <span className="left-sidebar-app-name">Spacron</span>
             {workspaceName && (
               <span className="left-sidebar-workspace" title={workspaceName}>
                 {workspaceName}
@@ -1664,8 +1680,10 @@ export default function AppShell() {
               onClick={() => setInteractionMode('cli')}
               aria-pressed={currentInteractionMode === 'cli'}
             >
-              <span aria-hidden="true">›_</span>
-              CLI
+              <span className="left-sidebar-mode-icon" aria-hidden="true">
+                <Icon><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></Icon>
+              </span>
+              <span className="left-sidebar-mode-text">Code</span>
             </button>
             <button
               type="button"
@@ -1673,8 +1691,10 @@ export default function AppShell() {
               onClick={() => setInteractionMode('chat')}
               aria-pressed={currentInteractionMode === 'chat'}
             >
-              <span aria-hidden="true">✦</span>
-              Chat
+              <span className="left-sidebar-mode-icon" aria-hidden="true">
+                <Icon><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon>
+              </span>
+              <span className="left-sidebar-mode-text">Conversational</span>
             </button>
           </div>
         </div>
@@ -1688,7 +1708,7 @@ export default function AppShell() {
               else openAgentSpawn();
             }}
             disabled={currentInteractionMode === 'chat'}
-            title={currentInteractionMode === 'chat' ? 'Switch to CLI mode to start a new agent' : 'Start a new agent'}
+            title={currentInteractionMode === 'chat' ? 'Switch to Code mode to start a new agent' : 'Start a new agent'}
             aria-pressed={layoutState.agentSpawnOpen}
           >
             <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>

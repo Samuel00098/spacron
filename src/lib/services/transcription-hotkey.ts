@@ -17,6 +17,7 @@ import {
 } from '$lib/services/voice-input';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { showToast } from '$lib/stores/notification';
+import { interactionMode } from '$lib/stores/interactionMode';
 
 /**
  * Transcription mode: speak once, land the text somewhere useful.
@@ -86,6 +87,31 @@ export const transcriptionLevel = writable<number>(0);
 
 /** Words banked so far in this dictation — proof the words are landing. */
 export const transcriptionWordCount = writable<number>(0);
+
+/**
+ * A dictation is committed and either arming (mic still opening), listening, or
+ * processing. Differs from `transcriptionState` on purpose: the phase stays
+ * 'idle' while the mic is opening, which used to leave the surface with NOTHING
+ * to show for the first beat — or forever, when getUserMedia stalls. Any
+ * surface that wants "I'm on" has to light up from the moment the capture is
+ * committed, not from `onStart`.
+ */
+export const transcriptionActive = writable<boolean>(false);
+
+/**
+ * Where the live dictation is aimed right now, so each surface can say what
+ * this mic is actually feeding. Text fields get the same treatment as the
+ * meter: a pill that only says "Listening" cannot tell you the words are
+ * heading for the chat composer, the terminal, or some unrelated box — which
+ * is the "it just isn't showing anything" failure. The chat composer swims its
+ * own indicator on `kind === 'chat'`; the CLI pill labels the target instead,
+ * so what you are dictating into is never a mystery.
+ */
+export type TranscriptionTarget =
+  | { kind: 'chat'; label: string }
+  | { kind: 'field'; label: string }
+  | { kind: 'terminal'; label: string };
+export const transcriptionTarget = writable<TranscriptionTarget | null>(null);
 
 /**
  * The gesture is a TAP, not a hold, and that is deliberate.
@@ -223,7 +249,25 @@ function insertIntoEditable(target: EditableTarget, text: string): boolean | Pro
       const start = el.selectionStart ?? el.value.length;
       const end = el.selectionEnd ?? start;
       el.setRangeText(text, start, end, 'end');
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      // Trigger React's internal value tracker for controlled inputs/textareas
+      try {
+        const proto =
+          typeof HTMLTextAreaElement !== 'undefined' && el instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : typeof HTMLInputElement !== 'undefined' && el instanceof HTMLInputElement
+              ? HTMLInputElement.prototype
+              : undefined;
+        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : undefined;
+        descriptor?.set?.call(el, el.value);
+      } catch {
+        // Prototype descriptor set is a React enhancement; don't let it fail delivery
+      }
+      try {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch {
+        // Ignore event dispatch failure in non-standard environments
+      }
       return true;
     }
     const sel = window.getSelection();
@@ -348,9 +392,11 @@ function wasUserDirected(el: HTMLElement): boolean {
  */
 function retargetDuringCapture(target: EditableTarget | null, el: HTMLElement) {
   if (phase !== 'listening' && !starting) return;
+  if (get(interactionMode) === 'chat' && (el.closest?.('.cli-mode-layer') || isXtermHelper(el))) return;
   if (!wasUserDirected(el)) return;
   targetField = target;
   targetSessionId = null;
+  publishTarget(target, null);
 }
 
 function installFocusTracker() {
@@ -432,9 +478,38 @@ function liveEditable(target: EditableTarget | null): EditableTarget | null {
   return target;
 }
 
+function findChatComposerElement(): HTMLTextAreaElement | HTMLInputElement | null {
+  if (typeof document === 'undefined') return null;
+  return (
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>('.chat-mode-composer textarea') ??
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>('.chat-mode-composer-area textarea') ??
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>('.chat-mode-composer textarea:not([disabled])') ??
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>('.chat-mode-composer input') ??
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>('.chat-mode-composer-area input') ??
+    document.querySelector<HTMLTextAreaElement | HTMLInputElement>(
+      '.chat-mode-composer textarea, .chat-mode-composer-area textarea, .chat-mode-composer input'
+    )
+  );
+}
+
 /** Where a capture started: the element under the caret NOW, else the last one. */
 function resolveEditableTarget(): EditableTarget | null {
   installFocusTracker();
+  if (get(interactionMode) === 'chat') {
+    const active = focusedEditableTarget();
+    if (active && active.kind !== 'preview' && !active.el.closest?.('.cli-mode-layer')) {
+      return active;
+    }
+    const last = liveEditable(lastEditableEl);
+    if (last && last.kind !== 'preview' && !last.el.closest?.('.cli-mode-layer')) {
+      return last;
+    }
+    const composerEl = findChatComposerElement();
+    if (composerEl) {
+      return { kind: 'input', el: composerEl };
+    }
+    return null;
+  }
   const preview = previewTarget && liveEditable(previewTarget);
   return preview ?? focusedEditableTarget() ?? liveEditable(lastEditableEl);
 }
@@ -486,6 +561,8 @@ function resetToIdle() {
   finalizing = false;
   deliveryStarted = false;
   starting = false;
+  transcriptionTarget.set(null);
+  transcriptionActive.set(false);
   setPhase('idle');
 }
 
@@ -582,6 +659,48 @@ function describeSession(sessionId: number): string {
 }
 
 /**
+ * Publish where a dictation is aimed, so indicators can name their mode: the
+ * conversational composer ("a chat message"), a named terminal, or a text
+ * field. `sessionId` is null while the target is a terminal that has not been
+ * resolved to a session yet — resolve best-effort so the label is still right.
+ */
+function publishTarget(field: EditableTarget | null, explicitSessionId: number | null): void {
+  try {
+    if (get(interactionMode) === 'chat') {
+      transcriptionTarget.set({ kind: 'chat', label: 'a chat message' });
+      return;
+    }
+    if (field) {
+      if (field.kind === 'preview') {
+        transcriptionTarget.set({ kind: 'field', label: describeField(field) });
+        return;
+      }
+      const el = field.el as HTMLElement;
+      if (el.closest?.('.chat-mode-composer')) {
+        transcriptionTarget.set({ kind: 'chat', label: 'a chat message' });
+        return;
+      }
+      transcriptionTarget.set({ kind: 'field', label: describeField(field) });
+      return;
+    }
+    const sessionId = explicitSessionId ?? resolveTargetSession();
+    transcriptionTarget.set(
+      sessionId != null
+        ? { kind: 'terminal', label: describeSession(sessionId) }
+        : { kind: 'terminal', label: 'a terminal' },
+    );
+  } catch {
+    transcriptionTarget.set(
+      get(interactionMode) === 'chat'
+        ? { kind: 'chat', label: 'a chat message' }
+        : field
+          ? { kind: 'field', label: 'a text field' }
+          : { kind: 'terminal', label: 'a terminal' },
+    );
+  }
+}
+
+/**
  * Log the dictation, whatever happens to it next.
  *
  * Called BEFORE delivery on purpose: a transcript that could not be inserted
@@ -627,7 +746,13 @@ function logToHistory(input: {
  */
 async function deliver(): Promise<void> {
   setPhase('processing');
-  const field = liveEditable(targetField);
+  let field = liveEditable(targetField);
+  if (!field && get(interactionMode) === 'chat') {
+    const composerEl = findChatComposerElement();
+    if (composerEl) {
+      field = { kind: 'input', el: composerEl };
+    }
+  }
   const allowNewLines = field != null;
   const text = cleanTranscript(accumulated.join(' '), allowNewLines) ?? '';
   teardownMic();
@@ -648,7 +773,8 @@ async function deliver(): Promise<void> {
   }
   // Null means either "aimed at a terminal but retargeted mid-dictation" or
   // "the remembered field is gone" — both want the terminal the user is in NOW.
-  const sessionId = field ? null : targetSessionId ?? resolveTargetSession();
+  // In chat mode, never fallback to a terminal session under any circumstances.
+  const sessionId = (field || get(interactionMode) === 'chat') ? null : targetSessionId ?? resolveTargetSession();
   logToHistory({ mechanical: text, finalText, field, sessionId });
   try {
     // The field this dictation is aimed at wins: the one the caret was in when
@@ -686,15 +812,23 @@ async function startListening(): Promise<void> {
   // capture started (now, or the last field before focus moved to the bar's
   // mic button) is where the transcript lands — unless the user moves the caret
   // to another text surface before it ends, which retargets it.
+  const inChat = get(interactionMode) === 'chat';
   const field = resolveEditableTarget();
-  const sessionId = field ? null : resolveTargetSession();
+  const sessionId = (field || inChat) ? null : resolveTargetSession();
   if (!field && sessionId == null) {
-    showToast('Click into a terminal or text field first, then speak.', 'error');
+    showToast(
+      inChat
+        ? 'Could not find a chat composer to dictate into.'
+        : 'Click into a terminal or text field first, then speak.',
+      'error',
+    );
     starting = false;
     return;
   }
   targetSessionId = sessionId;
   targetField = field;
+  transcriptionActive.set(true);
+  publishTarget(field, sessionId);
   accumulated = [];
   finalizing = false;
 
@@ -827,6 +961,12 @@ export function abortTranscription(): void {
   teardownMic();
 }
 
+/** Finish an active dictation from the floating bar without starting a new capture. */
+export function sendTranscriptionNow(): void {
+  if (starting || phase !== 'listening') return;
+  finalizeListening();
+}
+
 /**
  * The hotkey entry point. Idle → listen; listening → end and paste;
  * processing → ignored (delivery already in flight).
@@ -855,4 +995,21 @@ export function startBarTranscription(): boolean {
   starting = true;
   void startListening();
   return true;
+}
+
+/**
+ * Dedicated chat-mode dictation entry point (bound to F9 / shortcut in chat mode).
+ * In chat mode, dictation must NEVER bleed into code or terminal modes. It guarantees
+ * the chat composer is focused and receives the transcript.
+ */
+export function toggleChatModeTranscription(): void {
+  if (starting || phase === 'processing') return;
+  if (phase === 'listening') {
+    finalizeListening();
+    return;
+  }
+  const composer = findChatComposerElement();
+  composer?.focus?.();
+  starting = true;
+  void startListening();
 }

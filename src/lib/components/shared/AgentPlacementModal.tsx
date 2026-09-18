@@ -65,6 +65,7 @@ const OPTIONS: Array<{
  */
 export default function AgentPlacementModal() {
   const request = useStore(agentPlacementRequest);
+  const inlineChatRequest = request?.source === 'orchestrator' && Boolean(request.projectId && request.threadId);
   const [choices, setChoices] = useState<AgentPlacement[]>([]);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const backdropRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +77,7 @@ export default function AgentPlacementModal() {
   // lifetime and renders `null` until a placement is asked for — an ungated
   // registration here pinned `isModalOpen()` to true from startup and killed
   // every global shortcut in the app.
-  useModalFocus(backdropRef, undefined, Boolean(request));
+  useModalFocus(backdropRef, undefined, Boolean(request) && !inlineChatRequest);
 
   // Reseed (and refocus) whenever a new request reaches the head of the queue.
   useEffect(() => {
@@ -85,7 +86,7 @@ export default function AgentPlacementModal() {
     cardRef.current?.focus();
   }, [request?.id]);
 
-  if (!request) return null;
+  if (!request || inlineChatRequest) return null;
 
   // The seeding effect runs a tick after the request lands, so fall back to the
   // suggestion rather than rendering a row with no selection.

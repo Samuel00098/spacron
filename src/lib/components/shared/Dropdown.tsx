@@ -23,6 +23,8 @@ interface DropdownProps {
   /** CSS selector for a container element to bound the dropdown within.
    *  When set, the menu will not extend past this element's edges. */
   boundarySelector?: string;
+  /** Force the menu to open down or up, or let available space decide. */
+  direction?: 'down' | 'up' | 'auto';
 }
 
 // Menu max-height (keep in sync with .dd-menu max-height in CSS).
@@ -34,7 +36,7 @@ const MENU_MAX_WIDTH = 420;
 
 /** Gap kept between a menu and the window edge when it has to be nudged back
  *  inside. */
-const EDGE_MARGIN = 8;
+const EDGE_MARGIN = 16;
 
 export default function Dropdown({
   options,
@@ -44,6 +46,7 @@ export default function Dropdown({
   ariaLabel = 'Select an option',
   disabled = false,
   boundarySelector,
+  direction = 'auto',
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
@@ -64,25 +67,36 @@ export default function Dropdown({
   const updatePlacement = useCallback(() => {
     if (!rootEl.current) return;
     const r = rootEl.current.getBoundingClientRect();
+    const composer = rootEl.current?.closest('.chat-mode-composer');
+    const composerRect = composer?.getBoundingClientRect();
 
     // Determine the bounding rect that constrains the menu.
-    let boundTop = 0;
-    let boundBottom = window.innerHeight;
+    const edge = 16;
+    const bottomEdge = 32;
+    let boundTop = edge;
+    let boundBottom = window.innerHeight - bottomEdge;
     if (boundarySelector) {
       const boundary = document.querySelector(boundarySelector);
       if (boundary) {
         const br = boundary.getBoundingClientRect();
-        boundTop = br.top;
-        boundBottom = br.bottom;
+        boundTop = Math.max(edge, br.top + edge);
+        boundBottom = Math.min(window.innerHeight - bottomEdge, br.bottom - bottomEdge);
       }
     }
 
-    const below = boundBottom - r.bottom;
-    const above = r.top - boundTop;
-    const willDropUp = below < Math.min(MENU_MAX, 200) && above > below;
+    const topBase = composerRect ? composerRect.bottom + 6 : r.bottom + 6;
+    const below = boundBottom - topBase;
+    const topAnchor = composerRect ? composerRect.top : r.top;
+    const above = topAnchor - boundTop;
+    const willDropUp = direction === 'up'
+      ? true
+      : direction === 'down'
+        ? (below < 60 && above > below)
+        : (below < Math.min(MENU_MAX, 180) && above > below);
     setDropUp(willDropUp);
 
-    const maxHeight = Math.max(120, Math.min(MENU_MAX, (willDropUp ? above : below) - 12));
+    const available = willDropUp ? above : below;
+    const maxHeight = Math.max(60, Math.min(MENU_MAX, available - 8));
     const next: CSSProperties = {
       position: 'fixed',
       left: r.left,
@@ -99,19 +113,19 @@ export default function Dropdown({
       maxHeight,
     };
     if (willDropUp) {
-      next.bottom = boundBottom - r.top + 6;
+      next.bottom = window.innerHeight - topAnchor + 6;
     } else {
-      next.top = r.bottom + 6;
+      next.top = topBase;
     }
     setMenuStyle(next);
-  }, [boundarySelector]);
+  }, [boundarySelector, direction]);
 
   /**
    * Second placement pass. The menu sizes to its content, so its real width is
    * only knowable once it has rendered — which is also the moment it can be
-   * clamped back inside the window. A menu opened near the right edge (a picker
-   * in the right utility drawer, say) right-aligns with its trigger and grows
-   * inward instead of running off-screen.
+   * clamped back inside the window or boundary. A menu opened near the right edge
+   * (a picker in the right utility drawer, say) right-aligns with its trigger and
+   * grows inward instead of running off-screen.
    *
    * `useLayoutEffect`, so the corrected position is the first one painted. The
    * width guard makes this converge: the second run computes the same `left`
@@ -123,16 +137,27 @@ export default function Dropdown({
     const anchor = rootEl.current.getBoundingClientRect();
     if (menu.width === 0) return;
 
-    let left = anchor.left;
-    if (left + menu.width > window.innerWidth - EDGE_MARGIN) {
-      left = Math.min(anchor.right - menu.width, window.innerWidth - EDGE_MARGIN - menu.width);
+    let minLeft = EDGE_MARGIN;
+    let maxRight = window.innerWidth - EDGE_MARGIN;
+    if (boundarySelector) {
+      const boundary = document.querySelector(boundarySelector);
+      if (boundary) {
+        const br = boundary.getBoundingClientRect();
+        minLeft = Math.max(minLeft, br.left + EDGE_MARGIN);
+        maxRight = Math.min(maxRight, br.right - EDGE_MARGIN);
+      }
     }
-    left = Math.max(EDGE_MARGIN, left);
+
+    let left = anchor.left;
+    if (left + menu.width > maxRight) {
+      left = Math.min(anchor.right - menu.width, maxRight - menu.width);
+    }
+    left = Math.max(minLeft, left);
 
     setMenuStyle((prev) =>
       typeof prev.left === 'number' && Math.abs(prev.left - left) < 0.5 ? prev : { ...prev, left },
     );
-  }, [open, menuStyle]);
+  }, [open, menuStyle, boundarySelector]);
 
   function toggle() {
     if (disabled) return;

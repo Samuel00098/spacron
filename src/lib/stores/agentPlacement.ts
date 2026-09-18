@@ -22,6 +22,9 @@ export interface AgentPlacementRequest {
   suggested: AgentPlacement;
   /** Why `suggested` isn't just the global default; shown as a hint. */
   suggestionReason: string | null;
+  /** When present, the request is rendered in this Chat composer. */
+  projectId?: string;
+  threadId?: string;
   resolve: (choices: AgentPlacement[] | null) => void;
 }
 
@@ -55,6 +58,8 @@ export function requestAgentPlacement(args: {
   source: 'manual' | 'orchestrator';
   suggested?: AgentPlacement;
   suggestionReason?: string | null;
+  projectId?: string;
+  threadId?: string;
 }): Promise<AgentPlacement[] | null> {
   return new Promise((resolve) => {
     const request: AgentPlacementRequest = {
@@ -63,6 +68,8 @@ export function requestAgentPlacement(args: {
       source: args.source,
       suggested: args.suggested ?? defaultAgentPlacement(),
       suggestionReason: args.suggestionReason ?? null,
+      projectId: args.projectId,
+      threadId: args.threadId,
       resolve,
     };
     queue.push(request);
