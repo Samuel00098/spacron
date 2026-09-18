@@ -2,6 +2,33 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.0.0] - 2026-09-18
+
+Spacron 5.0 introduces Chat mode: a full-panel, thread-aware workspace for working with supported agent providers without leaving the project shell. Threads persist across sessions, follow-ups stay attached to the conversation that created them, and the composer can use live provider models while surfacing agent requests for input. The release also tightens the boundary between Chat and CLI work, keeps the existing preview available without competing for the stage, and gives the surrounding shell a more deliberate hierarchy for navigating projects, tools, and conversations.
+
+### Added
+
+- **Chat workspace mode** — switch between the existing CLI workspace and a dedicated Chat workspace from the application shell. Chat mode provides a focused conversation surface while preserving the active project context and keeping the preview available behind the chat panel.
+- **Persistent chat threads** — create, restore, rename, select, and delete conversation threads with durable local state. Existing thread data is migrated into the new thread model, and project contents are scoped so a project shows only the conversations that belong to its current workspace mode.
+- **Thread-aware follow-ups** — send a follow-up directly to the selected thread, retain the conversation's message history, and route responses back to the correct thread instead of treating each prompt as an unrelated request.
+- **Provider-backed chat models** — use the configured agent-provider catalogue from the Chat composer, with live model discovery for providers that expose their available models. Model choices are retained with the thread so a restored conversation continues with the intended provider context.
+- **Concurrent prompts and agent input requests** — keep multiple chat prompts in flight and surface requests for user input inside the composer, allowing an agent workflow to pause for a response without losing the surrounding conversation.
+- **Chat thread contracts and tests** — add typed thread/message contracts, store migrations, provider-catalogue coverage, and orchestrator tests for the new Chat workflows so persistence, routing, and completion behavior are exercised independently of the visual shell.
+
+### Changed
+
+- **Composer and workspace controls** — Chat controls now occupy the main workspace rather than the old room-dock flow, with compact composer dimensions, clearer send/model/thread actions, and a layout that remains usable when the sidebars are open.
+- **Sidebar hierarchy and branding** — the left navigation makes the Chat/CLI mode boundary explicit, project navigation and tools remain discoverable alongside the mode controls, and the Spacron branding and accent atmosphere are aligned with the expanded shell.
+- **Agent orchestration boundaries** — Chat uses the existing agent orchestration and terminal-lease infrastructure without exposing CLI-only room actions such as spawning another agent from the Chat surface. Realtime voice conversation is not presented as part of this non-realtime Chat workflow.
+- **Release selection** — release automation accepts both version tag forms (`5.0.0` and `v5.0.0`) and builds from the requested tag, keeping release artifacts tied to the version being published.
+
+### Fixed
+
+- **Deleted thread resurrection** — removing a chat thread now clears it from every relevant persisted and in-memory path, preventing it from reappearing after a reload or project/workspace restore.
+- **Chat focus stability** — composer focus no longer jumps unexpectedly while the Chat panel updates, threads change, or the sidebar closes.
+- **Mode and preview continuity** — switching into Chat no longer unmounts the preview or disturbs the surrounding project shell, so returning to the CLI workspace does not require reloading the active preview.
+- **Project-scoped thread lists** — Chat threads no longer leak between incompatible workspace modes or appear under the wrong project when project contents are restored.
+
 
 ## [v4.0.0] - 2026-09-09
 
