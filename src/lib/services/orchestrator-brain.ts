@@ -1068,7 +1068,7 @@ function buildSystemPrompt(
     'Tasks awaiting review that can be resumed automatically without approval:',
     reviewingList,
     '',
-    'Respond with ONLY a single JSON object — no prose, no markdown, no code fences:',
+    'For a FINAL answer, you may return ordinary prose or markdown, or one JSON object. Use the JSON form when you need actions; never hide an action in prose:',
     '{"reply": "<concise message to the user; list findings as short bullets>", "actions": [ <zero or more action objects> ]}',
     '',
     'Each action is ONE of:',
@@ -1530,6 +1530,20 @@ function parseRouteJson(raw: string, agents: AgentChoice[]): RouteResult | null 
     ...(todos?.length ? { todos } : {}),
   };
 }
+/**
+ * A model's final answer does not need to be JSON. JSON remains required for
+ * executable actions and tool requests, but ordinary replies can be returned
+ * as plain text or markdown and shown directly in the response card.
+ */
+function parseRouteResponse(raw: string, agents: AgentChoice[]): RouteResult | null {
+  const structured = parseRouteJson(raw, agents);
+  if (structured) return structured;
+
+  const reply = raw.trim();
+  if (!reply) return null;
+  return { reply: cleanOrchestratorReply(reply), actions: [], viaLLM: true };
+}
+
 
 function parseToolQuestion(call: BrainToolCall): RouteResult {
   const question = str(call.args.question) || 'I need one detail from you before I continue.';
@@ -1776,7 +1790,7 @@ export async function routeOrchestratorRequest(
               const finalRaw = await complete(`${baseSystemPrompt}\n\n${executionNote}`, buildUserText(message, finalContext), true);
               const finalText = typeof finalRaw === 'string' ? finalRaw : '';
               const finalCalls = parseBrainToolCalls(finalText);
-              const finalResult = finalCalls ? null : parseRouteJson(finalText, agents);
+              const finalResult = finalCalls ? null : parseRouteResponse(finalText, agents);
               if (finalResult) {
                 return withStatedPlacement({
                   ...finalResult,
@@ -1809,7 +1823,7 @@ export async function routeOrchestratorRequest(
             continue;
           }
 
-          const result = parseRouteJson(rawText, agents);
+          const result = parseRouteResponse(rawText, agents);
           if (result && result.todos?.length && !(intendedTodos?.length)) {
             // FINAL with a checklist but no tool work behind it: the user sees
             // every box pre-checked while nothing was verified. Strip it; the

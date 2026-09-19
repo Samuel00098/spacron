@@ -1282,19 +1282,48 @@ describe('stated placement on spawn actions', () => {
     expect(result.todos).toBeUndefined();
   });
 
-  it('recovers when the provider ignores the JSON reply protocol', async () => {
-    invoke
-      .mockResolvedValueOnce('Sure, I will take a look at the project.')
-      .mockResolvedValueOnce('{"reply":"The project is ready for review.","needsInput":false,"actions":[]}');
+  it('accepts a plain-text final reply when the provider does not use JSON', async () => {
+    invoke.mockResolvedValueOnce('Sure, I will take a look at the project.');
 
     const result = await routeOrchestratorRequest('review the project', ALL_AGENTS);
 
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[1][1].userText).toContain('did not follow the required JSON protocol');
-    expect(result).toMatchObject({ reply: 'The project is ready for review.', viaLLM: true });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ reply: 'Sure, I will take a look at the project.', viaLLM: true });
   });
 
-  it('reports a useful partial review when the provider never returns valid JSON', async () => {
+  it('raises the output budget when the recovery pass retries a truncated reply', async () => {
+    invoke
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('{"reply":"The project is ready for review.","needsInput":false,"actions":[]}');
+
+    await routeOrchestratorRequest('review the project', ALL_AGENTS);
+
+    // The retry asks the provider for a larger visible-output budget than the
+    // default, and tells the model why: the first reply was starved, not
+    // disobedient, so the fix is headroom rather than a reworded instruction.
+    // Normal requests keep the exact budget shape they had before (no
+    // maxTokens field at all); only the raised retry carries one.
+    expect(invoke.mock.calls[0][1].maxTokens).toBeUndefined();
+    expect(invoke.mock.calls[1][1].maxTokens).toBe(131_072);
+    expect(invoke.mock.calls[1][1].userText).toContain('larger output budget');
+  });
+
+  it('fails honestly when the recovery retry with the raised budget is also invalid', async () => {
+    invoke
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('');
+
+    const result = await routeOrchestratorRequest('review the project', ALL_AGENTS);
+
+    // One recovery pass only: the retry goes out with the raised budget, and
+    // a second invalid reply still closes the turn with the honest failure.
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1][1].maxTokens).toBe(131_072);
+    expect(result).toMatchObject({ failed: true, viaLLM: false });
+    expect(result.reply).toContain('did not return a valid final response');
+  });
+
+  it('prints a plain-text review response alongside the preserved evidence', async () => {
     invoke
       .mockResolvedValueOnce('I am reviewing the project now.')
       .mockResolvedValueOnce('The project review is complete.');
@@ -1305,12 +1334,10 @@ describe('stated placement on spawn actions', () => {
       projectRoot: '/repo',
     });
 
-    expect(result).toMatchObject({ failed: true, viaLLM: false });
-    expect(result.reply).toContain('What is working');
-    expect(result.reply).toContain('What is not working');
-    expect(result.reply).toContain('What needs improvement');
-    expect(result.reply).toContain('did not return a valid final response');
-    expect(result.reply).toContain('1 read/search operation succeeded');
+    expect(result.viaLLM).toBe(true);
+    expect(result.failed).toBeUndefined();
+    expect(result.reply).toBe('The project review is complete.');
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it('exhausts its tool budget with a final evidence pass on the same model', async () => {
