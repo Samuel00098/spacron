@@ -333,14 +333,13 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         aliases: &[],
         name: "GitHub Copilot CLI",
         // Deliberately None. Copilot CLI keeps its token in the OS keychain —
-        // `~/.copilot/` holds config, history and logs but no credential file —
-        // so there is nothing on disk that honestly means "signed in". Instead
-        // of giving up (the old `auth_path: None` + `detects_sign_in: false`
-        // combo reported a signed-in user as merely "Installed"), we probe the
-        // CLI's own read-only status command once per scan. `copilot auth
-        // status` exits 0 exactly when a token is present and valid.
+        // `~/.copilot/` holds no credential file. Sign-in is read from the
+        // login record it keeps in `~/.copilot/config.json` instead (see
+        // `copilot_login_marker`). There is no probe: Copilot CLI 1.x has no
+        // `auth` subcommand, so the old `copilot auth status` probe never
+        // exited, timed out, and reported every signed-in user as signed out.
         auth_path: None,
-        probe: Some("copilot auth status"),
+        probe: None,
         supports_usage: false,
     },
     ProviderSpec {
@@ -1015,7 +1014,7 @@ fn build_detected(spec: &ProviderSpec, installed: bool, signed_in: bool) -> Dete
         signed_in,
         detects_sign_in: spec.auth_path.is_some()
             || spec.probe.is_some()
-            || matches!(spec.provider, "gemini" | "cody"),
+            || matches!(spec.provider, "gemini" | "cody" | "copilot"),
         supports_usage: spec.supports_usage,
     }
 }
@@ -1025,10 +1024,10 @@ fn build_detected(spec: &ProviderSpec, installed: bool, signed_in: bool) -> Dete
 ///  1. a credential file exists on disk (the fast, offline check);
 ///  2. a per-provider marker — Gemini's settings file records the login method
 ///     (its OAuth token itself lives in the OS keychain), Cody is
-///     authenticated through documented environment variables;
-///  3. a bounded runtime probe of the CLI's own status command (Copilot's
-///     token lives in the OS keychain, so its `auth status` is the only
-///     honest check).
+///     authenticated through documented environment variables, Copilot
+///     records its login in `~/.copilot/config.json`;
+///  3. a bounded runtime probe of the CLI's own status command, for a
+///     provider that declares one.
 ///
 /// Absence is always "not signed in" here, never "unknown" — whether
 /// sign-in is knowable at all is `detects_sign_in`, which the UI reads to
@@ -1046,6 +1045,7 @@ async fn signed_in_by_file_or_marker(spec: &ProviderSpec, force: bool) -> bool {
     match spec.provider {
         "gemini" if gemini_settings_marker() => return true,
         "cody" if cody_env_or_marker() => return true,
+        "copilot" if copilot_login_marker() => return true,
         _ => {}
     }
     if let Some(probe) = spec.probe {
@@ -1085,6 +1085,42 @@ fn gemini_settings_marker() -> bool {
     home_dir()
         .map(|home| gemini_settings_marker_from(&home))
         .unwrap_or(false)
+}
+
+/// Copilot CLI stores its OAuth token in the OS credential store, but records
+/// who signed in under `loggedInUsers` in `~/.copilot/config.json` (a JSON file
+/// that starts with `//` comment lines). A non-empty list is the on-disk
+/// "signed in" marker. The CLI also authenticates from the documented
+/// `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` variables, which
+/// spawned agents inherit, so those count too.
+fn copilot_login_marker_from(home: &std::path::Path) -> bool {
+    let mut path = home.to_path_buf();
+    path.push(".copilot");
+    path.push("config.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let body: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("
+");
+    let Ok(json) = serde_json::from_str::<Value>(&body) else {
+        return false;
+    };
+    json.get("loggedInUsers")
+        .and_then(Value::as_array)
+        .is_some_and(|users| !users.is_empty())
+}
+
+fn copilot_login_marker() -> bool {
+    ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|v| !v.trim().is_empty()))
+        || home_dir()
+            .map(|home| copilot_login_marker_from(&home))
+            .unwrap_or(false)
 }
 
 /// Cody authenticates through Sourcegraph access tokens, which the CLI reads
@@ -1168,10 +1204,17 @@ async fn spawn_probe(
             .arg("/C")
             .arg(path)
             .args(args)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
             .output()
             .await;
     }
-    tokio::process::Command::new(path).args(args).output().await
+    tokio::process::Command::new(path)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
 }
 
 #[cfg(not(windows))]
@@ -1179,7 +1222,14 @@ async fn spawn_probe(
     path: &std::path::Path,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    tokio::process::Command::new(path).args(args).output().await
+    // A timed-out probe drops this future; without kill_on_drop the CLI it
+    // spawned would keep running in the background.
+    tokio::process::Command::new(path)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -3816,7 +3866,7 @@ mod tests {
         for spec in PROVIDERS {
             let has_mechanism = spec.auth_path.is_some()
                 || spec.probe.is_some()
-                || matches!(spec.provider, "gemini" | "cody");
+                || matches!(spec.provider, "gemini" | "cody" | "copilot");
             let agent = build_detected(spec, true, false);
             assert_eq!(
                 agent.detects_sign_in, has_mechanism,
@@ -3843,6 +3893,23 @@ mod tests {
             supports_usage: false,
         };
         assert!(!signed_in_by_file_or_marker(&spec, false).await);
+    }
+
+    #[test]
+    fn copilot_marker_reads_logged_in_users_past_comment_lines() {
+        let dir = std::env::temp_dir().join(format!("spacron-copilot-marker-{}", std::process::id()));
+        let cfg = dir.join(".copilot");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let file = cfg.join("config.json");
+        std::fs::write(&file, "// managed automatically
+{ \"loggedInUsers\": [{ \"host\": \"https://github.com\", \"login\": \"someone\" }] }").unwrap();
+        assert!(copilot_login_marker_from(&dir));
+        std::fs::write(&file, "// managed automatically
+{ \"loggedInUsers\": [] }").unwrap();
+        assert!(!copilot_login_marker_from(&dir));
+        std::fs::remove_file(&file).unwrap();
+        assert!(!copilot_login_marker_from(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
