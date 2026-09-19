@@ -99,6 +99,9 @@
   gap: 8px;
   width: min(700px, calc(100% - 36px));
   margin-inline: auto;
+  /* Rows reflow on the roster's own width (see the container query below),
+     not the window's — the settings pane is narrower than the viewport. */
+  container: agents-roster / inline-size;
 }
 
 .agents-roster-head {
@@ -164,9 +167,9 @@
 .agents-row-main {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 14px;
-  min-height: 52px;
+  gap: 14px;
+  padding: 10px 14px;
+  min-height: 56px;
 }
 
 .agents-row-mark {
@@ -315,15 +318,21 @@
 /* Fixed width so every row's status badge starts on the same vertical line —
    "Signed in" and "Not installed" are very different lengths. A column so a
    row can stack its one-click Sign in pill under the badge without widening
-   the column (rows without it are unchanged — a single child looks identical). */
+   the column (rows without it are unchanged — a single child looks identical).
+   Wide enough for the longest pill ("Find install steps") so it can never run
+   into the Yolo / Manual control beside it. */
 .agents-row-state {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 5px;
   justify-content: flex-start;
   flex-shrink: 0;
-  width: 92px;
+  width: 116px;
+}
+
+.agents-row-state > * {
+  max-width: 100%;
 }
 
 /* One-click Sign in — the same affordance as the spawn picker, so the
@@ -410,11 +419,38 @@
 .agents-row-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 6px;
   flex-shrink: 0;
-  /* Pulls the controls clear of the status badge without widening the gap
-     between the mark, the name block and the badge. */
-  margin-left: 4px;
+  /* Fixed width, right-aligned: rows without a Yolo / Manual control keep
+     their status badge on the same vertical line as rows that have one. */
+  width: 172px;
+}
+
+/* Narrow roster: the status and controls drop onto a second line, indented to
+   the name block, instead of squeezing the name into an ellipsis. */
+@container agents-roster (max-width: 560px) {
+  .agents-row-main {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .agents-row-meta {
+    flex-basis: calc(100% - 44px);
+  }
+
+  .agents-row-state {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-left: 44px;
+  }
+
+  .agents-row-actions {
+    width: auto;
+    margin-left: auto;
+  }
 }
 
 /* Per-row Yolo / Manual pin — a mini version of the global segmented control. */
