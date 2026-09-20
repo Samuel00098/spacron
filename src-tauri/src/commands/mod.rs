@@ -7,6 +7,7 @@ pub mod app_flags;
 pub mod audio;
 pub mod background;
 pub mod browser_shim;
+pub mod chatgpt;
 pub mod db;
 pub mod deps;
 pub mod env_vars;

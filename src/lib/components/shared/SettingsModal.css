@@ -2146,3 +2146,139 @@ details.settings-github-note pre {
   background: var(--accent);
   color: var(--on-accent);
 }
+
+/* Settings > Orchestrator: skills open in place to show what they do. */
+.skill-open-btn {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.settings-control-copy.skill-open-btn {
+  display: block;
+}
+
+.skill-open-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.skill-chevron {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 4px;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.skill-chevron.open {
+  transform: rotate(180deg);
+}
+
+.skill-row .skill-body {
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, var(--border));
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.skill-rules {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.skill-readonly-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.skill-full-text {
+  white-space: pre-wrap;
+}
+
+/* Settings > AI Connections > ChatGPT subscription: sign-in in place of a key
+   field. The dot is the only status colour — the row itself stays neutral. */
+.chatgpt-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chatgpt-signin-intro {
+  margin: 0 0 10px;
+  line-height: 1.55;
+}
+
+.chatgpt-signin-status {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.chatgpt-signin-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.6;
+}
+
+.chatgpt-signin-dot.on {
+  background: var(--success);
+  opacity: 1;
+}
+
+.chatgpt-signin-install,
+.chatgpt-signin-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, var(--border));
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.chatgpt-signin-install p,
+.chatgpt-signin-pending p {
+  margin: 0;
+}
+
+.chatgpt-signin-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chatgpt-signin-code code {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, var(--border));
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.chatgpt-signin-usercode {
+  flex: 0 0 auto;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
