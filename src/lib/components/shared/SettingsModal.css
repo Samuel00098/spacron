@@ -2211,27 +2211,67 @@ button.settings-control-copy.skill-open-btn {
 }
 
 /* Settings > AI Connections > ChatGPT subscription: sign-in in place of a key
-   field. The dot is the only status colour — the row itself stays neutral. */
+   field. The dot is the only status colour — the panel itself stays neutral.
+   Padding matches `.settings-control-row`, so the panel lines up with the
+   Provider row above it instead of starting at the card edge. */
 .chatgpt-signin {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 14px;
+  padding: 18px 22px;
+}
+
+.chatgpt-signin-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chatgpt-signin-logo {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.chatgpt-signin-head-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chatgpt-signin-title {
+  color: var(--text-primary);
+  font-size: 13.5px;
+}
+
+/* One line: dot, then the account state. A two-column row wrapped the email
+   under the dot at narrower widths. */
+.chatgpt-signin-detail {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .chatgpt-signin-intro {
-  margin: 0 0 10px;
-  line-height: 1.55;
+  margin: 0;
+  line-height: 1.6;
 }
 
-.chatgpt-signin-status {
-  padding-left: 0;
-  padding-right: 0;
+.chatgpt-signin-actions {
+  margin: 0;
+  flex-wrap: wrap;
 }
 
 .chatgpt-signin-dot {
   display: inline-block;
   width: 9px;
   height: 9px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--text-muted);
   opacity: 0.6;
@@ -2247,7 +2287,7 @@ button.settings-control-copy.skill-open-btn {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 12px 14px;
   border-radius: 8px;
   border: 1px solid var(--border-subtle, var(--border));

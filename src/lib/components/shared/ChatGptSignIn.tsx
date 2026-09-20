@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { providerApiKeyExists } from '$lib/services/ai-keychain';
+import { ProviderBrandMark } from './providerBrands';
 import { showToast } from '$lib/stores/notification';
 
 interface ChatGptStatus {
@@ -124,21 +125,22 @@ export function ChatGptSignIn({
 
   return (
     <div className="chatgpt-signin">
+      <div className="chatgpt-signin-head">
+        <ProviderBrandMark id="chatgpt" label="ChatGPT subscription" className="chatgpt-signin-logo" />
+        <div className="chatgpt-signin-head-copy">
+          <span className="chatgpt-signin-title">ChatGPT account</span>
+          <span className="chatgpt-signin-detail">
+            <span className={`chatgpt-signin-dot${status?.signedIn ? ' on' : ''}`} aria-hidden="true" />
+            {detail}
+          </span>
+        </div>
+      </div>
+
       <p className="shell-hint chatgpt-signin-intro">
         Use the ChatGPT plan you already pay for (Plus, Pro, Business…) as the orchestrator&apos;s brain.
         No API key and no extra cost: requests count against your plan&apos;s Codex usage limits.
         It runs through OpenAI&apos;s Codex CLI on this computer, which keeps your login; Spacron never sees it.
       </p>
-
-      <div className="settings-control-row chatgpt-signin-status">
-        <div className="settings-control-copy">
-          <span>ChatGPT account</span>
-          <small>{detail}</small>
-        </div>
-        <div className="settings-control">
-          <span className={`chatgpt-signin-dot${status?.signedIn ? ' on' : ''}`} aria-hidden="true" />
-        </div>
-      </div>
 
       {status && !status.installed && (
         <div className="chatgpt-signin-install">
@@ -174,7 +176,7 @@ export function ChatGptSignIn({
         </div>
       )}
 
-      <div className="settings-action-row">
+      <div className="settings-action-row chatgpt-signin-actions">
         {status?.installed && !status.signedIn && !pending && (
           <>
             <button type="button" className="settings-primary" onClick={() => void start(false)} disabled={starting}>
