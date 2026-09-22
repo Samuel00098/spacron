@@ -328,7 +328,38 @@ img { display: block; }
 .terminal-body .cmd { color: #fafafa; }
 .terminal-body .dim { color: var(--text-muted); }
 .terminal-body .ok { color: #fafafa; }
-.terminal-body .agent { color: #fafafa; font-weight: 700; }
+.terminal-body .agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #fafafa;
+  font-weight: 700;
+}
+
+.agent-icon {
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+.agent-icon img,
+.agent-icon svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.terminal-body .agent-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  padding: 0.12rem;
+  border-radius: 4px;
+  background: rgba(250, 250, 250, 0.08);
+}
 
 .terminal-cursor {
   display: inline-block;
@@ -362,6 +393,15 @@ img { display: block; }
   transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 
+.agents-card .agent-icon {
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0.22rem;
+  border: 1px solid rgba(250, 250, 250, 0.12);
+  border-radius: 7px;
+  background: rgba(250, 250, 250, 0.06);
+}
+
 .agents-card:hover {
   border-color: var(--text);
   transform: translateY(-2px);
@@ -383,6 +423,30 @@ img { display: block; }
   border-radius: 6px;
   padding: 0.2rem 0.5rem;
   white-space: nowrap;
+}
+
+.agent-mention-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.55rem;
+  vertical-align: middle;
+}
+
+.agent-mention {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-mention .agent-icon {
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.22em;
+  padding: 0.1em;
+  border-radius: 4px;
+  background: rgba(250, 250, 250, 0.08);
 }
 
 .agents-notes {
@@ -513,7 +577,19 @@ img { display: block; }
 
 .fleet-row .mark { color: var(--text-muted); }
 .fleet-row .branch { color: #fafafa; }
-.fleet-row .who { color: var(--text-muted); }
+.fleet-row .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+}
+.fleet-row .who .agent-icon {
+  width: 1rem;
+  height: 1rem;
+  padding: 0.12rem;
+  border-radius: 3px;
+  background: rgba(250, 250, 250, 0.08);
+}
 .fleet-row .state { margin-left: auto; color: #fafafa; }
 .fleet-row .state.pending { color: var(--text-muted); }
 

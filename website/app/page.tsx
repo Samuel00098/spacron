@@ -1,40 +1,259 @@
 import Link from 'next/link';
+import { getChangelogContent, parseChangelog } from '@/lib/changelog';
+import { getAgentBrand } from '../../src/lib/components/shared/agentBrands';
 
-const features = [
-  { title: 'Multi-pane Terminal', desc: 'PTY shell grid with xterm.js, drag-to-resize panes.' },
-  { title: 'Code Editor', desc: 'CodeMirror 6, 15+ languages, Vim mode, LSP.' },
-  { title: 'Live Preview', desc: 'HTTP/WebSocket proxy with auto hot-reload.' },
-  { title: 'DOM Inspector', desc: 'Click any element, inspect, send to AI.' },
-  { title: 'Git Integration', desc: 'Status, diff, commit, push — all in-app.' },
-  { title: 'AI Orchestration', desc: 'Multi-agent task dispatch with voice.' },
+/**
+ * Hero headline split into words so CSS can cascade them in one by one
+ * (superwhisper-style entrance). `{word}` renders as a highlighted chip.
+ */
+function heroWords(line: string) {
+  return line.split(' ').map((tok) =>
+    tok.startsWith('{') && tok.endsWith('}') ? { w: tok.slice(1, -1) } : tok,
+  );
+}
+const HERO_LINE_1 = heroWords('One {workspace}. One {goal}.');
+const HERO_LINE_2 = heroWords('A {fleet} that builds it.');
+
+const agentCards = [
+  { name: 'Claude Code', cmd: 'claude' },
+  { name: 'Codex CLI', cmd: 'codex' },
+  { name: 'Cursor', cmd: 'cursor-agent' },
+  { name: 'Gemini CLI', cmd: 'gemini' },
+  { name: 'Aider', cmd: 'aider' },
+  { name: 'OpenCode', cmd: 'opencode' },
 ];
 
-export default function HomePage() {
+function AgentIcon({ command, name, className = '' }: { command: string; name: string; className?: string }) {
+  const brand = getAgentBrand(command, name);
+  return (
+    <span
+      className={`agent-icon${className ? ` ${className}` : ''}`}
+      style={{ color: brand.color === 'mono' ? 'var(--text)' : brand.color }}
+      aria-hidden="true"
+    >
+      {brand.mark}
+    </span>
+  );
+}
+
+const agentNotes = [
+  { cls: 'live', text: 'Your subscription, your quota' },
+  { cls: '', text: 'Mix agents freely within one goal' },
+  { cls: '', text: 'New harnesses land with each release' },
+];
+
+const fleetRows = [
+  { mark: '●', branch: 'main', who: 'goal set: subscription billing', command: undefined, state: 'planning', pending: true },
+  { mark: '◆', branch: 'feat/stripe-checkout', who: 'Claude Code', command: 'claude', state: '✓ 42 tests passing', pending: false },
+  { mark: '◆', branch: 'feat/usage-limits', who: 'Cursor', command: 'cursor-agent', state: '✓ typecheck clean', pending: false },
+  { mark: '◆', branch: 'fix/socket-close', who: 'Codex CLI', command: 'codex', state: '↻ review bounced, returned', pending: false },
+];
+
+const toolCards = [
+  { name: 'Terminal grid', body: 'Drag-to-resize PTY panes, many sessions at once' },
+  { name: 'Editor', body: 'CodeMirror with LSP, syntax modes, and Vim bindings' },
+  { name: 'Live preview', body: 'HTTP/WebSocket proxy with hot reload' },
+  { name: 'HTTP inspector', body: 'Watch every request your app makes' },
+  { name: 'Containers', body: 'Manage Docker without leaving the deck' },
+  { name: 'Database browser', body: 'Inspect SQLite schemas and rows' },
+];
+
+const GENERIC_CHANGELOG_HEADINGS = /^(added|changed|fixed|removed|deprecated|security)$/i;
+
+export default async function HomePage() {
+  const entries = parseChangelog(await getChangelogContent()).slice(0, 3);
+  const insights = entries.map((entry) => {
+    // CHANGELOG bodies use conventional "### Added / Fixed" category headings.
+    // As card titles those are noise, so the title comes from the first real
+    // bullet and the excerpt from the next one (when there is one).
+    const bullets = [...entry.body.matchAll(/^\s*[-*]\s+(.{20,140})/gm)]
+      .map((m) => m[1].replace(/\*\*/g, '').replace(/`/g, '').replace(/\s+/g, ' ').trim());
+    const firstHeading = entry.body.match(/^###\s+(.+)$/m)?.[1]?.trim();
+    const heading = firstHeading && !GENERIC_CHANGELOG_HEADINGS.test(firstHeading) ? firstHeading : undefined;
+    const title = heading ?? bullets[0] ?? `Spacron v${entry.version}`;
+    const excerpt = heading ? bullets[0] ?? '' : bullets[1] ?? '';
+    return { version: entry.version, date: entry.date, title, excerpt };
+  });
+
   return (
     <>
+      {/* Soft radial glow behind the hero — breathes slowly (CSS only). */}
+      <div className="hero-glow" aria-hidden="true" />
+
       <section className="hero">
-        <img src="/icon.png" alt="" className="hero-logo" />
-        <h1>Spacron</h1>
-        <p className="hero-lead">
-          A keyboard-driven, local-first developer workspace — terminal, editor, preview, git, and AI in one window.
+        <span className="hero-badge" data-reveal="scale">
+          <span className="hero-badge-dot" aria-hidden="true" />
+          Local-first
+        </span>
+        <h1 className="hero-title" aria-label="One workspace. One goal. A fleet that builds it.">
+          <span className="hero-line">
+            {HERO_LINE_1.map((tok, i) =>
+              typeof tok === 'object' ? (
+                <span className="hero-chip" key={i} style={{ ['--wi' as string]: i }}>{tok.w}</span>
+              ) : (
+                <span className="hero-word" key={i} style={{ ['--wi' as string]: i }}>{tok}</span>
+              ),
+            )}
+          </span>
+          <span className="hero-line muted">
+            {HERO_LINE_2.map((tok, i) =>
+              typeof tok === 'object' ? (
+                <span className="hero-chip" key={i} style={{ ['--wi' as string]: i + HERO_LINE_1.length }}>{tok.w}</span>
+              ) : (
+                <span className="hero-word" key={i} style={{ ['--wi' as string]: i + HERO_LINE_1.length }}>{tok}</span>
+              ),
+            )}
+          </span>
+        </h1>
+        <p className="hero-lead" data-reveal style={{ ['--reveal-delay' as string]: '.55s' }}>
+          Spacron runs the coding CLIs you already use —{' '}
+          <span className="agent-mention-list">
+            {agentCards.map((agent, i) => (
+              <span className="agent-mention" key={agent.name}>
+                <AgentIcon command={agent.cmd} name={agent.name} />
+                {agent.name}{i < agentCards.length - 1 ? ',' : ''}
+              </span>
+            ))}
+          </span>{' '}
+          as one coordinated team. A coordinator splits your goal, builders work in isolated worktrees, and ownership checks keep them from stepping on each other.
         </p>
-        <div className="hero-actions">
-          <a href="/download" className="btn btn-primary">
-            Download
-          </a>
-          <Link href="/changelog" className="btn btn-ghost">
-            Changelog
-          </Link>
+        <div className="hero-actions" data-reveal style={{ ['--reveal-delay' as string]: '.7s' }}>
+          <a href="/download" className="btn btn-primary">Download Spacron</a>
+          <a href="#how" className="btn btn-ghost">See how it works</a>
+        </div>
+        <p className="hero-os" data-reveal style={{ ['--reveal-delay' as string]: '.82s' }}>
+          Windows <span className="sep">&middot;</span> macOS <span className="sep">&middot;</span> Linux
+        </p>
+
+        <div className="terminal" aria-hidden="true" data-reveal="scale" style={{ ['--reveal-delay' as string]: '.9s' }}>
+          <div className="terminal-bar">
+            <span className="terminal-dot" />
+            <span className="terminal-dot" />
+            <span className="terminal-dot" />
+            <span className="terminal-title">spacron — fleet chat</span>
+          </div>
+          <div className="terminal-body">
+            <div><span className="prompt">&gt;</span> <span className="cmd">build &quot;add subscription billing with Stripe&quot;</span></div>
+            <div><span className="dim">coordinator: planning — 3 sub-tasks, disjoint file sets</span></div>
+            <div><span className="agent"><AgentIcon command="claude" name="Claude Code" />Claude Code</span> <span className="dim">&middot; worktree feat/stripe-checkout</span> <span className="ok">✓ 42 tests passing</span></div>
+            <div><span className="agent"><AgentIcon command="cursor-agent" name="Cursor" />Cursor</span> <span className="dim">&middot; worktree feat/usage-limits</span> <span className="ok">✓ typecheck clean</span></div>
+            <div><span className="agent"><AgentIcon command="codex" name="Codex CLI" />Codex CLI</span> <span className="dim">&middot; review — 1 bounce returned</span></div>
+            <div><span className="dim">all workers accepted — merged to main</span> <span className="terminal-cursor" /></div>
+          </div>
         </div>
       </section>
 
-      <section className="features" id="features">
-        {features.map((f) => (
-          <div className="feature-card" key={f.title}>
-            <h3>{f.title}</h3>
-            <p>{f.desc}</p>
+      <section className="section" id="features">
+        <p className="section-eyebrow" data-reveal>Your tools</p>
+        <h2 className="section-title" data-reveal>Runs the Agents You Already Have</h2>
+        <p className="section-lead" data-reveal>
+          No keys resold, no quota caps, no lock-in to a model vendor. Spacron orchestrates the harnesses you already use and stays out of the way.
+        </p>
+
+        {/* Infinite marquee of agent cards — pauses on hover. */}
+        <div className="marquee" data-reveal>
+          <div className="marquee-track">
+            {[...agentCards, ...agentCards].map((a, i) => (
+              <div className="agents-card" key={`${a.name}-${i}`} aria-hidden={i >= agentCards.length}>
+                <AgentIcon command={a.cmd} name={a.name} />
+                <span className="agents-name">{a.name}</span>
+                <span className="agents-cmd">{a.cmd}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
+        <div className="agents-notes">
+          {agentNotes.map((n) => (
+            <div className={`chip ${n.cls}`.trim()} key={n.text} data-reveal="scale">
+              <span className="dot" />
+              <span>{n.text}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section" id="how">
+        <p className="section-eyebrow" data-reveal>How it works</p>
+        <h2 className="section-title" data-reveal>A Team, Not a Chat Window</h2>
+        <p className="section-lead" data-reveal>Everything a fleet needs under one roof — split the work, keep the work separate, review the work.</p>
+
+        <div className="feature-row" id="how-worktree">
+          <div className="feature-copy" data-reveal="left">
+            <h3>Every builder gets its own worktree</h3>
+            <p>
+              The coordinator splits your goal into sub-tasks with disjoint file sets, then runs each builder in its own pane, in an isolated git worktree, on its own branch — so two agents can never collide. Reviews bounce weak work back with a critique; only accepted work reaches main.
+            </p>
+          </div>
+          <div className="dark-panel" aria-hidden="true" data-reveal="right">
+            {fleetRows.map((row, i) => (
+              <div className={`fleet-row${row.pending ? ' is-pending' : ''}`} style={{ ['--ri' as string]: i }} key={row.branch}>
+                <span className="mark">{row.mark}</span>
+                <span className="branch">{row.branch}</span>
+                <span className="who">
+                  &middot; {row.command && <AgentIcon command={row.command} name={row.who} />}{row.who}
+                </span>
+                <span className={`state${row.pending ? ' pending' : ''}`}>{row.state}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="feature-row flip" id="coordinator">
+          <div className="feature-copy" data-reveal="right">
+            <h3>A coordinator that reads the whole deck</h3>
+            <p>
+              The conversational coordinator watches what you watch — the active file, your cursor, every open pane, the current branch, the task board. Ask it to find what&apos;s weak and get a concrete, evidence-backed answer in one turn. Hand it a goal and it plans, delegates, verifies, and reports back.
+            </p>
+          </div>
+          <div className="dark-panel" aria-hidden="true" data-reveal="left">
+            <div className="chat-msg you">
+              <span className="role">you</span>
+              Go through the codebase and tell me where it&apos;s weak.
+            </div>
+            <div className="chat-msg bot">
+              <span className="role">coordinator</span>
+              Swept 41 files. Three weak spots: the preview proxy never closes sockets on error; auth tokens sit in localStorage; the latest migration has no rollback path. All three are ranked in the task board.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section" id="toolbox">
+        <p className="section-eyebrow" data-reveal>The deck</p>
+        <h2 className="section-title" data-reveal>Everything Else Under the Same Roof</h2>
+        <p className="section-lead" data-reveal>A fleet deck is more than chat. Spacron ships the rest of your workspace in the same window — keyboard-driven, local-first.</p>
+        <div className="features">
+          {toolCards.map((card) => (
+            <div className="feature-card" key={card.name} data-reveal="scale">
+              <h3>{card.name}</h3>
+              <p>{card.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {insights.length > 0 && (
+        <section className="section" id="insights">
+          <p className="section-eyebrow" data-reveal>Latest releases</p>
+          <h2 className="section-title" data-reveal>Fresh From the Changelog</h2>
+          <div className="insight-grid">
+            {insights.map((insight) => (
+              <Link href="/changelog" className="insight-card" key={insight.version} data-reveal="scale">
+                <span className="insight-date">v{insight.version} &mdash; {insight.date}</span>
+                <h3>{insight.title}</h3>
+                <p>{insight.excerpt}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="final-cta">
+        <h2 data-reveal="scale">Your codebase isn&apos;t<br />going to write itself.</h2>
+        <p data-reveal>Spin up a fleet tonight. Tell Spacron the goal and watch the team work.</p>
+        <div className="hero-actions" data-reveal>
+          <a href="/download" className="btn btn-primary">Get Spacron</a>
+        </div>
       </section>
     </>
   );
