@@ -832,6 +832,45 @@
   overflow-wrap: anywhere;
 }
 
+.preview-panel .console-row {
+  position: relative;
+}
+
+/* Per-row copy: overlaid at the right edge so it takes no grid column, shown
+   on hover or keyboard focus. */
+.preview-panel .console-row-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.preview-panel .console-row:hover .console-row-copy,
+.preview-panel .console-row-copy:focus-visible {
+  opacity: 1;
+}
+
+.preview-panel .console-row-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.preview-panel .console-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .preview-panel .console-row.warn {
   background: rgba(251, 191, 36, 0.07);
 }

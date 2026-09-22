@@ -1903,7 +1903,11 @@ export default function AppShell() {
   function setPanelRoomOpen(id: AuxPanelId, open: boolean) {
     // Same rule as `focusRoom`: opening a panel that takes a new Split slot
     // re-tiles the stage, so it must not go through a view transition.
-    const run = open && willRetileSplit(id) ? withStageRetile : withRoomTransition;
+    // Opening a panel while a pane is zoomed carries the zoom onto it, as
+    // `focusRoom` does — otherwise Preview/Editor opened from the Tools menu
+    // took a Split slot hidden behind the zoomed pane, or came up small.
+    const carryZoom = open && zoomedRoom !== null && zoomedRoom !== id;
+    const run = open && (carryZoom || willRetileSplit(id)) ? withStageRetile : withRoomTransition;
     run(() => {
       const key = PANEL_VISIBILITY_KEYS[id];
       persistLayoutPatch({
@@ -1922,7 +1926,8 @@ export default function AppShell() {
       if (open) {
         // Same Split rule as a tab click: opening a panel must not evict the
         // pane you are working in.
-        if (claimSplitSlot(id)) setFocusedRoom(id);
+        if (carryZoom) setExpandedRoom(id);
+        if (claimSplitSlot(id) || carryZoom) setFocusedRoom(id);
       } else if (focusedRoom === id) {
         setFocusedRoom(nextVisibleRoom(id));
       }

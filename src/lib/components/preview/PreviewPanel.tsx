@@ -1227,6 +1227,15 @@ export default function PreviewPanel() {
     clearConsoleLogsStore();
   }, []);
 
+  const copyConsoleText = useCallback(async (text: string, done: string) => {
+    try {
+      await copyTextToClipboard(text);
+      showToast(done, 'success');
+    } catch {
+      showToast('Could not copy to clipboard', 'error');
+    }
+  }, []);
+
   const takeScreenshot = useCallback(async () => {
     if (screenshotting) return;
     const target = deviceMode ? viewportFrameRef.current : previewContentRef.current;
@@ -2407,6 +2416,13 @@ export default function PreviewPanel() {
                   />
                   Preserve log
                 </label>
+                <button
+                  onClick={() => void copyConsoleText(filteredConsoleLogs.map(formatConsoleLine).join('\n'), 'Console output copied')}
+                  disabled={filteredConsoleLogs.length === 0}
+                  title="Copy the messages shown below"
+                >
+                  Copy
+                </button>
                 <button onClick={clearConsoleLogs}>Clear</button>
                 <button onClick={() => setShowConsole(false)} aria-label="Close console">
                   Close
@@ -2435,6 +2451,17 @@ export default function PreviewPanel() {
                         {shortConsoleSource(log.url)}
                       </span>
                     )}
+                    <button
+                      className="console-row-copy"
+                      onClick={() => void copyConsoleText(log.message, 'Message copied')}
+                      title="Copy message"
+                      aria-label="Copy message"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                    </button>
                   </div>
                 ))
               )}
@@ -2444,6 +2471,13 @@ export default function PreviewPanel() {
       </div>
     </div>
   );
+}
+
+/** One console entry as a plain-text line, the way a browser console copies it. */
+function formatConsoleLine(log: { level: string; message: string; url?: string; count: number }): string {
+  const repeat = log.count > 1 ? ` (x${log.count})` : '';
+  const source = log.url ? `  ${log.url}` : '';
+  return `[${log.level}] ${log.message}${repeat}${source}`;
 }
 
 /** Last path segment of a console entry's source URL, or its host. */
