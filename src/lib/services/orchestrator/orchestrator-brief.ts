@@ -128,6 +128,13 @@ Pass the sub-task as \`prompt\` and that worker's file set as \`files\`. **Do no
 reporting instructions into the prompt** — they are appended for you, with the right
 absolute paths. Each worker gets its own pane and its own git branch.
 
+**Write each \`prompt\` as a detailed brief, never a one-liner.** The worker sees nothing
+but that prompt, so even when the user's goal was vague, spell it out: the goal and why;
+the relevant files, functions and conventions you found (real paths only); numbered,
+concrete requirements including edge cases; what must not change, including the files
+sibling workers own; what "done" looks like; and the exact commands to verify it. Where
+the goal leaves a choice open, decide and state it as an assumption.
+
 **Leave \`name\` out.** Workers are named for you, from the same set the app uses, so the
 user sees "Trinity" and "Morpheus" on the panes rather than \`claude-1\` and \`claude-2\` —
 a generic label you pass is replaced by one of those anyway. Pass a name only when it
