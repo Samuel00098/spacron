@@ -498,6 +498,47 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function JevConnectionSection() {
+  const [keyExists, setKeyExists] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [keyError, setKeyError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>('provider_api_key_exists', { provider: 'typesafe' })
+      .then((exists) => { if (active) setKeyExists(exists); })
+      .catch(() => { if (active) setKeyExists(false); });
+    return () => { active = false; };
+  }, []);
+
+  const saveKey = async (value: string) => {
+    setKeyError('');
+    try {
+      await invoke(value.trim() ? 'provider_api_key_set' : 'provider_api_key_delete',
+        value.trim() ? { provider: 'typesafe', apiKey: value.trim() } : { provider: 'typesafe' });
+      setKeyExists(Boolean(value.trim()));
+      setKeyInput('');
+    } catch (error) {
+      setKeyError(String(error ?? 'Could not save the key'));
+    }
+  };
+
+  return (
+    <Section title="Jev decisions">
+      <p className="shell-hint">Jev can help classify agent status and route work. It is optional; without a key, Spacron uses its existing behavior.</p>
+      <SettingRow title="TypeSafe API key" detail={keyExists ? 'Saved in OS keychain' : 'Not saved'}>
+        <input type="password" value={keyInput} onChange={(event) => setKeyInput(event.target.value)} placeholder={keyExists ? 'Key saved in OS keychain' : 'Paste key'} />
+      </SettingRow>
+      <div className="settings-action-row">
+        <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
+        <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
+        <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
+      </div>
+      {keyError && <p className="shell-hint">{keyError}</p>}
+    </Section>
+  );
+}
+
 function ModelSelect({
   value,
   models,
@@ -1823,6 +1864,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   )}
 
                 </Section>
+
+                <JevConnectionSection />
 
                 <Section title="Inline completion">
                   <SettingRow title="Ghost text">

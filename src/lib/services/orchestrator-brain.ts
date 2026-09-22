@@ -16,6 +16,8 @@ import {
   getProviderBaseUrl,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
+import { classifyRouting } from '$lib/services/jev';
+import { suggestReasoningLevel } from '$lib/services/orchestrator/jev-reasoning';
 import { cleanOrchestratorReply, hasReadEvidence, hasUnverifiedMutation, isDeferredCompletionReply, isPromiseOnlyReply, replyClaimsDocumentWrite, findClaimedWritePaths, writeEvidenceCoversClaims } from '$lib/services/orchestrator/chat-turn';
 import {
   BRAIN_ASK_TOOLS,
@@ -1661,8 +1663,17 @@ export async function routeOrchestratorRequest(
   if (configured) {
     const def = getProviderDef(provider);
     const primaryModel = ctx?.llmConfig?.model ?? get(currentAiModel);
+    const [routeAdvice, reasoningAdvice] = ctx?.conversational
+      ? await Promise.all([
+          classifyRouting(trimmed),
+          suggestReasoningLevel(trimmed, provider, primaryModel),
+        ])
+      : [null, null];
     const modelsToTry = [primaryModel];
-    const baseSystemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile);
+    const baseSystemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile)
+      + (routeAdvice || reasoningAdvice
+        ? `\nJev advisory for this prompt: ${routeAdvice ?? 'no routing suggestion'}; reasoning effort ${reasoningAdvice ?? 'no suggestion'}. This is a suggestion only. Keep the user's explicit choices and all delegation approval rules.`
+        : '');
     const maxToolRounds = ctx?.maxToolRounds ?? ctx?.budgets?.maxRounds ?? DEFAULT_AGENT_BUDGETS.maxRounds;
 
     for (const model of modelsToTry) {

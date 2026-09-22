@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invoke = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => undefined));
+const classifyRouting = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => null));
+const suggestReasoningLevel = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => null));
+vi.mock('$lib/services/jev', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/services/jev')>()), classifyRouting,
+}));
+vi.mock('$lib/services/orchestrator/jev-reasoning', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/services/orchestrator/jev-reasoning')>()), suggestReasoningLevel,
+}));
 const isProviderApiKeyConfiguredLocal = vi.hoisted(() => vi.fn(() => true));
 const getProviderDef = vi.hoisted(() => vi.fn(() => ({ models: [{ id: 'gpt-4.1' }, { id: 'gpt-4o-mini' }] })));
 const isLocalProvider = vi.hoisted(() => vi.fn(() => false));
@@ -57,8 +65,30 @@ const ALL_AGENTS = [
 ];
 
 describe('routeOrchestratorRequest', () => {
+  it('adds confident Jev advice to Chat without letting it authorize delegation', async () => {
+    invoke.mockResolvedValue('Answer.');
+    classifyRouting.mockResolvedValue('split');
+    suggestReasoningLevel.mockResolvedValue('high');
+    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
+      conversational: true,
+      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
+    });
+    const prompt = String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt);
+    expect(prompt).toContain('Jev advisory for this prompt: split; reasoning effort high');
+    expect(prompt).toContain('delegation approval rules');
+    classifyRouting.mockResolvedValue(null);
+    suggestReasoningLevel.mockResolvedValue(null);
+    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
+      conversational: true,
+      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
+    });
+    expect(String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt)).not.toContain('Jev advisory');
+  });
+
   beforeEach(() => {
     invoke.mockReset();
+    classifyRouting.mockReset().mockResolvedValue(null);
+    suggestReasoningLevel.mockReset().mockResolvedValue(null);
     isProviderApiKeyConfiguredLocal.mockReset().mockReturnValue(true);
     getProviderDef.mockClear();
     isLocalProvider.mockClear();

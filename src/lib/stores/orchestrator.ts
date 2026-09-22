@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { backendInvoke } from '$lib/services/backend';
 import { readProjectState } from '$lib/services/project-state';
 import { showToast } from '$lib/stores/notification';
+import { estimateFileOverlap } from '$lib/services/jev';
 import { getPresetRuns } from '$lib/stores/runs';
 import {
   getProjectTaskPanelLines,
@@ -4574,6 +4575,14 @@ export async function sendChatMessage(
       lastActivityAt: Date.now(),
     });
     return;
+  }
+
+  const newAgentWork = result.actions
+    .filter((action) => action.kind === 'spawn' || action.kind === 'send')
+    .map((action) => action.prompt ?? '')
+    .filter(Boolean);
+  if (newAgentWork.length && await estimateFileOverlap(newAgentWork.join('\n'), getRunningAgentRefs(projectId))) {
+    showToast('Possible file overlap with a running agent. Check task ownership before editing.', 'warning', 6000);
   }
 
   // ── Placement: explicit in the request, or the focused placement dialog ───

@@ -4,6 +4,10 @@ const getSessionOutputBuffer = vi.hoisted(() => vi.fn(() => ''));
 const getSessionOutputLength = vi.hoisted(() => vi.fn(() => 0));
 const getSessionOutputTail = vi.hoisted(() => vi.fn((_id: number, _chars: number) => ''));
 const getSessionOutputProduced = vi.hoisted(() => vi.fn(() => 0));
+const classifyDecision = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => null));
+vi.mock('$lib/services/jev', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/services/jev')>()), classifyDecision,
+}));
 vi.mock('$lib/stores/terminal', () => ({
   getSessionOutputBuffer,
   getSessionOutputLength,
@@ -31,6 +35,7 @@ describe('watchLeasedAgentTurn', () => {
   let lastBufLen = 0;
   beforeEach(() => {
     vi.useFakeTimers();
+    classifyDecision.mockReset().mockResolvedValue(null);
     buf = '';
     produced = 0;
     lastBufLen = 0;
@@ -157,6 +162,35 @@ describe('watchLeasedAgentTurn', () => {
     const outcome = await p;
     expect(outcome.kind).toBe('blocked');
     if (outcome.kind === 'blocked') expect(outcome.reason.toLowerCase()).toContain('do you want to');
+  });
+
+  it('uses Jev only after a suspected stop and keeps inferred provenance', async () => {
+    classifyDecision.mockResolvedValue({
+      probabilities: { working: 0.01, waiting_for_approval: 0.01, asking_question: 0.01, errored: 0.96, finished: 0.01 },
+      confidence: 0.96,
+    });
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 20 });
+    buf = '\x1b[31mAn error occurred while saving the file.\x1b[0m';
+    await vi.advanceTimersByTimeAsync(10);
+    expect(classifyDecision).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(70);
+    await expect(p).resolves.toMatchObject({ kind: 'finished', via: 'inferred', detail: expect.stringContaining('may indicate an error') });
+    expect(classifyDecision).toHaveBeenCalledTimes(1);
+    expect(classifyDecision.mock.calls[0][0]).not.toContain('\x1b');
+  });
+
+  it('keeps working when Jev confidently sees a temporary quiet period', async () => {
+    classifyDecision.mockResolvedValue({
+      probabilities: { working: 0.95, waiting_for_approval: 0.01, asking_question: 0.01, errored: 0.01, finished: 0.02 },
+      confidence: 0.95,
+    });
+    const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 20 });
+    buf = 'Compiling a large project';
+    await vi.advanceTimersByTimeAsync(10);
+    expect(classifyDecision).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(70);
+    expect(classifyDecision).toHaveBeenCalledTimes(1);
+    expect(await Promise.race([p, Promise.resolve('pending')])).toBe('pending');
   });
 
   it('ignores an attention prompt that was already on screen when it armed', async () => {

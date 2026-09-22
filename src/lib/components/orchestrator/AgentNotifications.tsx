@@ -27,6 +27,7 @@ import {
 } from '$lib/services/orchestrator/inbox';
 import MailboxCardView from './MailboxCard';
 import StatusIcon from './statusIcons';
+import JevNeedsInputTag from './JevNeedsInputTag';
 import { shouldUseSystemNotification, showSystemNotification } from '$lib/stores/zustand/notification';
 import './AgentNotifications.css';
 
@@ -413,6 +414,7 @@ function CompletionNotification({
           {c.elapsedSec != null && <span className="orc-comp-time">{formatSecs(c.elapsedSec)}</span>}
         </span>
         <span className="orc-comp-task" title={c.taskTitle}>{c.taskTitle}</span>
+        {c.status === 'blocked' && c.reason && <JevNeedsInputTag reason={c.reason} />}
         {c.reason && <span className="orc-comp-reason">{c.reason}</span>}
         {c.summaryPending ? (
           <span className="orc-comp-loading">

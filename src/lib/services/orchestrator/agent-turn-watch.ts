@@ -9,6 +9,8 @@ import { agentAttentionPhrases } from './agent-rules-file';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
+import { classifyDecision, confidentChoice } from '$lib/services/jev';
+import { stripTerminalOutput } from './activity-log';
 
 /**
  * How we came to believe a turn ended. Three genuinely different kinds of
@@ -357,7 +359,8 @@ async function watchTurnUntilDone(
       // sub-floor turn is always the more conservative one.
       const idleWindow = grownTotal >= minWorkChars ? idleMs : Math.max(QUIET_TURN_IDLE_MS, idleMs);
       if (sawActivity && Date.now() - lastGrowthAt >= idleWindow) {
-        return finishQuietTurn();
+        const quiet = await finishQuietTurn();
+        if (quiet) return quiet;
       }
 
       // Bell-corroborated fast finish, non-hook agents only. A bell is never
@@ -375,18 +378,41 @@ async function watchTurnUntilDone(
         Date.now() - lastBellAt >= BELL_FINISH_GRACE_MS &&
         Date.now() - lastGrowthAt >= BELL_FINISH_GRACE_MS;
       if (sawActivity && bellQuiet) {
-        return finishQuietTurn();
+        const quiet = await finishQuietTurn();
+        if (quiet) return quiet;
       }
 
       // Shared tail of both quiet paths: a parked attention prompt that scrolled
       // past the per-poll 2 KB `recent` tail must still flip the turn to
       // "blocked", and hook agents skip the rescan (they report via sentinel).
-      function finishQuietTurn(): AgentTurnOutcome {
+      async function finishQuietTurn(): Promise<AgentTurnOutcome | null> {
+        let tail = recent;
         if (!signalled) {
-          const tail = getSessionOutputTail(sessionId, IDLE_ATTENTION_SCAN_CHARS);
+          tail = getSessionOutputTail(sessionId, IDLE_ATTENTION_SCAN_CHARS);
           if (containsAttentionRequest(tail, attentionPhrases)) {
             return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases), via: 'inferred' };
           }
+        }
+        const decision = confidentChoice<'working' | 'waiting_for_approval' | 'asking_question' | 'errored' | 'finished'>(
+          await classifyDecision(
+            stripTerminalOutput(tail),
+            { working: 'Still doing work or temporarily quiet', waiting_for_approval: 'Waiting for permission or approval', asking_question: 'Asking the user a question', errored: 'Stopped because of an error', finished: 'Finished the current turn' },
+            'What is the agent doing at the end of this terminal output?',
+          ),
+          0.85,
+        );
+        if (sentinel) return sentinel;
+        if (getSessionOutputProduced(sessionId) !== lastProduced) return null;
+        if (decision === 'working') {
+          lastGrowthAt = Date.now();
+          lastBellAt = null;
+          return null;
+        }
+        if (decision === 'waiting_for_approval' || decision === 'asking_question') {
+          return { kind: 'finished', via: 'inferred', detail: 'The agent went quiet; its last output may need your input.' };
+        }
+        if (decision === 'errored') {
+          return { kind: 'finished', via: 'inferred', detail: 'The agent went quiet after output that may indicate an error.' };
         }
         return { kind: 'finished', via: 'inferred' };
       }

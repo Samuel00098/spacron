@@ -19,6 +19,7 @@ import {
   type InboxEntry,
 } from '$lib/services/orchestrator/inbox';
 import StatusIcon, { type StatusIconKind } from './statusIcons';
+import JevNeedsInputTag from './JevNeedsInputTag';
 import './InboxPanel.css';
 
 /** How many entries the list holds. Older traffic ages out of the mailbox log anyway. */
@@ -423,6 +424,7 @@ function InboxRowDetail({
         <span className={`inbox-detail-chip ${STATUS_ICON[entry.status]?.cls ?? 'muted'}`}>
           {statusLabel(entry)}
         </span>
+        {entry.status === 'blocked' && reason && <JevNeedsInputTag reason={reason} />}
         {elapsed && <span className="inbox-detail-fact">ran {elapsed}</span>}
         <span className="inbox-detail-fact">{absoluteTime(entry.ts)}</span>
       </div>

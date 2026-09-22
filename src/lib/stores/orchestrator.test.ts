@@ -4,6 +4,10 @@ import { get } from '$lib/stores/storeCompat';
 const invoke = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => undefined));
 const routeOrchestratorRequest = vi.hoisted(() => vi.fn());
 const showToast = vi.hoisted(() => vi.fn());
+const estimateFileOverlap = vi.hoisted(() => vi.fn(async () => false));
+vi.mock('$lib/services/jev', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/services/jev')>()), estimateFileOverlap,
+}));
 const showTerminal = vi.hoisted(() => vi.fn());
 const spawnAgentPreset = vi.hoisted(() => vi.fn(async (): Promise<number | null> => 42));
 const setSessionOwnerTask = vi.hoisted(() => vi.fn());
@@ -209,6 +213,7 @@ function resetMocks() {
   });
   routeOrchestratorRequest.mockReset();
   showToast.mockReset();
+  estimateFileOverlap.mockReset().mockResolvedValue(false);
   showTerminal.mockReset();
   spawnAgentPreset.mockReset();
   spawnAgentPreset.mockResolvedValue(42);
@@ -683,6 +688,21 @@ describe('orchestrator terminal leasing', () => {
 });
 
 describe('orchestrator chat actions', () => {
+  it('shows a non-blocking Jev overlap warning before spawning, with no-key fallback', async () => {
+    routeOrchestratorRequest.mockResolvedValue({
+      reply: 'Opening Claude.',
+      actions: [{ kind: 'spawn', agent: 'claude', prompt: 'edit src/app.ts', name: null }],
+      viaLLM: true,
+    });
+    estimateFileOverlap.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await sendChatMessage('project-1', '/repo', 'have claude edit src/app.ts');
+    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('Possible file overlap'), 'warning', 6000);
+    expect(spawnAgentPreset).toHaveBeenCalled();
+    showToast.mockClear();
+    await sendChatMessage('project-1', '/repo', 'have claude edit src/app.ts');
+    expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('Possible file overlap'), 'warning', 6000);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     orchestratorTasks.set([]);
