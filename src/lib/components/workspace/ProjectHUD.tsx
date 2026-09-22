@@ -631,6 +631,7 @@ export default function ProjectHUD() {
     const projectId = p.path ? projectIdByPath.get(p.path) ?? null : null;
     const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
     const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
+    const previewIsRunning = projectRooms.includes('preview');
     const allProjectTasks = projectId ? tasksByProject.get(projectId) ?? [] : [];
     const storedThreads = projectId ? allChatThreads.threadsByProject[projectId] ?? [] : [];
     const activeThreadId = projectId ? allChatThreads.activeThreadByProject[projectId] ?? null : null;
@@ -1085,9 +1086,26 @@ export default function ProjectHUD() {
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
             {currentInteractionMode === 'cli' && <>
-            {projectSessions.length > 0 && (
+            {(projectSessions.length > 0 || previewIsRunning) && (
               <div className="project-contents-section">
                 <div className="project-contents-label">Running</div>
+                {previewIsRunning && (
+                  <button
+                    type="button"
+                    className="project-process-row"
+                    onClick={() => openRoom(p.workspaceId, p.path, 'preview').catch(console.error)}
+                    title="Preview — running"
+                  >
+                    <span className="project-process-icon" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="13" rx="2" />
+                        <path d="M8 21h8M12 17v4" />
+                      </svg>
+                    </span>
+                    <span className="project-process-name">Preview</span>
+                    <span className="project-process-detail">active</span>
+                  </button>
+                )}
                 {projectSessions.map((session) => {
                   const isAgent = isAgentSession(session);
                   const name = isAgent ? getSessionPromptTargetLabel(session, projectSessions) : session.title;
