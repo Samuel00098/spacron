@@ -1075,7 +1075,10 @@ export default function AppShell() {
         // rather than focusing it, so it lands in a trailing pane and leaves the
         // rooms already on stage where they are — "agent on the left, preview on
         // the right".
-        if (room === 'preview' && ambientLayout === 'gallery') {
+        // Not while a pane is zoomed: `addRoomToSplit` clears the zoom, so the
+        // stage fell back to the grid — `focusRoom` carries it instead, the
+        // same as every other room.
+        if (room === 'preview' && ambientLayout === 'gallery' && zoomedRoom === null) {
           const otherRooms = visibleRooms.filter((r) => r !== 'preview');
           if (otherRooms.length > 0) {
             addRoomToSplit('preview');
