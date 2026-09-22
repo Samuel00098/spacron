@@ -68,8 +68,10 @@ export const quickCaptureOpen = writable(false);
 export const envManagerOpen = writable(false);
 export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
-/** Whether the unified right-hand tools sidebar is mounted. */
-export const rightSidebarVisible = writable(true);
+/** Whether the unified right-hand tools sidebar is mounted. Not persisted:
+ * every launch or reload starts closed, and it stays open only once the user
+ * opens it during the session. */
+export const rightSidebarVisible = writable(false);
 export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 export type RightSidebarNavigatorTab = (typeof RIGHT_SIDEBAR_NAVIGATOR_TABS)[number];
 export type RightSidebarTab = RightSidebarNavigatorTab | RightDrawerTool;
