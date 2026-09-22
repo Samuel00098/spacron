@@ -15,6 +15,7 @@ pub mod file_system;
 pub mod fs_watch;
 pub mod github;
 pub mod http;
+pub mod jev;
 pub mod keep_awake;
 pub mod lsp;
 pub mod mcp;

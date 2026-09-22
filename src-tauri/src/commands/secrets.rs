@@ -24,7 +24,7 @@ const APP_TITLE: &str = "Spacron";
 /// transcription/routing/recon calls all hit the same few hosts moments apart.
 /// Reusing a client keeps connections warm (HTTP keep-alive), so only the first
 /// call to each host pays the handshake — later chunks and turns reuse it.
-fn shared_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+pub(crate) fn shared_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
     static CLIENTS: OnceLock<Mutex<HashMap<u64, reqwest::Client>>> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
     let key = timeout.as_millis() as u64;
@@ -148,6 +148,11 @@ const LOCAL_PROVIDERS: &[&str] = &["ollama", "lmstudio"];
 
 fn is_known_provider(provider: &str) -> bool {
     KNOWN_PROVIDERS.contains(&provider)
+}
+
+// Choice-only decision service; never offered as a chat provider.
+fn is_key_provider(provider: &str) -> bool {
+    is_known_provider(provider) || provider == "typesafe"
 }
 
 fn is_local_provider(provider: &str) -> bool {
@@ -748,8 +753,8 @@ fn delete_keychain_entry(entry: Entry, description: &str) -> Result<(), String> 
 ///
 /// `commands::github` already follows this rule for its token — this brings the
 /// two into line.
-fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
-    if !is_known_provider(&provider) {
+pub(crate) fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
+    if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
     let entry = keychain_entry(&provider)?;
@@ -787,7 +792,7 @@ fn provider_api_key_get(provider: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub fn provider_api_key_exists(provider: String) -> Result<bool, String> {
-    if !is_known_provider(&provider) {
+    if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
     Ok(provider_api_key_get(provider)?.is_some())
@@ -795,7 +800,7 @@ pub fn provider_api_key_exists(provider: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn provider_api_key_set(provider: String, api_key: String) -> Result<(), String> {
-    if !is_known_provider(&provider) {
+    if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
     let api_key = api_key.trim().to_string();
@@ -813,7 +818,7 @@ pub fn provider_api_key_set(provider: String, api_key: String) -> Result<(), Str
 
 #[tauri::command]
 pub fn provider_api_key_delete(provider: String) -> Result<(), String> {
-    if !is_known_provider(&provider) {
+    if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
     delete_keychain_entry(keychain_entry(&provider)?, "API key")?;

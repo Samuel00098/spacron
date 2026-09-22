@@ -244,6 +244,7 @@ pub fn run() {
             commands::secrets::provider_api_key_exists,
             commands::secrets::provider_api_key_set,
             commands::secrets::provider_api_key_delete,
+            commands::jev::jev_classify,
             commands::secrets::remote_token_set,
             commands::secrets::remote_token_get,
             commands::secrets::remote_token_delete,
