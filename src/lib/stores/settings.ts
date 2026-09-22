@@ -209,6 +209,8 @@ export type AiProviderId =
   | 'cohere'
   | 'opencode'
   | 'opencode-go'
+  | 'kilocode'
+  | 'chatgpt'
   | 'ollama'
   | 'lmstudio'
   | 'local';
@@ -243,11 +245,20 @@ export interface AiProviderDef {
    */
   local?: boolean;
   /**
+   * Signed in through the user's own CLI instead of an API key. `chatgpt`
+   * runs on their ChatGPT plan via the Codex CLI (`commands/chatgpt.rs`);
+   * Settings shows a sign-in panel in place of the key field.
+   */
+  signIn?: 'chatgpt';
+  /**
    * OpenAI-compatible base URL for local providers (root that owns
    * `/chat/completions` and `/models`), e.g. `http://localhost:11434/v1`.
    */
   defaultBaseUrl?: string;
 }
+
+/** Default model used by the signed-in ChatGPT subscription composer route. */
+export const CHATGPT_DEFAULT_MODEL = 'gpt-5.6-luna';
 
 export const aiProviders: AiProviderDef[] = [
   {
@@ -487,6 +498,37 @@ export const aiProviders: AiProviderDef[] = [
     ],
   },
   {
+    id: 'kilocode',
+    label: 'Kilo Code',
+    keyLabel: 'Kilo Code API key',
+    keyPlaceholder: '...',
+    keyUrl: 'https://app.kilo.ai',
+    // Kilo Gateway is OpenRouter-compatible. A free Kilo account key unlocks
+    // the `:free` models; the live list tags them from the id suffix.
+    defaultModel: 'kilo-auto/free',
+    models: [
+      { id: 'kilo-auto/free', label: 'Auto (free)', description: 'Kilo routes each request to a free model.', free: true },
+      { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B', description: 'Free NVIDIA model with tool calling.', free: true },
+      { id: 'deepseek/deepseek-v4-flash-0731:free', label: 'DeepSeek V4 Flash', description: 'Free DeepSeek model with a 1M context.', free: true },
+      { id: 'qwen/qwen3.8-27b:free', label: 'Qwen 3.8 27B', description: 'Free Qwen model.', free: true },
+    ],
+  },
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT subscription',
+    signIn: 'chatgpt',
+    keyLabel: 'ChatGPT sign-in',
+    keyPlaceholder: '',
+    keyUrl: 'https://developers.openai.com/codex/cli',
+    // Runs on the user's own ChatGPT plan through their Codex CLI. Keep this
+    // explicit so a fresh composer does not fall back to another connection's
+    // model or to a provider-specific default.
+    defaultModel: CHATGPT_DEFAULT_MODEL,
+    models: [
+      { id: CHATGPT_DEFAULT_MODEL, label: 'GPT-5.6 Luna', description: 'Default model for the signed-in ChatGPT subscription.' },
+    ],
+  },
+  {
     id: 'ollama',
     label: 'Ollama',
     local: true,
@@ -545,6 +587,25 @@ export const aiProviders: AiProviderDef[] = [
 
 export function getProviderDef(id: AiProviderId): AiProviderDef {
   return aiProviders.find((p) => p.id === id) ?? aiProviders[0];
+}
+
+/**
+ * What to tell someone whose selected provider is not connected yet, in one
+ * sentence. Every "not connected" message uses this so the advice matches the
+ * provider: a free Kilo account, a ChatGPT sign-in, a server URL or a key.
+ */
+export function providerSetupHint(id: AiProviderId): string {
+  const def = getProviderDef(id);
+  if (def.signIn === 'chatgpt') {
+    return 'Open Settings → AI Connections → ChatGPT subscription and click "Sign in with ChatGPT" (it uses your ChatGPT plan through the Codex CLI, so no API key is needed).';
+  }
+  if (id === 'kilocode') {
+    return "Kilo Code's free models only need a free account: sign up at app.kilo.ai, copy your API key from your Kilo profile, and paste it into Settings → AI Connections → Kilo Code. The \"Auto (free)\" model then works at no cost.";
+  }
+  if (def.local) {
+    return `Check the ${def.keyLabel || `${def.label} server URL`} in Settings → AI Connections, and make sure ${def.label} is running.`;
+  }
+  return `Add the ${def.keyLabel || `${def.label} API key`} in Settings → AI Connections.`;
 }
 
 export interface VoiceOption {
@@ -764,7 +825,9 @@ export function setVoiceAiModel(provider: AiProviderId, modelId: string) {
 
 // Selected provider + per-provider remembered model choice.
 
-export const aiProvider = persistentWritable<AiProviderId>('aiProvider', 'openrouter');
+// New installs start on the user's signed-in ChatGPT subscription. Existing
+// persisted selections remain untouched, including per-thread choices.
+export const aiProvider = persistentWritable<AiProviderId>('aiProvider', 'chatgpt');
 export const aiModelByProvider = persistentWritable<Record<string, string>>('aiModelByProvider', {});
 
 // Per-provider server URL, used only by local providers (Ollama, LM Studio).
@@ -778,32 +841,6 @@ export const aiBaseUrlByProvider = persistentWritable<Record<string, string>>('a
 export const aiGhostTextEnabled = persistentWritable('aiGhostTextEnabled', false);
 export const aiCompletionProvider = persistentWritable<AiProviderId>('aiCompletionProvider', 'groq');
 export const aiCompletionModelByProvider = persistentWritable<Record<string, string>>('aiCompletionModelByProvider', {});
-
-// The ChatGPT subscription connector was removed. Reset any persisted
-// selections from older builds so a deleted provider cannot remain active.
-if (typeof window !== 'undefined') {
-  if (String(get(aiProvider)) === 'chatgpt') aiProvider.set('openrouter');
-  if (String(get(aiCompletionProvider)) === 'chatgpt') aiCompletionProvider.set('groq');
-  if (String(get(voiceAiProvider)) === 'chatgpt') voiceAiProvider.set('groq');
-  aiModelByProvider.update((models) => {
-    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
-    const next = { ...models };
-    delete next.chatgpt;
-    return next;
-  });
-  aiCompletionModelByProvider.update((models) => {
-    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
-    const next = { ...models };
-    delete next.chatgpt;
-    return next;
-  });
-  voiceAiModelByProvider.update((models) => {
-    if (!Object.prototype.hasOwnProperty.call(models, 'chatgpt')) return models;
-    const next = { ...models };
-    delete next.chatgpt;
-    return next;
-  });
-}
 
 /** Whether a provider runs locally and is configured by URL rather than key. */
 export function isLocalProvider(id: AiProviderId): boolean {
@@ -1224,7 +1261,7 @@ export function resetSettingsToDefault() {
   agentBrowserTools.set(false);
   keepSystemAwake.set(false);
   closeBehavior.set('quit');
-  aiProvider.set('openrouter');
+  aiProvider.set('chatgpt');
   aiModelByProvider.set({});
   aiBaseUrlByProvider.set({});
   aiGhostTextEnabled.set(false);

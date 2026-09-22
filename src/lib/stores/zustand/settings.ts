@@ -9,6 +9,8 @@ export type AiProviderId =
   | 'google'
   | 'groq'
   | 'xai'
+  | 'kilocode'
+  | 'chatgpt'
   | 'ollama'
   | 'lmstudio';
 export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'ollama' | 'lmstudio' | 'local';
@@ -201,7 +203,7 @@ function createSettingsState() {
     showHidden: persistentValue('showHidden', false),
     notificationsEnabled: persistentValue('notificationsEnabled', true),
     closeBehavior: persistentValue<CloseBehavior>('closeBehavior', 'quit'),
-    aiProvider: persistentValue<AiProviderId>('aiProvider', 'openrouter'),
+    aiProvider: persistentValue<AiProviderId>('aiProvider', 'chatgpt'),
     aiModelByProvider: persistentValue<Record<string, string>>('aiModelByProvider', {}),
     aiBaseUrlByProvider: persistentValue<Record<string, string>>('aiBaseUrlByProvider', {}),
     aiGhostTextEnabled: persistentValue('aiGhostTextEnabled', false),
@@ -286,7 +288,7 @@ const defaults: SettingsValues = {
   showHidden: false,
   notificationsEnabled: true,
   closeBehavior: 'quit',
-  aiProvider: 'openrouter',
+  aiProvider: 'chatgpt',
   aiModelByProvider: {},
   aiBaseUrlByProvider: {},
   aiGhostTextEnabled: false,
