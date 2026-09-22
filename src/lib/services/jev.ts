@@ -12,7 +12,7 @@ export interface JevDecision {
 export async function classify(
   state: string,
   labels: JevLabels,
-  question: string,
+  question = 'Which answer best fits the input?',
 ): Promise<JevProbabilities | null> {
   return (await classifyDecision(state, labels, question))?.probabilities ?? null;
 }

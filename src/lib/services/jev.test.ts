@@ -19,6 +19,8 @@ describe('Jev Choice client', () => {
     expect(invoke).toHaveBeenCalledWith('jev_classify', {
       state: 'The agent asked for approval', question: 'Is it waiting?', labels: { yes: 'Yes', no: 'No' },
     });
+    await expect(classify('The agent asked for approval', { yes: 'Yes', no: 'No' }))
+      .resolves.toEqual({ yes: 0.9, no: 0.1 });
   });
 
   it('falls back with no key, request error, timeout, or malformed probabilities', async () => {
