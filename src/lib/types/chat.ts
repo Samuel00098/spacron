@@ -74,6 +74,12 @@ export interface ChatAttachment {
   text?: string;
   /** Ephemeral blob: URL for image thumbnails and click-to-preview. Never persisted. */
   previewUrl?: string;
+  /**
+   * An image Spacron generated and keeps in its generated-images folder. Only
+   * these keep `path` when a thread is saved: pasted-image paths die with the
+   * temp folder on exit, generated ones do not.
+   */
+  generated?: boolean;
 }
 
 export interface ChatDispatchReference {
@@ -151,9 +157,16 @@ export interface ChatThread {
   order?: number;
 }
 
+/** Provider/model to use for the next explicit conversation after deletion. */
+export interface ChatThreadLlmSettings {
+  provider: ChatProviderId | null;
+  model: string | null;
+}
+
 export interface ChatThreadState {
   version: 1;
   threadsByProject: Record<string, ChatThread[]>;
   messagesByThread: Record<string, ChatMessage[]>;
   activeThreadByProject: Record<string, string | null>;
+  pendingNewThreadSettingsByProject?: Record<string, ChatThreadLlmSettings>;
 }

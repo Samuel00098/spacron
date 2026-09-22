@@ -18,6 +18,7 @@ import type {
   ChatMessageRole,
   ChatMessageType,
   ChatThread,
+  ChatThreadLlmSettings,
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
@@ -33,6 +34,7 @@ export type {
   ChatMessageRole,
   ChatMessageType,
   ChatThread,
+  ChatThreadLlmSettings,
   ChatThreadState,
   ChatThreadStatus,
   ChatProviderId,
@@ -96,6 +98,19 @@ function asReasoningEffort(value: unknown): ChatReasoningEffort {
     value === 'xhigh' || value === 'max' || value === 'ultra'
     ? value
     : 'default';
+}
+
+function normalizePendingThreadSettings(value: unknown): Record<string, ChatThreadLlmSettings> {
+  if (!isRecord(value)) return {};
+  const entries: Array<[string, ChatThreadLlmSettings]> = [];
+  for (const [projectId, rawSettings] of Object.entries(value)) {
+    if (!isRecord(rawSettings)) continue;
+    entries.push([projectId, {
+      provider: asProvider(rawSettings.provider),
+      model: asString(rawSettings.model),
+    }]);
+  }
+  return Object.fromEntries(entries);
 }
 
 function asLegacyMessages(value: unknown): LegacyChatMessage[] {
@@ -206,7 +221,10 @@ function copyAttachments(value: unknown): ChatAttachment[] | undefined {
       const size = asNumber(entry.size);
       if (!id || !name || !type || size == null) return null;
       const text = asString(entry.text);
-      return { id, name, type, size, ...(text != null ? { text } : {}) } satisfies ChatAttachment;
+      const path = entry.generated === true ? asString(entry.path) : null;
+      const attachment: ChatAttachment = { id, name, type, size, ...(text != null ? { text } : {}) };
+      if (path) Object.assign(attachment, { path, generated: true });
+      return attachment;
     })
     .filter((entry): entry is ChatAttachment => entry !== null);
   return attachments.length ? attachments : undefined;
@@ -359,6 +377,10 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
         )
       : {},
   };
+  const pendingNewThreadSettingsByProject = normalizePendingThreadSettings(raw.pendingNewThreadSettingsByProject);
+  if (Object.keys(pendingNewThreadSettingsByProject).length) {
+    state.pendingNewThreadSettingsByProject = pendingNewThreadSettingsByProject;
+  }
   for (const [projectId, threads] of Object.entries(raw.threadsByProject)) {
     if (!Array.isArray(threads)) continue;
     const normalized = threads
@@ -501,6 +523,21 @@ export function getActiveThreadId(projectId: string): string | null {
     : null;
 }
 
+/** Settings remembered from an active thread deleted before the next explicit new thread. */
+export function getPendingNewThreadSettings(projectId: string): ChatThreadLlmSettings | null {
+  return get(chatThreadState).pendingNewThreadSettingsByProject?.[projectId] ?? null;
+}
+
+/** Stop inheriting deleted-thread settings after the user chooses a new one. */
+export function clearPendingNewThreadSettings(projectId: string): void {
+  chatThreadState.update((state) => ({
+    ...state,
+    pendingNewThreadSettingsByProject: Object.fromEntries(
+      Object.entries(state.pendingNewThreadSettingsByProject ?? {}).filter(([entryProjectId]) => entryProjectId !== projectId),
+    ),
+  }));
+}
+
 /** Return the selected thread, creating the migration-compatible General
  * thread for projects that have no chat history yet. */
 export function ensureProjectThread(projectId: string, now = Date.now()): ChatThread {
@@ -535,6 +572,9 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
         thread.id === threadId ? { ...thread, unreadCount: 0 } : thread,
       ),
     },
+    pendingNewThreadSettingsByProject: Object.fromEntries(
+      Object.entries(state.pendingNewThreadSettingsByProject ?? {}).filter(([entryProjectId]) => entryProjectId !== projectId),
+    ),
   }));
   return true;
 }
@@ -544,6 +584,7 @@ export function createChatThread(
   overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
   now = Date.now(),
 ): ChatThread {
+  const pendingSettings = getPendingNewThreadSettings(projectId);
   const id = `chat-thread-${now}-${Math.random().toString(36).slice(2, 8)}`;
   const thread: ChatThread = {
     id,
@@ -551,9 +592,11 @@ export function createChatThread(
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
-    provider: overrides.provider ?? null,
-    model: overrides.model ?? null,
-    accessMode: overrides.accessMode ?? 'inherit',
+    provider: overrides.provider !== undefined ? overrides.provider : pendingSettings?.provider ?? null,
+    model: overrides.model !== undefined ? overrides.model : pendingSettings?.model ?? null,
+    // Full access is the default: the orchestrator edits and runs commands
+    // without a card per step. "Ask before edit" stays one click away.
+    accessMode: overrides.accessMode ?? 'full-access',
     reasoningEffort: overrides.reasoningEffort ?? 'default',
     taskId: overrides.taskId ?? null,
     sessionId: overrides.sessionId ?? null,
@@ -572,6 +615,9 @@ export function createChatThread(
     },
     messagesByThread: { ...state.messagesByThread, [id]: [] },
     activeThreadByProject: { ...state.activeThreadByProject, [projectId]: id },
+    pendingNewThreadSettingsByProject: Object.fromEntries(
+      Object.entries(state.pendingNewThreadSettingsByProject ?? {}).filter(([entryProjectId]) => entryProjectId !== projectId),
+    ),
   }));
   return thread;
 }
@@ -588,7 +634,8 @@ export function updateChatThread(threadId: string, patch: Partial<ChatThread>): 
       updated = true;
       break;
     }
-    return updated ? { ...state, threadsByProject } : state;
+    if (!updated) return state;
+    return { ...state, threadsByProject };
   });
   return updated;
 }
@@ -623,9 +670,17 @@ export function deleteChatThread(threadId: string): boolean {
     if (!ownerProjectId) return state;
     deleted = true;
     const currentThreads = state.threadsByProject[ownerProjectId] ?? [];
+    const removedThread = currentThreads[removedIndex];
     const remaining = currentThreads.filter((thread) => thread.id !== threadId);
     const nextThreads = remaining;
     const activeId = state.activeThreadByProject[ownerProjectId];
+    const pendingNewThreadSettingsByProject = { ...(state.pendingNewThreadSettingsByProject ?? {}) };
+    if (activeId === threadId && removedThread) {
+      pendingNewThreadSettingsByProject[ownerProjectId] = {
+        provider: removedThread.provider,
+        model: removedThread.model,
+      };
+    }
     const nextActiveId = nextThreads.length === 0
       ? null
       : activeId === threadId || !nextThreads.some((thread) => thread.id === activeId)
@@ -638,9 +693,28 @@ export function deleteChatThread(threadId: string): boolean {
       threadsByProject: { ...state.threadsByProject, [ownerProjectId]: nextThreads },
       messagesByThread,
       activeThreadByProject: { ...state.activeThreadByProject, [ownerProjectId]: nextActiveId },
+      pendingNewThreadSettingsByProject,
     };
   });
   return deleted;
+}
+
+/** Delete a user-closed thread and leave its project ready in a fresh thread
+ * when it was the project's last conversation. Ordinary deletion remains
+ * available separately for callers that must preserve an empty project. */
+export function closeChatThread(threadId: string): boolean {
+  const thread = getChatThread(threadId);
+  if (!thread || !deleteChatThread(threadId)) return false;
+
+  if ((get(chatThreadState).threadsByProject[thread.projectId] ?? []).length === 0) {
+    createChatThread(thread.projectId, {
+      provider: thread.provider,
+      model: thread.model,
+      accessMode: thread.accessMode,
+      reasoningEffort: thread.reasoningEffort,
+    });
+  }
+  return true;
 }
 
 export function setThreadDraft(threadId: string, draft: string): boolean {
@@ -707,23 +781,56 @@ export function summarizeThreadMessage(text: string): string {
   return summary.length > 80 ? `${summary.slice(0, 77).trimEnd()}…` : summary;
 }
 
-/** Generate a concise, intelligent thread summary title using the configured AI provider. */
+/**
+ * The title inside a model's reply. Models reach the same answer through very
+ * different wrappers — a leading blank line, a reasoning preamble, `Title:`,
+ * quotes — so this takes the first line with something on it rather than the
+ * first line, which an opening newline alone would leave empty.
+ */
+export function cleanGeneratedTitle(raw: string): string {
+  const withoutReasoning = (raw || '')
+    .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, ' ')
+    // An unclosed reasoning block runs to the end of the reply: there is no
+    // title after it, and the caller's fallback is the honest answer.
+    .replace(/<(think|thinking|reasoning)>[\s\S]*$/i, ' ');
+  const unwrap = (value: string) => value.replace(/^["'`*_]+|["'`*_]+$/g, '').trim();
+  const line = withoutReasoning
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0) ?? '';
+  // Unwrapped twice with the trailing period taken off in between, because the
+  // wrappers nest in both orders: `Title: "Review"` and `` `Review`. ``
+  const cleaned = unwrap(unwrap(line).replace(/^Title:\s*/i, '').replace(/[.]+$/, ''))
+    .replace(/[.]+$/, '')
+    .trim();
+  return cleaned.length > 70 ? `${cleaned.slice(0, 67).trimEnd()}…` : cleaned;
+}
+
+/**
+ * Generate a concise, intelligent thread summary title using the configured AI
+ * provider, falling back to [`summarizeThreadMessage`] whenever that provider
+ * cannot answer — no key, not a direct API provider, rate-limited, or a reply
+ * that cleaned down to nothing. A thread always gets a real name: the AI path
+ * is the better title, never the only one, and returning '' here is what used
+ * to leave a conversation called "New thread" for good.
+ */
 export async function generateAiThreadTitle(
   text: string,
   preferredProvider?: AiProviderId,
   preferredModel?: string,
 ): Promise<string> {
+  const fallback = summarizeThreadMessage(text);
   const provider = preferredProvider ?? get(aiProvider);
   const providerDef = getProviderDef(provider);
   // Agent-session providers such as `claude` can still exist in legacy Chat
   // metadata, but they are not direct API providers for this completion path.
-  if (providerDef.id !== provider) return '';
+  if (providerDef.id !== provider) return fallback;
   const local = isLocalProvider(provider);
   const hasKey = local ? true : await providerApiKeyExists(provider, { fresh: true });
   const baseUrl = local ? getProviderBaseUrl(provider) : '';
 
   if (!local && !hasKey) {
-    return '';
+    return fallback;
   }
 
   const model = preferredModel?.trim() || (provider === get(aiProvider)
@@ -731,7 +838,7 @@ export async function generateAiThreadTitle(
     : providerDef.defaultModel);
 
   const sample = text.trim().slice(0, 1000);
-  if (!sample) return '';
+  if (!sample) return fallback;
 
   const systemPrompt =
     'You are a title generator. Generate a concise, natural, 3 to 7 word summary or title describing what this chat is about based on the user\'s first message. ' +
@@ -746,16 +853,10 @@ export async function generateAiThreadTitle(
       apiKey: '',
       baseUrl: baseUrl || undefined,
     });
-    const cleaned = (raw || '')
-      .replace(/^["'`]|["'`]$/g, '')
-      .replace(/^Title:\s*/i, '')
-      .replace(/\r?\n.*$/s, '')
-      .replace(/[.]+$/, '')
-      .trim();
-    return cleaned.length > 70 ? `${cleaned.slice(0, 67).trimEnd()}…` : cleaned;
+    return cleanGeneratedTitle(raw) || fallback;
   } catch (error) {
     console.warn('ai_complete failed for thread title generation:', error);
-    return '';
+    return fallback;
   }
 }
 
@@ -780,11 +881,16 @@ export async function repairThreadSummaries(): Promise<void> {
       jobs.push(
         generateAiThreadTitle(firstUser.text, thread.provider as AiProviderId | undefined, thread.model || undefined)
           .then((aiTitle) => {
-            if (!aiTitle || !getChatThread(thread.id)) return;
+            // The fallback title is what this thread already carries whenever
+            // the AI path is unavailable, and renaming bumps `updatedAt` —
+            // which reorders the list. Re-titling to the same words every
+            // launch would reshuffle old threads for no gain.
+            const current = getChatThread(thread.id);
+            if (!aiTitle || !current || aiTitle === current.title) return;
             renameChatThread(thread.id, aiTitle);
           })
           .catch(() => {
-            // Keep the placeholder; the next launch retries.
+            // Keep the current title; the next launch retries.
           }),
       );
     }

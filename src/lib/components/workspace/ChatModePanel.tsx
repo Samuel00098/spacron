@@ -10,10 +10,12 @@ import { stopChatTurn, sendChatMessage, enqueueChatMessage, resendEditedChatMess
 import {
   chatThreadState,
   chatTurnTicker,
+  clearPendingNewThreadSettings,
   clearChatTurnTicker,
   appendThreadMessage,
   createChatThread,
   ensureProjectThread,
+  getPendingNewThreadSettings,
   removeThreadMessage,
   setThreadDraft,
   updateChatThread,
@@ -22,6 +24,7 @@ import { openFile } from '$lib/stores/editor';
 import { setActiveView } from '$lib/stores/layout';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import ChatAgentModelPicker from './ChatAgentModelPicker';
+import { todoProgress } from '$lib/services/orchestrator/chat-turn';
 import { ProviderBrandMark } from '$lib/components/shared/providerBrands';
 import {
   aiModelByProvider,
@@ -29,7 +32,6 @@ import {
   aiProviders,
   currentAiModel,
   getProviderDef,
-  getProviderBaseUrl,
   openaiRealtimeModel,
   openaiRealtimeVoice,
   openaiLiveModel,
@@ -58,7 +60,8 @@ import {
   type RealtimeVoiceSession,
   type RealtimeVoiceState,
 } from '$lib/services/realtime-voice';
-import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage } from '$lib/types/chat';
+import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
+import { REASONING_LABELS, reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
 import {
   sendTranscriptionNow,
   transcriptionActive,
@@ -74,7 +77,9 @@ import VoiceInputIcon from '$lib/components/shared/VoiceInputIcon';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
-import { DEFAULT_AGENT_BUDGETS } from '$lib/services/orchestrator/agent-transport';
+import { TURN_TIMING_PREFIX } from '$lib/services/orchestrator/turn-timing';
+import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import './ChatModePanel.css';
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -95,6 +100,16 @@ function formatBytes(bytes: number): string {
 function looksTextual(file: File): boolean {
   return file.type.startsWith('text/') ||
     /\.(md|mdx|txt|json|jsonc|js|jsx|ts|tsx|css|scss|html|xml|yaml|yml|toml|rs|py|go|java|c|cpp|h|hpp|sql|sh|ps1)$/i.test(file.name);
+}
+
+/** The viewer entry for an image attachment, or null when it has nothing to show. */
+function attachmentViewerImage(attachment: ChatAttachment): ViewerImage | null {
+  if (!attachment.type.startsWith('image/')) return null;
+  if (attachment.previewUrl) return { src: attachment.previewUrl, name: attachment.name, path: attachment.path };
+  // A sent message keeps only the path. Pasted images live in a temp folder
+  // for the session; generated ones are kept (see ChatAttachment.generated).
+  if (attachment.path && isTauriRuntime()) return { src: convertFileSrc(attachment.path), name: attachment.name, path: attachment.path };
+  return null;
 }
 
 async function toChatAttachment(file: File): Promise<ChatAttachment> {
@@ -256,7 +271,21 @@ function ChatMarkdownBody({ text, pending }: { text: string; pending?: boolean }
   }, [text]);
 
   useEffect(() => {
-    if (containerRef.current) linkifyProjectPaths(containerRef.current);
+    const container = containerRef.current;
+    if (!container) return;
+
+    container.querySelectorAll('table').forEach((table) => {
+      if (table.parentElement?.classList.contains('chat-mode-markdown-table-scroll')) return;
+      const scrollRegion = document.createElement('div');
+      scrollRegion.className = 'chat-mode-markdown-table-scroll';
+      scrollRegion.tabIndex = 0;
+      scrollRegion.setAttribute('role', 'region');
+      scrollRegion.setAttribute('aria-label', 'Scrollable table');
+      table.parentNode?.insertBefore(scrollRegion, table);
+      scrollRegion.appendChild(table);
+    });
+
+    linkifyProjectPaths(container);
   }, [html]);
 
   if (pending && !text.trim()) {
@@ -339,7 +368,11 @@ function InlineCard({ message, onOption }: { message: ChatMessage; onOption?: (l
   return null;
 }
 
-function ActivityDisclosure({ activities }: { activities: ChatMessage[] }) {
+function ActivityDisclosure({ activities: rows }: { activities: ChatMessage[] }) {
+  // The turn's timing row is a summary, not an operation: it labels the
+  // disclosure ("Worked for 2m 14s") and stays out of the count.
+  const timing = rows.find((row) => row.text.startsWith(TURN_TIMING_PREFIX));
+  const activities = timing ? rows.filter((row) => row !== timing) : rows;
   const pending = activities.some((activity) => activity.pending);
   const noun = activities.length === 1 ? 'operation' : 'operations';
 
@@ -350,12 +383,16 @@ function ActivityDisclosure({ activities }: { activities: ChatMessage[] }) {
           <span className={`chat-mode-activity-state${pending ? ' pending' : ''}`}>
             {pending ? 'Working' : 'Work details'}
           </span>
-          <span className="chat-mode-activity-summary">{activities.length} {noun}</span>
+          <span className="chat-mode-activity-summary">
+            {activities.length} {noun}
+            {timing ? ` · ${timing.text.split('\n')[0].slice(TURN_TIMING_PREFIX.length)}` : ''}
+          </span>
           <svg className="chat-mode-activity-chevron" viewBox="0 0 16 16" aria-hidden="true">
             <path d="m4 6 4 4 4-4" />
           </svg>
         </summary>
         <div className="chat-mode-activity-list">
+          {timing && <pre className="chat-mode-activity-timing">{timing.text.split('\n').filter(Boolean).join('\n')}</pre>}
           {activities.map((activity) => {
             const lines = activity.text.split('\n');
             const title = lines[0] || 'Tool activity';
@@ -376,28 +413,45 @@ function ActivityDisclosure({ activities }: { activities: ChatMessage[] }) {
   );
 }
 
-function adjacentActivities(messages: ChatMessage[], messageIndex: number): ChatMessage[] {
-  const before: ChatMessage[] = [];
-  for (let index = messageIndex - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || message.type !== 'activity') break;
-    before.unshift(message);
-  }
-  const after: ChatMessage[] = [];
-  for (let index = messageIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || message.type !== 'activity') break;
-    after.push(message);
-  }
-  return [...before, ...after];
+/** A reply that can carry a Work details disclosure (not a card or a report). */
+function ownsActivity(message: ChatMessage | undefined): boolean {
+  return message?.role === 'assistant'
+    && message.type !== 'activity'
+    && message.type !== 'approval'
+    && message.type !== 'input'
+    && message.type !== 'completion';
 }
 
-function activityRunBelongsToAssistant(messages: ChatMessage[], messageIndex: number): boolean {
+/**
+ * The index of the reply a run of activity rows belongs to, or -1. A run has
+ * ONE owner — the reply right after it, else the reply right before it — so
+ * the same operations are never rendered twice (the old rule attached a run to
+ * the replies on BOTH sides, duplicating "Work details" around a card).
+ */
+function activityRunOwner(messages: ChatMessage[], messageIndex: number): number {
   let first = messageIndex;
   while (first > 0 && messages[first - 1]?.type === 'activity') first -= 1;
   let last = messageIndex;
   while (last + 1 < messages.length && messages[last + 1]?.type === 'activity') last += 1;
-  return messages[first - 1]?.role === 'assistant' || messages[last + 1]?.role === 'assistant';
+  if (ownsActivity(messages[last + 1])) return last + 1;
+  if (ownsActivity(messages[first - 1])) return first - 1;
+  return -1;
+}
+
+function adjacentActivities(messages: ChatMessage[], messageIndex: number): ChatMessage[] {
+  if (!ownsActivity(messages[messageIndex])) return [];
+  const before: ChatMessage[] = [];
+  for (let index = messageIndex - 1; index >= 0 && messages[index]?.type === 'activity'; index -= 1) before.unshift(messages[index]);
+  const after: ChatMessage[] = [];
+  for (let index = messageIndex + 1; index < messages.length && messages[index]?.type === 'activity'; index += 1) after.push(messages[index]);
+  return [
+    ...(before.length && activityRunOwner(messages, messageIndex - 1) === messageIndex ? before : []),
+    ...(after.length && activityRunOwner(messages, messageIndex + 1) === messageIndex ? after : []),
+  ];
+}
+
+function activityRunBelongsToAssistant(messages: ChatMessage[], messageIndex: number): boolean {
+  return activityRunOwner(messages, messageIndex) >= 0;
 }
 
 function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
@@ -557,9 +611,8 @@ export default function ChatModePanel() {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [isComposerDragOver, setIsComposerDragOver] = useState(false);
-  const [expandedPreview, setExpandedPreview] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
   const [pendingSendCount, setPendingSendCount] = useState(0);
-  const [testingTools, setTestingTools] = useState(false);
   const [answeringRequest, setAnsweringRequest] = useState(false);
   const answeringRequestRef = useRef(false);
   const [liveModelsByProvider, setLiveModelsByProvider] = useState<Record<string, AiModelOption[]>>({});
@@ -577,7 +630,6 @@ export default function ChatModePanel() {
   const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
-  const taskLimitsRef = useRef<HTMLDetailsElement | null>(null);
   const [voicePhase, setVoicePhase] = useState<RealtimeVoiceState | 'idle'>('idle');
   const voiceSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const voiceActiveRef = useRef(false);
@@ -664,6 +716,24 @@ export default function ChatModePanel() {
     || (selectedProvider === defaultProvider ? defaultModel : modelByProvider[selectedProvider])
     || providerDef.defaultModel;
   const liveModels = liveModelsByProvider[selectedProvider] ?? [];
+  // Only the levels this provider's API accepts for this model; a saved level
+  // the new model lacks shows (and is sent) as the provider default.
+  const reasoningLevels = reasoningLevelsFor(selectedProvider, selectedModel);
+  const selectedReasoning: ChatReasoningEffort = thread?.reasoningEffort && reasoningLevels.includes(thread.reasoningEffort)
+    ? thread.reasoningEffort
+    : 'default';
+  // A conversation keeps its saved model, so one the provider retired or now
+  // lists as unsupported would fail every turn with no hint in the composer.
+  // Only judged against a loaded live list: the curated fallback is not
+  // authoritative about what the key can reach.
+  const selectedLiveModel = liveModels.find((entry) => entry.id === selectedModel);
+  const selectedModelIssue = !liveModels.length
+    ? null
+    : !selectedLiveModel
+      ? `${providerDef.label} does not list "${selectedModel}" for this key. Choose another model.`
+      : selectedLiveModel.supported === false
+        ? selectedLiveModel.supportReason ?? `"${selectedModel}" cannot run as a chat model yet. Choose another model.`
+        : null;
   const availableModels = useMemo(() => {
     const source = liveModels.length ? liveModels : providerDef.models;
     if (source.some((entry) => entry.id === selectedModel)) return source;
@@ -798,6 +868,7 @@ export default function ChatModePanel() {
       });
     } finally {
       setPendingSendCount((count) => Math.max(0, count - 1));
+      setResumable(hasResumableTurn(thread.id));
     }
   }
 
@@ -806,16 +877,6 @@ export default function ChatModePanel() {
     dismissResumableTurn(thread.id);
     setResumable(false);
   }
-
-  useEffect(() => {
-    const closeTaskLimitsWhenClickedOutside = (event: PointerEvent) => {
-      const details = taskLimitsRef.current;
-      if (!details?.open || event.target instanceof Node && details.contains(event.target)) return;
-      details.open = false;
-    };
-    document.addEventListener('pointerdown', closeTaskLimitsWhenClickedOutside, true);
-    return () => document.removeEventListener('pointerdown', closeTaskLimitsWhenClickedOutside, true);
-  }, []);
 
   useEffect(() => {
     const refresh = () => refreshLiveModels(selectedProvider);
@@ -847,6 +908,7 @@ export default function ChatModePanel() {
     if (!thread || !providerIds.has(nextValue as AiProviderId)) return;
     const nextProvider = nextValue as AiProviderId;
     const nextModel = modelByProvider[nextProvider] || getProviderDef(nextProvider).defaultModel;
+    clearPendingNewThreadSettings(thread.projectId);
     updateChatThread(thread.id, { provider: nextProvider, model: nextModel, updatedAt: Date.now() });
     aiProvider.set(nextProvider);
     setAiModel(nextProvider, nextModel);
@@ -855,6 +917,7 @@ export default function ChatModePanel() {
 
   function selectModel(nextModel: string, provider = selectedProvider) {
     if (!thread || !nextModel.trim()) return;
+    clearPendingNewThreadSettings(thread.projectId);
     updateChatThread(thread.id, { model: nextModel, updatedAt: Date.now() });
     aiProvider.set(provider);
     setAiModel(provider, nextModel);
@@ -948,9 +1011,10 @@ export default function ChatModePanel() {
 
   function startNewThread() {
     if (!project) return;
+    const pendingSettings = getPendingNewThreadSettings(project.id);
     createChatThread(project.id, {
-      provider: selectedProvider,
-      model: selectedModel,
+      provider: pendingSettings?.provider ?? selectedProvider,
+      model: pendingSettings?.model ?? selectedModel,
       accessMode,
     });
     setAttachments((current) => {
@@ -1469,15 +1533,30 @@ export default function ChatModePanel() {
     };
   }, []);
 
-  // Escape closes the expanded image preview.
-  useEffect(() => {
-    if (!expandedPreview) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setExpandedPreview(null);
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [expandedPreview]);
+  // Every image in the thread, oldest first, so the viewer can step through them.
+  const threadImages = useMemo(() => messages.flatMap((message) => (message.attachments ?? [])
+    .map((attachment) => ({ id: attachment.id, image: attachmentViewerImage(attachment) }))
+    .filter((entry): entry is { id: string; image: ViewerImage } => entry.image !== null)), [messages]);
+
+  function openThreadImage(attachmentId: string) {
+    const index = threadImages.findIndex((entry) => entry.id === attachmentId);
+    if (index >= 0) setViewer({ images: threadImages.map((entry) => entry.image), index });
+  }
+
+  // "Use as input": the image rides the next message as an attachment, which
+  // is how the brain learns its path for generate_image's reference_images.
+  function useImageAsInput(image: ViewerImage) {
+    if (!image.path) return;
+    const path = image.path;
+    setAttachments((current) => current.some((entry) => entry.path === path) ? current : [...current, {
+      id: `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: image.name,
+      type: getImageMimeType(path) || 'image/png',
+      size: 0,
+      path,
+      previewUrl: image.src,
+    }]);
+  }
 
   async function submit() {
     if (pendingRequest) {
@@ -1496,7 +1575,7 @@ export default function ChatModePanel() {
     try {
       // Queue-aware send: while a turn is running the message waits its turn
       // instead of being refused; the queued list under the composer offers
-      // "Answer next" (steer: jump the queue + stop the current turn) and "×".
+      // "Send now" (steer: hand it to the running turn) and "×".
       await enqueueChatMessage(project.id, project.root_path, text, {
         projectName: project.name,
         threadId: thread.id,
@@ -1513,11 +1592,11 @@ export default function ChatModePanel() {
   }
 
   return (
-    <section className={`chat-mode-panel${messages.length === 0 ? ' empty' : ''}`} aria-label="Conversational mode">
+    <section className={`chat-mode-panel${messages.length === 0 ? ' empty' : ''}`} aria-label="Chat">
       <div className="chat-mode-room-header">
         <div className="chat-mode-room-title">
           <span className="chat-mode-room-icon" aria-hidden="true"><VoiceModeIcon /></span>
-          <span className="chat-mode-room-kind">Conversational mode</span>
+          <span className="chat-mode-room-kind">Chat</span>
           <strong>{thread?.title ?? 'Conversation'}</strong>
           {/* Chat-level activity only ("Working", "Idle", "Needs input") — never a
               single agent's name. The thread can drive several agents at once,
@@ -1534,21 +1613,22 @@ export default function ChatModePanel() {
         <div className={`chat-mode-body${messages.length === 0 ? ' is-empty' : ''}`}>
           <div ref={scrollRef} className={`chat-mode-transcript${messages.length === 0 ? ' is-empty' : ''}`} aria-live="polite">
             {resumable && (
-              <div className="chat-mode-resume-card" role="status">
+              <div className="chat-mode-resume-card" role="status" aria-label="Saved interrupted work">
+                <span className="chat-mode-resume-icon" aria-hidden="true">↻</span>
                 <div className="chat-mode-resume-copy">
-                  <strong>Interrupted work</strong>
-                  <span>A previous turn was stopped before it finished. Its saved execution state is intact.</span>
+                  <strong>Saved work is ready to continue</strong>
+                  <span>Your previous turn stopped before finishing. Its execution state is still intact.</span>
                 </div>
                 <div className="chat-mode-resume-actions">
-                  <button type="button" className="primary" onClick={() => void resumeInterrupted()} disabled={pendingSendCount > 0}>Resume</button>
-                  <button type="button" onClick={dismissInterrupted}>Dismiss</button>
+                  <button type="button" className="primary" onClick={() => void resumeInterrupted()} disabled={pendingSendCount > 0}>Resume work</button>
+                  <button type="button" onClick={dismissInterrupted} disabled={pendingSendCount > 0}>Dismiss</button>
                 </div>
               </div>
             )}
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
                 <h2 className="chat-mode-empty-brand">Spacron</h2>
-                <p className="chat-mode-empty-subtitle">Conversational workspace</p>
+                <p className="chat-mode-empty-subtitle">Chat with your workspace</p>
                 <div className="chat-mode-suggestions">
                   {['What is the current project status?', 'Review the current changes', 'Build this feature'].map((suggestion) => (
                     <button key={suggestion} type="button" onClick={() => updateDraft(suggestion)}>{suggestion}</button>
@@ -1626,12 +1706,30 @@ export default function ChatModePanel() {
                   />
                   {message.attachments?.length ? (
                     <div className="chat-mode-message-attachments">
-                      {message.attachments.map((attachment) => (
-                        <span key={attachment.id} className="chat-mode-attachment-chip">
-                          {attachment.type.startsWith('image/') ? <ImageIcon /> : <PaperclipIcon />}
-                          {attachment.name}<small>{formatBytes(attachment.size)}</small>
-                        </span>
-                      ))}
+                      {message.attachments.map((attachment) => {
+                        const image = attachmentViewerImage(attachment);
+                        if (image && attachment.generated) {
+                          return (
+                            <button key={attachment.id} type="button" className="chat-mode-generated-image" onClick={() => openThreadImage(attachment.id)} title="Open in the image viewer">
+                              <img src={image.src} alt={attachment.name} loading="lazy" />
+                            </button>
+                          );
+                        }
+                        if (image) {
+                          return (
+                            <button key={attachment.id} type="button" className="chat-mode-attachment-chip image" onClick={() => openThreadImage(attachment.id)} title={`${attachment.name} — click to open`}>
+                              <img src={image.src} alt={attachment.name} className="chat-mode-attachment-thumb" loading="lazy" />
+                              <span>{attachment.name}</span>{attachment.size > 0 && <small>{formatBytes(attachment.size)}</small>}
+                            </button>
+                          );
+                        }
+                        return (
+                          <span key={attachment.id} className="chat-mode-attachment-chip">
+                            {attachment.type.startsWith('image/') ? <ImageIcon /> : <PaperclipIcon />}
+                            {attachment.name}<small>{formatBytes(attachment.size)}</small>
+                          </span>
+                        );
+                      })}
                     </div>
                   ) : null}
                   {message.completion && (
@@ -1676,7 +1774,7 @@ export default function ChatModePanel() {
                     <span className="chat-mode-turn-ticker-strip">{tickerCollapsed ? 'Show checklist' : 'Hide checklist'}</span>
                   </button>
                   <span className="chat-mode-turn-ticker-count">
-                    {turnTicker.items.filter((item) => item.done).length}/{turnTicker.items.length}
+                    {todoProgress(turnTicker.items).completed}/{todoProgress(turnTicker.items).total}
                   </span>
                 </div>
                 {!tickerCollapsed && <ul className="chat-mode-turn-ticker-items">
@@ -1703,10 +1801,10 @@ export default function ChatModePanel() {
                   <button
                     type="button"
                     className="chat-mode-message-queue-btn"
-                    title="Stop the current turn and answer this message next"
+                    title="Give this message to the running turn at its next step"
                     onClick={() => steerQueuedChatMessage(thread.id, queued.id)}
                   >
-                    Answer next
+                    Send now
                   </button>
                   <button
                     type="button"
@@ -1746,7 +1844,11 @@ export default function ChatModePanel() {
                       src={attachment.previewUrl}
                       alt={attachment.name}
                       className="chat-mode-attachment-thumb"
-                      onClick={() => setExpandedPreview(attachment.previewUrl ?? null)}
+                      onClick={() => {
+                        const images = attachments.map(attachmentViewerImage).filter((entry): entry is ViewerImage => entry !== null);
+                        const index = images.findIndex((entry) => entry.src === attachment.previewUrl);
+                        setViewer({ images, index: Math.max(0, index) });
+                      }}
                     />
                     <span>{attachment.name}</span><small>{formatBytes(attachment.size)}</small>
                     <button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={`Remove ${attachment.name}`}>×</button>
@@ -1839,6 +1941,7 @@ export default function ChatModePanel() {
                 onChange={(provider, model) => {
                   if (!thread || !providerIds.has(provider as AiProviderId)) return;
                   const nextProvider = provider as AiProviderId;
+                  clearPendingNewThreadSettings(thread.projectId);
                   updateChatThread(thread.id, { provider: nextProvider, model, updatedAt: Date.now() });
                   aiProvider.set(nextProvider);
                   setAiModel(nextProvider, model);
@@ -1850,8 +1953,8 @@ export default function ChatModePanel() {
                 <Dropdown
                   value={accessMode}
                   options={[
-                    { value: 'inherit', label: 'Default access' },
-                    { value: 'full-access', label: 'Full access' },
+                    { value: 'full-access', label: 'Full access', tooltip: 'Full access: the orchestrator edits files and runs commands on its own, without stopping to ask you first. Fastest; best when you trust the task.' },
+                    { value: 'inherit', label: 'Ask before edit', tooltip: 'Ask before edit: the orchestrator can read and search freely, but stops and asks you before it changes a file or runs a command that could change anything.' },
                   ] as DropdownOption[]}
                   onChange={selectAccess}
                   ariaLabel="Orchestrator agent access"
@@ -1859,50 +1962,23 @@ export default function ChatModePanel() {
                   boundarySelector=".chat-mode-panel"
                 />
               </div>
-              <details ref={taskLimitsRef} className="chat-mode-task-limits">
-                <summary title="Optional resource budgets for this conversation">
-                  <span className="chat-mode-task-limits-icon" aria-hidden="true">⚙</span>
-                  <span>Task limits</span>
-                  <span className="chat-mode-task-limits-chevron" aria-hidden="true" />
-                </summary>
-                <div className="chat-mode-task-limits-panel">
-                  <div className="chat-mode-task-limits-heading">
-                    <div>
-                      <strong>Task limits</strong>
-                      <span>Control how much context and output this conversation can use.</span>
-                    </div>
-                    <button type="button" className="chat-mode-task-test" disabled={testingTools || !thread} onClick={async () => {
-                      setTestingTools(true);
-                      try {
-                        const report = await invoke<string>('ai_agent_probe', { provider: selectedProvider, model: selectedModel, baseUrl: getProviderBaseUrl(selectedProvider) || undefined });
-                        showToast(report, 'success', 7000);
-                      } catch (error) { showToast(String(error), 'warning', 10000); }
-                      finally { setTestingTools(false); }
-                    }}>{testingTools ? 'Testing…' : 'Test provider'}</button>
-                  </div>
-                  <label className="chat-mode-limit-field chat-mode-limit-field-wide">
-                    <span>Tool protocol</span>
-                    <span className="chat-mode-select-wrap">
-                      <select value={thread?.agentBudgets?.toolMode ?? 'native'} onChange={event => { if (thread) updateChatThread(thread.id, { agentBudgets: { ...thread.agentBudgets, toolMode: event.target.value as 'native' | 'text' }, agentCheckpoint: undefined }); }}>
-                        <option value="native">Native tools</option>
-                        <option value="text">Text compatibility</option>
-                      </select>
-                      <span className="chat-mode-select-chevron" aria-hidden="true" />
-                    </span>
-                  </label>
-                  {(['outputTokens', 'contextChars', 'maxRounds'] as const).map(key => <label className="chat-mode-limit-field" key={key}>
-                    <span>{key === 'outputTokens' ? 'Output tokens' : key === 'contextChars' ? 'Context characters' : 'Tool rounds'}</span>
-                    <input type="number" min="1" value={thread?.agentBudgets?.[key] ?? ''} placeholder={String(DEFAULT_AGENT_BUDGETS[key])} aria-label={key === 'outputTokens' ? 'Output tokens' : key === 'contextChars' ? 'Context characters' : 'Tool rounds'} onChange={event => {
-                      if (!thread) return;
-                      const value = Number(event.target.value);
-                      const budgets = { ...thread.agentBudgets };
-                      if (Number.isSafeInteger(value) && value > 0) budgets[key] = value; else delete budgets[key];
-                      updateChatThread(thread.id, { agentBudgets: budgets });
-                    }} />
-                    {key === 'maxRounds' && <small>Leave blank to use the default of {DEFAULT_AGENT_BUDGETS.maxRounds} rounds.</small>}
-                  </label>)}
+              {reasoningLevels.length > 0 && (
+                <div className="chat-mode-reasoning-dropdown">
+                  <Dropdown
+                    value={selectedReasoning}
+                    options={(['default', ...reasoningLevels] as ChatReasoningEffort[]).map((level) => ({
+                      value: level,
+                      label: level === 'default' ? 'Default reasoning' : `${REASONING_LABELS[level]} reasoning`,
+                    })) as DropdownOption[]}
+                    onChange={(value) => {
+                      if (thread) updateChatThread(thread.id, { reasoningEffort: value as ChatReasoningEffort, updatedAt: Date.now() });
+                    }}
+                    ariaLabel="Reasoning level"
+                    disabled={!thread}
+                    boundarySelector=".chat-mode-panel"
+                  />
                 </div>
-              </details>
+              )}
               {modelErrors[selectedProvider] && (
                 <button
                   type="button"
@@ -1910,6 +1986,9 @@ export default function ChatModePanel() {
                   title={modelErrors[selectedProvider]}
                   onClick={() => ensureLiveModels(selectedProvider, true)}
                 >Retry connection</button>
+              )}
+              {!modelErrors[selectedProvider] && selectedModelIssue && (
+                <span className="chat-mode-provider-warning" role="status" title={selectedModelIssue}>Model unavailable</span>
               )}
             </div>
             <span className="chat-mode-composer-spacer" aria-hidden="true" />
@@ -1931,13 +2010,25 @@ export default function ChatModePanel() {
                   </svg>
                 </button>
               )}
-              {thread?.status === 'working' && <button type="button" className="chat-mode-composer-icon-btn" aria-label="Stop task" title="Stop task" onClick={() => stopChatTurn(thread.id)}><span aria-hidden="true">■</span></button>}
-              <button
-                type="submit"
-                className="chat-mode-send"
-                disabled={dictationLive || pendingSendCount > 0 || !thread || !(thread.draft.trim() || attachments.length)}
-                aria-label="Send message"
-              >
+              {thread?.status === 'working' ? (
+                <button
+                  type="button"
+                  className="chat-mode-send"
+                  onClick={() => stopChatTurn(thread.id)}
+                  aria-label="Stop task"
+                  title="Stop task"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="1.8" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="chat-mode-send"
+                  disabled={dictationLive || pendingSendCount > 0 || !thread || !(thread.draft.trim() || attachments.length)}
+                  aria-label="Send message"
+                >
                 {pendingSendCount > 0 ? (
                   <svg className="chat-mode-send-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
                     <path d="M12 2a10 10 0 0 1 10 10" />
@@ -1948,38 +2039,21 @@ export default function ChatModePanel() {
                     <polyline points="5 12 12 5 19 12" />
                   </svg>
                 )}
-              </button>
+                </button>
+              )}
             </div>
           </div>
           </form>
         </div>
       </div>
-      {expandedPreview && (
-        <div
-          className="chat-mode-image-preview-overlay"
-          onClick={() => setExpandedPreview(null)}
-          role="dialog"
-          aria-label="Image preview"
-        >
-          <div
-            className="chat-mode-image-preview-content"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <img
-              src={expandedPreview}
-              alt="Expanded preview"
-              className="chat-mode-image-preview-img"
-            />
-            <button
-              type="button"
-              className="chat-mode-image-preview-close"
-              onClick={() => setExpandedPreview(null)}
-              aria-label="Close preview"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
+      {viewer && (
+        <ImageViewer
+          images={viewer.images}
+          startIndex={viewer.index}
+          projectRoot={project?.root_path ?? null}
+          onClose={() => setViewer(null)}
+          onUseAsInput={useImageAsInput}
+        />
       )}
     </section>
   );

@@ -4,8 +4,10 @@ import {
   appendLegacyChatMessage,
   appendThreadMessage,
   chatThreadState,
+  cleanGeneratedTitle,
   clearChatThreadMessages,
   clearProjectThreadMessages,
+  closeChatThread,
   createChatThread,
   deleteChatThread,
   editChatMessage,
@@ -171,7 +173,8 @@ describe('chat thread state', () => {
       accessMode: 'auto-edits',
       reasoningEffort: 'high',
     });
-    expect(second).toMatchObject({ accessMode: 'inherit', reasoningEffort: 'default' });
+    // Full access is the default for a new conversation.
+    expect(second).toMatchObject({ accessMode: 'full-access', reasoningEffort: 'default' });
   });
 
   it('rejects messages for unknown threads and updates the owning thread status', () => {
@@ -291,6 +294,55 @@ describe('chat thread state', () => {
     expect(get(chatThreadState).threadsByProject['project-a'].map((thread) => thread.id)).toEqual([first.id, third.id]);
   });
 
+  it('opens a fresh thread with the same chat settings when closing the last thread', () => {
+    const last = createChatThread('project-a', {
+      title: 'Last conversation',
+      provider: 'ollama',
+      model: 'qwen3',
+      accessMode: 'inherit',
+      reasoningEffort: 'high',
+    }, 100);
+
+    expect(closeChatThread(last.id)).toBe(true);
+
+    const state = get(chatThreadState);
+    const threads = state.threadsByProject['project-a'];
+    expect(threads).toHaveLength(1);
+    expect(threads[0].id).not.toBe(last.id);
+    expect(threads[0]).toMatchObject({
+      title: 'New thread',
+      provider: 'ollama',
+      model: 'qwen3',
+      accessMode: 'inherit',
+      reasoningEffort: 'high',
+    });
+    expect(state.activeThreadByProject['project-a']).toBe(threads[0].id);
+    expect(state.messagesByThread[last.id]).toBeUndefined();
+  });
+
+  it('switches to a remaining thread instead of creating a replacement when closing one of several', () => {
+    const first = createChatThread('project-a', { title: 'First' }, 100);
+    const second = createChatThread('project-a', { title: 'Second' }, 200);
+    selectChatThread('project-a', first.id);
+
+    expect(closeChatThread(first.id)).toBe(true);
+    expect(get(chatThreadState).threadsByProject['project-a'].map((thread) => thread.id)).toEqual([second.id]);
+    expect(get(chatThreadState).activeThreadByProject['project-a']).toBe(second.id);
+  });
+
+  it('carries the deleted active thread provider and model into the next new thread', () => {
+    const first = createChatThread('project-a', { title: 'First', provider: 'openrouter', model: 'openai/gpt-5' }, 100);
+    const second = createChatThread('project-a', { title: 'Second', provider: 'ollama', model: 'qwen3' }, 200);
+    selectChatThread('project-a', first.id);
+
+    expect(closeChatThread(first.id)).toBe(true);
+    expect(get(chatThreadState).activeThreadByProject['project-a']).toBe(second.id);
+
+    const next = createChatThread('project-a', {}, 300);
+    expect(next).toMatchObject({ provider: 'openrouter', model: 'openai/gpt-5' });
+    expect(get(chatThreadState).pendingNewThreadSettingsByProject).toEqual({});
+  });
+
   it('keeps file attachments on the user message in the selected thread', () => {
     const thread = createChatThread('project-a', {}, 100);
     appendThreadMessage({
@@ -349,6 +401,63 @@ describe('chat thread state', () => {
     expect(get(chatThreadState).threadsByProject['project-a'][0].title).not.toBe('Review the authentication flow');
   });
 
+  it('names the thread from its first message when the AI reply cleans down to nothing', async () => {
+    // The screenshot bug: a reply that opens with a newline left the old
+    // first-line cleanup with an empty string, and the thread kept the
+    // placeholder for good.
+    invoke.mockResolvedValue('\nAuth review plan');
+    const thread = createChatThread('project-a', { provider: 'ollama' }, 100);
+    appendThreadMessage({
+      id: 'message-a',
+      threadId: thread.id,
+      type: 'user',
+      role: 'user',
+      text: '  Review the authentication flow\nwith extra detail',
+      ts: 110,
+    });
+
+    await vi.waitFor(() => {
+      expect(get(chatThreadState).threadsByProject['project-a'][0].title).toBe('Auth review plan');
+    });
+  });
+
+  it('falls back to the local summary when the provider cannot answer', async () => {
+    invoke.mockRejectedValue(new Error('429 rate limited'));
+    const thread = createChatThread('project-a', { provider: 'ollama' }, 100);
+    appendThreadMessage({
+      id: 'message-a',
+      threadId: thread.id,
+      type: 'user',
+      role: 'user',
+      text: '  Review the authentication flow\nwith extra detail',
+      ts: 110,
+    });
+
+    await vi.waitFor(() => {
+      expect(get(chatThreadState).threadsByProject['project-a'][0].title).toBe('Review the authentication flow');
+    });
+  });
+
+  it('never leaves a thread on the placeholder once it has a first message', async () => {
+    // An agent-session provider is not a direct API provider for this path, so
+    // the AI call is skipped entirely — the name still has to be real.
+    invoke.mockResolvedValue('');
+    const thread = createChatThread('project-a', { provider: 'claude' as never }, 100);
+    appendThreadMessage({
+      id: 'message-a',
+      threadId: thread.id,
+      type: 'user',
+      role: 'user',
+      text: 'Can you go through this application and see what is working?',
+      ts: 110,
+    });
+
+    await vi.waitFor(() => {
+      expect(get(chatThreadState).threadsByProject['project-a'][0].title)
+        .toBe('Can you go through this application and see what is working?');
+    });
+  });
+
   it('keeps the AI summary when a message is edited', async () => {
     invoke.mockResolvedValue('Auth flow review');
     const thread = createChatThread('project-a', { provider: 'ollama' }, 100);
@@ -403,5 +512,37 @@ describe('chat thread state', () => {
       ts: 120,
     }, thread.id)).toBeNull();
     expect(get(chatThreadState).threadsByProject['project-a']).toEqual([]);
+  });
+});
+
+describe('cleanGeneratedTitle', () => {
+  it('takes the first line with something on it, not the first line', () => {
+    expect(cleanGeneratedTitle('\nSelloCRM project review')).toBe('SelloCRM project review');
+    expect(cleanGeneratedTitle('   \n\n  SelloCRM project review  ')).toBe('SelloCRM project review');
+  });
+
+  it('drops a reasoning preamble instead of titling the thread with it', () => {
+    expect(cleanGeneratedTitle('<think>the user wants a short title</think>\nSelloCRM review'))
+      .toBe('SelloCRM review');
+    // Unclosed: the reply is reasoning all the way down and holds no title.
+    expect(cleanGeneratedTitle('<think>still deciding what to call this')).toBe('');
+  });
+
+  it('unwraps the labels and quotes models add despite being told not to', () => {
+    expect(cleanGeneratedTitle('Title: Auth flow review')).toBe('Auth flow review');
+    expect(cleanGeneratedTitle('"Auth flow review"')).toBe('Auth flow review');
+    expect(cleanGeneratedTitle('Title: "Auth flow review"')).toBe('Auth flow review');
+    expect(cleanGeneratedTitle('`Auth flow review`.')).toBe('Auth flow review');
+    expect(cleanGeneratedTitle('**Auth flow review**')).toBe('Auth flow review');
+  });
+
+  it('returns nothing for a reply with no title in it, so the caller can fall back', () => {
+    expect(cleanGeneratedTitle('')).toBe('');
+    expect(cleanGeneratedTitle('\n\n  ')).toBe('');
+  });
+
+  it('truncates an over-long title', () => {
+    expect(cleanGeneratedTitle('word '.repeat(40)).length).toBeLessThanOrEqual(70);
+    expect(cleanGeneratedTitle('word '.repeat(40)).endsWith('…')).toBe(true);
   });
 });
