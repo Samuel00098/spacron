@@ -177,6 +177,18 @@ describe('chat thread state', () => {
     expect(second).toMatchObject({ accessMode: 'full-access', reasoningEffort: 'default' });
   });
 
+  it('inherits the active thread provider and model for a new thread', () => {
+    const first = createChatThread('project-a', {
+      title: 'First',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
+    }, 100);
+
+    const next = createChatThread('project-a', {}, 200);
+
+    expect(next).toMatchObject({ provider: first.provider, model: first.model });
+  });
+
   it('rejects messages for unknown threads and updates the owning thread status', () => {
     const thread = createChatThread('project-a', {}, 100);
     expect(

@@ -584,7 +584,11 @@ export function createChatThread(
   overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
   now = Date.now(),
 ): ChatThread {
-  const pendingSettings = getPendingNewThreadSettings(projectId);
+  const state = get(chatThreadState);
+  const pendingSettings = state.pendingNewThreadSettingsByProject?.[projectId] ?? null;
+  const activeThreadId = state.activeThreadByProject[projectId] ?? null;
+  const activeThread = (state.threadsByProject[projectId] ?? []).find((thread) => thread.id === activeThreadId) ?? null;
+  const inheritedSettings = pendingSettings ?? activeThread;
   const id = `chat-thread-${now}-${Math.random().toString(36).slice(2, 8)}`;
   const thread: ChatThread = {
     id,
@@ -592,8 +596,8 @@ export function createChatThread(
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
-    provider: overrides.provider !== undefined ? overrides.provider : pendingSettings?.provider ?? null,
-    model: overrides.model !== undefined ? overrides.model : pendingSettings?.model ?? null,
+    provider: overrides.provider !== undefined ? overrides.provider : inheritedSettings?.provider ?? null,
+    model: overrides.model !== undefined ? overrides.model : inheritedSettings?.model ?? null,
     // Full access is the default: the orchestrator edits and runs commands
     // without a card per step. "Ask before edit" stays one click away.
     accessMode: overrides.accessMode ?? 'full-access',
