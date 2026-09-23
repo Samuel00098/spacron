@@ -1960,7 +1960,7 @@ export default function ChatModePanel() {
                   void submit();
                 }
               }}
-              placeholder={pendingRequest ? 'Answer the request above…' : (project ? 'Talk to the orchestrator…' : 'Select a project first')}
+              placeholder={pendingRequest ? 'Answer the request above…' : (project ? `What’s next for ${project.name}?` : 'Select a project first')}
               disabled={!project || Boolean(pendingRequest)}
               aria-label="Message the orchestrator"
             />
