@@ -143,6 +143,10 @@ export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges',
 // downloads a browser on first run. None of that should happen to a user who
 // never asked for it, so this is opt-in rather than opt-out.
 export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
+// Computer use (docs/computer-use.md): agents may ask to see the user's desktop
+// windows. OFF by default, and while off the tools are not even listed to
+// agents. Even when on, every window needs the user's per-agent permission.
+export const computerUse = persistentWritable('computerUse', false);
 
 // ─── Failover on usage limits ───────────────────────────────────────────────
 // When an agent is about to run out of usage mid-feature, move the unfinished

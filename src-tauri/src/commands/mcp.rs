@@ -324,3 +324,36 @@ pub async fn mcp_call_emulator_tool(
     }
     crate::mcp::call_emulator_tool(&name, args).await
 }
+
+/// Whether computer use can run on this platform at all (Windows only for now).
+/// The Settings row uses it to explain itself instead of offering a switch that
+/// would do nothing.
+#[tauri::command]
+pub fn mcp_computer_use_supported() -> bool {
+    crate::desktop::supported()
+}
+
+/// The user's `Allow computer use` switch.
+///
+/// Off by default and pushed on startup. Turning it off withdraws every grant
+/// and declines any open permission dialog; either way connected agents are
+/// told to re-read `tools/list`, so the tools appear or vanish without a restart.
+#[tauri::command]
+pub fn mcp_set_computer_use(handle: State<'_, McpServer>, enabled: bool) -> Result<(), String> {
+    let handle = handle.get()?;
+    handle.desktop.set_enabled(enabled);
+    handle.notify_tools_changed();
+    Ok(())
+}
+
+/// The user's answer to a computer-use permission dialog. The agent's tool call
+/// is blocked on this (see `desktop::DesktopState::ensure`).
+#[tauri::command]
+pub fn mcp_desktop_grant_respond(
+    handle: State<'_, McpServer>,
+    request_id: String,
+    allow: bool,
+) -> Result<(), String> {
+    handle.get()?.desktop.respond(&request_id, allow);
+    Ok(())
+}

@@ -192,6 +192,9 @@ webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7.2"
 webview2-com = "0.38.2"
+# Window capture for computer use (src/desktop). Windows-only for now; see
+# docs/computer-use.md for why macOS and Linux come later.
+xcap = "0.9.8"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -206,4 +209,10 @@ windows = { version = "0.61", features = [
     # (commands/keep_awake.rs).
     "Win32_System_Power",
     "Win32_System_Registry",
+    # Computer use (src/desktop): window enumeration, UI Automation, DPI.
+    "Win32_Graphics_Dwm",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
 ] }

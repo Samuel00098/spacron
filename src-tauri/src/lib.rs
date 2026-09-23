@@ -1,4 +1,5 @@
 mod commands;
+mod desktop;
 mod error;
 mod lsp;
 mod mcp;
@@ -229,7 +230,17 @@ pub fn run() {
                 })
             };
 
-            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn, report_fn) {
+            // An agent asking to see the desktop. The tool call blocks until
+            // the frontend's dialog answers through `mcp_desktop_grant_respond`
+            // (or times out) — see `desktop::DesktopState::ensure`.
+            let desktop_grant_fn: desktop::GrantEmitFn = {
+                let ah = app_handle.clone();
+                Arc::new(move |request| {
+                    let _ = ah.emit("mcp:desktop-grant-request", request);
+                })
+            };
+
+            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn, report_fn, desktop_grant_fn) {
                 Ok((handle, port)) => {
                     app.manage(mcp::McpServer(Some(handle)));
                     eprintln!("MCP server started on port {}", port);
@@ -496,6 +507,9 @@ pub fn run() {
             commands::mcp::mcp_set_agent_presets,
             commands::mcp::mcp_set_assistant_names,
             commands::mcp::mcp_deliver_respond,
+            commands::mcp::mcp_computer_use_supported,
+            commands::mcp::mcp_set_computer_use,
+            commands::mcp::mcp_desktop_grant_respond,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

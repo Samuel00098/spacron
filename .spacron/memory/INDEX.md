@@ -84,6 +84,7 @@ short enough that it says what the note is *about*, never what it says.
 ## Security & confinement
 
 - [path-confinement-layers](path-confinement-layers.md) — the two confinement steps, and which one does not normalize `..`
+- [computer-use-grants](computer-use-grants.md) — the blocking grant handshake between the desktop MCP tools and the permission dialog
 
 ## Build, release & repo hygiene
 

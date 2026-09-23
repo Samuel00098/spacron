@@ -56,6 +56,8 @@ import {
 import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
 import { initMcpBridge } from '$lib/stores/mcpBridge';
+import { initComputerUse } from '$lib/stores/computerUse';
+import DesktopGrantHost from '$lib/components/shared/DesktopGrantHost';
 import { applyUiFontSize } from '$lib/services/ui-typography';
 import { ensureWindowUsable, isTauriRuntime } from '$lib/utils/tauri';
 import { isModalOpen } from '$lib/react/useModalFocus';
@@ -131,6 +133,9 @@ export default function App() {
       // only that invalid geometry and leave normal user sizing untouched.
       void ensureWindowUsable();
       initMcpBridge();
+      // After the bridge: pushes the computer-use switch to the MCP server and
+      // listens for the permission requests `DesktopGrantHost` answers.
+      initComputerUse();
       // Tokens live in the OS keychain; load them into session memory so the
       // remote manager can prefill edit forms and reconnect without waiting.
       void hydrateRemoteTokens();
@@ -276,6 +281,7 @@ export default function App() {
       <AgentNotifications />
       <InboxPanel />
       <Toasts />
+      <DesktopGrantHost />
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}
 

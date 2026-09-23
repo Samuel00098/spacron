@@ -1,6 +1,6 @@
 # Computer use — design
 
-Status: **DESIGN — phase 0 spike done (2026-09-23), see results below.** Written 2026-09-23.
+Status: **Phase 1 (read-only, Windows) built 2026-09-23 — see "Phase 1 — as built".** Written 2026-09-23.
 Companion to [agent-browser.md](agent-browser.md). Settles the "control my
 laptop" pillar that [browser-pillar-spike.md](browser-pillar-spike.md) split off
 and [orca-feature-gap.md](orca-feature-gap.md) #45 lists as "big, and a security
@@ -320,6 +320,40 @@ Not covered, and to check in phase 1–2 before relying on it:
 - 150%/200% scaling, multiple monitors with mixed DPI, and real apps (Notepad,
   Office, Electron apps, browsers) for UIA coverage.
 - macOS.
+
+## Phase 1 — as built (2026-09-23)
+
+CLI agents only; the orchestrator is phase 3.
+
+| Piece | Where |
+|---|---|
+| Handlers, grants, formatting, tool schemas | `src-tauri/src/desktop/mod.rs` |
+| Windows backend (enumeration, cached UIA walk, `xcap` capture) | `src-tauri/src/desktop/win.rs` |
+| MCP wiring (listed only while on; identity; dispatch) | `src-tauri/src/mcp/mod.rs` (`tools/list`, `handle_tool_call`) |
+| Commands | `mcp_computer_use_supported`, `mcp_set_computer_use`, `mcp_desktop_grant_respond` in `commands/mcp.rs` |
+| Setting + push + request queue | `computerUse` in `stores/settings.ts`; `stores/computerUse.ts` |
+| Permission dialog | `components/shared/DesktopGrantHost.tsx` (mounted in `App.tsx`) |
+| Settings row | Settings → Agents → Computer use |
+
+Differences from the design above:
+
+- **Grants are per session, not per turn.** A CLI agent has no turn boundary
+  Rust can see; "this turn" arrives with the orchestrator in phase 3.
+- **Two grant kinds only:** the window list, and one window. The dialog is
+  Allow / Don't allow; the multi-window picker waits for phase 2, where scope
+  matters more.
+- **A declined request is remembered for the session**, so an agent cannot
+  re-raise the same dialog in a loop.
+- **Callers must be identified** — by their connection token, or by passing
+  `SPACRON_AGENT_TOKEN` as `agent_token`. An anonymous call is refused, because
+  a grant has to belong to a session that can end.
+- **No element refs yet.** `desktop_ui_tree` prints each element's centre as
+  window-normalized `@x,y`; refs that act tools can target come with phase 2.
+- **Also hidden:** the shell's own windows (desktop, taskbar) and tool windows
+  (overlays), matching what Alt-Tab shows.
+- Tree walks are bounded (default depth 12 / 600 elements / 8 s; `desktop_find`
+  40 / 5000 / 12 s) and UIA calls time out after 2 s connect / 5 s transaction,
+  so a hung app cannot stall an agent.
 
 ## Testing
 

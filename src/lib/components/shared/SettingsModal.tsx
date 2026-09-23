@@ -10,6 +10,7 @@ import {
   aiCompletionProvider,
   aiGhostTextEnabled,
   agentBrowserTools,
+  computerUse,
   mcpServers,
   agentWorktrees,
   aiProvider,
@@ -108,6 +109,7 @@ import { requestNotificationPermission, showToast } from '$lib/stores/notificati
 import { ChatGptSignIn } from './ChatGptSignIn';
 import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDownloading, updateProgress } from '$lib/stores/updater';
 import { get } from '$lib/stores/storeCompat';
+import { computerUseSupported } from '$lib/stores/computerUse';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
@@ -280,11 +282,23 @@ function formatBytes(bytes: number): string {
   return `${value >= 100 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
 }
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+function Toggle({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
       className={classNames('settings-toggle', checked && 'active')}
+      disabled={disabled}
+      style={disabled ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
       onClick={() => onChange(!checked)}
       aria-label={label}
       aria-pressed={checked}
@@ -1507,6 +1521,18 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAgentWorktrees = useStore(agentWorktrees);
   const currentAutoStage = useStore(autoStageAgentChanges);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
+  const currentComputerUse = useStore(computerUse);
+  // Null until the backend answers; the row stays disabled until then.
+  const [computerUseAvailable, setComputerUseAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void computerUseSupported().then((ok) => {
+      if (live) setComputerUseAvailable(ok);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   const currentAgentFailover = useStore(agentFailover);
   const currentFailoverHeadroom = useStore(agentFailoverHeadroomPercent);
   const currentFailoverCrossProvider = useStore(agentFailoverCrossProvider);
@@ -3022,6 +3048,31 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       label="Toggle agent browser tools"
                       checked={currentAgentBrowserTools}
                       onChange={agentBrowserTools.set}
+                    />
+                  </SettingRow>
+                </Section>
+
+                <Section title="Computer use">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Let agents look at the other apps on your computer: list your open windows,
+                    read what is in one, and take a screenshot of it. Agents can look but not click
+                    or type yet. Every agent asks you first, for each window, and its permission
+                    ends with its session. Spacron's own windows, password managers and Windows
+                    security prompts are never shown to an agent.
+                  </p>
+                  <SettingRow
+                    title="Allow computer use"
+                    detail={
+                      computerUseAvailable === false
+                        ? 'Available on Windows only for now. macOS support is planned.'
+                        : 'While this is off, agents are not offered the desktop tools at all. Turning it off also withdraws every permission already given.'
+                    }
+                  >
+                    <Toggle
+                      label="Toggle computer use"
+                      checked={currentComputerUse && computerUseAvailable === true}
+                      disabled={computerUseAvailable !== true}
+                      onChange={computerUse.set}
                     />
                   </SettingRow>
                 </Section>

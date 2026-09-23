@@ -242,6 +242,8 @@ pub struct McpServerHandle {
     pub assistant_names: Arc<Mutex<Vec<String>>>,
     /// Names handed out but not yet registered. See `ServerState`.
     reserved_names: Arc<Mutex<Vec<NameReservation>>>,
+    /// Computer-use switch and grants, shared with the server. See `crate::desktop`.
+    pub desktop: Arc<crate::desktop::DesktopState>,
 }
 
 impl McpServerHandle {
@@ -279,6 +281,8 @@ impl McpServerHandle {
         // A dead session's token must stop authenticating: it was written into
         // a config file that outlives the launch, and nothing else revokes it.
         self.forget_agent_session(session_id);
+        // Computer-use grants end with the session that was given them.
+        self.desktop.forget_session(session_id);
         let _ = self.notify_tx.send(());
     }
 
@@ -456,6 +460,7 @@ pub fn start(
     spawn_fn: SpawnFn,
     deliver_emit_fn: DeliverEmitFn,
     report_fn: ReportFn,
+    desktop_grant_fn: crate::desktop::GrantEmitFn,
 ) -> Result<(McpServerHandle, u16), String> {
     // Bind now, synchronously, and *keep* the socket. This used to probe with a
     // throwaway listener, drop it, and rebind for real inside the spawned task
@@ -487,8 +492,10 @@ pub fn start(
     // launch would be a config file authenticating as an agent that no longer
     // exists. These die with the process, and every agent gets a fresh one.
     let agent_tokens: AgentTokens = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let desktop = Arc::new(crate::desktop::DesktopState::new(desktop_grant_fn));
 
     let server_state = Arc::new(ServerState {
+        desktop: desktop.clone(),
         registry: registry.clone(),
         notify_tx: notify_tx.clone(),
         send_tx,
@@ -588,6 +595,7 @@ pub fn start(
         agent_presets,
         assistant_names,
         reserved_names,
+        desktop,
     };
 
     Ok((handle, actual_port))
@@ -641,6 +649,8 @@ struct ServerState {
     /// Live SSE clients, so `POST /message` can deliver a JSON-RPC response to
     /// the stream the requesting client is listening on. See [`SseSessions`].
     sse_sessions: SseSessions,
+    /// Computer use: the global switch and per-session grants.
+    desktop: Arc<crate::desktop::DesktopState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1863,10 +1873,14 @@ async fn dispatch_message(
             // `notifications/tools/list_changed` so connected clients come back
             // here for the updated list.
             let presets = state.agent_presets.lock().await.clone();
-            Json(JsonRpcResponse::success(
-                id,
-                serde_json::json!({ "tools": all_tools(&presets) }),
-            ))
+            let mut tools = all_tools(&presets);
+            // Computer use is listed only while the user has it switched on, so
+            // an agent cannot even ask for it otherwise. Toggling it pings
+            // `tools/list_changed` (see `mcp_set_computer_use`).
+            if state.desktop.available() {
+                tools.extend(crate::desktop::mcp_tools());
+            }
+            Json(JsonRpcResponse::success(id, serde_json::json!({ "tools": tools })))
         }
 
         "tools/call" => {
@@ -2396,6 +2410,42 @@ async fn handle_tool_call(
         "emulator_text" => emulator_text(id, &params).await,
         "emulator_rotate" => emulator_rotate(id, &params).await,
         "emulator_logcat" => emulator_logcat(id, &params).await,
+
+        // ── Computer use ─────────────────────────────────────────────────
+        // Grants belong to a session, so an anonymous caller is refused rather
+        // than handed a grant nobody can revoke. Identity is resolved the same
+        // way `report_status` does it: connection token first, then the
+        // `agent_token` argument.
+        name if crate::desktop::is_desktop_tool(name) => {
+            let args = tool_args(&params);
+            let session_id = caller.session_id.or_else(|| {
+                let claimed = args.and_then(|a| a.get("agent_token")).and_then(|v| v.as_str())?.trim();
+                if claimed.is_empty() {
+                    return None;
+                }
+                state.agent_tokens.lock().ok()?.get(claimed).copied().flatten()
+            });
+            let Some(session_id) = session_id else {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Computer use needs to know which agent is asking. Pass your SPACRON_AGENT_TOKEN \
+                     environment variable as 'agent_token'.",
+                ));
+            };
+            let agent_name = state
+                .registry
+                .lock()
+                .await
+                .values()
+                .find(|e| e.session_id == session_id)
+                .map(|e| e.name.clone());
+            let desktop_caller = crate::desktop::DesktopCaller { session_id, agent_name };
+            match crate::desktop::call_tool(&state.desktop, desktop_caller, name, args).await {
+                Ok(result) => Json(JsonRpcResponse::success(id, result)),
+                Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+            }
+        }
 
         _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: '{}'", tool_name))),
     }
@@ -3513,6 +3563,7 @@ mod tests {
             assistant_names: Arc::new(Mutex::new(Vec::new())),
             reserved_names: Arc::new(Mutex::new(Vec::new())),
             sse_sessions: Arc::new(DashMap::new()),
+            desktop: Arc::new(crate::desktop::DesktopState::new(Arc::new(|_| {}))),
         }
     }
 
@@ -4098,6 +4149,7 @@ mod tests {
     fn boot_with_frontend(accept: bool) -> (String, String, McpServerHandle, SeenDeliveries) {
         let seen: SeenDeliveries = Arc::new(std::sync::Mutex::new(Vec::new()));
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (grant_tx, mut grant_rx) = mpsc::unbounded_channel::<String>();
         let recorder = seen.clone();
 
         let (handle, port) = start(
@@ -4112,8 +4164,20 @@ mod tests {
                 let _ = tx.send(request_id.to_string());
             }),
             Arc::new(|_| {}),
+            // Computer-use permission requests: the stand-in frontend declines
+            // every one, so a test never shows a real window to anything.
+            Arc::new(move |req: &crate::desktop::GrantRequest| {
+                let _ = grant_tx.send(req.request_id.clone());
+            }),
         )
         .expect("server should start");
+
+        let desktop = handle.desktop.clone();
+        tokio::spawn(async move {
+            while let Some(id) = grant_rx.recv().await {
+                desktop.respond(&id, false);
+            }
+        });
 
         let pending = handle.pending_sends.clone();
         tokio::spawn(async move {
@@ -4299,6 +4363,88 @@ mod tests {
     //
     // Codex CLI speaks only this transport, so these cover the path that makes
     // it — and Gemini CLI, droid, opencode — able to connect at all.
+
+    async fn post_mcp(base: &str, token: &str, body: serde_json::Value) -> serde_json::Value {
+        reqwest::Client::new()
+            .post(format!("{base}/mcp?token={token}"))
+            .header("Accept", "application/json, text/event-stream")
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    fn listed_tool_names(body: &serde_json::Value) -> Vec<String> {
+        body["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn desktop_tools_are_listed_only_while_computer_use_is_on() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        let list = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+
+        let off = listed_tool_names(&post_mcp(&base, &token, list.clone()).await);
+        assert!(!off.iter().any(|n| n.starts_with("desktop_")), "listed while off: {off:?}");
+
+        handle.desktop.set_enabled(true);
+        let on = listed_tool_names(&post_mcp(&base, &token, list).await);
+        // Only where the platform can actually do it.
+        assert_eq!(on.iter().any(|n| n == "desktop_list_windows"), crate::desktop::supported());
+    }
+
+    #[tokio::test]
+    async fn desktop_tools_refuse_an_unidentified_caller() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.desktop.set_enabled(true);
+
+        let body = post_mcp(
+            &base,
+            &token,
+            serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "desktop_list_windows", "arguments": {} }
+            }),
+        )
+        .await;
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("agent_token"), "expected an identity error, got: {body}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_declined_desktop_grant_reaches_the_agent_as_an_error() {
+        let (base, token, handle) = boot();
+        wait_until_listening(&base, &token).await;
+        handle.desktop.set_enabled(true);
+        let agent_token = handle.mint_agent_token();
+        assert!(handle.bind_agent_token(&agent_token, 7));
+
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "name": "desktop_list_windows",
+                "arguments": { "agent_token": agent_token, "reason": "test" }
+            }
+        });
+        let body = post_mcp(&base, &token, call.clone()).await;
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("declined"), "expected the stand-in frontend's no, got: {body}");
+
+        // Remembered for the session: the second call is refused without a
+        // new dialog (the stand-in would answer, but nothing should ask it).
+        let again = post_mcp(&base, &token, call).await;
+        assert!(again["error"]["message"].as_str().unwrap_or_default().contains("declined"));
+    }
 
     #[tokio::test]
     async fn the_streamable_endpoint_answers_in_the_body() {
