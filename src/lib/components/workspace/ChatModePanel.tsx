@@ -1698,13 +1698,7 @@ export default function ChatModePanel() {
             )}
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
-                <h2 className="chat-mode-empty-brand">Spacron</h2>
-                <p className="chat-mode-empty-subtitle">{project ? `What’s next for ${project.name}?` : 'What’s next for your project?'}</p>
-                <div className="chat-mode-suggestions">
-                  {['What is the current project status?', 'Review the current changes', 'Build this feature'].map((suggestion) => (
-                    <button key={suggestion} type="button" onClick={() => updateDraft(suggestion)}>{suggestion}</button>
-                  ))}
-                </div>
+                <h2 className="chat-mode-empty-heading">{project ? `What’s next for ${project.name}?` : 'What’s next for your project?'}</h2>
               </div>
             ) : messages.map((message, messageIndex) => {
               if (message.type === 'completion') {

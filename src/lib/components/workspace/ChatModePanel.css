@@ -241,8 +241,8 @@
   padding-top: 16px;
 }
 
-/* Keep the empty-state welcome and composer in one flex stack. Their shared
-   width and shared centering reference means the welcome moves with the
+/* Keep the empty-state heading and composer in one flex stack. Their shared
+   width and shared centering reference means the heading moves with the
    composer when the available room changes. */
 .app-shell .chat-mode-content-stack {
   display: flex;
@@ -256,7 +256,7 @@
   justify-content: center;
 }
 
-/* An empty room is a landing state: keep the prompt under the welcome copy
+/* An empty room is a landing state: keep the composer under the heading
    instead of making the composer feel detached from the room. Once a thread
    has messages, the body returns to a normal scrolling transcript. */
 .app-shell .chat-mode-body.is-empty {
@@ -329,54 +329,19 @@
 
 
 
-.app-shell .chat-mode-empty h2,
-.app-shell .chat-mode-empty-brand {
-  margin: 0 0 6px;
+.app-shell .chat-mode-empty-heading {
+  max-width: 100%;
+  margin: 0;
   color: var(--text-primary);
   font-family: 'Inter', var(--font-sans) !important;
-  font-size: 26px !important;
-  font-weight: 800 !important;
+  font-size: clamp(26px, 3vw, 34px) !important;
+  font-weight: 700 !important;
   letter-spacing: -0.035em;
-  line-height: 1;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-.app-shell .chat-mode-empty p,
-.app-shell .chat-mode-empty-subtitle {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 450;
-  letter-spacing: -0.01em;
-}
-
-.app-shell .chat-mode-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 7px;
-  margin-top: 18px;
-}
-
-.app-shell .chat-mode-suggestions button {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--bg-secondary) 58%, transparent);
-  color: var(--text-secondary);
-  font: inherit;
-}
-
-.app-shell .chat-mode-suggestions button {
-  padding: 7px 9px;
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.app-shell .chat-mode-suggestions button:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  color: var(--text-primary);
 }
 
 .app-shell .chat-mode-message {

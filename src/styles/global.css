@@ -695,7 +695,7 @@ body {
    actual editor/terminal output and authored document content keep their own
    typography controls. The exclusions are descendants as well as roots so a
    nested span cannot accidentally pick the application size back up. */
-:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-brand):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
+:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--font-sans) !important;
   font-size: inherit !important;
   font-weight: 400 !important;
@@ -705,7 +705,7 @@ body {
 
 /* Retain a small amount of hierarchy without returning to the heavy 600-800
    weights that made labels look wide and crowded. */
-:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-brand) {
+:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-heading) {
   font-weight: 500 !important;
 }
 
