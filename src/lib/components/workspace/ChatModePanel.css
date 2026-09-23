@@ -335,7 +335,7 @@
   color: var(--text-primary);
   font-family: 'Inter', var(--font-sans) !important;
   font-size: clamp(26px, 3vw, 34px) !important;
-  font-weight: 600 !important;
+  font-weight: 500 !important;
   letter-spacing: -0.035em;
   line-height: 1.15;
   overflow-wrap: anywhere;
