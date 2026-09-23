@@ -1,6 +1,6 @@
 # Computer use — design
 
-Status: **Phase 1 (read-only, Windows) built 2026-09-23 — see "Phase 1 — as built".** Written 2026-09-23.
+Status: **Phases 1–4 built on Windows (2026-09-23); macOS (phase 5) not started. See the "as built" sections.** Written 2026-09-23.
 Companion to [agent-browser.md](agent-browser.md). Settles the "control my
 laptop" pillar that [browser-pillar-spike.md](browser-pillar-spike.md) split off
 and [orca-feature-gap.md](orca-feature-gap.md) #45 lists as "big, and a security
@@ -425,6 +425,34 @@ window, the permission dialogs, the Settings panel, and the stop shortcut
 (unit-tested with a stand-in; the real `RegisterHotKey` path has not been
 pressed by a person). Also untested: elevated targets, multiple monitors,
 150%+ scaling.
+
+## Phase 3 — as built (2026-09-23)
+
+The chat has the same ten `desktop_*` tools, through `mcp_call_desktop_tool`,
+which calls the same `desktop::call_tool` as MCP — same dialogs, lease, checks
+and log.
+
+- **Offered only while computer use is on** (and the platform supports it):
+  `setDesktopToolsAvailable` in `brain-tools.ts` gates the prompt tool list,
+  the native tool list and `brainToolProfile`. Ask/plan modes get the see
+  tools; only full mode gets the act tools.
+- **Per-turn identity.** Each turn calls with `chatId = "<thread>:<turn id>"`,
+  so a permission given during one reply cannot carry into the next, and the
+  store's turn `finally` calls `mcp_desktop_end_chat_turn`.
+- **The permission dialog is the approval.** Desktop tools never raise the
+  normal approval card; they are not in the store's `mutating` list.
+- **Taint rule.** After `desktop_ui_tree` or `desktop_find` in a turn, results
+  come wrapped in `<untrusted_app_content>`, and `write_file`, `edit_file` and
+  non-read-only `run_command` ask for the rest of the turn in every access
+  mode. A conversation "always allow" rule does not cover them.
+- **No vision:** screenshots are written to `%TEMP%/spacron-screenshots/` and
+  the model is told to read the tree instead (same contract as
+  `emulator_screenshot`).
+
+Four places must agree when a desktop tool is added (as with the emulator
+tools): `desktop::SEE_TOOLS`/`ACT_TOOLS` (Rust), `brain-tools.ts` (name union,
+defs, sets, profile), `agent-transport.ts` (`definitions`), and the executor
+case in `stores/orchestrator.ts`.
 
 ## Testing
 

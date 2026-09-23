@@ -16,10 +16,11 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { writable } from './storeCompat';
+import { get, writable } from './storeCompat';
 import { computerUse, computerUseBlockedApps } from './settings';
 import { playNudge } from '$lib/services/nudge';
 import { showToast } from './notification';
+import { setDesktopToolsAvailable } from '$lib/services/orchestrator/brain-tools';
 
 /** Mirrors `desktop::GrantRequest` in Rust (camelCase over the wire). */
 export interface DesktopGrantRequest {
@@ -47,10 +48,19 @@ export function initComputerUse(): void {
 
   // Fires immediately on subscribe, so this is also the startup push: the
   // server boots with the switch off and learns the saved value here.
+  // The chat's tools follow the same switch, and only where the platform can
+  // actually do it; until that is known they stay off.
+  let supported = false;
+  void computerUseSupported().then((ok) => {
+    supported = ok;
+    setDesktopToolsAvailable(ok && get(computerUse) === true);
+  });
+
   computerUse.subscribe((on) => {
     invoke('mcp_set_computer_use', { enabled: on === true }).catch((e) => {
       console.error('[computer-use] Failed to publish the setting to the MCP server:', e);
     });
+    setDesktopToolsAvailable(supported && on === true);
     // Rust declines every open request when the switch goes off; drop the
     // cards too so the dialog does not ask about something already refused.
     if (on !== true) desktopGrantQueue.set([]);

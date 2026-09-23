@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { BRAIN_TOOL_DEFS, parseBrainToolCalls, brainToolProfile, type BrainMode, type BrainToolName, type BrainToolCall, type BrainToolResult } from './brain-tools';
+import { activeBrainToolDefs, parseBrainToolCalls, brainToolProfile, type BrainMode, type BrainToolName, type BrainToolCall, type BrainToolResult } from './brain-tools';
 
 type Property = { type: string; items?: { type: string }; minimum?: number; description?: string };
 const str: Property = { type: 'string' };
@@ -8,6 +8,8 @@ const num: Property = { type: 'integer', minimum: 0 };
 const bool: Property = { type: 'boolean' };
 /** A fractional number. Screen coordinates are normalized 0.0–1.0, so `num` — which is integer-only — would reject every tap but the corners. */
 const dec: Property = { type: 'number' };
+/** A signed step count: desktop_scroll's dx/dy go negative for up and left. `num` has a floor of 0. */
+const signed: Property = { type: 'integer', minimum: -50 };
 const definitions: Record<string, { required: string[]; properties: Record<string, Property> }> = {
   read_project: { required: [], properties: { max_files: num, offset: num } },
   read_file: { required: ['path'], properties: { path: str, start_line: { type: 'integer', minimum: 1 }, line_count: num, start_char: num } },
@@ -39,12 +41,22 @@ const definitions: Record<string, { required: string[]; properties: Record<strin
   emulator_text: { required: ['target', 'text'], properties: { target: str, text: str } },
   emulator_rotate: { required: ['target'], properties: { target: str, rotation: num } },
   emulator_logcat: { required: ['target'], properties: { target: str, lines: num, filter: str } },
+  desktop_list_windows: { required: [], properties: { reason: str } },
+  desktop_ui_tree: { required: ['window'], properties: { window: str, depth: num, reason: str } },
+  desktop_find: { required: ['window'], properties: { window: str, query: str, role: str, reason: str } },
+  desktop_screenshot: { required: ['window'], properties: { window: str, reason: str } },
+  desktop_focus_window: { required: ['window'], properties: { window: str, reason: str } },
+  desktop_click: { required: ['window'], properties: { window: str, ref: str, x: dec, y: dec, button: str, double: bool, reason: str } },
+  desktop_type: { required: ['window', 'text'], properties: { window: str, text: str, ref: str, replace: bool, reason: str } },
+  desktop_key: { required: ['window', 'keys'], properties: { window: str, keys: str, reason: str } },
+  desktop_scroll: { required: ['window'], properties: { window: str, ref: str, x: dec, y: dec, dx: signed, dy: signed, reason: str } },
+  desktop_drag: { required: ['window'], properties: { window: str, from_ref: str, from_x: dec, from_y: dec, to_ref: str, to_x: dec, to_y: dec, reason: str } },
   generate_image: { required: ['prompt'], properties: { prompt: str, reference_images: { type: 'array', items: str } } },
   generate_video: { required: ['prompt'], properties: { prompt: str, reference_image: str } },
 };
 
 export function nativeTools(allowed?: ReadonlySet<BrainToolName>) {
-  return BRAIN_TOOL_DEFS
+  return activeBrainToolDefs()
     .filter((d) => !allowed || allowed.has(d.name))
     .map(d => ({ name: d.name, description: d.description,
       parameters: { type: 'object', ...definitions[d.name], additionalProperties: false } }));

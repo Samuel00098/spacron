@@ -1,11 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
 const caps = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: unknown) => cmd === 'ai_agent_capabilities' ? Promise.resolve(caps.value) : invoke(cmd, args) }));
 const listeners = vi.hoisted(() => ({ handler: null as null | ((event: { payload: { requestId: string; delta: string } }) => void), unlisten: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: (_name: string, handler: typeof listeners.handler) => { listeners.handler = handler; return Promise.resolve(listeners.unlisten); } }));
 import { AgentTransport, DEFAULT_AGENT_BUDGETS, filePage, nativeTools, validateToolCall } from './agent-transport';
-import { brainToolProfile } from './brain-tools';
+import {
+  BRAIN_DESKTOP_ACT_TOOLS,
+  BRAIN_DESKTOP_SEE_TOOLS,
+  BRAIN_READONLY_TOOLS,
+  BRAIN_WRITE_TOOLS,
+  brainToolProfile,
+  buildBrainToolsPrompt,
+  setDesktopToolsAvailable,
+} from './brain-tools';
 
 describe('native agent transport', () => {
   beforeEach(() => { invoke.mockReset(); caps.value = {}; });
@@ -260,5 +268,47 @@ describe('generate_image schema', () => {
     const tool = nativeTools(brainToolProfile('full').allowed).find((t) => t.name === 'generate_image');
     expect(tool?.parameters).toMatchObject({ required: ['prompt'], properties: { reference_images: { type: 'array' } } });
     expect(validateToolCall({ id: '1', name: 'generate_image', args: { prompt: 'x', reference_images: ['a.png'] } })).toBeNull();
+  });
+});
+
+describe('computer-use tools (docs/computer-use.md)', () => {
+  afterEach(() => setDesktopToolsAvailable(false));
+
+  it('are not offered at all while computer use is off', () => {
+    setDesktopToolsAvailable(false);
+    const full = nativeTools(brainToolProfile('full').allowed).map((t) => t.name);
+    expect(full.some((n) => n.startsWith('desktop_'))).toBe(false);
+    expect(buildBrainToolsPrompt()).not.toContain('desktop_');
+  });
+
+  it('let ask/plan mode read a window and only full mode act in one', () => {
+    setDesktopToolsAvailable(true);
+    const full = nativeTools(brainToolProfile('full').allowed).map((t) => t.name);
+    for (const t of [...BRAIN_DESKTOP_SEE_TOOLS, ...BRAIN_DESKTOP_ACT_TOOLS]) expect(full).toContain(t);
+    for (const mode of ['ask', 'plan'] as const) {
+      const names = nativeTools(brainToolProfile(mode).allowed).map((t) => t.name);
+      expect(names).toContain('desktop_ui_tree');
+      expect(names).not.toContain('desktop_click');
+      expect(names).not.toContain('desktop_type');
+    }
+    expect(buildBrainToolsPrompt()).toContain('DESKTOP LOOP');
+  });
+
+  it('has a schema for every desktop tool, including signed scroll steps', () => {
+    setDesktopToolsAvailable(true);
+    for (const name of [...BRAIN_DESKTOP_SEE_TOOLS, ...BRAIN_DESKTOP_ACT_TOOLS]) {
+      expect(validateToolCall({ id: '1', name, args: { window: '1', reason: 'r', text: 't', keys: 'enter' } }) ?? '').not.toContain('Unknown tool');
+    }
+    const scroll = { id: '1', name: 'desktop_scroll' as const, args: { window: '1', dy: '-3' } as Record<string, unknown> };
+    expect(validateToolCall(scroll)).toBeNull();
+    expect(scroll.args.dy).toBe(-3);
+    const click = { id: '1', name: 'desktop_click' as const, args: { window: '1', x: '0.25', y: 0.5 } as Record<string, unknown> };
+    expect(validateToolCall(click)).toBeNull();
+    expect(click.args.x).toBe(0.25);
+  });
+
+  it('runs acts one at a time and reads concurrently', () => {
+    for (const t of BRAIN_DESKTOP_ACT_TOOLS) expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
+    for (const t of BRAIN_DESKTOP_SEE_TOOLS) expect(BRAIN_READONLY_TOOLS.has(t)).toBe(true);
   });
 });
