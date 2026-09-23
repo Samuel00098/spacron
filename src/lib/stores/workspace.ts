@@ -175,8 +175,15 @@ const seededProjectRooms = new Set<string>();
  * a cold start every project but one would list no rooms. Seed those from the
  * stage they were last left on — which is exactly what they will come back to.
  */
-projects.subscribe((map) => {
-  for (const projectId of map.keys()) {
+projects.subscribe((map) => seedProjectRoomsFromStorage(map.keys()));
+
+/**
+ * Also called by the Projects panel for projects outside the active workspace:
+ * `projects` only ever holds the active workspace's projects, so without this a
+ * project in another recents entry would list no rooms on a cold start.
+ */
+export function seedProjectRoomsFromStorage(projectIds: Iterable<string>) {
+  for (const projectId of projectIds) {
     if (seededProjectRooms.has(projectId)) continue;
     seededProjectRooms.add(projectId);
     if (get(projectOpenRooms).has(projectId)) continue;
@@ -192,7 +199,7 @@ projects.subscribe((map) => {
     // No `sketch`: it is app-global, so a saved project never carried one.
     setProjectRooms(projectId, rooms);
   }
-});
+}
 
 interface ProjectWorkspaceState {
   editor: {

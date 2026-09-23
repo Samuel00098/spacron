@@ -12,6 +12,7 @@ import {
   removeProjectFromCollection,
   projectOpenRooms,
   isProjectSwitching,
+  seedProjectRoomsFromStorage,
 } from '$lib/stores/workspace';
 import {
   allProjectSessions,
@@ -49,6 +50,29 @@ function getFilename(path: string): string {
 }
 
 const EXPANDED_PROJECTS_KEY = 'spacron.hud.expandedProjects';
+
+interface KnownProject {
+  id: string;
+  root_path: string;
+}
+
+// Recents paths and project roots come from the same backend, but compare
+// separator- and case-insensitively so a Windows path spelled either way still
+// finds its project.
+function normalizeProjectPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function mergeKnownProjects(prev: Map<string, KnownProject>, incoming: Iterable<KnownProject>): Map<string, KnownProject> {
+  let next: Map<string, KnownProject> | null = null;
+  for (const project of incoming) {
+    const current = (next ?? prev).get(project.id);
+    if (current && current.root_path === project.root_path) continue;
+    next ??= new Map(prev);
+    next.set(project.id, { id: project.id, root_path: project.root_path });
+  }
+  return next ?? prev;
+}
 const COLLAPSED_SECTIONS_KEY = 'spacron.hud.collapsedSections';
 const PROJECT_SORT_KEY = 'spacron.hud.projectSort';
 const DOUBLE_TAP_MS = 400;
@@ -266,11 +290,46 @@ export default function ProjectHUD() {
   const currentInteractionMode = useStore(interactionMode);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
 
+  // `projectsMap` only holds the ACTIVE workspace's projects and is emptied on
+  // every workspace switch, yet each row here is usually its own recents entry.
+  // Resolve the other rows' ids from the backend's recent-project records (ids
+  // are path-stable), and keep every id seen this session, so a background
+  // project still lists its live sessions, rooms and tasks.
+  const [knownProjects, setKnownProjects] = useState<Map<string, KnownProject>>(new Map());
+
+  useEffect(() => {
+    setKnownProjects((prev) => mergeKnownProjects(prev, projectsMap.values()));
+  }, [projectsMap]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const recents = await invoke<KnownProject[]>('workspace_get_recent');
+        if (!cancelled) setKnownProjects((prev) => mergeKnownProjects(prev, recents));
+      } catch {
+        /* backend unavailable — the active workspace's projects still resolve */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rawWorkspaces]);
+
   const projectIdByPath = useMemo(() => {
     const byPath = new Map<string, string>();
-    for (const project of projectsMap.values()) byPath.set(project.root_path, project.id);
-    return byPath;
-  }, [projectsMap]);
+    for (const project of knownProjects.values()) byPath.set(normalizeProjectPath(project.root_path), project.id);
+    // The active workspace's live projects win over any stale record.
+    for (const project of projectsMap.values()) byPath.set(normalizeProjectPath(project.root_path), project.id);
+    return {
+      get: (path: string) => byPath.get(normalizeProjectPath(path)),
+    };
+  }, [knownProjects, projectsMap]);
+
+  useEffect(() => {
+    seedProjectRoomsFromStorage(knownProjects.keys());
+  }, [knownProjects]);
 
   const sessionsByProject = useMemo(() => {
     const byProject = new Map<string, TerminalSessionInfo[]>();
@@ -289,8 +348,8 @@ export default function ProjectHUD() {
   useEffect(() => {
     let cancelled = false;
     void Promise.all(
-      Array.from(projectsMap.values()).map(async (project) => {
-        const tasks = await readProjectOrchestratorTaskSummaries(project);
+      Array.from(knownProjects.values()).map(async (project) => {
+        const tasks = await readProjectOrchestratorTaskSummaries(project).catch(() => []);
         return [project.id, tasks] as const;
       }),
     ).then((entries) => {
@@ -304,7 +363,7 @@ export default function ProjectHUD() {
     return () => {
       cancelled = true;
     };
-  }, [projectsMap]);
+  }, [knownProjects]);
 
   const tasksByProject = useMemo(() => {
     const byProject = new Map<string, OrchestratorTask[]>();
@@ -946,7 +1005,9 @@ export default function ProjectHUD() {
               )}
             </div>
             )}
-            {currentInteractionMode === 'cli' && !hasOpenContents && (
+            {/* The CLI view lists rooms and sessions only, so tasks alone must
+                not hide the empty state and leave a blank box. */}
+            {currentInteractionMode === 'cli' && projectRooms.length === 0 && projectSessions.length === 0 && (
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
             {currentInteractionMode === 'cli' && <>
