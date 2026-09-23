@@ -1,6 +1,6 @@
 # Computer use — design
 
-Status: **DESIGN — not started.** Written 2026-09-23.
+Status: **DESIGN — phase 0 spike done (2026-09-23), see results below.** Written 2026-09-23.
 Companion to [agent-browser.md](agent-browser.md). Settles the "control my
 laptop" pillar that [browser-pillar-spike.md](browser-pillar-spike.md) split off
 and [orca-feature-gap.md](orca-feature-gap.md) #45 lists as "big, and a security
@@ -85,7 +85,7 @@ Chat ──invoke('mcp_call_desktop_tool')───────┘        (one c
   - `windows.rs` — backend: window enumeration (`EnumWindows`), UI Automation
     (`IUIAutomation` via `windows-rs`; new features: `Win32_UI_Accessibility`,
     `Win32_UI_Input_KeyboardAndMouse`, `Win32_UI_WindowsAndMessaging`,
-    `Win32_UI_HiDpi`), input (`SendInput` directly, or `enigo`), capture (`xcap`).
+    `Win32_UI_HiDpi`), input (raw `SendInput`), capture (`xcap`).
   - `macos.rs` — phase 5 (AX API, `CGEvent`, ScreenCaptureKit).
 - **`mcp/mod.rs`** — registers the `desktop_*` tools and routes to
   `desktop::handlers`, passing the caller's agent identity (from its
@@ -266,6 +266,61 @@ Act tools are write-class, so they run sequentially — the same reason
 Security review (per [SECURITY.md](SECURITY.md)) is a gate between phase 1 and 2,
 not after phase 4.
 
+## Phase 0 spike results (2026-09-23)
+
+Throwaway Rust program (`windows` 0.61 + `xcap` 0.9.8), run on Windows 11 at
+**125% scaling (DPI 120)**, single 2560×1440 display. Target: a WinForms test
+window the spike launched itself (textbox, button, status label), once
+**DPI-unaware** (bitmap-scaled by Windows, window DPI 96) and once **DPI-aware**
+(window DPI 120). The spike process ran per-monitor-v2 DPI aware. No input went
+to any real app.
+
+| Check | Unaware target | Aware target |
+|---|---|---|
+| Enumerate windows (`EnumWindows`, visible, uncloaked, titled) | 15 windows in 5.7 ms | — |
+| UIA tree, 10 elements (`ControlViewWalker`, uncached) | 224 ms | 116 ms |
+| `IsPassword` read on the textbox | ✓ | ✓ |
+| `InvokePattern` on the button (no pointer, no focus) | ✓ label → "clicked 1" | ✓ |
+| `ValuePattern.SetValue` + read back | ✓ 22 ms | ✓ 21 ms |
+| UIA rect → window-normalized → pixels round-trip | exact | exact |
+| `WindowFromPoint` root at the click point == target | ✓ | ✓ |
+| `SendInput` absolute click (virtual-desk 0–65535) | ✓ label → "clicked 2" | ✓ |
+| `LLMHF_INJECTED` seen by a `WH_MOUSE_LL` hook | 2/2 events flagged | 2/2 |
+| UIA `SetFocus` + `SendInput` Unicode typing (incl. `✓`) | ✓ exact | ✓ exact |
+| `xcap` window capture | 500×314 in 59 ms, correct pixels | 396×250 in 50 ms |
+| `SetForegroundWindow` from a background process to another window | ✓ in 151 ms (2/2 runs; ALT workaround never needed) | |
+
+**Verdict: phases 1–3 are feasible on Windows with no native helper binary.**
+Findings that change the design:
+
+- **Use raw `SendInput`, not `enigo`, on Windows.** The input code was ~40
+  lines, and we need direct control of the flags anyway. `enigo` can be
+  reconsidered for macOS.
+- **UIA is slow cross-process** (~12–20 ms per element, uncached). A real app
+  with hundreds of elements would take seconds. `desktop_ui_tree` must use a
+  `CacheRequest` (`BuildUpdatedCache`) and a depth limit from the start.
+- **The capture rect and the DWM frame rect differ by a few pixels**
+  (507×316 frame vs 500×314 capture). Normalized coordinates must be computed
+  against one rect for both screenshot and input, or a click chosen from a
+  screenshot lands a few pixels off. Crop the capture to
+  `DWMWA_EXTENDED_FRAME_BOUNDS`.
+- **Patterns first is confirmed.** Invoke/Value worked on a window that was not
+  focused and needed no pointer movement. Synthesized input is the fallback.
+- **The user-takeover pause is buildable.** The low-level hook tells injected
+  from real input.
+
+Not covered, and to check in phase 1–2 before relying on it:
+
+- **Foreground lock under real conditions.** The spike launched both windows, so
+  it held foreground rights. When the user is in another app, Spacron may not;
+  keep the ALT-key fallback and fail the call if focus is not obtained.
+- **UIPI:** input to an elevated (admin) window is silently dropped from a
+  non-elevated Spacron. Detect it (compare integrity levels) and refuse with a
+  clear message.
+- 150%/200% scaling, multiple monitors with mixed DPI, and real apps (Notepad,
+  Office, Electron apps, browsers) for UIA coverage.
+- macOS.
+
 ## Testing
 
 - **Unit (Rust):** grant scope checks, lease hand-off and expiry, key blocklist,
@@ -285,5 +340,5 @@ not after phase 4.
 - Should a grant card be answerable from the mobile companion? Useful for
   background agents, but it lets a phone approve control of the laptop.
   Recommendation: no in v1.
-- `enigo` vs raw `SendInput`: `enigo` is cross-platform but we need the
-  injected-flag and per-monitor DPI details anyway. Decide in the phase 0 spike.
+- ~~`enigo` vs raw `SendInput`~~ — decided by the spike: raw `SendInput` on
+  Windows.
