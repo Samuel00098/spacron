@@ -2322,3 +2322,29 @@ button.settings-control-copy.skill-open-btn {
   letter-spacing: 0.18em;
   text-align: center;
 }
+
+/* Settings > MCP ---------------------------------------------------------- */
+
+/* The server form stacks full-width fields, unlike the inline agent rows
+   `.agent-input` was sized for. */
+.mcp-field {
+  width: 100%;
+  margin-top: 8px;
+  box-sizing: border-box;
+}
+
+/* `.agent-input` fixes a 34px height for single-line inputs, which would
+   collapse a textarea to one row whatever its `rows` says. */
+.mcp-textarea {
+  width: 100%;
+  height: auto;
+  margin-top: 8px;
+  padding: 8px 12px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.mcp-server-problem {
+  color: var(--error);
+}

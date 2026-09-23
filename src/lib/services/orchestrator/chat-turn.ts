@@ -2,13 +2,44 @@ import { captureTranscript } from './activity-log';
 import { parseBrainTodos, type BrainToolResult } from './brain-tools';
 import type { ChatInlineRequest } from '$lib/types/chat';
 
+/**
+ * "create an image of a dog", "draw me a cat", "make a video of…": the user
+ * wants Spacron to generate media. Conservative on purpose — "add an image
+ * tag" or "make the image component responsive" is code work, not a picture.
+ */
+export function mediaGenerationRequest(text: string): 'image' | 'video' | null {
+  const clean = text.trim();
+  if (!clean || clean.length > 600) return null;
+  const match = clean.match(/\b(?:create|generate|make|draw|render|produce|design|paint|sketch|illustrate|animate)\s+(?:me\s+|us\s+)?(?:(?:a|an|some|another|one|two|three|\d+)\s+)?(?:\w+\s+){0,3}?(images?|pictures?|pics?|photos?|drawings?|illustrations?|artwork|logos?|icons?|wallpapers?|videos?|animations?|clips?)\b(?!\s*(?:tags?|components?|elements?|fields?|uploads?|uploader|urls?|paths?|loaders?|carousel|gallery|props?|src|\.))/i);
+  if (match) return /^(?:videos?|animations?|clips?)$/i.test(match[1]) ? 'video' : 'image';
+  // "draw me a dog" / "draw a cat": drawing is always a picture.
+  if (/^(?:can you |could you |please )?(?:draw|paint|sketch)\s+(?:me\s+)?(?:a|an|some)\s+\w+/i.test(clean)) return 'image';
+  return null;
+}
+
+const ATTACHMENT_SUFFIX = '\n\nThe user attached these files.';
+
+/** The user's own words, without the attachment block the store appends. */
+export function userRequestText(message: string): string {
+  const cut = message.indexOf(ATTACHMENT_SUFFIX);
+  return (cut >= 0 ? message.slice(0, cut) : message).trim();
+}
+
+/** Paths of attached images ("saved at <path>. Inspect it…"), for reference_images. */
+export function attachedImagePaths(message: string): string[] {
+  const paths: string[] = [];
+  const re = /--- Attached file: [^\n]* \(image\/[^)\n]*\) ---\nThe binary attachment was saved at (.+?)\. Inspect it when relevant\./g;
+  for (let match = re.exec(message); match; match = re.exec(message)) paths.push(match[1]);
+  return paths.slice(0, 4);
+}
+
 /** A short promise is progress copy, never evidence that the requested work finished. */
 export function isPromiseOnlyReply(text: string): boolean {
   const clean = text.trim();
   if (/^(?:on it|got it|working on it|absolutely|sure)[.!]?$/i.test(clean)) return true;
   return clean.length < 550
     && !/\n\s*(?:[-*]|\d+[.)])\s/.test(clean)
-    && /^(?:(?:sure|absolutely|okay|ok|got it|on it)[!,.—\s]*)?(?:i(?:['’]ll| will| am going to)|let me)\s+(?:take|look|check|inspect|read|review|map|investigate|analy[sz]e|run|implement|fix|start|work|help|coordinate|update|build|make|go|do)\b/i.test(clean);
+    && /^(?:(?:sure|absolutely|okay|ok|got it|on it)[!,.—\s]*)?(?:i(?:['’]ll| will| am going to)|let me)\s+(?:take|look|check|inspect|read|review|map|investigate|analy[sz]e|run|implement|fix|start|work|help|coordinate|update|build|make|go|do|generate|create|draw|render|produce|design|draft)\b/i.test(clean);
 }
 
 /**
@@ -93,11 +124,16 @@ export function cleanOrchestratorReply(text: string): string {
     segments.push({ isCode: false, content: text.slice(lastIndex) });
   }
 
-  const cleaned = segments.map((seg) => {
+  const cleaned = segments.map((seg, segIndex) => {
     if (seg.isCode) return seg.content;
 
+    // A segment that touches inline code is mid-sentence at that edge: the
+    // ", " in "`a`, `b`" is a whole segment, and trimming its "leading" comma
+    // glued the code spans together ("`a``b`").
+    const afterCode = segments[segIndex - 1]?.isCode === true;
+    const beforeCode = segments[segIndex + 1]?.isCode === true;
     const lines = seg.content.split('\n');
-    const processedLines = lines.map((line) => {
+    const processedLines = lines.map((line, lineIndex) => {
       // Horizontal rules (e.g. ---) are left as-is.
       if (/^\s*---+$/.test(line)) return line;
 
@@ -126,7 +162,8 @@ export function cleanOrchestratorReply(text: string): string {
       rest = rest.replace(/,\s*([.?!;:])/g, '$1');
 
       // Clean leading or trailing standalone commas on the rest of the line
-      rest = rest.replace(/^,\s*/, '').replace(/,\s*$/, '');
+      if (!(afterCode && lineIndex === 0)) rest = rest.replace(/^,\s*/, '');
+      if (!(beforeCode && lineIndex === lines.length - 1)) rest = rest.replace(/,\s*$/, '');
 
       return prefix + rest;
     });
@@ -156,6 +193,20 @@ const TOOL_ACTION_LABELS: Readonly<Record<string, string>> = {
   wait_for_agent: 'Check agent',
   ask_user: 'Ask you',
   ask_question: 'Ask you',
+  list_app_commands: 'Find app command',
+  run_app_command: 'Run app command',
+  emulator_list: 'List devices',
+  emulator_boot: 'Boot device',
+  emulator_shutdown: 'Shut down device',
+  emulator_screenshot: 'Capture screen',
+  emulator_tap: 'Tap',
+  emulator_swipe: 'Swipe',
+  emulator_key: 'Press key',
+  emulator_text: 'Type',
+  emulator_rotate: 'Rotate',
+  emulator_logcat: 'Read logcat',
+  generate_image: 'Generate image',
+  generate_video: 'Generate video',
 };
 
 /**
@@ -520,10 +571,6 @@ export function mergeTodoItems(
   let changed = false;
   let truncated = false;
   const merged = current.map((t) => ({ ...t }));
-  // Room for genuinely new steps: the unused slice of the ceiling, plus one per
-  // already-finished row (the relief loop below may recycle those to make room).
-  const recyclable = merged.filter((t) => todoIsDone(t.status, t.done) && t.status !== 'blocked').length;
-  let additionsLeft = Math.max(0, MAX_PLAN_ITEMS - merged.length) + recyclable;
 
   // Pass 1 — classify. Which existing row does each incoming row restate, and
   // which open rows did this call leave out entirely?
@@ -573,6 +620,9 @@ export function mergeTodoItems(
     applyRow(omittedOpen[k], unmatchedIncoming[k], unmatchedIncoming[k].label);
   }
   // Pass 4 — whatever is left is genuinely new work.
+  // Count room after reconciliation: this update may have just finished a row.
+  const recyclable = merged.filter((t) => todoIsDone(t.status, t.done) && t.status !== 'blocked').length;
+  let additionsLeft = Math.max(0, MAX_PLAN_ITEMS - merged.length) + recyclable;
   for (let k = paired; k < unmatchedIncoming.length; k++) {
     if (additionsLeft <= 0) {
       truncated = true;
@@ -592,6 +642,58 @@ export function mergeTodoItems(
     changed = true;
   }
   return { todos: merged, changed, truncated };
+}
+
+/**
+ * The ONE definition of the plan's progress count, shared by the ticker, the
+ * update_todos tool feedback, and the finished card so they can never disagree.
+ * Status is authoritative (see `todoIsDone`); a cancelled row is dropped from
+ * both sides of the fraction instead of being counted as done work.
+ */
+export function todoProgress(items: ChatTurnTodoItem[]): { completed: number; total: number } {
+  const counted = items.filter((item) => item.status !== 'cancelled');
+  return {
+    completed: counted.filter((item) => todoIsDone(item.status, item.done)).length,
+    total: counted.length,
+  };
+}
+
+/**
+ * Close out the plan at a successful turn end that did real work. The row the
+ * model was working (`in_progress`) and legacy status-less rows are finished by
+ * that evidence, since models routinely skip the last `[x]` re-announcement.
+ * Rows the model explicitly left `pending` are NOT: painting never-started work
+ * green is what made the ticker read 5/5 for a turn that did three things.
+ * Status and `done` are set together so every counter agrees.
+ */
+export function closeOutTodoItems(items: ChatTurnTodoItem[]): ChatTurnTodoItem[] {
+  return items.map((item) => (item.status === undefined || item.status === 'in_progress'
+    ? { ...item, status: 'completed', done: true }
+    : { ...item, done: todoIsDone(item.status, item.done) }));
+}
+
+/**
+ * Rows of a turn's FIRST plan that merely re-state work finished in the
+ * previous turn. The finished card writes its checklist into the transcript,
+ * so on a follow-up ("also add X") models copy every `[x]` row into the new
+ * plan and append X, and the list grew by the whole history on every message.
+ * Only rows the model itself declares completed are carried over: a PENDING row
+ * matching old work is a real redo request ("run the tests again") and stays.
+ */
+export function splitCarriedOverTodos(
+  previous: ChatTurnTodoItem[],
+  incoming: ChatTurnTodoItem[],
+): { fresh: ChatTurnTodoItem[]; carried: ChatTurnTodoItem[] } {
+  const finished = previous.filter((item) => item.status !== 'cancelled' && todoIsDone(item.status, item.done));
+  if (!finished.length) return { fresh: incoming, carried: [] };
+  const matchRow = todoRowMatcher(finished);
+  const fresh: ChatTurnTodoItem[] = [];
+  const carried: ChatTurnTodoItem[] = [];
+  for (const item of incoming) {
+    if (item.status === 'completed' && matchRow(item) !== undefined) carried.push(item);
+    else fresh.push(item);
+  }
+  return { fresh, carried };
 }
 
 /**
@@ -914,7 +1016,10 @@ export function formatTodoListMarkdown(todos: ChatTurnTodoItem[]): string {
     for (const item of items) {
       let marker: string;
       if (item.status) {
-        marker = item.status === 'completed' || item.status === 'cancelled' ? 'x'
+        // Cancelled is its own marker: rendering it as [x] claimed work that
+        // never happened, and the next turn re-read it as finished.
+        marker = item.status === 'completed' ? 'x'
+          : item.status === 'cancelled' ? '-'
           : item.status === 'in_progress' ? '~'
           : item.status === 'blocked' ? '!' : ' ';
       } else {
@@ -1032,8 +1137,9 @@ const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set(['write_file', 'save_do
 /**
  * The subset that changes the project itself, and so owes the turn a
  * verification run. `save_document` is deliberately excluded even though it
- * writes to disk: it lands a document in the user's Documents folder, which no
- * test, typecheck or build can say anything about, so gating it would demand a
+ * writes to disk: it lands a prose document in the project's docs/ folder (or
+ * the user's Documents folder), which no test, typecheck or build can say
+ * anything about, so gating it would demand a
  * pointless command every time the user asks for a written-up answer.
  */
 const CODE_MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set(['write_file', 'edit_file']);
@@ -1068,9 +1174,30 @@ function runCommandText(result: BrainToolResult): string {
 }
 
 /**
- * The verification commands run after a given position in the tool log. Shared
- * by the gate above and the completion report's [verified] badge, so "was this
- * checked?" is answered the same way in both.
+ * A run that produced no verdict at all: it timed out, its session died before
+ * the command finished, or the tool errored before the command ever ran.
+ *
+ * This is NOT a failure, and the difference is the whole point. `exit 1` is a
+ * result — the suite ran and something is broken. A TIMEOUT is the absence of
+ * a result, and printing it as `Tests: FAILED` tells the user their tests are
+ * red when nothing was ever checked. It is the worse lie of the two: a red
+ * badge sends them hunting a failure that does not exist, and it contradicts
+ * the model's own prose in the same card ("no verification run was possible"),
+ * which costs the whole report its credibility.
+ *
+ * Matched against the status line `formatBrainRunResult` writes, which is the
+ * same text `ok` is derived from in `executeBrainToolCalls`.
+ */
+const INCONCLUSIVE_RUN_RE = /^(?:TIMEOUT\b|SESSION CLOSED\b|error:)/i;
+
+function runInconclusive(result: BrainToolResult): boolean {
+  return INCONCLUSIVE_RUN_RE.test(result.output.trimStart());
+}
+
+/**
+ * The verification commands run after a given position in the tool log. The
+ * gate asks whether one ran; the completion report checks whether each latest
+ * verification class passed.
  */
 function verificationRunsAfter(results: BrainToolResult[], index: number): BrainToolResult[] {
   return results
@@ -1080,10 +1207,14 @@ function verificationRunsAfter(results: BrainToolResult[], index: number): Brain
 
 /**
  * True when the turn changed a file and never ran a verification command
- * AFTERWARDS — the one state a turn must not reach FINAL in. Two deliberate
+ * AFTERWARDS — the one state a turn must not reach FINAL in. Three deliberate
  * choices: a verification that FAILED still counts, because a reported failing
- * run is honest and the reply is where it gets surfaced; and a command run
- * before the last write is ignored, since it cannot have covered the change.
+ * run is honest and the reply is where it gets surfaced; a command run before
+ * the last write is ignored, since it cannot have covered the change; and a
+ * run that never COMPLETED does not count at all, because a command that hung
+ * checked nothing. The gate exists to make a check actually happen, and a
+ * timeout is the case where it did not. The caller nudges once and only once,
+ * so a project whose checks always hang still finishes its turn.
  *
  * Pure, so the store can unit-test it against recorded tool results.
  */
@@ -1093,7 +1224,7 @@ export function hasUnverifiedMutation(results: BrainToolResult[]): boolean {
     if (results[i].ok && CODE_MUTATING_TOOL_NAMES.has(results[i].name)) lastWrite = i;
   }
   if (lastWrite < 0) return false;
-  return verificationRunsAfter(results, lastWrite).length === 0;
+  return verificationRunsAfter(results, lastWrite).every(runInconclusive);
 }
 
 export interface TurnEvidence {
@@ -1106,12 +1237,23 @@ export interface TurnEvidence {
  * Structured completion report for a finished turn. Distinguishes what was
  * accomplished, what failed, and what needs improvement — with evidence.
  */
+/**
+ * `pass`/`fail` are verdicts a command actually returned. `inconclusive` is a
+ * command that never returned one (it hung, or its session died), and
+ * `skipped` is a check that was never attempted. The last two look alike to
+ * the user — neither says anything about the code — but they need separate
+ * wording, because one of them means a check was tried and is broken.
+ */
+export type VerificationStatus = 'pass' | 'fail' | 'inconclusive' | 'skipped';
+
 export interface CompletionReport {
   /** What was built/changed with verification status */
   completed: Array<{
     task: string;
     files: string[];
+    /** True only when the post-task verification passed. */
     verified: boolean;
+    verificationOutcome: VerificationStatus;
     evidence: string;
   }>;
   /** What failed and why */
@@ -1119,6 +1261,11 @@ export interface CompletionReport {
     task: string;
     reason: string;
     suggestion: string;
+    /**
+     * The tool produced no verdict rather than a bad one. Rendered amber, and
+     * never told to "fix what the command reported" — it reported nothing.
+     */
+    inconclusive?: boolean;
   }>;
   /** What works but could be improved */
   improvements: Array<{
@@ -1128,9 +1275,9 @@ export interface CompletionReport {
   }>;
   /** Verification results from tool evidence */
   verification: {
-    tests: 'pass' | 'fail' | 'skipped';
-    typecheck: 'pass' | 'fail' | 'skipped';
-    build: 'pass' | 'fail' | 'skipped';
+    tests: VerificationStatus;
+    typecheck: VerificationStatus;
+    build: VerificationStatus;
   };
 }
 
@@ -1141,6 +1288,28 @@ export interface CompletionReport {
 const TEST_COMMAND_RE = /\b(?:tests?|specs?|vitest|jest|mocha|pytest|ctest|phpunit|rspec)\b/i;
 const TYPECHECK_COMMAND_RE = /\b(?:typecheck|type-check|tsc|mypy)\b/i;
 const BUILD_COMMAND_RE = /\b(?:build|compile|bundle|msbuild)\b/i;
+
+function verificationClass(result: BrainToolResult): string {
+  const command = runCommandText(result);
+  if (TEST_COMMAND_RE.test(command)) return 'tests';
+  if (TYPECHECK_COMMAND_RE.test(command)) return 'typecheck';
+  if (BUILD_COMMAND_RE.test(command)) return 'build';
+  return 'other';
+}
+
+/** Summarize the latest result per check class without letting a failed test
+ * disappear behind a later passing typecheck or build. A real failure outranks
+ * a check that never completed: a red suite is the more urgent fact, and the
+ * Verification section below still names which class produced no verdict. */
+function summarizeVerificationRuns(runs: BrainToolResult[]): VerificationStatus {
+  const latestByClass = new Map<string, BrainToolResult>();
+  for (const run of runs) latestByClass.set(verificationClass(run), run);
+  if (latestByClass.size === 0) return 'skipped';
+  const latest = [...latestByClass.values()];
+  if (latest.some((run) => !run.ok && !runInconclusive(run))) return 'fail';
+  if (latest.some(runInconclusive)) return 'inconclusive';
+  return 'pass';
+}
 
 /**
  * Tools whose failure means the WORK did not happen, as opposed to a probe that
@@ -1174,11 +1343,28 @@ export function buildCompletionReport(
    * signal here. Deciding this by grepping the output gets it backwards in both
    * directions: a failing run is excluded before it is ever seen, so it can only
    * report "skipped", while a green run printing "0 failed" reads as a failure.
+   *
+   * The LAST run of a class decides it, never an OR across every run of that
+   * class. The brain is told to fix what a red run reported and run it again,
+   * so a turn that did exactly that ends green — and an OR would keep printing
+   * FAILED for the very run it was asked to repair.
+   *
+   * `ok` alone is still not enough to call something failed, because it lumps
+   * a command that hung in with a command that returned non-zero. Those are
+   * split here: only a run that reported gets a verdict.
    */
-  const verifyStatus = (runs: BrainToolResult[]): 'pass' | 'fail' | 'skipped' => {
-    if (runs.length === 0) return 'skipped';
-    return runs.some((r) => !r.ok) ? 'fail' : 'pass';
+  const verifyStatus = (runs: BrainToolResult[]): VerificationStatus => {
+    const last = runs.at(-1);
+    if (!last) return 'skipped';
+    if (runInconclusive(last)) return 'inconclusive';
+    return last.ok ? 'pass' : 'fail';
   };
+
+  // The plan badge below is judged on verification-class runs only. Feeding it
+  // every command would let an `ls` that exited 1 — or, under last-run-wins, a
+  // trailing `cat` that exited 0 — stand in for a verdict on the work.
+  const verificationRuns = commandRuns.filter((r) => VERIFICATION_COMMAND_RE.test(runCommandText(r)));
+  const verificationOutcome = summarizeVerificationRuns(verificationRuns);
 
   const completed: CompletionReport['completed'] = [];
   results.forEach((result, index) => {
@@ -1186,10 +1372,12 @@ export function buildCompletionReport(
     const firstLine = result.output.split('\n')[0] ?? '';
     const pathMatch = firstLine.match(WRITE_PATH_RE);
     const filePath = (pathMatch ? pathMatch[1] : firstLine).trim();
+    const verificationOutcome = summarizeVerificationRuns(verificationRunsAfter(results, index));
     completed.push({
       task: `${writeVerb(result.name)} ${filePath}`,
       files: [filePath],
-      verified: verificationRunsAfter(results, index).length > 0,
+      verified: verificationOutcome === 'pass',
+      verificationOutcome,
       evidence: firstLine.slice(0, 120),
     });
   });
@@ -1202,7 +1390,8 @@ export function buildCompletionReport(
       completed.push({
         task: todo.label,
         files: [],
-        verified: verifyStatus(commandRuns) === 'pass',
+        verified: verificationOutcome === 'pass',
+        verificationOutcome,
         evidence: 'Completed per plan',
       });
     }
@@ -1210,13 +1399,22 @@ export function buildCompletionReport(
 
   const failed: CompletionReport['failed'] = results
     .filter((r) => !r.ok && WORK_TOOL_NAMES.has(r.name))
-    .map((r) => ({
-      task: r.name,
-      reason: (r.output.split('\n')[0] ?? '').slice(0, 150),
-      suggestion: r.name === 'run_command'
-        ? 'Fix what the command reported, then run it again before calling the work done.'
-        : 'Check the error output and retry with corrected parameters.',
-    }));
+    .map((r) => {
+      const inconclusive = runInconclusive(r);
+      return {
+        task: r.name,
+        reason: (r.output.split('\n')[0] ?? '').slice(0, 150),
+        // "Fix what the command reported" is nonsense advice for a run that
+        // reported nothing, and it is what sent the last review hunting a
+        // failure that never existed.
+        suggestion: inconclusive
+          ? 'The command never finished, so nothing was checked. Re-run it in its run-once, non-interactive form, or with background: true, before treating the work as verified.'
+          : r.name === 'run_command'
+            ? 'Fix what the command reported, then run it again before calling the work done.'
+            : 'Check the error output and retry with corrected parameters.',
+        ...(inconclusive ? { inconclusive: true } : {}),
+      };
+    });
 
   return {
     completed,
@@ -1248,7 +1446,13 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
     lines.push('### What is working');
     for (const item of report.completed) {
       const files = item.files.filter((f) => !item.task.includes(f));
-      const badge = item.verified ? ' [verified]' : '';
+      const badge = item.verificationOutcome === 'pass'
+        ? ' [verified] 🟢'
+        : item.verificationOutcome === 'fail'
+          ? ' [verification failed] 🔴'
+          : item.verificationOutcome === 'inconclusive'
+            ? ' [unverified — the check never finished] 🟡'
+            : ' [not verified] 🟡';
       lines.push(`- ${item.task}${files.length > 0 ? ` (${files.join(', ')})` : ''}${badge}`);
       if (item.evidence && !item.evidence.includes(item.task)) lines.push(`  - ${item.evidence}`);
     }
@@ -1258,7 +1462,7 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
     if (lines.length > 0) lines.push('');
     lines.push('### What is not working');
     for (const item of report.failed) {
-      lines.push(`- **${item.task}**: ${item.reason}`);
+      lines.push(`- ${item.inconclusive ? '🟡' : '🔴'} **${item.task}**: ${item.reason}`);
       lines.push(`  - Suggestion: ${item.suggestion}`);
     }
   }
@@ -1267,7 +1471,7 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
     if (lines.length > 0) lines.push('');
     lines.push('### What needs improvement');
     for (const item of report.improvements) {
-      lines.push(`- **${item.area}**: ${item.current}`);
+      lines.push(`- 🟡 **${item.area}**: ${item.current}`);
       lines.push(`  - Suggested: ${item.suggested}`);
     }
   }
@@ -1279,11 +1483,20 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
   if ((v.tests !== 'skipped' || v.typecheck !== 'skipped' || v.build !== 'skipped') && !headed('verification')) {
     if (lines.length > 0) lines.push('');
     lines.push('### Verification');
+    const label = (status: VerificationStatus): string =>
+      status === 'pass' ? 'PASSED 🟢' : status === 'fail' ? 'FAILED 🔴' : 'DID NOT COMPLETE 🟡';
     const items: string[] = [];
-    if (v.tests !== 'skipped') items.push(`Tests: ${v.tests === 'pass' ? 'PASSED' : 'FAILED'}`);
-    if (v.typecheck !== 'skipped') items.push(`Typecheck: ${v.typecheck === 'pass' ? 'PASSED' : 'FAILED'}`);
-    if (v.build !== 'skipped') items.push(`Build: ${v.build === 'pass' ? 'PASSED' : 'FAILED'}`);
+    if (v.tests !== 'skipped') items.push(`Tests: ${label(v.tests)}`);
+    if (v.typecheck !== 'skipped') items.push(`Typecheck: ${label(v.typecheck)}`);
+    if (v.build !== 'skipped') items.push(`Build: ${label(v.build)}`);
     lines.push(items.join(' | '));
+    // Without this the line reads as a verdict on the code. It is not one:
+    // nothing was measured, and the user needs to know that before they go
+    // looking for a failure.
+    if (v.tests === 'inconclusive' || v.typecheck === 'inconclusive' || v.build === 'inconclusive') {
+      lines.push('');
+      lines.push('_A check marked DID NOT COMPLETE timed out or lost its session — it reports nothing about the code. This change is unverified._');
+    }
   }
 
   return lines.join('\n');

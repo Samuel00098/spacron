@@ -54,6 +54,8 @@ import {
   rightDrawerToolOf,
   clampRightDrawerWidth,
   RIGHT_DRAWER_MAX_WIDTH,
+  LEFT_PANEL_MIN_WIDTH,
+  LEFT_PANEL_MAX_WIDTH,
 } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import {
@@ -76,14 +78,18 @@ import {
   rightSidebarVisible,
   rightSidebarTab as rightSidebarTabStore,
   toggleYoutubeVisible,
-  openQuickCapture,
   openAgentSpawn,
   closeAgentSpawn,
   openEnvManager,
   terminalRoomOpen as terminalRoomOpenStore,
   homeScreenOpen,
 } from '$lib/stores/layout';
-import { openProject, toggleProjectHUD } from '$lib/stores/workspace';
+import {
+  openProject,
+  toggleProjectHUD,
+  newFolderPromptOpen,
+  cloneRepoPromptOpen,
+} from '$lib/stores/workspace';
 import { toggleCommandPalette, registerCommand } from '$lib/stores/commandpalette';
 import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
@@ -101,6 +107,7 @@ import {
   activeSessionId,
   devActiveSessionId,
   getSessionPromptTargetLabel,
+  getAgentDisplayName,
   isAgentSession,
   killSession,
   paneAssignments,
@@ -119,6 +126,7 @@ import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/type
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
+import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 // openDailyNote removed
 // toggleSketch removed
 import './AppShell.css';
@@ -136,7 +144,8 @@ type AuxPanelId =
   | 'youtube'
   | 'env'
   | 'mobile'
-  | 'sketch';
+  | 'sketch'
+  | 'deepseek';
 
 type AgentRoomId = `agent:${number}`;
 
@@ -168,6 +177,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   env: 'Environment',
   mobile: 'Mobile',
   sketch: 'Sketch',
+  deepseek: 'DeepSeek Harness',
 };
 
 function isAgentRoomId(id: RoomId): id is AgentRoomId {
@@ -217,7 +227,9 @@ function isPersistentRoomId(id: RoomId): boolean {
   // Sketch owns an in-memory canvas document. Minimizing is only a visibility
   // change, so keep it mounted just like Preview; unmounting here used to
   // reconstruct the panel from an older delayed localStorage snapshot.
-  return id === 'terminal' || id === 'dev-terminal' || id === 'preview' || id === 'sketch' || isAgentRoomId(id);
+  // DeepSeek Harness is an iframe onto a live conversation, so the same rule
+  // applies: hiding its room must not reload the page.
+  return id === 'terminal' || id === 'dev-terminal' || id === 'preview' || id === 'sketch' || id === 'deepseek' || isAgentRoomId(id);
 }
 
 // The layout fields AppShell reads. Kept as one named union so both the
@@ -246,6 +258,7 @@ type ShellLayoutKeys =
   | 'youtubeVisible'
   | 'mobileVisible'
   | 'sketchVisible'
+  | 'deepseekVisible'
   | 'agentSpawnOpen'
   | 'envManagerOpen'
   | 'auxPanelWidth'
@@ -272,6 +285,7 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   env: 'envVisible',
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
+  deepseek: 'deepseekVisible',
 };
 
 
@@ -282,6 +296,7 @@ const EnvManager = lazy(() => import('$lib/components/shared/EnvManager.tsx'));
 // Code-split: the sketch canvas is a large, self-contained surface, so it
 // should not sit in the shell's initial bundle.
 const SketchPanel = lazy(() => import('$lib/components/sketch/SketchPanel.tsx'));
+const DeepSeekPanel = lazy(() => import('$lib/components/deepseek/DeepSeekPanel.tsx'));
 
 function Icon({ children }: { children: React.ReactNode }) {
   return (
@@ -329,12 +344,12 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
   },
 };
 
-// The left rail intentionally stays small: Workspaces plus the global Task and
-// Sketch rooms. The file/navigation tools are hosted by the right sidebar.
+// The left rail intentionally stays small: the project list plus the global
+// Task and Sketch rooms. The file/navigation tools live in the right sidebar.
 const LEFT_DRAWER_TOOLS = ['projects', 'files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type LeftDrawerTool = (typeof LEFT_DRAWER_TOOLS)[number];
 const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactNode }> = {
-  projects: { title: 'Workspaces', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
+  projects: { title: 'Projects', icon: <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon> },
   files: { title: 'Files', icon: <Icon><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></Icon> },
   search: { title: 'Search files', icon: <Icon><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></Icon> },
   git: { title: 'Source Control', icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon> },
@@ -426,6 +441,13 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
     return (
       <Suspense fallback={null}>
         <SketchPanel onClose={onClose} />
+      </Suspense>
+    );
+  }
+  if (id === 'deepseek') {
+    return (
+      <Suspense fallback={null}>
+        <DeepSeekPanel />
       </Suspense>
     );
   }
@@ -571,6 +593,7 @@ export default function AppShell() {
         youtubeVisible: s.youtubeVisible,
         mobileVisible: s.mobileVisible,
         sketchVisible: s.sketchVisible,
+        deepseekVisible: s.deepseekVisible,
         agentSpawnOpen: s.agentSpawnOpen,
         envManagerOpen: s.envManagerOpen,
         auxPanelWidth: s.auxPanelWidth,
@@ -582,12 +605,6 @@ export default function AppShell() {
   );
   const currentInteractionMode = useStore(interactionMode);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const workspaceName = useWorkspaceStore((s) => {
-    const workspace = s.recentWorkspaces.find((entry) => entry.id === s.activeWorkspaceId);
-    if (!workspace) return null;
-    const isWorkspace = workspace.is_workspace || workspace.project_paths.length > 1;
-    return isWorkspace ? workspace.name : null;
-  });
   // Home is an overlay on top of the still-mounted workspace (see
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
   // so it is the only thing rendered.
@@ -761,6 +778,7 @@ export default function AppShell() {
     };
   }, [workspaceId, ambientLayout]);
   const allTerminalSessions = useStore(terminalSessions);
+  const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allDevTerminalSessions = useStore(devTerminalSessions);
   // Sessions across EVERY project, not just the active one — the stage mounts
   // background projects' agent panes from this so switching projects hides them
@@ -782,6 +800,7 @@ export default function AppShell() {
         { id: 'preview' as const, visible: layoutState.previewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
         { id: 'sketch' as const, visible: layoutState.sketchVisible },
+        { id: 'deepseek' as const, visible: layoutState.deepseekVisible },
         // Right utility drawer: review/fleet/toolbox/http/db/containers/env/mobile +
         // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
         // pop-up. None of those are rooms in the ambient grid.
@@ -1061,7 +1080,10 @@ export default function AppShell() {
       if (synonyms[wanted]) return synonyms[wanted];
       return (
         openRooms.find((id) => {
-          const labels = [roomTitle(id), roomKind(id), id].map((label) => label.toLowerCase());
+          // The raw launch command too: `roomKind` shows the product name now,
+          // and "focus claude" must still find the Claude Code room.
+          const command = isAgentRoomId(id) ? getAgentSessionForRoom(id)?.agentPreset ?? '' : '';
+          const labels = [roomTitle(id), roomKind(id), id, command].filter(Boolean).map((label) => label.toLowerCase());
           return labels.some((label) => label === wanted || label.includes(wanted) || wanted.includes(label));
         }) ?? null
       );
@@ -1195,9 +1217,9 @@ export default function AppShell() {
       return;
     }
 
-    const maxAllowedWidth = Math.min(600, effectiveWindowWidth - 250 - 48);
+    const maxAllowedWidth = Math.min(LEFT_PANEL_MAX_WIDTH, effectiveWindowWidth - 250 - 48);
     if (layoutState.leftPanelWidth > maxAllowedWidth) {
-      useLayoutStore.setState({ leftPanelWidth: Math.max(180, maxAllowedWidth) });
+      useLayoutStore.setState({ leftPanelWidth: Math.max(LEFT_PANEL_MIN_WIDTH, maxAllowedWidth) });
     }
   }, [layoutState.leftPanelWidth, layoutState.sidebarVisible, windowWidth, zoom]);
 
@@ -1278,9 +1300,12 @@ export default function AppShell() {
         });
       } else if (leftPanelResizing) {
         const delta = (event.clientX - leftPanelResizeRef.current.startX) / scale;
-        const maxAllowedWidth = Math.min(600, windowWidth / scale - 250 - 48);
+        const maxAllowedWidth = Math.min(LEFT_PANEL_MAX_WIDTH, windowWidth / scale - 250 - 48);
         useLayoutStore.setState({
-          leftPanelWidth: Math.max(180, Math.min(maxAllowedWidth, leftPanelResizeRef.current.startWidth + delta)),
+          leftPanelWidth: Math.max(
+            LEFT_PANEL_MIN_WIDTH,
+            Math.min(maxAllowedWidth, leftPanelResizeRef.current.startWidth + delta),
+          ),
         });
       } else if (auxResizing) {
         const delta = (event.clientX - auxResizeRef.current.startX) / scale;
@@ -1332,10 +1357,14 @@ export default function AppShell() {
       // app action via `action`, so we drive the same switch through that id.
       const actionId = matched.id.startsWith('custom_') ? matched.action : matched.id;
       if (!actionId) return;
+      if (actionId === 'toggleInteractionMode' && !project) return;
 
       event.preventDefault();
 
       switch (actionId) {
+        case 'toggleInteractionMode':
+          if (!event.repeat) setInteractionMode(get(interactionMode) === 'chat' ? 'cli' : 'chat');
+          break;
         case 'toggleProjectHUD':
           toggleProjectHUD();
           break;
@@ -1350,7 +1379,7 @@ export default function AppShell() {
           break;
         case 'newWorkspace':
           withTransition(() => {
-            useWorkspaceStore.getState().__set('newWorkspacePromptOpen', true);
+            newFolderPromptOpen.set(true);
           });
           break;
         case 'goToTerminal':
@@ -1427,9 +1456,6 @@ export default function AppShell() {
         case 'stopProxy':
           stopProxy();
           break;
-        case 'quickCapture':
-          openQuickCapture();
-          break;
         case 'spawnAgent':
           openAgentSpawn();
           break;
@@ -1470,7 +1496,7 @@ export default function AppShell() {
      * It also deliberately does NOT stand down for `isModalOpen()`. Every other
      * shortcut should: a dialog owns its keys. But dictation is an input method,
      * not navigation, and the modals ARE text-entry surfaces — Quick Capture,
-     * Task Editor, Clone Repo, New Folder, Workspace Name, Agent Spawn,
+     * Task Editor, Clone Repo, Create Project, Agent Spawn,
      * Settings. Gating on the modal counter made the key dead in exactly the
      * places you most want to dictate into, leaving the terminal as the only
      * thing that ever worked.
@@ -1571,7 +1597,7 @@ export default function AppShell() {
   }
 
   // --- LEFT workspace rail -------------------------------------------------
-  // The left rail is deliberately limited to Workspaces and the two global
+  // The left rail is deliberately limited to the project list and the two global
   // room launchers. File/navigation panels live in the right sidebar.
   const leftDrawerOpen = layoutState.sidebarVisible;
   useEffect(() => {
@@ -1609,19 +1635,6 @@ export default function AppShell() {
   function renderLeftUtilityPanel() {
     if (!leftDrawerOpen) return null;
 
-    const renderNavItem = (tool: LeftDrawerTool) => (
-      <button
-        key={tool}
-        type="button"
-        className={`left-sidebar-nav-item${leftActiveTool === tool ? ' active' : ''}`}
-        onClick={() => selectLeftTool(tool)}
-        aria-current={leftActiveTool === tool ? 'page' : undefined}
-      >
-        <span className="left-sidebar-nav-icon" aria-hidden="true">{LEFT_TOOL_META[tool].icon}</span>
-        <span className="left-sidebar-nav-label">{LEFT_TOOL_META[tool].title}</span>
-      </button>
-    );
-
     const renderRoomNavItem = (item: ActivityItem) => (
       <button
         key={item.id}
@@ -1635,6 +1648,27 @@ export default function AppShell() {
       </button>
     );
 
+    // The project-opening commands used to be a row of unlabelled icons on top
+    // of the project list. They read as a list here, above the global rooms.
+    const renderActionNavItem = (
+      key: string,
+      title: string,
+      icon: React.ReactNode,
+      onClick: () => void,
+      hint?: string,
+    ) => (
+      <button
+        key={key}
+        type="button"
+        className="left-sidebar-nav-item"
+        onClick={onClick}
+        title={hint ?? title}
+      >
+        <span className="left-sidebar-nav-icon" aria-hidden="true">{icon}</span>
+        <span className="left-sidebar-nav-label">{title}</span>
+      </button>
+    );
+
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
@@ -1642,7 +1676,7 @@ export default function AppShell() {
           width: 'var(--left-sidebar-width)',
           '--left-sidebar-width': `${layoutState.leftPanelWidth}px`,
         } as React.CSSProperties}
-        aria-label="Workspaces"
+        aria-label="Projects"
       >
         <div
           className="left-drawer-resize-handle"
@@ -1653,11 +1687,6 @@ export default function AppShell() {
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
             <span className="left-sidebar-app-name">Spacron</span>
-            {workspaceName && (
-              <span className="left-sidebar-workspace" title={workspaceName}>
-                {workspaceName}
-              </span>
-            )}
             {project && (
               <span className="left-sidebar-project" title={project?.root_path ?? undefined}>
                 {project.name}
@@ -1673,34 +1702,6 @@ export default function AppShell() {
             <Icon><path d="m15 18-6-6 6-6" /></Icon>
           </button>
         </header>
-
-        <div className="left-sidebar-mode-switch" role="group" aria-label="Workspace mode">
-          <span className="left-sidebar-mode-label">Workspace mode</span>
-          <div className="left-sidebar-mode-buttons">
-            <button
-              type="button"
-              className={currentInteractionMode === 'cli' ? 'active' : ''}
-              onClick={() => setInteractionMode('cli')}
-              aria-pressed={currentInteractionMode === 'cli'}
-            >
-              <span className="left-sidebar-mode-icon" aria-hidden="true">
-                <Icon><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></Icon>
-              </span>
-              <span className="left-sidebar-mode-text">Code</span>
-            </button>
-            <button
-              type="button"
-              className={currentInteractionMode === 'chat' ? 'active' : ''}
-              onClick={() => setInteractionMode('chat')}
-              aria-pressed={currentInteractionMode === 'chat'}
-            >
-              <span className="left-sidebar-mode-icon" aria-hidden="true">
-                <Icon><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon>
-              </span>
-              <span className="left-sidebar-mode-text">Conversational</span>
-            </button>
-          </div>
-        </div>
 
         <div className="left-sidebar-quick-actions">
           <button
@@ -1719,16 +1720,32 @@ export default function AppShell() {
           </button>
         </div>
 
-        <nav className="left-sidebar-nav" aria-label="Workspaces and global views">
-          <span className="left-sidebar-section-label">Workspaces</span>
-          {leftDrawerTools.map(renderNavItem)}
+        <nav className="left-sidebar-nav" aria-label="Project actions and global views">
+          {renderActionNavItem(
+            'create-project',
+            'Create Project',
+            <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></Icon>,
+            () => newFolderPromptOpen.set(true),
+            'Create Project… (Ctrl+N)',
+          )}
+          {renderActionNavItem(
+            'open-project',
+            'Open Project',
+            <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>,
+            () => void openProject(),
+            'Open Project Folder… (Ctrl+O)',
+          )}
+          {renderActionNavItem(
+            'clone-repo',
+            'Clone Repository',
+            <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon>,
+            () => cloneRepoPromptOpen.set(true),
+            'Clone Git Repository…',
+          )}
+          <div className="left-sidebar-nav-divider" aria-hidden="true" />
           {[tasksItem, sketchItem].map(renderRoomNavItem)}
         </nav>
 
-        <div className="left-sidebar-context-label" role="heading" aria-level={2}>
-          <span aria-hidden="true">{leftActiveTool ? LEFT_TOOL_META[leftActiveTool].icon : null}</span>
-          <span>Workspace</span>
-        </div>
         <div className="drawer-body">
           <ProjectHUD />
         </div>
@@ -1831,7 +1848,7 @@ export default function AppShell() {
         />
         <header className="drawer-header right-sidebar-header">
           <div className="right-sidebar-tool-tabs">
-            <div className="drawer-tabs" aria-label="Workspace navigation tools">
+            <div className="drawer-tabs" aria-label="Project navigation tools">
               {rightNavigatorTools.map((tool) => (
                 <button
                   key={tool}
@@ -2493,8 +2510,9 @@ export default function AppShell() {
   };
 
 
-  // Kept for command-palette access. The visible one-press action now lives in
-  // the Navigator, so the prompt bar does not duplicate it.
+  // Reachable three ways: the command palette, the sidebar's New Agent button,
+  // and the prompt bar in code mode — where it is the only one of the three
+  // that stays in reach with the left sidebar closed.
   const spawnAgentItem: ActivityItem = {
     id: 'spawnAgent',
     title: 'Spawn Agents',
@@ -2517,7 +2535,7 @@ export default function AppShell() {
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
 
-  // Command-palette launchers for the left workspace rail.
+  // Command-palette launchers for the left project rail.
   const leftNavDockItems: ActivityItem[] = leftDrawerTools.map((tool) => ({
     id: tool,
     title: LEFT_TOOL_META[tool].title,
@@ -2558,15 +2576,15 @@ export default function AppShell() {
     },
   ].filter((group) => group.items.length > 0);
   const paletteToolGroups: ToolMenuGroup[] = [
-    { id: 'workspace', label: 'Workspace', items: leftNavDockItems },
+    { id: 'projects', label: 'Projects', items: leftNavDockItems },
     { id: 'workspace-tools', label: 'Project tools', items: rightNavigatorItems },
     ...toolMenuGroups,
   ];
 
   // Layout actions stay as bare icons next to the Tools menu: they are pressed
   // constantly while arranging panes, so a popover round-trip would cost more
-  // than the chrome they take up. Spawn remains in this list for the command
-  // palette, but is filtered out of the prompt bar below.
+  // than the chrome they take up. Spawn leads the list in code mode and is
+  // filtered out in chat mode, where spawning is disabled anyway.
   const isExpanded = stageExpandedRoom !== null;
   const inSplit = ambientLayout === 'gallery';
   const layoutActionItems: ActivityItem[] = [
@@ -2680,6 +2698,7 @@ export default function AppShell() {
       { tab: 'voice', name: 'Settings: Voice' },
       { tab: 'terminal', name: 'Settings: Terminal' },
       { tab: 'agents', name: 'Settings: Agents' },
+      { tab: 'orchestrator', name: 'Settings: Orchestrator' },
       { tab: 'stats', name: 'Settings: Usage' },
       { tab: 'shortcuts', name: 'Settings: Shortcuts' },
       { tab: 'about', name: 'Settings: About' },
@@ -2767,6 +2786,14 @@ export default function AppShell() {
       return getSessionPromptTargetLabel(session, siblings);
     }
     if (id === 'dev-terminal') return 'Terminal';
+    // The DeepSeek room reads like an agent room: its assistant name here,
+    // the product in `roomKind` above it.
+    if (id === 'deepseek' && project?.root_path) {
+      return deepSeekAgentName(
+        deepSeekPanelRoot(deepSeekPlacementState, project.id, project.root_path),
+        allTerminalSessions.map((entry) => entry.agentName ?? '').filter(Boolean),
+      );
+    }
     if (id === 'workspace') {
       const tab = layoutState.sidebarTab;
       if (tab === 'git') return 'Source Control';
@@ -2783,11 +2810,13 @@ export default function AppShell() {
 
   function roomKind(id: RoomId) {
     if (isAgentRoomId(id)) {
+      // The product ("Claude Code", "Codex"), not the raw launch command.
       const session = getAgentSessionForRoom(id);
-      return session?.agentPreset ?? 'agent';
+      return getAgentDisplayName(session?.agentPreset) ?? 'agent';
     }
     if (id === 'terminal' || id === 'dev-terminal') return 'terminal';
     if (id === 'workspace') return layoutState.sidebarTab;
+    if (id === 'deepseek') return 'DeepSeek Harness';
     return 'tool';
   }
 
@@ -2831,6 +2860,8 @@ export default function AppShell() {
       return <Icon><rect x="2" y="4.5" width="20" height="15" rx="4" /><path d="M10 9.2 15 12l-5 2.8V9.2z" /></Icon>;
     case 'env':
       return <Icon><path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4z" /><path d="M9.5 12.2l1.8 1.8 3.4-3.6" /></Icon>;
+    case 'deepseek':
+      return <AgentBrandMark command="dsh" name="DeepSeek Harness" />;
     default:
       return null;
     }
@@ -3304,7 +3335,7 @@ export default function AppShell() {
     const isExpanded = stageExpandedRoom !== null;
 
     const persistentStageRooms: RoomId[] = [
-      ...(['terminal', 'dev-terminal', 'preview', 'sketch'] as RoomId[]).filter((room) =>
+      ...(['terminal', 'dev-terminal', 'preview', 'sketch', 'deepseek'] as RoomId[]).filter((room) =>
         openRooms.includes(room),
       ),
       ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
@@ -3526,7 +3557,7 @@ export default function AppShell() {
                   trailingControls={
                     <div className="prompt-trailing">
                       {layoutActionItems
-                        .filter((item) => item.id !== 'spawnAgent')
+                        .filter((item) => item.id !== 'spawnAgent' || currentInteractionMode === 'cli')
                         .map((item) => <ActivityButton key={item.id} item={item} />)}
                       <div className="prompt-trailing-separator" />
                       <ToolsMenu groups={toolMenuGroups} />

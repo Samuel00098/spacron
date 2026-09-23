@@ -83,6 +83,11 @@ pub fn terminal_create(
         _ => shell::detect_shell(),
     };
     let clean_cwd = resolve_terminal_cwd(cwd, &state)?;
+    // Provider keys never cross IPC; a launch asks for one by marker.
+    let env = env.map(|mut env| {
+        super::deepseek_harness::resolve_env_markers(&mut env);
+        env
+    });
     let pty_session = session::spawn(
         cols,
         rows,

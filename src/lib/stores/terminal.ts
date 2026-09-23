@@ -22,10 +22,16 @@ import { playNudge } from '$lib/services/nudge';
 import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import {
+  agentExecutable,
   agentReadsRulesFile,
   agentHasNativeExtras,
   ensureAgentRulesFiles,
 } from '$lib/services/orchestrator/agent-rules-file';
+
+/** Mirrors `DEEPSEEK_HARNESS_COMMAND`; the service is imported lazily here. */
+function isDeepSeekHarnessCommand(command: string): boolean {
+  return agentExecutable(command) === 'dsh';
+}
 import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator-brief';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
@@ -937,13 +943,14 @@ export function getSessionOutputLength(id: number): number {
 // tenth project announced "Terminal 31 closed" while the tab said "Terminal 1".
 // Capturing the label at close time keeps the message saying what the user was
 // actually looking at, in every project.
-const closingSessionLabels = new Map<number, string>();
+const closingSessions = new Map<number, { label: string; hidden: boolean }>();
 
 function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const isDev = devSessionIds.has(id);
   const sessionProjectId = terminalSessionProjects.get(id) ?? owningProjectId;
   const state = getProjectState(sessionProjectId, isDev);
   const session = state.sessions.find((x) => x.id === id);
+  const closing = closingSessions.get(id);
   exitCallbacks.get(id)?.(code);
   updateProjectState(sessionProjectId, (current) => ({
     ...current,
@@ -960,13 +967,11 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const visibleSessions = sessionProjectId === (isDev ? activeDevTerminalProjectId : activeTerminalProjectId) ? get(isDev ? devSessions : sessions) : state.sessions;
   const label = session
     ? getSessionLabel(session, visibleSessions)
-    : closingSessionLabels.get(id) ?? 'Terminal';
-  // `delete` returns whether the key existed — i.e. `killSession` ran for this
-  // session before its exit event landed, which is what separates a terminal the
-  // user closed from one that quit by itself. A killed pty frequently reports a
-  // non-zero exit code, so classifying by code alone announced every deliberate
-  // close as "process died".
-  const wasClosedByUser = closingSessionLabels.delete(id);
+    : closing?.label ?? 'Terminal';
+  // Map membership means `killSession` initiated this teardown. A killed pty
+  // frequently reports a non-zero exit code, so classifying by code alone
+  // announced every deliberate close as "process died".
+  const wasKilled = closingSessions.delete(id);
   const isAgent = isAgentSession(session);
   const clean = code === 0;
 
@@ -975,7 +980,7 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   // the watch noticing would otherwise keep the machine awake for nothing.
   agentSessionClosed(id);
 
-  if (session?.hidden) {
+  if (session?.hidden || closing?.hidden) {
     // Hidden sessions (background probes) are invisible by contract: no pane,
     // no tab, and no exit announcement.
   } else if (isAgent) {
@@ -986,14 +991,14 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
     // Never chime a completion for a terminal the USER closed: they did it,
     // they know, and a "done" cue there is the app claiming an agent finished
     // work that was cancelled out from under it.
-    if (!wasClosedByUser && get(announceAgentCompletions)) {
+    if (!wasKilled && get(announceAgentCompletions)) {
       playNudge(clean ? 'done' : 'failed');
     }
     // Orchestrator-tracked sessions (leased/adopted) already get a completion
     // card in the inbox on exit — the card is the notification. Only untracked
     // agent terminals — a CLI run by hand and never adopted — get the toast.
     if (!isOrchestratorTrackedSession(id)) {
-      if (wasClosedByUser) {
+      if (wasKilled) {
         showToast(`${label} closed`, 'info', 3000, true);
       } else if (clean) {
         // "Exited", not "finished its work". A clean exit is the process
@@ -1005,7 +1010,7 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
         showToast(`${label} exited with errors (code ${code})`, 'error', 8000, true);
       }
     }
-  } else if (wasClosedByUser || clean) {
+  } else if (wasKilled || clean) {
     showToast(`${label} closed`, 'info', 3000, true);
   } else {
     showToast(`${label} process died (exit ${code})`, 'error', 6000, true);
@@ -1815,6 +1820,27 @@ function launchFailedSince(sessionId: number, startLen: number): boolean {
 
 export type AgentReadiness = 'ready' | 'launch-failed';
 
+/**
+ * Whether an agent CLI actually came up, judged from its terminal after
+ * `waitForAgentReady` returned. That wait says "ready" even when the pane
+ * stayed silent, so it cannot tell a live agent from a blank screen; this can:
+ * - `started`: the CLI drew its interface (a TUI marker) or printed a banner.
+ * - `blank`: the session is alive but nothing the CLI drew ever arrived.
+ * - `launch-failed`: the shell could not find the command (not installed).
+ * - `gone`: the session is closed or its process exited.
+ */
+export type AgentStartupState = 'started' | 'blank' | 'launch-failed' | 'gone';
+
+export function agentStartupState(sessionId: number): AgentStartupState {
+  const session = findSessionAnyProject(sessionId);
+  if (!session || !session.isRunning) return 'gone';
+  const launchStart = agentLaunchStartLengths.get(sessionId) ?? 0;
+  if (launchFailedSince(sessionId, launchStart)) return 'launch-failed';
+  const grown = getSessionOutputBuffer(sessionId).slice(launchStart);
+  if (READY_TUI_MARKERS.some((marker) => grown.includes(marker))) return 'started';
+  return grown.length >= READY_BOOT_BANNER_DELTA ? 'started' : 'blank';
+}
+
 export async function waitForAgentReady(sessionId: number): Promise<AgentReadiness> {
   const startedAt = Date.now();
   const initialBuffer = getSessionOutputBuffer(sessionId);
@@ -2391,6 +2417,12 @@ export async function spawnAgentPreset(
     /** Provider-native model/reasoning flags for this one Chat session. */
     runtimeArgs?: string;
     /**
+     * Launch under a specific signed-in account rather than the user's current
+     * selection. Failover passes this so a successor can run on an account that
+     * still has headroom without moving the picker in Settings.
+     */
+    accountId?: string | null;
+    /**
      * Run against the new session before the CLI is launched. Used to attach a
      * worktree, which has to be registered while the pane is still empty — the
      * reconciler stages that branch back, and a late registration races the
@@ -2431,8 +2463,23 @@ export async function spawnAgentPreset(
   // this needs no per-provider branching here. Merged *under* `launchEnv` on
   // purpose: an env var the user set themselves in Settings is a deliberate
   // override and must outrank the account picker.
-  const accountEnv = await accountEnvFor(command);
-  const effectiveEnv = { ...accountEnv, ...launchEnv };
+  const accountEnv = await accountEnvFor(command, opts?.accountId);
+  // DeepSeek Harness has no terminal UI: its session stays a plain shell until
+  // the goal arrives, when `deliverDeepSeekTask` types a headless launch. Only
+  // the env has to be in place now. Dynamic import: the service reaches stores
+  // that import this module.
+  const deepSeek = isDeepSeekHarnessCommand(command) ? await import('$lib/services/deepseek-harness') : null;
+  let deepSeekEnv: Record<string, string> = {};
+  if (deepSeek) {
+    const problem = await deepSeek.deepSeekWorkerProblem();
+    if (problem) {
+      showToast(problem, 'error', 10000);
+      return null;
+    }
+    const { getMcpHttpUrl } = await import('./mcpBridge');
+    deepSeekEnv = deepSeek.deepSeekWorkerEnv(await getMcpHttpUrl());
+  }
+  const effectiveEnv = { ...accountEnv, ...launchEnv, ...deepSeekEnv };
 
   const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, {
     assignPane: false,
@@ -2469,12 +2516,16 @@ export async function spawnAgentPreset(
   // resolved command + permission args + MCP flags.
   const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${mcpFlags}`;
 
-  agentLaunchStartLengths.set(sessionId, getSessionOutputLength(sessionId));
-  suppressAgentDetection.add(sessionId);
-  try {
-    writeToSession(sessionId, launchLine + '\r');
-  } finally {
-    suppressAgentDetection.delete(sessionId);
+  if (deepSeek) {
+    deepSeek.markDeepSeekWorkerSession(sessionId);
+  } else {
+    agentLaunchStartLengths.set(sessionId, getSessionOutputLength(sessionId));
+    suppressAgentDetection.add(sessionId);
+    try {
+      writeToSession(sessionId, launchLine + '\r');
+    } finally {
+      suppressAgentDetection.delete(sessionId);
+    }
   }
 
   if (!activate && projectForFocus && priorActive?.sessionId != null && priorActive.sessionId !== sessionId) {
@@ -2506,7 +2557,7 @@ export async function killAllSessions() {
   agentLaunchStartLengths.clear();
   terminalSessionProjects.clear();
   suppressAgentDetection.clear();
-  closingSessionLabels.clear();
+  closingSessions.clear();
   autoBriefInFlight.clear();
   devSessionIds.clear();
   commandBlocks.set(new Map());
@@ -2532,7 +2583,15 @@ export async function killSession(id: number) {
   const closing = siblings.find((s) => s.id === id);
   // Remember what this terminal was called before we drop it from state — the
   // pty's exit event arrives after, and that is what names the toast.
-  if (closing) closingSessionLabels.set(id, getSessionLabel(closing, siblings));
+  if (closing) {
+    // The session is removed before its PTY exit callback runs, so preserve the
+    // hidden flag too. Otherwise an automatic hidden-shell cleanup looks like
+    // a user closing a visible terminal and emits a misleading toast.
+    closingSessions.set(id, {
+      label: getSessionLabel(closing, siblings),
+      hidden: Boolean(closing.hidden),
+    });
+  }
 
   if (projectId) {
     // Closing the pane is where a worktree's disk space comes back, but it used to

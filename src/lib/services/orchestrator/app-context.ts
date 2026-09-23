@@ -31,6 +31,7 @@ const PANEL_FLAGS: Array<{ flag: keyof LayoutState; label: string }> = [
   { flag: 'toolboxVisible', label: 'toolbox' },
   { flag: 'mobileVisible', label: 'mobile' },
   { flag: 'sketchVisible', label: 'sketch' },
+  { flag: 'deepseekVisible', label: 'deepseek' },
 ];
 
 /** Every view the assistant may `navigate` to (matches layout's known views). */

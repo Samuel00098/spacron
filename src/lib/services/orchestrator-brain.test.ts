@@ -39,12 +39,29 @@ const currentAiModel = vi.hoisted(() => {
 });
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('$lib/services/ai-keychain', () => ({ isProviderApiKeyConfiguredLocal }));
+vi.mock('./live-agent-models', () => ({
+  peekLiveAgentProviderModels: () => null,
+  loadLiveAgentProviderModels: () => Promise.resolve([]),
+}));
+const skillSettings = vi.hoisted(() => {
+  const store = <T,>(initial: T) => {
+    let value = initial;
+    return { subscribe(run: (v: T) => void) { run(value); return () => {}; }, set(next: T) { value = next; } };
+  };
+  return {
+    disabled: store<string[]>([]),
+    custom: store<Array<{ id: string; title: string; instructions: string; enabled: boolean }>>([]),
+  };
+});
 vi.mock('$lib/stores/settings', () => ({
   aiProvider,
   currentAiModel,
   getProviderDef,
   isLocalProvider,
   getProviderBaseUrl,
+  providerSetupHint: (id: string) => `Add the ${id} API key in Settings → AI Connections.`,
+  orchestratorDisabledSkills: skillSettings.disabled,
+  orchestratorCustomSkills: skillSettings.custom,
 }));
 
 import {
@@ -53,6 +70,13 @@ import {
   resolveAgentCommand,
   ADMIN_KEYWORD_RE,
   detectStatedPlacement,
+  describeTurnFocus,
+  countAsks,
+  repeatsPreviousAnswer,
+  isAcknowledgement,
+  classifyTurnIntent,
+  parseOpenAgentsCommand,
+  isProtocolDebris,
 } from './orchestrator-brain';
 
 const ALL_AGENTS = [
@@ -65,26 +89,6 @@ const ALL_AGENTS = [
 ];
 
 describe('routeOrchestratorRequest', () => {
-  it('adds confident Jev advice to Chat without letting it authorize delegation', async () => {
-    invoke.mockResolvedValue('Answer.');
-    classifyRouting.mockResolvedValue('split');
-    suggestReasoningLevel.mockResolvedValue('high');
-    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
-      conversational: true,
-      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
-    });
-    const prompt = String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt);
-    expect(prompt).toContain('Jev advisory for this prompt: split; reasoning effort high');
-    expect(prompt).toContain('delegation approval rules');
-    classifyRouting.mockResolvedValue(null);
-    suggestReasoningLevel.mockResolvedValue(null);
-    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
-      conversational: true,
-      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
-    });
-    expect(String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt)).not.toContain('Jev advisory');
-  });
-
   beforeEach(() => {
     invoke.mockReset();
     classifyRouting.mockReset().mockResolvedValue(null);
@@ -213,6 +217,21 @@ describe('routeOrchestratorRequest', () => {
     expect(call.userText).toContain('- Make it fast');
     expect(call.userText).toContain('New user message: Ship it now');
     expect(call.userText).not.toContain('Orchestrator:');
+  });
+
+  it('does not describe a reusable session after a finished turn as still in progress', async () => {
+    const result = await routeOrchestratorRequest('what are the agents doing', [{ command: 'claude', name: 'Claude' }], {
+      taskOutputs: [{
+        name: 'Backend',
+        agent: 'claude',
+        title: 'Run the auth checks',
+        status: 'in-progress',
+        turnState: 'ready',
+      }],
+    });
+
+    expect(result.reply).toContain('ready for your next message');
+    expect(result.reply).not.toContain('still in progress');
   });
 
   it('preserves the model input-required signal without treating every question as blocking', async () => {
@@ -408,6 +427,34 @@ describe('routeOrchestratorRequest', () => {
     expect(result.reply).toContain('lacks an index');
     expect(result.failed).toBeFalsy();
     expect(invoke.mock.calls.some((call) => String((call[1] as { userText: string }).userText).includes('complete 3-6 item plan'))).toBe(true);
+  });
+
+  it('sends an "image generation is unavailable" refusal back to call generate_image', async () => {
+    // The 2026-09-22 screenshot: the ChatGPT brain refused with 0 operations.
+    invoke
+      .mockResolvedValueOnce('{"reply":"I couldn’t create the dog image because image generation is unavailable in this session.","actions":[]}')
+      .mockResolvedValueOnce('{"tool_calls":[{"id":"1","name":"generate_image","args":{"prompt":"a dog"}}]}')
+      .mockResolvedValueOnce('{"reply":"Here is a friendly dog.","actions":[]}');
+    const toolExecutor = vi.fn(async () => ({ output: 'Generated image saved.' }));
+
+    const result = await routeOrchestratorRequest('can you create an image of aa dog', ALL_AGENTS, { toolExecutor, projectRoot: '/repo' });
+
+    expect(toolExecutor).toHaveBeenCalledWith(expect.objectContaining({ name: 'generate_image' }));
+    expect(invoke.mock.calls.some((call) => String((call[1] as { userText: string }).userText).includes('generate_image IS available'))).toBe(true);
+    expect(result.reply).toContain('friendly dog');
+  });
+
+  it('generates the image itself when the brain refuses twice', async () => {
+    // The San Francisco Bay screenshot: the recovery pass was refused too.
+    const refusal = '{"reply":"I couldn’t generate the image because the image-generation tool isn’t available in this session.","actions":[]}';
+    invoke.mockResolvedValueOnce(refusal).mockResolvedValueOnce(refusal);
+    const toolExecutor = vi.fn(async () => ({ output: 'Generated image with chatgpt, saved at /repo/generations/1.png and shown to the user in chat.' }));
+
+    const result = await routeOrchestratorRequest('can you create an image of the san-francisco bay', ALL_AGENTS, { toolExecutor, projectRoot: '/repo' });
+
+    expect(toolExecutor).toHaveBeenCalledWith(expect.objectContaining({ name: 'generate_image', args: { prompt: 'can you create an image of the san-francisco bay' } }));
+    expect(result.reply).toBe('Here is the image.');
+    expect(result.failed).toBeFalsy();
   });
 
   it('continues an incomplete project snapshot before accepting review findings', async () => {
@@ -608,6 +655,122 @@ describe('routeOrchestratorRequest', () => {
     expect(result.reply).toContain('desktop keychain could not provide');
     expect(result.reply).toContain('saved openai API key');
     expect(result.reply).not.toContain('Add the OpenAI API key');
+  });
+
+  it('clearly notifies the user when a provider has exhausted its credits', async () => {
+    invoke.mockRejectedValueOnce(new Error('Model request failed (402 Payment Required): insufficient_quota'));
+
+    const result = await routeOrchestratorRequest('review the application', ALL_AGENTS, {
+      llmConfig: {
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+        hasApiKey: true,
+      },
+    });
+
+    expect(result).toMatchObject({ viaLLM: false, failed: true, actions: [] });
+    expect(result.reply).toContain('no remaining usage credit or quota');
+    expect(result.reply).toContain('billing or usage page');
+  });
+
+  it('explains that OpenCode free models only run inside OpenCode instead of blaming the key', async () => {
+    invoke.mockRejectedValueOnce(new Error('auth: opencode / big-pickle (403 Forbidden): {"type":"error","error":{"type":"FreeTierError","message":"Error from provider (Console): OpenCode\'s free tier can only be used from within OpenCode"}}'));
+
+    const result = await routeOrchestratorRequest('review the application', ALL_AGENTS, {
+      llmConfig: { provider: 'opencode', model: 'big-pickle', hasApiKey: true },
+    });
+
+    expect(result).toMatchObject({ failed: true, actions: [] });
+    expect(result.reply).toContain("OpenCode's free models");
+    expect(result.reply).toContain('OpenCode Go subscription');
+    expect(result.reply).not.toContain('rejected the saved');
+  });
+
+  it("quotes the provider's own reason and the Zen/Go difference when OpenCode rejects a key", async () => {
+    invoke.mockRejectedValueOnce(new Error('auth: opencode / glm-5.3-flash (401 Unauthorized): {"type":"error","error":{"type":"AuthError","message":"Invalid API key."}}'));
+
+    const result = await routeOrchestratorRequest('review the application', ALL_AGENTS, {
+      llmConfig: { provider: 'opencode', model: 'glm-5.3-flash', hasApiKey: true },
+    });
+
+    expect(result.reply).toContain('"Invalid API key."');
+    expect(result.reply).toContain('switch the provider to OpenCode Go subscription');
+  });
+
+  it('surfaces native transport quota failures with the same credit notice', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'ai_agent_capabilities') return {};
+      throw new Error('quota: openai / gpt-5.4-mini (402): Payment Required');
+    });
+
+    const result = await routeOrchestratorRequest('review the application', ALL_AGENTS, {
+      nativeTools: true,
+      toolExecutor: vi.fn(),
+      llmConfig: {
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+        hasApiKey: true,
+      },
+    });
+
+    expect(result).toMatchObject({ viaLLM: false, failed: true, actions: [] });
+    expect(result.reply).toContain('no remaining usage credit or quota');
+  });
+
+  it('prompts typed chat as a chat assistant and keeps the spoken style for voice only', async () => {
+    invoke.mockResolvedValue('Answer.');
+    const llmConfig = { provider: 'openai' as const, model: 'gpt-4.1', hasApiKey: true };
+
+    await routeOrchestratorRequest('how does the router work?', ALL_AGENTS, { conversational: true, llmConfig });
+    const chatPrompt = String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt);
+    expect(chatPrompt).toContain('CHAT MODE');
+    expect(chatPrompt).not.toContain('VOICE CONVERSATION MODE');
+
+    await routeOrchestratorRequest('how does the router work?', ALL_AGENTS, { conversational: true, voice: true, llmConfig });
+    const voicePrompt = String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt);
+    expect(voicePrompt).toContain('VOICE CONVERSATION MODE');
+    expect(voicePrompt).not.toContain('CHAT MODE');
+  });
+
+  it('adds confident Jev advice to Chat without letting it authorize delegation', async () => {
+    invoke.mockResolvedValue('Answer.');
+    classifyRouting.mockResolvedValue('split');
+    suggestReasoningLevel.mockResolvedValue('high');
+    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
+      conversational: true,
+      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
+    });
+    const prompt = String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt);
+    expect(prompt).toContain('Jev advisory for this prompt: split; reasoning effort high');
+    expect(prompt).toContain('delegation approval rules');
+    classifyRouting.mockResolvedValue(null);
+    suggestReasoningLevel.mockResolvedValue(null);
+    await routeOrchestratorRequest('How should I approach this project?', ALL_AGENTS, {
+      conversational: true,
+      llmConfig: { provider: 'openai', model: 'gpt-5', hasApiKey: true },
+    });
+    expect(String(invoke.mock.calls.at(-1)?.[1]?.systemPrompt)).not.toContain('Jev advisory');
+  });
+
+  it.each([
+    'model_unavailable: openai / gpt-9 (404 Not Found): {"error":{"code":"model_not_found"}}',
+    'Model request failed (404): The model `gpt-9` does not exist or you do not have access to it.',
+    'Model request failed (404): This model is only supported in v1/responses and not in v1/chat/completions.',
+  ])('reports an unusable model instead of silently using the keyword fallback: %s', async (error) => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'ai_agent_capabilities') return {};
+      throw new Error(error);
+    });
+
+    const result = await routeOrchestratorRequest('spawn codex to fix the login bug', ALL_AGENTS, {
+      nativeTools: true,
+      toolExecutor: vi.fn(),
+      llmConfig: { provider: 'openai', model: 'gpt-9', hasApiKey: true },
+    });
+
+    expect(result).toMatchObject({ viaLLM: false, failed: true, actions: [] });
+    expect(result.reply).toContain('"gpt-9"');
+    expect(result.reply).toContain('Composer model menu');
   });
 
   it('does not retry another model after the local input limit rejects the request', async () => {
@@ -839,6 +1002,28 @@ describe('routeOrchestratorRequest', () => {
     const result = await routeOrchestratorRequest('have codex do x', ALL_AGENTS);
     expect(result.viaLLM).toBe(true);
     expect(result.actions).toEqual([{ kind: 'spawn', agent: 'codex', prompt: 'do x', name: null, role: null, files: null, skipWorktree: false, placement: null }]);
+  });
+
+  it('carries the worker model and reasoning selection through a spawn action', async () => {
+    invoke.mockResolvedValueOnce(
+      '{"reply":"On it.","actions":[{"kind":"spawn","agent":"codex","prompt":"do x","model":"gpt-5-codex","reasoningEffort":"high"}]}'
+    );
+
+    const result = await routeOrchestratorRequest('have codex do x', ALL_AGENTS);
+    expect(result.actions).toEqual([
+      {
+        kind: 'spawn',
+        agent: 'codex',
+        prompt: 'do x',
+        name: null,
+        role: null,
+        files: null,
+        model: 'gpt-5-codex',
+        reasoningEffort: 'high',
+        skipWorktree: false,
+        placement: null,
+      },
+    ]);
   });
 
   it('carries a valid team role through a spawn action', async () => {
@@ -1155,7 +1340,7 @@ describe('stated placement on spawn actions', () => {
     const result = await routeOrchestratorRequest('do that please', ALL_AGENTS, { toolExecutor, conversation: [{ role: 'assistant', text: 'I can inspect the app structure.' }] });
     expect(toolExecutor).toHaveBeenCalledTimes(1);
     expect(result.reply).toContain('React application');
-    expect(invoke.mock.calls[0][1].userText).toContain('assistant: I can inspect the app structure.');
+    expect(invoke.mock.calls[0][1].userText).toContain('assistant (your previous answer): I can inspect the app structure.');
   });
 
   it('routes the screenshot\'s inspection request through the LLM instead of the task-panel fast path', async () => {
@@ -1394,6 +1579,37 @@ describe('stated placement on spawn actions', () => {
 
 describe('native orchestrator execution', () => {
   beforeEach(() => { invoke.mockReset(); isProviderApiKeyConfiguredLocal.mockReturnValue(true); aiProvider.set('openai'); currentAiModel.set('model'); });
+  it('answers a simple conversational question without running tools', async () => {
+    invoke.mockImplementation(async (command) => command === 'ai_agent_capabilities' ? {} : {
+      text: JSON.stringify({ reply: 'Paris is the capital of France.', actions: [] }), calls: [], assistant: { role: 'assistant' },
+    });
+    const executor = vi.fn();
+    const result = await routeOrchestratorRequest('What is the capital of France?', ALL_AGENTS, {
+      conversational: true, nativeTools: true, toolExecutor: executor,
+    });
+    expect(result.reply).toBe('Paris is the capital of France.');
+    expect(result.failed).not.toBe(true);
+    expect(executor).not.toHaveBeenCalled();
+    expect(invoke.mock.calls.filter(([command]) => command === 'ai_agent_turn')).toHaveLength(1);
+  });
+
+  it('recovers from an empty answer after a tool result without repeating the tool', async () => {
+    let requests = 0;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'ai_agent_capabilities') return {};
+      if (requests++ === 0) return { text: '', calls: [{ id: 'read', name: 'read_file', args: { path: 'a' } }], assistant: { role: 'assistant' } };
+      expect(args.request.exchanges).toHaveLength(1);
+      if (requests === 2) throw 'empty_response: model returned neither text nor tools';
+      return { text: JSON.stringify({ reply: 'The file contains the expected configuration.', actions: [] }), calls: [], assistant: { role: 'assistant' } };
+    });
+    const executor = vi.fn(async () => ({ output: 'configuration' }));
+    const result = await routeOrchestratorRequest('Read file a and explain it', ALL_AGENTS, { nativeTools: true, toolExecutor: executor });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(requests).toBe(3);
+    expect(result.failed).not.toBe(true);
+    expect(result.reply).toBe('The file contains the expected configuration.');
+  });
+
   it('continues beyond eight tool rounds using structured results', async () => {
     let round = 0;
     invoke.mockImplementation(async (command, args) => {
@@ -1420,13 +1636,40 @@ describe('native orchestrator execution', () => {
     });
     let content = 'old';
     const order: string[] = [];
-    const result = await routeOrchestratorRequest('Update the file and check it', ALL_AGENTS, { nativeTools: true,
+    vi.useFakeTimers();
+    const pending = routeOrchestratorRequest('Update the file and check it', ALL_AGENTS, { nativeTools: true,
       toolExecutor: async call => { order.push(call.name); if (call.name === 'write_file') content = 'new'; else expect(content).toBe('new'); return { output: content }; } });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    vi.useRealTimers();
     expect(order).toEqual(['write_file', 'read_file']);
-    expect(requests).toBe(3);
+    // One successful round, then the failing request plus its two backoff retries.
+    expect(requests).toBe(4);
     expect(result.failed).toBe(true);
-    expect(result.reply).toContain('after 2 attempts');
+    expect(result.reply).toContain('after 3 attempts');
     expect(result.reply).toContain('Completed tool work is preserved');
+  });
+
+  it('gives every request its own retry budget, so an early blip does not doom a later round', async () => {
+    let requests = 0;
+    invoke.mockImplementation(async (command) => {
+      if (command === 'ai_agent_capabilities') return {};
+      requests += 1;
+      // Rounds 1 and 2 each fail once before succeeding.
+      if (requests === 1 || requests === 3) throw new Error('timeout: error sending request: operation timed out');
+      if (requests === 2) return { text: '', calls: [{ id: 'r', name: 'read_file', args: { path: 'a' } }], assistant: { role: 'assistant' } };
+      return { text: 'Read it; all good.', calls: [], assistant: { role: 'assistant' } };
+    });
+
+    vi.useFakeTimers();
+    const pending = routeOrchestratorRequest('check the file', ALL_AGENTS, { nativeTools: true, toolExecutor: vi.fn(async () => ({ output: 'x' })) });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    vi.useRealTimers();
+
+    expect(requests).toBe(4);
+    expect(result.failed).not.toBe(true);
+    expect(result.reply).toContain('all good');
   });
 
   it('retries a transient network failure on the same model and continues', async () => {
@@ -1442,10 +1685,14 @@ describe('native orchestrator execution', () => {
     });
     const executor = vi.fn(async () => ({ output: 'new content' }));
 
-    const result = await routeOrchestratorRequest('check the file', ALL_AGENTS, {
+    vi.useFakeTimers();
+    const pending = routeOrchestratorRequest('check the file', ALL_AGENTS, {
       nativeTools: true,
       toolExecutor: executor,
     });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    vi.useRealTimers();
 
     expect(requests).toBe(3);
     expect(executor).toHaveBeenCalledTimes(1);
@@ -1517,5 +1764,356 @@ describe('native orchestrator execution', () => {
 
     expect(round).toBe(2);
     expect(result.failed).not.toBe(true);
+  });
+
+  it('runs the project check after edits and sends a failure back to be fixed', async () => {
+    let round = 0;
+    const prompts: string[] = [];
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'ai_agent_capabilities') return {};
+      prompts.push(JSON.stringify(args));
+      const current = round++;
+      if (current === 0 || current === 2) {
+        return { text: '', calls: [{ id: `w${current}`, name: 'edit_file', args: { path: 'src/a.ts', old_string: 'a', new_string: 'b' } }], assistant: { role: 'assistant' } };
+      }
+      return { text: JSON.stringify({ reply: 'Changed src/a.ts.', actions: [] }), calls: [], assistant: { role: 'assistant' } };
+    });
+    const executor = vi.fn(async () => ({ output: 'Edited src/a.ts (replaced 1 occurrence).' }));
+    const postEditCheck = vi.fn()
+      .mockResolvedValueOnce({ command: 'npm run check', ok: false, output: 'exit 2 in 9.0s: `npm run check`\nsrc/a.ts(1,7): error TS2322' })
+      .mockResolvedValueOnce({ command: 'npm run check', ok: true, output: 'exit 0 in 9.0s: `npm run check`' });
+
+    const result = await routeOrchestratorRequest('Fix the bug in src/a.ts', ALL_AGENTS, {
+      nativeTools: true,
+      toolExecutor: executor,
+      projectRoot: '/repo',
+      postEditCheck,
+    });
+
+    expect(postEditCheck).toHaveBeenCalledTimes(2);
+    expect(prompts[2]).toContain('error TS2322');
+    // The passing check counts as verification: no extra "run your tests" round.
+    expect(round).toBe(4);
+    expect(prompts.some((p) => /no verification afterwards/i.test(p))).toBe(false);
+    expect(result).toMatchObject({ reply: 'Changed src/a.ts.' });
+  });
+
+  it('frames each new message: follow-up, several questions, or a go-ahead', async () => {
+    const previous = [
+      { role: 'user' as const, text: 'Review the project' },
+      { role: 'assistant' as const, text: 'Here is the review.' },
+    ];
+    expect(describeTurnFocus('What about point 4?', { conversation: previous })).toContain('Answer THIS message specifically');
+    expect(describeTurnFocus('okay continue', { conversation: previous })).toContain('continue the previous task');
+    expect(describeTurnFocus('Why does lint fail? And is Clerk configured?', { conversation: previous })).toContain('2 questions or requests: answer every one');
+    expect(describeTurnFocus('1. fix lint\n2. add tests\n3. update docs')).toContain('3 questions or requests');
+    expect(describeTurnFocus('Hello')).toBeNull();
+    expect(countAsks('Is it done?')).toBe(1);
+  });
+
+  it('keeps the previous answer whole and puts the turn focus right before the new message', async () => {
+    invoke.mockResolvedValueOnce('{"reply":"Point 4 is about test coverage.","actions":[]}');
+    const longAnswer = `${'Finding. '.repeat(300)}4. Test coverage is thin.`;
+    await routeOrchestratorRequest('what about point 4?', ALL_AGENTS, {
+      conversation: [{ role: 'user', text: 'Review it' }, { role: 'assistant', text: longAnswer }],
+    });
+    const userText: string = invoke.mock.calls[0][1].userText;
+    expect(userText).toContain('4. Test coverage is thin.');
+    expect(userText.indexOf('Turn focus:')).toBeLessThan(userText.indexOf('New user message: what about point 4?'));
+  });
+
+  it('sends a re-sent previous answer back to answer the new message', async () => {
+    const report = Array.from({ length: 40 }, (_, i) => `Finding ${i}: the module number ${i} needs clearer validation and better error handling.`).join('\n');
+    invoke
+      .mockResolvedValueOnce(JSON.stringify({ reply: report, actions: [] }))
+      .mockResolvedValueOnce('{"reply":"Lint fails because ESLint has no config for the app router.","actions":[]}');
+
+    const result = await routeOrchestratorRequest('why does lint fail?', ALL_AGENTS, {
+      toolExecutor: vi.fn(),
+      conversation: [{ role: 'user', text: 'Review it' }, { role: 'assistant', text: report }],
+    });
+
+    expect(invoke.mock.calls[1][1].userText).toContain('repeats your previous answer');
+    expect(result.reply).toBe('Lint fails because ESLint has no config for the app router.');
+    expect(repeatsPreviousAnswer(report, 'say that again', { conversation: [{ role: 'assistant', text: report }] })).toBe(false);
+  });
+
+  it('tells a thank-you apart from a request', () => {
+    for (const thanks of ['this is good, thanks for the work on the project', 'Thank you!', 'perfect, well done', 'okay great, thanks', 'That looks good']) {
+      expect(isAcknowledgement(thanks), thanks).toBe(true);
+    }
+    for (const request of ['thanks, now add tests', 'great, go ahead', 'thanks! can you also review the API?', 'okay continue', 'looks good but the lint still fails', 'why is this great?']) {
+      expect(isAcknowledgement(request), request).toBe(false);
+    }
+    const previous = [
+      { role: 'user' as const, text: 'Inspect the project and suggest improvements' },
+      { role: 'assistant' as const, text: 'Here is the review.' },
+    ];
+    expect(describeTurnFocus('Yeah this is good, thanks for the work', { conversation: previous })).toContain('thanking you');
+  });
+
+  it('feeds a whole project snapshot back to the model instead of an 18k slice', async () => {
+    // A real read_project snapshot is far bigger than the old fixed cap, which
+    // is why the model reported that the project snapshot was incomplete.
+    const snapshot = `START-OF-SNAPSHOT\n${'export const value = 1;\n'.repeat(3000)}END-OF-SNAPSHOT`;
+    expect(snapshot.length).toBeGreaterThan(60_000);
+    const toolExecutor = vi.fn(async () => ({ output: snapshot }));
+    invoke
+      .mockResolvedValueOnce('{"tool_calls":[{"id":"1","name":"read_project","args":{}}]}')
+      .mockResolvedValueOnce('{"reply":"Reviewed the project.","actions":[]}');
+
+    await routeOrchestratorRequest('go through the application and report what works', ALL_AGENTS, {
+      toolExecutor,
+      projectRoot: '/repo',
+    });
+
+    const secondCall = invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities')[1];
+    const userText: string = secondCall[1].userText;
+    expect(userText).toContain('START-OF-SNAPSHOT');
+    expect(userText).toContain('END-OF-SNAPSHOT');
+    expect(userText.length).toBeGreaterThan(50_000);
+  });
+
+  it('keeps tool evidence when the surrounding context is huge', async () => {
+    const snapshot = `START-OF-SNAPSHOT\n${'x'.repeat(40_000)}\nEND-OF-SNAPSHOT`;
+    const toolExecutor = vi.fn(async () => ({ output: snapshot }));
+    invoke
+      .mockResolvedValueOnce('{"tool_calls":[{"id":"1","name":"read_project","args":{}}]}')
+      .mockResolvedValueOnce('{"reply":"Reviewed.","actions":[]}');
+
+    await routeOrchestratorRequest('review the project', ALL_AGENTS, {
+      toolExecutor,
+      projectRoot: '/repo',
+      // A conversation far bigger than the whole budget: the evidence still
+      // survives, and the older context is trimmed first.
+      conversation: Array.from({ length: 12 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', text: `old turn ${i} ${'y'.repeat(12_000)}` })),
+    });
+
+    const userText: string = invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities')[1][1].userText;
+    expect(userText).toContain('START-OF-SNAPSHOT');
+    expect(userText).toContain('END-OF-SNAPSHOT');
+    expect(userText.length).toBeLessThanOrEqual(ORCHESTRATOR_USER_TEXT_CHAR_LIMIT);
+  });
+
+  it('sends an index instead of a second full copy when the transport already carries the results', async () => {
+    const snapshot = `START-OF-SNAPSHOT\n${'z'.repeat(40_000)}\nEND-OF-SNAPSHOT`;
+    const toolExecutor = vi.fn(async () => ({ output: snapshot }));
+    // A transport turn goes through ai_agent_turn, which replays the full
+    // outputs in its own history.
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'ai_agent_capabilities') return {};
+      const round = invoke.mock.calls.filter(([name]) => name === 'ai_agent_turn').length;
+      return round === 1
+        ? { text: '{"tool_calls":[{"id":"1","name":"read_project","args":{}}]}', calls: [{ id: '1', name: 'read_project', args: {} }], assistant: { role: 'assistant' }, finishReason: 'tool_calls', usage: null }
+        : { text: '{"reply":"Reviewed.","actions":[]}', calls: [], assistant: { role: 'assistant' }, finishReason: 'stop', usage: null };
+    });
+
+    await routeOrchestratorRequest('review the project', ALL_AGENTS, { toolExecutor, projectRoot: '/repo', nativeTools: true });
+
+    const userText: string = invoke.mock.calls.filter(([command]) => command === 'ai_agent_turn')[1][1].request.userText;
+    expect(userText).toMatch(/tool_result \S+ \(read_project, ok, 400\d\d chars\)/);
+    expect(userText).toContain('read_tool_result(id)');
+    // The 40k snapshot is not repeated: the prompt stays a fraction of its size.
+    expect(userText.length).toBeLessThan(20_000);
+    expect(userText).not.toContain('END-OF-SNAPSHOT');
+  });
+
+  it('tells the model the exact offset to continue a truncated project scan', async () => {
+    const partial = 'Next review offset=39. Broad project snapshot: read 39 of 80 relevant text file(s), 120000 characters. Some files were omitted or truncated for safety.';
+    const toolExecutor = vi.fn(async () => ({ output: partial }));
+    invoke
+      .mockResolvedValueOnce('{"tool_calls":[{"id":"1","name":"read_project","args":{}}]}')
+      .mockResolvedValueOnce('{"reply":"I can only give a partial review; the remaining files were not available.","actions":[]}')
+      .mockResolvedValueOnce('{"reply":"Full review done.","actions":[]}');
+
+    await routeOrchestratorRequest('go through the application and report what works', ALL_AGENTS, { toolExecutor, projectRoot: '/repo' });
+
+    const prompts = invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities').map(([, args]) => `${args.systemPrompt}${args.userText}`);
+    const nudge = prompts.find((prompt) => prompt.includes('The project snapshot is incomplete'));
+    expect(nudge).toContain('{"offset": 39}');
+    expect(nudge).toContain('do not ask the user for permission to keep reading');
+  });
+
+  it('opens the requested number of agents itself, without asking the model', async () => {
+    const result = await routeOrchestratorRequest('can you open 2 claude code agent', ALL_AGENTS, { conversational: true });
+    expect(invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities')).toHaveLength(0);
+    expect(result.actions).toEqual([
+      { kind: 'spawn', agent: 'claude', prompt: null },
+      { kind: 'spawn', agent: 'claude', prompt: null },
+    ]);
+    expect(result.reply).toBe('Opening 2 Claude Code agents. Their terminals will be ready for you.');
+  });
+
+  it('only treats a pure open request as one', () => {
+    const open = (text: string) => {
+      const parsed = parseOpenAgentsCommand(text, ALL_AGENTS);
+      return parsed ? `${parsed.count}x${parsed.agent.command}` : null;
+    };
+    expect(open('open codex')).toBe('1xcodex');
+    expect(open('Please spawn three Claude agents.')).toBe('3xclaude');
+    expect(open('open a couple of codex agents in a worktree')).toBe('2xcodex');
+    expect(open('launch 2 agents')).toBe('2xclaude');
+    expect(open('open 50 claude agents')).toBe('8xclaude');
+    // Carries a task, or is not about agents: the model decides.
+    expect(open('open claude and fix the login bug')).toBeNull();
+    expect(open('open claude to refactor the router')).toBeNull();
+    expect(open('open 2 terminals')).toBeNull();
+    expect(open('open settings')).toBeNull();
+    expect(open('open the router file')).toBeNull();
+  });
+
+  it('retries instead of showing a bare {"tool_calls":[]} as the reply', async () => {
+    invoke
+      .mockResolvedValueOnce('{"tool_calls":[]}')
+      .mockResolvedValueOnce('{"reply":"Here is the answer.","actions":[]}');
+
+    const result = await routeOrchestratorRequest('what does the router do?', ALL_AGENTS, { toolExecutor: vi.fn() });
+
+    const calls = invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities');
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1].userText + calls[1][1].systemPrompt).toContain('tool_calls list with no usable tool');
+    expect(result.reply).toBe('Here is the answer.');
+    expect(isProtocolDebris('{"tool_calls":[]}')).toBe(true);
+    expect(isProtocolDebris('Plain prose with {braces} inside.')).toBe(false);
+  });
+
+  it('reads each message and names what kind it is before any work', () => {
+    const previous = [
+      { role: 'user' as const, text: 'Add a login route' },
+      { role: 'assistant' as const, text: 'Added the login route in src/routes/login.ts.' },
+    ];
+    const cases: Array<[string, ReturnType<typeof classifyTurnIntent>]> = [
+      ['thanks, that is perfect', 'acknowledgement'],
+      ["that's not right, the route is still missing", 'correction'],
+      ['okay continue', 'continuation'],
+      ['how does the router pick a handler?', 'question'],
+      ['what is a JWT', 'question'],
+      ['how do I add a route?', 'question'],
+      ['can you add a logout route?', 'task'],
+      ['fix the failing lint check', 'task'],
+      ['please review the auth module', 'task'],
+      ['I was out for lunch', 'conversation'],
+    ];
+    for (const [message, intent] of cases) {
+      expect(classifyTurnIntent(message, { conversation: previous }), message).toBe(intent);
+    }
+    // Without a previous answer there is nothing to continue or dispute.
+    expect(classifyTurnIntent('okay continue')).not.toBe('continuation');
+    expect(describeTurnFocus('how does the router work?')).toContain('a question');
+    expect(describeTurnFocus('fix the failing lint check')).toContain('a request to do work');
+  });
+
+  it('gives every model the assistant, engineering and security skills', async () => {
+    invoke.mockResolvedValueOnce('{"reply":"Hi there.","actions":[]}');
+    await routeOrchestratorRequest('hello', ALL_AGENTS, {});
+    const systemPrompt: string = invoke.mock.calls.find(([command]) => command !== 'ai_agent_capabilities')?.[1].systemPrompt ?? '';
+    expect(systemPrompt).toContain('ASSISTANT SKILL:');
+    expect(systemPrompt).toContain('SOFTWARE ENGINEERING SKILL:');
+    expect(systemPrompt).toContain('SECURITY SKILL:');
+  });
+
+  it('follows the skills chosen in Settings: built-ins switched off, the user\'s own added', async () => {
+    skillSettings.disabled.set(['git']);
+    skillSettings.custom.set([{ id: 's1', title: 'Our React style', instructions: 'Use function components only.', enabled: true }]);
+    try {
+      invoke.mockResolvedValueOnce('{"reply":"Hi there.","actions":[]}');
+      await routeOrchestratorRequest('hello', ALL_AGENTS, {});
+      const systemPrompt: string = invoke.mock.calls.find(([command]) => command !== 'ai_agent_capabilities')?.[1].systemPrompt ?? '';
+      expect(systemPrompt).not.toContain('GIT SKILL:');
+      expect(systemPrompt).toContain('OUR REACT STYLE SKILL (written by the user');
+      expect(systemPrompt).toContain('Use function components only.');
+    } finally {
+      skillSettings.disabled.set([]);
+      skillSettings.custom.set([]);
+    }
+  });
+
+  it('answers a thank-you after a review without redoing the review', async () => {
+    const report = Array.from({ length: 40 }, (_, i) => `Finding ${i}: the module number ${i} needs clearer validation and better error handling.`).join('\n');
+    const toolExecutor = vi.fn();
+    invoke.mockResolvedValueOnce('{"reply":"Glad it helped! Let me know if you would like me to start on any of those fixes.","actions":[]}');
+
+    const result = await routeOrchestratorRequest('Yeah, this is good, thanks for the work on the project', ALL_AGENTS, {
+      toolExecutor,
+      projectRoot: '/repo',
+      conversation: [{ role: 'user', text: 'Inspect the project and suggest improvements' }, { role: 'assistant', text: report }],
+    });
+
+    // One model call, no project reads, and the polite offer is not treated as a deferral.
+    expect(invoke.mock.calls.filter(([command]) => command !== 'ai_agent_capabilities')).toHaveLength(1);
+    expect(toolExecutor).not.toHaveBeenCalled();
+    expect(result.reply).toBe('Glad it helped! Let me know if you would like me to start on any of those fixes.');
+  });
+
+  it('never answers a thank-you by re-sending the previous report', async () => {
+    const report = Array.from({ length: 40 }, (_, i) => `Finding ${i}: the module number ${i} needs clearer validation and better error handling.`).join('\n');
+    invoke.mockResolvedValue(JSON.stringify({ reply: report, actions: [] }));
+
+    const result = await routeOrchestratorRequest('thank you, this is great', ALL_AGENTS, {
+      toolExecutor: vi.fn(),
+      conversation: [{ role: 'user', text: 'Review it' }, { role: 'assistant', text: report }],
+    });
+
+    expect(result.reply).not.toContain('Finding 0');
+    expect(result.reply).toMatch(/welcome/i);
+  });
+
+  it('makes the model check a disputed claim with a tool instead of repeating itself', async () => {
+    let round = 0;
+    const prompts: string[] = [];
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'ai_agent_capabilities') return {};
+      prompts.push(JSON.stringify(args));
+      const current = round++;
+      if (current === 0) return { text: JSON.stringify({ reply: 'Environment Variables: No .env.local file was found.', actions: [] }), calls: [], assistant: { role: 'assistant' } };
+      if (current === 1) return { text: '', calls: [{ id: 'g', name: 'glob_files', args: { pattern: '.env*' } }], assistant: { role: 'assistant' } };
+      return { text: JSON.stringify({ reply: 'You are right: .env.local exists (it is git-ignored). CLERK_SECRET_KEY is set.', actions: [] }), calls: [], assistant: { role: 'assistant' } };
+    });
+    const executor = vi.fn(async () => ({ output: 'Files matching ".env*" (1):\n- .env.example\nAlso present but git-ignored (1):\n- .env.local (secret: read_file shows variable names only, never values)' }));
+
+    const result = await routeOrchestratorRequest('but there is a env.local file', ALL_AGENTS, {
+      nativeTools: true,
+      toolExecutor: executor,
+      projectRoot: '/repo',
+      conversation: [
+        { role: 'user', text: 'Check what is working in this project' },
+        { role: 'assistant', text: 'Environment Variables: No .env.local file was found.' },
+      ],
+    });
+
+    expect(prompts[1]).toContain('The user is correcting your previous answer');
+    expect(executor).toHaveBeenCalledWith(expect.objectContaining({ name: 'glob_files' }));
+    expect(result.reply).toContain('.env.local exists');
+  });
+
+  it('does not end a turn while a steered message is waiting', async () => {
+    let round = 0;
+    const prompts: string[] = [];
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'ai_agent_capabilities') return {};
+      prompts.push(JSON.stringify(args));
+      round += 1;
+      return { text: JSON.stringify({ reply: round === 1 ? 'Built it in red.' : 'Built it in blue.', actions: [] }), calls: [], assistant: { role: 'assistant' } };
+    });
+    const inbox = ['use blue instead'];
+    let firstRequest = true;
+    const steering = {
+      // The message lands after the first request went out.
+      pending: () => inbox.length > 0,
+      drain: () => (firstRequest ? ((firstRequest = false), []) : inbox.splice(0)),
+    };
+
+    const result = await routeOrchestratorRequest('Build the banner', ALL_AGENTS, {
+      nativeTools: true,
+      toolExecutor: vi.fn(),
+      projectRoot: '/repo',
+      steering,
+    });
+
+    expect(round).toBe(2);
+    expect(prompts[0]).not.toContain('use blue instead');
+    expect(prompts[1]).toContain('Messages the user sent while you were working');
+    expect(prompts[1]).toContain('use blue instead');
+    expect(result.reply).toBe('Built it in blue.');
   });
 });

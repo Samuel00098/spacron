@@ -1237,6 +1237,56 @@
   -webkit-backdrop-filter: blur(18px) saturate(130%) !important;
 }
 
+/* ── When the glass is allowed to re-sample the wallpaper ──────────────────
+   A `backdrop-filter` panel is not a painted surface, it is a live readback:
+   every frame, the compositor copies the wallpaper rectangle behind the panel,
+   blurs it, and composites the tint over the result. That is fine while the
+   rectangle is still and lands on whole device pixels. It is NOT fine while the
+   rectangle is moving or sitting on a fractional boundary — the sampled patch
+   shifts sub-pixel between frames, and the edge of the panel crawls. On a
+   wallpaper that reads as shimmer across the surface and a 1px seam along the
+   borders; on a flat background there is nothing behind the panel to shimmer,
+   which is why this only ever shows up once an image is set.
+
+   The three rules below take the readback away in the three situations where
+   the rectangle cannot be trusted. None of them change layout, so no xterm is
+   re-measured and the terminal-lifetime rules above are untouched — a
+   backdrop-filter is paint, and dropping it is a paint-only change.
+
+   The panels stay readable throughout because the tint is already doing the
+   work: `--panel-tint` is 0.7 (dark) / 0.78 (light), so losing 18px of blur
+   under a 70%-opaque fill is close to invisible, which is the same reasoning
+   that took the blur from 40px down to 18px in the block above. */
+
+/* 1. Off-stage panes stop blurring.
+   Every room that is open but not currently ON the stage still renders a
+   full-size `.stage-pane` (`hidden = !stageRoomSet.has(room)` in AppShell.tsx)
+   holding a real `.room-panel`. It is kept at full stage size on purpose so its
+   terminal never reflows to zero, and it is hidden with `visibility` plus
+   `clip-path` — both of which are paint-time, and neither of which retires the
+   panel's compositing layer. So with N rooms open and one on stage you get N
+   full-window blur layers stacked over the same wallpaper, all re-read every
+   frame, forever. That is the flicker that appears with nothing happening and
+   gets worse the more agents you have open.
+   Nothing here is visible, so blurring it buys nothing at all. */
+:root .app-shell .stage-pane.stage-hidden > .room-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 2. No re-blur while the stage geometry is in flight.
+   `.rooms-table` transitions `grid-template-columns`, `grid-template-rows` and
+   `gap` over `--dur-slow`, so for ~420ms after every layout change each panel's
+   box is a new fractional width on every frame — and each one re-samples its
+   wallpaper patch at that new sub-pixel offset. Freeze the glass for the length
+   of the settle pass and the panels resize as flat tinted surfaces, which is
+   what the eye wants during a move anyway: the blur returning once the box is
+   final is far quieter than 420ms of crawling edges. */
+:root .app-shell .rooms-table.layout-switching .room-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .app-shell .room-panel.featured {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   box-shadow:
@@ -1248,6 +1298,21 @@
   transform: translateY(-1px);
 }
 
+/* 3. The hover lift does not move the glass while a wallpaper is on.
+   Translating a `backdrop-filter` element drags its sampled rectangle across
+   the wallpaper by a sub-pixel amount for the whole `--dur-fast` transition, so
+   the 1px lift costs a visible shimmer along the panel edge every time the
+   cursor crosses it — the most-noticed instance of this bug, because it fires
+   on ordinary mouse movement rather than on a switch.
+   The lift is pure decoration and it is not the only hover cue: the room header
+   brightens on hover in the rule directly below, and that is a repaint of an
+   opaque strip, which re-samples nothing. Keep the lift for the no-wallpaper
+   look, where there is no backdrop to disturb. */
+html.has-bg-image .app-shell .room-panel:hover,
+html.has-bg-media .app-shell .room-panel:hover {
+  transform: none;
+}
+
 .app-shell .room-panel:hover .room-header {
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
 }
@@ -1255,9 +1320,9 @@
 /* ── Traveling edge light: shell-specific variants ─────────────────────────
    The light itself — the registered `--panel-edge-angle`, the keyframes, the
    masked ring, and the tokens that colour it — lives in `global.css` under
-   "Panel surfaces", because the floating panels (usage meter, inbox, HUD,
-   media player) are siblings of `.app-shell` and need the same treatment from
-   the same definition. Only the room-specific variants stay here. */
+   "Panel surfaces", because the floating panels (inbox, HUD, media player) are
+   siblings of `.app-shell` and need the same treatment from the same
+   definition. Only the room-specific variants stay here. */
 
 /* The panel you are working in gets a brighter, quicker light so "which panel
    is live" is answered by the same cue that separates them. */
@@ -2522,14 +2587,12 @@
 .app-shell ::view-transition-new(spacron-settings-modal),
 .app-shell ::view-transition-new(spacron-env-modal),
 .app-shell ::view-transition-new(spacron-command-palette),
-.app-shell ::view-transition-new(spacron-quick-capture-card),
 .app-shell ::view-transition-new(spacron-workspace-modal) {
   animation: modal-pop-in 0.3s var(--ease-out) both;
 }
 .app-shell ::view-transition-old(spacron-settings-modal),
 .app-shell ::view-transition-old(spacron-env-modal),
 .app-shell ::view-transition-old(spacron-command-palette),
-.app-shell ::view-transition-old(spacron-quick-capture-card),
 .app-shell ::view-transition-old(spacron-workspace-modal) {
   animation: modal-pop-out 0.2s var(--ease-in) both;
 }
@@ -3248,19 +3311,7 @@ html.is-webkitgtk .app-shell .composer-strip {
   -moz-osx-font-smoothing: grayscale;
 }
 
-.app-shell .left-sidebar-workspace {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-shell .left-sidebar-eyebrow,
-.app-shell .left-sidebar-section-label {
+.app-shell .left-sidebar-eyebrow {
   color: var(--text-muted);
   font-size: 9px;
   font-weight: 500;
@@ -3369,12 +3420,10 @@ html.is-webkitgtk .app-shell .composer-strip {
   flex: 0 0 auto;
 }
 
-.app-shell .left-sidebar-section-label {
-  padding: 5px 7px 3px;
-}
-
-.app-shell .left-sidebar-section-label.secondary {
-  padding-top: 6px;
+.app-shell .left-sidebar-nav-divider {
+  height: 1px;
+  margin: 5px 7px;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .app-shell .left-sidebar-nav-item {
@@ -3456,29 +3505,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   grid-column: 1 / -1;
 }
 
-.app-shell .left-sidebar-context-label {
-  min-height: 29px;
-  padding: 5px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-size: 9.5px;
-  font-weight: 500;
-  letter-spacing: 0.055em;
-  text-transform: uppercase;
-}
-
-.app-shell .left-sidebar-context-label > span:first-child,
-.app-shell .left-sidebar-context-label svg {
-  width: 14px;
-  height: 14px;
-  display: inline-flex;
-}
-
 .app-shell .left-sidebar .drawer-body {
   background: color-mix(in srgb, var(--bg-primary) 16%, transparent);
 }
@@ -3486,14 +3512,12 @@ html.is-webkitgtk .app-shell .composer-strip {
 /* The navigator supplies the one shared context heading. Individual panels
    keep their own action rows, but their repeated titles disappear so switching
    tools never produces a doubled "Projects / Projects" or "Git / Git" stack. */
-.app-shell .left-sidebar .projects-panel-title,
 .app-shell .left-sidebar .source-control .sc-title,
 .app-shell .left-sidebar .pp-title,
 .app-shell .left-sidebar .snippets-panel .panel-title {
   display: none;
 }
 
-.app-shell .left-sidebar .projects-header-actions,
 .app-shell .left-sidebar .source-control .sc-header-actions,
 .app-shell .left-sidebar .pp-chips,
 .app-shell .left-sidebar .snippets-panel .add-btn {
@@ -3505,6 +3529,14 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar-footer {
+  /* The query container for the usage readout that lives here — the rail is
+     resizable, so how much of this row the readout may use is a fact about the
+     footer, not about the window. Declared on the footer rather than on the
+     chip because `contain: inline-size` on an `auto`-width flex item sizes it
+     as if it had no contents. See the `usage-footer` steps in
+     `UsageCounter.css`. */
+  container-type: inline-size;
+  container-name: usage-footer;
   min-height: 44px;
   padding: 6px 8px;
   display: flex;
@@ -3523,109 +3555,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   margin-left: 0;
 }
 
-.app-shell .left-sidebar-mode-switch {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 0 8px 9px;
-  flex: 0 0 auto;
-}
-
-.app-shell .left-sidebar-mode-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.app-shell .left-sidebar-mode-label {
-  color: var(--text-muted);
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.075em;
-  text-transform: uppercase;
-}
-
-.app-shell .left-sidebar-mode-status {
-  padding: 2px 5px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: color-mix(in srgb, var(--accent) 72%, var(--text-secondary));
-  font-size: 8px;
-  font-weight: 500;
-  letter-spacing: 0.055em;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.app-shell .left-sidebar-mode-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--bg-secondary) 48%, transparent);
-}
-
-.app-shell .left-sidebar-mode-buttons button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  height: 27px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
-}
-
-.app-shell .left-sidebar-mode-buttons button:hover {
-  color: var(--text-primary);
-}
-
-.app-shell .left-sidebar-mode-buttons button.active {
-  background: color-mix(in srgb, var(--accent) 17%, var(--bg-secondary));
-  color: var(--text-primary);
-  box-shadow: var(--depth-pressed);
-}
-
-.app-shell .left-sidebar-mode-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  line-height: 1;
-  color: var(--accent);
-  transform: translateY(0.5px);
-}
-
-.app-shell .left-sidebar-mode-icon svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.9;
-}
-
-.app-shell .left-sidebar-mode-text {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  line-height: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .app-shell .workspace-layer.interaction-chat .workspace-overlays {
   visibility: hidden;
   pointer-events: none;
@@ -3635,108 +3564,34 @@ html.is-webkitgtk .app-shell .composer-strip {
   margin-left: auto;
 }
 
-.app-shell .left-sidebar .usage-panel {
-  position: static;
-  inset: auto;
-  width: auto;
-  max-height: min(240px, 32%);
-  flex: 0 1 auto;
-  z-index: auto;
-  border: 0;
-  border-radius: 0;
-  /* A radial wash has no rectangular perimeter, so the disclosure remains a
-     distinctive part of the sidebar rather than reading as a panel inside it. */
-  background: radial-gradient(
-    ellipse at 12% 8%,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    transparent 68%
-  );
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  animation: none;
+/* The usage disclosure and its footer readout are described once, in
+   `UsagePanel.css`, `UsageMeter.css` and `UsageCounter.css`. What used to be
+   here was ~100 lines undoing a floating-popover design those files no longer
+   declare, and the two descriptions had drifted apart. The shell's remaining
+   share is this rule and the container the footer chip's responsive steps query
+   — see the `usage-footer` blocks in UsageCounter.css.
+
+   The flex basis is what makes the usage panel below open at the size it asks
+   for. At the inherited `1 1 auto` the body's basis is its own content — a
+   project tree, so routinely 600px+ — and a basis that large wins most of the
+   shrink when the column overflows. The result was a usage panel squeezed to
+   roughly 200px however high its own cap was set, and one whose height changed
+   with the number of projects in the rail.
+
+   120px, not 0. A zero basis also gives the panel its fixed height, but it
+   makes the body the only thing that ever shrinks: on a rail under ~760px the
+   tree collapsed to nothing while the panel held its full 320. A small basis
+   keeps both behaviours — there is still free space to grow into whenever the
+   rail is tall enough, so the panel opens at exactly its stored height, and
+   when the rail is too short the shortfall is split between the two in
+   proportion rather than taken entirely out of the tree.
+
+   The right drawer keeps the inherited behaviour: it has no fixed-height
+   sibling to negotiate with. */
+.app-shell .left-sidebar .drawer-body {
+  flex: 1 1 120px;
 }
 
-.app-shell .left-sidebar .usage-panel::after {
-  display: none;
-}
-
-.app-shell .left-sidebar .usage-head {
-  padding: 8px 10px 6px;
-  border-bottom: 0;
-}
-
-.app-shell .left-sidebar .usage-title {
-  gap: 6px;
-  font-size: 11.5px;
-}
-
-.app-shell .left-sidebar .usage-title-glyph {
-  width: 23px;
-  height: 23px;
-  border-radius: 8px;
-  display: inline-grid;
-  place-items: center;
-  color: var(--accent);
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 72%),
-    color-mix(in srgb, var(--bg-primary) 48%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
-    0 4px 14px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.app-shell .left-sidebar .usage-title-glyph svg {
-  width: 13px;
-  height: 13px;
-}
-
-.app-shell .left-sidebar .usage-empty {
-  padding: 8px 14px 12px;
-  font-size: 10.5px;
-  line-height: 1.45;
-}
-
-.app-shell .left-sidebar .usage-list {
-  padding: 2px 6px 7px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
-}
-
-.app-shell .left-sidebar .usage-row {
-  padding: 7px 8px 8px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--bg-primary) 32%, transparent);
-  box-shadow: none;
-}
-
-.app-shell .left-sidebar .usage-row + .usage-row {
-  margin-top: 4px;
-}
-
-.app-shell .left-sidebar .usage-row[data-reporting='true'] {
-  background:
-    linear-gradient(105deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%),
-    color-mix(in srgb, var(--bg-primary) 34%, transparent);
-}
-
-.app-shell .left-sidebar .usage-row-mark {
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent);
-}
-
-.app-shell .left-sidebar .usage-meter-track {
-  height: 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
-}
-
-.app-shell .left-sidebar .usage-meter-fill {
-  border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
-}
 
 /* The full-height Bento navigator now carries status controls at its foot. The
    composer is centered in the remaining workspace so the two never collide. */
@@ -3763,10 +3618,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 
   .app-shell .left-sidebar-nav-item {
     height: 23px;
-  }
-
-  .app-shell .left-sidebar-section-label {
-    padding-top: 4px;
   }
 }
 
@@ -3843,33 +3694,10 @@ html.is-webkitgtk .app-shell .composer-strip {
   font-weight: 500;
 }
 
-.app-shell .left-sidebar-mode-switch {
-  gap: 7px;
-  padding: 0 10px 13px;
-}
-
-.app-shell .left-sidebar-mode-buttons {
-  min-height: 33px;
-  padding: 3px;
-  border-radius: 10px;
-}
-
-.app-shell .left-sidebar-mode-buttons button {
-  height: 29px;
-  border-radius: 7px;
-  font-size: 12px;
-  gap: 6px;
-  padding: 0 8px;
-}
-
 .app-shell .left-sidebar-nav {
   gap: 1px;
   padding: 9px 9px 11px;
   border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.app-shell .left-sidebar-section-label {
-  padding: 0 7px 5px;
 }
 
 .app-shell .left-sidebar-nav-item {
@@ -3880,25 +3708,13 @@ html.is-webkitgtk .app-shell .composer-strip {
   font-size: 13px;
 }
 
-.app-shell .left-sidebar-context-label {
-  min-height: 35px;
-  padding: 7px 12px;
-  background: color-mix(in srgb, var(--bg-primary) 14%, transparent);
-  border-top-color: color-mix(in srgb, var(--border) 80%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--border) 80%, transparent);
-}
-
 .app-shell .left-sidebar .drawer-body {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 30%);
 }
 
-.app-shell .left-sidebar .projects-panel-header {
-  padding: 11px 12px 8px;
-}
-
 .app-shell .left-sidebar .projects-search-section {
-  padding: 0 12px 11px;
+  padding: 0 8px 4px;
 }
 
 .app-shell .left-sidebar .projects-panel-body {
@@ -3977,10 +3793,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 
   .app-shell .left-sidebar-quick-actions {
     padding-bottom: 8px;
-  }
-
-  .app-shell .left-sidebar-mode-switch {
-    padding-bottom: 9px;
   }
 
   .app-shell .left-sidebar-nav-item {

@@ -77,3 +77,14 @@ Synced pieces now:
 If you touch any of these, the two brain tests named above plus the store test
 "does not paint a fully checked-off plan" and "applies the read-evidence gate
 to a short go-ahead" are the regression net.
+## The nets must stand down for a thank-you (2026-09-19)
+
+"this is good, thanks for the work" got the previous answer re-sent, once per
+thank-you. The polite reply ("…let me know if you'd like…") matched
+`DEFERRAL_PHRASE_RE`, so the deferral pass ordered the work redone; "yeah … thanks"
+also matched `CONTINUATION_RE` and inherited the old review request.
+`isAcknowledgement` (brain, exported) is the one classifier: it turns off
+`isDirectAdviceOnlyRequest`/`isContinuationOfDirectWork`, the promise and deferral
+passes, frames the turn as "reply briefly", swaps a still-repeated report for a
+short reply, and feeds the store's `isConversationalChatter`. Store tests pull the
+real function through the brain mock, so keep it there when editing that mock.

@@ -30,7 +30,7 @@ function runningLabel(item: CommandAction) {
   if (l.startsWith('detect') || l.startsWith('list')) return 'Scanning…';
   if (l.startsWith('copy')) return 'Copying to Pi…';
   if (l.startsWith('sync')) return 'Syncing to Pi…';
-  if (l.includes('serial monitor')) return 'Live — close terminal to stop';
+  if (l.includes('serial monitor')) return 'Live: close terminal to stop';
   return 'Running…';
 }
 
@@ -75,7 +75,7 @@ export default function EmbeddedPanel() {
 
   const arduinoCommands = useMemo<CommandAction[]>(
     () => [
-      { label: 'Detect boards', command: 'arduino-cli board list --format json', success: 'Boards scanned — check terminal' },
+      { label: 'Detect boards', command: 'arduino-cli board list --format json', success: 'Boards scanned: check terminal' },
       {
         label: 'Install AVR core',
         command: 'arduino-cli core update-index; arduino-cli core install arduino:avr',
@@ -233,19 +233,19 @@ export default function EmbeddedPanel() {
           const missingCli = /not (recognized|found)|command not found/i.test(out);
           state.arduino = {
             status: 'error',
-            detail: missingCli ? 'arduino-cli not installed — see setup below' : 'Failed to query boards — see terminal',
+            detail: missingCli ? 'arduino-cli not installed: see setup below' : 'Failed to query boards: see terminal',
           };
         } else {
           const detected = parseBoardListJson(result.output ?? '');
           state.arduino = detected
             ? { status: 'connected', detail: `${detected.name ?? 'Board'} on ${detected.port}` }
-            : { status: 'none', detail: 'No board detected — is it plugged in?' };
+            : { status: 'none', detail: 'No board detected: is it plugged in?' };
         }
       } else if (targetMode === 'pi') {
         state.pi =
           result.exitCode === 0
             ? { status: 'connected', detail: `${piTarget} reachable` }
-            : { status: 'error', detail: 'Not reachable — check host, IP and SSH key' };
+            : { status: 'error', detail: 'Not reachable: check host, IP and SSH key' };
       }
       return state;
     });
@@ -296,7 +296,7 @@ export default function EmbeddedPanel() {
           true,
         );
       } else {
-        showToast('No board detected yet — is it plugged in?', 'info');
+        showToast('No board detected yet: is it plugged in?', 'info');
       }
     }
   }
@@ -333,7 +333,7 @@ export default function EmbeddedPanel() {
               ) : conn.status === 'connected' ? (
                 <span className="embedded-status success" role="status">
                   <span className="embedded-status-dot" aria-hidden="true" />
-                  Connected — {conn.detail}
+                  Connected: {conn.detail}
                 </span>
               ) : conn.status === 'none' ? (
                 <span className="embedded-status idle" role="status">
@@ -406,7 +406,7 @@ export default function EmbeddedPanel() {
             </div>
             <p className="embedded-hint">
               Click <strong>Detect boards</strong> (or use <strong>Recheck</strong>) and Spacron
-              fills in the port and board of the Arduino that's actually plugged in — then{' '}
+              fills in the port and board of the Arduino that's actually plugged in: then{' '}
               <strong>Upload</strong> flashes the sketch from this project directly to the
               microcontroller, no Arduino app needed. The status dot beside "Project ready"
               turns green when a board is detected.
@@ -468,7 +468,7 @@ export default function EmbeddedPanel() {
                 {status === 'error' && (
                   <div className="embedded-status error">
                     ✗ {item.label} failed
-                    {run?.exitCode !== null && run?.exitCode !== undefined ? ` (exit ${run.exitCode})` : ' — see terminal'}
+                    {run?.exitCode !== null && run?.exitCode !== undefined ? ` (exit ${run.exitCode})` : ': see terminal'}
                   </div>
                 )}
               </div>

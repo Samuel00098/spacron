@@ -611,8 +611,11 @@ fn dispatch_invoke(cmd: &str, args: Value, roots: &[PathBuf]) -> Result<Value, S
         "fs_glob_files" => {
             #[derive(serde::Deserialize)]
             #[serde(rename_all = "camelCase")]
-            struct Glob { root_path: String, pattern: String, match_anywhere: bool, max: usize }
+            struct Glob { root_path: String, pattern: String, match_anywhere: bool, max: usize, #[serde(default)] ignored_only: bool }
             let a = parse::<Glob>(args)?;
+            if a.ignored_only {
+                return ok(fs::glob_ignored_files(&a.root_path, &a.pattern, a.match_anywhere, a.max, roots)?);
+            }
             ok(fs::glob_files(&a.root_path, &a.pattern, a.match_anywhere, a.max, roots)?)
         }
         "fs_write_file_checked" => {

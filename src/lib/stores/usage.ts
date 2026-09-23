@@ -149,6 +149,57 @@ export const usageState = writable<UsageState>({
 
 export const isUsagePanelOpen = writable(false);
 
+/**
+ * How tall the usage disclosure opens, in px.
+ *
+ * A stored preference rather than a per-open measurement, for two reasons.
+ * The panel used to open at whatever height its contents and the project tree
+ * left over, so it was a different size every time — and, because the tree's
+ * flex basis is its own content, usually a size too short to show one agent's
+ * meters whole. And the drag handle's result used to be thrown away on close,
+ * so a user who sized it once had to size it again on the next open.
+ *
+ * Global, not per-workspace: "how much of the rail is this readout worth" is a
+ * fact about the person, not about the project they happen to have open.
+ */
+const USAGE_HEIGHT_KEY = 'spacron_usage_panel_height';
+
+/** Tall enough for one provider's header and both of its meters, unclipped. */
+export const USAGE_PANEL_DEFAULT_HEIGHT = 320;
+export const USAGE_PANEL_MIN_HEIGHT = 132;
+export const USAGE_PANEL_MAX_HEIGHT = 900;
+
+export function clampUsagePanelHeight(px: number): number {
+  if (!Number.isFinite(px)) return USAGE_PANEL_DEFAULT_HEIGHT;
+  return Math.round(Math.max(USAGE_PANEL_MIN_HEIGHT, Math.min(USAGE_PANEL_MAX_HEIGHT, px)));
+}
+
+function storedUsagePanelHeight(): number {
+  try {
+    const raw = localStorage.getItem(USAGE_HEIGHT_KEY);
+    if (raw == null) return USAGE_PANEL_DEFAULT_HEIGHT;
+    return clampUsagePanelHeight(Number(raw));
+  } catch {
+    return USAGE_PANEL_DEFAULT_HEIGHT;
+  }
+}
+
+export const usagePanelHeight = writable(storedUsagePanelHeight());
+
+/** Live update while the handle is moving — cheap, and not written to disk. */
+export function setUsagePanelHeight(px: number) {
+  usagePanelHeight.set(clampUsagePanelHeight(px));
+}
+
+/** Called once when a resize gesture ends, so a drag is one write, not sixty. */
+export function persistUsagePanelHeight() {
+  try {
+    localStorage.setItem(USAGE_HEIGHT_KEY, String(get(usagePanelHeight)));
+  } catch {
+    /* private mode / quota — the height still holds for this session */
+  }
+}
+
 export function toggleUsagePanel() {
   isUsagePanelOpen.update((open) => !open);
   // Opening the panel is a deliberate "tell me now", so top up anything stale.

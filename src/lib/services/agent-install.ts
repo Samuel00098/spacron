@@ -53,12 +53,20 @@ const INSTALL_DOCS: Record<string, string> = {
   cn: 'https://docs.continue.dev/',
   kilo: 'https://kilocode.ai/',
   devin: 'https://docs.devin.ai/',
+  // Its README install line takes whatever npm's `latest` tag is, which was
+  // uninstallable on 2026-09-22 — the npm page lists the versions to pick from.
+  // Spacron's own hint pins one (`PINNED_VERSION` in deepseek_harness.rs).
+  dsh: 'https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions',
 };
 
-/** A web search for this CLI's install instructions — the honest fallback. */
+/**
+ * A web search for this CLI's install instructions — the honest fallback.
+ * Brave Search, the same engine the preview's address bar uses, so every
+ * search the app opens lands in one place.
+ */
 function searchUrlFor(name: string, command: string): string {
   const query = `${name || command} coding CLI install`;
-  return `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+  return `https://search.brave.com/search?q=${encodeURIComponent(query)}`;
 }
 
 /**

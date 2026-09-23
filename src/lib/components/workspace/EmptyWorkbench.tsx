@@ -106,7 +106,7 @@ export default function EmptyWorkbench() {
           >
             <div className="empty-wb-btn-left">
               <span className="empty-wb-btn-icon"><PlusIcon /></span>
-              <span>New Project Folder</span>
+              <span>Create Project</span>
             </div>
             <kbd>{formatShortcutLabel('Ctrl+N')}</kbd>
           </button>

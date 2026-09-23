@@ -15,12 +15,13 @@ vi.mock('$lib/stores/remoteWorkspace', () => ({
   },
 }));
 
-import { loadLiveAgentProviderModels } from './live-agent-models';
+import { loadLiveAgentProviderModels, resetLiveAgentModelCacheForTests } from './live-agent-models';
 
 describe('live agent models', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     remoteState.value = null;
+    resetLiveAgentModelCacheForTests();
   });
 
   it('loads Codex models from the native app-server adapter', async () => {
@@ -36,6 +37,58 @@ describe('live agent models', () => {
     expect(runEmbeddedCommand).not.toHaveBeenCalled();
   });
 
+  it('keeps structured native model capabilities from Codex', async () => {
+    invoke.mockResolvedValue({
+      exitCode: 0,
+      output: 'gpt-6-astra - GPT-6-Astra\n',
+      models: [{
+        id: 'gpt-6-astra',
+        label: 'GPT-6-Astra',
+        description: 'Live Codex model',
+        reasoningEfforts: ['low', 'high'],
+        defaultReasoningEffort: 'low',
+        isDefault: true,
+      }],
+    });
+
+    await expect(loadLiveAgentProviderModels('codex')).resolves.toEqual([
+      {
+        id: 'gpt-6-astra',
+        label: 'GPT-6-Astra',
+        description: 'Live Codex model',
+        reasoningEfforts: ['low', 'high'],
+        defaultReasoningEffort: 'low',
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it('loads Claude Code model names and effort levels from the native catalogue', async () => {
+    invoke.mockResolvedValue({
+      exitCode: 0,
+      output: 'claude-opus-5-5 - Opus 5.5\nclaude-fable-5-1 - Fable 5.1\n',
+      models: [{
+        id: 'claude-opus-5-5',
+        label: 'Opus 5.5',
+        description: 'For complex tasks',
+        reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultReasoningEffort: 'medium',
+        isDefault: true,
+      }],
+    });
+
+    await expect(loadLiveAgentProviderModels('claude')).resolves.toEqual([{
+      id: 'claude-opus-5-5',
+      label: 'Opus 5.5',
+      description: 'For complex tasks',
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningEffort: 'medium',
+      isDefault: true,
+      free: undefined,
+    }]);
+    expect(invoke).toHaveBeenCalledWith('agent_list_models', { command: 'claude' });
+  });
+
   it('normalizes a provider command alias before invoking the native catalogue', async () => {
     invoke.mockResolvedValue({
       exitCode: 0,
@@ -46,6 +99,29 @@ describe('live agent models', () => {
       { id: 'gpt-live', label: 'Live model', description: 'Reported by the installed agent CLI.' },
     ]);
     expect(invoke).toHaveBeenCalledWith('agent_list_models', { command: 'codex' });
+  });
+
+  it('never opens a terminal locally when the CLI cannot list models', async () => {
+    invoke.mockResolvedValue({ exitCode: null, output: '', error: 'timed out' });
+    await expect(loadLiveAgentProviderModels('cursor-agent')).resolves.toEqual([]);
+    expect(invoke).toHaveBeenCalledWith('agent_list_models', { command: 'cursor-agent' });
+    expect(runEmbeddedCommand).not.toHaveBeenCalled();
+  });
+
+  it('serves the last reported list at once and refreshes it behind', async () => {
+    invoke.mockResolvedValue({ exitCode: 0, output: 'gpt-old - Old\n' });
+    await loadLiveAgentProviderModels('codex');
+    // Past the in-memory TTL (as after a restart): the persisted list answers
+    // immediately while a new probe runs.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+    let finishProbe!: (value: unknown) => void;
+    invoke.mockReturnValue(new Promise((resolve) => { finishProbe = resolve; }));
+    await expect(loadLiveAgentProviderModels('codex')).resolves.toEqual([
+      { id: 'gpt-old', label: 'Old', description: 'Reported by the installed agent CLI.' },
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    finishProbe({ exitCode: 0, output: 'gpt-new - New\n' });
+    vi.restoreAllMocks();
   });
 
   it('falls back to the remote terminal adapter for a remote Cursor agent', async () => {
@@ -64,5 +140,15 @@ describe('live agent models', () => {
     remoteState.value = { url: 'ws://remote.test/pty', token: 'test' };
     await expect(loadLiveAgentProviderModels('codex')).resolves.toEqual([]);
     expect(runEmbeddedCommand).not.toHaveBeenCalled();
+  });
+
+  it('reuses a successful catalogue but retries after an empty one', async () => {
+    invoke.mockResolvedValue({ exitCode: 0, output: '', models: [] });
+    await expect(loadLiveAgentProviderModels('codex')).resolves.toEqual([]);
+    invoke.mockResolvedValue({ exitCode: 0, output: 'gpt-6-astra - GPT-6-Astra\n' });
+    await loadLiveAgentProviderModels('codex');
+    await loadLiveAgentProviderModels('codex');
+    // One failed probe, then one real probe served twice.
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });

@@ -68,7 +68,7 @@ async function mockBackend(opts: { url?: string | undefined; writeFails?: boolea
  */
 async function mockModule(
   existingFiles: Record<string, string> = {},
-  opts: { browserTools?: boolean } = {},
+  opts: { browserTools?: boolean; servers?: unknown[] } = {},
 ) {
   invokeMock.mockImplementation(async (cmd: string, args?: Record<string, string>) => {
     if (cmd === 'mcp_server_url') return URL;
@@ -81,14 +81,16 @@ async function mockModule(
     if (cmd === 'mcp_read_global_agent_config') {
       return existingFiles[args?.agent ?? ''] ?? '';
     }
+    if (cmd === 'mcp_write_launch_config') return LAUNCH_CONFIG_PATH;
     return undefined;
   });
   vi.resetModules();
   // Imported after the reset so it is the same module instance `mcpBridge` will
   // read. Under `environment: 'node'` there is no window, so `persistentWritable`
   // hands back a plain in-memory store — no zustand or app-flag round trip.
-  const { agentBrowserTools } = await import('./settings');
+  const { agentBrowserTools, mcpServers } = await import('./settings');
   agentBrowserTools.set(opts.browserTools === true);
+  mcpServers.set((opts.servers ?? []) as never);
   return await import('./mcpBridge');
 }
 
@@ -1074,5 +1076,145 @@ describe('each reported state maps to its own outcome', () => {
       ([, signal]) => (signal as { kind: string }).kind,
     );
     expect(kinds).toEqual(['finished', 'blocked', 'failed']);
+  });
+});
+
+/**
+ * User-managed MCP servers. Everything here is about the two invariants in
+ * `services/mcp-servers.ts`: we only ever write inside our own `spacron-`
+ * namespace, and every write reconciles that namespace against the list rather
+ * than blindly adding to it.
+ */
+describe('user MCP servers', () => {
+  const linear = {
+    id: 'a',
+    name: 'Linear',
+    transport: 'http',
+    url: 'https://mcp.linear.app/mcp',
+    headers: { Authorization: 'Bearer tok' },
+    enabled: true,
+  };
+  const localTool = {
+    id: 'b',
+    name: 'My Tool',
+    transport: 'stdio',
+    command: 'node',
+    args: ['./tool.js'],
+    enabled: true,
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it('gives every CLI the server in its own dialect', async () => {
+    const { ensureMcpConfigs } = await mockModule({}, { servers: [linear] });
+    await ensureMcpConfigs('C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers['spacron-linear']).toEqual({
+      type: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      headers: { Authorization: 'Bearer tok' },
+    });
+    expect(JSON.parse(written('C:/work/repo/.cursor/mcp.json')!).mcpServers['spacron-linear'])
+      .toMatchObject({ type: 'http' });
+    expect(JSON.parse(written('C:/work/repo/.gemini/settings.json')!).mcpServers['spacron-linear'])
+      .toMatchObject({ type: 'http' });
+    // opencode renames the transport and demands an explicit `enabled`.
+    expect(JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-linear']).toEqual({
+      type: 'remote',
+      url: 'https://mcp.linear.app/mcp',
+      enabled: true,
+      headers: { Authorization: 'Bearer tok' },
+    });
+    expect(JSON.parse(writtenGlobal('droid')!).mcpServers['spacron-linear'])
+      .toMatchObject({ disabled: false });
+    expect(writtenGlobal('codex')).toContain('[mcp_servers.spacron-linear]');
+  });
+
+  it('writes a local server as a command, not a URL', async () => {
+    const { ensureMcpConfigs } = await mockModule({}, { servers: [localTool] });
+    await ensureMcpConfigs('C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers['spacron-my-tool']).toEqual({
+      command: 'node',
+      args: ['./tool.js'],
+    });
+    expect(JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-my-tool']).toEqual({
+      type: 'local',
+      command: ['node', './tool.js'],
+      enabled: true,
+    });
+    expect(writtenGlobal('codex')).toContain('command = "node"');
+  });
+
+  it('removes a server the user deleted from every config', async () => {
+    const stale = {
+      'C:/work/repo/.mcp.json': JSON.stringify({
+        mcpServers: { 'spacron-linear': { type: 'http', url: 'https://old' } },
+      }),
+      'C:/work/repo/opencode.json': JSON.stringify({
+        mcp: { 'spacron-linear': { type: 'remote', url: 'https://old', enabled: true } },
+      }),
+      codex: '[mcp_servers.spacron-linear]\nurl = "https://old"\n',
+    };
+    const { ensureMcpConfigs } = await mockModule(stale, { servers: [] });
+    await ensureMcpConfigs('C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers['spacron-linear']).toBeUndefined();
+    expect(JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-linear']).toBeUndefined();
+    expect(writtenGlobal('codex')).not.toContain('spacron-linear');
+  });
+
+  it("leaves a server the user configured by hand alone", async () => {
+    const existing = {
+      'C:/work/repo/.mcp.json': JSON.stringify({
+        mcpServers: { linear: { type: 'http', url: 'https://mine' } },
+      }),
+      codex: '[mcp_servers.linear]\nurl = "https://mine"\n',
+    };
+    const { ensureMcpConfigs } = await mockModule(existing, { servers: [] });
+    await ensureMcpConfigs('C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers.linear).toEqual({
+      type: 'http',
+      url: 'https://mine',
+    });
+    expect(writtenGlobal('codex')).toContain('[mcp_servers.linear]');
+  });
+
+  it("keeps Spacron's own entries while pruning the namespace", async () => {
+    const stale = {
+      'C:/work/repo/.mcp.json': JSON.stringify({
+        mcpServers: { 'spacron-mcp': { type: 'sse', url: 'http://old' }, 'spacron-gone': {} },
+      }),
+    };
+    const { ensureMcpConfigs } = await mockModule(stale, { servers: [] });
+    await ensureMcpConfigs('C:/work/repo');
+
+    const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
+    expect(config.mcpServers['spacron-mcp']).toEqual({ type: 'sse', url: URL });
+    expect(config.mcpServers['spacron-gone']).toBeUndefined();
+  });
+
+  it('gives a Claude launch config the user servers too', async () => {
+    const { mcpLaunchFlags } = await mockModule({}, { servers: [linear] });
+    await mcpLaunchFlags('claude', 'C:/work/repo');
+
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'mcp_write_launch_config');
+    expect(JSON.parse(call![1].content).mcpServers['spacron-linear']).toMatchObject({ type: 'http' });
+  });
+
+  it('writes nothing for a row that is disabled or invalid', async () => {
+    const { ensureMcpConfigs } = await mockModule({}, {
+      servers: [
+        { ...linear, enabled: false },
+        { id: 'c', name: 'Bad', transport: 'http', url: 'nonsense', enabled: true },
+      ],
+    });
+    await ensureMcpConfigs('C:/work/repo');
+
+    const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
+    expect(Object.keys(config.mcpServers)).toEqual(['spacron-mcp']);
   });
 });

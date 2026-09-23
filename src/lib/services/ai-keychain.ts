@@ -4,7 +4,9 @@ import { isLocalProvider, getProviderBaseUrl, type AiProviderId } from '$lib/sto
 const KNOWN_PROVIDERS: AiProviderId[] = [
   'openrouter', 'anthropic', 'openai', 'google', 'groq', 'xai',
   'deepseek', 'mistral', 'together', 'fireworks', 'cerebras', 'nvidia',
-  'moonshot', 'sambanova', 'perplexity', 'cohere', 'opencode', 'opencode-go', 'ollama', 'lmstudio',
+  'moonshot', 'sambanova', 'perplexity', 'cohere', 'opencode', 'opencode-go', 'kilocode', 'ollama', 'lmstudio',
+  // No key: Rust answers "exists" from the Codex ChatGPT sign-in.
+  'chatgpt',
 ];
 
 // In-memory key-existence cache backed by the OS keychain.

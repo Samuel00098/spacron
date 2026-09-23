@@ -5,6 +5,7 @@ import * as agentPanelImagesModule from '$lib/stores/agentPanelImages';
 import { requestTerminalInput } from '$lib/stores/terminal';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
+import { isPointOverDropTarget } from '$lib/utils/drop-target';
 import { useStore } from '$lib/react/useStore';
 import './AgentPanelImages.css';
 
@@ -12,10 +13,11 @@ interface Props {
   sessionId: number;
 }
 
+// A rect test is not enough here: every mounted agent room listens to the same
+// window-level drag streams, and hidden rooms stay laid out at full stage size,
+// so a plain containment check made every agent's tray claim the same drop.
 function isOverElement(el: Element, clientX: number, clientY: number): boolean {
-  const rect = el.getBoundingClientRect();
-  return clientX >= rect.left && clientX <= rect.right &&
-         clientY >= rect.top && clientY <= rect.bottom;
+  return isPointOverDropTarget(el, clientX, clientY);
 }
 
 export default function AgentPanelImages({ sessionId }: Props) {
@@ -300,10 +302,6 @@ export default function AgentPanelImages({ sessionId }: Props) {
         setIsDragOver(false);
         void dropPositionToCss(pos).then((css) => {
           if (!css) return;
-          // Hidden rooms stay laid out at full size; reject them the same way
-          // TerminalPane does before the rect test.
-          const style = getComputedStyle(el);
-          if (style.visibility === 'hidden' || style.pointerEvents === 'none') return;
           if (!isOverElement(el, css.x, css.y)) return;
 
           const paths: string[] = payload.paths ?? [];
@@ -351,7 +349,7 @@ export default function AgentPanelImages({ sessionId }: Props) {
       {images.length > 0 && (
         <div className="api-strip">
           {images.map((img) => (
-            <div key={img.id} className="api-thumb" title={`${img.name} — click to preview`}>
+            <div key={img.id} className="api-thumb" title={`${img.name}: click to preview`}>
               <img
                 src={img.objectUrl}
                 alt={img.name}

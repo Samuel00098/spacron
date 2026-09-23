@@ -228,6 +228,16 @@
   margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary);
   white-space: pre-wrap; word-break: break-word;
 }
+/* The handover chain. Deliberately quieter than the agent's own words and set
+   apart by a rule rather than a tint: it is context for the claim above, not a
+   second claim, and the card's severity colour already belongs to the status.
+   See `notification-card-design` — never tint a whole surface. */
+.agent-notifs .orc-comp-handover {
+  margin: 5px 0 0; padding-top: 5px;
+  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.18));
+  font-size: 11px; line-height: 1.45; color: var(--text-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
 .agent-notifs .orc-comp-loading {
   display: inline-flex; align-items: center; gap: 5px; margin-top: 3px;
   font-size: 10px; color: var(--text-muted); font-style: italic;

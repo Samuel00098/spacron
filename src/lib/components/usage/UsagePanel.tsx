@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
   usageState,
   isUsagePanelOpen,
   closeUsagePanel,
+  usagePanelHeight,
+  setUsagePanelHeight,
+  persistUsagePanelHeight,
+  USAGE_PANEL_MIN_HEIGHT,
   PANEL_POLL_INTERVAL_MS,
   hasNumbers,
   type ProviderUsage,
@@ -46,6 +50,20 @@ const STATUS_NOTE: Record<Exclude<UsageStatus, 'ok'>, string> = {
   unsupported: "Signed in, but Spacron doesn't read usage for this CLI yet",
   error: 'Could not read usage',
 };
+
+/**
+ * How little of the project tree a resize may leave behind, in px.
+ *
+ * The panel can only grow by taking from the tree above it, and the tree is
+ * what the sidebar is mostly for — so the handle stops here rather than letting
+ * one drag swallow it. The panel's own floor is `USAGE_PANEL_MIN_HEIGHT`, in
+ * the store, so the clamp the handle applies and the clamp the stored value
+ * applies cannot drift apart.
+ */
+const MIN_DRAWER_BODY = 96;
+
+/** How far one arrow-key press moves the handle. */
+const DRAG_KEY_STEP = 24;
 
 function relativeAge(fetchedAt: number, now: number): string {
   const mins = Math.floor(Math.max(0, now / 1000 - fetchedAt) / 60);
@@ -168,7 +186,7 @@ export default function UsagePanel() {
   const accounts = useStore(accountsState);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ y: number; height: number; maxHeight: number } | null>(null);
-  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const height = useStore(usagePanelHeight);
 
   // Accounts and linked sessions change far less often than the meters, so they
   // load when the panel opens rather than on the usage poll.
@@ -203,18 +221,28 @@ export default function UsagePanel() {
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) setDragHeight(null);
-  }, [open]);
+  /**
+   * What the panel is now, and the most it could become.
+   *
+   * The panel can only take height from one place: the project tree directly
+   * above it, which is the sidebar's single flexible row. So the ceiling is
+   * this panel plus whatever that body can give up and stay usable. Measured
+   * per gesture rather than cached, because the rail and the window are both
+   * resizable underneath it.
+   */
+  function measure(): { height: number; max: number } {
+    const panel = panelRef.current;
+    if (!panel) return { height: USAGE_PANEL_MIN_HEIGHT, max: USAGE_PANEL_MIN_HEIGHT };
+    const shown = panel.getBoundingClientRect().height;
+    const body = panel.parentElement?.querySelector<HTMLElement>(':scope > .drawer-body');
+    const spare = Math.max(0, (body?.getBoundingClientRect().height ?? 0) - MIN_DRAWER_BODY);
+    return { height: shown, max: Math.max(USAGE_PANEL_MIN_HEIGHT, shown + spare) };
+  }
 
   function onDragStart(e: ReactPointerEvent<HTMLButtonElement>) {
     if (!panelRef.current) return;
-    const rect = panelRef.current.getBoundingClientRect();
-    dragStartRef.current = {
-      y: e.clientY,
-      height: rect.height,
-      maxHeight: Math.max(rect.height, rect.bottom - 8),
-    };
+    const { height, max } = measure();
+    dragStartRef.current = { y: e.clientY, height, maxHeight: max };
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
@@ -222,14 +250,31 @@ export default function UsagePanel() {
     const start = dragStartRef.current;
     if (!start) return;
     const next = start.height + start.y - e.clientY;
-    setDragHeight(Math.max(start.height, Math.min(start.maxHeight, next)));
+    // Clamped at both ends. This used to floor at the height the drag started
+    // from, which made the handle growth-only: one overshooting drag and the
+    // only way back was to close the panel and reopen it.
+    setUsagePanelHeight(Math.min(start.maxHeight, next));
+  }
+
+  /** The same resize from the keyboard — the handle is a real control. */
+  function onDragKey(e: React.KeyboardEvent<HTMLButtonElement>) {
+    const step = e.key === 'ArrowUp' ? DRAG_KEY_STEP : e.key === 'ArrowDown' ? -DRAG_KEY_STEP : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { height: shown, max } = measure();
+    setUsagePanelHeight(Math.min(max, shown + step));
+    persistUsagePanelHeight();
   }
 
   function onDragEnd(e: ReactPointerEvent<HTMLButtonElement>) {
+    const dragged = dragStartRef.current !== null;
     dragStartRef.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    // One write per gesture, not one per pointermove.
+    if (dragged) persistUsagePanelHeight();
   }
 
   if (!open) return null;
@@ -243,18 +288,22 @@ export default function UsagePanel() {
       className="usage-panel"
       ref={panelRef}
       aria-label="Agent usage"
-      style={dragHeight ? { height: `${dragHeight}px`, maxHeight: `${dragHeight}px` } : undefined}
+      /* One variable, not a height/max-height pair: the panel opens at this
+         stored height every time, and the stylesheet owns how a short window
+         trims it from there. */
+      style={{ '--usage-panel-height': `${height}px` } as React.CSSProperties}
     >
       <header className="usage-head">
         <button
           className="usage-drag-handle"
           type="button"
-          aria-label="Drag usage panel upward"
-          title="Drag upward"
+          aria-label="Resize usage panel"
+          title="Drag to resize"
           onPointerDown={onDragStart}
           onPointerMove={onDragMove}
           onPointerUp={onDragEnd}
           onPointerCancel={onDragEnd}
+          onKeyDown={onDragKey}
         >
           <span aria-hidden="true" />
         </button>

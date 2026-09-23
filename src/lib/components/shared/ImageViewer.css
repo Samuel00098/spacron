@@ -1,0 +1,270 @@
+.image-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.55);
+  /* Blur the app behind so the frame reads as its own surface. The viewer
+     has no position: fixed children, so this containing block is safe. */
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3vh 3vw;
+}
+
+.image-viewer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* Themes with a translucent --bg-primary let the app show through the bar
+     and footer. The overlay's backdrop blur frosts it; a second
+     backdrop-filter here would only see the overlay, not the app. */
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 0 40px color-mix(in srgb, var(--text-primary) 8%, transparent),
+    0 24px 70px rgba(0, 0, 0, 0.45);
+}
+
+.image-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  min-height: 44px;
+}
+
+.image-viewer-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.image-viewer-count,
+.image-viewer-zoom {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.image-viewer-zoom {
+  min-width: 3.2em;
+  text-align: center;
+}
+
+.image-viewer-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.image-viewer-tools button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out), color var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+
+.image-viewer-tools button:hover,
+.image-viewer-tools button.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.image-viewer-tools button:focus-visible {
+  outline: none;
+  border-color: var(--border-focus, var(--accent));
+}
+
+.image-viewer-tools button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.image-viewer-tools button.primary:hover {
+  filter: brightness(1.08);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.image-viewer-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.image-viewer-close {
+  font-size: 14px;
+}
+
+.image-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+  background: #000;
+}
+
+.image-viewer-stage.dragging {
+  cursor: grabbing;
+}
+
+.image-viewer-stage img {
+  flex: none;
+  user-select: none;
+  image-rendering: auto;
+}
+
+.image-viewer-step {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 56px;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 26px;
+  cursor: pointer;
+}
+
+.image-viewer-step:hover {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.image-viewer-step.prev { left: 12px; }
+.image-viewer-step.next { right: 12px; }
+
+.image-viewer-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.image-viewer-status {
+  color: var(--text-secondary);
+}
+
+.image-viewer-hint {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .image-viewer-hint { display: none; }
+}
+
+/* Edit mode: the selection canvas sits exactly over the image. */
+.image-viewer-stage.editing {
+  cursor: crosshair;
+}
+
+.image-viewer-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  pointer-events: none;
+}
+
+.image-viewer-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.image-viewer-edit textarea {
+  width: 100%;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.image-viewer-edit textarea:focus-visible {
+  outline: 2px solid var(--border-focus, var(--accent));
+  outline-offset: 1px;
+}
+
+.image-viewer-edit-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.image-viewer-edit-tools label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.image-viewer-edit-tools button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-viewer-edit-tools button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.image-viewer-edit-tools button:focus-visible {
+  outline: none;
+  border-color: var(--border-focus, var(--accent));
+}
+
+.image-viewer-edit-tools button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.image-viewer-edit-tools button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

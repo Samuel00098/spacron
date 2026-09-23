@@ -10,6 +10,9 @@ import {
   toolArgBool,
   toolArgNum,
   toolArgStrArr,
+  BRAIN_EMULATOR_TOOLS,
+  brainToolProfile,
+  normalizeEmulatorArgs,
 } from './brain-tools';
 
 describe('parseBrainToolCalls', () => {
@@ -123,5 +126,64 @@ describe('coordinator tool families', () => {
     expect(toolArgBool({ use_regex: 'true' }, 'use_regex', false)).toBe(true);
     expect(toolArgBool({}, 'use_regex', false)).toBe(false);
     expect(toolArgStrArr({ options: ['A', ' B ', 1, ''] }, 'options')).toEqual(['A', 'B']);
+  });
+});
+
+describe('emulator tools', () => {
+  it('splits device tools into observing and acting', () => {
+    for (const t of ['emulator_list', 'emulator_screenshot', 'emulator_logcat'] as const) {
+      expect(BRAIN_READONLY_TOOLS.has(t)).toBe(true);
+      expect(BRAIN_WRITE_TOOLS.has(t)).toBe(false);
+    }
+    for (const t of ['emulator_boot', 'emulator_tap', 'emulator_swipe', 'emulator_text'] as const) {
+      expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
+      expect(BRAIN_READONLY_TOOLS.has(t)).toBe(false);
+    }
+  });
+
+  it('lets ask/plan mode look at a device but never touch one', () => {
+    for (const mode of ['ask', 'plan'] as const) {
+      const { allowed } = brainToolProfile(mode);
+      expect(allowed.has('emulator_list')).toBe(true);
+      expect(allowed.has('emulator_logcat')).toBe(true);
+      expect(allowed.has('emulator_tap')).toBe(false);
+      expect(allowed.has('emulator_boot')).toBe(false);
+    }
+    const full = brainToolProfile('full').allowed;
+    for (const t of BRAIN_EMULATOR_TOOLS) expect(full.has(t)).toBe(true);
+  });
+
+  it('coerces stringified coordinates, which the Rust handlers read as absent', () => {
+    expect(normalizeEmulatorArgs('emulator_tap', { target: 'emulator-5554', x: '0.5', y: 0.25 }))
+      .toEqual({ target: 'emulator-5554', x: 0.5, y: 0.25 });
+    expect(normalizeEmulatorArgs('emulator_logcat', { target: 'e', lines: '200' }))
+      .toEqual({ target: 'e', lines: 200 });
+  });
+
+  it('leaves unparseable values alone rather than inventing a coordinate', () => {
+    expect(normalizeEmulatorArgs('emulator_tap', { target: 'e', x: 'middle' }))
+      .toEqual({ target: 'e', x: 'middle' });
+  });
+
+  it('stringifies a raw keycode, which emulator_key only accepts as text', () => {
+    expect(normalizeEmulatorArgs('emulator_key', { target: 'e', key: 4 }))
+      .toEqual({ target: 'e', key: '4' });
+    expect(normalizeEmulatorArgs('emulator_key', { target: 'e', key: 'back' }))
+      .toEqual({ target: 'e', key: 'back' });
+  });
+});
+
+describe('generate_image', () => {
+  it('is a sequential tool offered only with full access', () => {
+    expect(BRAIN_WRITE_TOOLS.has('generate_image')).toBe(true);
+    expect(BRAIN_READONLY_TOOLS.has('generate_image')).toBe(false);
+    expect(brainToolProfile('full').allowed.has('generate_image')).toBe(true);
+    expect(brainToolProfile('ask').allowed.has('generate_image')).toBe(false);
+  });
+
+  it('has a video sibling with the same access rules', () => {
+    expect(BRAIN_WRITE_TOOLS.has('generate_video')).toBe(true);
+    expect(brainToolProfile('full').allowed.has('generate_video')).toBe(true);
+    expect(brainToolProfile('ask').allowed.has('generate_video')).toBe(false);
   });
 });

@@ -9,6 +9,7 @@
  */
 
 import { backendInvoke } from '$lib/services/backend';
+import { visibilityNote } from '$lib/services/orchestrator/file-visibility';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -387,14 +388,17 @@ export async function buildProjectTree(
       const items = await backendInvoke<ProjectDirectoryEntry[]>('fs_read_dir', { path: dir });
       for (const item of items) {
         if (entries.length >= maxEntries) return;
-        if (item.name.startsWith('.')) continue;
         const isDir = isDirectoryEntry(item);
-        if (isDir && SKIP_DIRS.has(item.name)) continue;
+        // Dot-directories are tooling state; dotfiles are real project files
+        // (.env.local, .gitignore). Hiding them made the brain report an
+        // existing .env.local as missing.
+        if (isDir && (item.name.startsWith('.') || SKIP_DIRS.has(item.name))) continue;
         if (!isDir && SKIP_EXT.has(item.name.slice(item.name.lastIndexOf('.')))) continue;
 
         const indent = '  '.repeat(depth);
         const relative = dir === rootPath ? item.name : `${dir.slice(rootPath.length + 1)}/${item.name}`;
-        entries.push(`${indent}${isDir ? '[dir]' : '[file]'} ${relative}`);
+        const note = isDir ? '' : visibilityNote(relative, false);
+        entries.push(`${indent}${isDir ? '[dir]' : '[file]'} ${relative}${note ? ` (${note})` : ''}`);
         if (isDir) {
           await walk(`${dir}/${item.name}`, depth + 1);
         }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceTodoItems, agentInputRequest, buildCompletionReport, cleanOrchestratorReply, composeTurnReply, findClaimedWritePaths, findOmittedPlanItems, formatDocumentsIndexBlock, formatStructuredReport, formatTodoListMarkdown, formatTurnSummary, hasUnverifiedMutation, isDeferredCompletionReply, isPromiseOnlyReply, mergeTodoItems, parseTodoList, replyClaimsDocumentWrite, todoIsDone, todoMarkerStatus, writeEvidenceCoversClaims, MAX_PLAN_ITEMS, type ChatTurnTodoItem } from './chat-turn';
+import { advanceTodoItems, agentInputRequest, buildCompletionReport, cleanOrchestratorReply, closeOutTodoItems, composeTurnReply, splitCarriedOverTodos, todoProgress, findClaimedWritePaths, findOmittedPlanItems, formatDocumentsIndexBlock, formatStructuredReport, formatTodoListMarkdown, formatTurnSummary, hasUnverifiedMutation, isDeferredCompletionReply, isPromiseOnlyReply, mediaGenerationRequest, userRequestText, attachedImagePaths, mergeTodoItems, parseTodoList, replyClaimsDocumentWrite, todoIsDone, todoMarkerStatus, writeEvidenceCoversClaims, MAX_PLAN_ITEMS, type ChatTurnTodoItem } from './chat-turn';
 import type { BrainToolResult } from './brain-tools';
 
 function toolResult(overrides: Partial<BrainToolResult> & Pick<BrainToolResult, 'name'>): BrainToolResult {
@@ -10,6 +10,8 @@ describe('Chat turn presentation', () => {
   it('recognizes the reported promise without rejecting a substantive report', () => {
     expect(isPromiseOnlyReply('I’ll take a quick look through the project’s core files and summarize how it’s structured and what it’s doing.')).toBe(true);
     expect(isPromiseOnlyReply('The app uses React. Authentication is implemented in auth.ts.')).toBe(false);
+    // An image request that ended with no generate_image call and no picture.
+    expect(isPromiseOnlyReply('I’ll generate a cheerful golden retriever in a sunny meadow.')).toBe(true);
   });
 
   describe('isDeferredCompletionReply', () => {
@@ -84,8 +86,47 @@ describe('Chat turn presentation', () => {
       expect(md).toContain('- [x] Done item');
       expect(md).toContain('- [~] Active item');
       expect(md).toContain('- [!] Stuck item (needs credentials)');
-      expect(md).toContain('- [x] Dropped item');
+      expect(md).toContain('- [-] Dropped item');
       expect(md).toContain('- [ ] Waiting item');
+    });
+  });
+
+  describe('plan counts and follow-up turns', () => {
+    it('counts by status and leaves cancelled rows out of both sides', () => {
+      expect(todoProgress([
+        { label: 'a', done: true, status: 'completed' },
+        { label: 'b', done: true, status: 'cancelled' },
+        { label: 'c', done: true, status: 'pending' },
+        { label: 'd', done: true },
+      ])).toEqual({ completed: 2, total: 3 });
+    });
+
+    it('closes out the working row but never paints untouched pending work green', () => {
+      const closed = closeOutTodoItems([
+        { label: 'a', done: false, status: 'completed' },
+        { label: 'b', done: false, status: 'in_progress' },
+        { label: 'c', done: false, status: 'pending' },
+        { label: 'd', done: false, status: 'blocked' },
+        { label: 'e', done: false },
+      ]);
+      expect(closed.map((t) => [t.status, t.done])).toEqual([
+        ['completed', true], ['completed', true], ['pending', false], ['blocked', false], ['completed', true],
+      ]);
+      expect(todoProgress(closed)).toEqual({ completed: 3, total: 5 });
+    });
+
+    it('drops rows a follow-up copies from the finished previous plan, but keeps redo requests', () => {
+      const previous = [
+        { label: 'Inspect the auth module', done: true, status: 'completed' as const },
+        { label: 'Fix the token refresh', done: true, status: 'completed' as const },
+      ];
+      const { fresh, carried } = splitCarriedOverTodos(previous, [
+        { label: 'Inspect the auth module', done: true, status: 'completed' },
+        { label: 'Fix the token refresh', done: false, status: 'pending' },
+        { label: 'Add a logout button', done: false, status: 'in_progress' },
+      ]);
+      expect(carried.map((t) => t.label)).toEqual(['Inspect the auth module']);
+      expect(fresh.map((t) => t.label)).toEqual(['Fix the token refresh', 'Add a logout button']);
     });
   });
 
@@ -209,6 +250,20 @@ describe('Chat turn presentation', () => {
       expect(merged.todos.some((t) => t.label === 'Flip the read replica')).toBe(true);
       expect(merged.todos.filter((t) => t.label.startsWith('Pending step'))).toHaveLength(MAX_PLAN_ITEMS - 1);
       expect(merged.todos.some((t) => t.label.startsWith('…and '))).toBe(false);
+    });
+
+    it('makes room for a new step when the same update completes a row at the ceiling', () => {
+      const plan: ChatTurnTodoItem[] = Array.from({ length: MAX_PLAN_ITEMS }, (_, i) => ({
+        id: `step-${i}`, label: `Pending step ${i + 1}`, done: false, status: 'pending',
+      }));
+      const merged = mergeTodoItems(plan, [
+        { ...plan[0], status: 'completed', done: true },
+        ...plan.slice(1),
+        { id: 'new-step', label: 'Flip the read replica', done: false, status: 'pending' },
+      ]);
+      expect(merged.truncated).toBe(false);
+      expect(merged.todos).toHaveLength(MAX_PLAN_ITEMS);
+      expect(merged.todos.map((item) => item.id)).toEqual([...plan.slice(1).map((item) => item.id), 'new-step']);
     });
 
     it('refuses an addition at the ceiling rather than dropping pending work', () => {
@@ -497,6 +552,88 @@ describe('Chat turn presentation', () => {
         expect(formatted).toContain('### What is not working');
       });
 
+      it('does not report a check that never completed as FAILED', () => {
+        // The shipped bug: `npx vitest` and `npx tsc` both hung, every run came
+        // back not-ok, and the card printed "Tests: FAILED | Typecheck: FAILED"
+        // directly under the model's own "no verification run was possible".
+        // A timeout is the absence of a verdict, not a red one.
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', name: 'edit_file', output: 'Edited convex/segments.ts (replaced 12 chars).' }),
+          toolResult({ id: 'b', ok: false, name: 'run_command', output: 'TIMEOUT after 90.0s (no completion): `npx vitest`\n(no output)' }),
+          toolResult({ id: 'c', ok: false, name: 'run_command', output: 'TIMEOUT after 90.0s (no completion): `npx tsc --noEmit`\n(no output)' }),
+        ], []);
+        expect(report.verification).toMatchObject({ tests: 'inconclusive', typecheck: 'inconclusive' });
+        const formatted = formatStructuredReport(report);
+        expect(formatted).not.toContain('FAILED');
+        expect(formatted).toContain('Tests: DID NOT COMPLETE');
+        expect(formatted).toContain('Typecheck: DID NOT COMPLETE');
+        expect(formatted).toContain('This change is unverified.');
+        // The edit keeps an amber badge, never a green or a red one.
+        expect(formatted).toContain('[unverified — the check never finished] 🟡');
+        // And it is not told to fix what a command that reported nothing said.
+        expect(formatted).toContain('The command never finished, so nothing was checked.');
+        expect(formatted).not.toContain('Fix what the command reported');
+      });
+
+      it('treats a dead session like a timeout and a tool error as inconclusive too', () => {
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', ok: false, name: 'run_command', output: 'SESSION CLOSED after 4.0s before the command completed: `npm test`\n' }),
+          toolResult({ id: 'b', ok: false, name: 'run_command', output: 'error: shell is gone: `npm run build`' }),
+        ], []);
+        expect(report.verification).toMatchObject({ tests: 'inconclusive', build: 'inconclusive' });
+      });
+
+      it('still reports a real failure as FAILED when another class only timed out', () => {
+        // A red suite is the more urgent fact and must not be softened to
+        // amber just because the typecheck beside it hung.
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', ok: false, name: 'run_command', output: 'exit 1 in 2.0s: `npm test`\n1 failed' }),
+          toolResult({ id: 'b', ok: false, name: 'run_command', output: 'TIMEOUT after 90.0s (no completion): `npx tsc --noEmit`\n' }),
+        ], []);
+        expect(report.verification).toMatchObject({ tests: 'fail', typecheck: 'inconclusive' });
+        const formatted = formatStructuredReport(report);
+        expect(formatted).toContain('Tests: FAILED 🔴');
+        expect(formatted).toContain('Typecheck: DID NOT COMPLETE');
+      });
+
+      it('reads a timed-out run that later completed by its last run', () => {
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', ok: false, name: 'run_command', output: 'TIMEOUT after 90.0s (no completion): `npx vitest`\n' }),
+          toolResult({ id: 'b', name: 'run_command', output: 'exit 0 in 4.0s: `npx vitest run`\n13 passed' }),
+        ], []);
+        expect(report.verification.tests).toBe('pass');
+      });
+
+      it('reports the last run of a class, so a suite fixed and re-run reads PASSED', () => {
+        // The brain is told to fix what a red run reported and run it again.
+        // An OR across every run would keep printing FAILED for the one run it
+        // was asked to repair.
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', name: 'run_command', ok: false, output: 'exit 1 in 2.0s: `npm test`\n1 failed' }),
+          toolResult({ id: 'b', name: 'edit_file', output: 'Edited src/auth.ts (replaced 12 chars).' }),
+          toolResult({ id: 'c', name: 'run_command', output: 'exit 0 in 2.1s: `npm test`\n13 passed' }),
+        ], []);
+        expect(report.verification.tests).toBe('pass');
+        expect(formatStructuredReport(report)).toContain('Tests: PASSED');
+      });
+
+      it('judges each class by its own last run', () => {
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', name: 'run_command', ok: false, output: 'exit 1 in 2.0s: `npm run build`\nboom' }),
+          toolResult({ id: 'b', name: 'run_command', output: 'exit 0 in 2.1s: `npm test`\n13 passed' }),
+        ], []);
+        // A green suite run last must not clear a build that is still red.
+        expect(report.verification).toMatchObject({ tests: 'pass', build: 'fail' });
+      });
+
+      it('does not let a trailing non-verification command stand in as the plan\'s evidence', () => {
+        const report = buildCompletionReport([
+          toolResult({ id: 'a', name: 'run_command', ok: false, output: 'exit 1 in 2.0s: `npm test`\n1 failed' }),
+          toolResult({ id: 'b', name: 'run_command', output: 'exit 0 in 0.1s: `cat package.json`\n{}' }),
+        ], [{ label: 'Fix the lookup', done: true }]);
+        expect(report.completed[0]).toMatchObject({ task: 'Fix the lookup', verified: false });
+      });
+
       it('does not read a green run as failed because its output says "0 failed"', () => {
         const report = buildCompletionReport([
           toolResult({ id: 'a', name: 'run_command', output: 'exit 0 in 2.0s: `npm test`\n12 passed, 0 failed' }),
@@ -575,6 +712,13 @@ describe('Chat turn presentation', () => {
   });
 
   describe('cleanOrchestratorReply', () => {
+    it('keeps the commas between inline code spans', () => {
+      expect(cleanOrchestratorReply('- Helpers: `requireIdentity`, `requireOrgAccess`, `requireRole` throughout.')).toBe(
+        '- Helpers: `requireIdentity`, `requireOrgAccess`, `requireRole` throughout.'
+      );
+      expect(cleanOrchestratorReply('Route groups `(agency)`, `(auth)`')).toBe('Route groups `(agency)`, `(auth)`');
+    });
+
     it('removes em dashes between greeting and clause', () => {
       const input = "Hello — happy to help, and I'm here with you for the rest of the session. What would you like to work on in sello today?";
       expect(cleanOrchestratorReply(input)).toBe(
@@ -661,6 +805,16 @@ describe('hasUnverifiedMutation (verification gate)', () => {
     expect(hasUnverifiedMutation([write('a'), run('b', 'npm test', 1)])).toBe(false);
   });
 
+  it('does not accept a verification that never completed', () => {
+    // A command that hung checked nothing, so the gate has not been satisfied.
+    // The caller nudges once and only once, so a project whose checks always
+    // hang still finishes its turn.
+    const hung = toolResult({ id: 'b', ok: false, name: 'run_command', output: 'TIMEOUT after 90.0s (no completion): `npm test`\n' });
+    expect(hasUnverifiedMutation([write('a'), hung])).toBe(true);
+    // One real run alongside it is enough to clear the gate.
+    expect(hasUnverifiedMutation([write('a'), hung, run('c', 'npm test', 1)])).toBe(false);
+  });
+
   it('ignores a command that only looked at the work', () => {
     expect(hasUnverifiedMutation([write('a'), run('b', 'git status')])).toBe(true);
     expect(hasUnverifiedMutation([write('a'), run('b', 'cat src/auth.ts')])).toBe(true);
@@ -680,5 +834,30 @@ describe('hasUnverifiedMutation (verification gate)', () => {
     expect(hasUnverifiedMutation([
       toolResult({ id: 'a', name: 'edit_file', ok: false, output: 'error: edit failed: no match' }),
     ])).toBe(false);
+  });
+});
+
+describe('mediaGenerationRequest', () => {
+  it('recognises plain requests for a picture or clip', () => {
+    // The 2026-09-22 screenshot: typo included.
+    expect(mediaGenerationRequest('can you create an image of aa dog')).toBe('image');
+    expect(mediaGenerationRequest('generate a picture of a sunset')).toBe('image');
+    expect(mediaGenerationRequest('make me a logo for the app')).toBe('image');
+    expect(mediaGenerationRequest('draw me a cat')).toBe('image');
+    expect(mediaGenerationRequest('make a short video of waves')).toBe('video');
+  });
+
+  it('reads the request and attached image paths past the attachment block', () => {
+    const message = 'make this picture red\n\nThe user attached these files. Use their contents as context when relevant:\n--- Attached file: cat.png (image/png) ---\nThe binary attachment was saved at C:/tmp/cat.png. Inspect it when relevant.\n--- End attached file ---';
+    expect(userRequestText(message)).toBe('make this picture red');
+    expect(attachedImagePaths(message)).toEqual(['C:/tmp/cat.png']);
+    expect(attachedImagePaths('no attachments')).toEqual([]);
+  });
+
+  it('leaves code work alone', () => {
+    expect(mediaGenerationRequest('add an image tag to the header')).toBeNull();
+    expect(mediaGenerationRequest('make the image component responsive')).toBeNull();
+    expect(mediaGenerationRequest('create an image upload field')).toBeNull();
+    expect(mediaGenerationRequest('fix the video player')).toBeNull();
   });
 });

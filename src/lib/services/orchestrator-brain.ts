@@ -5,6 +5,9 @@ import {
   type AgentCheckpoint,
   type AgentBudgets,
 } from './orchestrator/agent-transport';
+import { streamingReplyPreview } from './orchestrator/reply-stream';
+import { getAgentProviderCapabilities, isChatAgentProvider } from './chat-provider-adapters';
+import { loadLiveAgentProviderModels, peekLiveAgentProviderModels } from './live-agent-models';
 import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import {
@@ -14,11 +17,13 @@ import {
   getProviderDef,
   isLocalProvider,
   getProviderBaseUrl,
+  providerSetupHint,
+  orchestratorCustomSkills,
+  orchestratorDisabledSkills,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
-import { classifyRouting } from '$lib/services/jev';
-import { suggestReasoningLevel } from '$lib/services/orchestrator/jev-reasoning';
-import { cleanOrchestratorReply, hasReadEvidence, hasUnverifiedMutation, isDeferredCompletionReply, isPromiseOnlyReply, replyClaimsDocumentWrite, findClaimedWritePaths, writeEvidenceCoversClaims } from '$lib/services/orchestrator/chat-turn';
+import { cleanOrchestratorReply, hasReadEvidence, hasUnverifiedMutation, isDeferredCompletionReply, isPromiseOnlyReply, mediaGenerationRequest, userRequestText, attachedImagePaths, replyClaimsDocumentWrite, findClaimedWritePaths, writeEvidenceCoversClaims } from '$lib/services/orchestrator/chat-turn';
+import { buildSkillsPrompt } from '$lib/services/orchestrator/skills';
 import {
   BRAIN_ASK_TOOLS,
   BRAIN_READONLY_TOOLS,
@@ -27,6 +32,7 @@ import {
   brainToolSignature,
   buildBrainToolsPrompt,
   formatBrainToolResults,
+  formatBrainToolResultIndex,
   isDoomLoop,
   parseBrainTodos,
   parseBrainToolCalls,
@@ -36,6 +42,10 @@ import {
   type BrainToolResult,
 } from '$lib/services/orchestrator/brain-tools';
 import type { AgentRole } from '$lib/services/orchestrator/agent-charter';
+import { DIRECT_EDIT_FILE_LIMIT, EXPLICIT_SPAWN_RE, hasDelegationAction } from '$lib/services/orchestrator/delegation-policy';
+import type { ChatReasoningEffort } from '$lib/types/chat';
+import { classifyRouting } from '$lib/services/jev';
+import { suggestReasoningLevel } from '$lib/services/orchestrator/jev-reasoning';
 
 export interface AgentChoice {
   command: string;
@@ -58,6 +68,10 @@ export interface AgentChoice {
  */
 export type SpawnPlacement = 'worktree' | 'main';
 
+const VALID_REASONING_EFFORTS: readonly ChatReasoningEffort[] = [
+  'default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+];
+
 export type OrchestratorAction =
   /**
    * Launch a new agent. Omit `prompt` to open it idle/ready; `name` labels it.
@@ -68,7 +82,7 @@ export type OrchestratorAction =
    * launched this agent FROM a task-panel card, so completion can offer that
    * card a one-click move to Done.
    */
-  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; model?: string | null; skipWorktree?: boolean; placement?: SpawnPlacement | null; panelTaskId?: string | null }
+  | { kind: 'spawn'; agent: string; prompt?: string | null; name?: string | null; role?: AgentRole | null; files?: string[] | null; model?: string | null; reasoningEffort?: ChatReasoningEffort; skipWorktree?: boolean; placement?: SpawnPlacement | null; panelTaskId?: string | null }
   /** Push a new prompt to an already-running agent, addressed by its name. */
   | { kind: 'send'; target: string; prompt: string }
   /** Give a running agent a name (or rename it). */
@@ -140,8 +154,16 @@ export interface RunningAgentRef {
   recentOutput?: string | null;
 }
 
+/**
+ * A task can keep its live session for follow-up messages after its latest
+ * turn has ended. This separates that reusable-session state from the task's
+ * lease status, so the brain does not call a finished turn "still in progress".
+ */
+export type AgentTurnState = 'working' | 'ready';
+
 export interface AgentOutputRef extends RunningAgentRef {
   status: 'in-progress' | 'complete' | 'blocked' | 'failed' | 'cancelled';
+  turnState?: AgentTurnState;
   updatedAt?: number | null;
   reason?: string | null;
   freshness?: string | null;
@@ -261,6 +283,25 @@ export interface RouteContext {
    * transcript between rounds; failures never affect routing.
    */
   onToolRound?: (results: BrainToolResult[], round: number) => void;
+  /**
+   * Messages the user steered into this turn while it runs (Codex-style): the
+   * loop drains them before each model request and will not accept a FINAL
+   * while one is waiting.
+   */
+  steering?: { pending: () => boolean; drain: () => string[] };
+  /** Observational: wall-clock time of each model request, for the turn's timing line. */
+  onModelCall?: (elapsedMs: number) => void;
+  /**
+   * Display only: the readable reply text of the model request in flight, as
+   * it streams ('' when a new request starts). Tool rounds are never shown.
+   * Must not affect routing; the finished response is parsed as usual.
+   */
+  onReplyStream?: (preview: string) => void;
+  /**
+   * The project's own check, run once when a turn that changed files is about
+   * to finish without having verified them. Null when the project has none.
+   */
+  postEditCheck?: () => Promise<{ command: string; ok: boolean; output: string } | null>;
   signal?: AbortSignal;
   nativeTools?: boolean;
   checkpoint?: AgentCheckpoint;
@@ -278,6 +319,13 @@ export interface RouteContext {
    * conversation and only acts (spawn/send/close) on an explicit request.
    */
   conversational?: boolean;
+  /**
+   * The turn is SPOKEN (realtime voice call), not typed in the Chat panel.
+   * Both set `conversational`, but only speech wants short, markdown-free
+   * replies; a typed chat wants a full ChatGPT/Claude-style answer. Leaving
+   * this unset in Chat is what keeps the voice style rules out of its prompt.
+   */
+  voice?: boolean;
 }
 
 export interface RouteLlmConfig {
@@ -287,6 +335,13 @@ export interface RouteLlmConfig {
   hasApiKey?: boolean;
   baseUrl?: string;
   sessionId?: string;
+  /**
+   * Visible-output budget in tokens for this model's replies. The loop may
+   * raise it mid-turn: a reasoning model that spends the default budget
+   * thinking returns its FINAL answer truncated, which parses as an invalid
+   * protocol response — more headroom, not another lecture, is the fix.
+   */
+  outputTokens?: number;
 }
 
 
@@ -303,6 +358,16 @@ function compactText(raw: string, maxChars: number): string {
  */
 export const ORCHESTRATOR_USER_TEXT_CHAR_LIMIT = 120_000;
 const ORCHESTRATOR_NEW_MESSAGE_CHAR_LIMIT = 16_000;
+/**
+ * Past this much tool output, a turn whose transport already replays the full
+ * results sends an index in the prompt instead of a second copy.
+ */
+const TOOL_RESULT_INLINE_LIMIT = 20_000;
+/** Tool evidence never drops below this, however tight the rest of the prompt is. */
+const MIN_TOOL_RESULT_CHARS = 18_000;
+/** Room kept for the app state, project tree and conversation beside the evidence. */
+const MIN_SURROUNDING_CONTEXT_CHARS = 8_000;
+
 const ORCHESTRATOR_CONTEXT_TRUNCATION_MARKER =
   '\n\n[Earlier context was trimmed to fit the orchestrator input limit.]\n\n';
 
@@ -427,7 +492,8 @@ function buildUserText(message: string, ctx?: RouteContext): string {
   if (taskOutputs.length) {
     parts.push('Recent agent/task status and terminal output:');
     for (const r of taskOutputs) {
-      parts.push(`- ${r.name ? `"${compactText(r.name, 48)}"` : '(unnamed)'} [${compactText(r.agent, 48)}, ${r.status}] - ${compactText(r.title, 120)}`);
+      const turnState = r.turnState === 'ready' ? ', latest turn complete and ready for a new message' : '';
+      parts.push(`- ${r.name ? `"${compactText(r.name, 48)}"` : '(unnamed)'} [${compactText(r.agent, 48)}, ${r.status}${turnState}] - ${compactText(r.title, 120)}`);
       if (r.freshness) parts.push(`  Freshness: ${compactText(r.freshness, 160)}`);
       if (r.reason) parts.push(`  Reason: ${compactText(r.reason, 180)}`);
       if (r.recentOutput?.trim()) {
@@ -467,25 +533,55 @@ function buildUserText(message: string, ctx?: RouteContext): string {
   }
   const conversation = (ctx?.conversation ?? []).slice(-12);
   if (conversation.length) {
-    parts.push('Conversation history (most recent turns, use this to resolve follow-ups):');
-    for (const turn of conversation) {
+    // Your previous answer is kept (nearly) whole: a follow-up such as "what
+    // about point 4?" is unanswerable when that answer was cut to 800 chars.
+    const previousAnswer = conversation.map((turn) => turn.role).lastIndexOf('assistant');
+    parts.push('Conversation history (oldest first; context for the new message, not a request to answer again):');
+    conversation.forEach((turn, index) => {
       const role = turn.role === 'user' ? 'user' : turn.role === 'assistant' ? 'assistant' : turn.role;
-      parts.push(`${role}: ${compactText(turn.text, 800)}`);
-    }
+      const label = index === previousAnswer ? 'assistant (your previous answer)' : role;
+      parts.push(`${label}: ${compactText(turn.text, index === previousAnswer ? PREVIOUS_ANSWER_CHAR_LIMIT : 800)}`);
+    });
   }
-  if (ctx?.toolResults?.length) {
-    parts.push('Results from tools already executed in this turn:');
-    parts.push(truncatePromptContext(formatBrainToolResults(ctx.toolResults), 18_000));
-  }
-  if (ctx?.executionNote?.trim()) parts.push(`Execution instruction: ${ctx.executionNote.trim()}`);
+  // Everything after the tool results, so the results can be sized against
+  // whatever budget the rest of the prompt leaves.
+  const tailParts: string[] = [];
+  if (ctx?.executionNote?.trim()) tailParts.push(`Execution instruction: ${ctx.executionNote.trim()}`);
   const recentUserMessages = (ctx?.recentUserMessages ?? []).slice(-6);
   if (recentUserMessages.length) {
-    parts.push('Recent user messages:');
-    for (const text of recentUserMessages) parts.push(`- ${compactText(text, 240)}`);
+    tailParts.push('Recent user messages:');
+    for (const text of recentUserMessages) tailParts.push(`- ${compactText(text, 240)}`);
   }
+  const focus = describeTurnFocus(message, ctx);
+  if (focus) tailParts.push(`Turn focus: ${focus}`);
   const newMessage = `New user message: ${ctx?.nativeTools ? message : compactText(message, ORCHESTRATOR_NEW_MESSAGE_CHAR_LIMIT)}`;
   const contextBudget = (ctx?.nativeTools ? (ctx.budgets?.contextChars ?? DEFAULT_AGENT_BUDGETS.contextChars) : ORCHESTRATOR_USER_TEXT_CHAR_LIMIT) - newMessage.length - 1;
-  const context = truncatePromptContext(parts.join('\n'), contextBudget);
+
+  // Tool results are this turn's evidence: what the model read, ran and found.
+  // They used to be squeezed into a fixed 18k slice of an up-to-128k budget,
+  // so a `read_project` snapshot arrived gutted and the model correctly
+  // reported that it could not review the project. They now take what the rest
+  // of the prompt leaves, and the surrounding context is trimmed first.
+  let context: string;
+  if (ctx?.toolResults?.length) {
+    // With a transport the full outputs are already in the conversation
+    // history it replays, so a second full copy here only slows the turn down.
+    // Past a threshold the prompt carries an index of them instead.
+    const full = formatBrainToolResults(ctx.toolResults);
+    const carriedByTransport = ctx.nativeTools === true && ctx.toolExecutor !== undefined;
+    const indexed = carriedByTransport && full.length > TOOL_RESULT_INLINE_LIMIT;
+    const label = indexed
+      ? 'Tool results from this turn (full outputs are in the tool messages; page any of them with read_tool_result(id)):'
+      : 'Results from tools already executed in this turn:';
+    const tail = tailParts.join('\n');
+    const overhead = label.length + tail.length + 4;
+    const resultsBudget = Math.max(MIN_TOOL_RESULT_CHARS, contextBudget - overhead - MIN_SURROUNDING_CONTEXT_CHARS);
+    const results = truncatePromptContext(indexed ? formatBrainToolResultIndex(ctx.toolResults) : full, resultsBudget);
+    const head = truncatePromptContext(parts.join('\n'), Math.max(0, contextBudget - overhead - results.length));
+    context = truncatePromptContext([head, label, results, tail].filter(Boolean).join('\n'), contextBudget);
+  } else {
+    context = truncatePromptContext([...parts, ...tailParts].join('\n'), contextBudget);
+  }
   return context ? `${context}\n${newMessage}` : newMessage;
 }
 
@@ -502,12 +598,6 @@ const CLOSE_ALL_RE = /\b(all|everything|every ?one|every agent|them all|the agen
 // just chatting, asking for an explanation, or asking for status.
 const QUESTION_START_RE = /^(what|why|how|when|where|who|which|is|are|does|do|can|could|would|should|explain|describe|tell me|show me|help me understand|help me|give me|walk me through)\b/i;
 const QUESTION_MARK_RE = /\?\s*$/;
-
-// Explicit "open an agent" intent. In spoken conversation mode we only spawn
-// when the user clearly asks to launch an agent or to have one do coding work —
-// everything else is treated as plain conversation, never a dispatch.
-const EXPLICIT_SPAWN_RE =
-  /\b(open|spawn|launch|start|fire up|boot up|kick off|create|use|have|get|tell|ask|put)\b[^.?!]*\b(agent|claude|codex|aider|opencode|antigravity|agy|cursor|pi|grok|assistant|bot)\b/i;
 
 // Status-check patterns — intercepted before the LLM so we respond instantly.
 const STATUS_CHECK_RE = /^(status|what[‘’]?s (?:the )?status|what[‘’]?s running|list agents|show agents|which agents|what agents are running|show me the agents|what are (?:my |the )?agents doing|how (?:is|are) (?:the |my |that |those )?agents? doing|is (?:it|that|the agent) (?:done|finished|complete)|has (?:it|that|the agent) finished|are (?:they|the agents) (?:done|finished|complete))\b/i;
@@ -560,7 +650,33 @@ const DIRECT_ADVICE_RE =
 const BROAD_REVIEW_RE =
   /\b(go through|look through|walk through|read all (?:the )?files?|all (?:the )?files?|whole project|entire project|the project|application|codebase)\b/i;
 
+// Thanks and praise that close out a finished task ("this is good, thanks for
+// the work on the project"). Such a message asks for nothing, so every
+// "keep working" net must stand down for it: the reply to it is a sentence of
+// thanks, and a polite "let me know if you'd like…" is not a deferral. Before
+// this, the deferral net ordered a redo and the user got the previous answer
+// again, once per thank-you.
+const ACKNOWLEDGEMENT_RE =
+  /\b(?:thanks?|thank you|thx|cheers|appreciate(?:d)?|great|perfect|awesome|amazing|excellent|brilliant|fantastic|wonderful|nice|cool|love it|well done|good (?:job|work)|nice (?:job|work)|great (?:job|work)|(?:this|that|it)(?:['’]s| is| looks| was) (?:good|great|fine|perfect|helpful|exactly))\b/i;
+// Anything that turns the message back into a request: a question, a
+// go-ahead, a correction or a new instruction.
+const ACKNOWLEDGEMENT_BLOCKER_RE =
+  /\?|\b(?:but|however|although|except|now|next|also|then|continue|go ahead|proceed|keep going|carry on|do it|can you|could you|would you|will you|let['’]?s|please (?:do|go|continue|check|look|review)|check|review|explain|inspect|look (?:at|into)|why|how|what|which|where|when)\b/i;
+
+const ACKNOWLEDGEMENT_FALLBACK_REPLY = "You're welcome, glad it helped. Tell me whenever you want to pick up the next thing.";
+
+/** A thank-you or a word of praise with no request in it. */
+export function isAcknowledgement(message: string): boolean {
+  const text = message.trim();
+  if (!text || text.length > 200) return false;
+  return ACKNOWLEDGEMENT_RE.test(text)
+    && !ACKNOWLEDGEMENT_BLOCKER_RE.test(text)
+    && !ACTION_RE.test(text)
+    && !EXPLICIT_SPAWN_RE.test(text);
+}
+
 function isDirectAdviceOnlyRequest(message: string): boolean {
+  if (isAcknowledgement(message)) return false;
   return (DIRECT_ADVICE_RE.test(message) || BROAD_REVIEW_RE.test(message)) && !ACTION_RE.test(message);
 }
 
@@ -586,7 +702,7 @@ const CONTINUATION_RE =
 function isContinuationOfDirectWork(message: string, ctx?: RouteContext): boolean {
   const trimmedMessage = message.trim();
   if (!trimmedMessage || trimmedMessage.length > 80) return false;
-  if (!CONTINUATION_RE.test(trimmedMessage)) return false;
+  if (!CONTINUATION_RE.test(trimmedMessage) || isAcknowledgement(trimmedMessage)) return false;
   if (ACTION_RE.test(trimmedMessage) || EXPLICIT_SPAWN_RE.test(trimmedMessage)) return false;
   const priorUserText = (ctx?.conversation ?? [])
     .filter((turn) => turn.role === 'user')
@@ -596,8 +712,111 @@ function isContinuationOfDirectWork(message: string, ctx?: RouteContext): boolea
   return isDirectAdviceOnlyRequest(priorUserText) || BROAD_REVIEW_RE.test(priorUserText);
 }
 
-function hasDelegationAction(actions: OrchestratorAction[]): boolean {
-  return actions.some((action) => action.kind === 'spawn' || action.kind === 'send');
+// "but there is a .env.local", "that's not right", "you missed the tests":
+// the user disputing a claim in the previous answer.
+const DISPUTE_RE =
+  /^(?:but|no,?|nope|actually|wait)\b|\b(?:that'?s|this is|it'?s) (?:not (?:true|right|correct)|wrong|incorrect)\b|\b(?:you'?re|you are|you were) wrong\b|\byou (?:missed|forgot|overlooked)\b|\b(?:it|that|this|the file) (?:does|do) exist\b|\bcheck (?:it |that |this )?again\b|\blook again\b/i;
+
+const ASKS_FOR_REPEAT_RE = /\b(?:repeat|again|same|resend|re-?send|say that|one more time|remind me)\b/i;
+
+function wordShingles(text: string): Set<string> {
+  const words = text.toLowerCase().replace(/[^a-z0-9_.\s-]/g, ' ').split(/\s+/).filter(Boolean);
+  const shingles = new Set<string>();
+  for (let i = 0; i + 2 < words.length; i += 1) shingles.add(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  return shingles;
+}
+
+/**
+ * The reply is (nearly) the previous answer again, and the user did not ask
+ * for that. Word-trigram overlap, so small edits to a re-sent report still
+ * count, while a genuinely new answer on the same topic does not.
+ */
+export function repeatsPreviousAnswer(reply: string, message: string, ctx?: RouteContext): boolean {
+  if (ASKS_FOR_REPEAT_RE.test(message)) return false;
+  const previous = [...(ctx?.conversation ?? [])].reverse().find((turn) => turn.role === 'assistant')?.text ?? '';
+  if (reply.length < 300 || previous.length < 300) return false;
+  const a = wordShingles(reply);
+  const b = wordShingles(previous);
+  if (!a.size || !b.size) return false;
+  let shared = 0;
+  for (const shingle of a) if (b.has(shingle)) shared += 1;
+  return shared / Math.min(a.size, b.size) >= 0.6;
+}
+
+/** How much of the previous answer the next turn sees verbatim. */
+const PREVIOUS_ANSWER_CHAR_LIMIT = 6_000;
+
+/**
+ * The questions and requests in one message: sentences ending in "?" plus
+ * numbered or bulleted items. Two or more means "answer every one".
+ */
+export function countAsks(message: string): number {
+  const questions = (message.match(/[^?.!\n]+\?/g) ?? []).length;
+  const items = message.split('\n').filter((line) => /^\s*(?:\d+[.)]|[-*•])\s+\S/.test(line)).length;
+  return Math.max(questions, items);
+}
+
+/** What kind of message the user just sent, judged before any work starts. */
+export type TurnIntent = 'acknowledgement' | 'correction' | 'continuation' | 'question' | 'task' | 'conversation';
+
+const TURN_QUESTION_RE = /^(?:what|why|how|when|where|which|who|whose|is|are|was|were|do|does|did|can|could|should|would|will|has|have|any)\b/i;
+// "can you fix…", "please add…": polite phrasing of an instruction, not a question.
+const POLITE_REQUEST_RE = /^(?:(?:can|could|would|will) you|please|pls|i (?:want|need) you to|i(?:['’]d| would) like you to)\b/i;
+
+/**
+ * Read the message before acting on it. A thank-you gets a sentence back, a
+ * question gets an answer, a correction gets re-checked, a go-ahead continues
+ * the last task, and only a request for work starts new work.
+ */
+export function classifyTurnIntent(message: string, ctx?: RouteContext): TurnIntent {
+  const text = message.trim();
+  if (!text) return 'conversation';
+  if (isAcknowledgement(text)) return 'acknowledgement';
+  if (disputesPreviousAnswer(text, ctx)) return 'correction';
+  const hasPrevious = (ctx?.conversation ?? []).some((turn) => turn.role === 'assistant' && turn.text.trim());
+  if (hasPrevious && (isContinuationOfDirectWork(text, ctx) || (CONTINUATION_RE.test(text) && text.length <= 60))) return 'continuation';
+  const politeRequest = POLITE_REQUEST_RE.test(text);
+  const wantsWork = politeRequest || ACTION_RE.test(text) || EXPLICIT_SPAWN_RE.test(text) || DIRECT_ADVICE_RE.test(text);
+  if (!politeRequest && (TURN_QUESTION_RE.test(text) || (text.endsWith('?') && !wantsWork))) return 'question';
+  if (wantsWork) return 'task';
+  return 'conversation';
+}
+
+/**
+ * One line telling the model what kind of message it is answering, placed
+ * right before that message. Without it a follow-up ("but there is a
+ * .env.local") was answered by re-sending the whole previous report.
+ */
+export function describeTurnFocus(message: string, ctx?: RouteContext): string | null {
+  const hasPrevious = (ctx?.conversation ?? []).some((turn) => turn.role === 'assistant' && turn.text.trim());
+  const asks = countAsks(message);
+  const every = asks >= 2 ? ` It contains ${asks} questions or requests: answer every one, in order, and label each answer.` : '';
+  const ongoing = hasPrevious ? ' Answer THIS message specifically. Earlier turns are context only: refer back briefly where it helps, and never re-send your previous answer.' : '';
+  switch (classifyTurnIntent(message, ctx)) {
+    case 'acknowledgement':
+      return hasPrevious
+        ? 'the user is thanking you or approving the finished work; there is no new request. Reply in one or two warm sentences, with at most a one-line offer of a next step. Use no tools, and do not repeat, summarise or redo the previous work.'
+        : 'a friendly remark with no request in it. Reply briefly and naturally; use no tools.';
+    case 'correction':
+      return `the user is disputing your previous answer. Verify their point with tools, then correct your answer; do not restate it.${every}`;
+    case 'continuation':
+      return `a go-ahead to continue the previous task. Carry on from where it stopped instead of starting over.${every}`;
+    case 'question':
+      return `a question. Answer it directly and completely. If it is about this project, check the code with read tools first; do not edit files, change settings, or start agents unless the user asks.${ongoing}${every}`;
+    case 'task':
+      return `a request to do work. Read what you need, do it with the right tools or app actions, verify it, then report what changed.${ongoing}${every}`;
+    default:
+      if (!hasPrevious) return every ? every.trim() : null;
+      return `a new message in an ongoing conversation.${ongoing}${every}`;
+  }
+}
+
+/** A short message disputing the previous answer, when there was one. */
+function disputesPreviousAnswer(message: string, ctx?: RouteContext): boolean {
+  const trimmedMessage = message.trim();
+  if (!trimmedMessage || trimmedMessage.length > 400) return false;
+  if (!(ctx?.conversation ?? []).some((turn) => turn.role === 'assistant' && turn.text.trim())) return false;
+  return DISPUTE_RE.test(trimmedMessage);
 }
 
 function pickDefaultAgent(agents: AgentChoice[]): AgentChoice | null {
@@ -701,7 +920,8 @@ function matchRunningName(message: string, running: RunningAgentRef[]): string |
   return null;
 }
 
-function statusPhrase(status: AgentOutputRef['status']): string {
+function statusPhrase(status: AgentOutputRef['status'], turnState?: AgentOutputRef['turnState']): string {
+  if (turnState === 'ready' && status === 'in-progress') return 'ready for your next message';
   switch (status) {
     case 'in-progress': return 'still in progress';
     case 'complete': return 'done';
@@ -738,7 +958,7 @@ function formatStatusReply(refs: AgentOutputRef[]): string {
     const latest = latestOutputLine(r);
     const reason = r.reason ? ` (${compactText(r.reason, 90)})` : '';
     const tail = latest ? ` Latest output: ${latest}` : '';
-    return `- ${displayAgentName(r)} is ${statusPhrase(r.status)}${reason}: ${compactText(r.title, 90)}.${tail}`;
+    return `- ${displayAgentName(r)} is ${statusPhrase(r.status, r.turnState)}${reason}: ${compactText(r.title, 90)}.${tail}`;
   });
   if (refs.length === 1) return lines[0].replace(/^- /, '');
   return `${refs.length} recent agent tasks:\n${lines.join('\n')}`;
@@ -754,7 +974,7 @@ function formatOutputReply(refs: AgentOutputRef[], conversational = false): stri
   const parts = withOutput.slice(0, 3).map((r) => {
     const output = r.recentOutput!.trim().split('\n').slice(-20).join('\n');
     const compact = compactText(output, conversational ? 520 : 900);
-    const intro = `${displayAgentName(r)} is ${statusPhrase(r.status)} on "${compactText(r.title, 80)}".`;
+    const intro = `${displayAgentName(r)} is ${statusPhrase(r.status, r.turnState)} on "${compactText(r.title, 80)}".`;
     if (conversational) return `${intro} The latest terminal output says: ${compact}`;
     return `${intro}\n\nLatest terminal output:\n\`\`\`\n${output}\n\`\`\``;
   });
@@ -791,12 +1011,11 @@ function missingBrainConnectionReply(ctx?: RouteContext): string {
   const provider = ctx?.llmConfig?.provider ?? get(aiProvider);
   const definition = getProviderDef(provider);
   const providerLabel = definition?.label ?? provider;
-  const keyLabel = definition?.keyLabel ?? `${providerLabel} API key`;
   const model = ctx?.llmConfig?.model ?? get(currentAiModel);
   if (isLocalProvider(provider)) {
-    return `Composer is set to ${providerLabel} (${model}), but its local server is not available to the orchestrator. Check the ${providerLabel} server URL in Settings, then retry.`;
+    return `Composer is set to ${providerLabel} (${model}), but its local server is not available to the orchestrator. ${providerSetupHint(provider)} Then retry.`;
   }
-  return `Composer is set to ${providerLabel} (${model}), but that provider connection is not available to the orchestrator. Add the ${keyLabel} in Settings, or choose a connected provider in Composer, then retry. Once connected, I will review it here without launching an agent.`;
+  return `Composer is set to ${providerLabel} (${model}), but it is not connected yet. ${providerSetupHint(provider)} Or choose a connected provider in Composer, then retry. Once connected, I will review it here without launching an agent.`;
 }
 
 /**
@@ -827,7 +1046,62 @@ function providerCredentialFailureReply(provider: AiProviderId, model: string, e
   if (missing) {
     return `The orchestrator reached ${providerLabel} (${model}), but the desktop keychain could not provide the saved ${keyLabel}. Re-save that key in Settings, then retry.`;
   }
-  return `The orchestrator reached ${providerLabel} (${model}), but the provider rejected the saved ${keyLabel}. Check that key in Settings and retry.`;
+  // The provider's own words beat a guess: a 403 is as often "this model is
+  // not in your plan" as "bad key", and only the body says which.
+  const said = providerErrorMessage(error);
+  if (provider === 'opencode' || provider === 'opencode-go') {
+    if (normalized.includes('freetiererror') || normalized.includes('free tier')) {
+      return `${model} is one of OpenCode's free models, and OpenCode only serves those inside its own app, so every other client (Spacron included) gets a 403 whatever the key. Pick a paid model instead: an OpenCode Zen model needs Zen balance, or use the "OpenCode Go subscription" provider with your Go key.`;
+    }
+    const other = provider === 'opencode' ? 'OpenCode Go subscription' : 'OpenCode Zen';
+    return `${providerLabel} rejected the saved ${keyLabel} for ${model}${said ? `: "${said}"` : ''}. Zen and Go share one console but not one endpoint: a Go subscription key only works with the "OpenCode Go subscription" provider, and Zen models need Zen balance. If your key is for the other plan, switch the provider to ${other} (or re-save the key under it), then retry.`;
+  }
+  return `The orchestrator reached ${providerLabel} (${model}), but the provider rejected the saved ${keyLabel}${said ? `: "${said}"` : ''}. Check that key in Settings and retry.`;
+}
+
+/** The human-readable message inside a provider error body, if it has one. */
+function providerErrorMessage(error: string): string | null {
+  const match = /"message"\s*:\s*"((?:[^"\\]|\\.){1,300})"/.exec(error);
+  return match ? match[1].replace(/\\"/g, '"').trim() || null : null;
+}
+
+/** Turn provider quota, credit, and billing failures into an explicit user notice. */
+function providerQuotaFailureReply(provider: AiProviderId, model: string, error: string): string | null {
+  const normalized = error.toLowerCase();
+  const exhausted = /\b402\b/.test(normalized)
+    || normalized.includes('payment required')
+    || normalized.includes('quota')
+    || normalized.includes('insufficient_quota')
+    || normalized.includes('insufficient balance')
+    || normalized.includes('out of credit')
+    || normalized.includes('no credits')
+    || normalized.includes('credit balance')
+    || normalized.includes('billing')
+    || normalized.includes('usage limit');
+  if (!exhausted) return null;
+
+  const definition = getProviderDef(provider);
+  const providerLabel = definition?.label ?? provider;
+  return `The orchestrator reached ${providerLabel} (${model}), but that provider reports that the account has no remaining usage credit or quota. Check the provider's billing or usage page, or switch to another provider/model, then retry.`;
+}
+
+/**
+ * The selected model id does not exist for this key, or exists but cannot
+ * serve a chat completion (Responses-only, image, speech, embedding models).
+ * Retrying cannot help, and the keyword fallback would silently answer in its
+ * place, so name the model and send the user to the picker.
+ */
+export function modelUnavailableFailureReply(provider: AiProviderId, model: string, error: string): string | null {
+  const normalized = error.toLowerCase();
+  const unavailable = /(?:^|error: )model_unavailable:/.test(normalized)
+    || normalized.includes('model_not_found')
+    || /\bmodel\b[^.]{0,80}\b(?:does not exist|not found|is not available|not supported|unsupported)\b/.test(normalized)
+    || normalized.includes('not a chat model')
+    || normalized.includes('v1/responses')
+    || normalized.includes('only supported in v1/completions');
+  if (!unavailable) return null;
+  const providerLabel = getProviderDef(provider)?.label ?? provider;
+  return `${providerLabel} cannot run "${model}" as a chat model for this key. It may be retired, need access this account does not have, or only work through a different API (image, speech, or Responses-only models). Pick another model in the Composer model menu, then retry.`;
 }
 
 /** A local validation failure cannot be fixed by retrying another model. */
@@ -838,14 +1112,21 @@ function inputLengthFailureReply(provider: AiProviderId, model: string, error: s
   return `The orchestrator could not send this request to ${providerLabel} (${model}) because its input context is too large. I trimmed the local context, but this request is still over the provider's context limit. Start a fresh conversation or ask for a narrower review, then retry.`;
 }
 
+/** Backoff before each retry of one model request after a transient failure. */
+const TRANSIENT_RETRY_DELAYS_MS = [1_000, 4_000] as const;
+
 function isTransientProviderFailure(error: string): boolean {
   const normalized = error.toLowerCase();
   return normalized.includes('network')
     || normalized.includes('fetch failed')
     || normalized.includes('connection reset')
     || normalized.includes('connection refused')
+    || normalized.includes('connection closed')
     || normalized.includes('timed out')
-    || /\b(?:502|503|504)\b/.test(normalized);
+    || /(?:^|error: )timeout:/.test(normalized)
+    || /(?:^|error: )rate_limit:/.test(normalized)
+    || normalized.includes('overloaded')
+    || /\b(?:500|502|503|504|529)\b/.test(normalized);
 }
 
 function networkFailureReply(provider: AiProviderId, model: string, attempts: number, error: string): string {
@@ -892,6 +1173,55 @@ function protocolFailureReply(
 }
 
 /** Routing without an LLM: pick a sensible agent and decide chat vs dispatch. */
+// A pure "open N <agent> agents" request: nothing else in the message but
+// politeness, a count, an agent name, the noun, and optionally where to run.
+const OPEN_AGENTS_RE = /^(?:(?:hey|ok(?:ay)?|so)[,\s]+)?(?:(?:please|pls|can you|could you|would you|will you|can u)\s+)?(?:please\s+)?(?:open|spawn|launch|start|bring up|spin up|fire up|give me)\s+(?:up\s+)?(?:(a couple(?: of)?|a few|another|\d{1,2}|an?|one|two|three|four|five|six|seven|eight)\s+)?(?:new\s+|more\s+)?([a-z0-9 .-]*?)\s*(agents?|instances?|sessions?|clis?)?(?:\s+(?:for me|please|now))?(?:\s+(?:in|on)\s+(?:an?\s+|the\s+)?(?:new\s+|separate\s+|isolated\s+)?(?:work[\s-]?trees?|isolation|main(?:\s+(?:repo(?:sitory)?|branch))?|primary\s+repo)(?:\s+each)?)?\s*[.!?]*$/i;
+const COUNT_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, another: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  'a couple': 2, 'a couple of': 2, 'a few': 3,
+};
+const MAX_AGENTS_PER_REQUEST = 8;
+
+/**
+ * "can you open 2 claude code agents" → two idle Claude spawns, with no model
+ * call. Opening agents is the most common app command, and a weak or free
+ * brain model can fumble the protocol for it (it once answered with a bare
+ * `{"tool_calls":[]}`), so the harness does it itself. Only a PURE open
+ * request matches; anything carrying a task goes to the model.
+ */
+export function parseOpenAgentsCommand(message: string, agents: AgentChoice[]): { agent: AgentChoice; count: number } | null {
+  const match = message.trim().match(OPEN_AGENTS_RE);
+  if (!match) return null;
+  const [, countWord, rawName, noun] = match;
+  const name = (rawName ?? '').trim();
+  if (name && ACTION_RE.test(name)) return null;
+  const command = name ? resolveAgentCommand(name, agents) : null;
+  // Without an agent name it must say "agent(s)": "open 2 terminals" or
+  // "open settings" are not agent requests.
+  if (!command && (name || !noun)) return null;
+  if (command) {
+    // Every word of the name must belong to the agent's own terms ("claude code"),
+    // so "open claude with the auth notes" never matches.
+    const agentTerms = agentMatchTerms(agents.find((a) => a.command === command) as AgentChoice).join(' ');
+    const extra = name.toLowerCase().split(/\s+/).filter((word) => word && !agentTerms.includes(word) && !['code', 'cli', 'the'].includes(word));
+    if (extra.length) return null;
+  }
+  const agent = (command ? agents.find((a) => a.command === command) : null) ?? pickDefaultAgent(agents);
+  if (!agent) return null;
+  const parsed = countWord ? (/^\d+$/.test(countWord) ? Number(countWord) : COUNT_WORDS[countWord.toLowerCase()] ?? 1) : 1;
+  const count = Math.min(Math.max(parsed, 1), MAX_AGENTS_PER_REQUEST);
+  return { agent, count };
+}
+
+function openAgentsRoute(request: { agent: AgentChoice; count: number }): RouteResult {
+  const { agent, count } = request;
+  return {
+    reply: count === 1 ? `Opening ${agent.name}. Its terminal will be ready for you.` : `Opening ${count} ${agent.name} agents. Their terminals will be ready for you.`,
+    actions: Array.from({ length: count }, () => ({ kind: 'spawn' as const, agent: agent.command, prompt: null })),
+    viaLLM: false,
+  };
+}
+
 function heuristicRoute(message: string, agents: AgentChoice[], ctx?: RouteContext): RouteResult {
   const text = message.trim();
 
@@ -1002,6 +1332,8 @@ function heuristicRoute(message: string, agents: AgentChoice[], ctx?: RouteConte
   }
 
   // Pure "open/spawn/launch X agent" request with no real task → spawn idle.
+  const openAgents = parseOpenAgentsCommand(text, agents);
+  if (openAgents) return openAgentsRoute(openAgents);
   if (isExplicitSpawn && !hasRealTask) {
     return {
       reply: `Opening ${agent.name}. Its terminal will be ready for you.`,
@@ -1025,11 +1357,46 @@ function heuristicRoute(message: string, agents: AgentChoice[], ctx?: RouteConte
   }
   return {
     reply: isQuestion
-      ? "I can help with that — but I need an AI provider configured to give a good answer. Set one up in Settings, or describe a coding task and I'll put an agent on it."
+      ? `I can help with that, but I need an AI provider connected to give a good answer. ${providerSetupHint(ctx?.llmConfig?.provider ?? get(aiProvider))} Or describe a coding task and I'll put an agent on it.`
       : "Tell me what you'd like built, fixed, or changed and I'll put an agent on it.",
     actions: [],
     viaLLM: false,
   };
+}
+
+const PROMPT_MODEL_LIMIT = 15;
+
+/**
+ * The models and reasoning levels one agent CLI actually offers, as reported
+ * by the installed CLI, so the brain can honour "open Claude Code on Opus 5.5,
+ * low reasoning" with real ids. Empty until that CLI's catalogue has loaded
+ * once (see `warmLaunchCatalogues`); the brain then falls back to leaving
+ * model/reasoning unset, which launches on the CLI's own defaults.
+ */
+function launchCatalogueLine(command: string): string {
+  if (!isChatAgentProvider(command)) return '';
+  const capabilities = getAgentProviderCapabilities(command);
+  const models = (peekLiveAgentProviderModels(command) ?? []).filter((m) => m.id !== 'default');
+  const shown = models.slice(0, PROMPT_MODEL_LIMIT).map((m) => {
+    const efforts = m.reasoningEfforts
+      ? m.reasoningEfforts.length ? m.reasoningEfforts.join('/') : 'no reasoning control'
+      : null;
+    return `${m.id}${m.isDefault ? ' (default)' : ''}${efforts ? ` [${efforts}]` : ''}`;
+  });
+  const more = models.length > PROMPT_MODEL_LIMIT ? `, +${models.length - PROMPT_MODEL_LIMIT} more` : '';
+  const modelPart = shown.length ? `\n    models: ${shown.join(', ')}${more}` : '';
+  const reasoningPart = capabilities.reasoningEfforts.length
+    ? models.some((m) => m.reasoningEfforts) ? '' : `\n    reasoning: ${capabilities.reasoningEfforts.join('/')}`
+    : '\n    reasoning: not settable at launch';
+  return `${modelPart}${reasoningPart}`;
+}
+
+/** Start loading each agent CLI's catalogue so a later turn can list it. */
+function warmLaunchCatalogues(agents: AgentChoice[]): void {
+  for (const agent of agents) {
+    if (!isChatAgentProvider(agent.command) || peekLiveAgentProviderModels(agent.command)) continue;
+    void loadLiveAgentProviderModels(agent.command).catch(() => undefined);
+  }
 }
 
 function buildSystemPrompt(
@@ -1037,9 +1404,10 @@ function buildSystemPrompt(
   running: RunningAgentRef[],
   reviewing: RunningAgentRef[],
   conversational = false,
-  profile: string[] = []
+  profile: string[] = [],
+  voice = false,
 ): string {
-  const list = agents.map((a) => `- ${a.command} — ${a.name}`).join('\n');
+  const list = agents.map((a) => `- ${a.command} — ${a.name}${launchCatalogueLine(a.command)}`).join('\n');
   const runningList = running.length
     ? running
         .map((r) => `- ${r.name ? `"${compactText(r.name, 48)}"` : '(unnamed)'} [${compactText(r.agent, 48)}] — working on: ${compactText(r.title, 120)}`)
@@ -1081,6 +1449,8 @@ function buildSystemPrompt(
     '    "skipWorktree" (optional, boolean): set to true for admin/release tasks (tagging, pushing, changelogs, version bumps, deploy) so the agent runs directly in the project root instead of an isolated git worktree. Defaults to false — the app ALSO auto-detects it from the prompt content, so you typically do not need to set this explicitly.',
     '    "placement" (optional, "worktree" | "main" | null): set ONLY when the user says where that agent should run — "in a worktree" / "isolated" → "worktree"; "in the main repo" / "on the main branch" / "no worktree" → "main". Set it PER SPAWN: "open one in a worktree and another in the main repo" is two spawns with different values. Leave it null when they did not say — the app then asks them, so never guess.',
     '    If your PREVIOUS reply asked the user where an agent should run and their latest message answers with a place ("worktree", "main repo"), re-issue the spawn they originally asked for with that "placement" set. Do not ask again.',
+    '    "model" (optional, string | null): the model that agent’s CLI should launch on. Set it ONLY when the user names one ("Opus 5.5", "GPT-5.6 Sol", "use a cheap model"), and use an exact id from that agent’s "models" list above — map the user’s words to the closest listed id. Never invent an id; if nothing listed matches, leave it null and say which models are available. Null = the CLI’s own default model.',
+    '    "reasoningEffort" (optional, "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null): the reasoning level for that agent. Set it ONLY when the user asks for one ("low reasoning", "think hard" → "high", "max effort"), and only to a level listed for the chosen model in brackets (or the agent’s "reasoning" line). An agent marked "not settable at launch", or a model marked "no reasoning control", takes null. Null = the CLI default. Neither field ever needs a question: when the user did not say, leave them null.',
     '- {"kind": "send", "target": "<running agent name>", "prompt": "<full standalone prompt>"}',
     '    Give a new task to an agent that is ALREADY running. Use this instead of spawning when the user refers to an existing agent.',
     '- {"kind": "name", "target": "<running agent name or unnamed reference>", "name": "<new name>"}',
@@ -1107,17 +1477,21 @@ function buildSystemPrompt(
     '    Rearrange the whole workspace. Focus = one big room; Development = dedicated dev tools page; Canvas (mode "gallery") = a freeform, pan/zoom board with every open room; Preview = the live app preview (dev server) with the terminal alongside, for testing web apps. "focus mode" → focus; "dev tools" / "development page" → development; "show everything" / "canvas" / "gallery" / "the board" → gallery; "preview" / "test the app" / "preview mode" / "run the app" → preview.',
     '- {"kind": "room", "op": "focus"|"minimize"|"restore"|"close", "target": "<room name>"}',
     '    Act on one room. Rooms are the workspace, terminal, an agent (by its name), or a panel (editor, preview, review, http, tasks, db, containers, toolbox, pet). "focus the terminal" → focus terminal; "minimize the editor" → minimize editor; "close the preview" → close preview. Use the workspace layout shown in the app state to pick the right room name.',
-    '- {"kind": "canvas", "op": "zoom-in"|"zoom-out"|"fit"|"lock"|"unlock"}',
-    '    Control the Canvas board (it auto-switches to Canvas first). "zoom in"/"zoom out" → zoom-in/zoom-out; "fit everything"/"fit to screen"/"reset the view"/"recenter" → fit; "lock the panels"/"snap to grid"/"arrange the panels" → lock (auto-grid on, panels fixed); "unlock"/"let me move the panels"/"free arrange" → unlock (free drag & resize). Use this for the board itself; use "room" to act on one panel and "layout" to switch arrangements.',
     '',
     'Rules:',
-    '- Prefer an APP action when the user wants to look at or move around the app (open a file, switch pages, run the preview, jump to a line, manage tasks). Use SPAWN/SEND only when actual code needs writing or investigating.',
+    '- Prefer an APP action when the user wants to look at or move around the app (open a file, switch pages, run the preview, jump to a line, manage tasks). Use SPAWN/SEND only for big changes (see the SCOPE RULE) or when the user asks for an agent.',
+    '- ANYTHING ELSE IN THE APP — When the user asks for something in Spacron that no action above covers (a tool, room, panel, layout, settings page, palette command), call list_app_commands with a word or two from the request, then run_app_command with the matching id. Never say the app cannot do something before you have looked. Risky commands show the user an approval card; that is expected, not a failure.',
     '- DIRECT-FIRST POLICY — For review, audit, inspect, explain, summarize, plan, prioritize, recommend, suggest, or "go through the application" requests, act as the operator yourself. Use the application state and READ tools, then return an evidence-based answer with an EMPTY actions array. Do not spawn or send an agent unless the user explicitly asks for one or substantial code work is actually required.',
     '- For a broad review, call read_project first to gather the relevant text files in one bounded snapshot, then synthesize the findings in this same turn. Broad inspection is not by itself a reason to delegate.',
     '- DIRECT OPERATIONS — Use APP actions for safe UI control and run_command for bounded checks whose output you need in this turn. Use write_file/edit_file for authorized project changes and save_document for user-requested documents. Never claim an operation is complete from intention alone; wait for its tool result.',
     '- COMPLETION CONTRACT — A turn ends only when the requested work is complete or a blocker requires the user. Never end with "then I can…", "next step is…", "ready when you are", or any promise of future recommendations. If you have partial findings, continue with tools and deliver the full answer in this turn; findings must come from tool results in this turn.',
     '- VERIFY BEFORE FINISHING — If you changed files with write_file, save_document, or edit_file, run the project\'s verification with run_command (its tests, typecheck, lint, or build) AFTER that change and report the real result, exit code included. A failing verification is a finding to report, not a reason to keep editing silently. If no such command exists, say so explicitly rather than implying the change was checked.',
-    '- DELEGATE ONLY WHEN NEEDED — Use SPAWN/SEND for substantial multi-file implementation, long-running work, or parallel work that cannot be safely completed by the orchestrator. Explain the hand-off in the reply.',
+    `- SCOPE RULE: EDIT SMALL, DELEGATE BIG — You make small changes yourself: a task that changes at most ${DIRECT_EDIT_FILE_LIMIT} project files. Work that needs more than ${DIRECT_EDIT_FILE_LIMIT} files (a new feature or module, a refactor, a cross-cutting change) is a big change you must NOT make on your own. After reconnaissance, if the task clearly needs more than ${DIRECT_EDIT_FILE_LIMIT} files, make no edits: return a FINAL whose reply explains the scope (which files, why) and whose actions hold ONE spawn with a complete, self-contained brief written per DETAILED AGENT BRIEFS below. That spawn is a PROPOSAL: the app asks the user to approve it and pick the agent (Claude Code, Codex, or another local model) before anything starts, so never describe it as already started. The executor also refuses the file that would cross the limit; when that happens, stop editing and propose the hand-off the same way.`,
+    '- EXISTENCE CLAIMS — Never say a file, folder, or setting is missing unless a tool result looked for it BY NAME in this turn (glob_files also lists git-ignored files, marked as such). A file absent from a snapshot or tree is not evidence it is missing. Listings mark secret files: read_file on an env file shows each variable name and whether it is set (never the value), so report "X is set" or "X is empty", never guess values; key and credential files are only confirmed to exist.',
+    '- ANSWER WHAT WAS ASKED — The "New user message" is the one you answer now; the "Turn focus" line says what kind of message it is. Earlier conversation is context: use it to resolve "it", "that", or "point 3", but never re-send a previous answer. If the message holds several questions or requests, answer every one, in order. If something it needs is ambiguous and you cannot resolve it from the conversation or the project, ask one short question instead of guessing.',
+    '- CORRECTIONS — When the user says your previous answer was wrong ("but there is…", "that\'s not right"), re-check the claim with tools before replying, then say plainly what was wrong and give only the corrected findings. Never repeat the previous answer unchanged.',
+    '- FAILED COMMANDS — If a command fails or times out, report exactly that with its output. Commands run with CI=1; one that still never finishes is usually in watch mode, serving, or prompting. Retry with the run-once form (for example "vitest run") before concluding anything, and never invent an unrelated cause such as missing environment variables without evidence.',
+    '- NEVER DELEGATE ON YOUR OWN — Never spawn or send an agent without the user\'s approval. When the user explicitly asks for an agent ("have Codex do it", "delegate this"), their message is the approval.',
     '- You can combine actions: "open the router file and have claude add a route" → one open-file action AND one spawn action.',
     '- When the user asks a question about the app ("what file am I on?", "is the dev server running?", "what terminals are open?"), answer from the application state with an EMPTY actions array.',
     '- The actions array may contain MULTIPLE actions. "open two claude agents" → two spawn actions.',
@@ -1133,12 +1507,12 @@ function buildSystemPrompt(
     '- If the user is only chatting, greeting, or you need clarification, use an empty actions array and answer in reply.',
     '- Prefer "claude" for general coding unless another agent is clearly better.',
     '- To-do lists (the "todos" field) are execution plans. Only produce them in a round that calls tools that will work them. NEVER include "todos" in a FINAL reply with zero tool_calls this turn; claiming finished checklists without executed tool work is a protocol violation.',
-    '- EXPLORATION FIRST (RECON): For any task requiring 3+ steps, you MUST call read_project for broad reconnaissance BEFORE creating a todo list. read_project reads the relevant text files across the project, giving you the context needed to create an accurate plan. The plan must be grounded in what you actually found, not what you assume exists. Only after gathering context should you call update_todos with your plan. This is the Explore-Plan-Code workflow: understand the problem and existing code first (read_project), then create a detailed plan (update_todos), then execute.',
+    '- EXPLORATION FIRST (RECON): For any task requiring 3+ steps, gather context BEFORE creating a todo list, then plan, then execute (Explore-Plan-Code). Match the reconnaissance to the scope: for a focused task (one feature, one bug, named files) use grep_code, glob_files, and read_file on the files involved; reserve read_project for broad reviews or an unfamiliar codebase where you do not yet know where to look. The plan must be grounded in what you actually found, not what you assume exists.',
     '- PLAN STRUCTURE: After reconnaissance, establish the complete todo list in one update_todos call with 3-6 logical items. Include exploration, implementation or delegation, any blocking question, and verification as separate items where applicable. Later update_todos calls must repeat the full list and change statuses, not append paraphrases. Add a new item only when execution discovers genuinely new work.',
     '- COMPLETION REPORT: Match the report to the request. For a simple question or small change, answer naturally and concisely. For a review, multi-step implementation, investigation, or verification task, use a breakdown with only the sections that have substance: What is working, What is not working, What needs improvement, and verification/evidence. Do not force empty sections or a formal report onto simple requests.',
     '- STYLE & PUNCTUATION — Do NOT use em dashes (—), en dashes (–), or hyphens (-) between clauses, sentences, or phrases in your replies. Use normal commas, periods, or semicolons instead.',
     '- REPLY DETAIL — "concise" means dense with facts, never vague. A reply that reports work, reviews code, or answers a project question must name the actual files, paths, commands, and numbers you saw in tool results, and list distinct findings as short bullet lines (one per line) instead of one compressed sentence. A one-line acknowledgement is acceptable only for small talk; after real tool work, deliver the specifics in this reply.',
-    '- DOCUMENTS & PLANS — If the user asks you to save, write, draft, or export a document, use save_document. Choose a descriptive kebab-case filename yourself and save it in the user Documents folder; do not ask for a filename or location unless the user explicitly requires one. If the user only asks for research or an answer, do not save a file. A later explicit save request may use the research already in the conversation. Do not dump long documents into the chat reply; save it, then briefly summarise the key points and give the exact returned file path.',
+    '- DOCUMENTS & PLANS — If the user asks you to save, write, draft, or export a document, use save_document. Choose a descriptive kebab-case filename yourself; it is saved in the project docs/ folder (the user Documents folder only when no project is open). Do not ask for a filename or location unless the user explicitly requires one. If the user only asks for research or an answer, do not save a file. A later explicit save request may use the research already in the conversation. Do not dump long documents into the chat reply; save it, then briefly summarise the key points and give the exact returned file path.',
     ...(conversational ? [] : ['- Keep reply to one or two sentences.']),
     '- CRITICAL: "open/spawn/launch X agent" without a real task (e.g. "open Claude", "spawn Codex", "launch an agent") means spawn with null prompt. Do NOT use the user\'s message as the agent\'s prompt — the user just wants the agent opened and ready, not given a meaningless task.',
     '- Only include a real task prompt when the user describes actual work to do ("fix this bug", "build a login page", "refactor the router").',
@@ -1155,7 +1529,23 @@ function buildSystemPrompt(
     '  - If no agents are running, use SPAWN instead of SEND.',
     '',
     'Example: User says "Build a login system, plan first then delegate to my open agents." Turn 1: spawn claude to plan. Turn 2 (plan is ready, two agents "Neo" and "Trinity" are running): send sub-task 1 ("Set up the login form UI") to Neo, send sub-task 2 ("Create the auth API endpoint") to Trinity.',
-    ...(conversational
+    ...(conversational && !voice
+      ? [
+          '',
+          'CHAT MODE — IMPORTANT:',
+          'The user is typing to you in a chat panel, the way they would talk to ChatGPT or Claude. You are a hands-on assistant for THIS project: you answer questions, read and search the code, run commands, edit files, and plan multi-step work yourself with your tools. Delegating to a terminal agent is the exception, not the default.',
+          '- ANSWER DIRECTLY. A general question (a concept, an API, "how do I…", an opinion) needs no tools: answer it fully right away. A question about THIS project\'s code needs evidence: grep_code / glob_files to locate, read_file to read, then answer citing the paths and line numbers you read. Never guess at code you have not read this turn.',
+          '- FORMAT like a chat assistant: GitHub-flavored markdown, short paragraphs, bullet lists for distinct points, fenced code blocks with a language tag for code and commands, and `inline code` for paths, symbols, and commands. Use a compact, well-labeled table for comparisons or repeated fields; include consistent units and a brief lead-in or takeaway when it helps. Keep headers and columns concise, and use bullets for sequences or long prose. Add icons or emoji only when they make the information easier to scan. Lead with the answer; put detail after it. Length follows the question: a quick question gets a quick answer; a review or explanation gets the depth it needs.',
+          '- STATUS ICONS — Use 🔴 for a confirmed failure or critical bug, 🟡 for a warning, partial result, or work not yet verified, and 🟢 only for a successful result supported by tool evidence. Put a short text label beside each icon, do not rely on color alone, and do not mark an overall result green when it also contains a confirmed failure.',
+          '- DO THE WORK when asked to change something ("fix", "add", "rename", "update", "refactor"): read the relevant files, make the change with edit_file (or write_file for a new file), run the project\'s verification with run_command, and report what changed. Edits and commands are approval-gated in the UI when the user has not granted full access, so call the tool and let the user approve; do not ask "should I?" in prose first.',
+          '- PLAN VISIBLY for work with 3 or more steps: after gathering context, call update_todos with the full plan, mark exactly one item in progress as you work it, and update statuses as items finish. Skip the plan for a single question or a one-step change.',
+          '- ONE PLAN PER REQUEST: a plan covers only the work THIS message asks for. Checklists from earlier replies are history; never copy their finished items into a new plan. When the user adds to the work mid-conversation, plan the new items plus anything still unfinished, nothing else. The update_todos result shows the plan of record with its count; report progress from it, not from memory.',
+          '- Spawn or send to a terminal agent only when the user explicitly asks for an agent, or the work is long-running or parallel enough that it cannot reasonably be done here. A question, an observation, brainstorming, or describing a problem is NOT a request to spawn.',
+          '- ACTIONS RUN IMMEDIATELY — app-control, spawn, send, and close actions execute the moment you return them. State what you did in the reply; never pair an action with a "want me to go ahead?" question. If you need permission or a missing detail first, use ask_question with an EMPTY actions array.',
+          '- Use the conversation so far: a follow-up like "do that", "yes", or "and the tests?" continues the previous request, so act on it instead of asking the user to repeat themselves.',
+        ]
+      : []),
+    ...(conversational && voice
       ? [
           '',
           'VOICE CONVERSATION MODE — IMPORTANT:',
@@ -1172,6 +1562,9 @@ function buildSystemPrompt(
            '- If the output is long, lead with what the agent concluded or produced, then offer to go deeper ("that\'s the gist — want the detail on any part?") rather than reading everything at once.',
         ]
       : []),
+    '',
+    buildSkillsPrompt({ disabled: get(orchestratorDisabledSkills), custom: get(orchestratorCustomSkills) }),
+    '',
     buildBrainToolsPrompt(),
   ].join('\n');
 }
@@ -1326,6 +1719,13 @@ function parsePlacement(raw: unknown): SpawnPlacement | null {
   return null;
 }
 
+function parseReasoningEffort(raw: unknown): ChatReasoningEffort {
+  const value = str(raw).toLowerCase();
+  return (VALID_REASONING_EFFORTS as readonly string[]).includes(value)
+    ? value as ChatReasoningEffort
+    : 'default';
+}
+
 /**
  * Fill in `placement` for spawns the model left unset, from a placement the user
  * stated for the whole request ("open two agents in the main repo"). Only
@@ -1358,6 +1758,9 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     const name = str(obj.name);
     const role = parseRole(obj.role);
     const files = parseFileList(obj.files);
+    const model = str(obj.model) || null;
+    const rawReasoningEffort = obj.reasoningEffort ?? obj.reasoning_effort;
+    const reasoningEffort = rawReasoningEffort == null ? undefined : parseReasoningEffort(rawReasoningEffort);
     // The brain can explicitly set skipWorktree, or we auto-detect it from
     // admin/release keywords in the prompt so e.g. "tag v2.0 and push"
     // automatically bypasses isolation without the LLM needing to know about it.
@@ -1368,7 +1771,18 @@ function parseAction(raw: unknown, agents: AgentChoice[]): OrchestratorAction | 
     // placement dialog. It is deliberately NOT inferred from `prompt`: the task
     // text can mention a worktree without being about placement at all.
     const placement = parsePlacement(obj.placement);
-    return { kind: 'spawn', agent, prompt: prompt || null, name: name || null, role, files, skipWorktree, placement };
+    return {
+      kind: 'spawn',
+      agent,
+      prompt: prompt || null,
+      name: name || null,
+      role,
+      files,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      skipWorktree,
+      placement,
+    };
   }
   if (kind === 'send') {
     const target = str(obj.target);
@@ -1533,6 +1947,7 @@ function parseRouteJson(raw: string, agents: AgentChoice[]): RouteResult | null 
     ...(todos?.length ? { todos } : {}),
   };
 }
+
 /**
  * A model's final answer does not need to be JSON. JSON remains required for
  * executable actions and tool requests, but ordinary replies can be returned
@@ -1543,10 +1958,21 @@ function parseRouteResponse(raw: string, agents: AgentChoice[]): RouteResult | n
   if (structured) return structured;
 
   const reply = raw.trim();
-  if (!reply) return null;
+  if (!reply || isProtocolDebris(reply)) return null;
   return { reply: cleanOrchestratorReply(reply), actions: [], viaLLM: true };
 }
 
+/**
+ * A reply that is only protocol JSON the loop could not use: an empty or
+ * unknown-tool `{"tool_calls":[]}`, or a bare reply/actions envelope that did
+ * not parse. Prose replies are allowed, but this is not prose, and showing it
+ * put a raw `{"tool_calls":[]}` in the chat instead of a retry.
+ */
+export function isProtocolDebris(text: string): boolean {
+  const unfenced = text.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1').trim();
+  if (!unfenced.startsWith('{') || !unfenced.endsWith('}')) return false;
+  return /"(?:tool_calls|actions|reply|needsInput)"\s*:/.test(unfenced);
+}
 
 function parseToolQuestion(call: BrainToolCall): RouteResult {
   const question = str(call.args.question) || 'I need one detail from you before I continue.';
@@ -1587,6 +2013,11 @@ async function executeBrainToolCalls(
       const invalid = validateToolCall(call);
       if (invalid) throw new Error(invalid);
       const executed = await executor(call);
+      // `ok` deliberately lumps "never reported" (TIMEOUT, SESSION CLOSED,
+      // error:) in with "reported badly" (exit N) — for the model, both mean
+      // the call did not deliver. The completion card must NOT: it splits them
+      // again via `INCONCLUSIVE_RUN_RE` in `orchestrator/chat-turn.ts`, which
+      // matches these same prefixes. Keep the two lists in step.
       return {
         result: { id: call.id, name: call.name, ok: !/^error:|^TIMEOUT|^SESSION CLOSED|^exit [1-9]/i.test(String(executed.output ?? '')), output: String(executed.output ?? '') },
         actions: executed.actions ?? [],
@@ -1628,6 +2059,7 @@ export async function routeOrchestratorRequest(
   ctx?: RouteContext
 ): Promise<RouteResult> {
   const trimmed = message.trim();
+  const acknowledgement = isAcknowledgement(trimmed);
 
   // Fast-path: status check — respond instantly from live state, no LLM needed.
   if (STATUS_CHECK_RE.test(trimmed)) {
@@ -1654,6 +2086,11 @@ export async function routeOrchestratorRequest(
     return { reply: cleanOrchestratorReply(formatTaskPanelAdvice(ctx?.taskPanel ?? [])), actions: [], viaLLM: false };
   }
 
+  // Fast-path: "open 2 claude code agents" — the harness opens them itself,
+  // whatever model is the brain. Placement ("in a worktree") is applied below.
+  const openAgents = parseOpenAgentsCommand(trimmed, agents);
+  if (openAgents) return withStatedPlacement(openAgentsRoute(openAgents), trimmed);
+
   const provider = ctx?.llmConfig?.provider ?? get(aiProvider);
   const local = isLocalProvider(provider);
   const hasApiKey = ctx?.llmConfig?.hasApiKey ?? isProviderApiKeyConfiguredLocal(provider);
@@ -1671,7 +2108,8 @@ export async function routeOrchestratorRequest(
         ])
       : [null, null];
     const modelsToTry = [primaryModel];
-    const baseSystemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile)
+    warmLaunchCatalogues(agents);
+    const baseSystemPrompt = buildSystemPrompt(agents, ctx?.runningAgents ?? [], ctx?.reviewingAgents ?? [], ctx?.conversational, ctx?.profile, ctx?.voice === true)
       + (routeAdvice || reasoningAdvice
         ? `\nJev advisory for this prompt: ${routeAdvice ?? 'no routing suggestion'}; reasoning effort ${reasoningAdvice ?? 'no suggestion'}. This is a suggestion only. Keep the user's explicit choices and all delegation approval rules.`
         : '');
@@ -1680,20 +2118,58 @@ export async function routeOrchestratorRequest(
     for (const model of modelsToTry) {
       const profile = brainToolProfile(ctx?.budgets?.toolProfile ?? ctx?.toolProfile ?? 'full');
       const transport = ctx?.nativeTools && ctx.toolExecutor ? new AgentTransport(provider, model, ctx.checkpoint, ctx.saveCheckpoint, ctx.signal, { ...ctx.budgets, toolProfile: ctx.budgets?.toolProfile ?? ctx.toolProfile }) : undefined;
-      const complete = async (systemPrompt: string, userText: string, final = false): Promise<string> => transport
-        ? transport.request(systemPrompt, userText, baseUrl || undefined, ctx?.llmConfig?.sessionId, final)
-        : invoke<string>('ai_complete', { systemPrompt, userText, provider, model, apiKey: '', baseUrl: baseUrl || undefined, sessionId: ctx?.llmConfig?.sessionId });
+      const onReplyStream = ctx?.onReplyStream;
+      if (transport && onReplyStream) {
+        let streamed = '';
+        let shown = '';
+        const show = (preview: string) => {
+          if (preview === shown) return;
+          shown = preview;
+          try { onReplyStream(preview); } catch { /* display only */ }
+        };
+        transport.stream = {
+          start: () => { streamed = ''; show(''); },
+          delta: (text) => { streamed += text; show(streamingReplyPreview(streamed) ?? ''); },
+        };
+      }
+      // Undefined until the loop RAISES it: normal requests must keep the
+      // exact budget shape they had before (the transport's own budgets, the
+      // Rust default), so the override only ever applies after a starved or
+      // protocol-failed reply, and it persists for the rest of the turn so
+      // later recovery passes and the forced final pass inherit the room.
+      let raisedOutputTokens: number | undefined;
+      const complete = async (systemPrompt: string, userText: string, final = false): Promise<string> => {
+        const startedAt = Date.now();
+        try {
+          return await (transport
+            ? transport.request(systemPrompt, userText, baseUrl || undefined, ctx?.llmConfig?.sessionId, final, raisedOutputTokens)
+            : invoke<string>('ai_complete', { systemPrompt, userText, provider, model, apiKey: '', baseUrl: baseUrl || undefined, sessionId: ctx?.llmConfig?.sessionId, ...(raisedOutputTokens !== undefined ? { maxTokens: raisedOutputTokens } : {}) }));
+        } finally {
+          try { ctx?.onModelCall?.(Date.now() - startedAt); } catch { /* observational only */ }
+        }
+      };
       let toolRounds = 0;
       let toolResults: BrainToolResult[] = [];
       let toolSignatures: string[] = [];
       let executedActions: OrchestratorAction[] = [];
       let promiseRecoveryUsed = false;
       let deferredRecoveryUsed = false;
+      let mediaRecoveryUsed = false;
       let incompleteReviewRecoveryPages = 0;
       let incompleteFileRecoveryPages = 0;
       let directPolicyRecoveryUsed = false;
       let claimWriteRecoveryUsed = false;
       let verificationRecoveryUsed = false;
+      let correctionRecoveryUsed = false;
+      let repeatRecoveryUsed = false;
+      // The automatic post-edit check runs at most twice per turn: once for the
+      // edits, once more after the model fixes what the first run reported.
+      let postEditChecks = 0;
+      // User messages steered into this running turn, in arrival order.
+      const steeredMessages: string[] = [];
+      const turnMessage = (): string => (steeredMessages.length
+        ? `${message}\n\nMessages the user sent while you were working (newest last; they refine or redirect the request above, take them into account now):\n${steeredMessages.map((text) => `- ${text}`).join('\n')}`
+        : message);
       let protocolRecoveryUsed = false;
       let reviewPlanRecoveryUsed = false;
       let reviewExecutionRecoveryUsed = false;
@@ -1729,25 +2205,31 @@ export async function routeOrchestratorRequest(
       try {
         while (true) {
           ctx?.signal?.throwIfAborted();
+          steeredMessages.push(...(ctx?.steering?.drain() ?? []));
           const routeContext: RouteContext = {
             ...ctx,
             toolResults: transport ? toolResults.filter(r => r.id === 'review-project') : toolResults,
             executionNote: executionNote || undefined,
           };
-          const userText = buildUserText(message, routeContext);
+          const userText = buildUserText(turnMessage(), routeContext);
           const systemPrompt = executionNote.startsWith('Execution has stopped')
             ? `${baseSystemPrompt}\n\n${executionNote}`
             : baseSystemPrompt;
           let raw: string;
-          for (;;) {
+          // The retry budget is PER REQUEST. It used to be one retry for the
+          // whole turn, so a long agentic turn that absorbed a single blip in
+          // round 2 died on the next blip in round 15 with "could not reach".
+          for (let attempt = 0; ; attempt += 1) {
             try {
               raw = await complete(systemPrompt, userText);
               break;
             } catch (error) {
               const msg = String(error ?? '');
-              if (!isTransientProviderFailure(msg) || networkAttempts >= 1) throw error;
-              networkAttempts += 1;
-              await new Promise(resolve => setTimeout(resolve, 250));
+              networkAttempts = attempt;
+              if (!isTransientProviderFailure(msg) || attempt >= TRANSIENT_RETRY_DELAYS_MS.length) throw error;
+              ctx?.signal?.throwIfAborted();
+              await new Promise(resolve => setTimeout(resolve, TRANSIENT_RETRY_DELAYS_MS[attempt]));
+              ctx?.signal?.throwIfAborted();
             }
           }
           const rawText = typeof raw === 'string' ? raw : '';
@@ -1799,7 +2281,7 @@ export async function routeOrchestratorRequest(
                 toolResults,
                 executionNote,
               };
-              const finalRaw = await complete(`${baseSystemPrompt}\n\n${executionNote}`, buildUserText(message, finalContext), true);
+              const finalRaw = await complete(`${baseSystemPrompt}\n\n${executionNote}`, buildUserText(turnMessage(), finalContext), true);
               const finalText = typeof finalRaw === 'string' ? finalRaw : '';
               const finalCalls = parseBrainToolCalls(finalText);
               const finalResult = finalCalls ? null : parseRouteResponse(finalText, agents);
@@ -1845,15 +2327,66 @@ export async function routeOrchestratorRequest(
           if (!result) {
             if (!protocolRecoveryUsed) {
               protocolRecoveryUsed = true;
+              // A reasoning model usually fails the protocol by STARVATION, not
+              // disobedience: hidden thinking tokens consume the output budget
+              // and the FINAL object arrives truncated (finish_reason length),
+              // so no rewording of the instruction alone can fix it. Raise the
+              // output budget before the retry — with_reasoning_headroom's 4x
+              // on the Rust side turns this into a real ceiling bump — and
+              // keep it for the rest of the turn so later recovery passes and
+              // the forced final pass inherit the room instead of re-failing.
+              // It is a ceiling, not a spend, so a compliant model is unchanged.
+              raisedOutputTokens = Math.max(
+                (raisedOutputTokens ?? ctx?.llmConfig?.outputTokens ?? DEFAULT_AGENT_BUDGETS.outputTokens) * 4,
+                DEFAULT_AGENT_BUDGETS.outputTokens,
+              );
               executionNote = [
+                ...(/"tool_calls"\s*:/.test(rawText)
+                  ? ['Your previous response was a tool_calls list with no usable tool in it. App actions such as spawn, navigate, open-file or setting are NOT tools: return them in a FINAL {"reply":"...","actions":[...]} object. Call a tool only by one of the listed tool names.']
+                  : []),
                 'The previous model response did not follow the required JSON protocol.',
-                'Convert the useful content into exactly one valid JSON object now.',
+                `Convert the useful content into exactly one valid JSON object now; this retry has a larger output budget (${raisedOutputTokens} tokens), so return the complete answer and do not truncate it to save tokens.`,
                 'Return either FINAL {"reply":"...","needsInput":false,"actions":[]} or a valid TOOL REQUEST.',
                 'Do not include markdown fences, commentary, or any text outside the JSON object.',
               ].join(' ');
               continue;
             }
             throw new Error('protocol: the model did not return a valid final reply');
+          }
+
+          // "But there is a .env.local file": the user disputes the previous
+          // answer. A reply built from memory just repeated the old report,
+          // false claim included (0 operations). The correction must be
+          // checked with a tool this turn before any answer is accepted.
+          if (
+            ctx?.toolExecutor
+            && !correctionRecoveryUsed
+            && !result.needsInput
+            && disputesPreviousAnswer(trimmed, ctx)
+            && !toolResults.some((tool) => tool.id !== 'review-project' && tool.name !== 'update_todos')
+          ) {
+            correctionRecoveryUsed = true;
+            executionNote = `The user is correcting your previous answer: "${compactText(trimmed, 300)}". Do not repeat that answer. Check the claim with tools now (glob_files also lists git-ignored files; read_file, grep_code, run_command), then say plainly what was wrong, what the evidence shows, and give only the corrected findings.`;
+            continue;
+          }
+
+          // Re-sending the previous answer is not an answer to a new message.
+          if (!repeatRecoveryUsed && !result.needsInput && repeatsPreviousAnswer(result.reply, trimmed, ctx)) {
+            repeatRecoveryUsed = true;
+            executionNote = `Your reply repeats your previous answer almost word for word. The user asked something new: "${compactText(trimmed, 300)}". Answer that message specifically, using tools if it needs checking; mention earlier findings only where they bear on it.`;
+            continue;
+          }
+          // Never answer a thank-you by re-sending the work, even when the
+          // corrective pass above repeated it again.
+          if (acknowledgement && repeatsPreviousAnswer(result.reply, trimmed, ctx)) {
+            return { ...result, reply: ACKNOWLEDGEMENT_FALLBACK_REPLY, actions: executedActions };
+          }
+
+          // A turn does not end while the user has steered a message into it:
+          // the next request carries the message, and the model continues.
+          if (ctx?.steering?.pending()) {
+            executionNote = 'The user sent a new message while you were working; it is shown with the request now. Take it into account and continue this turn. Do not finish without addressing it.';
+            continue;
           }
 
           // Models can still reach for a worker despite the direct-first
@@ -1904,6 +2437,34 @@ export async function routeOrchestratorRequest(
                 continue;
               }
               result.reply = `${result.reply}\n\n(Note: no file was actually written this turn; the creation claim above did not happen.)`;
+            }
+          }
+
+          // Before asking the model to verify, run the project's own check
+          // for it (the cheap stand-in for OpenCode's post-edit LSP errors).
+          // A failure goes back to the model with the output so it fixes the
+          // errors in this turn; a pass is recorded as the verification run.
+          if (
+            ctx?.postEditCheck
+            && postEditChecks < 2
+            && !result.failed
+            && !result.needsInput
+            && !result.actions.length
+            && hasUnverifiedMutation(toolResults)
+          ) {
+            postEditChecks += 1;
+            const check = await ctx.postEditCheck();
+            ctx.signal?.throwIfAborted();
+            if (check) {
+              toolResults = [...toolResults, { id: `post-edit-check-${postEditChecks}`, name: 'run_command', ok: check.ok, output: check.output }];
+              try { ctx.onToolRound?.(toolResults, toolRounds); } catch { /* observational only */ }
+              if (!check.ok && postEditChecks < 2) {
+                executionNote = `The automatic check after your edits failed (\`${check.command}\`). Fix the errors in the files you changed, then finish. Output:\n${check.output.slice(0, 6_000)}`;
+                continue;
+              }
+              if (!check.ok) {
+                result.reply = `${result.reply}\n\n(Note: the automatic check \`${check.command}\` still fails after the last edit.)`;
+              }
             }
           }
 
@@ -1992,7 +2553,11 @@ export async function routeOrchestratorRequest(
             && !result.needsInput
           ) {
             incompleteReviewRecoveryPages += 1;
-            executionNote = 'The project snapshot is incomplete. Do not summarize it as a complete review. Continue reading the remaining project files with read_project using the next review offset shown in the tool result, or use read_file for the exact files needed, then return concrete findings in this turn.';
+            // The literal next offset, so even a small model has nothing to
+            // work out. Without it, models asked the USER to let them continue
+            // — a question the app can answer itself.
+            const nextOffset = latestProjectSnapshot?.output.match(/Next review offset=(\d+)/)?.[1];
+            executionNote = `The project snapshot is incomplete. Do not summarize it as a complete review, and do not ask the user for permission to keep reading: you can read the rest yourself now. Call read_project with {"offset": ${nextOffset ?? 'the next review offset shown in the tool result'}} (repeat until the header stops reporting omitted files), or read_file for the exact files you still need, then return concrete findings in this turn.`;
             continue;
           }
           const latestFileRead = toolResults
@@ -2038,6 +2603,7 @@ export async function routeOrchestratorRequest(
           // action nor a tool call. Give it one explicit recovery pass so the
           // same turn can turn that promise into real execution.
           const canRecoverPromise = !promiseRecoveryUsed
+            && !acknowledgement
             && isPromiseOnlyReply(result.reply)
             && Boolean(ctx?.toolExecutor)
             && (Boolean(ctx?.conversation?.length) || Boolean(ctx?.projectRoot) || ACTION_RE.test(trimmed));
@@ -2047,12 +2613,59 @@ export async function routeOrchestratorRequest(
             continue;
           }
 
+          // The user asked for a picture or clip and the model answered without
+          // calling the tool — typically "image generation is unavailable in
+          // this session", because the ChatGPT brain's own image tool is off
+          // (see chatgpt.rs `run_turn`) and it forgets Spacron's. One pass that
+          // names the tool; if the model refuses again, Spacron calls the tool
+          // itself with the user's words — a refusal never reaches the user.
+          const userRequest = userRequestText(trimmed);
+          const mediaKind = mediaGenerationRequest(userRequest);
+          const mediaTool = mediaKind === 'video' ? 'generate_video' : 'generate_image';
+          if (
+            mediaKind
+            && ctx?.toolExecutor
+            && profile.allowed.has(mediaTool)
+            && !result.needsInput
+            && !toolResults.some((tool) => tool.name === 'generate_image' || tool.name === 'generate_video')
+          ) {
+            if (!mediaRecoveryUsed) {
+              mediaRecoveryUsed = true;
+              executionNote = `The user asked for ${mediaKind === 'video' ? 'a video' : 'an image'} and you have not generated it. ${mediaTool} IS available in this session and is how Spacron makes it — your own built-in media tools are not, so never say generation is unavailable. Call ${mediaTool} now with a prompt written from the user's words, then give a short FINAL description.`;
+              continue;
+            }
+            const refs = attachedImagePaths(trimmed);
+            const call: BrainToolCall = {
+              id: 'media-fallback',
+              name: mediaTool,
+              args: mediaKind === 'video'
+                ? { prompt: userRequest, ...(refs[0] ? { reference_image: refs[0] } : {}) }
+                : { prompt: userRequest, ...(refs.length ? { reference_images: refs } : {}) },
+            };
+            const execution = await executeBrainToolCalls([call], ctx.toolExecutor);
+            toolResults = [...toolResults, ...execution.results];
+            toolRounds += 1;
+            try { ctx.onToolRound?.(toolResults, toolRounds); } catch { /* observational only */ }
+            const made = execution.results[0];
+            const noun = mediaKind === 'video' ? 'video' : 'image';
+            return withStatedPlacement({
+              reply: made?.ok
+                ? `Here is the ${noun}.`
+                : made?.output.includes('already been shown')
+                  ? `The ${noun} could not be generated.`
+                  : `The ${noun} could not be generated: ${(made?.output ?? 'no result').replace(/^error:\s*/, '')}`,
+              actions: executedActions,
+              viaLLM: true,
+              failed: !made?.ok,
+            }, trimmed);
+          }
+
           // A deferral ("I've inspected…, then I can give you recommendations")
           // claims progress but hands the deliverable to a future exchange.
           // Auto-continue: the turn keeps working until the request is answered
           // or a real blocker requires the user. One dedicated pass; a second
           // deferral falls through to the store's honest-failure conversion.
-          if (!deferredRecoveryUsed && isDeferredCompletionReply(result.reply) && Boolean(ctx?.toolExecutor) && !result.needsInput) {
+          if (!deferredRecoveryUsed && !acknowledgement && isDeferredCompletionReply(result.reply) && Boolean(ctx?.toolExecutor) && !result.needsInput) {
             deferredRecoveryUsed = true;
             executionNote = 'You stated partial progress and deferred the rest of the work. The turn does not end while requested work remains. Continue now using the available tools until the request is answered or a real blocker requires the user. Do not ask permission to continue.';
             continue;
@@ -2064,12 +2677,21 @@ export async function routeOrchestratorRequest(
         }
       } catch (error) {
         const msg = String(error ?? '');
+        // Billing/quota text takes precedence over 403 because some providers
+        // use that status for an exhausted account as well as bad credentials.
+        providerFailureReply = providerQuotaFailureReply(provider, model, msg);
+        if (providerFailureReply) break;
         providerFailureReply = providerCredentialFailureReply(provider, model, msg);
         if (providerFailureReply) break;
         providerFailureReply = inputLengthFailureReply(provider, model, msg);
         if (providerFailureReply) break;
-        // No key / command missing (older binary) → stop trying the LLM.
-        if (msg.includes('API key is not set') || msg.includes('not found') || msg.includes('not allowed')) {
+        providerFailureReply = modelUnavailableFailureReply(provider, model, msg);
+        if (providerFailureReply) break;
+        // No key / Tauri command missing or denied (older binary) → stop trying
+        // the LLM. Match the command-registry wording only: a bare "not found"
+        // also matched a provider's "model not found", which dropped a real
+        // model error into the keyword heuristic as if no provider existed.
+        if (msg.includes('API key is not set') || /\bcommand\b.*\bnot (?:found|allowed)\b/i.test(msg)) {
           break;
         }
         providerFailureReply = msg.includes('protocol: the model did not return a valid final reply')

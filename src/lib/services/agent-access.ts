@@ -1,4 +1,4 @@
-import { aiProviders, getProviderBaseUrl, type AiProviderId } from '$lib/stores/settings';
+import { aiProviders, getProviderBaseUrl, providerSetupHint, type AiProviderId } from '$lib/stores/settings';
 import { listProviderModels, providerApiKeyExists } from '$lib/services/ai-keychain';
 
 export interface AgentAccessStatus {
@@ -43,7 +43,7 @@ export async function detectAgentAccess(options?: AgentAccessOptions): Promise<A
       ready: true,
       via: 'api-key',
       providerId: remoteMatch.id,
-      message: `${remoteMatch.label} is ready.`,
+      message: `${remoteMatch.label} API key is configured.`,
     };
   }
 
@@ -51,8 +51,8 @@ export async function detectAgentAccess(options?: AgentAccessOptions): Promise<A
     try {
       const baseUrl = getProviderBaseUrl(provider.id);
       if (!baseUrl) continue;
-      const models = await listProviderModels(provider.id);
-      if (models.length > 0) {
+      const models = await listProviderModels(provider.id, 'chat');
+      if (models.some((model) => model.supported !== false)) {
         return {
           ready: true,
           via: 'local-model',
@@ -70,7 +70,7 @@ export async function detectAgentAccess(options?: AgentAccessOptions): Promise<A
     via: 'none',
     providerId: null,
     message: selectedProvider && !selectedProvider.local
-      ? `${selectedProvider.label} is not connected. Add the ${selectedProvider.keyLabel || `${selectedProvider.label} API key`} in Settings, then retry.`
+      ? `${selectedProvider.label} is not connected. ${providerSetupHint(selectedProvider.id)} Then retry.`
       : BLOCKED_MESSAGE,
   };
 }

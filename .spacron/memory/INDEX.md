@@ -13,7 +13,9 @@ short enough that it says what the note is *about*, never what it says.
 
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
 - [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
+- [agent-failover](agent-failover.md) — moving unfinished work off an agent that is running out of usage: the invariants it spans, and two traps
 - [agent-turn-detection](agent-turn-detection.md) — how a turn is judged to have ended, and why a guess may not say "finished"
+- [agent-turn-reporting](agent-turn-reporting.md) — who owns a session's watcher, and which turn ends may release the lease
 - [agent-report-status](agent-report-status.md) — the `report_status` tool and per-launch agent tokens; only a declared end may interrupt
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
 - [agent-inbox-unread](agent-inbox-unread.md) — why "read" and "dismissed" have to stay separate bits
@@ -28,8 +30,9 @@ short enough that it says what the note is *about*, never what it says.
 ## Workspace shell, rooms & visuals
 
 - [image-attach-delivery](image-attach-delivery.md) — how pasted/dropped images reach TUI agents and composers, and why preview URLs stay ephemeral
+- [image-generation](image-generation.md) — image/video generation: provider fallback order, what was verified live and what was not, where results live, and the scope/persistence traps
 
-- [html5-dnd-dead-in-tauri](html5-dnd-dead-in-tauri.md) — HTML5 drag-and-drop never fires in the Tauri window; use pointer events
+- [html5-dnd-dead-in-tauri](html5-dnd-dead-in-tauri.md) — HTML5 drag-and-drop never fires in the Tauri window; use pointer events, and how a surface decides a broadcast drop is its own
 - [modal-containing-block-gotcha](modal-containing-block-gotcha.md) — `backdrop-filter` breaks `position: fixed`; which modals must portal to body
 - [modal-open-count-gate](modal-open-count-gate.md) — `modalOpenCount` gates app-wide keydowns; a stale bump kills every shortcut
 - [modal-focus-restore-gotcha](modal-focus-restore-gotcha.md) — restore focus from the trigger side, not from inside the dialog
@@ -43,10 +46,14 @@ short enough that it says what the note is *about*, never what it says.
 - [preview-room-is-persistent](preview-room-is-persistent.md) — preview is hidden, not unmounted, so the page survives a room switch
 - [preview-responsive-viewport](preview-responsive-viewport.md) — phone/tablet preview is a scaled viewport, with no device chassis
 - [terminal-cell-measure-stuck](terminal-cell-measure-stuck.md) — a pane opened at 0x0 wedges the grid at 80x24 for its whole life
+- [onboarding-walkthrough-removed](onboarding-walkthrough-removed.md) — the walkthrough is deleted; leftover `onboardingCompleted` keys are dead, and `app_flags` now has no callers
+- [quick-capture-removed](quick-capture-removed.md) — the Quick Capture modal, its `quickCaptureOpen` plumbing and the Ctrl+Shift+Space shortcut are deleted
 - [terminal-fit-host-padding](terminal-fit-host-padding.md) — FitAddon cannot see container padding; open xterm into a zero-padding host
 - [session-close-label](session-close-label.md) — name a closed terminal from a snapshot, never from its process-wide id
 - [edge-light-gating](edge-light-gating.md) — the traveling edge light runs only while a room is working
 - [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`
+- [website-logo-sync](website-logo-sync.md) — website/public holds copies of the app icon; re-stamp it from src-tauri/icons and static/ when the icon changes
+- [website-motion-layer](website-motion-layer.md) — the html.js pre-paint gate behind the site's scroll reveals, and why every data-reveal page must mount ScrollFX
 - [resource-monitor-removed](resource-monitor-removed.md) — the CPU/RAM chip and its Rust side are deleted; `sysinfo` stays
 - [embedded-command-sentinel](embedded-command-sentinel.md) — completion sentinel is on a fresh line, per-run token, shell-dialect aware; interactive runs are unwrapped
 - [hidden-background-sessions](hidden-background-sessions.md) — hidden terminal sessions must be filtered from every user-facing surface; the one entry point and the one kill path
@@ -60,11 +67,18 @@ short enough that it says what the note is *about*, never what it says.
 
 ## AI providers & model requests
 
-- [chatgpt-subscription-auth](chatgpt-subscription-auth.md) — ChatGPT sign-in drives `codex login`; tokens stay the CLI's business
+- [deepseek-harness-agent](deepseek-harness-agent.md) — DeepSeek Harness as a web-panel + headless agent: npm version trap, approaches ruled out, what is still unverified
+- [chatgpt-subscription-auth](chatgpt-subscription-auth.md) — the `chatgpt` brain provider is the user's Codex CLI over JSON-RPC, and what spawning it on Windows costs
 - [live-model-list-refresh](live-model-list-refresh.md) — why failed model fetches must never be cached as empty lists
 - [model-request-param-dialects](model-request-param-dialects.md) — why `run_completion` negotiates request shape from the provider's own error
 - [orchestrator-bare-ack-net](orchestrator-bare-ack-net.md) — the two-layer guard (brain prompt rule + round-0 auto-read re-route) that stops the assistant replying with a promise and doing nothing; extended for deferral replies and follow-up ("okay") turns
+- [orchestrator-file-visibility](orchestrator-file-visibility.md) — listed vs read: git-ignored and secret files, and the Rust/TS pieces that must agree
+- [orchestrator-approval-cards](orchestrator-approval-cards.md) — what asks in Default access, and the card/activity-row contract between the store and ChatModePanel
+- [orchestrator-edit-scope-and-delegation](orchestrator-edit-scope-and-delegation.md) — the 3-file direct-edit limit and the ask-before-delegating gate; which three files must agree
 - [orchestrator-tool-calling](orchestrator-tool-calling.md) — the provider-agnostic FINAL vs tool_calls loop and where the executor lives; recovery-flag inventory and turn-completion contract; update_todos 5-state plan tool and its honesty invariants
+- [orchestrator-emulator-tools](orchestrator-emulator-tools.md) - how the orchestrator reaches the emulator, and the four lists that must agree
+- [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe
+- [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 
 ## Security & confinement
 
@@ -73,6 +87,7 @@ short enough that it says what the note is *about*, never what it says.
 ## Build, release & repo hygiene
 
 - [release-flow](release-flow.md) — cutting a release, including the `cargo metadata` step everybody forgets
+- [npm-audit-fix-edgesout-bug](npm-audit-fix-edgesout-bug.md) — npm 10.9.7 aborts every dependency bump; the legacy-peer-deps workaround and how to check it
 - [sidecar-externalbin-deadlock](sidecar-externalbin-deadlock.md) — why `build.rs` stamps a placeholder sidecar; never revert it
 - [build-scripts-are-esm](build-scripts-are-esm.md) — `scripts/*.js` are ESM; a `require` slip is red only in the release matrix
 - [msi-ice30-duplicate-sidecar](msi-ice30-duplicate-sidecar.md) — WiX ICE30 when a bin target and a sidecar share a filename

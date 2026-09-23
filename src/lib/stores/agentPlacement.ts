@@ -1,5 +1,6 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { agentWorktrees } from './settings';
+import type { ChatReasoningEffort } from '$lib/types/chat';
 
 /**
  * Where a freshly spawned agent should run.
@@ -7,6 +8,17 @@ import { agentWorktrees } from './settings';
  *  - `main`: directly in the project root, on the checked-out branch
  */
 export type AgentPlacement = 'worktree' | 'main';
+
+/** The complete launch choice made for one local CLI instance. */
+export interface AgentLaunchChoice {
+  placement: AgentPlacement;
+  /** Provider-native model id, or null for the CLI's own default. */
+  model?: string | null;
+  /** Provider-native reasoning effort, or `default` for the CLI default. */
+  reasoningEffort?: ChatReasoningEffort;
+}
+
+export type AgentPlacementAnswer = AgentPlacement | AgentLaunchChoice;
 
 export interface AgentPlacementRequest {
   id: number;
@@ -16,6 +28,16 @@ export interface AgentPlacementRequest {
    * the main repo and the other two in their own worktrees.
    */
   agents: string[];
+  /** Launch commands matching `agents`, used to load each CLI's own catalogue. */
+  commands?: string[];
+  /** Initial location for each row, aligned with `agents`. */
+  suggestedPlacements?: AgentPlacement[];
+  /**
+   * Model/reasoning the orchestrator already chose for each row, aligned with
+   * `agents`. The dialog starts on these so it shows (and keeps) that choice
+   * instead of resetting every row to the CLI default.
+   */
+  suggestedLaunch?: Array<{ model?: string | null; reasoningEffort?: ChatReasoningEffort } | undefined>;
   /** Who asked — tunes the dialog copy. */
   source: 'manual' | 'orchestrator';
   /** Pre-selected option for every agent (the global default, unless the caller knows better). */
@@ -25,7 +47,7 @@ export interface AgentPlacementRequest {
   /** When present, the request is rendered in this Chat composer. */
   projectId?: string;
   threadId?: string;
-  resolve: (choices: AgentPlacement[] | null) => void;
+  resolve: (choices: AgentPlacementAnswer[] | null) => void;
 }
 
 /**
@@ -55,16 +77,22 @@ export function defaultAgentPlacement(): AgentPlacement {
  */
 export function requestAgentPlacement(args: {
   agents: string[];
+  commands?: string[];
+  suggestedPlacements?: AgentPlacement[];
+  suggestedLaunch?: AgentPlacementRequest['suggestedLaunch'];
   source: 'manual' | 'orchestrator';
   suggested?: AgentPlacement;
   suggestionReason?: string | null;
   projectId?: string;
   threadId?: string;
-}): Promise<AgentPlacement[] | null> {
+}): Promise<AgentPlacementAnswer[] | null> {
   return new Promise((resolve) => {
     const request: AgentPlacementRequest = {
       id: nextRequestId++,
       agents: args.agents,
+      commands: args.commands,
+      suggestedPlacements: args.suggestedPlacements,
+      suggestedLaunch: args.suggestedLaunch,
       source: args.source,
       suggested: args.suggested ?? defaultAgentPlacement(),
       suggestionReason: args.suggestionReason ?? null,
@@ -77,11 +105,21 @@ export function requestAgentPlacement(args: {
   });
 }
 
+/** The choice a row starts on: the caller's suggestion, else the defaults. */
+export function initialLaunchChoice(request: AgentPlacementRequest, index: number): AgentLaunchChoice {
+  const launch = request.suggestedLaunch?.[index];
+  return {
+    placement: request.suggestedPlacements?.[index] ?? request.suggested,
+    model: launch?.model ?? null,
+    reasoningEffort: launch?.reasoningEffort ?? 'default',
+  };
+}
+
 /**
  * Settle a pending request with one placement per agent, index-aligned with the
  * request's `agents`. `null` = dismissed, so nothing should be spawned.
  */
-export function resolveAgentPlacement(id: number, choices: AgentPlacement[] | null): void {
+export function resolveAgentPlacement(id: number, choices: AgentPlacementAnswer[] | null): void {
   const index = queue.findIndex((request) => request.id === id);
   if (index === -1) return;
   const [request] = queue.splice(index, 1);

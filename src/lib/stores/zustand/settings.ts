@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { getAppFlag, setAppFlag } from '$lib/services/app-flags';
+import type { McpServer } from '$lib/services/mcp-servers';
+import { DEFAULT_MEDIA_GENERATION, type MediaGenerationSettings } from '$lib/services/media-generation';
 
 export type CloseBehavior = 'quit' | 'minimize';
 export type AiProviderId =
@@ -58,7 +59,8 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
     { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
     { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
-    { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
+    { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', keys: 'Ctrl+Shift+J' },
+    { id: 'newWorkspace', label: 'Create Project', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
     { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
@@ -82,7 +84,6 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'zoomIn', label: 'Zoom In', keys: 'Ctrl+=' },
     { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
     { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
-    { id: 'quickCapture', label: 'Quick Capture', keys: 'Ctrl+Shift+Space' },
     { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
     // openDailyNote removed
     // toggleSketch removed
@@ -221,6 +222,10 @@ function createSettingsState() {
     // the toggle reset every launch, so turning it on could never stick.
     transcriptionAutoSend: persistentValue('transcriptionAutoSend', false),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
+    // Orchestrator skills (services/orchestrator/skills.ts): built-ins switched
+    // off, and the user's own. Shape kept inline so this store stays leaf-level.
+    orchestratorDisabledSkills: persistentValue<string[]>('orchestratorDisabledSkills', []),
+    orchestratorCustomSkills: persistentValue<Array<{ id: string; title: string; instructions: string; enabled: boolean }>>('orchestratorCustomSkills', []),
     uiZoom: persistentValue('uiZoom', 100),
     uiFontSize: persistentValue('uiFontSize', 14),
     swipeNavigationEnabled: persistentValue('swipeNavigationEnabled', true),
@@ -233,7 +238,6 @@ function createSettingsState() {
     backgroundImageEnabled: persistentValue('backgroundImageEnabled', false),
     backgroundImageOpacity: persistentValue('backgroundImageOpacity', 100),
     backgroundImageBlur: persistentValue('backgroundImageBlur', 0),
-    onboardingCompleted: persistentValue('onboardingCompleted', false),
     terminalShell: persistentValue('terminalShell', ''),
     terminalCursorStyle: persistentValue<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar'),
     terminalScrollback: persistentValue('terminalScrollback', 5000),
@@ -257,6 +261,19 @@ function createSettingsState() {
     agentWorktrees: persistentValue('agentWorktrees', true),
     autoStageAgentChanges: persistentValue('autoStageAgentChanges', false),
     agentBrowserTools: persistentValue('agentBrowserTools', false),
+    // Failover: move unfinished work off an agent that is running out of usage,
+    // rather than letting it stop mid-feature. See
+    // `services/orchestrator/agent-failover.ts` for the ladder these three feed.
+    agentFailover: persistentValue('agentFailover', true),
+    agentFailoverHeadroomPercent: persistentValue('agentFailoverHeadroomPercent', 4),
+    // A same-CLI account hop spends the user's own plan; a hop to a different
+    // CLI may spend money on a different service. On by default, but a setting
+    // rather than an assumption, and every hop lands in the activity log.
+    agentFailoverCrossProvider: persistentValue('agentFailoverCrossProvider', true),
+    mcpServers: persistentValue<McpServer[]>('mcpServers', []),
+    // Image/video generation: provider pick and model overrides. See
+    // `services/media-generation.ts`; the fallback order lives in Rust.
+    mediaGeneration: { ...DEFAULT_MEDIA_GENERATION, ...persistentValue<Partial<MediaGenerationSettings>>('mediaGeneration', {}) },
     // Keep the machine awake while agents are mid-turn — see stores/settings.ts.
     keepSystemAwake: persistentValue('keepSystemAwake', false),
   };
@@ -268,13 +285,9 @@ interface SettingsActions {
   __set: <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => void;
   resetSettingsToDefault: () => void;
   updateSetting: (key: string, value: unknown) => void;
-  markOnboardingCompleted: () => void;
-  markOnboardingIncomplete: () => void;
 }
 
 export type SettingsState = SettingsValues & SettingsActions;
-
-const ONBOARDING_FLAG = 'onboardingCompleted';
 
 const defaults: SettingsValues = {
   fontSize: 14,
@@ -303,6 +316,8 @@ const defaults: SettingsValues = {
   voiceAiModelByProvider: {},
   transcriptionAutoSend: false,
   announceAgentCompletions: true,
+  orchestratorDisabledSkills: [],
+  orchestratorCustomSkills: [],
   uiZoom: 100,
   uiFontSize: 14,
   swipeNavigationEnabled: true,
@@ -313,7 +328,8 @@ const defaults: SettingsValues = {
     { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
     { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
     { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
-    { id: 'newWorkspace', label: 'New Workspace', keys: 'Ctrl+N' },
+    { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', keys: 'Ctrl+Shift+J' },
+    { id: 'newWorkspace', label: 'Create Project', keys: 'Ctrl+N' },
     { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
     { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
     { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
@@ -337,7 +353,6 @@ const defaults: SettingsValues = {
     { id: 'zoomIn', label: 'Zoom In', keys: 'Ctrl+=' },
     { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
     { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
-    { id: 'quickCapture', label: 'Quick Capture', keys: 'Ctrl+Shift+Space' },
     { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
     // openDailyNote removed
     // toggleSketch removed
@@ -354,7 +369,6 @@ const defaults: SettingsValues = {
   backgroundImageEnabled: false,
   backgroundImageOpacity: 100,
   backgroundImageBlur: 0,
-  onboardingCompleted: false,
   terminalShell: '',
   terminalCursorStyle: 'bar',
   terminalScrollback: 5000,
@@ -368,6 +382,11 @@ const defaults: SettingsValues = {
   agentWorktrees: true,
   autoStageAgentChanges: false,
   agentBrowserTools: false,
+  agentFailover: true,
+  agentFailoverHeadroomPercent: 4,
+  agentFailoverCrossProvider: true,
+  mcpServers: [],
+  mediaGeneration: DEFAULT_MEDIA_GENERATION,
   keepSystemAwake: false,
 };
 
@@ -384,7 +403,6 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
     for (const [key, value] of Object.entries(defaults)) {
       persistValue(key, value);
     }
-    setAppFlag(ONBOARDING_FLAG, 'false');
   },
 
   updateSetting: (key: string, value: unknown) => {
@@ -421,7 +439,6 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       closeBehavior: 'closeBehavior',
       appearance: 'appearance',
       accentColor: 'accentColor',
-      onboardingCompleted: 'onboardingCompleted',
       terminalShell: 'terminalShell',
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
@@ -433,6 +450,11 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       agentWorktrees: 'agentWorktrees',
       autoStageAgentChanges: 'autoStageAgentChanges',
       agentBrowserTools: 'agentBrowserTools',
+      agentFailover: 'agentFailover',
+      agentFailoverHeadroomPercent: 'agentFailoverHeadroomPercent',
+      agentFailoverCrossProvider: 'agentFailoverCrossProvider',
+      mcpServers: 'mcpServers',
+      mediaGeneration: 'mediaGeneration',
       keepSystemAwake: 'keepSystemAwake',
     };
     const stateKey = setters[key];
@@ -440,17 +462,5 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       const s = getState();
       (s as any).__set(stateKey, value);
     }
-  },
-
-  markOnboardingCompleted: () => {
-    set({ onboardingCompleted: true });
-    persistValue('onboardingCompleted', true);
-    setAppFlag(ONBOARDING_FLAG, 'true');
-  },
-
-  markOnboardingIncomplete: () => {
-    set({ onboardingCompleted: false });
-    persistValue('onboardingCompleted', false);
-    setAppFlag(ONBOARDING_FLAG, 'false');
   },
 }));

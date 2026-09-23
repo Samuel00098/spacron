@@ -388,6 +388,46 @@ export async function getWorktreeDelta(
   }
 }
 
+export interface SnapshotWorktreeResult {
+  /** True when there was uncommitted work and it has now been committed. */
+  committed: boolean;
+  /** The branch tip after the snapshot — what a successor inherits. */
+  head: string;
+}
+
+/**
+ * Commit whatever an agent left uncommitted on its own branch, and stop there.
+ *
+ * The freeze step of a handover. An agent that is about to be stopped
+ * mid-feature must not leave edits floating in a checkout its successor is then
+ * told to continue from — `getWorktreeDelta` and every later commit-range
+ * operation only see commits, so uncommitted work is work the brief cannot
+ * describe and the successor may quietly clobber.
+ *
+ * Deliberately **not** `stageWorktreeChanges`: that one goes on to apply the
+ * delta into the user's main checkout, which is the auto-staging behaviour and
+ * is off by default. Freezing work is not a reason to push it past the review
+ * wall, so this touches the branch and nothing else.
+ *
+ * Returns null on failure rather than throwing — a handover must still happen
+ * if the snapshot fails (the work is in the checkout either way), and the
+ * caller records that it could not freeze rather than abandoning the hop.
+ */
+export async function snapshotWorktree(
+  projectId: string,
+  worktree: WorktreeInfo
+): Promise<SnapshotWorktreeResult | null> {
+  try {
+    const raw = await backendInvoke<{ committed: boolean; head: string }>(
+      'workspace_git_snapshot_worktree',
+      { projectId, worktreePath: worktree.path }
+    );
+    return { committed: raw.committed, head: raw.head };
+  } catch {
+    return null;
+  }
+}
+
 export interface StageWorktreeResult {
   success: boolean;
   message: string;

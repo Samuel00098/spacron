@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
 import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
+import { isPointOverDropTarget } from '$lib/utils/drop-target';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -1117,27 +1118,25 @@ function TerminalPane({
       explorerDragPathRef.current = custom.detail?.path?.trim() || null;
       setIsDragOver(false);
     }
-    function handleDragMove() {
+    function handleDragMove(event: Event) {
       if (!explorerDragPathRef.current) return;
-      const c = containerRef.current;
-      if (!c) return;
-      const rect = c.getBoundingClientRect();
-      // Check the last known mouse position via the on-screen cursor
-      const els = document.elementsFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      const over = els.some((el) => el === c || c.contains(el));
-      setIsDragOver(over);
+      const custom = event as CustomEvent<{ clientX?: number; clientY?: number }>;
+      // Highlight follows the CURSOR. Hit-testing the pane's own centre instead
+      // lit up whichever pane owned that point for the whole drag, no matter
+      // where the pointer actually was.
+      setIsDragOver(
+        isPointOverDropTarget(containerRef.current, custom.detail?.clientX, custom.detail?.clientY),
+      );
     }
     function handleDragEnd(event: Event) {
       const custom = event as CustomEvent<{ path?: string; clientX?: number; clientY?: number }>;
       const endedPath = custom.detail?.path?.trim() || explorerDragPathRef.current;
       const cx = custom.detail?.clientX;
       const cy = custom.detail?.clientY;
-      let overPane = false;
-      const c = containerRef.current;
-      if (c && typeof cx === 'number' && typeof cy === 'number') {
-        const rect = c.getBoundingClientRect();
-        overPane = cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom;
-      }
+      // Hit-test, not a rect test: hidden rooms stay laid out at full stage
+      // size, so a plain rect check made every mounted pane claim the drop and
+      // the dragged path landed in every open agent terminal at once.
+      const overPane = isPointOverDropTarget(containerRef.current, cx, cy);
       // Drop into this pane only if NOT also over the floating prompt bar
       let overBar = false;
       const barEl = document.querySelector('#floating-prompt-bar');
@@ -1638,19 +1637,11 @@ function TerminalPane({
         void dropPositionToCss(pos).then((css) => {
           if (disposed || !css) return;
 
-          // Hidden rooms (parked project layers, stage-hidden panes) stay laid
-          // out at full size, so their rects contain every drop point. Hidden
-          // layers are `visibility: hidden` + `pointer-events: none`, which the
-          // container inherits — reject those before the rect test.
-          const style = getComputedStyle(c);
-          if (style.visibility === 'hidden' || style.pointerEvents === 'none') return;
-
-          // Only handle drops within this pane's container
-          const rect = c.getBoundingClientRect();
-          if (
-            css.x < rect.left || css.x > rect.right ||
-            css.y < rect.top || css.y > rect.bottom
-          ) return;
+          // Only handle drops within this pane's container, and only while this
+          // pane is the one on screen at that point — hidden rooms (parked
+          // project layers, stage-hidden panes) stay laid out at full size, so
+          // their rects contain every drop point.
+          if (!isPointOverDropTarget(c, css.x, css.y)) return;
 
           // Don't steal drops from the floating prompt bar
           const barEl = document.querySelector('#floating-prompt-bar');

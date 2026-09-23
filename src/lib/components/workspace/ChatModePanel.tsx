@@ -6,7 +6,7 @@ import DOMPurify from 'dompurify';
 import { get } from '$lib/stores/storeCompat';
 import { activeProject } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
-import { stopChatTurn, sendChatMessage, enqueueChatMessage, resendEditedChatMessage, hasResumableTurn, resumeOrchestratorTurn, dismissResumableTurn, orchestratorTasks, resolveProjectFilePath, chatMessageQueues, removeQueuedChatMessage, steerQueuedChatMessage, type QueuedChatMessage } from '$lib/stores/orchestrator';
+import { stopChatTurn, sendChatMessage, enqueueChatMessage, resendEditedChatMessage, hasResumableTurn, resumeOrchestratorTurn, dismissResumableTurn, orchestratorTasks, resolveProjectFilePath, chatMessageQueues, removeQueuedChatMessage, steerQueuedChatMessage, editImageInThread, type QueuedChatMessage } from '$lib/stores/orchestrator';
 import {
   chatThreadState,
   chatTurnTicker,
@@ -49,9 +49,14 @@ import { showToast } from '$lib/stores/notification';
 import {
   agentPlacementRequest,
   resolveAgentPlacement,
+  type AgentLaunchChoice,
   type AgentPlacement,
+  initialLaunchChoice,
   type AgentPlacementRequest,
 } from '$lib/stores/agentPlacement';
+import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
+import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
 import {
   isRealtimeVoiceSupported,
   REALTIME_VOICE_INSTRUCTIONS,
@@ -455,20 +460,51 @@ function activityRunBelongsToAssistant(messages: ChatMessage[], messageIndex: nu
 }
 
 function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
-  const [choices, setChoices] = useState<AgentPlacement[]>([]);
+  const [choices, setChoices] = useState<AgentLaunchChoice[]>([]);
+  const [modelsByCommand, setModelsByCommand] = useState<Record<string, AgentProviderModel[]>>({});
+  const [loadingCommands, setLoadingCommands] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    setChoices(request.agents.map(() => request.suggested));
+    setChoices(request.agents.map((_agent, index) => initialLaunchChoice(request, index)));
+    let cancelled = false;
+    const commands = [...new Set(request.commands ?? request.agents)];
+    setLoadingCommands(new Set(commands));
+    void Promise.all(commands.map(async (command) => {
+      try {
+        const models = await loadLiveAgentProviderModels(command);
+        if (!cancelled && models.length) {
+          setModelsByCommand((current) => ({ ...current, [command]: models }));
+        }
+      } catch (error) {
+        console.warn(`Could not load ${command} local models:`, error);
+      } finally {
+        if (!cancelled) {
+          setLoadingCommands((current) => {
+            const next = new Set(current);
+            next.delete(command);
+            return next;
+          });
+        }
+      }
+    }));
+    return () => { cancelled = true; };
   }, [request.id]);
 
-  const placements = request.agents.map((_agent, index) => choices[index] ?? request.suggested);
+  const launchChoices = request.agents.map((_agent, index) => choices[index] ?? initialLaunchChoice(request, index));
+  const placements = launchChoices.map((choice) => choice.placement);
   const isolatedCount = placements.filter((placement) => placement === 'worktree').length;
   const mainCount = placements.length - isolatedCount;
   const isMulti = placements.length > 1;
   const setAt = (index: number, placement: AgentPlacement) => {
-    setChoices((current) => placements.map((value, currentIndex) => currentIndex === index ? placement : value));
+    setChoices(launchChoices.map((choice, currentIndex) => currentIndex === index ? { ...choice, placement } : choice));
   };
-  const setAll = (placement: AgentPlacement) => setChoices(placements.map(() => placement));
+  const setAll = (placement: AgentPlacement) => setChoices(launchChoices.map((choice) => ({ ...choice, placement })));
+  const setModel = (index: number, model: string | null) =>
+    setChoices(launchChoices.map((choice, currentIndex) => currentIndex === index ? { ...choice, model } : choice));
+  const setReasoning = (index: number, reasoningEffort: ChatReasoningEffort) =>
+    setChoices(launchChoices.map((choice, currentIndex) => currentIndex === index ? { ...choice, reasoningEffort } : choice));
+  const commandFor = (index: number) => request.commands?.[index] ?? request.agents[index] ?? '';
+  const modelsFor = (index: number) => modelsByCommand[commandFor(index)] ?? [];
   const confirmLabel = !isMulti
     ? placements[0] === 'main' ? 'Start in main repo' : 'Start isolated'
     : mainCount === 0 ? `Start ${placements.length} isolated`
@@ -476,11 +512,11 @@ function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
         : `Start ${placements.length} agents`;
 
   return (
-    <div className="chat-mode-placement-dialog" role="dialog" aria-label="Choose where agents run">
+    <div className="chat-mode-placement-dialog" role="dialog" aria-label="Configure local CLI agent launches">
       <div className="chat-mode-placement-header">
         <div>
-          <strong>{isMulti ? 'Where should these agents run?' : 'Where should this agent run?'}</strong>
-          <span>{isMulti ? `${placements.length} agents requested by the orchestrator` : `${request.agents[0] ?? 'Agent'} requested by the orchestrator`}</span>
+          <strong>{isMulti ? 'Configure these local CLI launches' : 'Configure this local CLI launch'}</strong>
+          <span>{isMulti ? `${placements.length} agents · location, model, and reasoning` : `${request.agents[0] ?? 'Agent'} · location, model, and reasoning`}</span>
         </div>
         {isMulti && (
           <div className="chat-mode-placement-setall" aria-label="Set all agent locations">
@@ -494,11 +530,24 @@ function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
       <div className="chat-mode-placement-list">
         {request.agents.map((agent, index) => (
           <div className="chat-mode-placement-row" key={`${agent}-${index}`}>
-            <span className="chat-mode-placement-agent" title={agent}>{agent}</span>
-            <div className="chat-mode-placement-options">
-              <button type="button" className={placements[index] === 'worktree' ? 'active' : ''} onClick={() => setAt(index, 'worktree')}>Isolated</button>
-              <button type="button" className={placements[index] === 'main' ? 'active' : ''} onClick={() => setAt(index, 'main')}>Main repo</button>
+            <div className="chat-mode-placement-location">
+              <span className="chat-mode-placement-agent" title={agent}>{agent}</span>
+              <div className="chat-mode-placement-options">
+                <button type="button" className={placements[index] === 'worktree' ? 'active' : ''} onClick={() => setAt(index, 'worktree')}>Isolated</button>
+                <button type="button" className={placements[index] === 'main' ? 'active' : ''} onClick={() => setAt(index, 'main')}>Main repo</button>
+              </div>
             </div>
+            <AgentLaunchConfigFields
+              className="chat-mode-placement-config"
+              command={commandFor(index)}
+              models={modelsFor(index)}
+              loading={loadingCommands.has(commandFor(index))}
+              model={launchChoices[index].model ?? null}
+              reasoningEffort={launchChoices[index].reasoningEffort ?? 'default'}
+              onModelChange={(model) => setModel(index, model)}
+              onReasoningChange={(effort) => setReasoning(index, effort)}
+              boundarySelector=".chat-mode-placement-dialog"
+            />
           </div>
         ))}
       </div>
@@ -506,7 +555,7 @@ function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
         <span>{isolatedCount} isolated · {mainCount} main repo</span>
         <div>
           <button type="button" onClick={() => resolveAgentPlacement(request.id, null)}>Cancel</button>
-          <button type="button" className="primary" onClick={() => resolveAgentPlacement(request.id, placements)}>{confirmLabel}</button>
+          <button type="button" className="primary" onClick={() => resolveAgentPlacement(request.id, launchChoices)}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -981,8 +1030,8 @@ export default function ChatModePanel() {
       if (result.removedLaterCount > 0) {
         showToast(
           result.removedLaterCount === 1
-            ? 'Resent — 1 later message removed'
-            : `Resent — ${result.removedLaterCount} later messages removed`,
+            ? 'Resent: 1 later message removed'
+            : `Resent: ${result.removedLaterCount} later messages removed`,
           'info',
           2600,
         );
@@ -1543,6 +1592,28 @@ export default function ChatModePanel() {
     if (index >= 0) setViewer({ images: threadImages.map((entry) => entry.image), index });
   }
 
+  // A project's generations folder is outside the asset scope granted at
+  // startup; re-grant it per project so saved images and videos load.
+  useEffect(() => {
+    const root = project?.root_path;
+    if (!root || !isTauriRuntime()) return;
+    void invoke('allow_generations_dir', { projectRoot: root }).catch(() => {});
+  }, [project?.root_path]);
+
+  // The viewer's Edit: runs straight away and lands in this thread.
+  function editImage(image: ViewerImage, prompt: string, markPath?: string) {
+    if (!project || !image.path) return;
+    void editImageInThread({
+      projectId: project.id,
+      rootPath: project.root_path,
+      threadId: thread?.id,
+      imagePath: image.path,
+      imageName: image.name,
+      markPath,
+      prompt,
+    });
+  }
+
   // "Use as input": the image rides the next message as an attachment, which
   // is how the brain learns its path for generate_image's reference_images.
   function useImageAsInput(image: ViewerImage) {
@@ -1707,6 +1778,16 @@ export default function ChatModePanel() {
                   {message.attachments?.length ? (
                     <div className="chat-mode-message-attachments">
                       {message.attachments.map((attachment) => {
+                        if (attachment.type.startsWith('video/') && attachment.path && isTauriRuntime()) {
+                          return (
+                            <div key={attachment.id} className="chat-mode-generated-video">
+                              <video src={convertFileSrc(attachment.path)} controls preload="metadata" />
+                              <button type="button" onClick={() => void invoke('reveal_image', { path: attachment.path, projectRoot: project?.root_path ?? null }).catch(() => {})} title={attachment.path}>
+                                Show in folder
+                              </button>
+                            </div>
+                          );
+                        }
                         const image = attachmentViewerImage(attachment);
                         if (image && attachment.generated) {
                           return (
@@ -1717,7 +1798,7 @@ export default function ChatModePanel() {
                         }
                         if (image) {
                           return (
-                            <button key={attachment.id} type="button" className="chat-mode-attachment-chip image" onClick={() => openThreadImage(attachment.id)} title={`${attachment.name} — click to open`}>
+                            <button key={attachment.id} type="button" className="chat-mode-attachment-chip image" onClick={() => openThreadImage(attachment.id)} title={`${attachment.name}: click to open`}>
                               <img src={image.src} alt={attachment.name} className="chat-mode-attachment-thumb" loading="lazy" />
                               <span>{attachment.name}</span>{attachment.size > 0 && <small>{formatBytes(attachment.size)}</small>}
                             </button>
@@ -1839,7 +1920,7 @@ export default function ChatModePanel() {
             <div className="chat-mode-attachment-list" aria-label="Attached files">
               {attachments.map((attachment) => (
                 attachment.type.startsWith('image/') && attachment.previewUrl ? (
-                  <span key={attachment.id} className="chat-mode-attachment-chip image" title={`${attachment.name} — click to preview`}>
+                  <span key={attachment.id} className="chat-mode-attachment-chip image" title={`${attachment.name}: click to preview`}>
                     <img
                       src={attachment.previewUrl}
                       alt={attachment.name}
@@ -2053,6 +2134,7 @@ export default function ChatModePanel() {
           projectRoot={project?.root_path ?? null}
           onClose={() => setViewer(null)}
           onUseAsInput={useImageAsInput}
+          onEdit={editImage}
         />
       )}
     </section>

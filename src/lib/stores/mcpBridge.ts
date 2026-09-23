@@ -20,6 +20,7 @@ import {
   spawnAgentPreset,
 } from './terminal';
 import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
+import { isDeepSeekHarness, isDeepSeekWorkerSession } from '$lib/services/deepseek-harness';
 import { deliverTurnSignal } from '$lib/services/orchestrator/agent-hook-signals';
 import { showToast } from './notification';
 import { ASSISTANT_NAMES, pickAssistantName } from '$lib/services/orchestrator/agent-names';
@@ -36,7 +37,18 @@ import {
 import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
 import { usageState } from './usage';
-import { agentBrowserTools } from './settings';
+import { agentBrowserTools, mcpServers } from './settings';
+import {
+  codexTable,
+  droidEntry,
+  enabledServers,
+  headersLostOnCodex,
+  isSpacronKey,
+  mergeMap,
+  opencodeEntry,
+  standardEntry,
+  type McpServer,
+} from '$lib/services/mcp-servers';
 // ---------------------------------------------------------------------------
 // Rust MCP server handle — registered from lib.rs as managed Tauri state
 // ---------------------------------------------------------------------------
@@ -404,6 +416,13 @@ async function deliverMcpPrompt(payload: DeliverPromptRequest): Promise<void> {
   let error: string | null = null;
 
   try {
+    // A headless DeepSeek worker exits when its task is done, leaving a bare
+    // shell: typed feedback would run as a shell command. Refuse instead.
+    if (isDeepSeekWorkerSession(session_id)) {
+      throw new Error(
+        'DeepSeek Harness workers run one task and exit, so they cannot take follow-up messages. Delegate a new task that includes the feedback instead.',
+      );
+    }
     delivered = await sendOrchestratorFollowUpWhenReady(session_id, message);
     if (!delivered) {
       // The distinction matters to the caller: a dead pane is permanent, a
@@ -477,6 +496,12 @@ export function initMcpBridge(): void {
     console.log(`[mcp] Spawning agent: ${preset}${prompt ? ` (prompt: ${prompt})` : ''}`);
 
     try {
+      // A DeepSeek worker without a task would be an idle shell: it runs one
+      // task per launch, delivered below as its goal.
+      if (isDeepSeekHarness(preset) && !prompt?.trim()) {
+        throw new Error('DeepSeek Harness needs a task to start. Use delegate_task with a prompt.');
+      }
+
       // An agent-driven spawn is isolated by default. Without this every worker
       // an orchestrator spawns edits the SAME working tree concurrently, and two
       // workers touching one file silently clobber each other — the exact thing
@@ -716,6 +741,37 @@ function browserEntry<T>(entry: T): T | null {
 }
 
 // ---------------------------------------------------------------------------
+// User-managed MCP servers
+// ---------------------------------------------------------------------------
+
+/**
+ * The user's server list, or empty when the store is not initialised (tests,
+ * non-browser contexts). Empty is the safe reading: it writes no servers, and
+ * the prune below then removes any we wrote earlier — which is wrong but
+ * recoverable on the next real project open, whereas guessing a list is not.
+ */
+function userServers(): McpServer[] {
+  try {
+    const value = get(mcpServers);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Keys already in a config file's server section.
+ *
+ * Pruning needs them: a server the user deleted leaves a `spacron-` key behind
+ * that nothing in the desired set mentions, so the only way to find it is to
+ * look at what is actually in the file. See invariant 2 in `mcp-servers.ts`.
+ */
+function sectionKeys(config: Record<string, unknown>, section: string): string[] {
+  const servers = config[section];
+  return servers && typeof servers === 'object' ? Object.keys(servers as object) : [];
+}
+
+// ---------------------------------------------------------------------------
 // Per-preset config injection
 // ---------------------------------------------------------------------------
 
@@ -779,6 +835,11 @@ export async function injectMcpConfigForAgent(
     case 'cursor-agent':
     case 'agent':
       await injectCursorConfig(projectRoot, httpUrl);
+      break;
+    case 'dsh':
+      // DeepSeek Harness gets the server from a `--patch` file on its command
+      // line, with the URL in its launch env — nothing to write here. See
+      // `services/deepseek-harness.ts`.
       break;
     default:
       // No known config surface for this executable — the normal path for a
@@ -866,12 +927,15 @@ export async function mcpLaunchFlags(
 
     // `type: 'sse'` is required: the Rust server speaks SSE, and a bare `url`
     // is treated as streamable HTTP, which it does not serve.
-    const mcpServers: Record<string, unknown> = { 'spacron-mcp': { type: 'sse', url } };
+    const servers: Record<string, unknown> = { 'spacron-mcp': { type: 'sse', url } };
     // This file is rewritten on every launch, so an omitted entry is already a
     // removed one — no delete branch needed here, unlike the merging writers.
-    if (wantsBrowserTools()) mcpServers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    for (const { key, server } of enabledServers(userServers())) {
+      servers[key] = standardEntry(server);
+    }
     const configPath = await invoke<string>('mcp_write_launch_config', {
-      content: JSON.stringify({ mcpServers }, null, 2),
+      content: JSON.stringify({ mcpServers: servers }, null, 2),
     });
     return ` --mcp-config "${configPath}"`;
   } catch (e) {
@@ -1067,11 +1131,15 @@ async function injectProjectMcpJson(
       // File doesn't exist or isn't valid JSON — start fresh
     }
 
-    const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-    mcpServers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
-    if (wantsBrowserTools()) mcpServers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
-    else delete mcpServers[BROWSER_SERVER_KEY];
-    config['mcpServers'] = mcpServers;
+    const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
+    servers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    else delete servers[BROWSER_SERVER_KEY];
+    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), standardEntry))) {
+      if (entry === null) delete servers[key];
+      else servers[key] = entry;
+    }
+    config['mcpServers'] = servers;
 
     await invoke('fs_write_file', {
       path: configPath,
@@ -1097,7 +1165,9 @@ async function injectProjectMcpJson(
 async function mergeJsonMcpConfig(
   configPath: string,
   section: string,
-  entries: Record<string, unknown | null>,
+  entries:
+    | Record<string, unknown | null>
+    | ((existingKeys: string[]) => Record<string, unknown | null>),
   label: string,
 ): Promise<void> {
   try {
@@ -1110,7 +1180,12 @@ async function mergeJsonMcpConfig(
     }
 
     const servers = (config[section] as Record<string, unknown>) ?? {};
-    for (const [name, entry] of Object.entries(entries)) {
+    // A callback form is what lets a caller prune: the keys it has to delete
+    // are the stale `spacron-` ones already in the file, which are only known
+    // once it has been read.
+    const resolved =
+      typeof entries === 'function' ? entries(sectionKeys(config, section)) : entries;
+    for (const [name, entry] of Object.entries(resolved)) {
       if (entry === null) delete servers[name];
       else servers[name] = entry;
     }
@@ -1138,10 +1213,11 @@ async function injectCursorConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/.cursor/mcp.json`,
     'mcpServers',
-    {
+    (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
       [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
-    },
+      ...mergeMap(userServers(), keys, standardEntry),
+    }),
     'Cursor',
   );
 }
@@ -1161,10 +1237,11 @@ async function injectGeminiConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/.gemini/settings.json`,
     'mcpServers',
-    {
+    (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
       [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
-    },
+      ...mergeMap(userServers(), keys, standardEntry),
+    }),
     'Gemini CLI',
   );
 }
@@ -1183,10 +1260,11 @@ async function injectOpencodeConfig(
   await mergeJsonMcpConfig(
     `${projectRoot}/opencode.json`,
     'mcp',
-    {
+    (keys) => ({
       'spacron-mcp': { type: 'remote', url: httpUrl, enabled: true },
       [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_OPENCODE_ENTRY),
-    },
+      ...mergeMap(userServers(), keys, opencodeEntry),
+    }),
     'opencode',
   );
 }
@@ -1214,6 +1292,10 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
     servers['spacron-mcp'] = { type: 'http', url: httpUrl, disabled: false };
     if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
     else delete servers[BROWSER_SERVER_KEY];
+    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), droidEntry))) {
+      if (entry === null) delete servers[key];
+      else servers[key] = entry;
+    }
     config['mcpServers'] = servers;
 
     await invoke('mcp_write_global_agent_config', {
@@ -1282,16 +1364,34 @@ async function warnIfGlobalConfigPortIsEphemeral(agent: string): Promise<void> {
  * immune: only a line that starts a new table header ends a block.
  */
 function stripTomlTable(content: string, header: string): string {
+  return stripTomlTablesWhere(content, (h) => h === header);
+}
+
+/**
+ * The same removal, for every table whose header matches a predicate.
+ *
+ * User servers make the set of tables we own dynamic, so a list of exact
+ * headers no longer covers it: a server the user deleted or renamed leaves a
+ * `[mcp_servers.spacron-*]` table that nothing in the desired set names. Only
+ * the file itself knows it is there.
+ */
+function stripTomlTablesWhere(content: string, matches: (header: string) => boolean): string {
   const lines = content.split('\n');
   const kept: string[] = [];
   let dropping = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (dropping && !trimmed.startsWith('[')) continue;
-    dropping = trimmed === header;
+    dropping = trimmed.startsWith('[') && matches(trimmed);
     if (!dropping) kept.push(line);
   }
   return kept.join('\n');
+}
+
+/** `[mcp_servers.<key>]` → `<key>`, or null for any other table header. */
+function codexServerKey(header: string): string | null {
+  const match = header.match(/^\[mcp_servers\.([^\]]+)\]$/);
+  return match ? match[1].trim() : null;
 }
 
 /**
@@ -1310,11 +1410,16 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
     await warnIfGlobalConfigPortIsEphemeral('codex');
     let content = await invoke<string>('mcp_read_global_agent_config', { agent: 'codex' });
 
-    // Drop any previous blocks: each header plus its keys, up to the next table.
-    // Both are rewritten from scratch every time, which is also how the browser
-    // server disappears again when the user turns it off.
-    content = stripTomlTable(content, '[mcp_servers.spacron-mcp]');
-    content = stripTomlTable(content, `[mcp_servers.${BROWSER_SERVER_KEY}]`);
+    // Drop every block we own — each header plus its keys, up to the next
+    // table — then write the wanted ones back. Rewriting from scratch is also
+    // how the browser server disappears when the user turns it off, and how a
+    // user server disappears when they delete or rename it. Tables outside the
+    // `spacron-` namespace are never matched, so a server the user configured
+    // by hand survives untouched.
+    content = stripTomlTablesWhere(content, (header) => {
+      const key = codexServerKey(header);
+      return key !== null && isSpacronKey(key);
+    });
 
     content = `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n`;
 
@@ -1325,6 +1430,17 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       content +=
         `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n` +
         `startup_timeout_sec = ${BROWSER_STARTUP_TIMEOUT_SEC}\n`;
+    }
+
+    for (const { key, server } of enabledServers(userServers())) {
+      if (headersLostOnCodex(server)) {
+        console.warn(
+          `[mcp] Codex has no config key for request headers, so "${server.name}" is written ` +
+            `to ~/.codex/config.toml without its auth header. It will work in the other agents ` +
+            `and fail to authenticate in Codex.`,
+        );
+      }
+      content += `\n${codexTable(key, server)}`;
     }
 
     await invoke('mcp_write_global_agent_config', {

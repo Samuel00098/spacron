@@ -13,7 +13,8 @@ import {
   discardPreparedTurnSignals,
   prepareTurnSignals,
 } from '$lib/services/orchestrator/agent-hook-signals';
-import { onSessionExit } from '$lib/stores/terminal';
+import { onSessionExit, writeToSession } from '$lib/stores/terminal';
+import { deliverDeepSeekTask, isDeepSeekWorkerSession } from '$lib/services/deepseek-harness';
 import { getAgentProviderLaunchOptions } from '$lib/services/agent-provider-catalogue';
 import type { ChatAccessMode, ChatReasoningEffort } from '$lib/types/chat';
 
@@ -33,6 +34,13 @@ export interface LeaseOrchestratorTerminalArgs {
   accessMode?: ChatAccessMode;
   /** Provider-native reasoning effort selected before the session starts. */
   reasoningEffort?: ChatReasoningEffort;
+  /**
+   * Signed-in account to launch under, when it should not be the user's current
+   * selection. Set by failover: the successor of an agent that ran out has to
+   * run somewhere with headroom left, and choosing that account for one task is
+   * not the same as the user changing which account they work as.
+   */
+  accountId?: string | null;
 }
 
 /**
@@ -103,6 +111,9 @@ export async function leaseOrchestratorTerminal(args: LeaseOrchestratorTerminalA
     activate,
     skipAutoBrief: true,
   };
+  // Only when failover picked one. Omitted — the ordinary case — the spawn
+  // resolves the user's selected account exactly as it always has.
+  if (args.accountId) spawnOptions.accountId = args.accountId;
   if (launchOptions.permissionArgs !== undefined) spawnOptions.permissionArgsOverride = launchOptions.permissionArgs;
   if (runtimeArgs) spawnOptions.runtimeArgs = runtimeArgs;
   const sessionId = await spawnAgentPreset(args.agentCommand, args.cwd, spawnOptions);
@@ -131,6 +142,8 @@ export async function sendOrchestratorGoalWhenReady(
   goal: string,
   opts?: SendOptions
 ): Promise<boolean> {
+  // A DeepSeek worker has no prompt to type into: the goal becomes its launch.
+  if (isDeepSeekWorkerSession(sessionId)) return deliverDeepSeekTask(sessionId, goal, writeToSession);
   return getAgentAdapter(sessionId).sendGoal(goal, opts);
 }
 export async function sendOrchestratorFollowUpWhenReady(
@@ -138,6 +151,9 @@ export async function sendOrchestratorFollowUpWhenReady(
   prompt: string,
   opts?: SendOptions
 ): Promise<boolean> {
+  // One task per launch; after it the pane is a bare shell that would run the
+  // follow-up as a command. The caller reports it as not delivered.
+  if (isDeepSeekWorkerSession(sessionId)) return false;
   return getAgentAdapter(sessionId).sendFollowUp(prompt, opts);
 }
 

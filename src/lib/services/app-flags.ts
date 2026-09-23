@@ -5,7 +5,7 @@ import { isTauriRuntime } from '$lib/utils/tauri';
  * one-time flags to a JSON file on disk. Unlike WebView `localStorage` (flushed
  * lazily, so recent writes can vanish on an abrupt shutdown), this is written
  * through immediately and survives — use it as the durable source of truth for
- * flags whose loss is user-visible, e.g. "onboarding completed".
+ * flags whose loss is user-visible (e.g. a first-run state).
  */
 
 export async function getAppFlag(key: string): Promise<string | null> {

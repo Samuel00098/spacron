@@ -33,6 +33,7 @@ import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
 import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
+import { DEEPSEEK_HARNESS_COMMAND, isDeepSeekHarness, openDeepSeekHarnessPanel } from '$lib/services/deepseek-harness';
 import {
   defaultAgentPlacement,
   expandSpawnPlan,
@@ -41,6 +42,11 @@ import {
 
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
+import AgentLaunchConfigFields from './AgentLaunchConfigFields';
+import { loadLiveAgentProviderModels, prewarmLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import { getAgentProviderLaunchOptions } from '$lib/services/agent-provider-catalogue';
+import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
+import type { ChatReasoningEffort } from '$lib/types/chat';
 import './AgentSpawnModal.css';
 
 export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
@@ -64,6 +70,19 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
   const [spawnCounts, setSpawnCounts] = useState<Map<string, number>>(new Map());
   const [spawnPlacements, setSpawnPlacements] = useState<Map<string, AgentPlacement>>(new Map());
+  const [launchConfigs, setLaunchConfigs] = useState<Map<string, { model: string | null; reasoningEffort: ChatReasoningEffort }>>(new Map());
+  const [modelsByCommand, setModelsByCommand] = useState<Map<string, AgentProviderModel[]>>(new Map());
+  const [loadingCommands, setLoadingCommands] = useState<Set<string>>(new Set());
+  const requestedModelCommands = useRef(new Set<string>());
+  // Unmount guard for the model probes below. It must NOT be per effect run:
+  // `selectedPresets` changes on every +/- click and preset refresh, and a
+  // per-run flag discarded a slow probe's result (Codex takes ~2s) while the
+  // request-once set stopped it being asked again, so the picker stuck on "Auto".
+  const modalMounted = useRef(true);
+  useEffect(() => {
+    modalMounted.current = true;
+    return () => { modalMounted.current = false; };
+  }, []);
   const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [gitRepositoryAvailable, setGitRepositoryAvailable] = useState<boolean | null>(null);
@@ -146,6 +165,12 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     });
   }, [project, $usage.lastFetchedAt, $usage.detected, $customAgents, $removedPresetAgents]);
 
+  // Probe every offered CLI as soon as the modal lists it, so the model
+  // picker is already filled by the time one is selected.
+  useEffect(() => {
+    prewarmLiveAgentProviderModels(spawnPresets.map((preset) => preset.command));
+  }, [spawnPresets]);
+
   const detectedByCommand = useMemo(() => {
     const map = new Map<string, DetectedAgent>();
     for (const det of $usage.detected) map.set(det.command, det);
@@ -163,6 +188,41 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const selectedPresets = useMemo(() => {
     return spawnPresets.filter((p) => (spawnCounts.get(p.command) ?? 0) > 0);
   }, [spawnPresets, spawnCounts]);
+
+  useEffect(() => {
+    const commands = selectedPresets.map((preset) => preset.command);
+    if (!commands.length) return;
+    for (const command of commands) {
+      if (requestedModelCommands.current.has(command)) continue;
+      requestedModelCommands.current.add(command);
+      setLoadingCommands((current) => new Set(current).add(command));
+      void loadLiveAgentProviderModels(command)
+        .then((models) => {
+          if (!modalMounted.current) return;
+          if (models.length) {
+            setModelsByCommand((current) => new Map(current).set(command, models));
+          } else {
+            // An empty answer is not a catalogue; let a later render retry.
+            requestedModelCommands.current.delete(command);
+          }
+        })
+        .catch(() => {
+          // Do not cache a failed fetch as an empty catalogue. The field
+          // offers only "CLI default" meanwhile, and a later modal open
+          // can retry the local CLI probe.
+          requestedModelCommands.current.delete(command);
+        })
+        .finally(() => {
+          if (modalMounted.current) {
+            setLoadingCommands((current) => {
+              const next = new Set(current);
+              next.delete(command);
+              return next;
+            });
+          }
+        });
+    }
+  }, [selectedPresets]);
 
   // Active agent shown in the configuration section
   const activePreset = useMemo(() => {
@@ -243,9 +303,40 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     });
   };
 
+  const launchConfigFor = (command: string) => launchConfigs.get(command) ?? { model: null, reasoningEffort: 'default' as ChatReasoningEffort };
+
+  const setLaunchModel = (command: string, model: string | null) => {
+    setLaunchConfigs((current) => {
+      const next = new Map(current);
+      next.set(command, { ...launchConfigFor(command), model });
+      return next;
+    });
+  };
+
+  const setLaunchReasoning = (command: string, reasoningEffort: ChatReasoningEffort) => {
+    setLaunchConfigs((current) => {
+      const next = new Map(current);
+      next.set(command, { ...launchConfigFor(command), reasoningEffort });
+      return next;
+    });
+  };
+
   const handleSpawnConfirm = useCallback(async () => {
-    const entries = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
-    if (!entries.length) return;
+    const selected = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
+    if (!selected.length) return;
+
+    // DeepSeek Harness has no terminal UI: its tile opens one web panel for the
+    // project (however many were picked) instead of spawning terminals.
+    const entries = selected.filter(([cmd]) => !isDeepSeekHarness(cmd));
+    if (entries.length < selected.length) {
+      // Same placement rule as every other agent below.
+      const placement = spawnPlacements.get(DEEPSEEK_HARNESS_COMMAND) ?? defaultPlacement;
+      void openDeepSeekHarnessPanel({ isolated: placement === 'worktree' && gitRepositoryAvailable === true });
+    }
+    if (!entries.length) {
+      onclose();
+      return;
+    }
 
     const plan = expandSpawnPlan(
       entries.map(([cmd, count]) => ({
@@ -284,9 +375,16 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             })
           : null;
 
+        const launchConfig = launchConfigFor(cmd);
+        const launchOptions = getAgentProviderLaunchOptions(cmd, {
+          model: launchConfig.model,
+          reasoningEffort: launchConfig.reasoningEffort,
+        });
+
         const id = await spawnAgentPreset(cmd, worktree?.path ?? cwd, {
           isDev,
           projectId,
+          runtimeArgs: launchOptions.runtimeArgs || undefined,
           onSessionCreated: worktree ? (id) => setSessionWorktree(id, worktree) : undefined,
         });
         if (id !== null) {
@@ -328,7 +426,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
       undefined,
       true
     );
-  }, [spawnCounts, spawnPlacements, spawnPresets, defaultPlacement, gitRepositoryAvailable, project, isDev, onclose]);
+  }, [spawnCounts, spawnPlacements, spawnPresets, launchConfigs, defaultPlacement, gitRepositoryAvailable, project, isDev, onclose]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && totalSpawnCount > 0) {
@@ -382,7 +480,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
             </span>
             <div className="asm-title-text">
               <span className="asm-title">Spawn Agents</span>
-              <span className="asm-subtitle">Choose agents, set instance counts under each, and configure workspace.</span>
+              <span className="asm-subtitle">Choose agents, counts, local CLI model, reasoning, and workspace.</span>
             </div>
           </div>
           <button className="asm-close-btn" onClick={onclose} aria-label="Close dialog">
@@ -656,6 +754,17 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                 </button>
               </div>
             </div>
+
+            <AgentLaunchConfigFields
+              command={activePreset.command}
+              models={modelsByCommand.get(activePreset.command) ?? []}
+              loading={loadingCommands.has(activePreset.command)}
+              model={launchConfigFor(activePreset.command).model}
+              reasoningEffort={launchConfigFor(activePreset.command).reasoningEffort}
+              onModelChange={(model) => setLaunchModel(activePreset.command, model)}
+              onReasoningChange={(reasoningEffort) => setLaunchReasoning(activePreset.command, reasoningEffort)}
+              boundarySelector=".asm-card"
+            />
           </div>
         )}
 

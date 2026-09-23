@@ -2367,6 +2367,55 @@ pub struct StageWorktreeResult {
 /// The trade-off is that the branch is not recorded as merged. That costs nothing
 /// here: the user writes the real commit in Source Control, and worktree cleanup
 /// already force-deletes the branch.
+/// What a freeze-before-handover snapshot did.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorktreeResult {
+    /// True when there was uncommitted work and it was committed.
+    pub committed: bool,
+    /// The branch tip after the snapshot — what the successor inherits.
+    pub head: String,
+}
+
+/// Commit whatever an agent left uncommitted in its worktree, and stop there.
+///
+/// This is the freeze step of a handover: an agent that is about to be stopped
+/// mid-feature must not leave edits floating in a checkout its successor is
+/// then told to continue from. It is deliberately **not**
+/// [`workspace_git_stage_worktree`]: that one goes on to apply the delta into
+/// the user's main checkout, which is the auto-staging behaviour and is off by
+/// default. Freezing work is not a reason to push it past the review wall, so
+/// this touches the worktree's own branch and nothing else.
+#[tauri::command(async)]
+pub fn workspace_git_snapshot_worktree(
+    project_id: String,
+    worktree_path: String,
+    state: State<AppState>,
+) -> Result<SnapshotWorktreeResult, String> {
+    check_git_available().map_err(|e| format!("Git not available: {e}"))?;
+
+    let projects = state.workspace_manager.list_projects();
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+    let root_path = &project.root_path;
+
+    let cleaned = crate::commands::clean_path_buf(PathBuf::from(&worktree_path));
+    let in_managed_area = is_under(&cleaned, &worktree_area(root_path))
+        || legacy_worktree_area(root_path).is_some_and(|area| is_under(&cleaned, &area));
+    if !in_managed_area {
+        return Err("Refusing to snapshot a path outside the managed worktree area.".to_string());
+    }
+    if !cleaned.join(".git").exists() {
+        return Err("Not a git worktree.".to_string());
+    }
+
+    let committed = snapshot_worktree(&cleaned)?;
+    let head = git_capture(&cleaned, &["rev-parse", "HEAD"]).unwrap_or_default();
+    Ok(SnapshotWorktreeResult { committed, head })
+}
+
 #[tauri::command(async)]
 pub fn workspace_git_stage_worktree(
     project_id: String,

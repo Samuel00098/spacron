@@ -15,8 +15,11 @@ Traps, each one paid for once:
   cannot run. Resolve the native binary under the platform package's
   `vendor/<triple>/bin/` the way the package's own `bin/codex.js` does.
 - **A plain start costs ~11s**, nearly all of it the user's hooks, apps,
-  plugins and MCP servers. `--disable hooks --disable apps --disable plugins
-  -c mcp_servers={}` brings a whole turn to ~7s.
+  plugins and MCP servers. With `--disable hooks --disable apps --disable
+  plugins -c mcp_servers={}` and the native binary, a start measured 0.4–1s
+  (2026-09-22); the rest of a ~5s turn is the model. The server is kept warm
+  between requests (`WARM` in chatgpt.rs), so only the first request, one after
+  a Stop, or one after 10 idle minutes pays the start.
 - **Rust's argument quoting is not `cmd.exe`'s.** `-c web_search="disabled"`
   arrives escaped and kills the server at startup; pass unquoted values.
 - Codex's stderr is the only place startup failures are explained, so capture

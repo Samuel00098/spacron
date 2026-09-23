@@ -1,23 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
 import {
   recentWorkspaces,
   renameProject,
-  renameWorkspace,
   reorderRecentWorkspaces,
   reorderWorkspaceProject,
   openWorkspace,
   switchToProject,
   deleteCollection,
   removeProjectFromCollection,
-  moveProjectToWorkspace,
-  moveProjectToStandalone,
-  addProjectToWorkspace,
-  openProject,
-  createNewWorkspace,
-  newFolderPromptOpen,
-  cloneRepoPromptOpen,
   projectOpenRooms,
   isProjectSwitching,
 } from '$lib/stores/workspace';
@@ -36,8 +28,8 @@ import {
 import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import {
   chatThreadState,
+  closeChatThread,
   createChatThread,
-  deleteChatThread,
   selectChatThread,
   toggleChatThreadPinned,
   type ChatThread,
@@ -46,6 +38,8 @@ import {
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
 import { requestRoomControl } from '$lib/stores/layoutControl';
+import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
+import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import './ProjectHUD.css';
 
 function getFilename(path: string): string {
@@ -54,11 +48,9 @@ function getFilename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-const COLLAPSED_WORKSPACES_KEY = 'spacron.hud.collapsedWorkspaces';
 const EXPANDED_PROJECTS_KEY = 'spacron.hud.expandedProjects';
 const COLLAPSED_SECTIONS_KEY = 'spacron.hud.collapsedSections';
 const PROJECT_SORT_KEY = 'spacron.hud.projectSort';
-const WORKSPACE_SORT_KEY = 'spacron.hud.workspaceSort';
 const DOUBLE_TAP_MS = 400;
 
 export type SortMode = 'custom' | 'az' | 'za' | 'recent' | 'time';
@@ -92,21 +84,77 @@ function sortItems<T extends { name: string; last_opened?: string; id?: string; 
   return copy;
 }
 
-const ROOM_LABELS: Record<string, string> = {
+// A room's mark, at the 12px the Running rows give it. The paths are copied from
+// AppShell's `roomIcon`, so a tool reads as the same mark in the tree as in its
+// own room header.
+function Glyph({ children }: { children: ReactNode }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {children}
+    </svg>
+  );
+}
+
+const ROOM_GLYPHS: Record<string, ReactNode> = {
+  terminal: (
+    <Glyph>
+      <rect x="2" y="3" width="20" height="18" rx="3" />
+      <polyline points="8,9 4,12 8,15" />
+      <line x1="12" y1="15" x2="20" y2="15" />
+    </Glyph>
+  ),
+  editor: (
+    <Glyph>
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </Glyph>
+  ),
+  preview: (
+    <Glyph>
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </Glyph>
+  ),
+  tasks: (
+    <Glyph>
+      <rect x="3" y="3" width="5" height="18" rx="1" />
+      <rect x="10" y="3" width="5" height="12" rx="1" />
+      <rect x="17" y="3" width="5" height="8" rx="1" />
+    </Glyph>
+  ),
+  sketch: (
+    <Glyph>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" />
+    </Glyph>
+  ),
+};
+
+// Anything the room list can carry that has no glyph of its own still gets a row
+// (a bare panel) rather than vanishing from the list.
+const DEFAULT_ROOM_GLYPH = (
+  <Glyph>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+  </Glyph>
+);
+
+// Rooms with a richer row of their own above the generic ones: preview says what
+// state it is in, DeepSeek shows its assistant name and whether it is isolated.
+const ROOMS_WITH_OWN_ROW = new Set(['preview', 'editor', 'deepseek']);
+
+const TOOL_ROW_LABELS: Record<string, string> = {
   terminal: 'Terminal',
-  editor: 'Editor',
-  preview: 'Preview',
-  review: 'Review',
   tasks: 'Tasks',
   sketch: 'Sketch',
 };
 
 interface ProjectItem {
+  // Id of the recents entry that stores this project. It is the handle every
+  // store call needs; the sidebar itself only ever shows a flat project list.
   workspaceId: string;
   name: string;
   path: string;
   isActive: boolean;
-  isInsideWorkspace?: boolean;
   last_opened?: string;
   id?: string;
 }
@@ -167,15 +215,11 @@ export default function ProjectHUD() {
   const projectsMap = useWorkspaceStore((s) => s.projects);
 
   const [search, setSearch] = useState('');
-  const [showNewWs, setShowNewWs] = useState(false);
-  const [newWsName, setNewWsName] = useState('');
+  const [projectSearchOpen, setProjectSearchOpen] = useState(false);
   const [activeMenuKey, setActiveMenuKey] = useState<string | null>(null);
-  const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
   const [renamingProjectPath, setRenamingProjectPath] = useState<string | null>(null);
   const [renamingProjectName, setRenamingProjectName] = useState('');
-  const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
-  const [renamingWorkspaceName, setRenamingWorkspaceName] = useState('');
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
     try {
@@ -194,36 +238,12 @@ export default function ProjectHUD() {
     return 'custom';
   });
 
-  const [workspaceSort, setWorkspaceSort] = useState<SortMode>(() => {
-    try {
-      const raw = localStorage.getItem(WORKSPACE_SORT_KEY);
-      if (raw === 'az' || raw === 'za' || raw === 'recent' || raw === 'time' || raw === 'custom') return raw;
-    } catch {}
-    return 'custom';
-  });
-
   function changeProjectSort(mode: SortMode) {
     setProjectSort(mode);
     try {
       localStorage.setItem(PROJECT_SORT_KEY, mode);
     } catch {}
   }
-
-  function changeWorkspaceSort(mode: SortMode) {
-    setWorkspaceSort(mode);
-    try {
-      localStorage.setItem(WORKSPACE_SORT_KEY, mode);
-    } catch {}
-  }
-
-  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem(COLLAPSED_WORKSPACES_KEY);
-      return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
-    } catch {
-      return new Set<string>();
-    }
-  });
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
     try {
@@ -235,14 +255,13 @@ export default function ProjectHUD() {
   });
 
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const newWsInputRef = useRef<HTMLInputElement | null>(null);
   const projectRenameInputRef = useRef<HTMLInputElement | null>(null);
-  const workspaceRenameInputRef = useRef<HTMLInputElement | null>(null);
   const lastCardClickRef = useRef<{ path: string; at: number }>({ path: '', at: 0 });
 
   const crossProjectSessions = useStore(allProjectSessions);
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
+  const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allChatThreads = useStore(chatThreadState);
   const currentInteractionMode = useStore(interactionMode);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
@@ -265,7 +284,7 @@ export default function ProjectHUD() {
   }, [crossProjectSessions]);
 
   // The orchestrator store is live for projects visited in this session. Read a
-  // lightweight history for the other projects as well, so a workspace switch
+  // lightweight history for the other projects as well, so a project switch
   // does not make their completed work disappear from the project tree.
   useEffect(() => {
     let cancelled = false;
@@ -313,57 +332,52 @@ export default function ProjectHUD() {
     return projectsMap.get(activeProjId)?.root_path ?? null;
   }, [activeProjId, projectsMap]);
 
-  // Distinguish between Standalone Projects and Workspace Groups
-  // A Workspace is either explicitly marked with is_workspace: true, or has multiple project paths
-  const { standaloneProjects, workspaceGroups } = useMemo(() => {
-    const standalones: ProjectItem[] = [];
-    const groups: typeof rawWorkspaces = [];
+  // One flat project list. A recents entry may still hold more than one path
+  // (older saved groups do), so every path it carries becomes its own project
+  // row rather than a folder the user has to open first.
+  const projectItems = useMemo(() => {
+    const items: ProjectItem[] = [];
 
     for (const ws of rawWorkspaces) {
-      const isGroup = ws.is_workspace || (ws.project_paths && ws.project_paths.length > 1);
-      if (isGroup) {
-        groups.push(ws);
-      } else {
-        const pPath = ws.project_paths?.[0] || '';
-        standalones.push({
+      const paths = ws.project_paths ?? [];
+      if (paths.length === 0) {
+        items.push({
           workspaceId: ws.id,
-          name: pPath ? (ws.name || getFilename(pPath)) : ws.name,
-          path: pPath,
-          isActive: activeWsId === ws.id && (activeProjPath === pPath || !activeProjPath),
-          isInsideWorkspace: false,
+          name: ws.name,
+          path: '',
+          isActive: activeWsId === ws.id && !activeProjPath,
+          last_opened: ws.last_opened,
+          id: ws.id,
+        });
+        continue;
+      }
+      for (const path of paths) {
+        items.push({
+          workspaceId: ws.id,
+          name: paths.length > 1 ? getFilename(path) : (ws.name || getFilename(path)),
+          path,
+          isActive:
+            activeWsId === ws.id && (activeProjPath === path || (!activeProjPath && paths.length === 1)),
           last_opened: ws.last_opened,
           id: ws.id,
         });
       }
     }
-    return { standaloneProjects: standalones, workspaceGroups: groups };
+    return items;
   }, [rawWorkspaces, activeWsId, activeProjPath]);
 
-  // Filtered and sorted lists
+  // Filtered and sorted list
   const query = search.toLowerCase().trim();
 
-  const filteredStandalones = useMemo(() => {
-    let list = standaloneProjects;
+  const filteredProjects = useMemo(() => {
+    let list = projectItems;
     if (query) {
       list = list.filter(
         (p) => p.name.toLowerCase().includes(query) || p.path.toLowerCase().includes(query)
       );
     }
     return sortItems(list, projectSort);
-  }, [standaloneProjects, query, projectSort]);
-
-  const filteredWorkspaces = useMemo(() => {
-    let list = workspaceGroups;
-    if (query) {
-      list = list.filter((ws) => {
-        if (ws.name.toLowerCase().includes(query)) return true;
-        return (ws.project_paths || []).some((p) =>
-          getFilename(p).toLowerCase().includes(query) || p.toLowerCase().includes(query)
-        );
-      });
-    }
-    return sortItems(list, workspaceSort);
-  }, [workspaceGroups, query, workspaceSort]);
+  }, [projectItems, query, projectSort]);
 
   // Popovers stay open only while the user is interacting with that popover.
   useEffect(() => {
@@ -372,13 +386,11 @@ export default function ProjectHUD() {
       const target = event.target;
       if (!(target instanceof Element)) {
         setActiveMenuKey(null);
-        setShowMoveSubmenu(false);
         setThreadMenuId(null);
         return;
       }
       if (!target.closest('.hud-menu-container')) {
         setActiveMenuKey(null);
-        setShowMoveSubmenu(false);
       }
       if (!target.closest('.project-thread-actions')) setThreadMenuId(null);
     };
@@ -388,7 +400,6 @@ export default function ProjectHUD() {
 
   function beginProjectRename(project: ProjectItem) {
     setActiveMenuKey(null);
-    setShowMoveSubmenu(false);
     setRenamingProjectPath(project.path);
     setRenamingProjectName(project.name);
     window.setTimeout(() => projectRenameInputRef.current?.select(), 0);
@@ -407,22 +418,6 @@ export default function ProjectHUD() {
     }
   }
 
-  function beginWorkspaceRename(ws: { id: string; name: string }) {
-    setActiveMenuKey(null);
-    setShowMoveSubmenu(false);
-    setRenamingWorkspaceId(ws.id);
-    setRenamingWorkspaceName(ws.name);
-    window.setTimeout(() => workspaceRenameInputRef.current?.select(), 0);
-  }
-
-  function saveWorkspaceRename(workspaceId: string, value: string) {
-    const name = value.trim();
-    setRenamingWorkspaceId(null);
-    setRenamingWorkspaceName('');
-    if (!name) return;
-    renameWorkspace(workspaceId, name);
-  }
-
   function toggleSectionCollapse(sectionKey: string) {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
@@ -435,67 +430,34 @@ export default function ProjectHUD() {
     });
   }
 
-  function handleMoveStandalone(p: ProjectItem, direction: 'up' | 'down') {
-    const currentIndex = standaloneProjects.findIndex((item) => item.workspaceId === p.workspaceId);
+  // Move a project one row up or down the flat list. Neighbours usually live in
+  // separate recents entries, so the reorder happens between entries; when two
+  // rows come from the same entry it has to happen inside that entry instead.
+  function handleMoveProject(p: ProjectItem, direction: 'up' | 'down') {
+    const currentIndex = projectItems.findIndex(
+      (item) => item.workspaceId === p.workspaceId && item.path === p.path,
+    );
     if (currentIndex < 0) return;
     const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= standaloneProjects.length) return;
+    if (targetIndex < 0 || targetIndex >= projectItems.length) return;
+    const target = projectItems[targetIndex];
 
-    const currentWsId = standaloneProjects[currentIndex].workspaceId;
-    const targetWsId = standaloneProjects[targetIndex].workspaceId;
+    if (target.workspaceId === p.workspaceId) {
+      const paths = rawWorkspaces.find((w) => w.id === p.workspaceId)?.project_paths ?? [];
+      const from = paths.indexOf(p.path);
+      const to = paths.indexOf(target.path);
+      if (from < 0 || to < 0) return;
+      changeProjectSort('custom');
+      reorderWorkspaceProject(p.workspaceId, from, to);
+      return;
+    }
 
-    const rawCurrentIdx = rawWorkspaces.findIndex((w) => w.id === currentWsId);
-    const rawTargetIdx = rawWorkspaces.findIndex((w) => w.id === targetWsId);
-
+    const rawCurrentIdx = rawWorkspaces.findIndex((w) => w.id === p.workspaceId);
+    const rawTargetIdx = rawWorkspaces.findIndex((w) => w.id === target.workspaceId);
     if (rawCurrentIdx >= 0 && rawTargetIdx >= 0) {
       changeProjectSort('custom');
       reorderRecentWorkspaces(rawCurrentIdx, rawTargetIdx);
     }
-  }
-
-  function handleMoveWorkspace(wsId: string, direction: 'up' | 'down') {
-    const currentIndex = workspaceGroups.findIndex((w) => w.id === wsId);
-    if (currentIndex < 0) return;
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= workspaceGroups.length) return;
-
-    const currentWsId = workspaceGroups[currentIndex].id;
-    const targetWsId = workspaceGroups[targetIndex].id;
-
-    const rawCurrentIdx = rawWorkspaces.findIndex((w) => w.id === currentWsId);
-    const rawTargetIdx = rawWorkspaces.findIndex((w) => w.id === targetWsId);
-
-    if (rawCurrentIdx >= 0 && rawTargetIdx >= 0) {
-      changeWorkspaceSort('custom');
-      reorderRecentWorkspaces(rawCurrentIdx, rawTargetIdx);
-    }
-  }
-
-  function handleMoveWorkspaceProject(wsId: string, projectPath: string, direction: 'up' | 'down') {
-    const ws = workspaceGroups.find((w) => w.id === wsId);
-    if (!ws || !ws.project_paths) return;
-    const currentIndex = ws.project_paths.indexOf(projectPath);
-    if (currentIndex < 0) return;
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= ws.project_paths.length) return;
-
-    changeProjectSort('custom');
-    reorderWorkspaceProject(wsId, currentIndex, targetIndex);
-  }
-
-  // Toggle workspace collapse
-  function toggleWorkspaceCollapse(id: string) {
-    setCollapsedWorkspaces((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      try {
-        localStorage.setItem(COLLAPSED_WORKSPACES_KEY, JSON.stringify(Array.from(next)));
-      } catch {
-        /* storage unavailable */
-      }
-      return next;
-    });
   }
 
   // Toggle project expand
@@ -531,28 +493,13 @@ export default function ProjectHUD() {
     }
   }
 
-  // Handle create new workspace
-  function handleCreateWorkspace(e: React.FormEvent) {
-    e.preventDefault();
-    const name = newWsName.trim();
-    if (!name) return;
-    createNewWorkspace(name);
-    setNewWsName('');
-    setShowNewWs(false);
-  }
-
-  // Handle delete workspace
-  async function handleDeleteWorkspace(wsId: string, wsName: string) {
-    if (confirm(`Delete workspace "${wsName}"? (Your project files on disk will not be deleted)`)) {
-      await deleteCollection(wsId);
-    }
-  }
-
-  // Handle remove standalone project from list
-  async function handleRemoveStandalone(wsId: string, projectName: string) {
-    if (confirm(`Remove "${projectName}" from project list? (Your files on disk will not be deleted)`)) {
-      await deleteCollection(wsId);
-    }
+  // Handle remove project from the list. A recents entry that holds several
+  // paths only loses this one; an entry that holds just this project goes away.
+  async function handleRemoveProject(p: ProjectItem) {
+    if (!confirm(`Remove "${p.name}" from project list? (Your files on disk will not be deleted)`)) return;
+    const paths = rawWorkspaces.find((w) => w.id === p.workspaceId)?.project_paths ?? [];
+    if (paths.length > 1) await removeProjectFromCollection(p.workspaceId, p.path);
+    else await deleteCollection(p.workspaceId);
   }
 
   // Room jump
@@ -627,11 +574,20 @@ export default function ProjectHUD() {
   }
 
   // Render a project card
-  function renderProjectCard(p: ProjectItem, parentWorkspaceId?: string) {
+  function renderProjectCard(p: ProjectItem) {
     const projectId = p.path ? projectIdByPath.get(p.path) ?? null : null;
     const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
     const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
     const previewIsRunning = projectRooms.includes('preview');
+    const editorIsRunning = projectRooms.includes('editor');
+    const deepSeekIsRunning = projectRooms.includes('deepseek');
+    // Rooms that already have a row of their own in the list — either a bespoke
+    // one above, or one per session below. The terminal room is the shells'
+    // container: while it holds a session, that session IS the row, and a
+    // separate "Terminal" entry beside it just reads as a second terminal. With
+    // the room open and empty, the room row is the only thing left to show.
+    const coveredRooms = new Set(ROOMS_WITH_OWN_ROW);
+    if (projectSessions.length > 0) coveredRooms.add('terminal');
     const allProjectTasks = projectId ? tasksByProject.get(projectId) ?? [] : [];
     const storedThreads = projectId ? allChatThreads.threadsByProject[projectId] ?? [] : [];
     const activeThreadId = projectId ? allChatThreads.activeThreadByProject[projectId] ?? null : null;
@@ -687,16 +643,13 @@ export default function ProjectHUD() {
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
     const isExpanded = p.path ? expandedProjects.has(p.path) : false;
-    const parentWs = parentWorkspaceId ? workspaceGroups.find((w) => w.id === parentWorkspaceId) : null;
-    const projIndex = parentWs?.project_paths ? parentWs.project_paths.indexOf(p.path) : -1;
-    const standaloneIndex = !parentWorkspaceId ? standaloneProjects.findIndex((item) => item.workspaceId === p.workspaceId) : -1;
+    const itemIndex = projectItems.findIndex(
+      (item) => item.workspaceId === p.workspaceId && item.path === p.path,
+    );
+    const canMoveUp = itemIndex > 0;
+    const canMoveDown = itemIndex >= 0 && itemIndex < projectItems.length - 1;
 
-    const canMoveUp = parentWorkspaceId ? projIndex > 0 : standaloneIndex > 0;
-    const canMoveDown = parentWorkspaceId
-      ? parentWs?.project_paths != null && projIndex >= 0 && projIndex < parentWs.project_paths.length - 1
-      : standaloneIndex >= 0 && standaloneIndex < standaloneProjects.length - 1;
-
-    const projectMenuKey = `proj-menu:${parentWorkspaceId ?? 'root'}:${p.path}`;
+    const projectMenuKey = `proj-menu:${p.workspaceId}:${p.path}`;
     const showOptionsMenu = activeMenuKey === projectMenuKey;
 
     return (
@@ -778,10 +731,7 @@ export default function ProjectHUD() {
             <button
               type="button"
               className="hud-card-action-btn hud-options-trigger"
-              onClick={() => {
-                setShowMoveSubmenu(false);
-                setActiveMenuKey(showOptionsMenu ? null : projectMenuKey);
-              }}
+              onClick={() => setActiveMenuKey(showOptionsMenu ? null : projectMenuKey)}
               title="Project actions"
               aria-label={`Actions for ${p.name}`}
               aria-expanded={showOptionsMenu}
@@ -795,161 +745,75 @@ export default function ProjectHUD() {
 
             {showOptionsMenu && (
               <div className="hud-options-menu" role="menu">
-                {showMoveSubmenu ? (
-                  <div className="hud-submenu">
-                    <div className="hud-submenu-header">
-                      <button
-                        type="button"
-                        className="hud-submenu-back-btn"
-                        onClick={() => setShowMoveSubmenu(false)}
-                        title="Back to options"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="15 18 9 12 15 6" />
-                        </svg>
-                        <span>Back</span>
-                      </button>
-                      <span className="hud-submenu-title">Move to</span>
-                    </div>
-                    {workspaceGroups
-                      .filter((ws) => ws.id !== parentWorkspaceId)
-                      .map((ws) => (
-                        <button
-                          key={ws.id}
-                          type="button"
-                          className="hud-options-menu-item"
-                          onClick={() => {
-                            moveProjectToWorkspace(p.path, ws.id);
-                            setActiveMenuKey(null);
-                            setShowMoveSubmenu(false);
-                          }}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                          </svg>
-                          <span>{ws.name}</span>
-                        </button>
-                      ))}
+                <button
+                  type="button"
+                  className="hud-options-menu-item"
+                  role="menuitem"
+                  disabled={!canMoveUp}
+                  onClick={() => {
+                    handleMoveProject(p, 'up');
+                    setActiveMenuKey(null);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="19" x2="12" y2="5" />
+                    <polyline points="5 12 12 5 19 12" />
+                  </svg>
+                  <span>Move Up</span>
+                </button>
 
-                    {parentWorkspaceId && (
-                      <button
-                        type="button"
-                        className="hud-options-menu-item"
-                        onClick={() => {
-                          moveProjectToStandalone(p.path, parentWorkspaceId);
-                          setActiveMenuKey(null);
-                          setShowMoveSubmenu(false);
-                        }}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-                        </svg>
-                        <span>Move to Standalone</span>
-                      </button>
-                    )}
+                <button
+                  type="button"
+                  className="hud-options-menu-item"
+                  role="menuitem"
+                  disabled={!canMoveDown}
+                  onClick={() => {
+                    handleMoveProject(p, 'down');
+                    setActiveMenuKey(null);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <polyline points="19 12 12 19 5 12" />
+                  </svg>
+                  <span>Move Down</span>
+                </button>
 
-                    {workspaceGroups.length === 0 && !parentWorkspaceId && (
-                      <div className="hud-options-menu-empty">No workspaces created yet</div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="hud-options-menu-item"
-                      role="menuitem"
-                      disabled={!canMoveUp}
-                      onClick={() => {
-                        if (parentWorkspaceId) {
-                          handleMoveWorkspaceProject(parentWorkspaceId, p.path, 'up');
-                        } else {
-                          handleMoveStandalone(p, 'up');
-                        }
-                        setActiveMenuKey(null);
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="12" y1="19" x2="12" y2="5" />
-                        <polyline points="5 12 12 5 19 12" />
-                      </svg>
-                      <span>Move Up</span>
-                    </button>
+                <div className="hud-options-menu-divider" />
 
-                    <button
-                      type="button"
-                      className="hud-options-menu-item"
-                      role="menuitem"
-                      disabled={!canMoveDown}
-                      onClick={() => {
-                        if (parentWorkspaceId) {
-                          handleMoveWorkspaceProject(parentWorkspaceId, p.path, 'down');
-                        } else {
-                          handleMoveStandalone(p, 'down');
-                        }
-                        setActiveMenuKey(null);
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="12" y1="5" x2="12" y2="19" />
-                        <polyline points="19 12 12 19 5 12" />
-                      </svg>
-                      <span>Move Down</span>
-                    </button>
+                <button
+                  type="button"
+                  className="hud-options-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setActiveMenuKey(null);
+                    beginProjectRename(p);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
+                  </svg>
+                  <span>Rename Project</span>
+                </button>
 
-                    <div className="hud-options-menu-divider" />
+                <div className="hud-options-menu-divider" />
 
-                    <button
-                      type="button"
-                      className="hud-options-menu-item"
-                      role="menuitem"
-                      onClick={() => setShowMoveSubmenu(true)}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-                        <path d="m10 13 2 2 2-2M12 15v-5" />
-                      </svg>
-                      <span>Move to Workspace...</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="hud-options-menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        setActiveMenuKey(null);
-                        beginProjectRename(p);
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 20h9" />
-                        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
-                      </svg>
-                      <span>Rename Project</span>
-                    </button>
-
-                    <div className="hud-options-menu-divider" />
-
-                    <button
-                      type="button"
-                      className="hud-options-menu-item danger"
-                      role="menuitem"
-                      onClick={() => {
-                        setActiveMenuKey(null);
-                        if (parentWorkspaceId) {
-                          void removeProjectFromCollection(parentWorkspaceId, p.path);
-                        } else {
-                          void handleRemoveStandalone(p.workspaceId, p.name);
-                        }
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                      <span>{parentWorkspaceId ? 'Remove from Workspace' : 'Remove from Project List'}</span>
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  className="hud-options-menu-item danger"
+                  role="menuitem"
+                  onClick={() => {
+                    setActiveMenuKey(null);
+                    void handleRemoveProject(p);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  <span>Remove from Project List</span>
+                </button>
               </div>
             )}
           </div>
@@ -1050,7 +914,7 @@ export default function ProjectHUD() {
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     if (window.confirm(`Delete “${row.thread?.title ?? 'this thread'}”?`)) {
-                                      deleteChatThread(row.thread!.id);
+                                      closeChatThread(row.thread!.id);
                                     }
                                     setThreadMenuId(null);
                                   }}
@@ -1086,30 +950,88 @@ export default function ProjectHUD() {
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
             {currentInteractionMode === 'cli' && <>
-            {(projectSessions.length > 0 || previewIsRunning) && (
+            {(projectRooms.length > 0 || projectSessions.length > 0) && (
               <div className="project-contents-section">
-                <div className="project-contents-label">Running</div>
+                {/* Covers both senses: a panel that is open, and a process
+                    that is actually running inside one. */}
+                <div className="project-contents-label">Active</div>
                 {previewIsRunning && (
                   <button
                     type="button"
                     className="project-process-row"
                     onClick={() => openRoom(p.workspaceId, p.path, 'preview').catch(console.error)}
-                    title="Preview — running"
+                    title="Preview: running"
                   >
                     <span className="project-process-icon" aria-hidden="true">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="4" width="18" height="13" rx="2" />
-                        <path d="M8 21h8M12 17v4" />
-                      </svg>
+                      {ROOM_GLYPHS.preview}
                     </span>
                     <span className="project-process-name">Preview</span>
                     <span className="project-process-detail">active</span>
                   </button>
                 )}
+                {editorIsRunning && (
+                  <button
+                    type="button"
+                    className="project-process-row"
+                    onClick={() => openRoom(p.workspaceId, p.path, 'editor').catch(console.error)}
+                    title="Editor: open"
+                  >
+                    <span className="project-process-icon" aria-hidden="true">
+                      {ROOM_GLYPHS.editor}
+                    </span>
+                    <span className="project-process-name">Editor</span>
+                  </button>
+                )}
+                {deepSeekIsRunning && p.path && (() => {
+                  // Listed like an agent: its assistant name, the product beside it.
+                  const dsRoot = deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path);
+                  const isolated = dsRoot !== p.path;
+                  const name = deepSeekAgentName(dsRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
+                  return (
+                    <button
+                      type="button"
+                      className="project-process-row"
+                      onClick={() => openRoom(p.workspaceId, p.path, 'deepseek').catch(console.error)}
+                      title={`${name}: DeepSeek Harness, running`}
+                    >
+                      <span className="project-process-icon" aria-hidden="true">
+                        <AgentBrandMark command="dsh" name="DeepSeek Harness" />
+                      </span>
+                      <span className="project-process-name">{name}</span>
+                      <span className="project-process-detail">{isolated ? 'DeepSeek Harness · worktree' : 'DeepSeek Harness'}</span>
+                    </button>
+                  );
+                })()}
+                {/* Every other open room. The list is the project's one answer to
+                    "what is open here?" now that the Rooms chips are gone. */}
+                {projectRooms
+                  .filter((room) => !coveredRooms.has(room))
+                  .map((room) => (
+                    <button
+                      key={room}
+                      type="button"
+                      className="project-process-row"
+                      onClick={() => openRoom(p.workspaceId, p.path, room).catch(console.error)}
+                      title={`${TOOL_ROW_LABELS[room] ?? room}: open`}
+                    >
+                      <span className="project-process-icon" aria-hidden="true">
+                        {ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH}
+                      </span>
+                      <span className="project-process-name">{TOOL_ROW_LABELS[room] ?? room}</span>
+                    </button>
+                  ))}
                 {projectSessions.map((session) => {
                   const isAgent = isAgentSession(session);
                   const name = isAgent ? getSessionPromptTargetLabel(session, projectSessions) : session.title;
-                  const detail = getSessionPaneDisplayTitle(session, projectSessions);
+                  const task = getSessionPaneDisplayTitle(session, projectSessions);
+                  // An agent is listed like the DeepSeek row: its name, then what it
+                  // is. The task it is on moves to the hover text.
+                  const agentType = isAgent ? getAgentDisplayName(session.agentPreset) : null;
+                  const detail = agentType ?? task;
+                  const state = session.isExecuting ? 'working' : 'running';
+                  const hover = [name, agentType, task && task !== name ? task : null, state]
+                    .filter(Boolean)
+                    .join(' — ');
                   return (
                     <button
                       key={session.id}
@@ -1120,9 +1042,15 @@ export default function ProjectHUD() {
                           console.error
                         )
                       }
-                      title={session.isExecuting ? `${name} — working` : `${name} — running`}
+                      title={hover}
                     >
-                      <span className={`hud-status-dot${session.isExecuting ? ' working' : ''}`} aria-hidden="true" />
+                      <span className={`project-process-icon${session.isExecuting ? ' busy' : ''}`} aria-hidden="true">
+                        {isAgent ? (
+                          <AgentBrandMark command={session.agentPreset} name={name} />
+                        ) : (
+                          ROOM_GLYPHS.terminal
+                        )}
+                      </span>
                       <span className="project-process-name">{name}</span>
                       {detail && detail !== name && <span className="project-process-detail">{detail}</span>}
                     </button>
@@ -1131,24 +1059,6 @@ export default function ProjectHUD() {
               </div>
             )}
 
-            {projectRooms.length > 0 && (
-              <div className="project-contents-section">
-                <div className="project-contents-label">Rooms</div>
-                <div className="project-room-chips">
-                  {projectRooms.map((room) => (
-                    <button
-                      key={room}
-                      type="button"
-                      className="project-room-chip"
-                      onClick={() => openRoom(p.workspaceId, p.path, room).catch(console.error)}
-                      title={`Open ${ROOM_LABELS[room] ?? room}`}
-                    >
-                      {ROOM_LABELS[room] ?? room}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             </>}
           </div>
         )}
@@ -1158,475 +1068,8 @@ export default function ProjectHUD() {
 
   return (
     <div className="projects-sidebar-panel">
-      {/* Top Header Toolbar */}
-      <div className="projects-panel-header">
-        <span className="projects-panel-title">Projects</span>
-        <div className="projects-header-actions">
-          <button
-            type="button"
-            className="projects-header-btn"
-            onClick={() => void openProject()}
-            title="Open Project Folder... (Ctrl+O)"
-            aria-label="Open Project Folder"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="projects-header-btn"
-            onClick={() => newFolderPromptOpen.set(true)}
-            title="New Project Folder... (Ctrl+N)"
-            aria-label="New Project Folder"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              <line x1="12" y1="11" x2="12" y2="17" />
-              <line x1="9" y1="14" x2="15" y2="14" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="projects-header-btn"
-            onClick={() => {
-              setShowNewWs(true);
-              setTimeout(() => newWsInputRef.current?.focus(), 50);
-            }}
-            title="Create New Workspace..."
-            aria-label="Create New Workspace"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="7" />
-              <rect x="14" y="3" width="7" height="7" />
-              <rect x="14" y="14" width="7" height="7" />
-              <rect x="3" y="14" width="7" height="7" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="projects-header-btn"
-            onClick={() => cloneRepoPromptOpen.set(true)}
-            title="Clone Git Repository..."
-            aria-label="Clone Git Repository"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="18" cy="18" r="3" />
-              <circle cx="6" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 15V9a4 4 0 0 0-4-4H9" />
-              <line x1="6" y1="9" x2="6" y2="15" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Filter / Search Bar */}
-      <div className="projects-search-section">
-        <div className="projects-search-field">
-          <svg className="projects-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            ref={inputRef}
-            type="text"
-            className="projects-search-input"
-            placeholder="Filter projects & workspaces…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {search && (
-            <button
-              type="button"
-              className="projects-search-clear"
-              onClick={() => setSearch('')}
-              title="Clear search"
-              aria-label="Clear search"
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Inline New Workspace Form */}
-      {showNewWs && (
-        <form className="projects-new-ws-inline" onSubmit={handleCreateWorkspace}>
-          <input
-            ref={newWsInputRef}
-            type="text"
-            className="projects-inline-input"
-            placeholder="Workspace name…"
-            value={newWsName}
-            onChange={(e) => setNewWsName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && setShowNewWs(false)}
-          />
-          <button type="submit" className="projects-inline-btn primary" disabled={!newWsName.trim()}>
-            Create
-          </button>
-          <button type="button" className="projects-inline-btn" onClick={() => setShowNewWs(false)}>
-            Cancel
-          </button>
-        </form>
-      )}
-
       {/* Main Scrollable Body */}
       <div className="projects-panel-body scrollable">
-        {/* WORKSPACES SECTION */}
-        {(() => {
-          const isWorkspacesCollapsed = collapsedSections.has('workspaces');
-          const wsSortMenuKey = 'section-sort:workspaces';
-          const isWsSortMenuOpen = activeMenuKey === wsSortMenuKey;
-
-          return (
-            <div key="workspaces" className="projects-section-group">
-              <div
-                className="projects-section-header"
-                onClick={() => toggleSectionCollapse('workspaces')}
-                title={isWorkspacesCollapsed ? 'Expand Workspaces section' : 'Collapse Workspaces section'}
-              >
-                <div className="projects-section-header-left">
-                  <button
-                    type="button"
-                    className={`projects-section-chevron${isWorkspacesCollapsed ? ' collapsed' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleSectionCollapse('workspaces');
-                    }}
-                    aria-label={isWorkspacesCollapsed ? 'Expand Workspaces' : 'Collapse Workspaces'}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </button>
-                  <span className="projects-section-title">Workspaces</span>
-                </div>
-
-                <div className="projects-section-header-right" onClick={(e) => e.stopPropagation()}>
-                  {/* Sort button & popover */}
-                  <div className={`hud-menu-container${isWsSortMenuOpen ? ' has-active-menu' : ''}`} style={{ position: 'relative' }}>
-                    <button
-                      type="button"
-                      className={`projects-header-btn mini hud-options-trigger${workspaceSort !== 'custom' ? ' active' : ''}`}
-                      onClick={() => setActiveMenuKey(isWsSortMenuOpen ? null : wsSortMenuKey)}
-                      title={`Sort Workspaces (${workspaceSort === 'az' ? 'A to Z' : workspaceSort === 'za' ? 'Z to A' : workspaceSort === 'recent' ? 'Recent works' : workspaceSort === 'time' ? 'By timing' : 'Custom'})`}
-                      aria-label="Sort Workspaces"
-                      aria-expanded={isWsSortMenuOpen}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="4" y1="6" x2="20" y2="6" />
-                        <line x1="4" y1="12" x2="14" y2="12" />
-                        <line x1="4" y1="18" x2="8" y2="18" />
-                      </svg>
-                    </button>
-
-                    {isWsSortMenuOpen && (
-                      <div className="hud-options-menu" role="menu">
-                        <div className="hud-options-menu-header">Sort Workspaces</div>
-                        <button
-                          type="button"
-                          className={`hud-options-menu-item${workspaceSort === 'az' ? ' active' : ''}`}
-                          role="menuitem"
-                          onClick={() => {
-                            changeWorkspaceSort('az');
-                            setActiveMenuKey(null);
-                          }}
-                        >
-                          <span>A to Z</span>
-                          {workspaceSort === 'az' && (
-                            <span className="hud-sort-check">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          className={`hud-options-menu-item${workspaceSort === 'za' ? ' active' : ''}`}
-                          role="menuitem"
-                          onClick={() => {
-                            changeWorkspaceSort('za');
-                            setActiveMenuKey(null);
-                          }}
-                        >
-                          <span>Z to A</span>
-                          {workspaceSort === 'za' && (
-                            <span className="hud-sort-check">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          className={`hud-options-menu-item${workspaceSort === 'recent' ? ' active' : ''}`}
-                          role="menuitem"
-                          onClick={() => {
-                            changeWorkspaceSort('recent');
-                            setActiveMenuKey(null);
-                          }}
-                        >
-                          <span>Recent works</span>
-                          {workspaceSort === 'recent' && (
-                            <span className="hud-sort-check">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          className={`hud-options-menu-item${workspaceSort === 'time' ? ' active' : ''}`}
-                          role="menuitem"
-                          onClick={() => {
-                            changeWorkspaceSort('time');
-                            setActiveMenuKey(null);
-                          }}
-                        >
-                          <span>By timing</span>
-                          {workspaceSort === 'time' && (
-                            <span className="hud-sort-check">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Create Workspace button */}
-                  <button
-                    type="button"
-                    className="projects-header-btn mini"
-                    onClick={() => {
-                      setShowNewWs(true);
-                      setTimeout(() => newWsInputRef.current?.focus(), 50);
-                    }}
-                    title="Create Workspace"
-                    aria-label="Create Workspace"
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-              {!isWorkspacesCollapsed && (
-                <div className="projects-section-list">
-                  {filteredWorkspaces.map((ws) => {
-                    const isCollapsed = collapsedWorkspaces.has(ws.id);
-                    const paths = ws.project_paths || [];
-                    const wsProjects: ProjectItem[] = paths.map((p) => ({
-                      workspaceId: ws.id,
-                      name: getFilename(p),
-                      path: p,
-                      isActive: activeWsId === ws.id && activeProjPath === p,
-                      isInsideWorkspace: true,
-                    }));
-
-                    const wsIndex = workspaceGroups.findIndex((w) => w.id === ws.id);
-                    const canWsMoveUp = wsIndex > 0;
-                    const canWsMoveDown = wsIndex >= 0 && wsIndex < workspaceGroups.length - 1;
-                    const wsMenuKey = `ws-menu:${ws.id}`;
-                    const showWsMenu = activeMenuKey === wsMenuKey;
-
-                    return (
-                      <div key={ws.id} className="projects-workspace-card">
-                        <div
-                          className={`projects-workspace-header${activeWsId === ws.id ? ' active' : ''}`}
-                          onClick={() => {
-                            toggleWorkspaceCollapse(ws.id);
-                            if (activeWsId !== ws.id) void openWorkspace(ws.id);
-                          }}
-                          title={isCollapsed ? `Expand ${ws.name}` : `Collapse ${ws.name}`}
-                        >
-                          <button
-                            type="button"
-                            className={`projects-workspace-chevron${isCollapsed ? ' collapsed' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleWorkspaceCollapse(ws.id);
-                            }}
-                            aria-label={isCollapsed ? 'Expand workspace' : 'Collapse workspace'}
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                          </button>
-
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="projects-workspace-icon">
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                          </svg>
-
-                          {renamingWorkspaceId === ws.id ? (
-                            <input
-                              ref={workspaceRenameInputRef}
-                              className="projects-workspace-rename-input"
-                              value={renamingWorkspaceName}
-                              maxLength={255}
-                              aria-label={`Rename ${ws.name}`}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => setRenamingWorkspaceName(e.target.value)}
-                              onBlur={(e) => void saveWorkspaceRename(ws.id, e.currentTarget.value)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation();
-                                if (e.key === 'Enter') e.currentTarget.blur();
-                                if (e.key === 'Escape') {
-                                  setRenamingWorkspaceId(null);
-                                  setRenamingWorkspaceName('');
-                                }
-                              }}
-                            />
-                          ) : (
-                            <span className="projects-workspace-name" title={ws.name}>{ws.name}</span>
-                          )}
-
-                          <span className="projects-workspace-count">({paths.length})</span>
-
-                          <div className={`projects-workspace-actions hud-menu-container${showWsMenu ? ' has-active-menu' : ''}`} onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              className="hud-card-action-btn hud-options-trigger"
-                              onClick={() => setActiveMenuKey(showWsMenu ? null : wsMenuKey)}
-                              title="Workspace actions"
-                              aria-label={`Actions for ${ws.name}`}
-                              aria-expanded={showWsMenu}
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <circle cx="12" cy="5" r="2" />
-                                <circle cx="12" cy="12" r="2" />
-                                <circle cx="12" cy="19" r="2" />
-                              </svg>
-                            </button>
-
-                            {showWsMenu && (
-                              <div className="hud-options-menu" role="menu">
-                                <button
-                                  type="button"
-                                  className="hud-options-menu-item"
-                                  role="menuitem"
-                                  disabled={!canWsMoveUp}
-                                  onClick={() => {
-                                    handleMoveWorkspace(ws.id, 'up');
-                                    setActiveMenuKey(null);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <line x1="12" y1="19" x2="12" y2="5" />
-                                    <polyline points="5 12 12 5 19 12" />
-                                  </svg>
-                                  <span>Move Up</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="hud-options-menu-item"
-                                  role="menuitem"
-                                  disabled={!canWsMoveDown}
-                                  onClick={() => {
-                                    handleMoveWorkspace(ws.id, 'down');
-                                    setActiveMenuKey(null);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <line x1="12" y1="5" x2="12" y2="19" />
-                                    <polyline points="19 12 12 19 5 12" />
-                                  </svg>
-                                  <span>Move Down</span>
-                                </button>
-
-                                <div className="hud-options-menu-divider" />
-
-                                <button
-                                  type="button"
-                                  className="hud-options-menu-item"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setActiveMenuKey(null);
-                                    void addProjectToWorkspace(ws.id);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                    <line x1="12" y1="5" x2="12" y2="19" />
-                                    <line x1="5" y1="12" x2="19" y2="12" />
-                                  </svg>
-                                  <span>Add Project...</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="hud-options-menu-item"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setActiveMenuKey(null);
-                                    beginWorkspaceRename(ws);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M12 20h9" />
-                                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
-                                  </svg>
-                                  <span>Rename Workspace</span>
-                                </button>
-
-                                <div className="hud-options-menu-divider" />
-
-                                <button
-                                  type="button"
-                                  className="hud-options-menu-item danger"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setActiveMenuKey(null);
-                                    void handleDeleteWorkspace(ws.id, ws.name);
-                                  }}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <polyline points="3 6 5 6 21 6" />
-                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                                  </svg>
-                                  <span>Delete Workspace</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {!isCollapsed && (
-                          <div className="projects-workspace-body">
-                            {wsProjects.map((p) => renderProjectCard(p, ws.id))}
-                            {wsProjects.length === 0 && (
-                              <div className="projects-workspace-empty">
-                                <span>No projects yet. Click + to add a project.</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {filteredWorkspaces.length === 0 && !search && (
-                    <div className="projects-section-empty-hint">
-                      No workspaces. Create one to group related projects together.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
         {/* PROJECTS SECTION */}
         {(() => {
           const isProjectsCollapsed = collapsedSections.has('projects');
@@ -1641,6 +1084,28 @@ export default function ProjectHUD() {
                 title={isProjectsCollapsed ? 'Expand Projects section' : 'Collapse Projects section'}
               >
                 <div className="projects-section-header-left">
+                  <button
+                    type="button"
+                    className={`projects-search-toggle${projectSearchOpen || search ? ' active' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (projectSearchOpen) {
+                        setProjectSearchOpen(false);
+                        setSearch('');
+                      } else {
+                        if (isProjectsCollapsed) toggleSectionCollapse('projects');
+                        setProjectSearchOpen(true);
+                      }
+                    }}
+                    title={projectSearchOpen ? 'Close project search' : 'Search projects'}
+                    aria-label={projectSearchOpen ? 'Close project search' : 'Search projects'}
+                    aria-expanded={projectSearchOpen}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="11" cy="11" r="7" />
+                      <path d="m20 20-4-4" />
+                    </svg>
+                  </button>
                   <button
                     type="button"
                     className={`projects-section-chevron${isProjectsCollapsed ? ' collapsed' : ''}`}
@@ -1757,21 +1222,56 @@ export default function ProjectHUD() {
               </div>
 
               {!isProjectsCollapsed && (
-                <div className="projects-section-list">
-                  {filteredStandalones.map((p) => renderProjectCard(p))}
-                  {filteredStandalones.length === 0 && !search && (
-                    <div className="projects-section-empty-hint">
-                      No standalone projects. Open a folder to begin.
+                <>
+                  {projectSearchOpen && (
+                    <div className="projects-search-section">
+                      <div className="projects-search-field">
+                        <svg className="projects-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                          <circle cx="11" cy="11" r="8" />
+                          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        <input
+                          ref={inputRef}
+                          autoFocus
+                          type="text"
+                          className="projects-search-input"
+                          placeholder="Filter projects…"
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                        />
+                        {search && (
+                          <button
+                            type="button"
+                            className="projects-search-clear"
+                            onClick={() => setSearch('')}
+                            title="Clear search"
+                            aria-label="Clear search"
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
-                </div>
+                  <div className="projects-section-list">
+                    {filteredProjects.map((p) => renderProjectCard(p))}
+                    {filteredProjects.length === 0 && !search && (
+                      <div className="projects-section-empty-hint">
+                        No projects yet. Open a folder to begin.
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           );
         })()}
 
         {/* Global Empty Search State */}
-        {search && filteredStandalones.length === 0 && filteredWorkspaces.length === 0 && (
+        {search && filteredProjects.length === 0 && (
           <div className="projects-empty-state">
             <p className="projects-empty-title">No projects match "{search}"</p>
             <button type="button" className="projects-empty-action-btn" onClick={() => setSearch('')}>

@@ -1,22 +1,25 @@
-/* One usage window as a bar. Single line (label · bar · percent · reset) so a
-   stack of windows stays as tall as its header — the compact shape the usage
-   popup is meant to have. Carries no positioning of its own; it renders inside
-   whichever surface lists it. */
+/* One usage window as a labelled bar: label · percentage over track over reset.
+   Three stacked rows rather than one line, because the label and the reset both
+   want to truncate and a single line makes them fight the bar for the space.
+
+   Carries no positioning of its own; it renders inside whichever surface lists
+   it. It inherits the `usage` query container from `.usage-panel`, so the
+   narrow-rail steps below are asking the sidebar's width — not the window's. */
 
 .usage-meter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto;
-  gap: 5px 10px;
+  gap: 4px;
   min-width: 0;
 }
 
 .usage-meter-heading {
-  grid-column: 1 / -1;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .usage-meter-label {
@@ -29,6 +32,10 @@
   white-space: nowrap;
 }
 
+/* The percentage is stated as text as well as drawn, because the bar alone is
+   only comparable against itself — "how close am I?" is a number question, and
+   a 4px difference in fill does not answer it. It never truncates: the label
+   beside it gives way first. */
 .usage-meter-remaining {
   flex: none;
   font-size: 12px;
@@ -38,16 +45,15 @@
 }
 
 .usage-meter-track {
-  grid-column: 1 / -1;
   min-width: 28px;
-  height: 8px;
+  height: 6px;
   border-radius: 999px;
   overflow: hidden;
   /* The empty half of the bar is a recess, not a surface — it should read as
      "unspent", which is quieter than the panel it sits on. Quiet, not
      invisible: at 10% the track vanished against the frost and a low
      percentage looked like an empty row rather than a small number. */
-  background: color-mix(in srgb, var(--text-primary) 17%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
 .usage-meter-fill {
@@ -56,23 +62,28 @@
   border-radius: inherit;
   /* The fill has to out-contrast the track it sits in, or a 20% reading is
      indistinguishable from 0%. */
-  background: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
   transition: width var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .usage-meter-fill {
+    transition: none;
+  }
+}
+
 .usage-meter-reset {
-  grid-column: 1 / -1;
   font-size: 10.5px;
   color: var(--text-tertiary, var(--text-secondary));
   opacity: 0.8;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: none;
 }
 
-/* Severity is the one place colour is allowed in here. A normal window stays
-   monochrome on purpose: if every meter were tinted, the one that actually
+/* Severity is the one place colour is allowed in here. A normal window keeps
+   the accent fill on purpose: if every meter were tinted, the one that actually
    matters would not stand out. */
 .usage-meter[data-severity='normal'] .usage-meter-remaining {
   color: var(--success, #7fc7a2);
@@ -80,6 +91,7 @@
 
 .usage-meter[data-severity='warn'] .usage-meter-fill {
   background: var(--warning, #e2c08d);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warning, #e2c08d) 28%, transparent);
 }
 
 .usage-meter[data-severity='warn'] .usage-meter-remaining {
@@ -88,8 +100,39 @@
 
 .usage-meter[data-severity='critical'] .usage-meter-fill {
   background: var(--error, #c74e39);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--error, #c74e39) 32%, transparent);
 }
 
 .usage-meter[data-severity='critical'] .usage-meter-remaining {
   color: var(--error, #c74e39);
+}
+
+/* ── Narrow rail ─────────────────────────────────────────────────────────
+   Each part owns its own row, so nothing here has to be dropped to make the
+   rail's 180px minimum: the label truncates, the reset truncates, and the bar
+   and its percentage — the answer the meter exists to give — are never the
+   things that give way. Only the type steps down. */
+
+@container usage (max-width: 250px) {
+  .usage-meter {
+    gap: 3px;
+  }
+
+  .usage-meter-label {
+    font-size: 11px;
+  }
+
+  .usage-meter-reset {
+    font-size: 10px;
+  }
+}
+
+@container usage (max-width: 212px) {
+  .usage-meter-label {
+    font-size: 10.5px;
+  }
+
+  .usage-meter-remaining {
+    font-size: 11.5px;
+  }
 }

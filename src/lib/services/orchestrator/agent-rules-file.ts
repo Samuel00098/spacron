@@ -108,6 +108,11 @@ const RULES_FILE_AGENTS = new Set([
   // context to follow project-specific agent instructions" (user-level
   // `~/.vibe/AGENTS.md` and the project's AGENTS.md). Verified 2026-08-12.
   'vibe',
+  // DeepSeek Harness — its `dsh-agent-instructions` package (on in `dsh-base`)
+  // loads `AGENTS.md` and `CLAUDE.md` from the project root down to the cwd,
+  // deduplicating identical siblings. Verified 2026-09-22 against the README
+  // shipped in `@deepseek-ai/dsh-agent-instructions` 0.1.7-alpha.1.
+  'dsh',
   // Autohand — docs.autohand.ai has an "AGENTS.md Guide" dedicated to how the
   // CLI loads AGENTS.md for project context (verified 2026-08-12).
   'autohand',
@@ -258,6 +263,50 @@ const AGENT_ATTENTION_PHRASES: Record<string, string[]> = {
 export function agentAttentionPhrases(command: string | null | undefined): string[] {
   if (!command) return [];
   return AGENT_ATTENTION_PHRASES[agentExecutable(command)] ?? [];
+}
+
+/**
+ * Per-CLI phrases that mean "this account is out of usage", keyed by executable.
+ *
+ * Same honesty rule as the attention map above, applied harder. Each entry is
+ * refusal text that CLI really prints; a guess assembled from the vendor's name
+ * would either never fire or — far worse — fire on ordinary output and throw a
+ * half-built feature at another agent for no reason. CLIs with no distinctive
+ * refusal stay out of this map and rely on the universal `AGENT_LIMIT_PATTERN`.
+ *
+ * Note what is *not* here: nothing matches a bare "rate limit" or "quota",
+ * because agents discuss those while writing code about them. The narrowness is
+ * the point, and the meter corroboration in `watchLeasedAgentTurn` is the other
+ * half — neither signal ends a turn alone.
+ */
+const AGENT_LIMIT_PHRASES: Record<string, string[]> = {
+  claude: [
+    'approaching your usage limit',
+    'usage limit reached',
+    "you've reached your usage limit",
+    'your limit will reset at',
+  ],
+  codex: [
+    "you've hit your usage limit",
+    'usage limit reached',
+    'your limit resets',
+    'rate limit exceeded',
+  ],
+  gemini: ['quota exceeded', 'you have exceeded your current quota', 'resource_exhausted'],
+  opencode: ['usage limit reached', 'out of credits'],
+  droid: ['usage limit reached', 'out of credits'],
+  'cursor-agent': ['usage limit reached', 'you have run out of'],
+  cursor: ['usage limit reached', 'you have run out of'],
+};
+
+/**
+ * Extra limit phrases for a specific agent command, resolved via its
+ * executable. Empty for unknown CLIs, which fall back to the universal pattern.
+ * Never returns null so the caller can spread it unconditionally.
+ */
+export function agentLimitPhrases(command: string | null | undefined): string[] {
+  if (!command) return [];
+  return AGENT_LIMIT_PHRASES[agentExecutable(command)] ?? [];
 }
 
 /** What a detection run concluded, and on what basis. */

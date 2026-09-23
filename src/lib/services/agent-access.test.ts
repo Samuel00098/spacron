@@ -21,6 +21,7 @@ vi.mock('$lib/stores/settings', () => ({
     { id: 'lmstudio', label: 'LM Studio', local: true },
   ],
   getProviderBaseUrl,
+  providerSetupHint: (id: string) => `Add the ${id} API key in Settings → AI Connections.`,
 }));
 
 import { detectAgentAccess, getAgentAccessBlockedMessage } from './agent-access';
@@ -39,6 +40,7 @@ describe('detectAgentAccess', () => {
       ready: true,
       via: 'api-key',
       providerId: 'groq',
+      message: 'Groq API key is configured.',
     });
     expect(listProviderModels).not.toHaveBeenCalled();
   });
@@ -64,6 +66,21 @@ describe('detectAgentAccess', () => {
     });
   });
 
+  it('does not unlock Chat for a local catalogue containing only unsupported models', async () => {
+    listProviderModels.mockResolvedValue([{ id: 'unsupported', supported: false }]);
+    await expect(detectAgentAccess({ preferredProvider: 'ollama' })).resolves.toMatchObject({ ready: false });
+    expect(listProviderModels).toHaveBeenCalledWith('ollama', 'chat');
+  });
+
+  it('continues to a usable local provider after an unsupported catalogue', async () => {
+    listProviderModels.mockImplementation(async (provider: string) => (
+      provider === 'ollama'
+        ? [{ id: 'unsupported', supported: false }]
+        : [{ id: 'chat-model', supported: true }]
+    ));
+    await expect(detectAgentAccess()).resolves.toMatchObject({ ready: true, providerId: 'lmstudio' });
+  });
+
   it('does not unlock Chat through a different provider when Composer selected one', async () => {
     providerApiKeyExists.mockImplementation(async (provider: string) => provider === 'groq');
 
@@ -71,7 +88,9 @@ describe('detectAgentAccess', () => {
       ready: false,
       via: 'none',
       providerId: null,
-      message: 'OpenRouter is not connected. Add the OpenRouter API key in Settings, then retry.',
+      // The per-provider setup hint (a free Kilo account, a ChatGPT sign-in, a
+      // key) is what the message carries now — see `providerSetupHint`.
+      message: 'OpenRouter is not connected. Add the openrouter API key in Settings → AI Connections. Then retry.',
     });
     expect(providerApiKeyExists).toHaveBeenCalledTimes(1);
     expect(providerApiKeyExists).toHaveBeenCalledWith('openrouter', undefined);

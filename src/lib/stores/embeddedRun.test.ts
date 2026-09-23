@@ -146,7 +146,7 @@ describe('runEmbeddedCommand', () => {
     const result = await promise;
 
     expect(result.exitCode).toBe(1);
-    expect(showToast).toHaveBeenCalledWith('Sync failed (exit 1) — see terminal', 'error', 6000);
+    expect(showToast).toHaveBeenCalledWith('Sync failed (exit 1): see terminal', 'error', 6000);
     expect(realGet(embeddedRuns)['pi:Sync']?.status).toBe('error');
     expect(realGet(embeddedRuns)['pi:Sync']?.exitCode).toBe(1);
   });

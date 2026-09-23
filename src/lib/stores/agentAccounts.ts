@@ -16,6 +16,7 @@
 
 import { writable, get } from '$lib/stores/storeCompat';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import type { ProviderUsage } from '$lib/stores/usage';
 
 export interface WebSessionStatus {
   provider: string;
@@ -149,21 +150,79 @@ export async function removeAccount(provider: string, accountId: string): Promis
 }
 
 /**
- * The environment a launched agent needs to use its selected account.
+ * The environment a launched agent needs to use an account.
  *
  * Empty for the default account, and empty for every provider that doesn't do
  * account switching — so this is safe to merge unconditionally at spawn time,
  * which is what keeps the call site free of provider-specific branching.
+ *
+ * `accountId` is normally omitted, meaning "whichever account the user
+ * selected". Failover passes one: a successor launches under a *different*
+ * account from the one that ran out, and doing that must not move the user's
+ * global selection — the picker in Settings says who the user works as, and a
+ * handover is not the user changing their mind.
  */
-export async function accountEnvFor(provider: string): Promise<Record<string, string>> {
+export async function accountEnvFor(
+  provider: string,
+  accountId?: string | null
+): Promise<Record<string, string>> {
   if (!isTauriRuntime()) return {};
   try {
     const invoke = await invoker();
-    return await invoke<Record<string, string>>('usage_account_env', { provider });
+    return await invoke<Record<string, string>>('usage_account_env', {
+      provider,
+      accountId: accountId ?? null,
+    });
   } catch {
     // A launch must never be blocked by this. Falling back to no patch means
     // the agent uses its default account, which is the pre-existing behaviour.
     return {};
+  }
+}
+
+/**
+ * One account's own headroom, whether or not it is the selected one.
+ *
+ * The usage panel reads the selected account; this reads every account, which
+ * is a different question and only failover asks it. Two accounts on one
+ * billing plan share a limit, so a handover has to check the successor's
+ * headroom *before* launching into it — otherwise the hop lands in an immediate
+ * second stop.
+ */
+export interface AccountUsage {
+  provider: string;
+  accountId: string;
+  label: string;
+  active: boolean;
+  /**
+   * Whether this account resolves to a login of its own.
+   *
+   * False for a managed Claude account on macOS: the login Keychain holds one
+   * item per CLI, so relocating the config dir moves settings but not the
+   * login, and this account shares the default account's credential. Handing
+   * work to it would hand it back to the login that just ran out.
+   */
+  distinctLogin: boolean;
+  usage: ProviderUsage;
+}
+
+/**
+ * Headroom for every account of every account-capable CLI.
+ *
+ * Shares Rust's per-account freshness cache with the panel's own poll, so this
+ * costs no extra network traffic for whichever account is selected.
+ */
+export async function fetchAccountUsage(force = false): Promise<AccountUsage[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    const invoke = await invoker();
+    return await invoke<AccountUsage[]>('usage_fetch_accounts', { force });
+  } catch (err) {
+    // Same rule as `refreshAccounts`: a failed read is reported, never rendered
+    // as "you have no accounts". Failover treats an empty list as "nothing
+    // qualifies", which stops rather than hops — the safe direction.
+    accountsState.update((s) => ({ ...s, error: String(err) }));
+    return [];
   }
 }
 

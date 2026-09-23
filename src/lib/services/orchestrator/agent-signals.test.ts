@@ -4,8 +4,11 @@ import {
   countBellStream,
   createBellScanState,
   containsAttentionRequest,
+  containsLimitNotice,
   attentionReason,
+  limitReason,
 } from './agent-signals';
+import { agentLimitPhrases } from './agent-rules-file';
 
 /** Feed `text` through the streaming scanner in fixed-size chunks. */
 function countChunked(text: string, size: number): number {
@@ -139,5 +142,62 @@ describe('attentionReason', () => {
   it('drops OSC window-title sequences', () => {
     const raw = '\x1b]0;grok - Waiting for response... - Fix Rendering\x07';
     expect(attentionReason(raw)).toBe('Agent is waiting for your input.');
+  });
+});
+
+describe('containsLimitNotice', () => {
+  // The whole point of this matcher is that it is *narrower* than the attention
+  // one. A false attention match misreports a working agent as blocked; a false
+  // limit match throws a half-built feature at another agent for nothing.
+
+  it('recognises the refusals these CLIs actually print', () => {
+    expect(containsLimitNotice('You have reached your usage limit.')).toBe(true);
+    expect(containsLimitNotice('Usage limit reached. Your limit will reset at 5pm.')).toBe(true);
+    expect(containsLimitNotice("You've hit your weekly usage limit")).toBe(true);
+    expect(containsLimitNotice('You are out of credits.')).toBe(true);
+    expect(containsLimitNotice('Quota exceeded for this project', ['quota exceeded'])).toBe(true);
+  });
+
+  it('ignores an agent merely writing about rate limits', () => {
+    // This is the false positive that matters: agents write retry logic, read
+    // vendor docs, and name variables `rateLimit` all day.
+    expect(containsLimitNotice('Added a rateLimit guard to the fetch helper.')).toBe(false);
+    expect(containsLimitNotice('The API returns 429 when you send too fast.')).toBe(false);
+    expect(containsLimitNotice('function handleQuota(limit: number) {')).toBe(false);
+    expect(containsLimitNotice('I will now run the tests.')).toBe(false);
+  });
+
+  it('reads through the terminal escape codes a real tail is dense with', () => {
+    const raw =
+      '\x1b[10;64H\x1b[38;2;200;200;200m│ ' +
+      'You have reached your usage limit. Try again later.' +
+      '\x1b[39m│\x1b[0m';
+    expect(containsLimitNotice(raw)).toBe(true);
+    expect(limitReason(raw).toLowerCase()).toContain('usage limit');
+  });
+
+  it('quotes the CLI rather than inventing a sentence, when it can', () => {
+    const reason = limitReason('Usage limit reached. Your limit will reset at 5pm.');
+    expect(reason.toLowerCase()).toContain('usage limit reached');
+    expect(reason).not.toMatch(/\x1b/);
+  });
+
+  it('falls back to a plain statement when nothing quotable matched', () => {
+    expect(limitReason('')).toBe('The agent stopped on its usage limit.');
+  });
+});
+
+describe('agentLimitPhrases', () => {
+  it('resolves by executable, so a launcher prefix or a path does not lose them', () => {
+    expect(agentLimitPhrases('npx opencode --foo')).toEqual(agentLimitPhrases('opencode'));
+    expect(agentLimitPhrases('/usr/local/bin/claude')).toEqual(agentLimitPhrases('claude'));
+    expect(agentLimitPhrases('claude.cmd')).toEqual(agentLimitPhrases('claude'));
+  });
+
+  it('is empty for a CLI whose refusal text nobody has verified', () => {
+    // Deliberately absent rather than half-supported: a guessed phrase either
+    // never fires or fires on ordinary output, and the second is much worse.
+    expect(agentLimitPhrases('crush')).toEqual([]);
+    expect(agentLimitPhrases(null)).toEqual([]);
   });
 });

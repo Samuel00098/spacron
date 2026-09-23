@@ -25,6 +25,8 @@ const MAX_PROJECT_ENTRIES = 40;
 const MAX_PROMPT_LINES = 12;
 const MAX_ENTRY_CHARS = 240;
 const MAX_NEW_PER_TURN = 6;
+/** A lesson seen this often (or saved from a repeated instruction) is a firm rule. */
+export const FIRM_RULE_USES = 3;
 const GLOBAL_KEY = 'spacron_orchestrator_profile';
 
 export const globalOrchestratorProfile = writable<ProfileEntry[]>([]);
@@ -59,7 +61,7 @@ function mergeEntry(entries: ProfileEntry[], entry: ProfileEntry, cap: number): 
   const next = entries.map((existing) => {
     if (normalizeKey(existing.text) !== key) return existing;
     merged = true;
-    return { ...existing, text: entry.text, lastSeenAt: entry.lastSeenAt, uses: existing.uses + 1 };
+    return { ...existing, text: entry.text, lastSeenAt: entry.lastSeenAt, uses: existing.uses + entry.uses };
   });
   if (!merged) next.push(entry);
   return next.sort((a, b) => (b.lastSeenAt - a.lastSeenAt) || (b.uses - a.uses)).slice(0, cap);
@@ -98,14 +100,72 @@ async function flushProjectProfile(projectId: string, _rootPath?: string): Promi
   await writeProjectState(projectId, 'orchestrator-profile.json', JSON.stringify(entries, null, 2));
 }
 
+/** Forget one learned entry, wherever it lives. */
+export async function removeProfileEntry(projectId: string | null, id: string): Promise<void> {
+  const globals = get(globalOrchestratorProfile);
+  if (globals.some((entry) => entry.id === id)) {
+    globalOrchestratorProfile.set(globals.filter((entry) => entry.id !== id));
+    flushGlobalProfile();
+  }
+  if (projectId && (get(orchestratorProfile)[projectId] ?? []).some((entry) => entry.id === id)) {
+    orchestratorProfile.update((all) => ({ ...all, [projectId]: (all[projectId] ?? []).filter((entry) => entry.id !== id) }));
+    await flushProjectProfile(projectId).catch(() => {});
+  }
+}
+
+/** Forget everything learned about the user, and about the project when one is given. */
+export async function clearLearnedProfile(projectId: string | null): Promise<void> {
+  globalOrchestratorProfile.set([]);
+  flushGlobalProfile();
+  if (projectId) {
+    orchestratorProfile.update((all) => ({ ...all, [projectId]: [] }));
+    await flushProjectProfile(projectId).catch(() => {});
+  }
+}
+
+// ─── Repeated instructions ──────────────────────────────────────────────────
+
+const FILLER_WORDS = new Set([
+  'the', 'and', 'for', 'you', 'your', 'that', 'this', 'with', 'from', 'can', 'please', 'just', 'again',
+  'are', 'was', 'have', 'has', 'not', 'but', 'all', 'any', 'its', 'it\'s', 'our', 'them', 'they', 'what',
+  'when', 'then', 'there', 'here', 'into', 'out', 'about', 'like', 'want', 'need', 'make', 'sure', 'okay',
+]);
+
+function contentWords(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[^a-z0-9']+/).filter((word) => word.length >= 3 && !FILLER_WORDS.has(word)));
+}
+
+/**
+ * The earlier message the user is repeating, if any. Saying the same thing
+ * twice means the assistant did not follow it the first time, which is the
+ * strongest signal there is for something worth remembering. Word overlap, so
+ * "always run the tests after an edit" matches "run tests after every edit".
+ */
+export function findRepeatedInstruction(message: string, earlierMessages: readonly string[]): string | null {
+  const current = contentWords(message);
+  if (current.size < 3) return null;
+  const earlier = [...earlierMessages];
+  if (earlier.length && earlier[earlier.length - 1].trim() === message.trim()) earlier.pop();
+  for (const previous of earlier.reverse()) {
+    const words = contentWords(previous);
+    if (words.size < 3) continue;
+    let shared = 0;
+    for (const word of current) if (words.has(word)) shared += 1;
+    if (shared / (current.size + words.size - shared) >= 0.5) return previous;
+  }
+  return null;
+}
+
 // ─── Read (for the brain) ───────────────────────────────────────────────────
 
 /** Compact profile lines (global + project), recency/uses-sorted, for the prompt. */
 export function getProfileLines(projectId: string): string[] {
   const globals = get(globalOrchestratorProfile).map((e) => ({ ...e, label: 'you' }));
   const projectEntries = (get(orchestratorProfile)[projectId] ?? []).map((e) => ({ ...e, label: 'this project' }));
+  // Rules the user repeated (uses >= 3) come first so the prompt cap never drops them.
+  const firm = (entry: ProfileEntry) => (entry.uses >= FIRM_RULE_USES ? 1 : 0);
   return [...globals, ...projectEntries]
-    .sort((a, b) => (b.lastSeenAt - a.lastSeenAt) || (b.uses - a.uses))
+    .sort((a, b) => (firm(b) - firm(a)) || (b.lastSeenAt - a.lastSeenAt) || (b.uses - a.uses))
     .slice(0, MAX_PROMPT_LINES)
     .map((e) => `[${e.label}] ${e.text}`);
 }
@@ -153,6 +213,8 @@ export interface ReflectArgs {
   actions: OrchestratorAction[];
   /** Injected LLM call (same shape recon uses), so this module stays provider-agnostic. */
   complete: (systemPrompt: string, userText: string) => Promise<string>;
+  /** An earlier message the user is repeating (see findRepeatedInstruction). */
+  repeatedFrom?: string | null;
 }
 
 /**
@@ -161,7 +223,7 @@ export interface ReflectArgs {
  * blocks the reply, and silently no-ops on any failure.
  */
 export async function reflectAndEvolve(args: ReflectArgs): Promise<void> {
-  const { projectId, rootPath, userMessage, reply, actions, complete } = args;
+  const { projectId, rootPath, userMessage, reply, actions, complete, repeatedFrom } = args;
   if (!projectId || !userMessage.trim()) return;
 
   const currentProfile = getProfileLines(projectId);
@@ -176,6 +238,13 @@ export async function reflectAndEvolve(args: ReflectArgs): Promise<void> {
     `User: ${compact(userMessage, 600)}`,
     `Assistant reply: ${compact(reply, 400)}`,
     `Actions taken: ${actionsSummary}`,
+    ...(repeatedFrom
+      ? [
+          '',
+          `REPEATED: the user said something very similar earlier: "${compact(repeatedFrom, 300)}".`,
+          'Having to repeat it means the assistant did not follow it the first time. If it is an instruction or a preference, record it as a firm rule that starts with "Always" or "Never". If it is only a repeated question, record nothing unless it shows a preference.',
+        ]
+      : []),
   ].join('\n');
 
   let response: string;
@@ -199,7 +268,8 @@ export async function reflectAndEvolve(args: ReflectArgs): Promise<void> {
       scope: insight.scope,
       createdAt: now,
       lastSeenAt: now,
-      uses: 1,
+      // A rule the user had to repeat starts ahead of one-off observations.
+      uses: repeatedFrom ? 3 : 1,
     };
     if (insight.scope === 'global') {
       globalOrchestratorProfile.update((entries) => mergeEntry(entries, entry, MAX_GLOBAL_ENTRIES));

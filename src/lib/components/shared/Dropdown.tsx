@@ -9,6 +9,8 @@ export type DropdownOption = {
   value: string;
   label: string;
   sublabel?: string;
+  /** Hover text explaining the option (shown on the item and on the trigger while selected). */
+  tooltip?: string;
   color?: string;
   disabled?: boolean;
 };
@@ -25,6 +27,10 @@ interface DropdownProps {
   boundarySelector?: string;
   /** Force the menu to open down or up, or let available space decide. */
   direction?: 'down' | 'up' | 'auto';
+  /** Optional cap for compact contextual menus. */
+  menuMaxHeight?: number;
+  /** Extra class for a menu that needs context-specific styling. */
+  menuClassName?: string;
 }
 
 // Menu max-height (keep in sync with .dd-menu max-height in CSS).
@@ -47,6 +53,8 @@ export default function Dropdown({
   disabled = false,
   boundarySelector,
   direction = 'auto',
+  menuMaxHeight = MENU_MAX,
+  menuClassName,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
@@ -88,15 +96,16 @@ export default function Dropdown({
     const below = boundBottom - topBase;
     const topAnchor = composerRect ? composerRect.top : r.top;
     const above = topAnchor - boundTop;
+    const boundedMenuMaxHeight = Math.max(60, Math.min(MENU_MAX, menuMaxHeight));
     const willDropUp = direction === 'up'
       ? true
       : direction === 'down'
         ? (below < 60 && above > below)
-        : (below < Math.min(MENU_MAX, 180) && above > below);
+        : (below < Math.min(boundedMenuMaxHeight, 180) && above > below);
     setDropUp(willDropUp);
 
     const available = willDropUp ? above : below;
-    const maxHeight = Math.max(60, Math.min(MENU_MAX, available - 8));
+    const maxHeight = Math.max(60, Math.min(boundedMenuMaxHeight, available - 8));
     const next: CSSProperties = {
       position: 'fixed',
       left: r.left,
@@ -118,7 +127,7 @@ export default function Dropdown({
       next.top = topBase;
     }
     setMenuStyle(next);
-  }, [boundarySelector, direction]);
+  }, [boundarySelector, direction, menuMaxHeight]);
 
   /**
    * Second placement pass. The menu sizes to its content, so its real width is
@@ -232,6 +241,7 @@ export default function Dropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        title={selected?.tooltip}
         onClick={toggle}
         onKeyDown={onKeydown}
       >
@@ -258,7 +268,7 @@ export default function Dropdown({
         createPortal(
           <div
             ref={menuEl}
-            className={`dd-menu${dropUp ? ' drop-up' : ''}`}
+            className={`dd-menu${dropUp ? ' drop-up' : ''}${menuClassName ? ` ${menuClassName}` : ''}`}
             role="listbox"
             aria-label={ariaLabel}
             style={menuStyle}
@@ -270,6 +280,7 @@ export default function Dropdown({
                 className={`dd-item${option.value === value ? ' active' : ''}`}
                 disabled={option.disabled}
                 role="option"
+                title={option.tooltip}
                 aria-selected={option.value === value}
                 onClick={() => choose(option)}
               >

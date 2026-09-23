@@ -59,12 +59,15 @@ back on the heuristic fallback at its normal window.
 
 **`agentCanReport` had to move with it**, and this is the non-obvious half. It
 answered true for `claude`/`codex`/etc. off `MCP_CONFIGURABLE_EXECUTABLES`, which
-would have silenced their inferred ends — "an agent that could report and didn't
-gets silence". But MCP does not cross the seam either: agents are handed
+would have silenced their inferred *pauses* — "an agent that could report and
+didn't gets silence". But MCP does not cross the seam either: agents are handed
 `http://127.0.0.1:<port>`, and from the box that is the box's own loopback, not
 the laptop's MCP server. So **no** channel reaches an agent on a remote, and
-`agentCanReport` returns false there, so those turns read as "went quiet"
-instead of vanishing. `remote-turn-signals.test.ts` covers both.
+`agentCanReport` returns false there, so a guessed "needs input" still reaches
+the user instead of vanishing. `remote-turn-signals.test.ts` covers both.
+
+(Since 2026-09-21 this only affects `blocked`. A guessed *finish* is inbox-only
+everywhere and never consults `agentCanReport` — see [[agent-report-status]].)
 
 ## Still open
 

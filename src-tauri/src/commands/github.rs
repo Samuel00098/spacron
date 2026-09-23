@@ -604,7 +604,7 @@ pub async fn github_cli_sign_in() -> Result<GithubIdentity, String> {
 /// GitHub repository names allow letters, digits, '-', '_', and '.'.
 fn validate_repo_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > 100 {
-        return Err("Repository name must be 1–100 characters.".to_string());
+        return Err("Repository name must be 1 to 100 characters.".to_string());
     }
     if name == "." || name == ".." {
         return Err("Invalid repository name.".to_string());

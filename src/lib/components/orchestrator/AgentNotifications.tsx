@@ -423,6 +423,11 @@ function CompletionNotification({
         ) : c.summary ? (
           <p className="orc-comp-summary">{c.summary}</p>
         ) : null}
+        {/* Work that passed through more than one agent. Shown on the card
+            itself, not only in the inbox: "Codex finished it" is a confusing
+            thing to read about a task the user dispatched to Claude, and the
+            one sentence that explains it belongs with the claim it explains. */}
+        {c.handover && <p className="orc-comp-handover">{c.handover}</p>}
       </div>
       <div className="orc-comp-actions">
         {onShow && (

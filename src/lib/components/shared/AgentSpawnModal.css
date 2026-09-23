@@ -18,7 +18,7 @@
 
 /* Modal Card: Solid, clean, focused with flexible bounds */
 .asm-card {
-  width: 590px;
+  width: 720px;
   max-width: calc(100 * var(--app-vw, 1vw) - 32px);
   max-height: min(650px, calc(90 * var(--app-vh, 1vh)));
   background: #111116;
@@ -309,6 +309,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 6px;
   min-height: 18px;
@@ -385,6 +386,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  flex-shrink: 0;
   height: 16px;
   padding: 0 6px;
   border-radius: 999px;
@@ -393,14 +395,29 @@
   color: var(--info, #3b82f6);
   font-size: 9px;
   font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
   box-sizing: border-box;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
 }
 
 .asm-signin-btn:hover {
   background: var(--info, #3b82f6);
   color: #ffffff;
+  border-color: var(--info, #3b82f6);
+}
+
+.asm-signin-btn:active {
+  transform: scale(0.96);
+}
+
+.asm-signin-btn:focus-visible {
+  outline: 2px solid var(--info, #3b82f6);
+  outline-offset: 2px;
 }
 
 /* ---- Stable Stepper & Add Button Container ---- */
@@ -528,6 +545,54 @@
   background: color-mix(in srgb, var(--text-primary, #fff) 2%, #0e0e12);
   border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
   box-sizing: border-box;
+}
+
+.asm-config-section .agent-launch-config-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.asm-config-section .agent-launch-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+
+.asm-config-section .agent-launch-config-field > span {
+  color: var(--text-muted, #8a8a9a);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.asm-config-section .agent-launch-config-field select {
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 7px;
+  background: var(--bg-secondary, #17171c);
+  color: var(--text-primary, #e8e8ec);
+  font: inherit;
+  font-size: 11px;
+}
+
+.asm-config-section .agent-launch-config-field select:disabled {
+  opacity: 0.6;
+}
+
+.asm-config-section .agent-launch-config-field .dropdown {
+  width: 100%;
+}
+
+.asm-config-section .agent-launch-config-fields small {
+  flex-basis: 100%;
+  color: var(--text-muted, #8a8a9a);
+  font-size: 10px;
 }
 
 :root.light-theme .asm-config-section {

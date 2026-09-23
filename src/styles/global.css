@@ -1008,7 +1008,6 @@ input:focus {
   .scrollable-tab-content,
   .account-switch-menu,
   .usage-list,
-  .ob-card,
   .projects-panel-body,
   .te-run-menu,
   .te-body,
@@ -1142,8 +1141,6 @@ input:focus {
 :root:not(.solid-theme) .titlebar,
 :root:not(.solid-theme) .app-shell .room-dock,
 :root:not(.solid-theme) .app-shell .composer-strip .floating-prompt-bar,
-:root:not(.solid-theme) .usage-panel,
-:root:not(.solid-theme) .usage-dock,
 :root:not(.solid-theme) .inbox-panel,
 :root:not(.solid-theme) .project-hud,
 :root:not(.solid-theme) .floating-youtube {
@@ -1229,8 +1226,6 @@ input:focus {
 .app-shell .right-utility-panel,
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar,
-.usage-panel,
-.usage-dock,
 .inbox-panel,
 .floating-youtube {
   --panel-edge-w: 1px;
@@ -1248,8 +1243,6 @@ input:focus {
 :root.light-theme .app-shell .right-utility-panel,
 :root.light-theme .app-shell .room-dock,
 :root.light-theme .app-shell .composer-strip .floating-prompt-bar,
-:root.light-theme .usage-panel,
-:root.light-theme .usage-dock,
 :root.light-theme .inbox-panel,
 :root.light-theme .floating-youtube {
   /* The accent is a dark slate in light themes, so the light itself flips to
@@ -1265,8 +1258,6 @@ input:focus {
 .app-shell .right-utility-panel::after,
 .app-shell .room-dock::after,
 .app-shell .composer-strip .floating-prompt-bar::after,
-.usage-panel::after,
-.usage-dock::after,
 .inbox-panel::after,
 .floating-youtube::after {
   content: '';
@@ -1329,9 +1320,15 @@ input:focus {
   animation-play-state: running;
 }
 
-/* `.usage-panel`, `.usage-dock`, `.inbox-panel` and `.floating-youtube` are all
-   `position: fixed` with a `z-index`, which satisfies the positioning and
-   stacking-context requirements on their own. These three do not:
+/* `.inbox-panel` and `.floating-youtube` are `position: fixed` with a
+   `z-index`, which satisfies the positioning and stacking-context requirements
+   on their own. These two do not:
+
+   (`.usage-panel` and `.usage-dock` used to be listed here too. They are no
+   longer floating surfaces — both are inline sections of the left sidebar's
+   Bento card, which already carries the tint and the rim — so they have been
+   dropped from every list above rather than left to fight their own styling
+   with an `!important` background.)
 
    `.room-dock` and `.floating-prompt-bar` are static flow elements. The dock
    already opens a stacking context via its `view-transition-name`, but still
@@ -1356,8 +1353,6 @@ input:focus {
 /* The small surfaces sit over live content and are a fraction of a room's size,
    so they get a thinner, slower light — at room settings the ring reads as a
    spinning bezel on a 380px popover, and as a loading spinner on a pill. */
-.usage-panel,
-.usage-dock,
 .inbox-panel,
 .floating-youtube,
 .app-shell .room-dock,

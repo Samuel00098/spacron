@@ -379,6 +379,95 @@ describe('watchLeasedAgentTurn', () => {
     await vi.advanceTimersByTimeAsync(80);
     await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
   });
+
+  // A newline in fixture text, kept out of the literals so the escape never
+  // has to survive a source transform.
+  const BR = String.fromCharCode(10);
+
+  // ── Limit detection ────────────────────────────────────────────────────────
+  //
+  // The rule here is the one the bell path had to learn the hard way: a signal
+  // that is expensive to be wrong about corroborates, it never decides. A false
+  // limit reading throws a half-built feature at another agent for nothing.
+
+  it('does not call a turn limited on the refusal text alone', async () => {
+    // An agent writing code *about* rate limiting prints the same words. Without
+    // the meter agreeing, this is an ordinary quiet finish.
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 20,
+      meterSaysSpent: () => false,
+    });
+    buf = 'usage limit reached, see the docs for how to handle it';
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
+  });
+
+  it('does not call a turn limited on the meter alone', async () => {
+    // A spent account whose agent simply finished its turn has finished its
+    // turn. Reporting that as a limit stop would hand away work that was done.
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 20,
+      meterSaysSpent: () => true,
+    });
+    buf = 'wrote the handler and the test, all green';
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
+  });
+
+  it('calls a turn limited when the refusal and the meter agree', async () => {
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 20,
+      meterSaysSpent: () => true,
+    });
+    buf = 'Working... ' + BR + 'You have reached your usage limit. Your limit will reset at 5pm.';
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(200);
+    const outcome = await p;
+    expect(outcome.kind).toBe('limited');
+    expect(outcome.kind === 'limited' && outcome.reason).toContain('usage limit');
+  });
+
+  it('never classifies a limit when the caller supplies no meter', async () => {
+    // The pre-existing behaviour, and the safe default for any caller with
+    // nothing to corroborate against.
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 20,
+    });
+    buf = 'You have reached your usage limit.';
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'inferred' });
+  });
+
+  it('lets an attention prompt outrank a limit notice', async () => {
+    // A parked prompt is a live agent waiting on a human. Handing its work to
+    // another agent would abandon a question the user could have answered.
+    const p = watchLeasedAgentTurn(1, {
+      shouldContinue: () => true,
+      pollMs: 10,
+      idleMs: 100,
+      minWorkChars: 20,
+      meterSaysSpent: () => true,
+    });
+    buf = 'usage limit reached earlier; retrying' + BR + 'Do you want to continue? (y/n)';
+    await vi.advanceTimersByTimeAsync(10);
+    const outcome = await p;
+    expect(outcome.kind).toBe('blocked');
+  });
 });
 
 describe('describeTurnEnd', () => {

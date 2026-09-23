@@ -302,3 +302,25 @@ pub async fn mcp_set_assistant_names(
     *handle.get()?.assistant_names.lock().await = cleaned;
     Ok(())
 }
+
+/// Run one emulator tool on behalf of the in-app orchestrator.
+///
+/// The orchestrator is not an MCP client — it lives in the frontend, on the
+/// other side of the HTTP server from the CLI agents. This is the seam that
+/// gives it the same device control they have, routed to the same handlers so
+/// the two cannot drift apart. The name is checked against the allowlist here
+/// rather than trusted from the caller, because `name` reaches this command
+/// straight from a model's tool call.
+#[tauri::command]
+pub async fn mcp_call_emulator_tool(
+    name: String,
+    args: serde_json::Value,
+) -> Result<String, String> {
+    if !crate::mcp::ORCHESTRATOR_EMULATOR_TOOLS.contains(&name.as_str()) {
+        return Err(format!(
+            "'{name}' is not an emulator tool. Available: {}.",
+            crate::mcp::ORCHESTRATOR_EMULATOR_TOOLS.join(", ")
+        ));
+    }
+    crate::mcp::call_emulator_tool(&name, args).await
+}

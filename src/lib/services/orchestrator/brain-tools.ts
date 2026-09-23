@@ -18,7 +18,21 @@ export type BrainToolName =
   | 'wait_for_agent'
   | 'update_todos'
   | 'ask_user'
-  | 'ask_question';
+  | 'ask_question'
+  | 'list_app_commands'
+  | 'run_app_command'
+  | 'emulator_list'
+  | 'emulator_boot'
+  | 'emulator_shutdown'
+  | 'emulator_screenshot'
+  | 'emulator_tap'
+  | 'emulator_swipe'
+  | 'emulator_key'
+  | 'emulator_text'
+  | 'emulator_rotate'
+  | 'emulator_logcat'
+  | 'generate_image'
+  | 'generate_video';
 
 export interface BrainToolCall {
   /** Client-generated id so results can be matched back. Optional from model. */
@@ -48,17 +62,17 @@ export const BRAIN_TOOL_DEFS: BrainToolDef[] = [
   { name: 'read_tool_result', description: 'Retrieve the next page of an earlier tool result by its id, including evidence compacted from context.', parameters: '{"id":"tool result id", "offset":0}' },
   {
     name: 'read_project',
-    description: 'Read the relevant text files across the active project for broad reconnaissance and review. Skips dependencies, build output, hidden state, and binary files; capped for safety. Use this FIRST for any multi-step task to understand the codebase before planning. This is the Explore step in the Explore-Plan-Code workflow.',
+    description: 'Read the relevant text files across the active project for broad reconnaissance and review. Skips dependencies, build output, and binary files; capped for safety. Git-ignored and secret files it did not read are listed by name, so never report them as missing. Use this FIRST for any multi-step task to understand the codebase before planning. This is the Explore step in the Explore-Plan-Code workflow.',
     parameters: '{"max_files": "80 (optional, maximum 120)"}',
   },
   {
     name: 'read_file',
-    description: 'Read a repo-relative file with start_line, line_count and optional start_char paging. Follow the returned continuation to read the entire file.',
+    description: 'Read a repo-relative file with start_line, line_count and optional start_char paging. Follow the returned continuation to read the entire file. Env files return variable names with set/empty status only; key and credential files are withheld.',
     parameters: '{"path": "src/lib/auth.ts (required, repo-relative)"}',
   },
   {
     name: 'glob_files',
-    description: 'Find files by glob pattern (e.g. "src/**/*.ts", "*.json"). Read-only; capped. Prefer over guessing paths.',
+    description: 'Find files by glob pattern (e.g. "src/**/*.ts", ".env*"). Read-only; capped. Also lists matching git-ignored files and marks secret ones. Use it before claiming any file is missing.',
     parameters: '{"pattern": "src/**/*.ts (required)", "max": "20 (optional)"}',
   },
   {
@@ -68,23 +82,33 @@ export const BRAIN_TOOL_DEFS: BrainToolDef[] = [
   },
   {
     name: 'write_file',
-    description: 'Create or overwrite a small repo-relative file. Coordinator fast-path ONLY for surgical changes (notes, reports, tiny fixes) — large coding work goes to an agent via spawn/send.',
+    description: 'Create or overwrite a repo-relative file. Read an existing file with read_file before overwriting it. Counts toward the per-task limit of 3 changed files; bigger work is proposed as an agent hand-off for the user to approve.',
     parameters: '{"path": "notes/todo.md (required, repo-relative)", "content": "<full file text> (required)"}',
   },
   {
     name: 'save_document',
-    description: 'Save a generated document in the user Documents folder. Choose a descriptive filename yourself; do not ask the user for a filename unless they explicitly require a specific one.',
+    description: 'Save a generated document in the project docs/ folder (the user Documents folder only when no project is open). Never overwrites: an existing name gets a -2, -3 suffix, and the result gives the saved path. Choose a descriptive filename yourself; do not ask the user for a filename unless they explicitly require a specific one.',
     parameters: '{"filename": "descriptive filename with extension (optional)", "content": "<full file text> (required)"}',
   },
   {
     name: 'edit_file',
-    description: 'Precise string replacement in a repo-relative file. old_string must match EXACTLY and UNAMBIGUOUSLY (one occurrence). Small surgical changes only — large work goes to an agent.',
-    parameters: '{"path": "src/lib/auth.ts (required)", "old_string": "<exact text> (required)", "new_string": "<replacement> (required)"}',
+    description: 'String replacement in a repo-relative file you have read this conversation. Copy old_string from read_file output WITHOUT the "N: " line prefix; it must match one occurrence (whitespace/indentation drift is tolerated, ambiguity is not). Set replace_all to change every occurrence. Returns a diff. Counts toward the per-task limit of 3 changed files.',
+    parameters: '{"path": "src/lib/auth.ts (required)", "old_string": "<text to replace> (required)", "new_string": "<replacement> (required)", "replace_all": "false (optional)"}',
   },
   {
     name: 'run_command',
     description: 'Run a shell command and get its exit code + output back IN THIS TURN (tests, typecheck, build). Runs hidden in the project shell; output capped. Prefer verification commands.',
     parameters: '{"command": "npm test (required)", "timeout_s": "90 (optional, 5-300)"}',
+  },
+  {
+    name: 'list_app_commands',
+    description: 'Find Spacron app commands: every Tools-menu item, room, panel, layout, settings page and command-palette action. Returns id, name and category. Use it to discover how to do something in the app that no action covers, then run it with run_app_command.',
+    parameters: '{"query": "terminal (optional; words to match)"}',
+  },
+  {
+    name: 'run_app_command',
+    description: 'Run one Spacron app command by its id from list_app_commands (or its exact name). Commands marked "asks the user first" show an approval card before they run. Do not guess ids; list first.',
+    parameters: '{"id": "layout.fleet (required)"}',
   },
   {
     name: 'list_terminals',
@@ -121,7 +145,116 @@ export const BRAIN_TOOL_DEFS: BrainToolDef[] = [
     description: 'Ask the user a blocking multiple-choice question (e.g. relaying a worker\'s question with its options) and stop this turn. Prefer over ask_user when there are clear options.',
     parameters: '{"question": "Iris asks: use Postgres or SQLite? (required)", "options": "[\\"Postgres\\", \\"SQLite\\"] (optional)", "target": "Iris (optional: agent waiting on the answer)"}',
   },
+  // Emulator tools. Same names and arguments as the MCP tools the CLI agents
+  // get, so one instruction ("tap the login button") means the same thing
+  // whether the user says it to the orchestrator or to a worker.
+  {
+    name: 'emulator_list',
+    description: 'Discover every mobile device the app can drive: host platform, Android tooling availability, connected Android devices (with serials), installable AVDs, and iOS simulators (macOS only, with UDIDs). Returns the serials and UDIDs the other emulator_* tools take. Call this FIRST — never guess a serial. On Android prefer the stock phone AVD (named like "Medium_Phone_API_36" or "Pixel_9_API_35") unless the task is about another form factor.',
+    parameters: '{}',
+  },
+  {
+    name: 'emulator_boot',
+    description: 'Boot an Android emulator (AVD name) or iOS simulator (UDID) from emulator_list. Booting is detached and can take over a minute: poll emulator_list until an emulator-* device reports state "device" before interacting. Do not report the app as running until that poll succeeds.',
+    parameters: '{"target": "Medium_Phone_API_36 (required, from emulator_list)", "platform": "android|ios (optional, default android)"}',
+  },
+  {
+    name: 'emulator_shutdown',
+    description: 'Power off a running emulator (Android emulator-* serial) or simulator (iOS UDID).',
+    parameters: '{"target": "emulator-5554 (required)", "platform": "android|ios (optional, default android)"}',
+  },
+  {
+    name: 'emulator_screenshot',
+    description: 'Capture the device screen to an image FILE and return its path and pixel size. You cannot see the image — it is written for the USER to open, so tell them the path. It does not tell you what is on screen: use emulator_logcat, the app source, or ask the user for that. Taps and swipes take normalized coordinates and need no dimensions from here.',
+    parameters: '{"target": "emulator-5554 (required)", "platform": "android|ios (optional, default android)"}',
+  },
+  {
+    name: 'emulator_tap',
+    description: 'Tap a point on an Android screen. Coordinates are normalized 0.0-1.0 (0,0 top-left, 1,1 bottom-right), so screen centre is x=0.5, y=0.5 with no resolution maths. Android only — iOS simulators cannot receive touches. You are tapping blind: prefer driving the app through adb/run_command where an exact target exists, and confirm the effect with emulator_logcat.',
+    parameters: '{"target": "emulator-5554 (required)", "x": "0.5 (required, 0.0-1.0)", "y": "0.5 (required, 0.0-1.0)"}',
+  },
+  {
+    name: 'emulator_swipe',
+    description: 'Swipe or drag between two normalized 0.0-1.0 points on an Android screen — scrolling, dismissing sheets, pull-to-refresh. Android only.',
+    parameters: '{"target": "emulator-5554 (required)", "x1": 0.5, "y1": 0.8, "x2": 0.5, "y2": 0.2, "duration_ms": "300 (optional, max 2000)"}',
+  },
+  {
+    name: 'emulator_key',
+    description: 'Press an Android hardware key: back, home, recents, menu, power, volume_up, volume_down, enter, delete, tab, space, camera, search, notifications, media_play_pause, media_next, media_previous — or a raw Android keycode integer. Android only.',
+    parameters: '{"target": "emulator-5554 (required)", "key": "back (required)"}',
+  },
+  {
+    name: 'emulator_text',
+    description: 'Type text into the focused field on an Android device. Tap the field first if it does not already have focus. Android only; max 4096 characters.',
+    parameters: '{"target": "emulator-5554 (required)", "text": "hello@example.com (required)"}',
+  },
+  {
+    name: 'emulator_rotate',
+    description: 'Rotate an Android display: 0 portrait, 1 landscape, 2 reverse portrait, 3 reverse landscape. Auto-rotate is locked off so the orientation sticks. Android only.',
+    parameters: '{"target": "emulator-5554 (required)", "rotation": "1 (optional, 0-3)"}',
+  },
+  {
+    name: 'emulator_logcat',
+    description: 'Read recent Android logcat — app output, stack traces, system messages. This is your main way to find out what the app actually did after an install, launch, tap or crash, since you cannot see the screen. Optionally filter to lines containing a substring (a package name or log tag). Android only.',
+    parameters: '{"target": "emulator-5554 (required)", "lines": "100 (optional, max 500)", "filter": "com.example.app (optional substring)"}',
+  },
+  {
+    name: 'generate_image',
+    description: 'Create an image; takes about a minute. Spacron uses the user\'s ChatGPT plan first and falls back to another provider they have a key for (OpenAI, Google, OpenRouter, fal, Replicate), so never ask which service to use.'
+      + ' It is saved in the project\'s generations folder. Pass reference_images (up to 4 local image paths) to edit, restyle or combine images — normally the paths of images the user attached, which appear in the message as "saved at <path>". The new image is shown to the user in chat automatically: describe it briefly and do not paste its path unless asked. You cannot see images yourself, so write the prompt from the user\'s words.',
+    parameters: '{"prompt": "what to draw or how to change the references (required)", "reference_images": ["C:/…/pasted-image.png (optional, up to 4)"]}',
+  },
+  {
+    name: 'generate_video',
+    description: 'Create a short video clip (a few seconds); takes one to several minutes and costs the user money on their provider (Google Veo, OpenAI Sora, fal or Replicate, whichever has a key). Pass reference_image to animate a still, normally an image the user attached or one generate_image made. The video is shown in chat automatically and saved in the project\'s generations folder; describe it briefly.',
+    parameters: '{"prompt": "what happens in the clip, camera and style (required)", "reference_image": "C:/…/image.png (optional starting frame)"}',
+  },
 ];
+
+/**
+ * Coerce emulator arguments to the JSON types the Rust handlers read.
+ *
+ * The handlers use `as_f64` and `as_str`, which are exact: a coordinate that
+ * arrives as the string "0.5" reads as absent, and the tap is rejected for a
+ * missing argument. Models produce both spellings freely, and the resulting
+ * error ("needs 'x' and 'y'") points at arguments the model can see it sent,
+ * so it retries the same call until the doom-loop guard stops the turn. The
+ * fix belongs here rather than in the handlers, which are also the CLI agents'
+ * contract and should stay strict about what they accept.
+ */
+export function normalizeEmulatorArgs(
+  name: BrainToolName,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const numeric = ['x', 'y', 'x1', 'y1', 'x2', 'y2', 'duration_ms', 'rotation', 'lines'];
+  const out: Record<string, unknown> = { ...args };
+  for (const field of numeric) {
+    if (!(field in out)) continue;
+    const value = out[field];
+    if (typeof value === 'number') continue;
+    if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value.trim()))) {
+      out[field] = Number(value.trim());
+    }
+  }
+  // `key` is the mirror case: a raw keycode is legal, but only spelled as a
+  // string, because the handler parses the integer out of the name field.
+  if (name === 'emulator_key' && typeof out.key === 'number') out.key = String(out.key);
+  return out;
+}
+
+/** The device tools, routed to the same MCP handlers the CLI agents call. */
+export const BRAIN_EMULATOR_TOOLS: ReadonlySet<BrainToolName> = new Set([
+  'emulator_list',
+  'emulator_boot',
+  'emulator_shutdown',
+  'emulator_screenshot',
+  'emulator_tap',
+  'emulator_swipe',
+  'emulator_key',
+  'emulator_text',
+  'emulator_rotate',
+  'emulator_logcat',
+]);
 
 export const BRAIN_TOOL_NAMES: ReadonlySet<string> = new Set(
   BRAIN_TOOL_DEFS.map((d) => d.name),
@@ -139,6 +272,12 @@ export const BRAIN_READONLY_TOOLS: ReadonlySet<BrainToolName> = new Set([
   'list_agents',
   'get_agent_output',
   'wait_for_agent',
+  // Observing a device changes nothing on it. The screenshot writes a file,
+  // but to the temp directory, so two of them cannot collide with each other
+  // or with anything else in the turn.
+  'emulator_list',
+  'emulator_screenshot',
+  'emulator_logcat',
 ]);
 
 /** Tools that mutate state — the loop runs these sequentially, in order. */
@@ -148,6 +287,19 @@ export const BRAIN_WRITE_TOOLS: ReadonlySet<BrainToolName> = new Set([
   'save_document',
   'edit_file',
   'run_command',
+  'run_app_command',
+  // Input is ordered by definition: a tap that races the swipe before it lands
+  // somewhere neither the model nor the user intended.
+  'emulator_boot',
+  'emulator_shutdown',
+  'emulator_tap',
+  'emulator_swipe',
+  'emulator_key',
+  'emulator_text',
+  'emulator_rotate',
+  // One generation at a time: it is slow and spends the user's plan limits.
+  'generate_image',
+  'generate_video',
 ]);
 
 /** Tools that end the turn as a blocking question for the user. */
@@ -179,10 +331,15 @@ export function brainToolProfile(mode: BrainMode): { allowed: ReadonlySet<BrainT
     'list_agents',
     'get_agent_output',
     'wait_for_agent',
+    'list_app_commands',
+    // Ask/plan mode may look at a device; only `full` may touch one.
+    'emulator_list',
+    'emulator_screenshot',
+    'emulator_logcat',
   ];
   if (mode === 'full') {
     return {
-      allowed: new Set<BrainToolName>([...readOnly, PLAN_TOOL, 'write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command', 'ask_user', 'ask_question']),
+      allowed: new Set<BrainToolName>([...readOnly, PLAN_TOOL, 'write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command', 'run_app_command', 'ask_user', 'ask_question', 'emulator_boot', 'emulator_shutdown', 'emulator_tap', 'emulator_swipe', 'emulator_key', 'emulator_text', 'emulator_rotate', 'generate_image', 'generate_video']),
       mutating: true,
     };
   }
@@ -200,6 +357,14 @@ export const BRAIN_TOOL_OUTPUT_CAP = 32_000;
 
 /** Larger cap for the deliberate broad-review snapshot, still bounded. */
 export const BRAIN_REVIEW_OUTPUT_CAP = 120_000;
+
+/**
+ * Ceiling for a snapshot fed back to the model. The snapshot itself is sized
+ * to the model's context window (`projectSnapshotCharCap`), so this only stops
+ * a pathological case; clipping here at the smaller review cap would undo that
+ * sizing for a big-window model.
+ */
+export const BRAIN_REVIEW_MAX_OUTPUT_CAP = 600_000;
 
 /** Same tool + same args this many times in a row = doom loop, stop. */
 export const DOOM_LOOP_THRESHOLD = 3;
@@ -224,12 +389,14 @@ export function buildBrainToolsPrompt(): string {
     '- PLAN STATE: declare and track your plan ONLY through the update_todos tool — never as a "todos" array inside your JSON. After reconnaissance, establish the COMPLETE plan in one call, normally 3-6 concise top-level items. Group related sub-steps, and do not silently omit verification or a required question.',
     '- You may request MULTIPLE independent calls in one turn (e.g. read package.json + glob src/**/*.ts together). Reads run concurrently; writes run sequentially in order.',
     '- After the app returns {"tool_results": [...]}, continue: call more tools or return FINAL.',
-    '- Set needsInput to true only when a required answer blocks safe progress; optional follow-ups stay conversational.',
+    '- Set needsInput to true only when a required answer blocks safe progress; optional follow-ups stay conversational. When you do set it, END the reply with the actual question, phrased as a question and answerable in a sentence ("Which database should I use?"). A statement of what is missing is not a question, and the app shows that last question to the user on its own.',
     '- DIRECT-FIRST: review, audit, inspect, explain, summarize, recommend, suggest, and "go through the application" requests belong to you. Use the supplied app state and read tools, then return a FINAL answer with no agent action unless the user explicitly requested an agent.',
     '- For a broad review or "go through the application" request, call read_project first. It returns a bounded snapshot of the relevant text files. Do not return FINAL until you have reviewed that result and can give concrete recommendations in this same turn.',
     '- A broad review is not a reason to delegate. Batch read-only calls, synthesize evidence, and make concrete recommendations yourself. If you use glob_files instead of read_project, immediately read the returned paths in batches and do not stop at the file list.',
     '- NEVER return a bare acknowledgement with no actions and no tool_calls when the user asked for work — that ends the turn and nothing happens.',
     '- COORDINATOR LOOP: to monitor a worker, call wait_for_agent(name). WORKING → keep waiting (return FINAL with no actions and let the next user turn re-check, or poll once more). BLOCKED → relay its question via ask_question and stop. COMPLETE/FAILED → report the result.',
+    '- EMULATOR LOOP: call emulator_list first and use a serial it returned — never a guessed one. After emulator_boot, poll emulator_list until the device reports state "device"; a boot takes over a minute and nothing before that poll is running. You CANNOT see the screen: emulator_screenshot writes a file for the USER, and emulator_logcat is how YOU find out what happened. Build, install and launch through run_command (gradle, adb install, adb shell am start); use tap/swipe/text for what only a touch can do, and confirm each effect in logcat rather than assuming it landed.',
+    '- IMAGES: when the user asks for an image, or to change, restyle or combine images they attached, call generate_image yourself (do not delegate) with their attached image paths as reference_images. The image appears in chat on its own; your FINAL reply only needs a short description. For a video or animation call generate_video the same way. Never claim an image or video exists unless the tool returned it.',
     '- DIRECT EDITS & EXECUTION: You can inspect, edit, write, and verify files directly using read_file, edit_file, write_file, and run_command. Perform multi-step work iteratively across tool rounds. Only delegate to an agent via spawn/send when the user explicitly requests an agent or for massive parallel sub-projects.',
     '- run_command is SYNC: it runs hidden and returns `exit <code>` plus the output tail in the same turn. Chain verification yourself: run tests → read failures → edit → re-run.',
     '- run_command is WRITE-class: it runs sequentially, never in parallel with edits. Long-running servers/watchers do NOT belong here — use the `run` action for those.',
@@ -328,11 +495,27 @@ export function formatBrainToolResults(results: BrainToolResult[]): string {
   return results
     .map((r) => {
       const head = `tool_result ${r.id} (${r.name}, ${r.ok ? 'ok' : 'error'}):`;
-      const cap = r.name === 'read_project' ? BRAIN_REVIEW_OUTPUT_CAP : BRAIN_TOOL_OUTPUT_CAP;
+      const cap = r.name === 'read_project' ? BRAIN_REVIEW_MAX_OUTPUT_CAP : BRAIN_TOOL_OUTPUT_CAP;
       const body = r.output.trim().slice(0, cap) || '(empty)';
       return `${head}\n${body}`;
     })
     .join('\n\n');
+}
+
+/**
+ * One line per result instead of the whole output, for rounds where the
+ * transport already carries the full outputs in the conversation history.
+ * Sending both doubled the tokens of every later round in a turn — the single
+ * biggest cost of a long review — while telling the model nothing new.
+ */
+export function formatBrainToolResultIndex(results: BrainToolResult[]): string {
+  return results
+    .map((r) => {
+      const head = `tool_result ${r.id} (${r.name}, ${r.ok ? 'ok' : 'error'}, ${r.output.length} chars):`;
+      const preview = r.output.trim().replace(/\s+/g, ' ').slice(0, 300) || '(empty)';
+      return `${head} ${preview}${r.output.length > 300 ? '…' : ''}`;
+    })
+    .join('\n');
 }
 
 export function toolArgStr(args: Record<string, unknown>, key: string): string {

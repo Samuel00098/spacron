@@ -123,7 +123,7 @@ describe('Notification & Toast Stores', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(mockInvoke).toHaveBeenCalledWith('notification_show', {
-      title: 'Spacron - Done',
+      title: 'Spacron: Done',
       body: 'Task finished!',
     });
   });

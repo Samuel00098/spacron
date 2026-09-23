@@ -28,6 +28,24 @@ export const RIGHT_DRAWER_MIN_WIDTH = 280;
 export const RIGHT_DRAWER_MAX_WIDTH = 720;
 export const RIGHT_DRAWER_DEFAULT_WIDTH = 380;
 
+// The left Navigator's width, on the same terms: one definition for the
+// default, the setter and the load-time sanitiser in `workspace.ts`.
+//
+// 340 rather than the earlier 310 because the footer's usage readout is the
+// widest fixed thing in the rail — two agents, a "+N" and the disclosure caret
+// — and at 310 the footer had about 216px to give it, which was roughly what
+// that row needs. The caret was the part with nowhere to go. The extra 30px is
+// the margin that keeps the whole readout, caret included, on one line.
+export const LEFT_PANEL_MIN_WIDTH = 180;
+export const LEFT_PANEL_MAX_WIDTH = 600;
+export const LEFT_PANEL_DEFAULT_WIDTH = 340;
+
+/** Narrow anything (a persisted value, a drag result) to a usable rail width. */
+export function clampLeftPanelWidth(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : LEFT_PANEL_DEFAULT_WIDTH;
+  return Math.max(LEFT_PANEL_MIN_WIDTH, Math.min(LEFT_PANEL_MAX_WIDTH, n));
+}
+
 /** Narrow anything (a persisted value, a drag result) to a usable drawer width.
  *  A non-finite value falls back to the default rather than through: `width:
  *  NaN` / `width: null` makes the panel size to its content, which is the
@@ -58,9 +76,10 @@ const defaultLayout: LayoutState = {
   youtubeVisible: false,
   mobileVisible: false,
   sketchVisible: false,
+  deepseekVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
-  leftPanelWidth: 310,
+  leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
   rightDrawerWidth: RIGHT_DRAWER_DEFAULT_WIDTH,
 };
 
@@ -193,6 +212,8 @@ interface LayoutActions {
   toggleSidebarTab: (tab: SidebarTab) => void;
   toggleEditorSplitPreview: () => void;
   revealPreview: () => void;
+  /** Open the DeepSeek Harness room and bring it on stage. */
+  revealDeepSeek: () => void;
   setSidebarWidth: (width: number) => void;
   resetLayoutToDefault: () => void;
   /** Merge a partial layout patch into the store and persist it. Used to
@@ -205,8 +226,6 @@ interface LayoutActions {
   applyRightDrawerTool: (tool: RightDrawerTool | null) => void;
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
-  openQuickCapture: () => void;
-  closeQuickCapture: () => void;
   openEnvManager: () => void;
   closeEnvManager: () => void;
   openAgentSpawn: () => void;
@@ -214,7 +233,6 @@ interface LayoutActions {
   settingsOpen: boolean;
   /** Section to open Settings on; null means "wherever it was last left". */
   settingsInitialTab: SettingsTab | null;
-  quickCaptureOpen: boolean;
   envManagerOpen: boolean;
   agentSpawnOpen: boolean;
 }
@@ -239,6 +257,7 @@ const AUX_VIEW_FLAGS = {
   // independently by `toggleYoutubeVisible`.
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
+  deepseek: 'deepseekVisible',
 } as const satisfies Partial<Record<ActiveView, keyof LayoutState>>;
 
 type AuxView = keyof typeof AUX_VIEW_FLAGS;
@@ -273,7 +292,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   ...loadLayout(),
   settingsOpen: false,
   settingsInitialTab: null,
-  quickCaptureOpen: false,
   envManagerOpen: false,
   agentSpawnOpen: false,
 
@@ -281,9 +299,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   // Theme…" opens Settings where the user asked to go rather than on General.
   openSettings: (tab) => set({ settingsOpen: true, settingsInitialTab: tab ?? null }),
   closeSettings: () => set({ settingsOpen: false, settingsInitialTab: null }),
-
-  openQuickCapture: () => set({ quickCaptureOpen: true }),
-  closeQuickCapture: () => set({ quickCaptureOpen: false }),
 
   openAgentSpawn: () => set({ agentSpawnOpen: true }),
   closeAgentSpawn: () => set({ agentSpawnOpen: false }),
@@ -568,7 +583,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
 
   setLeftPanelWidth: (width: number) => {
     set((l) => {
-      const next: LayoutState = { ...l, leftPanelWidth: Math.max(180, Math.min(600, width)) };
+      const next: LayoutState = { ...l, leftPanelWidth: clampLeftPanelWidth(width) };
       persistLayout(next);
       return next;
     });
@@ -686,6 +701,16 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     // Ask the room system to focus the preview room so it appears in-view
     // (not just added to the room list in the background).
     requestRoomControl('focus', 'preview');
+  },
+
+  revealDeepSeek: () => {
+    set((l) => {
+      if (l.deepseekVisible) return l;
+      const next: LayoutState = { ...l, deepseekVisible: true, lastAuxView: 'deepseek' as const, activeView: 'deepseek' as const };
+      persistLayout(next);
+      return next;
+    });
+    requestRoomControl('focus', 'deepseek');
   },
 
   setSidebarWidth: (width: number) => {

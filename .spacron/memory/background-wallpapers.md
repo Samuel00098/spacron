@@ -46,10 +46,8 @@ detailed scenes, ~20% smaller than the 82 the first pairs used. Sources are
 already 1672×941, so no scaling is needed.
 
 Then add a light/dark pair to `presetThemes.ts` (see below). Nothing else needs
-touching — the Settings theme grid, the onboarding picker and the MCP
-`set_theme` name lookup all map over `presetThemes`, so a new entry propagates
-everywhere on its own. The only hard-coded theme ids are the four in
-`OnboardingWalkthrough.tsx`.
+touching — the Settings theme grid and the MCP `set_theme` name lookup both map
+over `presetThemes`, so a new entry propagates everywhere on its own.
 
 ## Wallpaper "opacity" — the field named opacity is NOT the lever
 

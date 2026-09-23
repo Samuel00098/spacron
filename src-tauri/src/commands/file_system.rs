@@ -687,7 +687,7 @@ pub fn write_binary(path: &str, data: &[u8], roots: &[PathBuf]) -> Result<(), St
 /// The app-owned scratch directory for clipboard-pasted images:
 /// `<os-temp>/spacron/pasted`. Lives outside every project so pastes never bloat
 /// a codebase; [`clear_pasted_images`] empties it on app exit.
-fn pasted_images_dir() -> PathBuf {
+pub fn pasted_images_dir() -> PathBuf {
     std::env::temp_dir().join("spacron").join("pasted")
 }
 
@@ -768,25 +768,79 @@ pub fn get_file_info(path: &str, roots: &[PathBuf]) -> Result<FileEntry, String>
 }
 
 #[tauri::command(async)]
-pub fn fs_glob_files(root_path: String, pattern: String, match_anywhere: bool, max: usize, state: State<AppState>) -> Result<Vec<String>, String> {
+pub fn fs_glob_files(root_path: String, pattern: String, match_anywhere: bool, max: usize, ignored_only: Option<bool>, state: State<AppState>) -> Result<Vec<String>, String> {
+    if ignored_only.unwrap_or(false) {
+        return glob_ignored_files(&root_path, &pattern, match_anywhere, max, &project_roots(&state));
+    }
     glob_files(&root_path, &pattern, match_anywhere, max, &project_roots(&state))
+}
+
+const GLOB_SKIP_DIRS: [&str; 7] = [".git", "node_modules", "target", "dist", "build", ".next", ".venv"];
+
+fn glob_walker(root: &Path) -> ignore::Walk {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder.hidden(false).follow_links(false).sort_by_file_path(|a,b| a.cmp(b)).filter_entry(|e| {
+        !GLOB_SKIP_DIRS.iter().any(|s| e.file_name() == std::ffi::OsStr::new(s))
+    });
+    builder.build()
+}
+
+fn relative_path(root: &Path, path: &Path) -> Result<String, String> {
+    Ok(path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"))
+}
+
+fn glob_matches(matcher: &regex::Regex, relative: &str, match_anywhere: bool) -> bool {
+    let candidate = if match_anywhere { relative.rsplit('/').next().unwrap_or(relative) } else { relative };
+    matcher.is_match(candidate)
 }
 
 pub fn glob_files(root_path: &str, pattern: &str, match_anywhere: bool, max: usize, roots: &[PathBuf]) -> Result<Vec<String>, String> {
     let root = require_path(root_path)?;
     require_in_roots(&root, roots)?;
     let matcher = regex::Regex::new(pattern).map_err(|e| e.to_string())?;
-    let mut builder = ignore::WalkBuilder::new(&root);
-    builder.hidden(false).follow_links(false).sort_by_file_path(|a,b| a.cmp(b)).filter_entry(|e| {
-        ![".git", "node_modules", "target", "dist", "build", ".next", ".venv"].iter().any(|s| e.file_name() == std::ffi::OsStr::new(s))
-    });
     let mut paths = Vec::new();
-    for item in builder.build().flatten() {
+    for item in glob_walker(&root).flatten() {
         if !item.file_type().is_some_and(|f| f.is_file()) { continue; }
-        let relative = item.path().strip_prefix(&root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
-        let candidate = if match_anywhere { relative.rsplit('/').next().unwrap_or(&relative) } else { &relative };
-        if matcher.is_match(candidate) { paths.push(relative); }
+        let relative = relative_path(&root, item.path())?;
+        if glob_matches(&matcher, &relative, match_anywhere) { paths.push(relative); }
         if paths.len() >= max { break; }
+    }
+    Ok(paths)
+}
+
+/// Files that exist but that `glob_files` never lists because `.gitignore`
+/// (or `.ignore`) excludes them: `.env.local`, local config, generated
+/// output. Only files sitting directly in directories the normal walk visits
+/// are reported, so an ignored directory such as `coverage/` cannot flood the
+/// list. Without this the orchestrator concluded that `.env.local` "does not
+/// exist" when it was merely ignored.
+pub fn glob_ignored_files(root_path: &str, pattern: &str, match_anywhere: bool, max: usize, roots: &[PathBuf]) -> Result<Vec<String>, String> {
+    let root = require_path(root_path)?;
+    require_in_roots(&root, roots)?;
+    let matcher = regex::Regex::new(pattern).map_err(|e| e.to_string())?;
+    let mut listed = std::collections::HashSet::new();
+    let mut dirs = vec![root.clone()];
+    for item in glob_walker(&root).flatten() {
+        match item.file_type() {
+            Some(kind) if kind.is_file() => { listed.insert(item.path().to_path_buf()); }
+            Some(kind) if kind.is_dir() && item.depth() > 0 => dirs.push(item.path().to_path_buf()),
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let mut files: Vec<PathBuf> = entries.flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.path())
+            .filter(|path| !listed.contains(path))
+            .collect();
+        files.sort();
+        for path in files {
+            let relative = relative_path(&root, &path)?;
+            if glob_matches(&matcher, &relative, match_anywhere) { paths.push(relative); }
+            if paths.len() >= max { return Ok(paths); }
+        }
     }
     Ok(paths)
 }
@@ -806,6 +860,30 @@ mod agent_file_tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "user change");
         write_file_checked(&path, "updated", Some("user change"), &roots).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
+    }
+    #[test]
+    fn ignored_files_are_listed_separately_without_flooding_from_ignored_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("coverage")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(".gitignore"), ".env.local\ncoverage/\n*.log\n").unwrap();
+        std::fs::write(root.join(".env.local"), "SECRET=1").unwrap();
+        std::fs::write(root.join(".env.example"), "SECRET=").unwrap();
+        std::fs::write(root.join("coverage/index.html"), "x").unwrap();
+        std::fs::write(root.join("src/app.ts"), "x").unwrap();
+        std::fs::write(root.join("src/debug.log"), "x").unwrap();
+        let roots = [root.to_path_buf()];
+        let root_path = root.to_string_lossy();
+
+        let normal = glob_files(&root_path, ".*", true, 50, &roots).unwrap();
+        assert!(normal.contains(&".env.example".to_string()));
+        assert!(!normal.contains(&".env.local".to_string()));
+
+        let ignored = glob_ignored_files(&root_path, ".*", true, 50, &roots).unwrap();
+        assert_eq!(ignored, vec![".env.local".to_string(), "src/debug.log".to_string()]);
+        assert_eq!(glob_ignored_files(&root_path, "^[.]env", true, 50, &roots).unwrap(), vec![".env.local".to_string()]);
     }
     #[test]
     fn glob_reaches_files_beyond_old_depth_limit() {

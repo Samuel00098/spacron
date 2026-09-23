@@ -101,9 +101,9 @@ async function showDesktopNotification(message: string, type: Toast['type']) {
   }
 
   const titles: Record<Toast['type'], string> = {
-    error: 'Spacron - Error',
-    warning: 'Spacron - Warning',
-    success: 'Spacron - Done',
+    error: 'Spacron: Error',
+    warning: 'Spacron: Warning',
+    success: 'Spacron: Done',
     info: 'Spacron',
   };
 

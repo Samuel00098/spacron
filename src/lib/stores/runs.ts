@@ -49,6 +49,10 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   { name: 'GitHub Copilot CLI', command: 'copilot', isPreset: true, isAgent: true },
   { name: 'Qwen Code', command: 'qwen', isPreset: true, isAgent: true },
   { name: 'Cline', command: 'cline', isPreset: true, isAgent: true },
+  // No terminal UI: the picker opens it as a web panel and delegation runs it
+  // headless — see `services/deepseek-harness.ts`. The preset still lives here
+  // so detection, the delegate roster and brand marks treat it like any agent.
+  { name: 'DeepSeek Harness', command: 'dsh', isPreset: true, isAgent: true },
   { name: 'Amp', command: 'amp', isPreset: true, isAgent: true },
   { name: 'Goose', command: 'goose', isPreset: true, isAgent: true },
   { name: 'Kimi CLI', command: 'kimi', isPreset: true, isAgent: true },

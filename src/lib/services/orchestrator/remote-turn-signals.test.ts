@@ -12,9 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *      made `agent-turn-watch` treat the session as `signalled`, skip the
  *      BEL/regex path and wait out the 15-minute `SIGNALLED_IDLE_MS` backstop —
  *      strictly worse than the heuristic it displaced.
- *   2. `agentCanReport` is false there, so an inferred end is worded as a guess
- *      ("went quiet") instead of being silenced as a report the agent declined
- *      to make. Silence is only information when the agent had a way to speak.
+ *   2. `agentCanReport` is false there, so an inferred PAUSE still interrupts
+ *      instead of being silenced as a report the agent declined to make.
+ *      Silence is only information when the agent had a way to speak. (An
+ *      inferred FINISH is inbox-only everywhere and does not consult this.)
  */
 
 const invoke = vi.hoisted(() =>

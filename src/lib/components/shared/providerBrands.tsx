@@ -35,11 +35,15 @@ const PROVIDER_ASSETS: Record<string, { file: string; color: string }> = {
 // unrelated coding-agent name through the generic name-hint resolver.
 const SHARED_BRANDS: Record<string, { command: string; name: string }> = {
   openai: { command: 'codex', name: 'Codex' },
+  // The ChatGPT-subscription provider is served by the Codex CLI, so it wears
+  // the same OpenAI mark as the `openai` connection.
+  chatgpt: { command: 'codex', name: 'Codex' },
   anthropic: { command: 'claude', name: 'Claude' },
   google: { command: 'gemini', name: 'Gemini' },
   xai: { command: 'grok', name: 'Grok' },
   opencode: { command: 'opencode', name: 'OpenCode' },
   'opencode-go': { command: 'opencode', name: 'OpenCode' },
+  kilocode: { command: 'kilo', name: 'Kilo' },
   moonshot: { command: 'kimi', name: 'Kimi' },
 };
 

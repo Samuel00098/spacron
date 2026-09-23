@@ -60,6 +60,16 @@ export interface InboxEntryDetail {
   elapsedSec?: number | null;
   /** How the turn end became known — decides what the expanded row may claim. */
   endedBy?: 'declared' | 'exit' | 'inferred';
+  /**
+   * The chain of agents this work passed through, when it passed through more
+   * than one. Present only for a task that was handed over on a usage limit.
+   *
+   * Kept separate from `reason` and `summary` because it makes a different kind
+   * of claim: those two are what an agent said and what a model made of it,
+   * while this is what Spacron observed — how much headroom was left, how many
+   * files each agent left on the branch, and how each one stopped.
+   */
+  handover?: string;
   /** Recipient of a directed message; null means the whole team. */
   to?: string | null;
   /** Files a message claimed or released. */
@@ -113,6 +123,8 @@ export interface CompletionLike {
     endedBy?: 'declared' | 'exit' | 'inferred';
     /** True for a turn end that must not interrupt — inbox only. */
     silent?: boolean;
+    /** The chain of agents this work passed through, when it was handed over. */
+    handover?: string | null;
     /** The orchestrator task this turn belonged to, when one exists. */
     taskId?: string | null;
   } | null;
@@ -224,6 +236,7 @@ export function completionEntry(msg: CompletionLike, read: boolean): InboxEntry 
       summaryPending: c.summaryPending,
       elapsedSec: c.elapsedSec,
       endedBy: c.endedBy,
+      handover: c.handover?.trim() || undefined,
       taskId: c.taskId ?? null,
     },
   };

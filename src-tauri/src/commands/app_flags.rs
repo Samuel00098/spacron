@@ -2,12 +2,10 @@
 //!
 //! The frontend stores most settings in the WebView's `localStorage`, but that
 //! store is flushed to disk lazily and recent writes can be lost when the
-//! process is killed abruptly (e.g. an OS shutdown). For a handful of one-time
-//! flags where that loss is user-visible — notably "onboarding completed" — we
-//! mirror the value into `config_dir/app_flags.json`, which is written through
-//! immediately and survives an abrupt shutdown. The frontend treats the backend
-//! value as the durable source of truth and reconciles localStorage from it on
-//! startup.
+//! process is killed abruptly (e.g. an OS shutdown). For one-time flags where
+//! that loss is user-visible the frontend mirrors the value into
+//! `config_dir/app_flags.json`, which is written through immediately and
+//! survives an abrupt shutdown.
 
 use crate::state::AppState;
 use std::collections::BTreeMap;

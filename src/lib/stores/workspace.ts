@@ -10,6 +10,7 @@ import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayo
 import { isSafePresetId } from '$lib/components/layout/split-layout';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
+import { LEFT_PANEL_DEFAULT_WIDTH, clampLeftPanelWidth } from './zustand/layout';
 import { backendInvoke } from '$lib/services/backend';
 import { resetProjectSearchState } from './projectsearch';
 import type { RemoteConnection } from './remoteWorkspace';
@@ -144,6 +145,7 @@ function collectOpenRoomIds(): string[] {
   // so a background project keeps whatever it was left with — the same way the
   // rest of its saved stage behaves.
   if (l.sketchVisible) rooms.push('sketch');
+  if (l.deepseekVisible) rooms.push('deepseek');
   return rooms;
 }
 
@@ -250,6 +252,7 @@ interface ProjectWorkspaceState {
     youtubeVisible: boolean;
     mobileVisible: boolean;
     sketchVisible: boolean;
+    deepseekVisible: boolean;
     /** The Terminal room's own open/closed state. Not part of `LayoutState` —
      *  it is its own store — but it is a room like any other, so it has to be
      *  saved per project or closing it can't survive a switch. */
@@ -406,6 +409,7 @@ interface PersistedProjectState {
     youtubeVisible?: boolean;
     mobileVisible?: boolean;
     sketchVisible?: boolean;
+    deepseekVisible?: boolean;
     /** The Terminal room's open/closed state — see the note on the cache type.
      *  Absent in state saved before it was per-project; treated as open then,
      *  which is what that build always did. */
@@ -542,6 +546,7 @@ function saveProjectStateToStorage(projectId: string) {
       youtubeVisible: currentLayout.youtubeVisible,
       mobileVisible: currentLayout.mobileVisible,
       sketchVisible: currentLayout.sketchVisible,
+      deepseekVisible: currentLayout.deepseekVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       rightSidebarTab: get(rightSidebarTab),
@@ -706,6 +711,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       youtubeVisible: Boolean(l.youtubeVisible),
       mobileVisible: Boolean(l.mobileVisible),
       sketchVisible: Boolean(l.sketchVisible),
+      deepseekVisible: Boolean(l.deepseekVisible),
       terminalRoomOpen: l.terminalRoomOpen === undefined ? true : Boolean(l.terminalRoomOpen),
       rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
       rightSidebarTab: sanitiseRightSidebarTab(l.rightSidebarTab ?? l.rightDrawerTool),
@@ -716,7 +722,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       sidebarVisible: Boolean(l.sidebarVisible ?? true),
       sidebarWidth: typeof l.sidebarWidth === 'number' ? Math.max(100, Math.min(600, l.sidebarWidth)) : 310,
       sidebarTab: typeof l.sidebarTab === 'string' ? l.sidebarTab : 'files',
-      leftPanelWidth: typeof l.leftPanelWidth === 'number' ? Math.max(180, Math.min(600, l.leftPanelWidth)) : 310,
+      leftPanelWidth: clampLeftPanelWidth(l.leftPanelWidth),
       rightDrawerWidth: typeof l.rightDrawerWidth === 'number' ? Math.max(280, Math.min(720, l.rightDrawerWidth)) : 380,
     };
   }
@@ -828,6 +834,7 @@ export function saveProjectState(projectId: string) {
       youtubeVisible: get(layout).youtubeVisible,
       mobileVisible: get(layout).mobileVisible,
       sketchVisible: get(layout).sketchVisible,
+      deepseekVisible: get(layout).deepseekVisible,
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       rightSidebarTab: get(rightSidebarTab),
@@ -954,6 +961,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         youtubeVisible: cached.layout.youtubeVisible,
         mobileVisible: cached.layout.mobileVisible,
         sketchVisible: cached.layout.sketchVisible,
+        deepseekVisible: cached.layout.deepseekVisible,
         lastAuxView: sanitiseActiveView(cached.layout.lastAuxView, l.lastAuxView),
         editorSplitPreview: cached.layout.editorSplitPreview,
         auxPanelWidth: cached.layout.auxPanelWidth,
@@ -1066,6 +1074,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           youtubeVisible: false,
           mobileVisible: false,
           sketchVisible: false,
+          deepseekVisible: false,
           lastAuxView: 'preview',
           editorSplitPreview: false,
           auxPanelWidth: 550,
@@ -1073,7 +1082,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarVisible: true,
           sidebarWidth: 310,
           sidebarTab: 'files',
-          leftPanelWidth: 310,
+          leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
           rightDrawerWidth: 380,
         }));
         rightSidebarTab.set('files');
@@ -1095,6 +1104,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           youtubeVisible: persisted.layout!.youtubeVisible ?? false,
           mobileVisible: persisted.layout!.mobileVisible ?? false,
           sketchVisible: persisted.layout!.sketchVisible ?? false,
+          deepseekVisible: persisted.layout!.deepseekVisible ?? false,
           lastAuxView: sanitiseActiveView(persisted.layout!.lastAuxView, l.lastAuxView),
           editorSplitPreview: persisted.layout!.editorSplitPreview ?? false,
           auxPanelWidth: persisted.layout!.auxPanelWidth ?? 550,
@@ -1102,7 +1112,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarVisible: persisted.layout!.sidebarVisible ?? true,
           sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
           sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
-          leftPanelWidth: persisted.layout!.leftPanelWidth ?? 310,
+          leftPanelWidth: persisted.layout!.leftPanelWidth ?? LEFT_PANEL_DEFAULT_WIDTH,
           rightDrawerWidth: persisted.layout!.rightDrawerWidth ?? 380,
         }));
         rightSidebarTab.set(

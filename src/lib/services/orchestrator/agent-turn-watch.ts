@@ -2,10 +2,12 @@ import { getSessionOutputProduced, getSessionOutputTail } from '$lib/stores/term
 import {
   attentionReason,
   containsAttentionRequest,
+  containsLimitNotice,
   countBellStream,
   createBellScanState,
+  limitReason,
 } from './agent-signals';
-import { agentAttentionPhrases } from './agent-rules-file';
+import { agentAttentionPhrases, agentLimitPhrases } from './agent-rules-file';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
@@ -38,6 +40,22 @@ export type AgentTurnOutcome =
   | { kind: 'finished'; via: TurnEndSource; detail?: string }
   | { kind: 'blocked'; reason: string; via: TurnEndSource }
   | { kind: 'failed'; reason: string; via: TurnEndSource }
+  /**
+   * The agent stopped because its account ran out of usage, not because the
+   * work reached any kind of end.
+   *
+   * Its own variant rather than a flavour of `failed`, because it means
+   * something different and something the app can act on: nothing is wrong with
+   * the work or the agent, and another account or another CLI can finish it.
+   * Collapsing it into "went quiet" — which is what happened before this
+   * existed — told the user their agent had mysteriously stopped when the app
+   * could have said exactly why and moved the work.
+   *
+   * Only ever reached with two agreeing signals: the CLI's own refusal text in
+   * the transcript *and* the meter showing that account spent. See
+   * `WatchLeasedAgentOptions.meterSaysSpent`.
+   */
+  | { kind: 'limited'; reason: string; via: TurnEndSource }
   | { kind: 'aborted' };
 
 /** How one turn end should be presented to the user. */
@@ -77,6 +95,13 @@ export function describeTurnEnd(outcome: AgentTurnOutcome): TurnEndPresentation 
       return { status: 'blocked', ...src(outcome.via), reason: outcome.reason };
     case 'failed':
       return { status: 'failed', ...src(outcome.via), reason: outcome.reason };
+    case 'limited':
+      // `blocked`, not `failed`: the work is unfinished and something has to
+      // happen next, but nothing went wrong and the card must not say it did.
+      // A limited turn is normally intercepted upstream and handed to an agent
+      // with headroom; this wording is what the user sees when there was
+      // nowhere to hand it to.
+      return { status: 'blocked', ...src(outcome.via), reason: outcome.reason };
     case 'finished':
       // An agent that said what it did gets that sentence carried through to
       // the card and the inbox row. Dropping it (which this used to do) is why
@@ -121,6 +146,23 @@ export interface WatchLeasedAgentOptions {
    * after the much longer [`QUIET_TURN_IDLE_MS`] window.
    */
   minWorkChars?: number;
+  /**
+   * Whether the meter agrees this agent's account is spent.
+   *
+   * The second of the two signals a `limited` classification needs. A limit
+   * phrase in the transcript is not enough on its own — an agent writing code
+   * *about* rate limiting prints the same words — and the cost of being wrong
+   * is a half-built feature thrown at another agent for nothing.
+   *
+   * This is the same lesson the bell path already carries: a terminal bell used
+   * to end turns instantly and discard the agent's real answer, so a bell now
+   * only corroborates a finish after a quiet period. Limit detection follows
+   * the rule for the same reason.
+   *
+   * Omitted, no turn is ever classified `limited` — which is the pre-existing
+   * behaviour and a safe default for any caller that has no meter to consult.
+   */
+  meterSaysSpent?: () => boolean;
 }
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -241,6 +283,8 @@ async function watchTurnUntilDone(
   // then rely on the universal pattern). Layered onto the generic matcher so
   // each agent's distinctive "needs input" prompts are recognised.
   const attentionPhrases = agentAttentionPhrases(opts.agentCommand);
+  // Per-CLI refusal text, layered onto the universal limit pattern the same way.
+  const limitPhrases = agentLimitPhrases(opts.agentCommand);
 
   // Growth is measured against the session's MONOTONIC produced-chars counter,
   // not against the length of the retained window. The window is capped, so once
@@ -254,6 +298,15 @@ async function watchTurnUntilDone(
   let grownTotal = 0;
   /** When the most recent terminal bell in this turn's output was seen, or null. */
   let lastBellAt: number | null = null;
+  /**
+   * The CLI's own limit refusal, once seen in this turn's output.
+   *
+   * Remembered rather than acted on. It only becomes a `limited` outcome at the
+   * moment the turn would otherwise resolve, and only if the meter agrees —
+   * see `meterSaysSpent`. Holding it means a phrase that scrolls past the
+   * 2 KB `recent` tail is not lost, while still never deciding anything alone.
+   */
+  let limitNotice: string | null = null;
 
   // Escape state for the incremental bell scanner, threaded across polls.
   const bellState = createBellScanState();
@@ -350,6 +403,14 @@ async function watchTurnUntilDone(
         return { kind: 'blocked', reason: attentionReason(recent, attentionPhrases), via: 'inferred' };
       }
 
+      // A limit refusal is noted, never acted on here. Returning on it would
+      // reproduce the bell bug: a mid-turn match (an agent reading a vendor's
+      // rate-limit docs, a retried 429 it recovered from) would sever the lease
+      // and throw away the answer that was still coming.
+      if (growth > 0 && !limitNotice && containsLimitNotice(recent, limitPhrases)) {
+        limitNotice = limitReason(recent, limitPhrases);
+      }
+
       // The idle fallback normally requires the work floor — a tiny burst that
       // never became real work must not false-complete a turn. But a genuine
       // quiet turn (a terse agent that answers and stops) needs a much longer
@@ -392,6 +453,20 @@ async function watchTurnUntilDone(
           if (containsAttentionRequest(tail, attentionPhrases)) {
             return { kind: 'blocked', reason: attentionReason(tail, attentionPhrases), via: 'inferred' };
           }
+          // The wider tail is also the right place to catch a refusal that
+          // scrolled past the per-poll window, for the same reason the
+          // attention rescan lives here: the buffer is stable now, so what it
+          // holds is unambiguous rather than a transient redraw.
+          if (!limitNotice && containsLimitNotice(tail, limitPhrases)) {
+            limitNotice = limitReason(tail, limitPhrases);
+          }
+        }
+        // Two agreeing signals, and only then. Either alone is a guess, and a
+        // false positive costs a needless handover mid-feature; a false
+        // negative costs only the status quo, which is the cheaper way to be
+        // wrong.
+        if (limitNotice && opts.meterSaysSpent?.()) {
+          return { kind: 'limited', reason: limitNotice, via: 'inferred' };
         }
         const decision = confidentChoice<'working' | 'waiting_for_approval' | 'asking_question' | 'errored' | 'finished'>(
           await classifyDecision(
@@ -401,6 +476,8 @@ async function watchTurnUntilDone(
           ),
           0.85,
         );
+        // A new declaration or output while the network call ran wins over a
+        // screen-based guess; the next poll will inspect the new output.
         if (sentinel) return sentinel;
         if (getSessionOutputProduced(sessionId) !== lastProduced) return null;
         if (decision === 'working') {

@@ -66,7 +66,7 @@ export function toggleCommandPalette() {
   });
 }
 
-import { newWorkspacePromptOpen, newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
+import { newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
 import { saveActiveFile, formatActiveFile } from './editor';
 import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings, toggleYoutubeVisible } from './layout';
 import { createTerminalSession } from './terminal';
@@ -83,23 +83,17 @@ export function initDefaultCommands() {
       action: () => saveActiveFile(),
     },
     {
-      id: 'workspace.new',
-      name: 'New Workspace',
-      category: 'Workspace',
-      shortcut: 'Ctrl+N',
-      action: () => newWorkspacePromptOpen.set(true),
-    },
-    {
-      id: 'workspace.open',
-      name: 'Open Folder...',
-      category: 'Workspace',
+      id: 'project.open',
+      name: 'Open Project...',
+      category: 'Project',
       shortcut: 'Ctrl+O',
       action: () => openProject(),
     },
     {
-      id: 'workspace.new_folder',
-      name: 'New Folder...',
-      category: 'Workspace',
+      id: 'project.new_folder',
+      name: 'Create Project...',
+      category: 'Project',
+      shortcut: 'Ctrl+N',
       action: () => newFolderPromptOpen.set(true),
     },
     {
@@ -123,9 +117,9 @@ export function initDefaultCommands() {
       action: () => toggleYoutubeVisible(),
     },
     {
-      id: 'workspace.env',
+      id: 'project.env',
       name: 'Environment Manager',
-      category: 'Workspace',
+      category: 'Project',
       shortcut: 'Ctrl+Shift+E',
       action: () => openEnvManager(),
     },

@@ -410,7 +410,7 @@ function InboxRowDetail({
   onCopy: () => void;
   onShow?: () => void;
 }) {
-  const { reason, summary, summaryPending, elapsedSec, to, files, worktreeBranch } = entry.detail;
+  const { reason, summary, summaryPending, elapsedSec, to, files, worktreeBranch, handover } = entry.detail;
   const elapsed = formatSecs(elapsedSec);
   // A recap that merely echoes the agent's own sentence is not a second thing to
   // read.
@@ -442,6 +442,15 @@ function InboxRowDetail({
               <p className="inbox-detail-message muted">{recap}</p>
             </div>
           ) : null}
+          {/* Work that moved between agents. Its own block, below the recap,
+              because it is a different kind of claim: the recap is what a model
+              made of the transcript, this is what Spacron observed. */}
+          {handover && (
+            <div className="inbox-detail-block">
+              <span className="inbox-detail-label">Handed over</span>
+              <p className="inbox-detail-message muted">{handover}</p>
+            </div>
+          )}
           {/* Nothing was said at all — show the fallback sentence rather than an
               opened row that is emptier than the collapsed one. */}
           {!said && <p className="inbox-detail-message muted">{entry.body}</p>}

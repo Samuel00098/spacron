@@ -168,7 +168,7 @@ export async function runEmbeddedCommand(
         showToast(successMessage, 'success', 5000, true);
       } else if (notify && status === 'error') {
         const detail = exitCode !== null ? ` (exit ${exitCode})` : '';
-        showToast(`${label} failed${detail} — see terminal`, 'error', 6000);
+        showToast(`${label} failed${detail}: see terminal`, 'error', 6000);
       }
       // Background sessions are one-shot: reclaim the hidden terminal the
       // moment the command settles so no orphaned probe shells accumulate.

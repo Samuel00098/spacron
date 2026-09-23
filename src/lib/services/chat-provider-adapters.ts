@@ -27,7 +27,10 @@ export interface AgentProviderCapabilities {
   supportsChat: boolean;
   /** Native protocol used by the Chat driver. */
   protocol?: ChatProviderProtocol;
-  /** Provider-native models, used until a live catalogue is available. */
+  /**
+   * Only the "CLI default" entry. Real model ids come solely from the
+   * installed CLI's live catalogue — nothing is pre-listed.
+   */
   models: AgentProviderModel[];
   accessModes: ChatAccessMode[];
   reasoningEfforts: ChatReasoningEffort[];
@@ -103,15 +106,39 @@ function parseDashModels(output: string): AgentProviderModel[] {
   return models;
 }
 
+function humanizeModelId(id: string): string {
+  const modelName = id.split('/').pop() ?? id;
+  return modelName
+    .replace(/(\d+)-(\d+)(?=-|$)/g, '$1.$2')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\bclaude\b/gi, 'Claude')
+    .replace(/\bfable\b/gi, 'Fable')
+    .replace(/\bopus\b/gi, 'Opus')
+    .replace(/\bsonnet\b/gi, 'Sonnet')
+    .replace(/\bhaiku\b/gi, 'Haiku')
+    .replace(/\bgpt\b/gi, 'GPT')
+    .replace(/\bgrok\b/gi, 'Grok')
+    .replace(/\bgemini\b/gi, 'Gemini')
+    .replace(/\bglm\b/gi, 'GLM')
+    .replace(/\b(qwen|deepseek|mistral|kimi|minimax|nemotron)\b/gi, (name) =>
+      name[0].toUpperCase() + name.slice(1),
+    )
+    .replace(/\b(sol|terra|luna|codex|spark|build|pro|mini|nano|flash|latest)\b/gi, (name) =>
+      name[0].toUpperCase() + name.slice(1),
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function parseGrokModels(output: string): AgentProviderModel[] {
   const models: AgentProviderModel[] = [];
   const seen = new Set<string>();
   for (const line of cleanModelOutput(output).split('\n')) {
-    const match = line.trim().match(/^\*\s+([^\s(]+)(?:\s+\(([^)]+)\))?$/);
+    const match = line.trim().match(/^(?:\*|-)\s+([^\s(]+)(?:\s+\(([^)]+)\))?$/);
     if (!match) continue;
     addUniqueModel(models, seen, {
       id: match[1],
-      label: match[1],
+      label: humanizeModelId(match[1]),
       description: 'Reported by the installed agent CLI.',
       isDefault: /\bdefault\b/i.test(match[2] ?? ''),
     });
@@ -127,7 +154,7 @@ function parseOpenCodeModels(output: string): AgentProviderModel[] {
     if (!/^[A-Za-z0-9._~-]+\/[A-Za-z0-9._:/~-]+$/.test(trimmed)) continue;
     addUniqueModel(models, seen, {
       id: trimmed,
-      label: trimmed,
+      label: humanizeModelId(trimmed),
       description: 'Reported by the installed OpenCode CLI.',
       free: /(?:^|[-/])free(?:$|-)/i.test(trimmed),
     });
@@ -184,12 +211,7 @@ const claudeAdapter: ChatProviderAdapter = {
   aliases: ['claude', 'claude-code'],
   label: 'Claude Code',
   protocol: 'claude-stream-json',
-  models: [
-    { id: 'default', label: 'Auto', description: 'Let Claude Code choose the available model.' },
-    { id: 'fable', label: 'Claude Fable' },
-    { id: 'opus', label: 'Claude Opus' },
-    { id: 'sonnet', label: 'Claude Sonnet' },
-  ],
+  models: [{ id: 'default', label: 'CLI default', description: 'Let Claude Code choose the available model.' }],
   accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
   reasoningEfforts: CLAUDE_REASONING,
   modelCommand: null,
@@ -272,16 +294,20 @@ const openCodeAdapter: ChatProviderAdapter = {
   protocol: 'opencode-server',
   models: [{ id: 'default', label: 'Auto', description: 'Let OpenCode choose the configured model.' }],
   accessModes: ['supervised', 'full-access'],
+  // Every launch here is the interactive `opencode` TUI, which accepts no
+  // reasoning flag: `--variant` exists only on `opencode run` and the TUI
+  // ignores it without an error. Empty = the picker is shown disabled.
   reasoningEfforts: [],
   modelCommand: 'opencode models',
   buildLaunchOptions(selection) {
     const model = safeProviderValue(selection.model);
+    const runtimeArgs = runtimeModelArgs(model);
     return {
       permissionArgs: permissionArgs(selection.accessMode ?? 'inherit', this.accessModes, {
         supervised: '',
         'full-access': '--auto',
       }),
-      runtimeArgs: runtimeModelArgs(model).join(' '),
+      runtimeArgs: runtimeArgs.join(' '),
     };
   },
   parseModels: parseOpenCodeModels,

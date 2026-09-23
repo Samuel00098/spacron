@@ -14,7 +14,12 @@ See also [[orchestrator-bare-ack-net]] (the ack guard the loop extends) and
 ## Turn-completion contract (2026-09-16)
 
 The loop's recovery passes are single-use flags, each with its own trigger:
-`protocolRecoveryUsed` (non-JSON response), `directPolicyRecoveryUsed`
+`protocolRecoveryUsed` (non-JSON response; the pass also RAISES the turn's
+output budget 4x via `raisedOutputTokens` → `ai_complete(max_tokens)` /
+transport `request(..., outputTokensOverride)`, because the usual cause is a
+reasoning model whose scratchpad starved the FINAL object — a reworded lecture
+cannot fix that; undefined until raised, so normal requests keep the exact
+budget shape they had), `directPolicyRecoveryUsed`
 (delegation despite direct-first, or unevidenced advice FINAL),
 `promiseRecoveryUsed` (bare ack), `deferredRecoveryUsed` ("then I can…"
 deferrals — see [[orchestrator-bare-ack-net]]), `claimWriteRecoveryUsed`
@@ -149,3 +154,56 @@ Three rules that only make sense together:
 The store passes `turnEvidence` as that fourth argument: the report must be built
 from the same results the summary and the plan closure use, or the card and the
 phase-4 evidence disagree.
+
+## Plan counts and follow-ups (2026-09-19)
+
+- `todoProgress` is the ONE progress count (ticker, update_todos feedback, final
+  card). Cancelled rows leave both sides of the fraction; they render `[-]`.
+- Turn-end close-out is `closeOutTodoItems`: in_progress and status-less rows
+  complete; explicitly `pending` rows stay open. It sets `status` and `done`
+  together — the old `{ ...t, done: true }` kept `status: 'pending'`, so the
+  ticker and the card disagreed.
+- update_todos feedback echoes the MERGED plan of record, never the call size.
+- The finished card's checklist is in the transcript, so a follow-up's first
+  plan is filtered by `splitCarriedOverTodos` against `lastTurnPlanByThread`
+  (in-memory, store): rows declared `[x]` that match the previous finished plan
+  are dropped. Pending matches are redo requests and stay.
+
+## Tool evidence is sized by the budget, not a constant (2026-09-20)
+
+`buildUserText` used to squeeze ALL tool results into a fixed 18k slice while
+`read_project` alone is allowed `BRAIN_REVIEW_OUTPUT_CAP` (120k). A real
+snapshot therefore reached the model gutted, and it answered — correctly —
+"the project snapshot is incomplete / this turn does not expose the remaining
+file reads". Symptom looks like a missing tool; it is a truncated prompt.
+
+Now the results block takes what the rest of the prompt leaves
+(`contextChars`, default 128k), the surrounding context is trimmed FIRST, and
+`MIN_TOOL_RESULT_CHARS` (18k) is the floor, not the cap. Anything that adds
+prompt sections must keep that order, or the evidence starves again.
+
+Text-mode providers (the ChatGPT/Codex subscription, any model whose catalogue
+reports no tool support, any provider that rejects the tools param) feel this
+first: they get tools only through the prompt, so the prompt IS their channel.
+
+## Context is sized from the model, and evidence is sent once (2026-09-20)
+
+Three numbers decide whether a big review fits, and they must agree:
+
+1. `contextCharBudget` (agent-transport) — the turn's character budget. The
+   user's Task-limits value wins; otherwise the model's advertised window is
+   converted with `CHARS_PER_TOKEN`. It used to compare a TOKEN count against a
+   character length, so a 128k-token model was treated as 128k CHARACTERS and
+   lost ~75% of its window to needless compaction.
+2. `projectSnapshotCharCap` (stores/orchestrator) — one `read_project`
+   snapshot: 60% of that budget, floored at the old 120k, ceilinged at
+   `BRAIN_REVIEW_MAX_OUTPUT_CAP`. `formatBrainToolResults` must clip
+   `read_project` at the SAME ceiling or the sizing is undone downstream.
+3. `buildUserText` — with a transport the history already replays full tool
+   outputs, so past `TOOL_RESULT_INLINE_LIMIT` the prompt carries only an
+   index (`formatBrainToolResultIndex`). Sending both copies doubled the tokens
+   of every later round; that duplication is what made long reviews crawl.
+
+A truncated snapshot must never become a question for the user: the
+incomplete-snapshot recovery passes the literal `{"offset": N}` from the
+snapshot header, because models asked permission instead of paging.

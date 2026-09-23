@@ -3,7 +3,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState, openProject } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
-  openQuickCapture,
   openRightSidebar,
   rightSidebarVisible,
   setRightDrawerTool,
@@ -13,6 +12,7 @@ import {
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
+import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
@@ -34,6 +34,8 @@ export default function TitleBar() {
   const projectsMap = useWorkspaceStore((s) => s.projects);
   const activeProject = activeProjectId ? projectsMap.get(activeProjectId) : null;
   const goBackEnabled = useStore(canGoBack);
+  const currentInteractionMode = useStore(interactionMode);
+  const modeShortcut = useSettingsStore((s) => s.userShortcuts.find((shortcut) => shortcut.id === 'toggleInteractionMode')?.keys);
   const goForwardEnabled = useStore(canGoForward);
   const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
@@ -184,26 +186,41 @@ export default function TitleBar() {
         </button>
       </div>
 
-      {/* Centre drag region with the current project label. Project switching
-          belongs to the Projects sidebar, so this indicator is display-only. */}
+      {/* Centre: the Code / Chat switch. It affects the whole window,
+          so it sits in the window chrome rather than inside a collapsible
+          sidebar. With no project open there is no mode to pick yet, so the
+          slot falls back to the one action that matters — opening one. */}
       <div
         className="titlebar-center"
         data-tauri-drag-region
       >
         {activeProject ? (
-          <div
-            className="titlebar-project-pill static"
-            title={activeProject.name}
-            aria-label={`Active project: ${activeProject.name}`}
-            role="status"
-            data-tauri-drag-region
-          >
-            <span className="titlebar-project-icon" aria-hidden="true" data-tauri-drag-region>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+          <div className="titlebar-mode-switch" role="group" aria-label="Interaction mode">
+            <button
+              type="button"
+              className={`titlebar-mode-btn${currentInteractionMode === 'cli' ? ' active' : ''}`}
+              onClick={() => setInteractionMode('cli')}
+              aria-pressed={currentInteractionMode === 'cli'}
+              title={`Code mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="16 18 22 12 16 6" />
+                <polyline points="8 6 2 12 8 18" />
               </svg>
-            </span>
-            <span className="titlebar-project-name" data-tauri-drag-region>{activeProject.name}</span>
+              <span>Code</span>
+            </button>
+            <button
+              type="button"
+              className={`titlebar-mode-btn${currentInteractionMode === 'chat' ? ' active' : ''}`}
+              onClick={() => setInteractionMode('chat')}
+              aria-pressed={currentInteractionMode === 'chat'}
+              title={`Chat mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>Chat</span>
+            </button>
           </div>
         ) : (
           <button
@@ -253,28 +270,6 @@ export default function TitleBar() {
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <path d="M15 4v16" />
                 <path d="M17 8h1M17 12h1M17 16h1" />
-              </svg>
-            </button>
-
-            <button
-              className="icon-btn tb-collapse-1"
-              onClick={openQuickCapture}
-              aria-label="Quick Capture"
-              title={`Quick Capture (${formatShortcutLabel('Ctrl+Shift+Space')})`}
-            >
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
 

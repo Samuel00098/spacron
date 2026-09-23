@@ -167,9 +167,7 @@ the picker and editor visibly change; chrome neutrals stay shared per
 `presetThemes.ts` + the two `.webp` files need touching (ffmpeg recipe in
 [[background-wallpapers]]); the Rust side reads presets on the frontend for the
 picker, but the **bundled** defaults live in `loader.rs` — add the pair there
-too so a fresh install can hit it before the frontend loads. The four
-hard-coded theme ids in `OnboardingWalkthrough.tsx` may need a re-check if we
-want the pair on the tour.
+too so a fresh install can hit it before the frontend loads.
 
 **5. Welcome / launcher polish ("launcher polish" per CNVS)**
 

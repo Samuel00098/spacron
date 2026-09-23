@@ -48,7 +48,29 @@ pub fn run() {
 
     std::fs::create_dir_all(&config_dir).expect("failed to create spacron config directory");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Must be the first plugin. A second launch (Explorer's "Open with Spacron"
+    // while the app is open) exits at once and hands its paths to this window,
+    // which opens them as projects. Release builds only: `tauri dev` shares the
+    // identifier, so a dev window would otherwise swallow the installed app's
+    // launches, or the installed app would refuse to start beside it.
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        let paths = commands::launch::project_paths_from_args(
+            argv.into_iter().skip(1),
+            std::path::Path::new(&cwd),
+        );
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        if !paths.is_empty() {
+            let _ = app.emit("app:open-paths", paths);
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -154,6 +176,7 @@ pub fn run() {
             let pty_manager = app_state.pty_manager.clone();
             let app_handle = app.handle().clone();
             app.manage(app_state);
+            commands::images::allow_image_dirs(app.handle(), &config_dir);
 
             let read_cb: mcp::ReadFn = {
                 let pm = pty_manager.clone();
@@ -241,6 +264,11 @@ pub fn run() {
             commands::chatgpt::chatgpt_login_start,
             commands::chatgpt::chatgpt_login_cancel,
             commands::chatgpt::chatgpt_logout,
+            commands::deepseek_harness::deepseek_harness_status,
+            commands::deepseek_harness::deepseek_harness_worker_files,
+            commands::deepseek_harness::deepseek_harness_write_task,
+            commands::deepseek_harness::deepseek_harness_web_open,
+            commands::deepseek_harness::deepseek_harness_web_stop,
             commands::secrets::provider_api_key_exists,
             commands::secrets::provider_api_key_set,
             commands::secrets::provider_api_key_delete,
@@ -255,6 +283,13 @@ pub fn run() {
             commands::secrets::agent_turn::ai_agent_cancel,
             commands::secrets::agent_turn::ai_agent_capabilities,
             commands::secrets::agent_turn::ai_agent_probe,
+            commands::images::generate_media,
+            commands::images::allow_generations_dir,
+            commands::images::save_edit_mark,
+            commands::images::generate_image_cancel,
+            commands::images::save_image_copy,
+            commands::images::reveal_image,
+            commands::images::generated_images_folder,
             commands::secrets::ai_generate_commit_message,
             commands::secrets::list_provider_models,
             commands::secrets::check_local_provider_online,
@@ -285,6 +320,8 @@ pub fn run() {
             commands::music_library::music_library_scan,
             commands::music_library::music_library_reveal,
             commands::notification::notification_show,
+            commands::open_with::workspace_open_with_app,
+            commands::launch::app_launch_paths,
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
             commands::workspace::workspace_rename_project,
@@ -319,6 +356,7 @@ pub fn run() {
             commands::workspace::workspace_git_worktree_status,
             commands::workspace::workspace_git_worktree_delta,
             commands::workspace::workspace_git_stage_worktree,
+            commands::workspace::workspace_git_snapshot_worktree,
             commands::workspace::workspace_git_rename_worktree,
             commands::github::github_token_set,
             commands::github::github_token_exists,
@@ -369,6 +407,7 @@ pub fn run() {
             commands::agent_models::agent_list_models,
             commands::usage::usage_detect_agents,
             commands::usage::usage_fetch_all,
+            commands::usage::usage_fetch_accounts,
             commands::agent_accounts::usage_list_accounts,
             commands::agent_accounts::usage_select_account,
             commands::agent_accounts::usage_add_account,
@@ -452,6 +491,7 @@ pub fn run() {
             commands::mcp::mcp_write_global_agent_config,
             commands::mcp::mcp_write_launch_config,
             commands::mcp::mcp_set_project_root,
+            commands::mcp::mcp_call_emulator_tool,
             commands::mcp::mcp_set_agent_presets,
             commands::mcp::mcp_set_assistant_names,
             commands::mcp::mcp_deliver_respond,
@@ -463,6 +503,8 @@ pub fn run() {
             // exit so screenshots pasted this session don't linger on disk.
             if let tauri::RunEvent::Exit = event {
                 let _ = commands::file_system::clear_pasted_images();
+                // No `dsh web` server may outlive the app.
+                commands::deepseek_harness::shutdown_all();
             }
         });
 }

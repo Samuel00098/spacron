@@ -268,6 +268,56 @@ fn capture_help(executable: &str) -> Result<String, String> {
     Ok(text)
 }
 
+/// The process PATH followed by the current registry `Path` (Windows), each
+/// directory once. See [`which`] for why the registry is merged in.
+fn search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    #[cfg(windows)]
+    dirs.extend(registry_path_dirs());
+
+    // The same directory frequently appears in the process PATH and the
+    // registry merge; search each directory once.
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|dir| seen.insert(dir.clone()));
+    dirs
+}
+
+/// A `PATH` value for child processes that must resolve the same tools a fresh
+/// terminal would (an npm `.cmd` shim looks up `node` on PATH, not next to
+/// itself). Unlike [`search_dirs`], the registry `Path` comes FIRST and the
+/// process PATH only fills what room is left: cmd.exe's own command search
+/// stops working once PATH passes its 8191-character line limit (verified —
+/// `where node` still succeeds while the shim's bare `node` is "not
+/// recognized"), and dev tooling can prepend hundreds of entries.
+pub fn search_path() -> Option<std::ffi::OsString> {
+    const CMD_PATH_LIMIT: usize = 8000;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    #[cfg(windows)]
+    dirs.extend(registry_path_dirs());
+    let registry_count = dirs.len();
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut length = 0usize;
+    let mut kept = Vec::new();
+    for (index, dir) in dirs.into_iter().enumerate() {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        let cost = dir.as_os_str().len() + 1;
+        if index >= registry_count && length + cost > CMD_PATH_LIMIT {
+            continue;
+        }
+        length += cost;
+        kept.push(dir);
+    }
+    std::env::join_paths(kept).ok()
+}
+
 /// Locate `program` on PATH, trying `PATHEXT` suffixes on Windows so `grok`
 /// finds `grok.exe` and `cursor-agent` finds `cursor-agent.cmd`.
 ///
@@ -283,17 +333,7 @@ fn capture_help(executable: &str) -> Result<String, String> {
 /// gap too.) On macOS/Linux there is no equivalent registry; the process PATH
 /// is the honest scope there.
 pub fn which(program: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    #[cfg(windows)]
-    dirs.extend(registry_path_dirs());
-
-    // The same directory frequently appears in the process PATH and the
-    // registry merge; search each directory once.
-    let mut seen = std::collections::HashSet::new();
-    dirs.retain(|dir| seen.insert(dir.clone()));
+    let dirs = search_dirs();
 
     #[cfg(windows)]
     let extensions: Vec<String> = std::env::var("PATHEXT")
@@ -463,7 +503,7 @@ fn file_contains_literal(path: &Path) -> Option<&'static str> {
 /// `"%dp0%\node_modules\@openai\codex\bin\codex.js"`. Scanning the shim finds
 /// nothing, so the referenced path is what has to be read. Placeholders for the
 /// shim's own directory (`%dp0%`, `%~dp0`, `$basedir`) resolve against it.
-fn shim_targets(shim: &Path) -> Vec<PathBuf> {
+pub(crate) fn shim_targets(shim: &Path) -> Vec<PathBuf> {
     let Ok(text) = std::fs::read_to_string(shim) else {
         return Vec::new();
     };

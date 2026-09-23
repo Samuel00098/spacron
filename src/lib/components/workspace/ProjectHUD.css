@@ -10,29 +10,6 @@
   background: transparent;
 }
 
-/* Top Header Toolbar */
-.projects-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px 6px;
-  flex-shrink: 0;
-}
-
-.projects-panel-title {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-muted);
-}
-
-.projects-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .projects-header-btn {
   display: flex;
   align-items: center;
@@ -54,9 +31,8 @@
 
 /* Filter / Search Section */
 .projects-search-section {
-  padding: 0 10px 8px;
+  padding: 0 8px 4px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .projects-search-field {
@@ -119,6 +95,33 @@
   color: var(--text-primary);
 }
 
+.projects-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.projects-search-toggle:hover,
+.projects-search-toggle.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.projects-search-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 1px;
+}
+
 /* Inline New Collection Bar */
 .projects-new-collection-inline {
   display: flex;
@@ -128,46 +131,6 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-}
-
-.projects-inline-input {
-  flex: 1;
-  min-width: 0;
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11.5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  outline: none;
-}
-
-.projects-inline-input:focus {
-  border-color: var(--accent);
-}
-
-.projects-inline-btn {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 500;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.projects-inline-btn.primary {
-  background: var(--accent);
-  color: var(--button-text, #fff);
-  border-color: transparent;
-}
-
-.projects-inline-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* Scrollable Body */
@@ -656,38 +619,6 @@
   flex-shrink: 0;
 }
 
-/* The one status light, in two stages. Bare (grey) means the session is open
-   but idle; `.working` is green and pulsing while
-   `TerminalSessionInfo.isExecuting` is true, matching the room panel's edge
-   light. */
-.hud-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  opacity: 0.55;
-  flex-shrink: 0;
-  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
-}
-
-.hud-status-dot.working {
-  background: var(--success);
-  opacity: 1;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 70%, transparent);
-  animation: hud-status-pulse 1.8s var(--ease-in-out, ease-in-out) infinite;
-}
-
-@keyframes hud-status-pulse {
-  0%, 100% { box-shadow: 0 0 5px color-mix(in srgb, var(--success) 55%, transparent); }
-  50% { box-shadow: 0 0 9px color-mix(in srgb, var(--success) 90%, transparent); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hud-status-dot.working {
-    animation: none;
-  }
-}
-
 .project-contents {
   display: flex;
   flex-direction: column;
@@ -1036,6 +967,9 @@
   flex-shrink: 0;
 }
 
+/* The row leads with WHAT is running — an agent's own CLI logo, or the glyph the
+   tool uses in its room header — rather than a bare status dot. The parent has a
+   real size because `AgentBrandMark` paints at 100% of whatever contains it. */
 .project-process-icon {
   display: inline-flex;
   align-items: center;
@@ -1046,37 +980,39 @@
   flex: 0 0 12px;
 }
 
+.project-process-icon .agent-brand-mark,
+.project-process-icon .agent-brand-mark > svg,
+.project-process-icon .agent-brand-mark > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* `.busy` carries the old green dot's one bit of information —
+   `TerminalSessionInfo.isExecuting` — onto the mark itself, so "is it still
+   running?" is still answerable at a glance without a second element. */
+.project-process-icon.busy {
+  animation: project-process-busy 1.8s var(--ease-in-out, ease-in-out) infinite;
+}
+
+@keyframes project-process-busy {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-process-icon.busy {
+    animation: none;
+  }
+}
+
 .project-process-detail {
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.project-room-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 1px 2px;
-}
-
-.project-room-chip {
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-
-.project-room-chip:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  color: var(--text-primary);
 }
 
 .project-task-list {
@@ -1241,17 +1177,6 @@
   border-radius: 4px;
 }
 
-/* Inline New Workspace Form */
-.projects-new-ws-inline {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .project-sidebar-card-task-count {
   display: inline-flex;
   align-items: center;
@@ -1262,110 +1187,6 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--text-secondary);
   flex-shrink: 0;
-}
-
-/* Workspace Group Card */
-.projects-workspace-card {
-  margin: 2px 2px 4px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
-  overflow: visible;
-  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-}
-
-.projects-workspace-card:hover {
-  border-color: color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
-}
-
-.projects-workspace-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  border-radius: 6px 6px 0 0;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.projects-workspace-header:hover {
-  background: var(--bg-hover);
-}
-
-.projects-workspace-header.active {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-}
-
-.projects-workspace-chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0;
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.projects-workspace-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.projects-workspace-icon {
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
-.projects-workspace-name {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: -0.01em;
-}
-
-.projects-workspace-count {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-muted);
-  margin-right: 4px;
-}
-
-.projects-workspace-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.projects-workspace-card:hover .projects-workspace-actions,
-.projects-workspace-actions:focus-within {
-  opacity: 1;
-}
-
-.projects-workspace-body {
-  padding: 3px 4px 6px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.projects-workspace-empty {
-  padding: 8px 10px;
-  font-size: 11px;
-  color: var(--text-muted);
-  font-style: italic;
-  text-align: center;
 }
 
 /* Section Header Left & Chevron */

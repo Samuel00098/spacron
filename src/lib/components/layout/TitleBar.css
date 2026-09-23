@@ -133,6 +133,73 @@
 
 
 
+/* Independent Code / Chat buttons, centered as a pair in the titlebar. */
+.titlebar .titlebar-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  max-width: 100%;
+}
+
+.titlebar .titlebar-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+
+.titlebar .titlebar-mode-btn svg {
+  flex: 0 0 auto;
+}
+
+.titlebar .titlebar-mode-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.titlebar .titlebar-mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 36%, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary);
+}
+
+.titlebar .titlebar-mode-btn.active svg {
+  color: var(--accent);
+}
+
+/* Narrow windows: the labels go and the control becomes two icons. */
+@media (max-width: 900px) {
+  .titlebar .titlebar-mode-btn span {
+    display: none;
+  }
+
+  .titlebar .titlebar-mode-btn {
+    padding: 0 7px;
+  }
+}
+
 .titlebar .titlebar-project-pill {
   display: inline-flex;
   align-items: center;
@@ -165,27 +232,6 @@
 
 .titlebar .titlebar-project-pill:active {
   transform: scale(0.98);
-}
-
-.titlebar .titlebar-project-pill.static {
-  cursor: default;
-  pointer-events: auto;
-  -webkit-app-region: drag;
-  app-region: drag;
-}
-
-.titlebar .titlebar-project-pill.static:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
-}
-
-.titlebar .titlebar-project-pill.static:hover .titlebar-project-icon {
-  color: var(--text-muted);
-}
-
-.titlebar .titlebar-project-pill.static:active {
-  transform: none;
 }
 
 .titlebar .titlebar-project-icon {
@@ -670,4 +716,3 @@
     right: 70px;
   }
 }
-

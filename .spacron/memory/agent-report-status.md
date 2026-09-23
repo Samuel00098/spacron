@@ -149,22 +149,34 @@ The channel is opened in `createSession` (the env must be complete before the
 process starts) and attached right after the PTY exists — the same two-step as
 the MCP token, for the same reason.
 
-## Silence is only fair to agents that could have spoken (2026-08-26)
+## Silence is only fair to agents that could have spoken (2026-08-26,
+narrowed 2026-09-21)
 
-`silent` is **not** just `endedBy === 'inferred'`. It is
-`endedBy === 'inferred' && agentCanReport(task.agentPreset)`.
+`turnEndIsSilent` (agent-capabilities.ts) is the ONE place this is decided; all
+three call sites in `stores/orchestrator` go through it. Do not re-inline it —
+they each spelled it out before and drifted.
+
+A guessed **finish** is inbox-only for every agent, full stop. It does not
+consult `agentCanReport`. That gate used to apply here too, which meant the ~31
+CLIs with no channel floated a corner card and an OS notification reading
+"Agent went quiet" on every idle spell — indistinguishable from a long compile,
+and the exact false completion alert the rule exists to stop. Removed
+2026-09-21 on user report.
+
+The gate survives for a guessed **pause** only, and that asymmetry is the point:
+a wrong finish costs an interruption over nothing and teaches the user to
+distrust the real ones, while a missed "needs input" strands them waiting on an
+agent that is waiting on them. So an inferred `blocked` still interrupts —
+unless the agent *could* have said so and didn't, which is itself evidence it is
+not blocked.
 
 Spacron writes an MCP config for eight executables (claude, codex, gemini,
 opencode, droid, cursor, cursor-agent, agent). The preset catalog briefs ~39
 CLIs to call `report_status` — so **31 of them are told to report a tool they
 do not have**, because `injectMcpConfigForAgent` has no branch for them and
-they launch with no Spacron tools at all.
-
-Withholding the card from those would mean they finish and the user is told
-nothing, ever — the opposite failure from the false "finished" the rule exists
-to stop. So: an agent that *could* report and didn't gets silence (its silence
-is information); an agent with no channel still gets a card, worded "went
-quiet". A guess honestly labelled as a guess beats nothing.
+they launch with no Spacron tools at all. The shell status channel
+(`hasAnyTurnSignalChannel`) covers most of that gap in practice; a remote box
+covers none of it.
 
 `agent-capabilities.ts` owns the list, as a leaf module both `mcpBridge`
 (writes the configs) and `stores/orchestrator` (decides what interrupts) can

@@ -3269,7 +3269,7 @@ fn get_ws_target_from_proxy_path(path: &str, query: Option<&str>) -> Option<Stri
 /// (`wss` included — rustls). The handshake carries the site's cookies from
 /// the shared persistent jar plus a matching `Origin`, so sockets that require
 /// an authenticated session (the normal case for logged-in web apps) connect.
-async fn handle_external_websocket(
+pub(crate) async fn handle_external_websocket(
     client_ws: axum::extract::ws::WebSocket,
     target_ws_url: String,
     cookie_header: Option<String>,

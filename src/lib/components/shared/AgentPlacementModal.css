@@ -217,12 +217,21 @@
 
 .apm-agent-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 7px 10px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--text-primary, #fff) 3%, transparent);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.apm-agent-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .apm-agent-icon {
@@ -284,6 +293,71 @@
 .apm-segment.active {
   color: var(--accent, #3b82f6);
   background: color-mix(in srgb, var(--accent, #3b82f6) 16%, transparent);
+}
+
+.agent-launch-config-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px 0 2px;
+  width: 100%;
+}
+
+.agent-launch-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-launch-config-field > span {
+  color: var(--text-muted, #808080);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.agent-launch-config-field select {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-primary, #111) 70%, transparent);
+  color: var(--text-primary, #e8e8e8);
+  font: inherit;
+  font-size: 11px;
+}
+
+.agent-launch-config-field select:focus-visible {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+}
+
+.agent-launch-config-field .dropdown {
+  width: 100%;
+}
+
+.agent-launch-config-field .dd-trigger {
+  height: 30px;
+  border-color: var(--input-border, var(--border));
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+}
+
+.agent-launch-config-field .dd-trigger:hover:not(:disabled) {
+  border-color: var(--border-focus, var(--accent));
+}
+
+.agent-launch-config-field select:disabled { opacity: 0.6; }
+
+.agent-launch-config-field small {
+  min-height: 13px;
+  color: var(--text-muted, #808080);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.apm-agent-config {
+  padding-left: 36px;
 }
 
 .apm-legend {

@@ -1,111 +1,49 @@
-/* The agent usage readout now lives only in the Navigator footer. The sidebar
-   variant below removes the old viewport anchoring and standalone glass shell.
-   Frost recipe matches the expanded details — see
-   [[glass-panel-recipe]]: the color-mix layer stays LAST in the background
-   shorthand, and no ancestor may establish a backdrop root. */
+/* The agent usage readout in the Navigator footer: brand mark, percentage, and
+   the window that percentage belongs to, per signed-in agent, worst first.
 
+   It has exactly one home. `<UsageCounter />` always renders
+   `usage-dock usage-dock-sidebar`, so the free-floating `position: fixed` glass
+   chip this file used to lead with — viewport anchoring, its own frost recipe,
+   a drop shadow, a rim light — was a design with no rendering, undone one
+   declaration at a time by the `.usage-dock-sidebar` block below it. Both are
+   now one description of the one chip: a contained button in the footer, whose
+   surface the sidebar's Bento card already provides. */
+
+/* The chip shares the footer with the appearance and settings buttons inside a
+   rail the user can drag between 180px and 600px, so "is there room for two
+   agents on one line?" is a question about the FOOTER — which is where the
+   `usage-footer` query container the steps at the bottom of this file ask is
+   declared (`.left-sidebar-footer`, AppShell.css). It is declared there rather
+   than on the chip itself because `contain: inline-size` on an `auto`-width
+   flex item would size it as if it had no contents, i.e. to nothing.
+
+   The viewport media queries those steps replaced asked a different question
+   and answered it dishonestly: they hid an agent with `display: none` while the
+   "+N" badge — counted in JS from `MAX_AGENTS` — went on reporting the old
+   number, so a 680px window showed one agent and claimed none were hidden.
+   Nothing below hides a reading; the row wraps instead. */
 .usage-dock {
-  position: fixed;
-  left: 12px;
-  bottom: 12px;
-  /* Under `.usage-panel` (1400), which opens directly above it. */
-  z-index: 1350;
-
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* The readout grows and shrinks as agents come and go. A minimum stops the
-     chip collapsing to nothing between polls. Growth runs rightwards from a
-     pinned left edge, so nothing else on screen moves. */
-  min-width: 42px;
-  max-width: min(460px, calc(100vw - 24px));
-  padding: 7px 13px;
-
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.09));
-  border-radius: 999px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
-    color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  transition:
-    border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
-    box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease),
-    opacity var(--dur-fast, 0.15s) var(--ease-out, ease);
-}
-
-.usage-dock:hover {
-  border-color: var(--border-strong, rgba(255, 255, 255, 0.18));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
-}
-
-/* In the Navigator the same live readout becomes a contained status banner.
-   Its data and click target are unchanged; only the old viewport anchoring and
-   stand-alone glass shell are removed because the parent Bento card owns both. */
-.usage-dock.usage-dock-sidebar {
   position: relative;
-  inset: auto;
   z-index: 1;
-  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px 8px;
   min-width: 0;
-  max-width: none;
   min-height: 30px;
   padding: 5px 8px;
-  gap: 8px;
   border: 0;
   border-radius: 8px;
-  justify-content: flex-start;
   background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
 
-.usage-dock.usage-dock-sidebar:hover {
-  background: transparent;
+.usage-dock:hover,
+.usage-dock:focus-visible {
   color: var(--text-primary);
-  box-shadow: none;
-}
-
-.usage-dock.usage-dock-sidebar:focus-visible {
-  outline: none;
-  background: transparent;
-  color: var(--text-primary);
-}
-
-.usage-dock.usage-dock-sidebar::after {
-  display: none;
-}
-
-.usage-dock.usage-dock-sidebar .usage-dock-agent {
-  min-width: 0;
-}
-
-.usage-dock.usage-dock-sidebar .usage-dock-empty-label {
-  font-size: 10.5px;
-  font-weight: 500;
-}
-
-.usage-dock.usage-dock-sidebar .usage-dock-num {
-  font-size: 11px;
-}
-
-.usage-dock.usage-dock-sidebar .usage-dock-win,
-.usage-dock.usage-dock-sidebar .usage-dock-more {
-  font-size: 9px;
-}
-
-.usage-dock-caret {
-  flex: none;
-  color: var(--text-muted);
-  transition: transform var(--dur-fast, 0.15s) var(--ease-out, ease);
-}
-
-.usage-dock[data-open='true'] .usage-dock-caret {
-  transform: rotate(180deg);
 }
 
 .usage-dock:focus-visible {
@@ -122,10 +60,16 @@
   opacity: 1;
 }
 
+.usage-dock-empty-label {
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
 .usage-dock-agent {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 /* The brand mark is the part that says *whose* number this is, so it is sized
@@ -142,9 +86,7 @@
 
 /* <AgentBrandMark> paints at 100%/100%, so it needs a parent with a real size —
    without one it falls back to the asset's intrinsic dimensions, and a fetched
-   favicon is routinely 256px square. This dock is a sibling of `.app-shell`, so
-   the shell's sizing rules never reach it and it must state its own. See
-   [[agent-brand-marks]]. */
+   favicon is routinely 256px square. See [[agent-brand-marks]]. */
 .usage-dock-mark svg,
 .usage-dock-mark img {
   width: 19px;
@@ -155,21 +97,22 @@
 .usage-dock-window {
   display: inline-flex;
   align-items: baseline;
-  gap: 1.5px;
+  gap: 2.5px;
   color: var(--text-secondary);
 }
 
 .usage-dock-num {
-  font-size: 12.5px;
+  font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
 /* The window suffix is what stops a bare "100%" reading as a full tank, so it
-   is quieter than the number but never hidden. */
+   is quieter than the number but never hidden — and it keeps a real gap from
+   the number, which at 1.5px was rendering as "100%mo". */
 .usage-dock-win {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 500;
   opacity: 0.72;
 }
@@ -181,7 +124,8 @@
 }
 
 .usage-dock-more {
-  font-size: 10px;
+  flex: none;
+  font-size: 9px;
   font-weight: 600;
   padding: 2px 5px;
   border-radius: 999px;
@@ -197,6 +141,17 @@
 
 .usage-dock-window[data-severity='critical'] {
   color: var(--error, #c74e39);
+}
+
+.usage-dock-caret {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+
+.usage-dock[data-open='true'] .usage-dock-caret {
+  transform: rotate(180deg);
 }
 
 /* Refreshing is a background event and the numbers on screen stay valid while
@@ -222,34 +177,29 @@
   }
 }
 
-/* Narrow windows: drop the secondary window per agent, keeping the mark and
-   the leading (worst) number so the chip still says who and how much. */
-@media (max-width: 900px) {
-  .usage-dock-window:not(:first-of-type) {
-    display: none;
+/* ── Narrow footer ──────────────────────────────────────────────────────
+   The footer spends a fixed 92px on its two icon buttons, its gaps and its
+   padding, so the chip's share is the footer width minus that. Two agents plus
+   the "+N" badge and the caret need ~215px of it — and at the rail's default
+   310px the chip gets about 216, which is why the DEFAULT layout was already
+   touching its own limit, with "100%mo" pressed against the next agent's mark.
+   Tighten the gaps first; then let the row take a second line rather than drop
+   a number it is still counting. */
+
+@container usage-footer (max-width: 308px) {
+  .usage-dock {
+    gap: 2px 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .usage-dock-agent {
+    gap: 5px;
   }
 }
 
-@media (max-width: 680px) {
-  .usage-dock-agent:not(:first-of-type) {
-    display: none;
-  }
-}
-
-@media (max-width: 480px) {
-  .usage-dock:not(.usage-dock-sidebar) {
-    left: 8px;
-    bottom: 8px;
-    padding: 5px 9px;
-    gap: 6px;
-    max-width: calc(100vw - 16px);
-  }
-
-  .usage-dock-mark {
-    width: 17px;
-    height: 17px;
-  }
-
+@container usage-footer (max-width: 268px) {
+  .usage-dock-mark,
   .usage-dock-mark svg,
   .usage-dock-mark img {
     width: 17px;
@@ -257,13 +207,12 @@
   }
 
   .usage-dock-num {
-    font-size: 11.5px;
+    font-size: 10.5px;
+  }
+
+  /* On a wrapped row the caret's `margin-left: auto` would strand it alone on
+     the last line, so it returns to sitting right after the readings. */
+  .usage-dock-caret {
+    margin-left: 0;
   }
 }
-
-@media (max-width: 360px) {
-  .usage-dock-win {
-    font-size: 9px;
-  }
-}
-

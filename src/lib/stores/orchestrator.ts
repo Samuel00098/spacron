@@ -1,12 +1,35 @@
 import { loadAgentCheckpoint, saveAgentCheckpoint, deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoints';
-import { filePage } from '$lib/services/orchestrator/agent-transport';
+import { filePage, contextCharBudget, type AgentBudgets } from '$lib/services/orchestrator/agent-transport';
+import { applyTextEdit, unifiedDiff } from '$lib/services/orchestrator/edit-match';
+import { saveTurnEdits, loadTurnEdits, clearTurnEdits, resetTurnEditsForTests, type TurnEditRecord } from '$lib/services/orchestrator/turn-edit-undo';
+import { approvalRuleKey, classifyCommand, describeRule, ruleAllows } from '$lib/services/orchestrator/command-policy';
+import { findAppCommand, formatAppCommandList, isRiskyAppCommand, listAppCommands, type AppCommand } from '$lib/services/orchestrator/app-commands';
+import { useCommandPaletteStore } from '$lib/stores/zustand/commandpalette';
+import { createTurnTiming, formatTurnTiming, recordModelCall, recordToolCall } from '$lib/services/orchestrator/turn-timing';
+import { redactEnvFile, secretKind, visibilityNote } from '$lib/services/orchestrator/file-visibility';
+import {
+  DIRECT_EDIT_FILE_LIMIT,
+  buildDelegationProposal,
+  checkDirectEditScope,
+  createDirectEditScope,
+  hasDelegationAction,
+  hasDirectRead,
+  userApprovedDelegation,
+  isScopeContinuation,
+  recordDirectEdit,
+  recordDirectRead,
+  resolveDelegationAnswer,
+  scopeKey,
+  type DelegationProposal,
+  type DirectEditScope,
+} from '$lib/services/orchestrator/delegation-policy';
 import { writable, get, derived } from '$lib/stores/storeCompat';
 import { useOrchestratorStore } from './zustand/orchestrator';
 import { invoke } from '@tauri-apps/api/core';
 import { backendInvoke } from '$lib/services/backend';
 import { readProjectState } from '$lib/services/project-state';
 import { showToast } from '$lib/stores/notification';
-import { estimateFileOverlap } from '$lib/services/jev';
+import { sanitizeLaunchSelection } from '$lib/services/live-agent-models';
 import { getPresetRuns } from '$lib/stores/runs';
 import {
   getProjectTaskPanelLines,
@@ -29,6 +52,7 @@ import {
   routeOrchestratorRequest,
   ADMIN_KEYWORD_RE,
   detectStatedPlacement,
+  isAcknowledgement,
   type AgentChoice,
   type RouteResult,
   type RouteLlmConfig,
@@ -40,8 +64,8 @@ import {
 } from '$lib/services/orchestrator-brain';
 import { detectAgentAccess, getAgentAccessBlockedMessage } from '$lib/services/agent-access';
 import { reconnoiter, buildProjectTree, readProjectFilesForContext } from '$lib/services/orchestrator/recon';
-import { agentInputRequest, isPromiseOnlyReply, isDeferredCompletionReply, cleanOrchestratorReply, formatTurnSummary, composeTurnReply, parseTodoList, mergeTodoItems, advanceTodoItems, findOmittedPlanItems, todoMarkerStatus, todoIsDone, formatDocumentsIndexBlock, MAX_PLAN_ITEMS, type ChatTurnTodoItem, type DocumentsIndexEntry } from '$lib/services/orchestrator/chat-turn';
-import { toolArgStr, toolArgNum, toolArgBool, toolArgStrArr, BRAIN_TOOL_OUTPUT_CAP, BRAIN_REVIEW_OUTPUT_CAP, type BrainMode, type BrainToolCall, type BrainToolResult } from '$lib/services/orchestrator/brain-tools';
+import { agentInputRequest, isPromiseOnlyReply, isDeferredCompletionReply, cleanOrchestratorReply, formatTurnSummary, composeTurnReply, parseTodoList, mergeTodoItems, advanceTodoItems, findOmittedPlanItems, todoMarkerStatus, todoIsDone, todoProgress, closeOutTodoItems, splitCarriedOverTodos, formatTodoListMarkdown, formatDocumentsIndexBlock, MAX_PLAN_ITEMS, type ChatTurnTodoItem, type DocumentsIndexEntry } from '$lib/services/orchestrator/chat-turn';
+import { toolArgStr, toolArgNum, toolArgBool, toolArgStrArr, normalizeEmulatorArgs, BRAIN_TOOL_OUTPUT_CAP, BRAIN_REVIEW_OUTPUT_CAP, BRAIN_REVIEW_MAX_OUTPUT_CAP, type BrainMode, type BrainToolCall, type BrainToolResult } from '$lib/services/orchestrator/brain-tools';
 import {
   aiProvider,
   currentAiModel,
@@ -59,6 +83,7 @@ import {
   transitionTask,
   cancelTask,
   type OrchestratorTask,
+  type TaskMigration,
 } from '$lib/services/orchestrator/task-lifecycle';
 import { classifyTaskAfterExecution } from '$lib/services/orchestrator/review-gate';
 import {
@@ -75,8 +100,10 @@ import {
   type AgentTurnOutcome,
   type TurnEndPresentation,
 } from '$lib/services/orchestrator/agent-turn-watch';
-import { agentCanReport } from '$lib/services/orchestrator/agent-capabilities';
+import { turnEndIsSilent } from '$lib/services/orchestrator/agent-capabilities';
 import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
+import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-levels';
+import { estimateFileOverlap } from '$lib/services/jev';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
@@ -89,7 +116,28 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, renameTaskWorktree, deriveFirstWorkBranch, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { deepSeekTrackedWorktrees, dropDeepSeekWorktree, patchDeepSeekWorktree } from '$lib/services/deepseek-harness';
+import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, renameTaskWorktree, deriveFirstWorkBranch, getWorktreeDelta, snapshotWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import {
+  buildAccountRoster,
+  chooseSuccessor,
+  describeNothingQualifies,
+  earliestResetMs,
+  findReading,
+  headroomPercent,
+  isExhausted,
+  type AccountHeadroom,
+  type SuccessorChoice,
+  type SuccessorPolicy,
+} from '$lib/services/orchestrator/agent-failover';
+import {
+  buildHandoverBrief,
+  buildWrapUpRequest,
+  describeHandoverReason,
+  describeMigrationChain,
+} from '$lib/services/orchestrator/agent-handover';
+import { fetchAccountUsage } from '$lib/stores/agentAccounts';
+import { usageState, refreshUsage, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
 import {
   initWorktreeReconciler,
   reconcileNow,
@@ -97,12 +145,27 @@ import {
   stageWorktreeNow,
   type TrackedWorktree,
 } from '$lib/services/orchestrator/worktree-reconciler';
-import { autoStageAgentChanges } from '$lib/stores/settings';
+import {
+  autoStageAgentChanges,
+  agentFailover,
+  agentFailoverCrossProvider,
+  agentFailoverHeadroomPercent,
+  mediaGeneration,
+} from '$lib/stores/settings';
+import {
+  cancelMediaGeneration,
+  failureNotice,
+  fallbackNotice,
+  generateMedia,
+  mediaMimeType,
+  type MediaKind,
+} from '$lib/services/media-generation';
 import {
   buildEmbeddedCommand,
   detectShellKind,
   parseEmbeddedExitCode,
   EMBEDDED_DONE_PREFIX,
+  type EmbeddedShellKind,
 } from '$lib/services/embeddedCommand';
 import {
   appendLegacyChatMessage,
@@ -121,7 +184,7 @@ import {
   clearChatTurnTicker,
   type ChatThreadStatus,
 } from '$lib/stores/chatThreads';
-import { requestAgentPlacement, defaultAgentPlacement, type AgentPlacement } from '$lib/stores/agentPlacement';
+import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, type AgentPlacement, type AgentPlacementAnswer } from '$lib/stores/agentPlacement';
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
@@ -150,6 +213,7 @@ import {
   loadKnowledgeGraph,
 } from '$lib/services/orchestrator/knowledge';
 import {
+  findRepeatedInstruction,
   getProfileLines,
   loadProjectProfile,
   reflectAndEvolve,
@@ -173,9 +237,13 @@ import {
   setActiveSession,
   getSessionOutputBuffer,
   getSessionOutputLength,
+  getSessionOutputProduced,
   getSessionOutputSince,
   getActiveTerminalProjectId,
   allProjectSessions,
+  agentStartupState,
+  waitForAgentReady,
+  type AgentStartupState,
 } from '$lib/stores/terminal';
 
 export type {
@@ -294,6 +362,8 @@ function normalizeLoadedTask(raw: Partial<PersistedTask> | null | undefined): Or
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null,
     status,
     agentPreset: raw.agentPreset ?? null,
+    agentModel: raw.agentModel ?? null,
+    agentReasoningEffort: raw.agentReasoningEffort,
     role: raw.role ?? null,
     assignedSessionId: status === 'in-progress' ? raw.assignedSessionId ?? null : null,
     blockedReason: raw.blockedReason ?? null,
@@ -416,6 +486,8 @@ export async function loadProjectOrchestratorTasks(project: { id: string; root_p
       (rawTask?.name ?? null) !== reconciledTask.name ||
       rawTask?.status !== reconciledTask.status ||
       (rawTask?.agentPreset ?? null) !== reconciledTask.agentPreset ||
+      (rawTask?.agentModel ?? null) !== reconciledTask.agentModel ||
+      (rawTask?.agentReasoningEffort ?? 'default') !== (reconciledTask.agentReasoningEffort ?? 'default') ||
       (rawTask?.assignedSessionId ?? null) !== reconciledTask.assignedSessionId ||
       (rawTask?.blockedReason ?? null) !== reconciledTask.blockedReason ||
       (rawTask?.failureReason ?? null) !== reconciledTask.failureReason ||
@@ -960,11 +1032,17 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
       }
     }
   } else if (task.status === 'blocked') {
+    // Other agents read this log line back, so a limit stop has to say it was
+    // one. "Blocked: needs input" would send a teammate looking for a question
+    // that was never asked.
     await postMailboxMessage(task.projectId, projectPaths.get(task.projectId), {
       from,
       kind: 'note',
       taskId: task.id,
-      text: `Blocked on ${label}: ${outcome.kind === 'blocked' ? outcome.reason : 'needs input'}`,
+      text:
+        outcome.kind === 'limited'
+          ? `Out of usage on ${label}: ${outcome.reason}`
+          : `Blocked on ${label}: ${outcome.kind === 'blocked' ? outcome.reason : 'needs input'}`,
     });
   } else if (task.status === 'failed') {
     await postMailboxMessage(task.projectId, projectPaths.get(task.projectId), {
@@ -1118,6 +1196,7 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<number> 
       const outcome = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false, stagePending: false });
       if (!outcome.removed) continue;
       forgetWorktree(entry.worktree.path);
+      dropDeepSeekWorktree(projectId, entry.worktree.path);
       for (const task of get(orchestratorTasks)) {
         if (task.projectId === projectId && task.worktree?.path === entry.worktree.path) {
           patchTask(task.id, (t) => ({ ...t, worktree: null }));
@@ -1171,6 +1250,7 @@ export async function reclaimProjectWorktrees(projectId: string): Promise<Reclai
     if (result.removed) {
       outcome.removed += 1;
       forgetWorktree(entry.worktree.path);
+      dropDeepSeekWorktree(projectId, entry.worktree.path);
       const task = get(orchestratorTasks).find((t) => t.worktree?.path === entry.worktree.path);
       if (task) patchTask(task.id, (t) => ({ ...t, worktree: null }));
     } else {
@@ -1202,6 +1282,10 @@ export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
     for (const session of getTerminalProjectState(projectId, isDev).sessions) {
       if (session.worktree) known.add(session.worktree.path);
     }
+  }
+  // A DeepSeek panel's worktree has no session or task behind it.
+  for (const entry of deepSeekTrackedWorktrees()) {
+    if (entry.projectId === projectId) known.add(entry.worktree.path);
   }
 
   let removed = 0;
@@ -1280,7 +1364,21 @@ async function completeLeasedTask(
   const task = get(orchestratorTasks).find((t) => t.id === taskId);
   if (!task || task.status !== 'in-progress' || task.assignedSessionId !== sessionId) return;
 
-  const blocked = outcome.kind === 'blocked';
+  // A turn that stopped on a usage limit is not a turn that ended. The work is
+  // unfinished and nothing is wrong with it, so the first thing to try is
+  // moving it to an account that can finish it — the hard-stop case the
+  // mid-turn watch did not see coming, arriving by the other door.
+  //
+  // Only if the ladder has no rung left does this fall through and report, and
+  // then it reports as `blocked` with the CLI's own words: unfinished work the
+  // user has to decide about, not a failure and certainly not a completion.
+  if (outcome.kind === 'limited') {
+    const reading = findReading(failoverRoster, task.agentPreset, task.agentAccountId);
+    logTaskActivity(taskId, 'info', outcome.reason);
+    if (await handOverTask(taskId, reading, 'mid-turn')) return;
+  }
+
+  const blocked = outcome.kind === 'blocked' || outcome.kind === 'limited';
   const declaredFailure = outcome.kind === 'failed';
   // Snapshot the agent's terminal output before we release the lease, so the
   // durable record captures exactly what it did this turn.
@@ -1302,7 +1400,13 @@ async function completeLeasedTask(
 
   if (updated) {
     if (updated.status === 'blocked') {
-      logTaskActivity(taskId, 'blocked', outcome.kind === 'blocked' ? outcome.reason : 'Agent needs your input.');
+      logTaskActivity(
+        taskId,
+        'blocked',
+        outcome.kind === 'blocked' || outcome.kind === 'limited'
+          ? outcome.reason
+          : 'Agent needs your input.',
+      );
     } else if (updated.status === 'failed') {
       logTaskActivity(taskId, 'failed', updated.failureReason ?? 'Agent exited with errors.');
     } else {
@@ -1326,28 +1430,17 @@ async function completeLeasedTask(
     : null;
   const name = task.name?.trim() || agentType || task.agentPreset || 'Agent';
 
-  // A task launched FROM the task panel ("Run with agent") asks instead of
-  // auto-completing: the agent ending its turn is evidence, not a decision, so
-  // the user gets a one-click move of the card to Done. Only a clean finish
-  // asks — blocked/failed need human judgement first. The click re-checks the
-  // board: the card may have been moved or deleted while the agent worked.
+  // A task launched FROM the task panel ("Run with agent") is the task the
+  // agent was asked to complete. Once that leased task reaches a clean terminal
+  // state, close the linked board card as well; otherwise every later brain
+  // request receives the stale card in its "In progress" context. Blocked and
+  // failed runs remain actionable instead of being marked done.
   if (task.panelTaskId && updated.status === 'complete') {
     const panelTaskId = task.panelTaskId;
     const panelTask = get(tasks).find((t) => t.id === panelTaskId);
     if (panelTask && panelTask.status !== 'done') {
-      showToast(
-        `"${panelTask.title}": ${name} finished its turn.`,
-        'info',
-        12000,
-        false,
-        {
-          label: 'Mark done',
-          onClick: () => {
-            const current = get(tasks).find((t) => t.id === panelTaskId);
-            if (current && current.status !== 'done') updateTaskStatus(panelTaskId, 'done');
-          },
-        },
-      );
+      updateTaskStatus(panelTaskId, 'done');
+      showToast(`"${panelTask.title}": ${name} finished and the task was marked done.`, 'success', 6000);
     }
   }
 
@@ -1359,7 +1452,7 @@ async function completeLeasedTask(
   const completionStatus: CompletionSummary['status'] =
     updated.status === 'blocked' ? 'blocked' : updated.status === 'failed' ? 'failed' : 'done';
   const completionReason =
-    updated.status === 'blocked' && outcome.kind === 'blocked' ? outcome.reason
+    updated.status === 'blocked' && (outcome.kind === 'blocked' || outcome.kind === 'limited') ? outcome.reason
     : updated.status === 'failed' ? updated.failureReason ?? told?.reason ?? null
     // A finished turn used to carry no text at all, which is what left the
     // inbox showing a name and a title and nothing else. When the agent said
@@ -1371,10 +1464,7 @@ async function completeLeasedTask(
   // card inherits the doubt.
   const completionEndedBy: NonNullable<CompletionSummary['endedBy']> =
     completionStatus === 'done' ? (told?.endedBy ?? 'declared') : 'declared';
-  // …and an inferred finish does not interrupt — but ONLY when this agent had
-  // a way to tell us and didn't. A CLI with no MCP config surface can never
-  // report, so silencing its guesses would mean it finishes and the user hears
-  // nothing at all. Those still raise a card; it just says "went quiet".
+  // …and an inferred finish NEVER interrupts, whatever channel the agent had.
   //
   // "Output stopped growing for 90 seconds" is not evidence that an agent
   // finished — it is equally what a long compile, a slow tool call, or an agent
@@ -1385,7 +1475,18 @@ async function completeLeasedTask(
   // written for the inbox; it just does not float, chime, or raise an OS
   // notification. Only something the agent actually said — or a fact we
   // observed, like a non-zero exit — is allowed to interrupt.
-  const silent = completionEndedBy === 'inferred' && agentCanReport(task.agentPreset, sessionId);
+  //
+  // This used to be gated on `agentCanReport`, so a CLI with no reporting
+  // channel still floated a card worded "Agent went quiet". That is the one
+  // notification the rule exists to stop, and a guess is no more trustworthy
+  // for coming from an agent that could not have told us either way — it just
+  // fires more often, because those agents can only ever end a turn this way.
+  // `agentCanReport` still gates the *blocked* paths, where a missed pause
+  // strands the user; `turnEndIsSilent` holds both halves.
+  const silent = turnEndIsSilent(
+    { status: completionStatus, endedBy: completionEndedBy },
+    { preset: task.agentPreset, sessionId },
+  );
 
   // The completion card is the one visual notification for this event — it
   // floats as the corner card and lands in the inbox (see AgentNotifications),
@@ -1426,6 +1527,10 @@ async function completeLeasedTask(
     taskId: task.id,
     endedBy: completionEndedBy,
     silent,
+    // Work that passed through more than one agent gets the chain, so the
+    // thread shows what actually happened rather than only the last hop. Null
+    // for the overwhelming majority of turns, which never moved.
+    handover: describeMigrationChain(updated.migrations ?? []),
   };
 
   appendChat(task.projectId, {
@@ -1603,6 +1708,7 @@ function sendGoalToLeasedTask(
       const outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(id, sessionId),
         agentCommand,
+        meterSaysSpent: () => meterSaysTaskIsSpent(id),
       });
       if (outcome.kind !== 'aborted') completeLeasedTask(id, sessionId, outcome);
     } catch (err) {
@@ -1637,6 +1743,450 @@ function sendBriefToLeasedTask(id: string, sessionId: number, agentCommand: stri
   })();
 }
 
+// ─── Failover on usage limits ────────────────────────────────────────────────
+//
+// When the agent holding a half-built feature runs out of headroom, move the
+// unfinished work to one that still has some, rather than letting it stop at
+// the wall and leaving the user to notice and restart.
+//
+// **Why this is not a new poller.** `stores/usage` already reads every signed-in
+// CLI's own meter every 30 seconds, including while an agent is working, and
+// `.spacron/memory/agent-background-poll-budget.md` is explicit that anything
+// polling per agent has to justify itself. So this subscribes to the reading
+// that is already being taken; the only extra work is one Tauri call for the
+// per-account roster, and only while at least one leased agent is running.
+//
+// **Feature versus turn.** A feature is normally many turns, but a single
+// dispatch to a CLI agent can also *be* one turn that runs twenty minutes and
+// builds the whole thing. So "wait for the turn to end" can mean "wait for the
+// feature to finish", which is the one behaviour this must not have. When a
+// reading crosses the threshold mid-turn, the handover happens then — while the
+// work is half-built — not at a boundary that may be twenty minutes away.
+
+/** How long the outgoing agent gets to stop on its own before it is interrupted. */
+const WRAP_UP_GRACE_MS = 75 * 1000;
+
+/** How often the grace window checks whether the agent has gone quiet. */
+const WRAP_UP_POLL_MS = 2000;
+
+/**
+ * Output-quiet needed to call the wrap-up complied with.
+ *
+ * A CLI mid-tool-call usually lands within seconds of being asked, and what
+ * that looks like from here is the output buffer ceasing to grow. Short,
+ * because this runs *inside* the grace window rather than instead of it.
+ */
+const WRAP_UP_QUIET_MS = 6000;
+
+/** The per-account headroom roster, refreshed alongside the usage poll. */
+let failoverRoster: AccountHeadroom[] = [];
+
+/** Tasks mid-handover, so two polls cannot start two handovers for one task. */
+const handingOver = new Set<string>();
+
+/**
+ * Tasks already reported as having nowhere to go.
+ *
+ * Without this, a task stuck at the wall with no successor available would log
+ * the same "nothing has room" line every 30 seconds for as long as it sat
+ * there, which is how an activity log stops being readable.
+ */
+const noSuccessorReported = new Set<string>();
+
+let failoverWatchStop: (() => void) | null = null;
+
+function failoverPolicy(): SuccessorPolicy {
+  const configured = get(agentFailoverHeadroomPercent);
+  const usage = get(usageState);
+  return {
+    // Clamped rather than trusted: a persisted value from a hand-edited store
+    // could otherwise be negative (never fires) or 100 (fires on a fresh
+    // account), and both read as the feature being broken.
+    headroomPercent: Math.min(99, Math.max(0, Number(configured) || 0)),
+    allowCrossProvider: get(agentFailoverCrossProvider),
+    // Before the first detection scan lands, the installed set is empty — and
+    // an empty set here would reject every candidate, which reads as "failover
+    // never works" rather than "detection has not run yet".
+    installedCommands: haveAgentDetection(usage) ? installedAgentCommands(usage) : null,
+  };
+}
+
+/** Every leased agent currently working, and which login it is working under. */
+function runningLeasedTasks(): OrchestratorTask[] {
+  return get(orchestratorTasks).filter(
+    (task) =>
+      task.status === 'in-progress' &&
+      task.assignedSessionId != null &&
+      !task.adopted &&
+      Boolean(task.agentPreset),
+  );
+}
+
+/**
+ * Begin watching every running agent's headroom. Idempotent.
+ *
+ * Returns an unsubscribe, so a caller that owns the app's lifetime can stop it;
+ * in practice it runs for as long as the window is open, exactly like the meter
+ * it rides on.
+ */
+export function initAgentFailoverWatch(): () => void {
+  if (failoverWatchStop) return failoverWatchStop;
+
+  // The store also publishes its `loading` flips, so a subscriber fires two or
+  // three times per poll. Only a *new* reading is a new reason to check, and
+  // checking on the others would spend a roster call on numbers already seen.
+  let lastChecked = 0;
+  const stop = usageState.subscribe((state) => {
+    if (!state.lastFetchedAt || state.lastFetchedAt === lastChecked) return;
+    lastChecked = state.lastFetchedAt;
+    void (async () => {
+      if (!get(agentFailover)) return;
+      const running = runningLeasedTasks();
+      // No agent is working, so there is nothing to move and no reason to spend
+      // a call on the account roster.
+      if (!running.length) {
+        noSuccessorReported.clear();
+        return;
+      }
+      failoverRoster = buildAccountRoster(state.providers, await fetchAccountUsage());
+      const policy = failoverPolicy();
+      for (const task of running) {
+        const reading = findReading(failoverRoster, task.agentPreset, task.agentAccountId);
+        if (!isExhausted(reading, policy)) {
+          noSuccessorReported.delete(task.id);
+          continue;
+        }
+        await handOverTask(task.id, reading, 'mid-turn');
+      }
+    })();
+  });
+
+  failoverWatchStop = () => {
+    stop();
+    failoverWatchStop = null;
+  };
+  return failoverWatchStop;
+}
+
+/**
+ * Ask a working agent to stop cleanly, and interrupt it if it will not.
+ *
+ * The gentlest step first, and the reason a handover is not a crash: an agent
+ * that lands its current edit and commits leaves its successor a tree that
+ * makes sense. Killing one with no warning and no commit is the thing that
+ * would not be acceptable, so the interrupt is the fallback, not the method.
+ *
+ * Returns how it actually stopped, which the migration record keeps — "it put
+ * its tools down" and "we took them away" are different facts, and the
+ * completion card is not allowed to blur them.
+ */
+async function requestWrapUp(
+  taskId: string,
+  sessionId: number,
+  headroom: number | null,
+): Promise<TaskMigration['stoppedBy']> {
+  const adapter = getAgentAdapter(sessionId);
+  // The MONOTONIC produced-chars counter, never the retained window's length.
+  // The window is capped, so a verbose agent's length stops rising and a
+  // length-based wait would read that plateau as "it complied" — crediting a
+  // clean wrap-up to an agent that never stopped. `watchLeasedAgentTurn`
+  // carries the same note for the same reason.
+  const before = getSessionOutputProduced(sessionId);
+
+  const sent = await adapter.sendFollowUp(buildWrapUpRequest(headroom), {
+    shouldContinue: () => leasedSessionLive(taskId, sessionId),
+  });
+  // A session that would not take the message is already gone or wedged; there
+  // is nothing to wrap up and nothing to interrupt.
+  if (!sent) return 'already-idle';
+  logTaskActivity(taskId, 'info', 'Asked it to finish the edit in hand and commit before handing over.');
+
+  const deadline = Date.now() + WRAP_UP_GRACE_MS;
+  let lastProduced = before;
+  let quietSince = Date.now();
+  // The agent never reacting at all is not compliance. Requiring some output
+  // first means a session that ignored the message entirely falls through to
+  // the interrupt rather than being credited with a clean stop.
+  let reacted = false;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, WRAP_UP_POLL_MS));
+    if (!leasedSessionLive(taskId, sessionId)) return 'wrap-up';
+    const produced = getSessionOutputProduced(sessionId);
+    if (produced !== lastProduced) {
+      lastProduced = produced;
+      quietSince = Date.now();
+      reacted = true;
+      continue;
+    }
+    if (reacted && Date.now() - quietSince >= WRAP_UP_QUIET_MS) return 'wrap-up';
+  }
+
+  // Still going. ESC is what every TUI agent here treats as "stop what you are
+  // doing"; Ctrl-C is the fallback for the ones that do not.
+  adapter.writeRaw('\u001b');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  adapter.writeRaw('\u0003');
+  logTaskActivity(taskId, 'info', 'It did not stop in the grace window, so it was interrupted.');
+  return 'interrupt';
+}
+
+/** The reset instant of whichever of this account's windows has run out. */
+function resetForReading(reading: AccountHeadroom | null, policy: SuccessorPolicy): number | null {
+  return reading ? earliestResetMs([reading], policy) : null;
+}
+
+function agentLabelFor(preset: string | null | undefined, accountLabel: string | null): string {
+  const name = preset ? getAgentDisplayName(preset) ?? preset : 'The previous agent';
+  return accountLabel ? `${name} (${accountLabel})` : name;
+}
+
+/**
+ * Move one task's unfinished work to an agent that still has headroom.
+ *
+ * The sequence, and why it is this order:
+ *
+ *   1. **Choose the successor first.** Never stop a working agent before
+ *      knowing there is somewhere for its work to go — that would turn "your
+ *      feature moved" into "your feature stopped".
+ *   2. **Ask it to wrap up**, and interrupt only if it will not.
+ *   3. **Freeze the tree.** `snapshotWorktree` commits whatever is loose on the
+ *      branch, so the brief describes something git can see and the successor
+ *      cannot clobber uncommitted work it never knew about.
+ *   4. **Kill before launch.** Two agents must never run on one branch, so the
+ *      transcript is snapshotted while the session is still alive (see
+ *      `closeOrchestratorAgent`, which documents the completion race this
+ *      ordering avoids) and the session goes down before anything starts.
+ *   5. **Relaunch in the same worktree**, on the same branch, under the chosen
+ *      preset and account, with a brief built from the diff.
+ *
+ * The task, the thread and the branch are all unchanged, so the conversation
+ * the work started in is the conversation it reports back into, and three
+ * agents' work accumulates on one branch — one review at the end, not one per
+ * agent.
+ */
+export async function handOverTask(
+  taskId: string,
+  reading: AccountHeadroom | null,
+  trigger: 'mid-turn' | 'pre-dispatch',
+): Promise<boolean> {
+  if (handingOver.has(taskId)) return false;
+  const task = get(orchestratorTasks).find((t) => t.id === taskId);
+  if (!task || !task.agentPreset) return false;
+
+  const policy = failoverPolicy();
+  const choice = chooseSuccessor(
+    failoverRoster,
+    { command: task.agentPreset, accountId: task.agentAccountId ?? null },
+    policy,
+  );
+
+  if (!choice) {
+    // Say it once, with a real time rather than a shrug — the meters carry a
+    // reset instant per window, so "everything is spent" can always be dated.
+    if (!noSuccessorReported.has(taskId)) {
+      noSuccessorReported.add(taskId);
+      logTaskActivity(taskId, 'info', describeNothingQualifies(failoverRoster, policy));
+    }
+    return false;
+  }
+
+  handingOver.add(taskId);
+  try {
+    return await runHandover(task, reading, choice, policy, trigger);
+  } catch (err) {
+    // A failed handover says so. Dropping it silently would leave a user
+    // watching an agent that is about to stop for reasons nobody wrote down.
+    const message = err instanceof Error ? err.message : String(err);
+    logTaskActivity(taskId, 'failed', `Could not hand the work over: ${message}`);
+    return false;
+  } finally {
+    handingOver.delete(taskId);
+  }
+}
+
+async function runHandover(
+  task: OrchestratorTask,
+  reading: AccountHeadroom | null,
+  choice: SuccessorChoice,
+  policy: SuccessorPolicy,
+  trigger: 'mid-turn' | 'pre-dispatch',
+): Promise<boolean> {
+  const sessionId = task.assignedSessionId ?? null;
+  const fromHeadroom = reading ? headroomPercent(reading.windows) : null;
+  const fromReset = resetForReading(reading, policy);
+  const fromLabel = agentLabelFor(task.agentPreset, reading?.accountId ? reading.label : null);
+  const toLabel = agentLabelFor(
+    choice.candidate.command,
+    choice.candidate.accountId ? choice.candidate.label : null,
+  );
+  const reason = describeHandoverReason(fromLabel, fromHeadroom, fromReset);
+
+  logTaskActivity(task.id, 'info', `${reason} Handing the rest of this to ${toLabel}.`);
+
+  // 1. Stop the outgoing agent, gently if it will let us.
+  let stoppedBy: TaskMigration['stoppedBy'] =
+    trigger === 'pre-dispatch' ? 'pre-emptive' : 'already-idle';
+  if (sessionId != null && trigger === 'mid-turn' && leasedSessionLive(task.id, sessionId)) {
+    stoppedBy = await requestWrapUp(task.id, sessionId, fromHeadroom);
+  }
+
+  // 2. Freeze the tree, so the brief describes something git can see. Best
+  //    effort: the work is in the checkout either way, and a snapshot that
+  //    fails is not a reason to abandon a handover.
+  if (task.worktree) {
+    const snapshot = await snapshotWorktree(task.projectId, task.worktree);
+    if (!snapshot) {
+      logTaskActivity(
+        task.id,
+        'info',
+        'Could not commit the loose edits before handing over; they are still in the checkout.',
+      );
+    }
+  }
+  const delta = task.worktree ? await getWorktreeDelta(task.projectId, task.worktree) : null;
+
+  // 3. Kill before launch — two agents must never run on one branch.
+  if (sessionId != null) {
+    captureTaskTranscript(task.id, sessionId);
+    await killSession(sessionId);
+  }
+
+  const migration: TaskMigration = {
+    at: Date.now(),
+    fromPreset: task.agentPreset ?? null,
+    fromAccountId: task.agentAccountId ?? null,
+    fromAccountLabel: reading?.accountId ? reading.label : null,
+    fromHeadroomPercent: fromHeadroom,
+    fromResetAtMs: fromReset,
+    toPreset: choice.candidate.command,
+    toAccountId: choice.candidate.accountId,
+    toAccountLabel: choice.candidate.accountId ? choice.candidate.label : null,
+    toHeadroomPercent: choice.headroomPercent,
+    filesChanged: delta ? delta.pendingFiles : null,
+    stoppedBy,
+    reason,
+  };
+
+  // 4. Back to `todo` so the ordinary launch path can transition it forward.
+  //    Patched directly rather than through `transitionTask`, which has no
+  //    in-progress → in-progress edge and should not gain one: a relaunch is a
+  //    fresh start of the same task, not a state a task can sit in twice.
+  patchTask(task.id, (current) => ({
+    ...current,
+    status: 'todo',
+    assignedSessionId: null,
+    lastSessionId: sessionId ?? current.lastSessionId ?? null,
+    blockedReason: null,
+    failureReason: null,
+    promptSentAt: null,
+    migrations: [...(current.migrations ?? []), migration],
+  }));
+
+  // 5. Relaunch in the same worktree, on the same branch, under the successor.
+  //    `holdGoal` keeps the goal back so the brief goes first — the successor
+  //    needs to know it is inheriting a half-built feature before it is told
+  //    what the feature is.
+  const briefTask = get(orchestratorTasks).find((t) => t.id === task.id) ?? task;
+  const brief = buildHandoverBrief({
+    task: briefTask,
+    fromLabel,
+    toLabel,
+    delta,
+    reason,
+    history: (briefTask.migrations ?? []).slice(0, -1),
+  });
+
+  // Without a worktree, this path is the successor's cwd — and launching an
+  // agent into the wrong directory is worse than not launching one. The task is
+  // left blocked with the reason on it rather than started somewhere arbitrary.
+  const rootPath = task.worktree?.path ?? projectPaths.get(task.projectId) ?? '';
+  if (!rootPath) {
+    patchTask(task.id, (current) => ({
+      ...current,
+      status: 'blocked',
+      blockedReason: `${reason} There is no checkout to start ${toLabel} in.`,
+    }));
+    logTaskActivity(task.id, 'blocked', `There is no checkout to start ${toLabel} in.`);
+    return false;
+  }
+  const nextSessionId = await launchOrchestratorTask(task.id, choice.candidate.command, rootPath, {
+    holdGoal: true,
+    accountId: choice.candidate.accountId,
+    activate: false,
+    model: task.agentModel,
+    reasoningEffort: task.agentReasoningEffort,
+  });
+  if (nextSessionId == null) {
+    patchTask(task.id, (current) => ({
+      ...current,
+      status: 'blocked',
+      blockedReason: `${reason} ${toLabel} could not be started to take over.`,
+    }));
+    logTaskActivity(task.id, 'blocked', `${toLabel} could not be started to take over.`);
+    return false;
+  }
+
+  logTaskActivity(
+    task.id,
+    'dispatch',
+    `${toLabel} took over on the same branch with ${Math.round(choice.headroomPercent)}% usage left.`,
+  );
+  sendGoalToLeasedTask(task.id, nextSessionId, brief, choice.candidate.command, true);
+  // The successor's own headroom is now the one that matters, and the meter is
+  // already polling it — no separate watch is armed for the new agent.
+  void refreshUsage(true);
+  return true;
+}
+
+/**
+ * Swap the preset before a turn starts, when the requested one is already spent.
+ *
+ * Cheaper and simpler than the mid-turn path, and it costs nothing: never start
+ * a turn that cannot finish. This covers the ordinary multi-turn case, where
+ * the limit is reached between turns rather than during one.
+ *
+ * Returns the command and account to launch under — the requested ones when
+ * there is nothing wrong with them, which is the overwhelmingly common case.
+ */
+function resolvePreDispatchAgent(
+  agentCommand: string,
+  accountId: string | null,
+): { command: string; accountId: string | null; swappedFrom: string | null } {
+  const unchanged = { command: agentCommand, accountId, swappedFrom: null };
+  if (!get(agentFailover) || !failoverRoster.length) return unchanged;
+
+  const policy = failoverPolicy();
+  const reading = findReading(failoverRoster, agentCommand, accountId);
+  if (!isExhausted(reading, policy)) return unchanged;
+
+  const choice = chooseSuccessor(failoverRoster, { command: agentCommand, accountId }, policy);
+  if (!choice) return unchanged;
+  return {
+    command: choice.candidate.command,
+    accountId: choice.candidate.accountId,
+    swappedFrom: agentLabelFor(agentCommand, reading?.accountId ? reading.label : null),
+  };
+}
+
+/**
+ * Whether the meter agrees a task's account is out of usage.
+ *
+ * The corroborating half of limit detection: the watcher supplies the CLI's own
+ * refusal text, this supplies the number, and neither ends a turn alone. Reads
+ * the roster the failover watch already keeps warm, so it costs nothing at the
+ * moment a turn resolves.
+ *
+ * False when there is no roster and no reading, which is the safe answer —
+ * "we did not measure" must never be mistaken for "it is spent".
+ */
+function meterSaysTaskIsSpent(taskId: string): boolean {
+  const task = get(orchestratorTasks).find((t) => t.id === taskId);
+  if (!task) return false;
+  const reading = findReading(failoverRoster, task.agentPreset, task.agentAccountId);
+  return isExhausted(reading, failoverPolicy());
+}
+
 export async function launchOrchestratorTask(
   id: string,
   agentCommand: string,
@@ -1649,6 +2199,12 @@ export async function launchOrchestratorTask(
     model?: string | null;
     accessMode?: ChatAccessMode;
     reasoningEffort?: ChatReasoningEffort;
+    /**
+     * Signed-in account to launch under, for the CLIs that hold more than one.
+     * Set by failover so a successor runs where there is headroom left, without
+     * moving the account picker the user set in Settings.
+     */
+    accountId?: string | null;
   } = true
 ): Promise<number | null> {
   // 4th arg stays boolean-compatible (= autoRun). Persistent agents pass
@@ -1666,6 +2222,21 @@ export async function launchOrchestratorTask(
 
   const task = get(orchestratorTasks).find((t) => t.id === id);
   if (!task) return null;
+
+  // Never start a turn that cannot finish. When the requested CLI's login is
+  // already out of headroom, the successor is chosen here — before a terminal
+  // is leased — which is both cheaper than the mid-turn path and invisible to
+  // everything downstream, since only the command and account change.
+  const dispatch = resolvePreDispatchAgent(agentCommand, opts.accountId ?? null);
+  if (dispatch.swappedFrom) {
+    logTaskActivity(
+      task.id,
+      'info',
+      `${dispatch.swappedFrom} has no usage left, so this was dispatched to ${getAgentDisplayName(dispatch.command) ?? dispatch.command} instead.`,
+    );
+  }
+  agentCommand = dispatch.command;
+  const accountId = dispatch.accountId;
 
   const launchGeneration = nextLaunchGeneration(task.id);
   let launchCommitted = false;
@@ -1701,6 +2272,7 @@ export async function launchOrchestratorTask(
       model,
       accessMode: opts.accessMode,
       reasoningEffort: opts.reasoningEffort,
+      accountId,
     });
     if (sessionId == null) {
       showToast(worktree ? 'Could not start the agent in its isolated worktree. The worktree was kept; retry the launch.' : 'Could not start the agent terminal', 'error');
@@ -1718,7 +2290,7 @@ export async function launchOrchestratorTask(
     }
 
     patchTask(task.id, (current) =>
-      transitionTask({ ...current, agentPreset: agentCommand, assignedSessionId: sessionId, promptSentAt: null }, 'in-progress')
+      transitionTask({ ...current, agentPreset: agentCommand, agentAccountId: accountId, assignedSessionId: sessionId, promptSentAt: null }, 'in-progress')
     );
     launchCommitted = true;
     logTaskActivity(task.id, 'dispatch', `Launched ${getAgentDisplayName(agentCommand) ?? agentCommand}.`);
@@ -1813,6 +2385,78 @@ export async function closeOrchestratorAgent(id: string, note?: string): Promise
   if (sessionId != null) await killSession(sessionId);
   patchTask(id, (t) => ({ ...cancelTask(t, note), assignedSessionId: null }));
   logTaskActivity(id, 'cancelled', note?.trim() ? `Closed: ${note.trim()}` : 'Closed.');
+}
+
+// ─── Confirming a spawned agent came up ─────────────────────────────────────
+
+interface StartableAgent {
+  task: { id: string };
+  sessionId: number | null;
+  name: string;
+  agent: string;
+}
+
+export interface AgentStartOutcome {
+  name: string;
+  agent: string;
+  /** `started` when it is on screen and ready for input. */
+  state: AgentStartupState;
+  /** True when a blank or dead first launch was closed and reopened. */
+  reopened: boolean;
+}
+
+/**
+ * Wait for an idle agent's CLI, then check it really drew its interface. A
+ * blank or dead pane is closed and reopened once; a missing command is not
+ * retried, because reopening cannot install it.
+ */
+export async function verifyIdleAgentStart<E extends StartableAgent>(
+  entry: E,
+  relaunch: (entry: E) => Promise<E | null>,
+): Promise<AgentStartOutcome> {
+  let current: E = entry;
+  let reopened = false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (current.sessionId == null) break;
+    const readiness = await waitForAgentReady(current.sessionId);
+    const state = readiness === 'launch-failed' ? 'launch-failed' : agentStartupState(current.sessionId);
+    if (state === 'started' || state === 'launch-failed') return { name: current.name, agent: current.agent, state, reopened };
+    await closeOrchestratorAgent(current.task.id, `${current.name} did not start (${state === 'blank' ? 'blank screen' : 'terminal closed'}).`);
+    if (attempt === 1) return { name: current.name, agent: current.agent, state, reopened };
+    const next = await relaunch(current);
+    if (!next) return { name: current.name, agent: current.agent, state: 'gone', reopened: true };
+    current = next;
+    reopened = true;
+  }
+  return { name: current.name, agent: current.agent, state: 'gone', reopened };
+}
+
+function joinNames(names: string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** The reply once every opened agent has been checked. */
+export function describeAgentStartOutcomes(outcomes: readonly AgentStartOutcome[]): string {
+  const label = (agent: string) => getAgentDisplayName(agent) ?? agent;
+  const ready = outcomes.filter((o) => o.state === 'started');
+  const lines: string[] = [];
+  if (ready.length) {
+    const kinds = [...new Set(ready.map((o) => o.agent))];
+    const names = ready.map((o) => (kinds.length > 1 ? `${o.name} (${label(o.agent)})` : o.name));
+    const what = kinds.length === 1 ? ` (${label(kinds[0])})` : '';
+    lines.push(ready.length === 1
+      ? `${names[0]}${what} is open, active and ready for input.`
+      : `All ${ready.length} agents are open, active and ready for input: ${joinNames(names)}${what}.`);
+    const reopened = ready.filter((o) => o.reopened).map((o) => o.name);
+    if (reopened.length) lines.push(`${joinNames(reopened)} came up blank the first time, so I closed and reopened ${reopened.length === 1 ? 'it' : 'them'}.`);
+  }
+  for (const failed of outcomes.filter((o) => o.state !== 'started')) {
+    lines.push(failed.state === 'launch-failed'
+      ? `${failed.name} could not start: the \`${failed.agent}\` command is not installed or not on PATH.`
+      : `${failed.name} still did not start after I closed and reopened it, so I closed it.`);
+  }
+  if (ready.length) lines.push(ready.length === 1 ? 'What would you like it to work on?' : 'What would you like them to work on? You can give them one task each or the same task.');
+  return lines.join('\n\n');
 }
 
 // ─── App-control actions ──────────────────────────────────────────────────────
@@ -2017,6 +2661,19 @@ export interface CompletionSummary {
    * "your agent finished" alert that arrives while nothing has happened.
    */
   silent?: boolean;
+  /**
+   * The chain of agents this work passed through, when it passed through more
+   * than one — set only for a task handed over on a usage limit.
+   *
+   * **The constraint on its wording.** `endedBy` above decides what the card
+   * may claim about the *final* turn; this has to keep the same discipline per
+   * hop. "Claude went quiet at 98%" and "Claude declared it was done" are
+   * different claims, and flattening them is how a user gets told work
+   * completed that never did. So every clause here states what was observed —
+   * headroom, files on the branch, how the agent stopped — and never that an
+   * earlier agent finished anything. See `describeMigrationChain`.
+   */
+  handover?: string | null;
   taskId?: string | null;
 }
 
@@ -2240,10 +2897,25 @@ function watchChatAgentResponse(
       let outcome: AgentTurnOutcome;
       do {
         outcome = await getAgentAdapter(sessionId).watchTurn({
-        shouldContinue: () => leasedSessionLive(taskId, sessionId),
-        agentCommand,
+          shouldContinue: () => leasedSessionLive(taskId, sessionId),
+          agentCommand,
+          meterSaysSpent: () => meterSaysTaskIsSpent(taskId),
         });
-        // Silence is not completion. Keep listening for the next output or declared end.
+        // A live CLI can stay open after answering. A readable inferred result
+        // is enough to settle THIS Chat turn, but not enough to close the
+        // reusable task/session. Mark the turn ready and let the next message
+        // arm a fresh watcher; otherwise this loop can keep the task looking
+        // "still in progress" forever when the CLI never emits a report.
+        if (outcome.kind === 'finished' && outcome.via === 'inferred' && leasedSessionLive(taskId, sessionId)) {
+          const settledText = chatResponseText(sessionId, outputStart).trim();
+          if (settledText) {
+            publish(false);
+            logTaskActivity(taskId, 'finished', 'Chat turn went quiet; the session remains ready for follow-up.');
+            return;
+          }
+        }
+        // Silence without a readable response is not completion. Keep listening
+        // for the next output or a declared end rather than dropping the turn.
       } while (outcome.kind === 'finished' && outcome.via === 'inferred' && leasedSessionLive(taskId, sessionId));
       if (outcome.kind === 'aborted') {
         const current = get(orchestratorTasks).find((entry) => entry.id === taskId);
@@ -2300,6 +2972,147 @@ function watchChatAgentResponse(
   });
 }
 
+/**
+ * Turns the orchestrator is watching because IT messaged the agent, keyed by
+ * session. Separate from `chatTurnWatchers` (the agent-Chat stream) so the two
+ * can coexist on one session without both reporting the same turn end.
+ */
+const dispatchTurnWatchers = new Map<number, Promise<void>>();
+
+/**
+ * Put an agent's question into a conversation as a card the user can answer.
+ *
+ * The request carries `taskId` and `sessionId`, and that is the whole trick:
+ * the relay branch of `sendChatMessage` routes a reply to a card with a
+ * `taskId` into THAT agent's REPL instead of starting a fresh orchestrator
+ * turn. `agentInputRequest` strips the ANSI — the reason is raw PTY text.
+ *
+ * Returns the request, or null when there is nothing answerable to post.
+ */
+function postAgentInputCard(
+  task: OrchestratorTask,
+  sessionId: number | null,
+  reason: string,
+  inferred: boolean,
+  threadId: string,
+): ChatInlineRequest | null {
+  if (sessionId == null) return null;
+  // One open question per agent. The watchers re-arm, so a second card for a
+  // prompt the user has not answered yet would just split the conversation —
+  // and only one of the two could be answered.
+  const alreadyAsking = getThreadMessageSnapshot(threadId).some(
+    (message) => message.inlineRequest && !message.inlineRequest.answeredAt && message.inlineRequest.taskId === task.id,
+  );
+  if (alreadyAsking) return null;
+
+  const request = agentInputRequest(`agent-request-${msgId()}`, reason, task.id, sessionId, inferred);
+  appendChat(
+    task.projectId,
+    { id: msgId(), role: 'assistant', type: 'input', text: '', ts: Date.now(), inlineRequest: request },
+    threadId,
+  );
+  updateChatThread(threadId, { status: 'needs-input', updatedAt: Date.now(), lastActivityAt: Date.now() });
+  return request;
+}
+
+/**
+ * Report that a dispatched agent has stopped and is waiting on the user.
+ *
+ * Deliberately NOT `completeLeasedTask`: that releases the terminal lease and
+ * clears `assignedSessionId`, so the user's answer would go to a FRESH CLI that
+ * never saw the question while the one actually holding it sat at its prompt.
+ * The agent is waiting, not finished — so it is marked blocked *in place*, and
+ * the answer types straight back into the same REPL.
+ */
+function reportAgentNeedsInput(
+  taskId: string,
+  sessionId: number,
+  reason: string,
+  inferred: boolean,
+  preferredThreadId?: string,
+): void {
+  const task = get(orchestratorTasks).find((entry) => entry.id === taskId);
+  if (!task) return;
+
+  const threadId = threadIdForTask(task, preferredThreadId) ?? undefined;
+  const request = threadId ? postAgentInputCard(task, sessionId, reason, inferred, threadId) : null;
+  const prompt = request?.prompt
+    ?? (captureTranscript(reason, MAX_TRANSCRIPT_CHARS).trim()
+      || 'The agent needs your input to continue.');
+
+  patchTask(taskId, (current) => ({ ...current, status: 'blocked', blockedReason: prompt }));
+  logTaskActivity(taskId, 'blocked', prompt);
+
+  const name = task.name?.trim()
+    || (task.agentPreset ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset : null)
+    || 'Agent';
+  // Same rule as every other turn end: only a pause the agent actually declared
+  // may interrupt. A match on an attention phrase is a guess, and a guess that
+  // chimes is the false alarm that costs the real ones their credibility.
+  const silent = turnEndIsSilent(
+    { status: 'blocked', endedBy: inferred ? 'inferred' : 'declared' },
+    { preset: task.agentPreset, sessionId },
+  );
+  // The inbox row and corner card for the same pause, because the panel may not
+  // be open. Filed project-side only when the thread already holds the
+  // answerable card, so one pause is never two rows in the conversation.
+  appendAgentTurnCard(task, name, 'blocked', prompt, inferred ? 'inferred' : 'declared', silent, request ? undefined : threadId);
+  if (!silent) announceCompletionAloud(name, 'blocked', task.title);
+}
+
+/**
+ * Watch ONE turn of an agent the orchestrator just sent a message to, and bring
+ * the result back to the conversation that sent it.
+ *
+ * Without this a `send` was fire-and-forget. The spawn path arms a watcher for
+ * the FIRST turn only (`sendGoalToLeasedTask`), so every later message the
+ * orchestrator pushed into a live REPL ran unwatched: an agent that stopped to
+ * ask a question just sat there, and the user was told nothing until they
+ * happened to type again. `wait_for_agent` cannot cover this — it is a one-shot
+ * status read whose own instructions say "the next turn re-checks", and nothing
+ * schedules that next turn.
+ */
+function watchDispatchedAgentTurn(
+  taskId: string,
+  sessionId: number,
+  threadId: string | undefined,
+  agentCommand: string | null,
+): void {
+  const task = get(orchestratorTasks).find((entry) => entry.id === taskId);
+  if (!task) return;
+  // Pin the conversation before deciding whether this path needs its own
+  // watcher. Adopted sessions already have a re-arming watcher, but that
+  // watcher still needs to know which conversation owns the message.
+  if (threadId) threadIdByTaskId.set(taskId, threadId);
+  // Adopted sessions already carry a permanently re-arming watcher
+  // (`watchAdoptedAgentTurns`); a second one would report every turn twice.
+  if (task.adopted) return;
+  if (dispatchTurnWatchers.has(sessionId) || chatTurnWatchers.has(sessionId)) return;
+
+  const watch = (async () => {
+    try {
+      const outcome = await getAgentAdapter(sessionId).watchTurn({
+        shouldContinue: () => leasedSessionLive(taskId, sessionId),
+        agentCommand: agentCommand ?? undefined,
+        meterSaysSpent: () => meterSaysTaskIsSpent(taskId),
+      });
+      if (outcome.kind === 'aborted') return;
+      if (outcome.kind === 'blocked') {
+        reportAgentNeedsInput(taskId, sessionId, outcome.reason, outcome.via === 'inferred', threadId);
+        return;
+      }
+      await completeLeasedTask(taskId, sessionId, outcome);
+    } catch (error) {
+      console.error('Failed to watch a dispatched agent turn:', error);
+    }
+  })();
+
+  dispatchTurnWatchers.set(sessionId, watch);
+  void watch.finally(() => {
+    if (dispatchTurnWatchers.get(sessionId) === watch) dispatchTurnWatchers.delete(sessionId);
+  });
+}
+
 async function sendThreadFollowUp(
   projectId: string,
   rootPath: string,
@@ -2321,7 +3134,10 @@ async function sendThreadFollowUp(
     const request = inputMessageId ? getThreadMessageSnapshot(threadId).find((message) => message.id === inputMessageId)?.inlineRequest : null;
     const deliveryText = request?.options?.find((option) => option.label === text)?.value ?? text;
     const sent = await sendFollowUpToAgent(task, buildAttachmentPrompt(deliveryText, attachments), rootPath, chatMode, Boolean(inputMessageId), (sessionId) => {
-      if (chatMode && task.agentPreset) watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, getSessionOutputLength(sessionId));
+      // Adopted sessions already have a permanent watcher. Starting the
+      // agent-Chat watcher as well would report the same turn twice and would
+      // release the adopted session when its first reply finishes.
+      if (chatMode && task.agentPreset && !task.adopted) watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, getSessionOutputLength(sessionId));
     }, request?.inputMode === 'line');
     const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
     syncChatThreadTask(latestTask, threadId);
@@ -2497,7 +3313,7 @@ function shouldNudgeAdopted(sessionId: number, bufLen: number): boolean {
  * post, and the task stays `in-progress` — the watcher re-arms, because the
  * user is still working in that terminal; ending the task on its first quiet
  * moment would sever the session from agent mode while they were
- * mid-conversation with it. `appendAdoptedTurnCard` drops the durable trace;
+ * mid-conversation with it. `appendAgentTurnCard` drops the durable trace;
  * this function adds the notification on top.
  */
 function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
@@ -2508,6 +3324,7 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       const outcome = await getAgentAdapter(sessionId).watchTurn({
         shouldContinue: () => leasedSessionLive(taskId, sessionId),
         agentCommand: task.agentPreset ?? undefined,
+        meterSaysSpent: () => meterSaysTaskIsSpent(taskId),
       });
       if (outcome.kind === 'aborted') return;
 
@@ -2540,12 +3357,17 @@ function notifyAdoptedTurnEnd(
     told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet, so it is assumed finished.'),
   );
 
-  // A hand-launched agent gets the same rule as a leased one: only a turn end
-  // the agent actually declared may interrupt. An inferred one — output stopped
-  // growing, so we assumed — is recorded in the inbox and nothing else. This is
-  // the loudest version of the false alarm, because an adopted watcher re-arms
+  // A hand-launched agent gets the same rule as a leased one: an inferred
+  // FINISH — output stopped growing, so we assumed — is recorded in the inbox
+  // and nothing else, whatever reporting channel the agent had. This is the
+  // loudest version of the false alarm, because an adopted watcher re-arms
   // every turn and would chime on every quiet spell.
-  const silent = told.endedBy === 'inferred' && agentCanReport(task.agentPreset, sessionId);
+  //
+  // An inferred *pause* is the opposite trade: a missed "needs input" strands
+  // the user waiting on an agent that is waiting on them, so it still
+  // interrupts — but only when the agent had no way to say so itself, since an
+  // agent that could report and stayed quiet is telling us it is not blocked.
+  const silent = turnEndIsSilent(told, { preset: task.agentPreset, sessionId });
 
   // The completion card below is the one visual notification for this turn end —
   // a toast would duplicate it. The chime stays as the "right now" audio cue.
@@ -2559,9 +3381,22 @@ function notifyAdoptedTurnEnd(
     }
   }
 
+  // A hand-launched agent can still be one a conversation has been driving —
+  // the orchestrator adopts a live session the moment it is asked to message
+  // one. When it stopped to ask something, that question belongs in that
+  // conversation as an ANSWERABLE card, not only as an inbox row: the request
+  // carries the task, which is what routes the reply back into this CLI.
+  //
+  // Its status is deliberately left alone. An adopted task stays `in-progress`
+  // so its re-arming watcher keeps running and the user keeps their terminal.
+  const threadId = threadIdForTask(task) ?? undefined;
+  const asked = threadId && told.status === 'blocked' && told.reason
+    ? postAgentInputCard(task, sessionId ?? task.assignedSessionId ?? null, told.reason, told.endedBy === 'inferred', threadId)
+    : null;
+
   // The durable trace for this turn. A card lands only when a cue lands, so it
   // can never outnumber the chimes (shouldNudgeAdopted already deduped this one).
-  appendAdoptedTurnCard(task, name, told.status, told.reason, told.endedBy, silent);
+  appendAgentTurnCard(task, name, told.status, told.reason, told.endedBy, silent, asked ? undefined : threadId);
 }
 
 /**
@@ -2581,15 +3416,22 @@ function spokenTurnEnd(name: string, told: TurnEndPresentation): string {
 }
 
 /**
- * Append the lightweight inbox card for a hand-launched agent's finished turn.
+ * Append the lightweight turn card for an agent the orchestrator did not run
+ * through `completeLeasedTask` — a hand-launched one, or a dispatched one that
+ * paused for input and kept its lease.
  *
  * A real completion card minus the AI summary: no `generateTranscriptSummary`
  * (the user drove this directly and a recap would be noise), no mailbox post,
  * and — on the turn-end path — the task stays `in-progress`. `completionEntry`
  * (inbox.ts) picks this up as a normal inbox row: done turns are informational,
  * blocked turns are actionable.
+ *
+ * `threadId` also mirrors it into that conversation. Pass it for anything the
+ * user asked for there — "tell me when it's done" is answered in the thread
+ * they asked in, not only in the inbox. Leave it out when the thread already
+ * holds a richer row for the same event, so one turn end is never two rows.
  */
-function appendAdoptedTurnCard(
+function appendAgentTurnCard(
   task: OrchestratorTask,
   name: string,
   status: 'done' | 'failed' | 'blocked',
@@ -2598,6 +3440,8 @@ function appendAdoptedTurnCard(
   endedBy: NonNullable<CompletionSummary['endedBy']> = 'declared',
   /** Inbox-only: no floating card, no chime, no OS notification. */
   silent = false,
+  /** Conversation to mirror the card into, when one owns this agent. */
+  threadId?: string,
 ): void {
   appendChat(task.projectId, {
     id: msgId(),
@@ -2618,8 +3462,9 @@ function appendAdoptedTurnCard(
       taskId: task.id,
       endedBy,
       silent,
+      handover: describeMigrationChain(task.migrations ?? []),
     },
-  });
+  }, threadId);
 }
 
 /**
@@ -2883,11 +3728,20 @@ export function getAgentOutputRefs(projectId: string): AgentOutputRef[] {
       const recentOutput = full ? full.slice(-TASK_OUTPUT_TAIL) : null;
       const updatedAt = t.completedAt ?? t.startedAt ?? t.createdAt;
       const reason = t.blockedReason ?? t.failureReason ?? null;
+      // Persistent/adopted sessions stay leased so the user can send another
+      // message, but their latest turn may already be finished. The activity
+      // marker is the durable boundary that lets the brain report that state
+      // honestly without making the session unavailable for follow-up.
+      const turnState: AgentOutputRef['turnState'] =
+        t.status === 'in-progress' && t.activity?.at(-1)?.kind === 'finished'
+          ? 'ready'
+          : 'working';
       return {
         name: t.name ?? null,
         agent: t.agentPreset ?? 'agent',
         title: t.goal ? t.title : 'idle',
         status: t.status as AgentOutputRef['status'],
+        turnState,
         updatedAt,
         reason,
         freshness: taskFreshness(t),
@@ -2942,6 +3796,67 @@ function resolveRunningTaskByName(projectId: string, target: string): Orchestrat
   return adoptMatchingLiveAgent(projectId, wanted);
 }
 
+/** How often the steering wait re-checks whether the agent has paused. */
+const LEASED_STEER_POLL_MS = 150;
+
+/**
+ * How long a leased agent's output must stop growing before a correction goes
+ * in. Short on purpose — this is "between two things it is doing", not "idle",
+ * and a CLI mid-tool-call streams far more often than this.
+ */
+const LEASED_STEER_QUIET_MS = 600;
+
+/**
+ * Longest a correction waits for that pause before going in regardless.
+ *
+ * A bound is essential. An agent streaming continuously for minutes would
+ * otherwise swallow the user's message entirely, and a correction that never
+ * arrives is worse than one that arrives mid-stream: the user typed it, watched
+ * nothing happen, and has no way to tell whether it was received.
+ */
+const LEASED_STEER_MAX_WAIT_MS = 15 * 1000;
+
+/**
+ * Hold a correction until the leased agent is between things, then let it go.
+ *
+ * `steeringInboxes` already does this for orchestrator *brain* turns, handing a
+ * mid-flight correction to the running turn at its next tool round rather than
+ * interleaving it into whatever is in progress. A leased CLI agent has no tool
+ * rounds to hand anything to — all Spacron can see is its terminal — so the
+ * honest analogue is the one signal that means the same thing from outside: the
+ * output stopping. A CLI mid-tool-call streams; a CLI that has just landed one
+ * pauses, and that pause is where a typed line is read as a line rather than
+ * landing in the middle of a prompt it was composing.
+ *
+ * **Only ever waits for an agent that is actually mid-turn.** `wasMidTurn` is
+ * read by the caller *before* it patches the task forward, because by the time
+ * the send happens the status no longer distinguishes the two cases. Every
+ * other follow-up — the reply to a blocked agent parked at a prompt, the answer
+ * to its question, the first message to an idle one — is by definition already
+ * at a safe moment, so it goes straight through with no delay at all. Making
+ * every follow-up pay for this would be the wrong trade: the common case is not
+ * an interruption.
+ */
+async function awaitSafeMomentToSteer(taskId: string, sessionId: number): Promise<void> {
+  const deadline = Date.now() + LEASED_STEER_MAX_WAIT_MS;
+  let last = getSessionOutputProduced(sessionId);
+  let quietSince = Date.now();
+
+  for (;;) {
+    if (Date.now() - quietSince >= LEASED_STEER_QUIET_MS) return;
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, LEASED_STEER_POLL_MS));
+    // The task losing its session mid-wait means there is nothing left to be
+    // polite to; let the caller's own liveness check answer.
+    if (!leasedSessionLive(taskId, sessionId)) return;
+    const produced = getSessionOutputProduced(sessionId);
+    if (produced !== last) {
+      last = produced;
+      quietSince = Date.now();
+    }
+  }
+}
+
 /** Push a prompt to a running agent's live terminal; if blocked, reopen it and send automatically. */
 export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string, rootPath: string, chatMode = false, answeringInput = false, beforeSend?: (sessionId: number) => void, lineInput = false): Promise<boolean> {
   if (task.assignedSessionId != null) {
@@ -2950,10 +3865,21 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
     // session is enough to route a follow-up into.
     if (!live?.isRunning || (!task.adopted && live.ownerTaskId !== task.id)) return false;
 
+    // Read before the patch below moves the task forward: only a task that was
+    // ALREADY running a turn is being interrupted. Everything else — a reply to
+    // a blocked agent, an answer to its question, a message to an idle one — is
+    // already at a safe moment and must not be made to wait for one.
+    const wasMidTurn = task.status === 'in-progress' && task.promptSentAt != null;
+
     if (chatMode) {
       patchTask(task.id, (current) => ({ ...current, status: 'in-progress', blockedReason: null }));
       beforeSend?.(task.assignedSessionId);
     }
+    // Hold the correction until the agent is between things. Typing into a CLI
+    // that is mid-stream is how a reply lands inside the prompt it was
+    // composing; `steeringInboxes` has done this for brain turns all along, and
+    // a leased CLI deserves the same courtesy.
+    if (wasMidTurn) await awaitSafeMomentToSteer(task.id, task.assignedSessionId);
     const sent = lineInput
       ? await getAgentAdapter(task.assignedSessionId).sendInputLine(prompt)
       : await sendOrchestratorFollowUpWhenReady(task.assignedSessionId, answeringInput ? prompt : withAgentTaskPanelContext(prompt, task.projectId), {
@@ -2988,9 +3914,13 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
     taskId: task.id,
     taskTitle: task.title,
     name: task.name,
-    model: chatThread?.model,
+    // Resume on the account this task is already on, not on whichever one the
+    // picker happens to point at now — the work is mid-flight and moving it
+    // between logins is a handover, which is a decision failover makes.
+    accountId: task.agentAccountId ?? null,
+    model: task.agentModel ?? chatThread?.model,
     accessMode: chatThread?.accessMode,
-    reasoningEffort: chatThread?.reasoningEffort,
+    reasoningEffort: task.agentReasoningEffort ?? chatThread?.reasoningEffort,
   });
   if (sessionId == null) return false;
   // The exit handler will write the completion card for this resumed session;
@@ -3034,6 +3964,7 @@ export async function sendFollowUpToAgent(task: OrchestratorTask, prompt: string
     const outcome = await getAgentAdapter(sessionId).watchTurn({
       shouldContinue: () => leasedSessionLive(task.id, sessionId),
       agentCommand: task.agentPreset ?? undefined,
+      meterSaysSpent: () => meterSaysTaskIsSpent(task.id),
     });
     if (outcome.kind !== 'aborted') completeLeasedTask(task.id, sessionId, outcome);
   })();
@@ -3067,7 +3998,9 @@ function buildProjectTaskMemory(projectId: string): string[] {
       const activities = task.activity ?? [];
       const label = compactInlineText(task.name ?? task.title ?? task.goal, 64);
       const agent = compactInlineText(task.agentPreset ?? 'agent', 48);
-      const head = label ? `${label} [${agent}, ${task.status}]` : `[${agent}, ${task.status}]`;
+      const turnReady = task.status === 'in-progress' && task.activity?.at(-1)?.kind === 'finished';
+      const displayedStatus = turnReady ? 'ready for a new message' : task.status;
+      const head = label ? `${label} [${agent}, ${displayedStatus}]` : `[${agent}, ${displayedStatus}]`;
       const activity = activities.slice(-2).map(formatTaskActivity).filter((line) => line.length > 0);
       const freshness = taskFreshness(task);
       if (activity.length) return `${head} (${freshness}) — ${activity.join('; ')}`;
@@ -3075,6 +4008,106 @@ function buildProjectTaskMemory(projectId: string): string[] {
       return goal ? `${head} (${freshness}) — goal: ${goal}` : `${head} (${freshness})`;
     });
   return [...learnedMemory, ...recentTaskMemory].slice(-10);
+}
+
+/**
+ * Run one image/video generation and post the result into the thread: the
+ * file as its own message, a line when a fallback provider was used, and a
+ * plain report when nothing could make it. Returns the text for the brain.
+ * Shared by the generate_image / generate_video tools and the viewer's Edit.
+ */
+async function runMediaGeneration(options: {
+  projectId: string;
+  threadId?: string;
+  rootPath: string;
+  kind: MediaKind;
+  prompt: string;
+  referenceImages: string[];
+  signal?: AbortSignal;
+}): Promise<string> {
+  const { projectId, threadId, kind } = options;
+  const requestId = crypto.randomUUID();
+  const cancel = () => cancelMediaGeneration(requestId);
+  options.signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await generateMedia({
+      requestId,
+      kind,
+      prompt: options.prompt,
+      referenceImages: options.referenceImages,
+      projectRoot: options.rootPath || null,
+      settings: get(mediaGeneration),
+    });
+    const notice = fallbackNotice(result);
+    appendChat(projectId, {
+      id: msgId(),
+      role: 'assistant',
+      text: notice ?? '',
+      ts: Date.now(),
+      attachments: [{ id: `generated-${requestId}`, name: result.name, type: mediaMimeType(result.name), size: result.size, path: result.path.replace(/\\/g, '/'), generated: true }],
+    }, threadId);
+    const noun = kind === 'video' ? 'video' : 'image';
+    return `Generated ${noun} with ${result.provider}, saved at ${result.path} and shown to the user in chat.`
+      + (notice ? ' The user was told which provider was used and why.' : '')
+      + (result.revisedPrompt ? ` Prompt as drawn: ${result.revisedPrompt}` : '');
+  } catch (error) {
+    const message = String(error ?? 'generation failed');
+    const notice = failureNotice(message, kind);
+    if (notice) {
+      appendChat(projectId, { id: msgId(), role: 'assistant', text: notice, ts: Date.now() }, threadId);
+      return `error: ${message}\nThe user has already been shown this report; do not retry and do not repeat it.`;
+    }
+    return `error: ${message}`;
+  } finally {
+    options.signal?.removeEventListener('abort', cancel);
+  }
+}
+
+/**
+ * The image viewer's Edit: post the request as the user's message (the
+ * picture and, when the user painted one, the marked selection) and put the
+ * edited image into the same thread. Runs outside a brain turn, like ChatGPT's
+ * in-place edit, so it cannot be lost to a model that only promises.
+ */
+export async function editImageInThread(options: {
+  projectId: string;
+  rootPath: string;
+  threadId?: string;
+  imagePath: string;
+  imageName: string;
+  markPath?: string;
+  prompt: string;
+}): Promise<void> {
+  const prompt = options.prompt.trim();
+  if (!prompt || !options.projectId) return;
+  // With a selection the message shows the painted copy, so the user sees
+  // exactly which area they asked to change; the original still goes to the
+  // provider as the first reference below. The copy lives in the temp paste
+  // folder, so it is not `generated` and its path is not persisted.
+  const attachments: ChatAttachment[] = options.markPath
+    ? [{ id: `edit-mark-${Date.now()}`, name: `${options.imageName.replace(/\.[^.]+$/, '')} (selection).png`, type: 'image/png', size: 0, path: options.markPath }]
+    : [{ id: `edit-src-${Date.now()}`, name: options.imageName, type: mediaMimeType(options.imageName), size: 0, path: options.imagePath, generated: /[\\/](generations|generated-images)[\\/]/i.test(options.imagePath) }];
+  appendChat(options.projectId, { id: msgId(), role: 'user', text: `Edit image: ${prompt}`, ts: Date.now(), attachments }, options.threadId);
+  const pendingId = msgId();
+  appendChat(options.projectId, { id: pendingId, role: 'assistant', text: 'Editing the image…', ts: Date.now(), pending: true }, options.threadId);
+  // With a selection, the first reference is the picture and the second the
+  // same picture with the area painted over; the prompt says how to read them.
+  const fullPrompt = options.markPath
+    ? `${prompt}\n\nThe first image is the picture to edit. The second is the same picture with the area to change painted over in translucent magenta. Change only that area as described, remove the magenta, and keep everything else exactly as in the first image.`
+    : `Edit this image: ${prompt}. Keep everything the request does not mention unchanged.`;
+  const output = await runMediaGeneration({
+    projectId: options.projectId,
+    threadId: options.threadId,
+    rootPath: options.rootPath,
+    kind: 'image',
+    prompt: fullPrompt,
+    referenceImages: options.markPath ? [options.imagePath, options.markPath] : [options.imagePath],
+  });
+  if (output.startsWith('error:') && !output.includes('already been shown')) {
+    patchChat(options.projectId, pendingId, { text: `The edit failed: ${output.replace(/^error:\s*/, '')}`, pending: false });
+  } else {
+    patchChat(options.projectId, pendingId, { text: output.startsWith('error:') ? 'The edit could not be made.' : 'Here is the edited image.', pending: false });
+  }
 }
 
 function msgId(): string {
@@ -3154,6 +4187,34 @@ function looksLikeBlockingQuestion(reply: string, explicitlyRequired = false): b
   }
   if (!/[?]\s*$/.test(trimmed)) return false;
   return /^(?:which|what|where|who|when|how|please\s+(?:provide|specify|choose|select))\b/i.test(trimmed);
+}
+
+/** When the model flags `needsInput` but states no question of its own. */
+const GENERIC_INPUT_QUESTION = 'How would you like me to continue?';
+
+/**
+ * Split a reply into what happened and the question to put on the input card.
+ *
+ * The card used to repeat the whole reply, so a long report appeared twice and
+ * the "question" was often a statement. The report belongs above the card; the
+ * card is the ask. A reply that states no question at all gets a plain one,
+ * because a card that does not ask anything tells the user nothing.
+ */
+export function splitReplyForInput(reply: string): { body: string; question: string } {
+  const trimmed = reply.trim();
+  if (!trimmed) return { body: '', question: GENERIC_INPUT_QUESTION };
+  const sentences = trimmed.split(/(?<=[.?!])[ \t]+|\n+/).map((part) => part.trim()).filter(Boolean);
+  const lastQuestionIndex = sentences.map((sentence) => sentence.endsWith('?')).lastIndexOf(true);
+  if (lastQuestionIndex === -1) return { body: trimmed, question: GENERIC_INPUT_QUESTION };
+  // Everything from the first sentence of that trailing run of questions.
+  let firstOfRun = lastQuestionIndex;
+  while (firstOfRun > 0 && sentences[firstOfRun - 1].endsWith('?')) firstOfRun -= 1;
+  const question = sentences.slice(firstOfRun).join(' ').trim();
+  const body = trimmed.slice(0, trimmed.lastIndexOf(sentences[firstOfRun])).trim();
+  // A reply that is only the question keeps it as the message too: there is no
+  // report to show above, and an empty bubble reads as a glitch.
+  if (!body) return { body: trimmed, question: question.length <= 300 ? question : `${question.slice(0, 299)}…` };
+  return { body, question: question.length <= 300 ? question : `${question.slice(0, 299)}…` };
 }
 
 function markInlineRequestAnswered(
@@ -3248,7 +4309,7 @@ function pickProjectOverviewFiles(treeLines: string[]): string[] {
 /** True when a message is short chatter with no actual request to act. */
 function isConversationalChatter(text: string): boolean {
   const t = text.trim().toLowerCase();
-  if (t.length < 8) return true;
+  if (t.length < 8 || isAcknowledgement(t)) return true;
   return /^(hi|hello|hey|thanks|thank you|ok|okay|sure|cool|got it|great|nice|awesome|yes|no|yeah|nah|yep|nope|bye|goodbye|see you|cya|lol|whats up|what's up)\b/i.test(t);
 }
 
@@ -3275,6 +4336,77 @@ function joinRootPath(root: string, clean: string): string {
   const sep = root.includes('\\') ? '\\' : '/';
   const base = root.replace(/[\\/]+$/, '');
   return `${base}${sep}${clean.split('/').join(sep)}`;
+}
+
+/** A project file's text, or null when it does not exist (or cannot be read as text). */
+async function readExistingFile(path: string): Promise<string | null> {
+  try {
+    const content = await backendInvoke<string>('fs_read_file', { path });
+    return typeof content === 'string' ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/** "undo", "revert that", "undo your last changes": restore the last turn's direct edits. */
+const UNDO_EDITS_RE = /^(?:please\s+)?(?:undo|revert|roll\s?back)\b(?:\s+(?:that|this|it|those|these|the|your|my|last|edits?|changes?|turn|please))*[.!]?$/i;
+
+/**
+ * Put back what the orchestrator's last turn changed. A file someone edited
+ * since then is left alone and reported, so undo never destroys newer work.
+ */
+async function undoLastTurnEdits(conversationKey: string, rootPath: string): Promise<string> {
+  const records = await loadTurnEdits(conversationKey);
+  await clearTurnEdits(conversationKey);
+  // "undo" never falls through to the model: it has no undo tool, so the turn
+  // would come back as prose describing the edit that is still on disk — a
+  // reply that reads like compliance and changes nothing. Say plainly that
+  // there is nothing to restore instead.
+  if (records.length === 0) {
+    return 'I have no record of a file I changed directly in this conversation, so there is nothing for me to restore.\nDirect-edit undo only covers files I wrote myself. Changes made by a dispatched agent are not included — review those with `git diff` and revert them with git.';
+  }
+  const restored: string[] = [];
+  const skipped: string[] = [];
+  for (const record of records) {
+    const absolute = joinRootPath(rootPath, record.path);
+    const current = await readExistingFile(absolute);
+    if (current !== record.written) {
+      skipped.push(`${record.path} (changed since)`);
+      continue;
+    }
+    try {
+      if (record.original === null) await backendInvoke('fs_delete', { path: absolute });
+      else await backendInvoke('fs_write_file_checked', { path: absolute, content: record.original, expectedContent: record.written });
+      restored.push(record.path);
+    } catch (error) {
+      skipped.push(`${record.path} (${String(error ?? 'failed')})`);
+    }
+  }
+  const lines = [restored.length ? `Restored ${restored.length} file${restored.length === 1 ? '' : 's'}: ${restored.join(', ')}.` : 'Nothing was restored.'];
+  if (skipped.length) lines.push(`Left alone: ${skipped.join(', ')}.`);
+  return lines.join('\n');
+}
+
+const TYPECHECKED_EXTENSIONS_RE = /\.(?:[cm]?[jt]sx?|svelte|vue)$/i;
+const POST_EDIT_CHECK_TIMEOUT_MS = 180_000;
+
+/**
+ * The project's own fast check (`npm run typecheck` or `npm run check`), run
+ * once when a turn that edited script files is about to finish — the cheap
+ * stand-in for OpenCode's LSP diagnostics. Null when the project declares no
+ * such script, so the brain's verification rule asks the model instead.
+ */
+export async function postEditCheckCommand(rootPath: string, editedPaths: string[]): Promise<string | null> {
+  if (!editedPaths.some((path) => TYPECHECKED_EXTENSIONS_RE.test(path))) return null;
+  const manifest = await readExistingFile(joinRootPath(rootPath, 'package.json'));
+  if (!manifest) return null;
+  try {
+    const scripts = (JSON.parse(manifest) as { scripts?: Record<string, unknown> }).scripts ?? {};
+    const script = ['typecheck', 'check'].find((name) => typeof scripts[name] === 'string');
+    return script ? `npm run ${script}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function escapeGlobRegExp(s: string): string {
@@ -3346,9 +4478,43 @@ async function globFilesForBrain(rootPath: string, pattern: string, max: number)
   return backendInvoke<string[]>('fs_glob_files', { rootPath, pattern: matcher.source, matchAnywhere: !pattern.includes('/') && !pattern.includes('\\'), max });
 }
 
+/**
+ * Files matching the glob that exist but are git-ignored, so the normal walk
+ * never lists them (`.env.local`, local config). Listing them is what lets
+ * the brain tell "ignored" from "missing". Empty on a backend without support.
+ */
+async function globIgnoredFilesForBrain(rootPath: string, pattern: string, max: number): Promise<string[]> {
+  const matcher = globToRegExp(pattern);
+  if (!matcher) return [];
+  try {
+    const paths = await backendInvoke<string[]>('fs_glob_files', { rootPath, pattern: matcher.source, matchAnywhere: !pattern.includes('/') && !pattern.includes('\\'), max, ignoredOnly: true });
+    return Array.isArray(paths) ? paths : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A listing line: the path, plus why the orchestrator cannot read it in full when it cannot. */
+function describeListedPath(path: string, ignored: boolean): string {
+  const note = visibilityNote(path, ignored);
+  return note ? `- ${path} (${note})` : `- ${path}`;
+}
+
 const BRAIN_REVIEW_MAX_FILES = 120;
 const BRAIN_REVIEW_FILE_CHARS = 6000;
 const BRAIN_REVIEW_TOTAL_CHARS = BRAIN_REVIEW_OUTPUT_CAP;
+/** Even a million-token model keeps room for the conversation and the reply. */
+const BRAIN_REVIEW_MAX_TOTAL_CHARS = BRAIN_REVIEW_MAX_OUTPUT_CAP;
+
+/**
+ * How much of one project snapshot this turn's model can actually take: a
+ * share of its context window rather than one constant, so a big-window model
+ * reviews the whole project in a single pass while a small one still gets a
+ * snapshot it can hold. Never smaller than the old fixed cap.
+ */
+export function projectSnapshotCharCap(contextChars: number): number {
+  return Math.min(BRAIN_REVIEW_MAX_TOTAL_CHARS, Math.max(BRAIN_REVIEW_TOTAL_CHARS, Math.floor(contextChars * 0.6)));
+}
 const BRAIN_REVIEW_SKIP_NAMES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']);
 const BRAIN_REVIEW_TEXT_EXTENSIONS = new Set([
   '.astro', '.bat', '.c', '.cc', '.cmd', '.cpp', '.css', '.go', '.gql', '.graphql', '.h', '.hpp', '.html',
@@ -3424,10 +4590,18 @@ async function readDocumentsIndexForBrain(rootPath: string): Promise<string | nu
 }
 
 /** Read a bounded, source-oriented project snapshot for same-turn reviews. */
-async function readProjectForBrain(rootPath: string, requestedMax: number, offset = 0): Promise<string> {
+async function readProjectForBrain(rootPath: string, requestedMax: number, offset = 0, totalCharCap = BRAIN_REVIEW_TOTAL_CHARS): Promise<string> {
   const maxFiles = Math.max(1, Math.min(Math.floor(requestedMax), BRAIN_REVIEW_MAX_FILES));
   const discovered = await globFilesForBrain(rootPath, '**/*', offset + maxFiles * 2);
-  const candidates = discovered.filter(isLikelyBrainReviewText).slice(offset, offset + maxFiles);
+  const candidates = discovered.filter((path) => isLikelyBrainReviewText(path) && !secretKind(path)).slice(offset, offset + maxFiles);
+  // Everything that exists but is not in the snapshot is named, so a review
+  // never reports a git-ignored or secret file as missing.
+  const unread = offset === 0
+    ? [
+      ...discovered.filter((path) => secretKind(path)).map((path) => describeListedPath(path, false)),
+      ...(await globIgnoredFilesForBrain(rootPath, '**/*', 40)).map((path) => describeListedPath(path, true)),
+    ]
+    : [];
   const loaded = await Promise.all(candidates.map(async (path) => {
     try {
       const content = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, path) });
@@ -3445,11 +4619,11 @@ async function readProjectForBrain(rootPath: string, requestedMax: number, offse
   const sections: string[] = [];
   for (const item of loaded) {
     if (!item) continue;
-    if (chars >= BRAIN_REVIEW_TOTAL_CHARS) {
+    if (chars >= totalCharCap) {
       truncated = true;
       break;
     }
-    const remaining = BRAIN_REVIEW_TOTAL_CHARS - chars;
+    const remaining = totalCharCap - chars;
     const content = item.text.slice(0, Math.min(BRAIN_REVIEW_FILE_CHARS, remaining));
     const fileTruncated = content.length < item.text.length;
     if (fileTruncated) truncated = true;
@@ -3459,12 +4633,26 @@ async function readProjectForBrain(rootPath: string, requestedMax: number, offse
   }
 
   const header = `For further files use glob_files with offset; for full file contents use read_file with start_line. Next review offset=${offset + readCount}. Broad project snapshot: read ${readCount} of ${candidates.length} relevant text file(s), ${chars} characters${truncated || discovered.length > candidates.length ? '. Some files were omitted or truncated for safety.' : '.'}`;
-  return [header, ...sections, 'Review this source before replying. Give the user the concrete findings and suggested changes in this same turn.'].join('\n\n').slice(0, BRAIN_REVIEW_TOTAL_CHARS);
+  const unreadBlock = unread.length
+    ? `Files that exist but are not in this snapshot (${unread.length}${unread.length >= 40 ? '+' : ''}); never report these as missing:\n${unread.join('\n')}`
+    : '';
+  return [header, ...(unreadBlock ? [unreadBlock] : []), ...sections, 'Review this source before replying. Give the user the concrete findings and suggested changes in this same turn.'].join('\n\n').slice(0, totalCharCap);
 }
 
 // ─── Brain synchronous command runs (OpenCode `bash` parity) ────────────────
 
 export const BRAIN_RUN_POLL_MS = 300;
+/**
+ * The hidden shell is a real terminal, so test runners and linters see a TTY
+ * and start watch mode or an interactive prompt that never exits (`npm test`
+ * running `vitest` hit the 90s timeout, and the model then invented a cause).
+ * CI=1 is the switch those tools share for "run once, never prompt".
+ */
+const BRAIN_NON_INTERACTIVE_PREFIX: Record<EmbeddedShellKind, string> = {
+  pwsh: "$env:CI='1'; ",
+  cmd: 'set CI=1&& ',
+  sh: 'export CI=1; ',
+};
 export const BRAIN_RUN_DEFAULT_TIMEOUT_MS = 90_000;
 export const BRAIN_RUN_MAX_TIMEOUT_MS = 300_000;
 
@@ -3489,6 +4677,26 @@ export interface BrainRunResult {
  * terminals are never polluted and focus never moves. No toasts, no store
  * chips — the result goes back to the model as tool output.
  */
+/**
+ * One hidden shell reused by a turn's sequential commands, like Codex's and
+ * Claude Code's persistent shell: starting a fresh PowerShell per command
+ * cost about a second each. A command that does not finish cleanly (timeout,
+ * stop, exit) retires the shell, so the next command never inherits a busy
+ * or dead session. The owner calls `closeBrainShell` when the turn ends.
+ */
+export interface BrainShell { sessionId: number | null }
+
+export async function closeBrainShell(shell: BrainShell): Promise<void> {
+  const sid = shell.sessionId;
+  shell.sessionId = null;
+  if (sid == null) return;
+  try {
+    await killSession(sid);
+  } catch {
+    // Already gone.
+  }
+}
+
 export async function runBrainCommand(
   projectId: string,
   rootPath: string,
@@ -3496,6 +4704,7 @@ export async function runBrainCommand(
   timeoutMs: number = BRAIN_RUN_DEFAULT_TIMEOUT_MS,
   signal?: AbortSignal,
   onOutput?: (output: string) => void,
+  shell?: BrainShell,
 ): Promise<BrainRunResult> {
   signal?.throwIfAborted();
   const startedAt = Date.now();
@@ -3505,23 +4714,28 @@ export async function runBrainCommand(
   const elapsed = () => Date.now() - startedAt;
   const isDev = get(layoutSnapshot).ambient === 'development';
 
-  let sessionId: number | null = null;
-  try {
-    sessionId = await createTerminalSession(rootPath || undefined, undefined, projectId, {
-      isDev,
-      assignPane: false,
-      hidden: true,
-    });
-  } catch {
-    sessionId = null;
+  let sessionId: number | null = shell?.sessionId ?? null;
+  if (sessionId == null) {
+    try {
+      sessionId = await createTerminalSession(rootPath || undefined, undefined, projectId, {
+        isDev,
+        assignPane: false,
+        hidden: true,
+      });
+    } catch {
+      sessionId = null;
+    }
   }
   if (sessionId == null) {
     return { exitCode: null, output: '', timedOut: false, elapsedMs: elapsed() };
   }
   const sid: number = sessionId;
+  if (shell) shell.sessionId = sid;
+  let reusable = false;
   if (signal?.aborted) { await killSession(sid); signal.throwIfAborted(); }
 
-  const wrapper = buildEmbeddedCommand(command, detectShellKind());
+  const shellKind = detectShellKind();
+  const wrapper = buildEmbeddedCommand(`${BRAIN_NON_INTERACTIVE_PREFIX[shellKind]}${command}`, shellKind);
   const outputStart = getSessionOutputLength(sid);
   sendPromptToSession(sid, wrapper.text);
 
@@ -3554,15 +4768,21 @@ export async function runBrainCommand(
         onOutput?.(output);
         const exitCode = parseEmbeddedExitCode(output, wrapper.match);
         if (exitCode !== null) {
+          reusable = true;
           finish({ exitCode, output, timedOut: false });
         }
       }, BRAIN_RUN_POLL_MS);
     });
   } finally {
-    try {
-      await killSession(sid);
-    } catch {
-      // Session already gone (or a mocked kill) — the result stands.
+    if (shell && reusable) {
+      // Keep the shell for the turn's next command.
+    } else {
+      if (shell?.sessionId === sid) shell.sessionId = null;
+      try {
+        await killSession(sid);
+      } catch {
+        // Session already gone (or a mocked kill) — the result stands.
+      }
     }
   }
 }
@@ -3578,11 +4798,17 @@ function stripBrainRunSentinels(text: string): string {
 /**
  * Render a finished brain run as compact tool output: status header plus the
  * ANSI-stripped tail, capped for the model prompt. Pure — unit-tested.
+ *
+ * The status word at the head of the first line is parsed twice downstream:
+ * `executeBrainToolCalls` derives `ok` from it, and `INCONCLUSIVE_RUN_RE` in
+ * `orchestrator/chat-turn.ts` uses it to tell a run that FAILED from one that
+ * never REPORTED. Renaming `TIMEOUT` or `SESSION CLOSED` here silently turns
+ * every hung check back into `Tests: FAILED` on the completion card.
  */
 export function formatBrainRunResult(command: string, result: BrainRunResult): string {
   const secs = (result.elapsedMs / 1000).toFixed(1);
   const status = result.timedOut
-    ? `TIMEOUT after ${secs}s (no completion — narrow the command or raise timeout_s)`
+    ? `TIMEOUT after ${secs}s (no completion). A command that never finishes is usually waiting on something: a watch mode, a dev server, or an interactive prompt. Use the run-once, non-interactive form (e.g. "vitest run", "jest --ci"), run it with background: true, or raise timeout_s. Do not guess another cause without evidence`
     : result.exitCode === null
       ? `SESSION CLOSED after ${secs}s before the command completed`
       : `exit ${result.exitCode} in ${secs}s`;
@@ -3601,7 +4827,46 @@ export function formatBrainRunResult(command: string, result: BrainRunResult): s
  * confirmation hold. If the user should be asked first, the brain asks with an
  * empty actions array and acts on the next turn.
  */
-const brainApprovals = new Map<string, (approved: boolean) => void>();
+/** An answer to an operation approval card. `redirect` is a typed "no, do this instead". */
+type BrainApprovalDecision =
+  | { kind: 'once' }
+  | { kind: 'always' }
+  | { kind: 'deny' }
+  | { kind: 'redirect'; text: string };
+const brainApprovals = new Map<string, (decision: BrainApprovalDecision) => void>();
+const APPROVE_ONCE_LABEL = 'Approve';
+const DECLINE_LABEL = 'Decline';
+/** "Always allow" rules the user granted, per conversation (see command-policy). */
+const conversationApprovalRules = new Map<string, Set<string>>();
+
+/** Everything the command palette can run right now: the brain's view of the app. */
+function paletteCommandList(): AppCommand[] {
+  return useCommandPaletteStore.getState().commands;
+}
+
+/** What the approval card asks, in words rather than raw tool JSON. */
+function describeApprovalRequest(call: BrainToolCall): string {
+  const path = toolArgStr(call.args, 'path');
+  switch (call.name) {
+    case 'run_command': return `Run this command in the project?\n\n\`\`\`\n${toolArgStr(call.args, 'command')}\n\`\`\``;
+    case 'edit_file': return `Edit \`${path}\`?\n\n\`\`\`diff\n${String(call.args.old_string ?? '').split('\n').slice(0, 12).map((line) => `-${line}`).join('\n')}\n${String(call.args.new_string ?? '').split('\n').slice(0, 12).map((line) => `+${line}`).join('\n')}\n\`\`\``;
+    case 'write_file': return `Write \`${path}\` (${String(call.args.content ?? '').length} characters)?`;
+    case 'save_document': return `Save \`${toolArgStr(call.args, 'filename') || 'a document'}\` to the project's docs folder?`;
+    case 'run_app_command': {
+      const ref = toolArgStr(call.args, 'id');
+      const name = findAppCommand(paletteCommandList(), ref)?.name ?? ref;
+      return `Run the app command **${name}**?`;
+    }
+    case 'emulator_boot': return `Boot the device **${toolArgStr(call.args, 'target')}**?`;
+    case 'emulator_shutdown': return `Shut down the device **${toolArgStr(call.args, 'target')}**?`;
+    case 'emulator_tap': return `Tap **${toolArgStr(call.args, 'target')}** at x=${toolArgNum(call.args, 'x', 0)}, y=${toolArgNum(call.args, 'y', 0)}?`;
+    case 'emulator_swipe': return `Swipe on **${toolArgStr(call.args, 'target')}** from (${toolArgNum(call.args, 'x1', 0)}, ${toolArgNum(call.args, 'y1', 0)}) to (${toolArgNum(call.args, 'x2', 0)}, ${toolArgNum(call.args, 'y2', 0)})?`;
+    case 'emulator_key': return `Press **${toolArgStr(call.args, 'key')}** on ${toolArgStr(call.args, 'target')}?`;
+    case 'emulator_text': return `Type this on **${toolArgStr(call.args, 'target')}**?\n\n\`\`\`\n${toolArgStr(call.args, 'text').slice(0, 300)}\n\`\`\``;
+    case 'emulator_rotate': return `Rotate **${toolArgStr(call.args, 'target')}** to orientation ${toolArgNum(call.args, 'rotation', 1)}?`;
+    default: return `Allow ${call.name.replace(/_/g, ' ')}?`;
+  }
+}
 /** Short-lived per-root project-tree cache so consecutive turns skip the FS walk. */
 const projectTreeCache = new Map<string, { tree: string; builtAt: number }>();
 /**
@@ -3614,21 +4879,74 @@ export function resetOrchestratorCachesForTests(): void {
   chatQueues.clear();
   drainingChatThreads.clear();
   chatMessageQueues.set({});
+  stoppedChatTurns.clear();
+  directEditScopes.clear();
+  pendingDelegations.clear();
+  resetTurnEditsForTests();
+  steeringInboxes.clear();
+  conversationApprovalRules.clear();
+  // Turn watchers are keyed by session id, and tests reuse a handful of ids.
+  // A watcher left armed by an earlier case makes the next one stand down
+  // ("someone is already watching session 42") and its agent then looks
+  // permanently silent — a failure that only appears in a full-file run.
+  chatTurnWatchers.clear();
+  dispatchTurnWatchers.clear();
+  threadIdByTaskId.clear();
 }
 const answeringChatRequests = new Set<string>();
 interface BrainJob { owner: string; controller: AbortController; output: string; result?: BrainRunResult; error?: string }
 const brainJobs = new Map<string, BrainJob>();
 const activeBrainTurns = new Map<string, AbortController>();
+// A stop click must take effect in the UI immediately, even when the turn is
+// awaiting a non-cancellable filesystem IPC call. The controller still stops
+// the provider request; this set also prevents a late route result from being
+// committed after the user has stopped the turn.
+const stoppedChatTurns = new Set<string>();
+/**
+ * Each chat thread's last finished plan. In memory only: after a restart the
+ * worst case is one follow-up turn that re-lists old rows, which is the
+ * pre-fix behaviour, not a failure.
+ */
+const lastTurnPlanByThread = new Map<string, ChatTurnTodoItem[]>();
+/**
+ * Per-conversation edit scope: which project files the orchestrator changed in
+ * the current task (capped at DIRECT_EDIT_FILE_LIMIT) and which it has read.
+ * It outlives a turn so "okay, continue" cannot reset the file count.
+ */
+const directEditScopes = new Map<string, DirectEditScope>();
+/** Unapproved hand-offs waiting for the user's answer, per conversation. */
+const pendingDelegations = new Map<string, DelegationProposal>();
+// Each conversation's last turn of direct edits lives in `turn-edit-undo`,
+// which outlives this module so "undo" lasts as long as the message offering
+// it. `TurnEditRecord` is re-exported from there.
+/**
+ * Steered messages waiting for the running turn to pick them up at its next
+ * tool round. Present only while a brain turn is running in that thread.
+ */
+const steeringInboxes = new Map<string, QueuedChatMessage[]>();
 export function stopChatTurn(threadId: string): void {
+  stoppedChatTurns.add(threadId);
   activeBrainTurns.get(threadId)?.abort();
   for (const job of brainJobs.values()) if (job.owner === threadId && !job.result) job.controller.abort();
   clearChatTurnTicker(threadId);
+  const thread = getChatThread(threadId);
+  if (thread) {
+    const pending = getThreadMessageSnapshot(threadId).find((message) => message.pending);
+    if (pending) removeThreadMessage(threadId, pending.id);
+    updateChatThread(threadId, {
+      status: 'idle',
+      turnEndedAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
+  }
 }
 
 // ─── Chat message queue ────────────────────────────────────────────────────
 // Sending while a turn runs ENQUEUES instead of dropping the message: FIFO
 // order, one turn at a time, drained automatically. Any queued message can be
-// promoted to the front AND interrupt the running turn — that is steering.
+// steered: handed to the running turn at its next tool round (Codex-style), or
+// promoted to the front with an interrupt when the turn cannot take it.
 
 export interface QueuedChatMessage {
   id: string;
@@ -3681,11 +4999,22 @@ export function promoteQueuedChatMessage(threadId: string, id: string): void {
 }
 
 /**
- * Steering: answer THIS message next even though a turn is already running.
- * Moves the queued message to the front and stops the in-flight turn, so the
- * drain loop starts the steered message immediately.
+ * Steering: answer THIS message now even though a turn is already running.
+ * A brain turn in its tool loop takes the message at its next round without
+ * losing the work in flight. Anything else (no loop running, or attachments
+ * the loop cannot carry) falls back to promote-and-interrupt, so the drain
+ * loop starts the steered message immediately.
  */
 export function steerQueuedChatMessage(threadId: string, id: string): void {
+  const queue = chatQueues.get(threadId);
+  const entry = queue?.find((queued) => queued.id === id);
+  const inbox = steeringInboxes.get(threadId);
+  if (queue && entry && inbox && !entry.opts.attachments?.length) {
+    chatQueues.set(threadId, queue.filter((queued) => queued.id !== id));
+    notifyChatQueueListeners(threadId);
+    inbox.push(entry);
+    return;
+  }
   promoteQueuedChatMessage(threadId, id);
   if (activeBrainTurns.has(threadId)) stopChatTurn(threadId);
 }
@@ -3777,6 +5106,9 @@ export async function sendChatMessage(
   const chatThreadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
   const chatThread = chatThreadId ? getChatThread(chatThreadId) : null;
   if (opts?.threadId && (!chatThread || chatThread.projectId !== projectId)) return;
+  // A new queued turn is allowed to reuse a thread after the previous stop
+  // has fully unwound. Do not let the old stop marker poison this request.
+  if (chatThreadId) stoppedChatTurns.delete(chatThreadId);
   if (chatThreadId) clearChatTurnTicker(chatThreadId);
 
   // Resend-after-edit: logically the transcript already ends at the edited
@@ -3818,10 +5150,16 @@ export async function sendChatMessage(
   if (pendingInput?.inlineRequest?.id.startsWith('brain-approval-')) {
     const resolve = brainApprovals.get(pendingInput.inlineRequest.id);
     if (resolve) {
+      // A clicked option is an answer, not a chat message: no user bubble.
+      // Anything else typed while the card is open is "no, do this instead",
+      // which the running turn receives as a steered message.
+      const picked = pendingInput.inlineRequest.options?.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
       applyResendTruncation();
-      appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
       markInlineRequestAnswered(projectId, pendingInput.id, trimmed);
-      resolve(trimmed === 'Approve');
+      if (picked?.id === 'approve' || /^(?:y|yes|ok(?:ay)?|approve[d]?|go ahead)[.!]?$/i.test(trimmed)) resolve({ kind: 'once' });
+      else if (picked?.id === 'always') resolve({ kind: 'always' });
+      else if (picked?.id === 'deny' || /^(?:n|no|nope|decline|cancel|stop)[.!]?$/i.test(trimmed)) resolve({ kind: 'deny' });
+      else resolve({ kind: 'redirect', text: trimmed });
     } else {
       patchChat(projectId, pendingInput.id, { inlineRequest: null, pending: false, type: 'failure', text: 'This approval expired when the app restarted. Send the original request again; no pending operation was executed.' });
     }
@@ -3841,8 +5179,9 @@ export async function sendChatMessage(
           : null;
       })()
     : null;
+  const answeringAgentRequest = Boolean(pendingInput?.inlineRequest?.taskId);
   if (
-    chatMode &&
+    (chatMode || answeringAgentRequest) &&
     chatThreadId &&
     threadTask &&
     (!pendingInput || Boolean(pendingInput.inlineRequest?.taskId)) &&
@@ -3863,7 +5202,7 @@ export async function sendChatMessage(
     if (answeringChatRequests.has(chatThreadId)) return;
     answeringChatRequests.add(chatThreadId);
     try {
-      await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode, opts?.attachments ?? [], pendingInput?.id);
+      await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode || answeringAgentRequest, opts?.attachments ?? [], pendingInput?.id);
     } finally { answeringChatRequests.delete(chatThreadId); }
     return;
   }
@@ -3883,6 +5222,36 @@ export async function sendChatMessage(
     );
   if (unheldPendingInput?.inlineRequest) {
     markInlineRequestAnswered(projectId, unheldPendingInput.id, trimmed);
+  }
+
+  const conversationKey = chatThreadId ?? projectId;
+  if (UNDO_EDITS_RE.test(trimmed)) {
+    applyResendTruncation();
+    appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
+    const reply = await undoLastTurnEdits(conversationKey, rootPath);
+    appendChat(projectId, { id: msgId(), role: 'assistant', text: reply, ts: Date.now() }, chatThreadId);
+    if (chatThreadId) updateChatThread(chatThreadId, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now() });
+    return;
+  }
+
+  // The answer to a hand-off proposal: the chosen agent gets the drafted
+  // brief, "do it yourself" re-runs the original request with the file limit
+  // lifted, and anything unrelated simply drops the proposal.
+  let approvedDelegation: { label: string; actions: OrchestratorAction[] } | null = null;
+  let selfOverrideRequest: string | null = null;
+  const proposal = pendingDelegations.get(conversationKey);
+  if (proposal) {
+    pendingDelegations.delete(conversationKey);
+    const choice = resolveDelegationAnswer(proposal, trimmed);
+    if (choice?.kind === 'decline') {
+      applyResendTruncation();
+      appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now() }, chatThreadId);
+      appendChat(projectId, { id: msgId(), role: 'assistant', text: "Okay, I won't hand it off. No agent was started.", ts: Date.now() }, chatThreadId);
+      if (chatThreadId) updateChatThread(chatThreadId, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now() });
+      return;
+    }
+    if (choice?.kind === 'delegate') approvedDelegation = choice;
+    if (choice?.kind === 'self') selfOverrideRequest = proposal.request;
   }
 
   // Recheck the selected connection against the OS keychain for every Chat
@@ -3936,14 +5305,37 @@ export async function sendChatMessage(
     sessionId: chatThreadId,
   });
 
+  // How much room this model really has, so the prompt and the project
+  // snapshot are sized to the chosen brain rather than to one constant. The
+  // user's own Task limits still win; an unknown model falls back to the
+  // conservative default.
+  const modelCapabilities = await invoke<{ contextTokens?: number } | null>('ai_agent_capabilities', {
+    provider: llmConfig.provider,
+    model: llmConfig.model,
+    baseUrl: llmConfig.baseUrl || undefined,
+  }).catch(() => null);
+  const turnContextChars = contextCharBudget(chatThread?.agentBudgets, modelCapabilities ?? undefined);
+  const turnBudgets: AgentBudgets = {
+    ...chatThread?.agentBudgets,
+    contextChars: turnContextChars,
+    reasoningEffort: effectiveReasoningEffort(llmConfig.provider, llmConfig.model, chatThread?.reasoningEffort),
+  };
+
   const attachments = opts?.attachments ?? [];
-  const promptText = buildAttachmentPrompt(trimmed, attachments);
+  const promptText = buildAttachmentPrompt(
+    selfOverrideRequest
+      ? `${selfOverrideRequest}\n\n(The user chose to have you do this yourself instead of delegating: the ${DIRECT_EDIT_FILE_LIMIT}-file limit is lifted for this task. Do not propose a hand-off.)`
+      : trimmed,
+    attachments,
+  );
   if (chatThreadId) {
     clearChatTurnTicker(chatThreadId);
   }
   appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments }, chatThreadId);
   const assistantId = msgId();
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true }, chatThreadId);
+  // The header shows Working for the whole turn, not only after a tool ends.
+  if (chatThreadId) updateChatThread(chatThreadId, { status: 'working', updatedAt: Date.now(), lastActivityAt: Date.now() });
 
   let result: RouteResult;
   // Multi-step progress evidence: every completed tool round feeds the live
@@ -3951,6 +5343,10 @@ export async function sendChatMessage(
   // Cleared per turn so a summary never folds a previous turn's evidence in.
   let turnEvidence: BrainToolResult[] = [];
   let turnTodos: ChatTurnTodoItem[] = [];
+  // Files this turn changed directly, keyed by scopeKey: the undo record.
+  const turnEditLog = new Map<string, TurnEditRecord>();
+  // Where this turn's time goes; shown as the last Work details row.
+  const turnTiming = createTurnTiming();
   const legacyProviderAgent = opts?.provider && isChatAgentProvider(opts.provider)
     ? opts.provider.trim()
     : undefined;
@@ -3962,6 +5358,12 @@ export async function sendChatMessage(
     result = {
       reply: `Handing this to ${forced.name}.`,
         actions: [{ kind: 'spawn', agent: forced.command, prompt: promptText, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
+      viaLLM: false,
+    };
+  } else if (approvedDelegation) {
+    result = {
+      reply: `Handing this to ${approvedDelegation.label.replace(/^(?:Delegate|Send) to /, '')}.`,
+      actions: approvedDelegation.actions,
       viaLLM: false,
     };
   } else {
@@ -3979,6 +5381,31 @@ export async function sendChatMessage(
         if (chatThreadId && !getChatThread(chatThreadId)) controller.abort();
         controller.signal.throwIfAborted();
       };
+      // The task's edit scope carries across a short go-ahead ("okay,
+      // continue") and resets on a new request; "do it yourself anyway" lifts
+      // the file limit for the task it approves.
+      const editScope = directEditScopes.get(turnKey) ?? createDirectEditScope();
+      directEditScopes.set(turnKey, editScope);
+      if (selfOverrideRequest) {
+        editScope.files.clear();
+        editScope.override = true;
+      } else if (!isScopeContinuation(trimmed)) {
+        editScope.files.clear();
+        editScope.override = false;
+      }
+      const noteDirectWrite = (path: string, previous: string | null, written: string): void => {
+        recordDirectEdit(editScope, path);
+        recordDirectRead(editScope, path);
+        const key = scopeKey(path);
+        const first = turnEditLog.get(key);
+        turnEditLog.set(key, { path, original: first ? first.original : previous, written });
+      };
+      // Messages steered into this turn; drained at the top of each tool round.
+      const steeringInbox: QueuedChatMessage[] = [];
+      if (chatThreadId) steeringInboxes.set(chatThreadId, steeringInbox);
+      // The turn's sequential commands share one hidden shell (background
+      // commands get their own); it is closed when the turn ends.
+      const brainShell: BrainShell = { sessionId: null };
       const MAX_READ_ROUNDS = 3;
       const projectReads: Array<{ path: string; content: string; truncated: boolean }> = [];
       const MAX_TURN_EVIDENCE_RESULTS = 400;
@@ -4023,7 +5450,7 @@ export async function sendChatMessage(
             if (!rootPath) return { output: 'error: no active project.' };
             const maxFiles = toolArgNum(call.args, 'max_files', 80);
             try {
-              return { output: await readProjectForBrain(rootPath, maxFiles, toolArgNum(call.args, 'offset', 0)) };
+              return { output: await readProjectForBrain(rootPath, maxFiles, toolArgNum(call.args, 'offset', 0), projectSnapshotCharCap(turnContextChars)) };
             } catch (error) {
               return { output: `error: project review read failed: ${String(error ?? 'unknown')}` };
             }
@@ -4032,6 +5459,17 @@ export async function sendChatMessage(
             const path = sanitiseBrainRepoPath(toolArgStr(call.args, 'path'));
             if (!path || !rootPath) return { output: 'error: provide a repo-relative path in the active project.' };
             const content = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, path) });
+            // Secrets never reach the model provider: an env file shows its
+            // variable names and whether each is set; key files, only that
+            // they exist. Neither counts as read, so neither can be edited.
+            const secret = secretKind(path);
+            if (secret === 'credential') {
+              return { output: `${path} exists (${content.length} chars). It is a credential file, so its contents are withheld and never sent to the model. Refer to it by name.` };
+            }
+            if (secret === 'env') {
+              return { output: `${path} exists. It is a secret env file, so values are withheld: each variable shows only whether it is set.\n${filePage(redactEnvFile(content), toolArgNum(call.args, 'start_line', 1), toolArgNum(call.args, 'line_count', 200), toolArgNum(call.args, 'start_char', 0))}` };
+            }
+            recordDirectRead(editScope, path);
             return { output: `${path}\n${filePage(content, toolArgNum(call.args, 'start_line', 1), toolArgNum(call.args, 'line_count', 200), toolArgNum(call.args, 'start_char', 0))}` };
           }
           case 'read_tool_result': {
@@ -4051,8 +5489,17 @@ export async function sendChatMessage(
               const offset = toolArgNum(call.args, 'offset', 0);
               const all = await globFilesForBrain(rootPath, pattern, offset + max + 1);
               const hits = all.slice(offset, offset + max);
-              if (!hits.length) return { output: `No files match "${pattern}".` };
-              return { output: `Files matching "${pattern}" (${hits.length}):\n${hits.map((h) => `- ${h}`).join('\n')}${all.length > offset + max ? `\nContinue: offset=${offset + max}` : '\nEnd of results'}` };
+              // Ignored files belong in the first page's answer: "there is no
+              // .env.local" must never be concluded from a .gitignore entry.
+              const ignored = offset === 0 ? await globIgnoredFilesForBrain(rootPath, pattern, 20) : [];
+              const ignoredBlock = ignored.length
+                ? `\nAlso present but git-ignored (${ignored.length}${ignored.length >= 20 ? '+' : ''}):\n${ignored.map((path) => describeListedPath(path, true)).join('\n')}`
+                : '';
+              if (!hits.length && !ignored.length) return { output: `No files match "${pattern}" (git-ignored files were checked too).` };
+              const listed = hits.length
+                ? `Files matching "${pattern}" (${hits.length}):\n${hits.map((hit) => describeListedPath(hit, false)).join('\n')}${all.length > offset + max ? `\nContinue: offset=${offset + max}` : '\nEnd of results'}`
+                : `No tracked files match "${pattern}".`;
+              return { output: `${listed}${ignoredBlock}` };
             } catch (error) {
               return { output: `error: glob failed: ${String(error ?? 'unknown')}` };
             }
@@ -4095,9 +5542,16 @@ export async function sendChatMessage(
             if (!clean) return { output: `error: refusing path "${rawPath}" — repo-relative paths only, never outside the project or under .git.` };
 
             try {
+              const previous = await readExistingFile(joinRootPath(rootPath, clean));
+              const expectedArg = typeof call.args.expected_content === 'string' ? call.args.expected_content : undefined;
+              if (previous !== null && expectedArg === undefined && !hasDirectRead(editScope, clean)) {
+                return { output: `error: ${clean} already exists and you have not read it in this conversation. Read it with read_file first, then prefer edit_file for a targeted change.` };
+              }
               checkActive();
-              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content, expectedContent: typeof call.args.expected_content === 'string' ? call.args.expected_content : undefined });
-              return { output: `Wrote ${clean} (${content.length} chars).` };
+              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content, expectedContent: expectedArg ?? previous ?? undefined });
+              noteDirectWrite(clean, previous, content);
+              const diff = previous === null ? '' : `\n${unifiedDiff(clean, previous, content)}`;
+              return { output: `Wrote ${clean} (${content.length} chars).${diff}` };
             } catch (error) {
               return { output: `error: write failed: ${String(error ?? 'unknown')}` };
             }
@@ -4111,6 +5565,24 @@ export async function sendChatMessage(
               return { output: 'error: invalid filename; use a single filename without folders or path separators.' };
             }
             try {
+              if (rootPath) {
+                // Documents belong to the project: save under <root>/docs through the
+                // same root-confined write as write_file. Never clobber an existing
+                // doc; take the next free "-2", "-3"… name instead.
+                const dot = filename.lastIndexOf('.');
+                const stem = dot > 0 ? filename.slice(0, dot) : filename;
+                const ext = dot > 0 ? filename.slice(dot) : '';
+                let rel = '';
+                for (let n = 1; n <= 50 && !rel; n += 1) {
+                  const candidate = `docs/${n === 1 ? filename : `${stem}-${n}${ext}`}`;
+                  if (await readExistingFile(joinRootPath(rootPath, candidate)) === null) rel = candidate;
+                }
+                if (!rel) return { output: `error: docs/ already holds too many files named like ${filename}; choose a different filename.` };
+                checkActive();
+                await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, rel), content });
+                return { output: `Saved ${rel} in the project (${content.length} chars).` };
+              }
+              // No project open: fall back to the user's Documents folder.
               checkActive();
               const savedPath = await invoke<string>('save_document_file', { filename, content });
               return { output: `Saved ${savedPath} (${content.length} chars).` };
@@ -4128,20 +5600,25 @@ export async function sendChatMessage(
             if (!rootPath) return { output: 'error: no active project.' };
             const clean = sanitiseBrainRepoPath(rawPath);
             if (!clean) return { output: `error: refusing path "${rawPath}" — repo-relative paths only, never outside the project or under .git.` };
+            if (!hasDirectRead(editScope, clean)) {
+              return { output: `error: read ${clean} with read_file before editing it, so old_string comes from its current contents.` };
+            }
             try {
               const current = await backendInvoke<string>('fs_read_file', { path: joinRootPath(rootPath, clean) });
-              let count = 0;
-              let idx = current.indexOf(oldStr);
-              while (idx !== -1 && count < 3) {
-                count += 1;
-                idx = current.indexOf(oldStr, idx + oldStr.length);
+              const edit = applyTextEdit(current, oldStr, newStr, toolArgBool(call.args, 'replace_all', false));
+              if (!edit.ok) {
+                if (edit.reason === 'not-found') return { output: `error: old_string not found in ${clean} — re-read it and copy the exact text (whitespace included).` };
+                if (edit.reason === 'ambiguous') return { output: `error: old_string matches ${edit.count} times in ${clean} — include more surrounding lines so exactly one occurrence matches, or set replace_all to change every exact occurrence.` };
+                if (edit.reason === 'unchanged') return { output: 'error: old_string and new_string are identical; nothing to change.' };
+                return { output: 'error: missing "old_string" argument (exact text to replace).' };
               }
-              if (count === 0) return { output: `error: old_string not found in ${clean} — re-read it and copy the exact text (whitespace included).` };
-              if (count > 1) return { output: `error: old_string matches ${count} times in ${clean} — include more surrounding lines so exactly one occurrence matches.` };
-              const next = current.replace(oldStr, newStr);
               checkActive();
-              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content: next, expectedContent: current });
-              return { output: `Edited ${clean} (replaced ${oldStr.length} chars).` };
+              await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, clean), content: edit.content, expectedContent: current });
+              noteDirectWrite(clean, current, edit.content);
+              const how = edit.matcher === 'exact'
+                ? `replaced ${edit.replacements} occurrence${edit.replacements === 1 ? '' : 's'}`
+                : `matched with ${edit.matcher} tolerance`;
+              return { output: `Edited ${clean} (${how}).\n${unifiedDiff(clean, current, edit.content)}` };
             } catch (error) {
               const msg = String(error ?? 'unknown');
               if (msg.startsWith('error: old_string') || msg.startsWith('error: edit grows')) return { output: msg };
@@ -4165,7 +5642,7 @@ export async function sendChatMessage(
                 .then(result => { job.result = result; job.output = result.output; }, error => { job.error = String(error); });
               return { output: `Started background command ${id}. Use command_status(id) until an exit code is available. It is not complete yet.` };
             }
-            const res = await runBrainCommand(projectId, rootPath, command, timeoutS * 1000, controller.signal);
+            const res = await runBrainCommand(projectId, rootPath, command, timeoutS * 1000, controller.signal, undefined, brainShell);
             return { output: formatBrainRunResult(command, res) };
           }
           case 'command_status':
@@ -4191,6 +5668,9 @@ export async function sendChatMessage(
             if (hit) {
               const label = `"${hit.name ?? hit.agent}"`;
               const tail = hit.recentOutput?.trim().slice(-1500) ?? '(no output captured yet)';
+              if (hit.status === 'in-progress' && hit.turnState === 'ready') {
+                return { output: `COMPLETE: ${label} finished its latest turn on "${hit.title}" and its session is ready for another message. Result tail:\n${tail}` };
+              }
               if (hit.status === 'in-progress') {
                 return { output: `WORKING: ${label} is still in progress on "${hit.title}". Latest output tail:\n${tail}\n\nSay briefly that it is still working and stop — the next turn re-checks. Do not report completion.` };
               }
@@ -4220,6 +5700,60 @@ export async function sendChatMessage(
             const opt = options.length ? ` Options: ${options.join(' | ')}.` : '';
             const tgt = target ? ` For ${target}.` : '';
             return { output: `question noted — ending turn for user input.${tgt} Q: ${question.slice(0, 500)}${opt}` };
+          }
+          case 'list_app_commands': {
+            const query = toolArgStr(call.args, 'query');
+            return { output: formatAppCommandList(listAppCommands(paletteCommandList(), query), query) };
+          }
+          case 'run_app_command': {
+            const ref = toolArgStr(call.args, 'id');
+            if (!ref) return { output: 'error: missing "id" argument. Find it with list_app_commands first.' };
+            const command = findAppCommand(paletteCommandList(), ref);
+            if (!command) return { output: `error: no app command "${ref}". Call list_app_commands to find the right id.` };
+            try {
+              checkActive();
+              await command.action();
+              return { output: `Ran app command "${command.name}" (${command.id}).` };
+            } catch (error) {
+              return { output: `error: app command "${command.name}" failed: ${String(error ?? 'unknown')}` };
+            }
+          }
+          case 'generate_image':
+          case 'generate_video': {
+            const prompt = toolArgStr(call.args, 'prompt');
+            if (!prompt) return { output: 'error: missing "prompt" argument.' };
+            const kind: MediaKind = call.name === 'generate_video' ? 'video' : 'image';
+            const rawRefs = kind === 'video' ? [call.args.reference_image] : call.args.reference_images;
+            const referenceImages = (Array.isArray(rawRefs) ? rawRefs : [])
+              .filter((p): p is string => typeof p === 'string' && p.trim() !== '');
+            checkActive();
+            const output = await runMediaGeneration({
+              projectId, threadId: chatThreadId, rootPath, kind, prompt, referenceImages, signal: controller.signal,
+            });
+            checkActive();
+            return { output };
+          }
+          case 'emulator_list':
+          case 'emulator_boot':
+          case 'emulator_shutdown':
+          case 'emulator_screenshot':
+          case 'emulator_tap':
+          case 'emulator_swipe':
+          case 'emulator_key':
+          case 'emulator_text':
+          case 'emulator_rotate':
+          case 'emulator_logcat': {
+            checkActive();
+            try {
+              return {
+                output: await invoke<string>('mcp_call_emulator_tool', {
+                  name: call.name,
+                  args: normalizeEmulatorArgs(call.name, call.args),
+                }),
+              };
+            } catch (error) {
+              return { output: `error: ${String(error ?? 'the emulator tool failed')}` };
+            }
           }
           case 'list_terminals': {
             const sessions = getTerminalProjectState(projectId).sessions.slice(0, 8);
@@ -4275,7 +5809,7 @@ export async function sendChatMessage(
             // tool evidence exists (Phase 4 guard).
             const entries = toolArgStrArr(call.args, 'todos');
             if (!entries.length) return { output: 'error: missing "todos" argument (one entry per task).' };
-            const parsed = entries
+            let parsed = entries
               .map((entry) => {
                 const { status, text } = todoMarkerStatus(entry);
                 const label = text.length > 120 ? `${text.slice(0, 119)}…` : text;
@@ -4285,6 +5819,20 @@ export async function sendChatMessage(
               .filter((item): item is ChatTurnTodoItem => Boolean(item));
             if (!parsed.length) return { output: 'error: every todo entry was empty after removing status markers.' };
             let planNote = '';
+            if (chatThreadId && !turnTodos.length) {
+              // First plan of this turn: rows copied from the previous turn's
+              // finished checklist are history, not new work. Without this a
+              // follow-up request re-listed the whole earlier plan and the
+              // ticker grew (and its count inflated) on every message.
+              const { fresh, carried } = splitCarriedOverTodos(lastTurnPlanByThread.get(chatThreadId) ?? [], parsed);
+              if (carried.length) {
+                if (!fresh.length) {
+                  return { output: `error: every item in this plan was already completed in an earlier turn (${carried.map((c) => c.label).join('; ')}). Plan only the work THIS message asks for.` };
+                }
+                parsed = fresh;
+                planNote = ` Left out ${carried.length} item(s) already completed in an earlier turn; plan only this request's work.`;
+              }
+            }
             if (chatThreadId) {
               // The FIRST call of a turn establishes the authoritative plan.
               // Once that plan has real shape, every later call must re-state
@@ -4309,12 +5857,17 @@ export async function sendChatMessage(
               turnTodos = mergedPlan.todos;
               setChatTurnTicker(chatThreadId, turnTodos);
               if (mergedPlan.truncated) {
-                planNote = ` Note: the plan is at its ${MAX_PLAN_ITEMS}-item ceiling; finish or cancel items before adding more.`;
+                planNote += ` Note: the plan is at its ${MAX_PLAN_ITEMS}-item ceiling; finish or cancel items before adding more.`;
               }
             }
             const inProgress = parsed.filter((item) => item.status === 'in_progress').length;
             const hint = inProgress > 1 ? ' Note: keep exactly one item in_progress.' : '';
-            return { output: `Recorded ${parsed.length} todo items (${parsed.filter((i) => i.status === 'completed').length} completed).${hint}${planNote}` };
+            // Echo the MERGED plan, not the size of this call: after a partial
+            // update the model was told "Recorded 2 items" while the ticker held
+            // five, so its own "all done" claims disagreed with the UI.
+            const plan = chatThreadId ? turnTodos : parsed;
+            const progress = todoProgress(plan);
+            return { output: `Plan of record: ${progress.completed}/${progress.total} complete.${hint}${planNote}\n${formatTodoListMarkdown(plan).replace(/^### Plan & Tasks\n/, '')}` };
           }
           case 'ask_user':
             return { output: 'question noted — ending turn for user input.' };
@@ -4326,7 +5879,13 @@ export async function sendChatMessage(
         checkActive();
         // update_todos mutates only turn-local plan state, not the workspace,
         // so it is available in every profile and never needs approval.
-        const mutating = ['write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command'].includes(call.name);
+        // Driving a device is a side effect outside the app, so it asks like
+        // an edit does. The per-tool "Always allow" answer is what keeps a tap
+        // loop usable: `approvalRuleKey` returns the bare tool name here, so
+        // one click covers every later emulator_tap in the conversation.
+        const mutating = ['write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command',
+          'emulator_boot', 'emulator_shutdown', 'emulator_tap', 'emulator_swipe', 'emulator_key',
+          'emulator_text', 'emulator_rotate'].includes(call.name);
         if (call.name === 'update_todos') {
           // Plan bookkeeping, not workspace work: its state renders live in
           // the ticker, so it takes no transcript activity card.
@@ -4334,43 +5893,132 @@ export async function sendChatMessage(
         }
         if (mutating && !rootPath) return { output: 'error: no active project directory.' };
         if (mutating && mutationDeclined) return { output: 'error: user declined changes this turn. Stop; do not attempt an equivalent operation.' };
-        if (mutating && (opts?.accessMode ?? chatThread?.accessMode) !== 'full-access') {
-          if (!chatThreadId) return { output: 'error: this operation requires Full access or approval in Chat.' };
+        // The scope limit is checked before any approval card: never ask the
+        // user to approve a write the policy will refuse anyway.
+        if (call.name === 'write_file' || call.name === 'edit_file') {
+          const path = sanitiseBrainRepoPath(toolArgStr(call.args, 'path'));
+          const refusal = path ? checkDirectEditScope(editScope, path) : null;
+          if (refusal) return { output: refusal };
+        }
+        let label = `${call.name}: ${toolArgStr(call.args, 'path') || toolArgStr(call.args, 'command') || toolArgStr(call.args, 'id') || toolArgStr(call.args, 'query') || toolArgStr(call.args, 'name') || toolArgStr(call.args, 'pattern') || toolArgStr(call.args, 'target') || toolArgStr(call.args, 'prompt').slice(0, 120) || (call.name === 'read_project' ? 'active project' : '')}`;
+        // "Ask before edit" asks like Codex/Claude Code do: read-only commands
+        // and anything the user already allowed for this conversation run
+        // straight away; everything else gets one inline card.
+        // A risky app command (reset, delete, stop, close…) asks in EVERY access
+        // mode, Full access included: the user chose a click before those run.
+        const appCommand = call.name === 'run_app_command' ? findAppCommand(paletteCommandList(), toolArgStr(call.args, 'id')) : null;
+        const riskyAppCommand = !!appCommand && isRiskyAppCommand(appCommand);
+        const command = call.name === 'run_command' ? toolArgStr(call.args, 'command') : appCommand?.id;
+        const approvalRules = conversationApprovalRules.get(turnKey) ?? new Set<string>();
+        const needsApproval = (mutating
+          && (opts?.accessMode ?? chatThread?.accessMode) !== 'full-access'
+          && !(call.name === 'run_command' && classifyCommand(command ?? '') === 'read-only')
+          && !(call.name === 'cancel_command')
+          && !ruleAllows(approvalRules, call.name, command))
+          || (riskyAppCommand && !ruleAllows(approvalRules, call.name, command));
+        if (needsApproval) {
+          if (!chatThreadId) {
+            return { output: riskyAppCommand
+              ? `error: "${appCommand?.name}" needs the user's approval, which only Chat can ask for. Tell the user to run it from Chat or the command palette.`
+              : 'error: this operation requires Full access or approval in Chat.' };
+          }
           const approvalId = `brain-approval-${msgId()}`;
           const messageId = msgId();
-          const approved = await new Promise<boolean>((resolve) => {
-            const timeout = setTimeout(() => finish(false), 10 * 60 * 1000);
-            const finish = (value: boolean) => {
+          const decision = await new Promise<BrainApprovalDecision>((resolve) => {
+            const timeout = setTimeout(() => finish({ kind: 'deny' }), 10 * 60 * 1000);
+            const finish = (value: BrainApprovalDecision) => {
               clearTimeout(timeout);
               brainApprovals.delete(approvalId);
-              patchChat(projectId, messageId, { inlineRequest: null, text: value ? 'Operation approved.' : 'Operation declined or approval expired.', pending: false });
+              // The card is a question, not transcript: once answered it
+              // leaves, and the decision is recorded on the operation's row.
+              removeThreadMessage(chatThreadId, messageId);
+              if (getChatThread(chatThreadId)) updateChatThread(chatThreadId, { status: 'working', updatedAt: Date.now() });
               resolve(value);
             };
-            controller.signal.addEventListener('abort', () => finish(false), { once: true });
+            controller.signal.addEventListener('abort', () => finish({ kind: 'deny' }), { once: true });
             brainApprovals.set(approvalId, finish);
             appendChat(projectId, { id: messageId, role: 'assistant', type: 'approval', text: '', ts: Date.now(),
-              inlineRequest: { id: approvalId, type: 'approval', prompt: `Allow this operation?\n\n${call.name}\n\n\`\`\`json\n${JSON.stringify(call.args, null, 2)}\n\`\`\``, options: [{ id: 'approve', label: 'Approve' }, { id: 'deny', label: 'Decline' }] } }, chatThreadId);
+              inlineRequest: {
+                id: approvalId,
+                type: 'approval',
+                prompt: describeApprovalRequest(call),
+                options: [
+                  { id: 'approve', label: APPROVE_ONCE_LABEL },
+                  { id: 'always', label: `Always allow ${describeRule(call.name, command)} in this conversation` },
+                  { id: 'deny', label: DECLINE_LABEL },
+                ],
+              } }, chatThreadId);
+            moveThreadMessageToEnd(chatThreadId, assistantId);
+            updateChatThread(chatThreadId, { status: 'needs-input', updatedAt: Date.now(), lastActivityAt: Date.now() });
           });
-          if (!approved || !getChatThread(chatThreadId)) {
+          if (!getChatThread(chatThreadId)) return { output: 'error: conversation closed before approval.' };
+          if (decision.kind === 'deny' || decision.kind === 'redirect') {
+            appendChat(projectId, { id: msgId(), role: 'assistant', type: 'activity', text: `${label} · declined by you`, pending: false, ts: Date.now() }, chatThreadId);
+            moveThreadMessageToEnd(chatThreadId, assistantId);
+            if (decision.kind === 'redirect') {
+              // "No, do X instead": the instruction joins the turn as a
+              // steered message, so the model changes course instead of stopping.
+              steeringInbox.push({ id: crypto.randomUUID(), projectId, rootPath, text: decision.text, ts: Date.now(), opts: opts ?? {} });
+              return { output: `error: the user declined this operation and said: "${decision.text}". Follow that instead.` };
+            }
             mutationDeclined = true;
             return { output: 'error: operation not approved. Do not retry it or execute an equivalent operation.' };
           }
+          if (decision.kind === 'always') {
+            approvalRules.add(approvalRuleKey(call.name, command));
+            conversationApprovalRules.set(turnKey, approvalRules);
+            label = `${label} · allowed for this conversation`;
+          } else {
+            label = `${label} · approved by you`;
+          }
         }
         const activityId = msgId();
-        const label = `${call.name}: ${toolArgStr(call.args, 'path') || toolArgStr(call.args, 'command') || toolArgStr(call.args, 'query') || toolArgStr(call.args, 'name') || toolArgStr(call.args, 'pattern') || (call.name === 'read_project' ? 'active project' : '')}`;
         appendChat(projectId, { id: activityId, role: 'assistant', type: 'activity', text: label, pending: true, ts: Date.now() }, chatThreadId);
+        // The live reply bubble stays below the work, like a streaming answer.
+        if (chatThreadId) moveThreadMessageToEnd(chatThreadId, assistantId);
+        const toolStartedAt = Date.now();
         try {
           checkActive();
           const result = await executeTool(call);
+          recordToolCall(turnTiming, Date.now() - toolStartedAt);
+          // A filesystem/IPC call may finish after Stop was clicked. Do not
+          // publish its activity row or move the thread back to working.
+          checkActive();
           if (mutating) projectReadCache.clear();
           const activityCap = call.name === 'read_project' ? BRAIN_REVIEW_OUTPUT_CAP : BRAIN_TOOL_OUTPUT_CAP;
           patchChat(projectId, activityId, { text: `${label}\n\n${result.output.slice(0, activityCap)}`, pending: false });
           if (chatThreadId) updateChatThread(chatThreadId, { status: 'working' });
           return result;
         } catch (error) {
+          if (controller.signal.aborted) {
+            removeThreadMessage(chatThreadId ?? '', activityId);
+            throw error;
+          }
           patchChat(projectId, activityId, { text: `${label}\n\nFailed: ${String(error)}`, pending: false });
           throw error;
         }
+      };
+      // The reply streams into the pending bubble while the model writes it.
+      // Batched so a fast stream is one render per frame-ish, and stopped
+      // before the final commit so a late flush can never overwrite it.
+      let streamedPreview = '';
+      let streamTimer: ReturnType<typeof setTimeout> | null = null;
+      const stopReplyStream = () => {
+        if (streamTimer) clearTimeout(streamTimer);
+        streamTimer = null;
+      };
+      const onReplyStream = (preview: string) => {
+        if (!preview && !streamedPreview) return;
+        streamedPreview = preview;
+        if (!preview) {
+          stopReplyStream();
+          patchChat(projectId, assistantId, { text: '' });
+          return;
+        }
+        streamTimer ??= setTimeout(() => {
+          streamTimer = null;
+          if (!controller.signal.aborted) patchChat(projectId, assistantId, { text: streamedPreview });
+        }, 50);
       };
       const toolExecutor = async (call: BrainToolCall): Promise<{ output: string; actions?: OrchestratorAction[] }> => {
         checkActive();
@@ -4419,22 +6067,52 @@ export async function sendChatMessage(
           appState: getAppContextSnapshot(projectId, rootPath),
           llmConfig,
           conversational: conversationalMode,
+          voice: opts?.voiceConversation === true,
           projectTree,
           projectReads,
           documentsIndex: rootPath ? await readDocumentsIndexForBrain(rootPath) ?? undefined : undefined,
           toolExecutor,
           // Capability profile for this turn: chat threads inherit their access
-          // mode, and conversational/voice turns stay read-only by default.
-          // 'ask' removes every mutating tool from the turn physically.
+          // mode, and SPOKEN turns stay read-only by default. 'ask' removes
+          // every mutating tool from the turn physically. This used to key on
+          // `conversationalMode`, which the typed Chat panel always sets, so
+          // every default-access chat lost edit_file/write_file/run_command and
+          // the per-mutation approval card below could never be reached.
           toolProfile: ((): BrainMode => {
             const mode = opts?.accessMode ?? chatThread?.accessMode;
             if (mode === 'full-access' || mode === 'auto' || mode === 'auto-edits') return 'full';
-            if (conversationalMode) return 'ask';
+            if (opts?.voiceConversation === true) return 'ask';
             // Default chat turns keep the brain's full toolkit (it is approval-
             // gated per mutation); 'supervised'/'inherit' behave identically here.
             return 'full';
           })(),
           onToolRound: (results) => recordTurnProgress(results),
+          onModelCall: (elapsedMs) => recordModelCall(turnTiming, elapsedMs),
+          onReplyStream,
+          // Steered messages join this turn at its next tool round; each gets
+          // its user bubble when the loop actually takes it.
+          steering: chatThreadId ? {
+            pending: () => steeringInbox.length > 0,
+            drain: () => steeringInbox.splice(0).map((entry) => {
+              appendChat(projectId, { id: msgId(), role: 'user', text: entry.text, ts: Date.now() }, chatThreadId);
+              return entry.text;
+            }),
+          } : undefined,
+          postEditCheck: async () => {
+            const command = rootPath ? await postEditCheckCommand(rootPath, [...turnEditLog.values()].map((record) => record.path)) : null;
+            if (!command) return null;
+            checkActive();
+            const activityId = msgId();
+            const label = `run_command: ${command} (automatic check after edits)`;
+            appendChat(projectId, { id: activityId, role: 'assistant', type: 'activity', text: label, pending: true, ts: Date.now() }, chatThreadId);
+            const checkStartedAt = Date.now();
+            const run = await runBrainCommand(projectId, rootPath, command, POST_EDIT_CHECK_TIMEOUT_MS, controller.signal, undefined, brainShell);
+            recordToolCall(turnTiming, Date.now() - checkStartedAt);
+            checkActive();
+            const output = formatBrainRunResult(command, run);
+            patchChat(projectId, activityId, { text: `${label}\n\n${output}`, pending: false });
+            return { command, ok: !run.timedOut && run.exitCode === 0, output };
+          },
           // The turn's plan has exactly ONE surface: the live ticker above the
           // composer, owned exclusively by the model's update_todos calls. The
           // narration-derived plan card that used to sit in Work details is
@@ -4444,14 +6122,19 @@ export async function sendChatMessage(
           signal: controller.signal,
           nativeTools: true,
           checkpoint: chatThread?.agentCheckpoint ?? (chatThreadId ? await loadAgentCheckpoint(chatThreadId) : undefined),
-          budgets: chatThread?.agentBudgets,
+          budgets: turnBudgets,
           saveCheckpoint: async state => { if (chatThreadId && getChatThread(chatThreadId)) { await saveAgentCheckpoint(chatThreadId, state, () => Boolean(getChatThread(chatThreadId))); updateChatThread(chatThreadId, { agentCheckpoint: state }); } },
-        });
+        }).finally(stopReplyStream);
+        // A provider/tool call may resolve just after Stop was clicked. Treat
+        // that result as cancelled before it can trigger another read round or
+        // reach the final transcript/action commit.
+        checkActive();
         if (rootPath && routed.readFiles?.length && readRounds < MAX_READ_ROUNDS) {
           readRounds += 1;
           patchChat(projectId, assistantId, { text: 'Reading the project files you asked about…' });
           const reads = await readProjectFilesForContext(routed.readFiles, rootPath);
           projectReads.push(...reads);
+          for (const read of reads) recordDirectRead(editScope, read.path);
           continue;
         }
         // Safety net: the FIRST routing pass answered with only a bare
@@ -4481,6 +6164,7 @@ export async function sendChatMessage(
             patchChat(projectId, assistantId, { text: `Reading the project files to answer you…` });
             const reads = await readProjectFilesForContext(neverRead, rootPath);
             projectReads.push(...reads);
+            for (const read of reads) recordDirectRead(editScope, read.path);
             continue;
           }
         }
@@ -4489,7 +6173,19 @@ export async function sendChatMessage(
         }
         return routed;
       }
-      } finally { activeBrainTurns.delete(turnKey); }
+      } finally {
+        activeBrainTurns.delete(turnKey);
+        void closeBrainShell(brainShell);
+        if (chatThreadId && steeringInboxes.get(chatThreadId) === steeringInbox) {
+          steeringInboxes.delete(chatThreadId);
+          // Steered after the loop's last round: nothing is lost, the message
+          // runs next as its own turn.
+          if (steeringInbox.length) {
+            chatQueues.set(chatThreadId, [...steeringInbox.splice(0), ...(chatQueues.get(chatThreadId) ?? [])]);
+            notifyChatQueueListeners(chatThreadId);
+          }
+        }
+      }
     };
     try {
       result = await routeWithProjectReads();
@@ -4498,7 +6194,8 @@ export async function sendChatMessage(
       // purpose: the turn ends silently instead of scaring the user with an
       // error bubble, and the queue's drain loop starts the next message.
       // throwIfAborted surfaces as AbortError; backend cancels mention abort too.
-      const aborted = String(err ?? '').toLowerCase().includes('abort');
+      const aborted = (chatThreadId ? stoppedChatTurns.has(chatThreadId) : false)
+        || String(err ?? '').toLowerCase().includes('abort');
       if (aborted) {
         result = { reply: '', actions: [], viaLLM: false, failed: true };
         // The steered/stopped turn never answered: drop its empty pending
@@ -4508,6 +6205,7 @@ export async function sendChatMessage(
           clearChatTurnTicker(chatThreadId);
           updateChatThread(chatThreadId, { turnEndedAt: Date.now(), status: 'idle' as ChatThreadStatus });
         }
+        if (chatThreadId) stoppedChatTurns.delete(chatThreadId);
       } else {
         console.error('Orchestrator routing error:', err);
         result = { reply: 'Something went wrong routing that. Try again.', actions: [], viaLLM: false };
@@ -4520,6 +6218,58 @@ export async function sendChatMessage(
   }
 
   if (chatThreadId && !getChatThread(chatThreadId)) return;
+
+  // Awaited, not fired off: the footer added below tells the user to say
+  // "undo", and the record must be readable by the time they can.
+  if (turnEditLog.size) await saveTurnEdits(conversationKey, [...turnEditLog.values()]);
+  const timingText = formatTurnTiming(turnTiming);
+  if (timingText && chatThreadId) {
+    appendChat(projectId, { id: msgId(), role: 'assistant', type: 'activity', text: timingText, pending: false, ts: Date.now() }, chatThreadId);
+    moveThreadMessageToEnd(chatThreadId, assistantId);
+  }
+
+  // Never delegate on the orchestrator's own initiative: a spawn/send the user
+  // did not ask for (by picking an agent, approving a proposal, or naming one
+  // in their message) becomes a proposal they answer, with the drafted brief.
+  const lastExchange = conversation.at(-1);
+  if (
+    !forced
+    && !approvedDelegation
+    && hasDelegationAction(result.actions)
+    && !userApprovedDelegation(trimmed, result.actions, {
+      userText: conversation.filter((message) => message.role === 'user').at(-1)?.text ?? '',
+      assistantAsked: lastExchange?.role === 'assistant' && /\?\s*$/.test(lastExchange.text),
+    })
+  ) {
+    if (opts?.voiceConversation) {
+      // Realtime voice never delivers a literal answer to a held proposal, so
+      // nothing is stored: the user's next explicit request ("have Claude do
+      // it") is the approval, and the brain re-plans from it.
+      result = {
+        ...result,
+        reply: `That's bigger than I should change on my own. Say "have Claude do it", "have Codex do it", or name another agent, and I'll hand it off.`,
+        actions: [],
+        needsInput: true,
+      };
+    } else {
+      const proposal = buildDelegationProposal({
+        id: `delegate-${assistantId}`,
+        request: selfOverrideRequest ?? trimmed,
+        reply: result.reply,
+        actions: result.actions,
+        agents,
+      });
+      pendingDelegations.set(conversationKey, proposal);
+      result = {
+        ...result,
+        reply: proposal.question,
+        actions: [],
+        needsInput: true,
+        inputRequest: { question: proposal.question, options: proposal.choices.map((choice) => choice.label) },
+      };
+    }
+  }
+
   // Never pair executing actions with a "want me to?" reply — the actions run
   // right below, so the reply must state what's happening, not ask permission.
   if (result.actions.length) {
@@ -4539,6 +6289,10 @@ export async function sendChatMessage(
       reply: cleanOrchestratorReply(result.reply),
     };
   }
+  if (turnEditLog.size && result.reply) {
+    const changed = [...turnEditLog.values()].map((record) => record.path);
+    result = { ...result, reply: `${result.reply}\n\n_Changed ${changed.length} file${changed.length === 1 ? '' : 's'} directly (${changed.join(', ')}). Say "undo" to restore ${changed.length === 1 ? 'it' : 'them'}._` };
+  }
 
   // A steered/stopped turn leaves no error bubble behind: its pending row was
   // already removed in the abort path above.
@@ -4556,10 +6310,14 @@ export async function sendChatMessage(
     && result.actions.length === 0
     && looksLikeBlockingQuestion(result.reply, result.needsInput === true)
   ) {
+    // The message above the card says what happened; the card carries only the
+    // question. A model that asked through ask_user/ask_question already gave
+    // both, so its own question wins and the reply stays whole.
+    const split = splitReplyForInput(result.reply);
     const inlineRequest: ChatInlineRequest = {
       id: `clarify-${assistantId}`,
       type: result.inputRequest?.options.length ? 'choice' : 'text',
-      prompt: result.inputRequest?.question ?? result.reply,
+      prompt: result.inputRequest?.question ?? split.question,
       options: result.inputRequest?.options.map((label, index) => ({ id: String(index + 1), label })),
       taskId: result.inputRequest?.target ? resolveRunningTaskByName(projectId, result.inputRequest.target)?.id : undefined,
       sessionId: result.inputRequest?.target ? resolveRunningTaskByName(projectId, result.inputRequest.target)?.assignedSessionId : undefined,
@@ -4568,6 +6326,7 @@ export async function sendChatMessage(
     patchChat(projectId, assistantId, {
       type: 'input',
       inlineRequest,
+      ...(result.inputRequest?.question ? {} : { text: split.body }),
     });
     updateChatThread(chatThreadId, {
       status: 'needs-input',
@@ -4577,6 +6336,14 @@ export async function sendChatMessage(
     return;
   }
 
+  // ── Launch settings: location, local CLI model, and reasoning ─────────────
+  // Placement is important information whenever the orchestrator is about to
+  // start an agent: it changes where edits land and whether parallel work is
+  // safe. The same dialog also owns the local CLI's model/reasoning choices so
+  // those settings cannot drift away from the location the user selected.
+  const plannedSpawns = result.actions.filter(
+    (action): action is Extract<OrchestratorAction, { kind: 'spawn' }> => action.kind === 'spawn'
+  );
   const newAgentWork = result.actions
     .filter((action) => action.kind === 'spawn' || action.kind === 'send')
     .map((action) => action.prompt ?? '')
@@ -4584,24 +6351,11 @@ export async function sendChatMessage(
   if (newAgentWork.length && await estimateFileOverlap(newAgentWork.join('\n'), getRunningAgentRefs(projectId))) {
     showToast('Possible file overlap with a running agent. Check task ownership before editing.', 'warning', 6000);
   }
-
-  // ── Placement: explicit in the request, or the focused placement dialog ───
-  // Placement is important information whenever the orchestrator is about to
-  // start an agent: it changes where edits land and whether parallel work is
-  // safe. Ask in text Chat as well as the legacy CLI path, while preserving
-  // explicit placement the user already stated in their request. Voice keeps
-  // its spoken question below because a modal cannot be used hands-free.
-  const plannedSpawns = result.actions.filter(
-    (action): action is Extract<OrchestratorAction, { kind: 'spawn' }> => action.kind === 'spawn'
-  );
-  // A placement the user SAID ("open Claude Code in a worktree, another in the
-  // main repo") is the answer — asking again would be pure friction. Only the
-  // spawns they left unstated need the question.
   const undecidedSpawns = plannedSpawns.filter((action) => !action.placement);
   const agentLabel = (action: (typeof plannedSpawns)[number]) =>
     action.name?.trim() || getAgentDisplayName(action.agent) || action.agent;
 
-  let askedPlacements: AgentPlacement[] | null = null;
+  let askedPlacements: AgentPlacementAnswer[] | null = null;
   let spawnsAllowed = true;
 
   const adminSpawn = undecidedSpawns.some(
@@ -4623,14 +6377,21 @@ export async function sendChatMessage(
     patchChat(projectId, assistantId, {
       text: `Where should ${who} run: an isolated worktree, or the main repo?`,
     });
-  } else if (undecidedSpawns.length) {
+  } else if (undecidedSpawns.length && !opts?.voiceConversation) {
+    // Asked only while some spawn's location is still open: when the user
+    // already said where every agent runs ("one in main, one in a worktree"),
+    // re-asking was pure friction and their stated placement won anyway.
+    // Model/reasoning never trigger the question — unset means CLI default.
     // The admin/release heuristic no longer decides — it only pre-selects "Main
     // repo" and explains why, since git tag/push can't work from a worktree.
     // This same focused question is used by conversational Chat. That keeps
     // normal messages friction-free while preventing a hidden worktree default
     // from breaking projects that are not Git repositories (or have no commit).
     askedPlacements = await requestAgentPlacement({
-      agents: undecidedSpawns.map(agentLabel),
+      agents: plannedSpawns.map(agentLabel),
+      commands: plannedSpawns.map((action) => action.agent),
+      suggestedPlacements: plannedSpawns.map((action) => action.placement ?? (adminSpawn ? 'main' : defaultAgentPlacement())),
+      suggestedLaunch: plannedSpawns.map((action) => ({ model: action.model ?? null, reasoningEffort: action.reasoningEffort })),
       source: 'orchestrator',
       suggested: adminSpawn ? 'main' : undefined,
       suggestionReason: adminSpawn
@@ -4642,7 +6403,7 @@ export async function sendChatMessage(
     if (!askedPlacements) {
       spawnsAllowed = false;
       patchChat(projectId, assistantId, {
-        text: `${result.reply}\n\n_Cancelled. No agent was started._`,
+      text: `${result.reply}\n\n_Cancelled. No agent was started._`,
       });
       showToast('Spawn cancelled', 'info', 2500);
     }
@@ -4664,6 +6425,7 @@ export async function sendChatMessage(
     selectedAgent: selectedAgent ?? undefined,
     turnEvidence,
     turnTodos,
+    recentUserMessages,
   });
 }
 
@@ -4773,13 +6535,15 @@ async function executeRoutedOrchestratorPlan(args: {
   chatMode: boolean;
   conversationalMode: boolean;
   opts: SendChatOpts;
-  askedPlacements: AgentPlacement[] | null;
+  askedPlacements: AgentPlacementAnswer[] | null;
   spawnsAllowed: boolean;
   userMessage: string;
   llmConfig?: RouteLlmConfig;
   selectedAgent?: string;
   turnEvidence?: BrainToolResult[];
   turnTodos?: ChatTurnTodoItem[];
+  /** The user's earlier messages in this conversation, for repeat detection. */
+  recentUserMessages?: string[];
 }): Promise<void> {
   let {
     projectId,
@@ -4816,7 +6580,14 @@ async function executeRoutedOrchestratorPlan(args: {
   const placementFor = (action: OrchestratorAction): AgentPlacement => {
     const spawn = action as (typeof plannedSpawns)[number];
     if (spawn.placement) return spawn.placement;
-    return askedPlacements?.[undecidedSpawns.indexOf(spawn)] ?? defaultAgentPlacement();
+    const answer = askedPlacements?.[plannedSpawns.indexOf(spawn)];
+    return (typeof answer === 'string' ? answer : answer?.placement) ?? defaultAgentPlacement();
+  };
+
+  const launchChoiceFor = (action: OrchestratorAction): AgentLaunchChoice | null => {
+    const spawn = action as (typeof plannedSpawns)[number];
+    const answer = askedPlacements?.[plannedSpawns.indexOf(spawn)];
+    return answer && typeof answer !== 'string' ? answer : null;
   };
 
   // ── Reconnaissance (started now, awaited after spawning) ──────────────────
@@ -4884,6 +6655,10 @@ async function executeRoutedOrchestratorPlan(args: {
     persistent: boolean;
     watchTurn: boolean;
     name: string;
+    /** Kept so a relaunch after a failed start matches the first launch. */
+    skipWorktree: boolean;
+    model?: string | null;
+    reasoningEffort?: ChatReasoningEffort;
   }
   const spawnEntries: SpawnEntry[] = [];
 
@@ -4933,6 +6708,20 @@ async function executeRoutedOrchestratorPlan(args: {
     // answer wins over both the brain's `skipWorktree` flag and the
     // admin-keyword heuristic, which only pre-selected what they were shown.
     const skipWorktree = placementFor(action) === 'main';
+    const launchChoice = launchChoiceFor(action);
+    const requestedReasoning = launchChoice?.reasoningEffort && launchChoice.reasoningEffort !== 'default'
+      ? launchChoice.reasoningEffort
+      : action.reasoningEffort && action.reasoningEffort !== 'default'
+        ? action.reasoningEffort
+        : action.agent === selectedAgent ? opts.reasoningEffort : undefined;
+    // The brain may name a model/level the installed CLI never reported; the
+    // placement prompt no longer always runs to catch that, so check here.
+    const sanitized = sanitizeLaunchSelection(action.agent, launchChoice?.model ?? action.model ?? null, requestedReasoning);
+    const selectedModel = sanitized.model;
+    const selectedReasoning = sanitized.reasoningEffort;
+    if (sanitized.dropped.length) {
+      showToast(`${getAgentDisplayName(action.agent) ?? action.agent} does not offer ${sanitized.dropped.join(' or ')}; using its default.`, 'info', 6000);
+    }
     const task = createOrchestratorTask(
       projectId,
       action.prompt ?? '',
@@ -4942,6 +6731,11 @@ async function executeRoutedOrchestratorPlan(args: {
       skipWorktree,
       action.panelTaskId ?? null
     );
+    patchTask(task.id, (current) => ({
+      ...current,
+      agentModel: selectedModel,
+      agentReasoningEffort: selectedReasoning ?? 'default',
+    }));
     if (chatThreadId) {
       threadIdByTaskId.set(task.id, chatThreadId);
       syncChatThreadTask(task, chatThreadId);
@@ -4963,9 +6757,9 @@ async function executeRoutedOrchestratorPlan(args: {
       autoRun: false,
       holdGoal: true,
       activate: !multiSpawn || isPrimary,
-      model: action.model,
+      model: selectedModel,
       accessMode: opts.accessMode === 'full-access' ? 'full-access' : undefined,
-      reasoningEffort: action.agent === selectedAgent ? opts.reasoningEffort : undefined,
+      reasoningEffort: selectedReasoning,
     });
 
     if (sessionId == null) {
@@ -4977,7 +6771,7 @@ async function executeRoutedOrchestratorPlan(args: {
       if (launchedTask) syncChatThreadTask(launchedTask, chatThreadId);
     }
 
-    spawnEntries.push({ task, sessionId, rawPrompt: action.prompt ?? '', agent: action.agent, persistent, watchTurn: !persistent, name });
+    spawnEntries.push({ task, sessionId, rawPrompt: action.prompt ?? '', agent: action.agent, persistent, watchTurn: !persistent, name, skipWorktree, model: selectedModel, reasoningEffort: selectedReasoning });
   }
 
   // ── Await reconnaissance ──────────────────────────────────────────────────
@@ -5031,7 +6825,14 @@ async function executeRoutedOrchestratorPlan(args: {
   for (const action of result.actions) {
     if (action.kind === 'send') {
       const target = resolveRunningTaskByName(projectId, action.target);
-      if (target && (await sendFollowUpToAgent(target, action.prompt, rootPath))) {
+      if (target && (await sendFollowUpToAgent(
+        target,
+        action.prompt,
+        rootPath,
+        true,
+        false,
+        (sessionId) => watchDispatchedAgentTurn(target.id, sessionId, chatThreadId, target.agentPreset ?? null),
+      ))) {
         dispatched.push({ taskId: target.id, agent: target.agentPreset ?? 'agent', name: target.name ?? null, via: 'send' });
       } else {
         showToast(`No running agent named "${action.target}"`, 'warning', 4000);
@@ -5067,6 +6868,46 @@ async function executeRoutedOrchestratorPlan(args: {
       // APP-control actions: drive the application UI directly (no agent).
       await executeAppAction(action, projectId, rootPath);
     }
+  }
+
+  // ── Confirm idle agents actually came up ───────────────────────────────────
+  // "Open 2 Claude agents" is only done when both CLIs are on screen and ready
+  // for input. A blank pane gets one close-and-reopen; then the reply says
+  // exactly which agents are ready and asks what they should work on.
+  const idleSpawns = spawnEntries.filter((entry) => entry.sessionId != null && !entry.rawPrompt);
+  if (idleSpawns.length) {
+    patchChat(projectId, assistantId, { text: `${result.reply}\n\nChecking that ${idleSpawns.length === 1 ? 'it is' : 'they are'} ready…` });
+    const relaunch = async (entry: SpawnEntry): Promise<SpawnEntry | null> => {
+      const task = createOrchestratorTask(projectId, '', entry.agent, entry.name, null, entry.skipWorktree, null);
+      patchTask(task.id, (current) => ({
+        ...current,
+        agentModel: entry.model ?? null,
+        agentReasoningEffort: entry.reasoningEffort ?? 'default',
+      }));
+      if (chatThreadId) {
+        threadIdByTaskId.set(task.id, chatThreadId);
+        syncChatThreadTask(task, chatThreadId);
+      }
+      const sessionId = await launchOrchestratorTask(task.id, entry.agent, rootPath, {
+        autoRun: false,
+        holdGoal: true,
+        activate: false,
+        model: entry.model,
+        reasoningEffort: entry.reasoningEffort,
+        accessMode: opts.accessMode === 'full-access' ? 'full-access' : undefined,
+      });
+      if (sessionId == null) {
+        deleteOrchestratorTask(task.id);
+        return null;
+      }
+      sendBriefToLeasedTask(task.id, sessionId, entry.agent, entry.name);
+      const ref = dispatched.find((d) => d.taskId === entry.task.id);
+      if (ref) ref.taskId = task.id;
+      return { ...entry, task, sessionId };
+    };
+    const outcomes = await Promise.all(idleSpawns.map((entry) => verifyIdleAgentStart(entry, relaunch)));
+    result = { ...result, reply: describeAgentStartOutcomes(outcomes) };
+    patchChat(projectId, assistantId, { text: result.reply });
   }
 
   if (dispatched.length) {
@@ -5113,13 +6954,15 @@ async function executeRoutedOrchestratorPlan(args: {
       // but NO other tool evidence, model-declared state stays untouched: a
       // turn that ran nothing must not paint itself all-green.
       turnTodos = workEvidence
-        ? turnTodos.map((t) => (t.status === 'blocked' ? t : { ...t, done: true }))
+        ? closeOutTodoItems(turnTodos)
         : turnTodos.map((t) => (t.status ? t : { ...t, done: false }));
       advanceChatTurnTicker(chatThreadId, turnTodos);
     } else {
       turnTodos = [];
       clearChatTurnTicker(chatThreadId);
     }
+    // What the NEXT turn's first plan is checked against (splitCarriedOverTodos).
+    if (turnTodos.length) lastTurnPlanByThread.set(chatThreadId, turnTodos);
     const summaryText = formatTurnSummary(turnEvidence);
     if (!opts?.voiceConversation) {
       // turnEvidence lets a turn that did work present itself as a structured
@@ -5145,6 +6988,7 @@ async function executeRoutedOrchestratorPlan(args: {
       projectId,
       rootPath,
       userMessage,
+      repeatedFrom: findRepeatedInstruction(userMessage, args.recentUserMessages ?? []),
       reply: result.reply,
       actions: result.actions,
       complete: (systemPrompt, userText) =>
@@ -5250,6 +7094,13 @@ export function trackedWorktrees(): TrackedWorktree[] {
     });
   }
 
+  // DeepSeek Harness panels: a worktree with no terminal session or task
+  // behind it (see `deepSeekPlacements`). Live while it is the panel's folder.
+  for (const entry of deepSeekTrackedWorktrees()) {
+    if (!projectPaths.has(entry.projectId) || byPath.has(entry.worktree.path)) continue;
+    byPath.set(entry.worktree.path, entry);
+  }
+
   return [...byPath.values()];
 }
 
@@ -5259,6 +7110,7 @@ export function trackedWorktrees(): TrackedWorktree[] {
  * a task can't end up with two disagreeing baselines.
  */
 function persistWorktreePatch(projectId: string, worktreePath: string, patch: Partial<WorktreeInfo>): void {
+  patchDeepSeekWorktree(projectId, worktreePath, patch);
   for (const task of get(orchestratorTasks)) {
     if (task.worktree?.path !== worktreePath) continue;
     patchTask(task.id, (t) =>
@@ -5370,6 +7222,12 @@ if (typeof window !== 'undefined') {
     },
   });
 
+  // Watch every working agent's headroom and move the work before it hits the
+  // wall. Rides the meter's existing 30s poll rather than adding one of its own
+  // (see `initAgentFailoverWatch`), so it costs nothing while nothing is
+  // running and one extra call while something is.
+  initAgentFailoverWatch();
+
   // Periodic orphan sweep + prune: catches worktrees orphaned mid-session (e.g.
   // a crashed agent whose pane-close cleanup never fired), then the branches
   // those removals leave behind.
@@ -5433,7 +7291,7 @@ if (typeof window !== 'undefined') {
       // event, so the two rows are correct rather than a double-write. (The
       // leased path avoids this via completeLeasedTask's idempotence guard, but
       // adopted tasks stay in-progress by design.)
-      appendAdoptedTurnCard(
+      appendAgentTurnCard(
         task,
         task.name
           ?? (task.agentPreset ? getAgentDisplayName(task.agentPreset) : null)

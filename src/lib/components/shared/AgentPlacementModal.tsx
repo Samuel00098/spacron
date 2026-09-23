@@ -4,8 +4,14 @@ import { useModalFocus } from '$lib/react/useModalFocus';
 import {
   agentPlacementRequest,
   resolveAgentPlacement,
+  type AgentLaunchChoice,
+  initialLaunchChoice,
   type AgentPlacement,
 } from '$lib/stores/agentPlacement';
+import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
+import type { ChatReasoningEffort } from '$lib/types/chat';
+import AgentLaunchConfigFields from './AgentLaunchConfigFields';
 
 import './AgentPlacementModal.css';
 
@@ -66,7 +72,9 @@ const OPTIONS: Array<{
 export default function AgentPlacementModal() {
   const request = useStore(agentPlacementRequest);
   const inlineChatRequest = request?.source === 'orchestrator' && Boolean(request.projectId && request.threadId);
-  const [choices, setChoices] = useState<AgentPlacement[]>([]);
+  const [choices, setChoices] = useState<AgentLaunchChoice[]>([]);
+  const [modelsByCommand, setModelsByCommand] = useState<Record<string, AgentProviderModel[]>>({});
+  const [loadingCommands, setLoadingCommands] = useState<Set<string>>(new Set());
   const cardRef = useRef<HTMLDivElement | null>(null);
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
@@ -82,23 +90,52 @@ export default function AgentPlacementModal() {
   // Reseed (and refocus) whenever a new request reaches the head of the queue.
   useEffect(() => {
     if (!request) return;
-    setChoices(request.agents.map(() => request.suggested));
+    setChoices(request.agents.map((_agent, index) => initialLaunchChoice(request, index)));
+    let cancelled = false;
+    const commands = [...new Set(request.commands ?? request.agents)];
+    setLoadingCommands(new Set(commands));
+    void Promise.all(commands.map(async (command) => {
+      try {
+        const models = await loadLiveAgentProviderModels(command);
+        if (!cancelled && models.length) {
+          setModelsByCommand((current) => ({ ...current, [command]: models }));
+        }
+      } catch (error) {
+        console.warn(`Could not load ${command} local models:`, error);
+      } finally {
+        if (!cancelled) {
+          setLoadingCommands((current) => {
+            const next = new Set(current);
+            next.delete(command);
+            return next;
+          });
+        }
+      }
+    }));
     cardRef.current?.focus();
+    return () => { cancelled = true; };
   }, [request?.id]);
 
   if (!request || inlineChatRequest) return null;
 
   // The seeding effect runs a tick after the request lands, so fall back to the
   // suggestion rather than rendering a row with no selection.
-  const placements = request.agents.map((_agent, i) => choices[i] ?? request.suggested);
+  const launchChoices = request.agents.map((_agent, i) => choices[i] ?? initialLaunchChoice(request, i));
+  const placements = launchChoices.map((choice) => choice.placement);
   const isMulti = request.agents.length > 1;
 
-  const confirm = () => resolveAgentPlacement(request.id, placements);
+  const confirm = () => resolveAgentPlacement(request.id, launchChoices);
   const cancel = () => resolveAgentPlacement(request.id, null);
 
   const setAt = (index: number, value: AgentPlacement) =>
-    setChoices(placements.map((current, i) => (i === index ? value : current)));
-  const setAll = (value: AgentPlacement) => setChoices(placements.map(() => value));
+    setChoices(launchChoices.map((current, i) => (i === index ? { ...current, placement: value } : current)));
+  const setAll = (value: AgentPlacement) => setChoices(launchChoices.map((choice) => ({ ...choice, placement: value })));
+  const setModel = (index: number, model: string | null) =>
+    setChoices(launchChoices.map((choice, i) => (i === index ? { ...choice, model } : choice)));
+  const setReasoning = (index: number, reasoningEffort: ChatReasoningEffort) =>
+    setChoices(launchChoices.map((choice, i) => (i === index ? { ...choice, reasoningEffort } : choice)));
+  const commandFor = (index: number) => request.commands?.[index] ?? request.agents[index] ?? '';
+  const modelsFor = (index: number) => modelsByCommand[commandFor(index)] ?? [];
 
   const isolatedCount = placements.filter((p) => p === 'worktree').length;
   const mainCount = placements.length - isolatedCount;
@@ -130,7 +167,7 @@ export default function AgentPlacementModal() {
       className="apm-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Choose where the agent runs"
+      aria-label="Configure local CLI agent launch"
       ref={backdropRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) cancel();
@@ -143,12 +180,12 @@ export default function AgentPlacementModal() {
           </span>
           <div className="apm-header-text">
             <span className="apm-title">
-              {isMulti ? 'Where should each agent run?' : 'Where should this agent run?'}
+              {isMulti ? 'Configure each agent launch' : 'Configure this agent launch'}
             </span>
             <span className="apm-subtitle">
               {isMulti
-                ? `${request.agents.length} agents · ${request.source === 'orchestrator' ? 'requested by the orchestrator' : 'set each one independently'}`
-                : `${request.agents[0] ?? 'Agent'} · ${request.source === 'orchestrator' ? 'requested by the orchestrator' : 'starting now'}`}
+                ? `${request.agents.length} agents · location, local CLI model, and reasoning`
+                : `${request.agents[0] ?? 'Agent'} · location, local CLI model, and reasoning`}
             </span>
           </div>
         </header>
@@ -175,27 +212,40 @@ export default function AgentPlacementModal() {
                   <span className="apm-agent-icon" aria-hidden="true">
                     {placements[index] === 'main' ? <MainRepoIcon /> : <WorktreeIcon />}
                   </span>
-                  <span className="apm-agent-name" title={agent}>
-                    {agent}
-                  </span>
-                  <span
-                    className="apm-segmented"
-                    role="radiogroup"
-                    aria-label={`Where ${agent} runs`}
-                  >
-                    {OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={placements[index] === option.value}
-                        className={`apm-segment${placements[index] === option.value ? ' active' : ''}`}
-                        onClick={() => setAt(index, option.value)}
-                      >
-                        {option.short}
-                      </button>
-                    ))}
-                  </span>
+                  <div className="apm-agent-main">
+                    <span className="apm-agent-name" title={agent}>
+                      {agent}
+                    </span>
+                    <span
+                      className="apm-segmented"
+                      role="radiogroup"
+                      aria-label={`Where ${agent} runs`}
+                    >
+                      {OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={placements[index] === option.value}
+                          className={`apm-segment${placements[index] === option.value ? ' active' : ''}`}
+                          onClick={() => setAt(index, option.value)}
+                        >
+                          {option.short}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                  <AgentLaunchConfigFields
+                    className="apm-agent-config"
+                    command={commandFor(index)}
+                    models={modelsFor(index)}
+                    loading={loadingCommands.has(commandFor(index))}
+                    model={launchChoices[index].model ?? null}
+                    reasoningEffort={launchChoices[index].reasoningEffort ?? 'default'}
+                    onModelChange={(model) => setModel(index, model)}
+                    onReasoningChange={(effort) => setReasoning(index, effort)}
+                    boundarySelector=".apm-card"
+                  />
                 </li>
               ))}
             </ul>
@@ -210,7 +260,8 @@ export default function AgentPlacementModal() {
             </dl>
           </>
         ) : (
-          <div className="apm-options" role="radiogroup" aria-label="Agent working directory">
+          <>
+            <div className="apm-options" role="radiogroup" aria-label="Agent working directory">
             {OPTIONS.map((option) => {
               const Icon = option.icon;
               const selected = placements[0] === option.value;
@@ -239,7 +290,18 @@ export default function AgentPlacementModal() {
                 </button>
               );
             })}
-          </div>
+            </div>
+            <AgentLaunchConfigFields
+              command={commandFor(0)}
+              models={modelsFor(0)}
+              loading={loadingCommands.has(commandFor(0))}
+              model={launchChoices[0]?.model ?? null}
+              reasoningEffort={launchChoices[0]?.reasoningEffort ?? 'default'}
+              onModelChange={(model) => setModel(0, model)}
+              onReasoningChange={(effort) => setReasoning(0, effort)}
+              boundarySelector=".apm-card"
+            />
+          </>
         )}
 
         {request.suggestionReason && <p className="apm-reason">{request.suggestionReason}</p>}

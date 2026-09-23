@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { MCP_CONFIGURABLE_EXECUTABLES, agentCanReport } from './agent-capabilities';
+import { MCP_CONFIGURABLE_EXECUTABLES, agentCanReport, turnEndIsSilent } from './agent-capabilities';
 
 describe('agentCanReport', () => {
   it('resolves the executable out of a launch command', () => {
@@ -18,6 +18,46 @@ describe('agentCanReport', () => {
     }
     expect(agentCanReport('')).toBe(false);
     expect(agentCanReport(null)).toBe(false);
+  });
+});
+
+describe('what a turn end is allowed to interrupt', () => {
+  // `aider` has no reporting channel; `codex` does. The distinction must matter
+  // for a guessed PAUSE and be irrelevant for a guessed FINISH.
+  const mute = 'aider';
+  const talker = 'codex';
+
+  it('never floats a finish nobody declared, whatever the agent could do', () => {
+    // The regression this pins: an agent with no channel used to get a corner
+    // card and an OS notification reading "Agent went quiet" on every idle
+    // spell, which is indistinguishable from a long compile.
+    for (const preset of [mute, talker, null]) {
+      expect(
+        turnEndIsSilent({ status: 'done', endedBy: 'inferred' }, { preset }),
+        `${preset ?? 'unknown'} must not interrupt with a guessed finish`,
+      ).toBe(true);
+    }
+  });
+
+  it('always speaks up for a finish the agent declared', () => {
+    expect(turnEndIsSilent({ status: 'done', endedBy: 'declared' }, { preset: mute })).toBe(false);
+    expect(turnEndIsSilent({ status: 'done', endedBy: 'exit' }, { preset: talker })).toBe(false);
+  });
+
+  it('always speaks up for a failure, however it was learned', () => {
+    // A non-zero exit is an observed fact, not a guess about one.
+    expect(turnEndIsSilent({ status: 'failed', endedBy: 'inferred' }, { preset: talker })).toBe(false);
+    expect(turnEndIsSilent({ status: 'failed', endedBy: 'declared' }, { preset: mute })).toBe(false);
+  });
+
+  it('keeps the agentCanReport gate for a guessed pause only', () => {
+    // A missed "needs input" strands the user waiting on an agent that is
+    // waiting on them, so a guess still speaks up — unless the agent could have
+    // said so and didn't, which is itself evidence it is not blocked.
+    expect(turnEndIsSilent({ status: 'blocked', endedBy: 'inferred' }, { preset: mute })).toBe(false);
+    expect(turnEndIsSilent({ status: 'blocked', endedBy: 'inferred' }, { preset: talker })).toBe(true);
+    // A question the agent actually asked is never swallowed.
+    expect(turnEndIsSilent({ status: 'blocked', endedBy: 'declared' }, { preset: talker })).toBe(false);
   });
 });
 

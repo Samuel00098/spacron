@@ -10,6 +10,7 @@ import {
   aiCompletionProvider,
   aiGhostTextEnabled,
   agentBrowserTools,
+  mcpServers,
   agentWorktrees,
   aiProvider,
   aiProviders,
@@ -17,6 +18,9 @@ import {
   appearance,
   autoSave,
   autoStageAgentChanges,
+  agentFailover,
+  agentFailoverCrossProvider,
+  agentFailoverHeadroomPercent,
   backgroundImageBlur,
   backgroundImageEnabled,
   backgroundImageOpacity,
@@ -63,6 +67,8 @@ import {
   smartVadEnabled,
   transcriptionAutoSend,
   announceAgentCompletions,
+  orchestratorCustomSkills,
+  orchestratorDisabledSkills,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
   openaiRealtimeVoice,
@@ -77,16 +83,29 @@ import {
   xaiRealtimeVoiceOptions,
   wordWrap,
   type AiModelOption,
+  mediaGeneration,
   type AiProviderId,
   type KeyboardShortcut,
   type VoiceConversationEngine,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
+import {
+  formatPairs,
+  headersLostOnCodex,
+  parseLines,
+  parsePairs,
+  validateServer,
+  type McpServer,
+} from '$lib/services/mcp-servers';
 import { ADD_CURSOR_GESTURE, COLUMN_SELECT_GESTURE } from '$lib/services/editor/multi-cursor';
 import { openChangelogPage } from '$lib/services/changelog';
-import { resetAllApplicationState } from '$lib/stores/workspace';
+import { activeProjectId, resetAllApplicationState } from '$lib/stores/workspace';
+import { BRAIN_SKILLS, MAX_CUSTOM_SKILL_CHARS, sanitizeCustomSkills, type CustomSkill } from '$lib/services/orchestrator/skills';
+import { FIRM_RULE_USES, clearLearnedProfile, globalOrchestratorProfile, orchestratorProfile, removeProfileEntry } from '$lib/services/orchestrator/evolve';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
+import { MEDIA_PROVIDERS, type MediaGenerationSettings, type MediaKind } from '$lib/services/media-generation';
 import { requestNotificationPermission, showToast } from '$lib/stores/notification';
+import { ChatGptSignIn } from './ChatGptSignIn';
 import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDownloading, updateProgress } from '$lib/stores/updater';
 import { get } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
@@ -140,6 +159,8 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
+  { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning' },
+  { id: 'mcp', label: 'MCP', kicker: 'Tool servers' },
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map' },
   { id: 'about', label: 'About', kicker: 'Version and reset' },
@@ -176,6 +197,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ai-provider', tab: 'models', section: 'Provider connections', label: 'Provider', keywords: 'ai model service connection' },
   { id: 'ai-api-key', tab: 'models', section: 'Provider connections', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
   { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
+  { id: 'media-generation', tab: 'models', section: 'Image & video generation', label: 'Image & video generation', keywords: 'image video picture generate fal replicate veo sora dalle', target: 'section' },
   { id: 'local-speech-models', tab: 'models', section: 'Local Speech-to-Text (STT)', label: 'Local Speech-to-Text', keywords: 'offline private voice dictation', target: 'section' },
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
   { id: 'smart-voice-detection', tab: 'voice', section: 'Voice input', label: 'Smart voice detection', keywords: 'vad speaking silence' },
@@ -190,7 +212,12 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'auto-stage', tab: 'agents', section: 'Isolation & changes', label: 'Auto-stage agent changes', keywords: 'git review' },
   { id: 'stay-awake', tab: 'agents', section: 'Power', label: 'Stay awake while agents work', keywords: 'sleep idle power' },
   { id: 'browser-tools', tab: 'agents', section: 'Browser', label: 'Browser tools', keywords: 'web agent' },
+  { id: 'orchestrator-skills', tab: 'orchestrator', section: 'Built-in skills', label: 'Built-in skills', keywords: 'orchestrator assistant security engineering debugging review git' },
+  { id: 'orchestrator-custom-skills', tab: 'orchestrator', section: 'Your skills', label: 'Add a skill', keywords: 'orchestrator custom instructions playbook prompt' },
+  { id: 'orchestrator-learned', tab: 'orchestrator', section: 'What it has learned', label: 'What it has learned', keywords: 'orchestrator memory profile preferences forget' },
   { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
+  { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
+  { id: 'mcp-servers', tab: 'mcp', section: 'Your servers', label: 'Add an MCP server', keywords: 'mcp model context protocol remote hosted stdio integration linear notion github' },
   { id: 'usage-stats', tab: 'stats', section: 'Usage', label: 'Usage', keywords: 'model tokens spending statistics cost', target: 'section' },
   { id: 'keyboard-shortcuts', tab: 'shortcuts', section: 'Keyboard shortcuts', label: 'Keyboard shortcuts', keywords: 'hotkeys keymap', target: 'section' },
   { id: 'custom-shortcuts', tab: 'shortcuts', section: 'Add custom navigation shortcut', label: 'Add custom navigation shortcut', keywords: 'hotkeys commands', target: 'section' },
@@ -489,6 +516,42 @@ function SettingRow({
   );
 }
 
+function SkillChevron({ open }: { open: boolean }) {
+  return (
+    <svg className={`skill-chevron${open ? ' open' : ''}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** A settings row whose title opens a read-only panel under it (built-in skills). */
+function SkillRow({
+  title,
+  detail,
+  expanded,
+  onToggleOpen,
+  body,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  expanded: boolean;
+  onToggleOpen: () => void;
+  body: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="settings-control-row skill-row" data-settings-key={settingsSearchKey(title)}>
+      <button type="button" className="settings-control-copy skill-open-btn" aria-expanded={expanded} onClick={onToggleOpen} title={expanded ? 'Collapse' : 'Read what this skill does'}>
+        <span>{title} <SkillChevron open={expanded} /></span>
+        {detail && <small>{detail}</small>}
+      </button>
+      <div className="settings-control">{children}</div>
+      {expanded && <div className="skill-body">{body}</div>}
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="settings-card" data-settings-section={settingsSearchKey(title)}>
@@ -498,6 +561,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/**
+ * Settings > AI Connections > Image & video generation. Generation tries the
+ * ChatGPT plan first for images, then every provider with a key; this picks
+ * which one goes first, per-provider models, and the two media-only keys.
+ */
 function JevConnectionSection() {
   const [keyExists, setKeyExists] = useState(false);
   const [keyInput, setKeyInput] = useState('');
@@ -536,6 +604,512 @@ function JevConnectionSection() {
       </div>
       {keyError && <p className="shell-hint">{keyError}</p>}
     </Section>
+  );
+}
+
+function MediaGenerationSection() {
+  const settings = useStore(mediaGeneration) as MediaGenerationSettings;
+  const [keys, setKeys] = useState<Record<string, boolean>>({});
+  const [keyInput, setKeyInput] = useState<Record<string, string>>({});
+  const [keyError, setKeyError] = useState('');
+  const keyProviders = MEDIA_PROVIDERS.filter((p) => p.keyUrl);
+
+  useEffect(() => {
+    let live = true;
+    void Promise.all(keyProviders.map(async (p) => [p.id, await invoke<boolean>('provider_api_key_exists', { provider: p.id }).catch(() => false)] as const))
+      .then((entries) => { if (live) setKeys(Object.fromEntries(entries)); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const update = (patch: Partial<MediaGenerationSettings>) => mediaGeneration.set({ ...settings, ...patch });
+
+  const saveKey = async (provider: string, value: string) => {
+    setKeyError('');
+    try {
+      await invoke(value.trim() ? 'provider_api_key_set' : 'provider_api_key_delete', value.trim() ? { provider, apiKey: value.trim() } : { provider });
+      setKeys((current) => ({ ...current, [provider]: Boolean(value.trim()) }));
+      setKeyInput((current) => ({ ...current, [provider]: '' }));
+    } catch (error) {
+      setKeyError(String(error ?? 'could not save the key'));
+    }
+  };
+
+  const providerRow = (kind: MediaKind) => {
+    const field = kind === 'video' ? 'videoProvider' : 'imageProvider';
+    const modelsField = kind === 'video' ? 'videoModels' : 'imageModels';
+    const chosen = settings[field];
+    const options = [
+      { id: 'auto', label: kind === 'image' ? 'Auto (ChatGPT plan first)' : 'Auto (first with a key)' },
+      ...MEDIA_PROVIDERS.filter((p) => (kind === 'video' ? p.video : p.image)).map((p) => ({ id: p.id, label: p.label })),
+    ];
+    const info = MEDIA_PROVIDERS.find((p) => p.id === chosen);
+    const fallback = kind === 'video' ? info?.videoDefault : info?.imageDefault;
+    return (
+      <>
+        <SettingRow title={kind === 'video' ? 'Video provider' : 'Image provider'} detail="Tried first; the others with a key are used if it is out of credit or not set up.">
+          <SelectField value={chosen} options={options} onChange={(value) => update({ [field]: value } as Partial<MediaGenerationSettings>)} ariaLabel={`${kind} provider`} />
+        </SettingRow>
+        {info && info.id !== 'chatgpt' && (
+          <SettingRow title={kind === 'video' ? 'Video model' : 'Image model'} detail="Leave blank for the default.">
+            <input
+              type="text"
+              value={settings[modelsField][info.id] ?? ''}
+              placeholder={fallback}
+              onChange={(event) => update({ [modelsField]: { ...settings[modelsField], [info.id]: event.target.value } } as Partial<MediaGenerationSettings>)}
+            />
+          </SettingRow>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <Section title="Image & video generation">
+      <p className="shell-hint">
+        Images use your ChatGPT plan first. When it is not signed in or its limit is used up, Spacron uses the next
+        provider with a key: OpenAI, Google and OpenRouter use the keys above; fal and Replicate use the keys below.
+        Files are saved in the project&apos;s <code>generations</code> folder and shown in the chat.
+      </p>
+      {providerRow('image')}
+      {providerRow('video')}
+      {keyProviders.map((p) => (
+        <div key={p.id}>
+          <SettingRow title={`${p.label} API key`} detail={keys[p.id] ? 'Saved' : 'Not saved'}>
+            <input
+              type="password"
+              value={keyInput[p.id] ?? ''}
+              placeholder={keys[p.id] ? 'Key saved in OS keychain' : 'Paste key'}
+              onChange={(event) => setKeyInput((current) => ({ ...current, [p.id]: event.target.value }))}
+              onKeyDown={(event) => { if (event.key === 'Enter') void saveKey(p.id, keyInput[p.id] ?? ''); }}
+            />
+          </SettingRow>
+          <div className="settings-action-row">
+            <button className="settings-primary" onClick={() => void saveKey(p.id, keyInput[p.id] ?? '')} disabled={!(keyInput[p.id] ?? '').trim()}>Save key</button>
+            <button className="settings-secondary" onClick={() => void saveKey(p.id, '')} disabled={!keys[p.id]}>Clear key</button>
+            <button className="settings-link-button" onClick={() => openExternalUrl(p.keyUrl!)}>Get a {p.label} key</button>
+          </div>
+        </div>
+      ))}
+      {keyError && <p className="shell-hint">{keyError}</p>}
+    </Section>
+  );
+}
+
+/**
+ * Settings > MCP: the tool servers every agent is given.
+ *
+ * Spacron's own server and the Playwright one are shown but not editable here
+ * — they are owned by the app and by the Browser tools setting respectively.
+ * Everything below them is the user's list, written into each CLI's own config
+ * file on the next project open or agent launch. See `services/mcp-servers.ts`
+ * for the dialects and the namespace rule that makes removal safe.
+ */
+function McpSettingsPane() {
+  const servers = useStore(mcpServers);
+  const browserOn = useStore(agentBrowserTools);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<McpServer | null>(null);
+  const [headersText, setHeadersText] = useState('');
+  const [argsText, setArgsText] = useState('');
+  const [envText, setEnvText] = useState('');
+  const [error, setError] = useState('');
+
+  const save = (next: McpServer[]) => mcpServers.set(next);
+  const closeForm = () => {
+    setEditingId(null);
+    setDraft(null);
+    setHeadersText('');
+    setArgsText('');
+    setEnvText('');
+    setError('');
+  };
+  const startAdd = () => {
+    setEditingId('new');
+    setDraft({ id: `mcp-${Date.now().toString(36)}`, name: '', transport: 'http', url: '', enabled: true });
+    setHeadersText('');
+    setArgsText('');
+    setEnvText('');
+    setError('');
+  };
+  const startEdit = (server: McpServer) => {
+    setEditingId(server.id);
+    setDraft({ ...server });
+    setHeadersText(formatPairs(server.headers, ':'));
+    setArgsText((server.args ?? []).join('\n'));
+    setEnvText(formatPairs(server.env, '='));
+    setError('');
+  };
+  const submit = () => {
+    if (!draft) return;
+    // The text fields become structured values only here, so a half-typed
+    // header line never reaches a config file.
+    const candidate: McpServer = {
+      ...draft,
+      name: draft.name.trim(),
+      url: draft.transport === 'stdio' ? undefined : draft.url?.trim(),
+      headers: draft.transport === 'stdio' ? undefined : parsePairs(headersText, ':'),
+      command: draft.transport === 'stdio' ? draft.command?.trim() : undefined,
+      args: draft.transport === 'stdio' ? parseLines(argsText) : undefined,
+      env: draft.transport === 'stdio' ? parsePairs(envText, '=') : undefined,
+    };
+    const problem = validateServer(candidate, servers);
+    if (problem) { setError(problem); return; }
+    save(editingId === 'new' ? [...servers, candidate] : servers.map((s) => (s.id === candidate.id ? candidate : s)));
+    closeForm();
+  };
+  const remote = draft?.transport !== 'stdio';
+
+  return (
+    <>
+      <Section title="Built in">
+        <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+          MCP servers give your agents tools beyond the filesystem and the shell. These two come
+          with Spacron.
+        </p>
+        <div className="agent-list">
+          <div className="agent-row">
+            <div className="agent-meta">
+              <div className="agent-name-row"><span className="agent-name">Spacron</span></div>
+              <small className="shell-hint">
+                Agent-to-agent tools and emulator control. Always on: it is how agents see each
+                other and how work gets handed over.
+              </small>
+            </div>
+          </div>
+          <div className="agent-row">
+            <div className="agent-meta">
+              <div className="agent-name-row"><span className="agent-name">Playwright browser</span></div>
+              <small className="shell-hint">
+                Lets an agent open the page it just built and read it. Managed by Browser tools in
+                Agents settings.
+              </small>
+            </div>
+            <Toggle
+              label="Toggle the Playwright browser server"
+              checked={browserOn}
+              onChange={(on) => agentBrowserTools.set(on)}
+            />
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Your servers">
+        <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+          Add a hosted server by URL, or a local one by command. Each is written into every agent
+          CLI's own config, so Claude Code, Codex, Gemini, droid, opencode and Cursor all get it.
+          Changes apply the next time a project opens or an agent launches.
+        </p>
+        {servers.length > 0 && (
+          <div className="agent-list">
+            {servers.map((server) => {
+              const problem = validateServer(server, servers);
+              return (
+                <div className="agent-row" key={server.id}>
+                  <div className="agent-meta">
+                    <div className="agent-name-row">
+                      <span className="agent-name">{server.name || 'Unnamed server'}</span>
+                      <span className="shell-hint" style={{ marginLeft: '8px' }}>
+                        {server.transport === 'stdio' ? 'local' : server.transport.toUpperCase()}
+                      </span>
+                    </div>
+                    <small className="shell-hint">
+                      {server.transport === 'stdio'
+                        ? [server.command, ...(server.args ?? [])].filter(Boolean).join(' ')
+                        : server.url}
+                    </small>
+                    {problem && <small className="shell-hint mcp-server-problem">{problem}</small>}
+                    {headersLostOnCodex(server) && (
+                      <small className="shell-hint">
+                        Codex has no setting for request headers, so this one reaches Codex without
+                        its auth header. Every other agent gets it.
+                      </small>
+                    )}
+                  </div>
+                  <Toggle
+                    label={`Toggle the ${server.name} server`}
+                    checked={server.enabled}
+                    onChange={(on) => save(servers.map((s) => (s.id === server.id ? { ...s, enabled: on } : s)))}
+                  />
+                  <button type="button" className="settings-secondary" onClick={() => startEdit(server)}>Edit</button>
+                  <button
+                    type="button"
+                    className="agent-remove"
+                    onClick={() => { save(servers.filter((s) => s.id !== server.id)); if (editingId === server.id) closeForm(); }}
+                    aria-label={`Remove ${server.name}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2m-1 0v14H9V6"/></svg>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {draft ? (
+          <div className="agent-add-container">
+            <h4 className="agent-add-title">{editingId === 'new' ? 'Add a server' : `Edit ${draft.name || 'server'}`}</h4>
+            <input
+              className="agent-input"
+              type="text"
+              placeholder="Name (e.g. Linear)"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              maxLength={60}
+            />
+            <div className="settings-action-row" style={{ marginTop: '8px' }}>
+              {(['http', 'sse', 'stdio'] as const).map((transport) => (
+                <button
+                  key={transport}
+                  type="button"
+                  className={draft.transport === transport ? 'settings-primary' : 'settings-secondary'}
+                  onClick={() => setDraft({ ...draft, transport })}
+                >
+                  {transport === 'http' ? 'Remote (HTTP)' : transport === 'sse' ? 'Remote (SSE)' : 'Local command'}
+                </button>
+              ))}
+            </div>
+            {remote ? (
+              <>
+                <input
+                  className="agent-input mcp-field"
+                  type="text"
+                  placeholder="https://mcp.example.com/mcp"
+                  value={draft.url ?? ''}
+                  onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+                />
+                <textarea
+                  className="agent-input mcp-textarea"
+                  placeholder={'Headers, one per line (optional):\nAuthorization: Bearer your-token'}
+                  value={headersText}
+                  onChange={(e) => setHeadersText(e.target.value)}
+                  rows={3}
+                />
+              </>
+            ) : (
+              <>
+                <input
+                  className="agent-input mcp-field"
+                  type="text"
+                  placeholder="Command (e.g. npx)"
+                  value={draft.command ?? ''}
+                  onChange={(e) => setDraft({ ...draft, command: e.target.value })}
+                />
+                <textarea
+                  className="agent-input mcp-textarea"
+                  placeholder={'Arguments, one per line (optional):\n-y\n@some/mcp-server'}
+                  value={argsText}
+                  onChange={(e) => setArgsText(e.target.value)}
+                  rows={3}
+                />
+                <textarea
+                  className="agent-input mcp-textarea"
+                  placeholder={'Environment, one per line (optional):\nAPI_TOKEN=your-token'}
+                  value={envText}
+                  onChange={(e) => setEnvText(e.target.value)}
+                  rows={2}
+                />
+              </>
+            )}
+            {error && <p className="shell-hint mcp-server-problem">{error}</p>}
+            <div className="settings-action-row">
+              <button type="button" className="settings-primary" onClick={submit}>
+                {editingId === 'new' ? 'Add server' : 'Save server'}
+              </button>
+              <button type="button" className="settings-secondary" onClick={closeForm}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="settings-action-row">
+            <button type="button" className="settings-primary" onClick={startAdd}>Add a server</button>
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function skillTitleCase(title: string): string {
+  return title.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Settings > Orchestrator: the brain's skills (built-in toggles plus the
+ * user's own) and what it has learned about the user and project. Skills feed
+ * `buildSkillsPrompt`; learned entries are the evolve.ts profile.
+ */
+function OrchestratorSettingsPane() {
+  const disabled = useStore(orchestratorDisabledSkills);
+  const customSkills = sanitizeCustomSkills(useStore(orchestratorCustomSkills));
+  const learnedGlobal = useStore(globalOrchestratorProfile);
+  const learnedByProject = useStore(orchestratorProfile);
+  const projectId = useStore(activeProjectId);
+  const learnedProject = projectId ? learnedByProject[projectId] ?? [] : [];
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [error, setError] = useState('');
+  const [openSkillId, setOpenSkillId] = useState<string | null>(null);
+
+  const toggleBuiltIn = (id: string, on: boolean) => {
+    orchestratorDisabledSkills.set(on ? disabled.filter((item) => item !== id) : [...new Set([...disabled, id])]);
+  };
+  const saveSkills = (next: CustomSkill[]) => orchestratorCustomSkills.set(sanitizeCustomSkills(next));
+  const resetForm = () => { setEditingId(null); setTitle(''); setInstructions(''); setError(''); };
+  const submit = () => {
+    const cleanTitle = title.trim();
+    const cleanText = instructions.trim();
+    if (!cleanTitle || !cleanText) { setError('Give the skill a name and some instructions.'); return; }
+    if (editingId) {
+      saveSkills(customSkills.map((skill) => (skill.id === editingId ? { ...skill, title: cleanTitle, instructions: cleanText } : skill)));
+    } else {
+      if (customSkills.length >= 12) { setError('You can have up to 12 skills. Remove one to add another.'); return; }
+      saveSkills([...customSkills, { id: `skill-${Date.now().toString(36)}`, title: cleanTitle, instructions: cleanText, enabled: true }]);
+    }
+    resetForm();
+  };
+  const learned = [
+    ...learnedGlobal.map((entry) => ({ entry, where: 'About you' })),
+    ...learnedProject.map((entry) => ({ entry, where: 'This project' })),
+  ];
+
+  return (
+    <>
+      <Section title="Built-in skills">
+        <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+          Skills are playbooks the orchestrator follows on every turn, whichever model is its brain.
+          Switch off any you do not want.
+        </p>
+        {BRAIN_SKILLS.map((skill) => (
+          <SkillRow
+            key={skill.id}
+            title={skillTitleCase(skill.title)}
+            detail={skill.summary}
+            expanded={openSkillId === skill.id}
+            onToggleOpen={() => setOpenSkillId(openSkillId === skill.id ? null : skill.id)}
+            body={
+              <>
+                <ul className="skill-rules">
+                  {skill.rules.map((rule) => <li key={rule}>{rule}</li>)}
+                </ul>
+                <p className="skill-readonly-note">Built-in skills are read-only. Switch it off if you do not want it.</p>
+              </>
+            }
+          >
+            <Toggle
+              label={`Toggle the ${skillTitleCase(skill.title)} skill`}
+              checked={!disabled.includes(skill.id)}
+              onChange={(on) => toggleBuiltIn(skill.id, on)}
+            />
+          </SkillRow>
+        ))}
+      </Section>
+
+      <Section title="Your skills">
+        <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+          Teach the orchestrator how you work: your stack, your review checklist, how you like
+          commits or replies written. Write it the way you would brief a new teammate. Your skills
+          never override the Security skill.
+        </p>
+        {customSkills.length > 0 && (
+          <div className="agent-list">
+            {customSkills.map((skill) => (
+              <div className="agent-row" key={skill.id}>
+                <button
+                  type="button"
+                  className="agent-meta skill-open-btn"
+                  aria-expanded={openSkillId === skill.id}
+                  onClick={() => setOpenSkillId(openSkillId === skill.id ? null : skill.id)}
+                  title={openSkillId === skill.id ? 'Collapse' : 'Read the full skill'}
+                >
+                  <div className="agent-name-row">
+                    <span className="agent-name">{skill.title}</span>
+                    <SkillChevron open={openSkillId === skill.id} />
+                  </div>
+                  {openSkillId === skill.id ? (
+                    <small className="shell-hint skill-full-text">{skill.instructions}</small>
+                  ) : (
+                    <small className="shell-hint">{skill.instructions.length > 140 ? `${skill.instructions.slice(0, 140)}…` : skill.instructions}</small>
+                  )}
+                </button>
+                <Toggle
+                  label={`Toggle the ${skill.title} skill`}
+                  checked={skill.enabled}
+                  onChange={(on) => saveSkills(customSkills.map((item) => (item.id === skill.id ? { ...item, enabled: on } : item)))}
+                />
+                <button type="button" className="settings-secondary" onClick={() => { setEditingId(skill.id); setTitle(skill.title); setInstructions(skill.instructions); setError(''); }}>
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="agent-remove"
+                  onClick={() => { saveSkills(customSkills.filter((item) => item.id !== skill.id)); if (editingId === skill.id) resetForm(); }}
+                  aria-label={`Remove ${skill.title}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2m-1 0v14H9V6"/></svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="agent-add-container">
+          <h4 className="agent-add-title">{editingId ? 'Edit skill' : 'Add a skill'}</h4>
+          <input
+            className="agent-input"
+            type="text"
+            placeholder="Name (e.g. Our React conventions)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={60}
+          />
+          <textarea
+            className="agent-input"
+            placeholder={'Instructions, one per line. For example:\n- Use function components and hooks, never classes.\n- Put API calls in src/api, never inside components.\n- Run npm test before saying a change is done.'}
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+            maxLength={MAX_CUSTOM_SKILL_CHARS}
+            rows={14}
+            style={{ width: '100%', minHeight: '240px', marginTop: '8px', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, boxSizing: 'border-box' }}
+          />
+          <div className="settings-action-row">
+            <button type="button" className="settings-primary" onClick={submit}>{editingId ? 'Save skill' : 'Add skill'}</button>
+            {editingId && <button type="button" className="settings-secondary" onClick={resetForm}>Cancel</button>}
+          </div>
+          {error && <p className="agent-error">{error}</p>}
+        </div>
+      </Section>
+
+      <Section title="What it has learned">
+        <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+          After each conversation the orchestrator notes lasting preferences and project facts, and
+          anything you have had to say twice becomes a firm rule. Remove anything that is wrong.
+        </p>
+        {learned.length === 0 ? (
+          <p className="shell-hint">Nothing learned yet.</p>
+        ) : (
+          <div className="agent-list">
+            {learned.map(({ entry, where }) => (
+              <div className="agent-row" key={entry.id}>
+                <div className="agent-meta">
+                  <div className="agent-name-row">
+                    <span className="agent-name">{entry.text}</span>
+                  </div>
+                  <small className="shell-hint">{where}{entry.uses >= FIRM_RULE_USES ? ' · firm rule' : ''}</small>
+                </div>
+                <button type="button" className="agent-remove" onClick={() => void removeProfileEntry(projectId, entry.id)} aria-label={`Forget: ${entry.text}`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2m-1 0v14H9V6"/></svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {learned.length > 0 && (
+          <div className="settings-action-row">
+            <button type="button" className="settings-secondary" onClick={() => void clearLearnedProfile(projectId)}>Forget everything</button>
+          </div>
+        )}
+      </Section>
+    </>
   );
 }
 
@@ -933,6 +1507,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAgentWorktrees = useStore(agentWorktrees);
   const currentAutoStage = useStore(autoStageAgentChanges);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
+  const currentAgentFailover = useStore(agentFailover);
+  const currentFailoverHeadroom = useStore(agentFailoverHeadroomPercent);
+  const currentFailoverCrossProvider = useStore(agentFailoverCrossProvider);
   const currentKeepSystemAwake = useStore(keepSystemAwake);
   const keepAwake = useStore(keepAwakeState);
   const currentCloseBehavior = useStore(closeBehavior);
@@ -979,6 +1556,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const providerDef = getProviderDef(provider);
   const localProvider = isLocalProvider(provider);
+  // A ChatGPT sign-in stands in for this provider's key, so the rest of
+  // Settings (and the model list) can treat it exactly like a saved key.
+  const handleChatGptSignedIn = useCallback((signedIn: boolean) => {
+    setKeyExists(signedIn);
+    if (signedIn) void loadLiveModels('chatgpt', true);
+  }, []);
   const completionDef = getProviderDef(completionProvider);
   const completionModels = completionLiveModels[completionProvider] ?? completionDef.models;
   const completionModel = completionModelMap[completionProvider] || completionDef.defaultModel;
@@ -1403,7 +1986,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   async function resetAllSettings() {
     let confirmed = false;
     const message =
-      'This will erase all workspaces, projects, settings, AI keys, and preferences and restart the onboarding. This cannot be undone.';
+      'This will erase all workspaces, projects, settings, and AI keys. This cannot be undone.';
     if (isTauriRuntime()) {
       try {
         const { ask } = await import('@tauri-apps/plugin-dialog');
@@ -1421,8 +2004,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
     if (!confirmed) return;
 
-    // Clear everything: workspaces, localStorage keys, settings, and the
-    // durable onboarding flag so the tour restarts on next load.
+    // Clear everything: workspaces, localStorage keys, and settings.
     await resetAllApplicationState();
     removedPresetAgents.set([]);
 
@@ -1826,12 +2408,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'models' && (
               <>
+                <JevConnectionSection />
                 <Section title="Provider connections">
                   <SettingRow title="Provider" detail="Choose a connection to configure. Pick the orchestrator provider and model in each Chat composer.">
                     <SelectField value={provider} options={aiProviders.filter((item) => item.id !== 'local').map((item) => ({ id: item.id, label: item.label }))} onChange={(value) => setProvider(value as AiProviderId)} ariaLabel="AI provider connection" renderIcon={providerIcon} />
                   </SettingRow>
 
-                  {localProvider ? (
+                  {providerDef.signIn === 'chatgpt' ? (
+                    <ChatGptSignIn openUrl={openExternalUrl} onSignedInChange={handleChatGptSignedIn} />
+                  ) : localProvider ? (
                     <>
                       <SettingRow title={providerDef.keyLabel}>
                         <input
@@ -1855,17 +2440,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <SettingRow title={providerDef.keyLabel} detail={keyExists ? 'Saved' : 'Not saved'}>
                         <input type="password" value={apiKeyInput} onChange={(event) => setApiKeyInput(event.target.value)} placeholder={keyExists ? 'Key saved in OS keychain' : providerDef.keyPlaceholder} />
                       </SettingRow>
+                      {provider === 'kilocode' && !keyExists && (
+                        <p className="shell-hint">
+                          Kilo Code&apos;s &quot;Auto (free)&quot; model costs nothing, but it still needs a key to
+                          identify your account. Create a free account at app.kilo.ai, copy the API key from your
+                          Kilo profile, and paste it above.
+                        </p>
+                      )}
                       <div className="settings-action-row">
                         <button className="settings-primary" onClick={() => void saveKey()} disabled={!apiKeyInput.trim()}>Save key</button>
                         <button className="settings-secondary" onClick={() => void clearKey()} disabled={!keyExists}>Clear key</button>
-                        <button className="settings-link-button" onClick={() => openExternalUrl(providerDef.keyUrl)}>Open provider</button>
+                        <button className="settings-link-button" onClick={() => openExternalUrl(providerDef.keyUrl)}>
+                          {provider === 'kilocode' ? 'Create a free Kilo account' : 'Open provider'}
+                        </button>
                       </div>
                     </>
                   )}
 
                 </Section>
-
-                <JevConnectionSection />
 
                 <Section title="Inline completion">
                   <SettingRow title="Ghost text">
@@ -1889,6 +2481,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     </button>
                   </div>
                 </Section>
+
+                <MediaGenerationSection />
 
                 <Section title="Local Speech-to-Text (STT)">
                   <div className="local-models-info">
@@ -2005,7 +2599,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Terminal transcription">
                   <SettingRow
                     title="Hotkey"
-                    detail="Tap the hotkey and speak — pauses do not end it. Tap again or press Esc to send, Ctrl+Esc to discard. The text lands wherever the cursor is, terminal or text field."
+                    detail="Tap the hotkey and speak: pauses do not end it. Tap again or press Esc to send, Ctrl+Esc to discard. The text lands wherever the cursor is, terminal or text field."
                   >
                     <kbd>{formatShortcutLabel(shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9')}</kbd>
                   </SettingRow>
@@ -2323,6 +2917,52 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                 </Section>
 
+                <Section title="Running out of usage">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    An agent that hits its plan's limit halfway through a feature normally just
+                    stops, and you find out later. Instead, Spacron watches each signed-in CLI's own
+                    meter and moves the unfinished work before the wall: it asks the agent to land
+                    what it has and commit, then puts another one in the same checkout, on the same
+                    branch, with a brief built from the actual diff. The task, the conversation and
+                    the review at the end are all unchanged: only who is typing.
+                  </p>
+                  <SettingRow
+                    title="Hand work over before the limit"
+                    detail="Off leaves an agent to stop at its limit mid-feature, which is the behaviour without this."
+                  >
+                    <Toggle
+                      label="Toggle handing agent work over on usage limits"
+                      checked={currentAgentFailover}
+                      onChange={agentFailover.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Move the work at"
+                    detail={`${currentFailoverHeadroom}% usage left. Earlier leaves the agent more room to wrap up cleanly; later gets more work out of the plan you are already paying for. Set it high to rehearse a handover without waiting for a real limit.`}
+                  >
+                    <input
+                      type="range"
+                      min="1"
+                      max="99"
+                      step="1"
+                      value={currentFailoverHeadroom}
+                      disabled={!currentAgentFailover}
+                      aria-label="Usage left at which work is handed over"
+                      onChange={(event) => agentFailoverHeadroomPercent.set(Number(event.target.value))}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Allow switching to a different CLI"
+                    detail="Another account of the same CLI is always tried first and spends only your own plan. Off stops there rather than moving the work to a different service, which may cost money."
+                  >
+                    <Toggle
+                      label="Toggle handing agent work to a different CLI"
+                      checked={currentFailoverCrossProvider}
+                      onChange={agentFailoverCrossProvider.set}
+                    />
+                  </SettingRow>
+                </Section>
+
                 <Section title="Power">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     A long agent run is unattended by design, which is exactly what your machine
@@ -2513,6 +3153,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               </>
             )}
 
+            {activeTab === 'orchestrator' && <OrchestratorSettingsPane />}
+            {activeTab === 'mcp' && <McpSettingsPane />}
             {activeTab === 'stats' && <UsageStatsPane />}
 
             {activeTab === 'shortcuts' && (
@@ -2636,7 +3278,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <div className="settings-danger-row">
                     <div>
                       <span>Factory reset</span>
-                      <small>Erase all workspaces, settings, and AI keys and restart the onboarding from scratch.</small>
+                      <small>Erase all workspaces, settings, and AI keys.</small>
                     </div>
                     <button className="settings-danger" onClick={resetAllSettings}>Factory Reset</button>
                   </div>

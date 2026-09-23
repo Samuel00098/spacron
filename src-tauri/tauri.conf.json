@@ -40,6 +40,19 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": ["spacron"],
+        "name": "Spacron Project",
+        "description": "Spacron project",
+        "mimeType": "application/x-spacron-project",
+        "contentTypes": ["public.folder"],
+        "exportedType": {
+          "identifier": "com.samue.spacron.project",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
     "externalBin": [
       "binaries/spacron-server",
       "binaries/spacron-open"
@@ -53,7 +66,16 @@
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/desktop.template"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/desktop.template"
       }
     },
     "macOS": {

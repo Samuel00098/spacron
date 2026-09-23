@@ -10,6 +10,49 @@ import type { ActivityEvent } from './activity-log';
 export type { ActivityEvent } from './activity-log';
 import type { WorktreeInfo } from './worktree-manager';
 import type { AgentRole } from './agent-charter';
+import type { ChatReasoningEffort } from '$lib/types/chat';
+
+/**
+ * One hop of a task's work from one agent to another.
+ *
+ * Recorded from evidence, not from the agent that just stopped: `filesChanged`
+ * comes from git, `headroomPercent` from the meter, `stoppedBy` from what
+ * actually happened when the agent was asked to wrap up. The outgoing agent is
+ * never asked to summarise its own unfinished work, because by definition it
+ * cannot.
+ */
+export interface TaskMigration {
+  at: number;
+  /** Launch command of the agent that handed the work over. */
+  fromPreset: string | null;
+  fromAccountId: string | null;
+  /** Human label for that account — an email, usually. Never a token. */
+  fromAccountLabel: string | null;
+  /** Headroom left on that account at the moment of the switch, in percent. */
+  fromHeadroomPercent: number | null;
+  /** When that account's limit comes back, unix ms, when the meter said. */
+  fromResetAtMs: number | null;
+  toPreset: string;
+  toAccountId: string | null;
+  toAccountLabel: string | null;
+  toHeadroomPercent: number | null;
+  /** Files the outgoing agent left on the branch, per `getWorktreeDelta`. */
+  filesChanged: number | null;
+  /**
+   * How the outgoing agent stopped.
+   *
+   * - `pre-emptive` — it had not started a turn; nothing needed interrupting.
+   * - `wrap-up` — it was asked to finish the edit in hand and complied.
+   * - `interrupt` — it did not stop in the grace window and was interrupted.
+   * - `already-idle` — it had already stopped when the switch was decided.
+   *
+   * This is the difference between "it put its tools down" and "we took them
+   * away", and the completion card is not allowed to blur the two.
+   */
+  stoppedBy: 'pre-emptive' | 'wrap-up' | 'interrupt' | 'already-idle';
+  /** One sentence, for the activity log and the completion card. */
+  reason: string;
+}
 
 export interface OrchestratorTask {
   id: string;
@@ -20,12 +63,27 @@ export interface OrchestratorTask {
   name?: string | null;
   status: OrchestratorTaskStatus;
   agentPreset?: string | null;
+  /** Provider-native worker model selected at launch; retained for relaunches. */
+  agentModel?: string | null;
+  /** Provider-native worker reasoning selected at launch; retained for relaunches. */
+  agentReasoningEffort?: ChatReasoningEffort;
   /**
    * Team role assigned by the planner (Coordinator/Builder/Scout/Reviewer). Adds
    * a compact role charter to the agent's brief so a fleet can divide a goal and
    * coordinate through the mailbox. Null ⇒ a plain, un-roled agent.
    */
   role?: AgentRole | null;
+  /**
+   * The signed-in account this agent is running under, for the CLIs that hold
+   * more than one. Null means "whichever the user selected" — which is what
+   * every task carried before failover existed, and what a CLI with a single
+   * login always carries.
+   *
+   * Recorded rather than re-derived because the user's selection can move while
+   * an agent is working: the account a running agent is *on* was fixed at
+   * spawn, and reading the picker later would answer a different question.
+   */
+  agentAccountId?: string | null;
   assignedSessionId?: number | null;
   /**
    * The session the agent last ran in. Unlike `assignedSessionId` (cleared on
@@ -72,10 +130,20 @@ export interface OrchestratorTask {
   /**
    * The task-panel card this agent was launched from ("Run with agent"). Set
    * only for panel-dispatched runs; when such an agent finishes cleanly, the
-   * user is offered a one-click move of that card to Done rather than having
-   * it moved for them.
+   * linked card is moved to Done with it.
    */
   panelTaskId?: string | null;
+  /**
+   * Every hand-off this work has been through, oldest first.
+   *
+   * A list, not a field, for two reasons the feature depends on. Work may pass
+   * through three or more agents, and the thread has to be able to show the
+   * *chain* — "Claude built the schema, Codex finished the handlers" — rather
+   * than only the last hop. And a correction the user types has to reach the
+   * agent **currently** holding the work, not the one that ran out; the last
+   * entry here is who that is.
+   */
+  migrations?: TaskMigration[];
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;

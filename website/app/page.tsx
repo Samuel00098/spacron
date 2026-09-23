@@ -4,23 +4,66 @@ import { getAgentBrand } from '../../src/lib/components/shared/agentBrands';
 
 /**
  * Hero headline split into words so CSS can cascade them in one by one
- * (superwhisper-style entrance). `{word}` renders as a highlighted chip.
+ * (superwhisper-style entrance). `{word}` renders as a highlighted chip;
+ * trailing punctuation (`{word}.`) stays outside the chip.
  */
 function heroWords(line: string) {
-  return line.split(' ').map((tok) =>
-    tok.startsWith('{') && tok.endsWith('}') ? { w: tok.slice(1, -1) } : tok,
+  return line.split(' ').map((tok) => {
+    const chip = tok.match(/^\{(.+)\}([^}]*)$/);
+    return chip ? { w: chip[1], tail: chip[2] } : tok;
+  });
+}
+
+type HeroToken = ReturnType<typeof heroWords>[number];
+
+/** One headline token, preceded by a real space so words never run together. */
+function HeroToken({ tok, i, wi }: { tok: HeroToken; i: number; wi: number }) {
+  const style = { ['--wi' as string]: wi };
+  return (
+    <>
+      {i > 0 && ' '}
+      {typeof tok === 'object' ? (
+        <>
+          <span className="hero-chip" style={style}>{tok.w}</span>
+          {tok.tail && <span className="hero-word" style={style}>{tok.tail}</span>}
+        </>
+      ) : (
+        <span className="hero-word" style={style}>{tok}</span>
+      )}
+    </>
   );
 }
-const HERO_LINE_1 = heroWords('One {workspace}. One {goal}.');
-const HERO_LINE_2 = heroWords('A {fleet} that builds it.');
+// One phrase per line, stacked. `muted` greys out the payoff line.
+const HERO_LINES = [
+  { words: heroWords('One {workspace}.'), muted: false },
+  { words: heroWords('One {goal}.'), muted: false },
+  { words: heroWords('A {fleet} that builds it.'), muted: true },
+];
+// Running word index across lines, so the cascade flows top to bottom.
+const HERO_LINE_OFFSETS = HERO_LINES.map((_, i) =>
+  HERO_LINES.slice(0, i).reduce((n, line) => n + line.words.length, 0),
+);
 
 const agentCards = [
   { name: 'Claude Code', cmd: 'claude' },
   { name: 'Codex CLI', cmd: 'codex' },
   { name: 'Cursor', cmd: 'cursor-agent' },
-  { name: 'Gemini CLI', cmd: 'gemini' },
+  { name: 'Antigravity CLI', cmd: 'agy' },
+  { name: 'Grok CLI', cmd: 'grok' },
   { name: 'Aider', cmd: 'aider' },
   { name: 'OpenCode', cmd: 'opencode' },
+];
+
+// Where each CLI logo floats behind the hero headline (% of the hero box),
+// kept to the sides so they frame the words instead of sitting under them.
+const heroFloaters = [
+  { cmd: 'claude', name: 'Claude Code', x: 4, y: 18, size: 58, delay: 0 },
+  { cmd: 'codex', name: 'Codex CLI', x: 90, y: 12, size: 52, delay: -2.5 },
+  { cmd: 'cursor-agent', name: 'Cursor', x: 12, y: 52, size: 46, delay: -5 },
+  { cmd: 'agy', name: 'Antigravity CLI', x: 84, y: 46, size: 56, delay: -1.2 },
+  { cmd: 'grok', name: 'Grok CLI', x: 16, y: 0, size: 42, delay: -7.3 },
+  { cmd: 'aider', name: 'Aider', x: 2, y: 80, size: 44, delay: -3.8 },
+  { cmd: 'opencode', name: 'OpenCode', x: 93, y: 76, size: 46, delay: -6.1 },
 ];
 
 function AgentIcon({ command, name, className = '' }: { command: string; name: string; className?: string }) {
@@ -39,7 +82,6 @@ function AgentIcon({ command, name, className = '' }: { command: string; name: s
 const agentNotes = [
   { cls: 'live', text: 'Your subscription, your quota' },
   { cls: '', text: 'Mix agents freely within one goal' },
-  { cls: '', text: 'New harnesses land with each release' },
 ];
 
 const fleetRows = [
@@ -81,41 +123,38 @@ export default async function HomePage() {
       <div className="hero-glow" aria-hidden="true" />
 
       <section className="hero">
+        {/* The CLIs Spacron drives, drifting faintly behind the headline. */}
+        <div className="hero-floaters" aria-hidden="true">
+          {heroFloaters.map((f) => (
+            <span
+              className="hero-floater"
+              key={f.cmd}
+              style={{
+                left: `${f.x}%`,
+                top: `${f.y}%`,
+                ['--size' as string]: `${f.size}px`,
+                ['--float-delay' as string]: `${f.delay}s`,
+              }}
+            >
+              <AgentIcon command={f.cmd} name={f.name} />
+            </span>
+          ))}
+        </div>
         <span className="hero-badge" data-reveal="scale">
           <span className="hero-badge-dot" aria-hidden="true" />
           Local-first
         </span>
         <h1 className="hero-title" aria-label="One workspace. One goal. A fleet that builds it.">
-          <span className="hero-line">
-            {HERO_LINE_1.map((tok, i) =>
-              typeof tok === 'object' ? (
-                <span className="hero-chip" key={i} style={{ ['--wi' as string]: i }}>{tok.w}</span>
-              ) : (
-                <span className="hero-word" key={i} style={{ ['--wi' as string]: i }}>{tok}</span>
-              ),
-            )}
-          </span>
-          <span className="hero-line muted">
-            {HERO_LINE_2.map((tok, i) =>
-              typeof tok === 'object' ? (
-                <span className="hero-chip" key={i} style={{ ['--wi' as string]: i + HERO_LINE_1.length }}>{tok.w}</span>
-              ) : (
-                <span className="hero-word" key={i} style={{ ['--wi' as string]: i + HERO_LINE_1.length }}>{tok}</span>
-              ),
-            )}
-          </span>
+          {HERO_LINES.map((line, li) => (
+            <span className={`hero-line${line.muted ? ' muted' : ''}`} key={li}>
+              {line.words.map((tok, i) => (
+                <HeroToken key={i} tok={tok} i={i} wi={HERO_LINE_OFFSETS[li] + i} />
+              ))}
+            </span>
+          ))}
         </h1>
         <p className="hero-lead" data-reveal style={{ ['--reveal-delay' as string]: '.55s' }}>
-          Spacron runs the coding CLIs you already use —{' '}
-          <span className="agent-mention-list">
-            {agentCards.map((agent, i) => (
-              <span className="agent-mention" key={agent.name}>
-                <AgentIcon command={agent.cmd} name={agent.name} />
-                {agent.name}{i < agentCards.length - 1 ? ',' : ''}
-              </span>
-            ))}
-          </span>{' '}
-          as one coordinated team. A coordinator splits your goal, builders work in isolated worktrees, and ownership checks keep them from stepping on each other.
+          Spacron runs the coding CLIs you already use as one orchestrated team. An orchestrator splits your goal, builders work in isolated worktrees, and ownership checks keep them from stepping on each other.
         </p>
         <div className="hero-actions" data-reveal style={{ ['--reveal-delay' as string]: '.7s' }}>
           <a href="/download" className="btn btn-primary">Download Spacron</a>
@@ -134,7 +173,7 @@ export default async function HomePage() {
           </div>
           <div className="terminal-body">
             <div><span className="prompt">&gt;</span> <span className="cmd">build &quot;add subscription billing with Stripe&quot;</span></div>
-            <div><span className="dim">coordinator: planning — 3 sub-tasks, disjoint file sets</span></div>
+            <div><span className="dim">orchestrator: planning — 3 sub-tasks, disjoint file sets</span></div>
             <div><span className="agent"><AgentIcon command="claude" name="Claude Code" />Claude Code</span> <span className="dim">&middot; worktree feat/stripe-checkout</span> <span className="ok">✓ 42 tests passing</span></div>
             <div><span className="agent"><AgentIcon command="cursor-agent" name="Cursor" />Cursor</span> <span className="dim">&middot; worktree feat/usage-limits</span> <span className="ok">✓ typecheck clean</span></div>
             <div><span className="agent"><AgentIcon command="codex" name="Codex CLI" />Codex CLI</span> <span className="dim">&middot; review — 1 bounce returned</span></div>
@@ -181,7 +220,7 @@ export default async function HomePage() {
           <div className="feature-copy" data-reveal="left">
             <h3>Every builder gets its own worktree</h3>
             <p>
-              The coordinator splits your goal into sub-tasks with disjoint file sets, then runs each builder in its own pane, in an isolated git worktree, on its own branch — so two agents can never collide. Reviews bounce weak work back with a critique; only accepted work reaches main.
+              The orchestrator splits your goal into sub-tasks with disjoint file sets, then runs each builder in its own pane, in an isolated git worktree, on its own branch — so two agents can never collide. Reviews bounce weak work back with a critique; only accepted work reaches main.
             </p>
           </div>
           <div className="dark-panel" aria-hidden="true" data-reveal="right">
@@ -198,11 +237,11 @@ export default async function HomePage() {
           </div>
         </div>
 
-        <div className="feature-row flip" id="coordinator">
+        <div className="feature-row flip" id="orchestrator">
           <div className="feature-copy" data-reveal="right">
-            <h3>A coordinator that reads the whole deck</h3>
+            <h3>An orchestrator that reads the whole deck</h3>
             <p>
-              The conversational coordinator watches what you watch — the active file, your cursor, every open pane, the current branch, the task board. Ask it to find what&apos;s weak and get a concrete, evidence-backed answer in one turn. Hand it a goal and it plans, delegates, verifies, and reports back.
+              The conversational orchestrator watches what you watch — the active file, your cursor, every open pane, the current branch, the task board. Ask it to find what&apos;s weak and get a concrete, evidence-backed answer in one turn. Hand it a goal and it plans, delegates, verifies, and reports back.
             </p>
           </div>
           <div className="dark-panel" aria-hidden="true" data-reveal="left">
@@ -211,7 +250,7 @@ export default async function HomePage() {
               Go through the codebase and tell me where it&apos;s weak.
             </div>
             <div className="chat-msg bot">
-              <span className="role">coordinator</span>
+              <span className="role">orchestrator</span>
               Swept 41 files. Three weak spots: the preview proxy never closes sockets on error; auth tokens sit in localStorage; the latest migration has no rollback path. All three are ranked in the task board.
             </div>
           </div>

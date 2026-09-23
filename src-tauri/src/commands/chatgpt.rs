@@ -8,7 +8,8 @@
 //!
 //! Each brain request is one *ephemeral* Codex thread whose base instructions
 //! are replaced by the orchestrator's system prompt, in an empty read-only
-//! sandbox with approvals declined. Codex acts as a plain text model here; the
+//! sandbox with approvals declined. The app server itself stays warm between
+//! requests (see `WARM`), because starting one costs seconds per model call. Codex acts as a plain text model here; the
 //! orchestrator's own tool loop (text mode — see `agent-transport.ts`) does the
 //! work, so its approval cards and edit limits still apply.
 
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -335,25 +336,111 @@ fn brain_cwd() -> Result<String, String> {
 // Completion
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Warm server
+// ---------------------------------------------------------------------------
+
+/// Kept only while nothing uses it; a server dies with its idle reaper.
+const WARM_IDLE: Duration = Duration::from_secs(10 * 60);
+/// Ephemeral threads are cheap, but a long-lived process should not collect
+/// them forever: recycle after this many turns.
+const WARM_MAX_TURNS: u32 = 200;
+
+struct Warm {
+    server: AppServer,
+    turns: u32,
+    last_used: Instant,
+}
+
+/// One idle, initialized app server, reused by the next brain request.
+///
+/// A request TAKES the server out of the slot and puts it back only after a
+/// turn that finished cleanly. A turn the user stopped drops its future, and
+/// with it the server (killed on drop), so a half-read turn can never leak its
+/// notifications into the next request. Two concurrent turns simply start a
+/// second server; the one that finishes last is dropped instead of kept.
+static WARM: Mutex<Option<Warm>> = Mutex::new(None);
+
+fn take_warm() -> Option<Warm> {
+    let mut warm = WARM.lock().unwrap_or_else(|e| e.into_inner()).take()?;
+    let alive = matches!(warm.server.child.try_wait(), Ok(None));
+    (alive && warm.last_used.elapsed() < WARM_IDLE && warm.turns < WARM_MAX_TURNS).then_some(warm)
+}
+
+fn keep_warm(mut warm: Warm) {
+    warm.last_used = Instant::now();
+    let stamp = warm.last_used;
+    {
+        let mut slot = WARM.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_some() { return; }
+        *slot = Some(warm);
+    }
+    tokio::spawn(async move {
+        tokio::time::sleep(WARM_IDLE).await;
+        let mut slot = WARM.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|w| w.last_used == stamp) {
+            *slot = None;
+        }
+    });
+}
+
+/// Forget the warm server, e.g. after the ChatGPT account changed.
+fn reset_warm() {
+    let stale = WARM.lock().unwrap_or_else(|e| e.into_inner()).take();
+    drop(stale);
+}
+
+/// Streams the reply's visible text as Codex produces it.
+pub type OnDelta<'a> = Option<&'a (dyn Fn(&str) + Send + Sync)>;
+
 /// Run one prompt through the user's ChatGPT plan and return the final text.
-pub async fn complete(model: &str, system_prompt: &str, user_text: &str) -> Result<String, String> {
+pub async fn complete(model: &str, system_prompt: &str, user_text: &str, effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
+    if let Some(mut warm) = take_warm() {
+        match run_turn(&mut warm.server, model, system_prompt, user_text, effort, on_delta).await {
+            Ok(text) => {
+                warm.turns += 1;
+                keep_warm(warm);
+                return Ok(text);
+            }
+            // A reused server can have died between requests (sleep, update,
+            // crash). Only that is retried, on a fresh server; a real provider
+            // error from a live server is the answer.
+            Err(error) if !error.contains("exited unexpectedly") && !error.contains("closed its input") => return Err(error),
+            Err(_) => {}
+        }
+    }
     let mut server = AppServer::start().await?;
+    let text = run_turn(&mut server, model, system_prompt, user_text, effort, on_delta).await?;
+    keep_warm(Warm { server, turns: 1, last_used: Instant::now() });
+    Ok(text)
+}
+
+async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
     let mut params = json!({
         "ephemeral": true,
-        "baseInstructions": format!("{system_prompt}\n\nYou are running as a text model inside Spacron. You have no shell, file or web tools in this session: never try to run commands or read files yourself. Answer only in the format described above."),
+        "baseInstructions": format!("{system_prompt}\n\nYou are running as a text model inside Spacron. Your own built-in shell, file, web and image tools are disabled here: never try to use them. Any Spacron tools listed above (such as generate_image) ARE available: call them with the tool_calls JSON described above and Spacron runs them. Never tell the user a listed tool is unavailable. Answer only in the format described above."),
         "sandbox": "read-only",
         "approvalPolicy": "never",
         "cwd": brain_cwd()?,
+        // Codex's own image tool must be off here: the brain would call it
+        // instead of Spacron's `generate_image`, and this loop keeps only the
+        // reply text, so the picture is made, charged and never shown.
+        // `run_image_turn` shares this server and keeps the tool on.
+        "config": {"features.image_generation": false},
     });
     if !model.is_empty() && model != DEFAULT_MODEL {
         params["model"] = json!(model);
     }
     let thread = server.request("thread/start", params).await?;
     let thread_id = thread["thread"]["id"].as_str().ok_or("protocol: Codex returned no thread id")?.to_string();
-    server.request("turn/start", json!({
+    let mut turn = json!({
         "threadId": thread_id,
         "input": [{"type": "text", "text": user_text, "text_elements": []}],
-    })).await?;
+    });
+    if let Some(effort) = effort.filter(|e| !e.is_empty() && *e != "default") {
+        turn["effort"] = json!(effort);
+    }
+    server.request("turn/start", turn).await?;
 
     let collect = async {
         let mut deltas = String::new();
@@ -365,8 +452,16 @@ pub async fn complete(model: &str, system_prompt: &str, user_text: &str) -> Resu
                 server.answer_server_request(&message).await?;
                 continue;
             }
+            // The server is reused, so only this thread's events count.
+            if message["params"]["threadId"].as_str().is_some_and(|id| id != thread_id) {
+                continue;
+            }
             match method {
-                "item/agentMessage/delta" => deltas.push_str(message["params"]["delta"].as_str().unwrap_or("")),
+                "item/agentMessage/delta" => {
+                    let delta = message["params"]["delta"].as_str().unwrap_or("");
+                    deltas.push_str(delta);
+                    if let (Some(on_delta), false) = (on_delta, delta.is_empty()) { on_delta(delta); }
+                }
                 "item/completed" => {
                     let item = &message["params"]["item"];
                     if item["type"] == "agentMessage" {
@@ -403,6 +498,121 @@ pub async fn complete(model: &str, system_prompt: &str, user_text: &str) -> Resu
     tokio::time::timeout(TURN_TIMEOUT, collect)
         .await
         .map_err(|_| "timeout: ChatGPT did not finish the reply in time".to_string())?
+}
+
+// ---------------------------------------------------------------------------
+// Image generation
+// ---------------------------------------------------------------------------
+
+/// Image generation runs a full model turn plus the image model; about a
+/// minute is normal, several under load.
+const IMAGE_TURN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// One generated image, as Codex reported it.
+pub struct GeneratedImage {
+    /// Where Codex saved the PNG (under `~/.codex/generated_images`), if it did.
+    pub saved_path: Option<PathBuf>,
+    /// The base64 PNG, always present on success.
+    pub base64: String,
+    pub revised_prompt: Option<String>,
+}
+
+/// Generate one image on the user's ChatGPT plan. `references` are local image
+/// files Codex attaches to the request (already confined by the caller).
+pub async fn generate_image(prompt: &str, references: &[PathBuf]) -> Result<GeneratedImage, String> {
+    if let Some(mut warm) = take_warm() {
+        match run_image_turn(&mut warm.server, prompt, references).await {
+            Ok(image) => {
+                warm.turns += 1;
+                keep_warm(warm);
+                return Ok(image);
+            }
+            Err(error) if !error.contains("exited unexpectedly") && !error.contains("closed its input") => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let mut server = AppServer::start().await?;
+    let image = run_image_turn(&mut server, prompt, references).await?;
+    keep_warm(Warm { server, turns: 1, last_used: Instant::now() });
+    Ok(image)
+}
+
+async fn run_image_turn(server: &mut AppServer, prompt: &str, references: &[PathBuf]) -> Result<GeneratedImage, String> {
+    let thread = server.request("thread/start", json!({
+        "ephemeral": true,
+        "baseInstructions": "You generate images for Spacron. For the user's request, call your image generation tool exactly once, using any attached images as visual references. Do not run commands, read or edit files, or ask questions. After the image is generated, reply with one short sentence describing it.",
+        "sandbox": "read-only",
+        "approvalPolicy": "never",
+        "cwd": brain_cwd()?,
+    })).await?;
+    let thread_id = thread["thread"]["id"].as_str().ok_or("protocol: Codex returned no thread id")?.to_string();
+    let mut input = vec![json!({"type": "text", "text": prompt, "text_elements": []})];
+    for path in references {
+        input.push(json!({"type": "localImage", "path": path.to_string_lossy()}));
+    }
+    server.request("turn/start", json!({"threadId": thread_id, "input": input})).await?;
+
+    let collect = async {
+        let mut image: Option<GeneratedImage> = None;
+        let mut final_text = String::new();
+        loop {
+            let message = server.read().await?;
+            let method = message["method"].as_str().unwrap_or("");
+            if message.get("id").is_some() && !method.is_empty() {
+                server.answer_server_request(&message).await?;
+                continue;
+            }
+            if message["params"]["threadId"].as_str().is_some_and(|id| id != thread_id) {
+                continue;
+            }
+            match method {
+                "item/completed" => {
+                    let item = &message["params"]["item"];
+                    match item["type"].as_str().unwrap_or("") {
+                        "imageGeneration" => {
+                            if item["failure"]["type"] == "usageLimitExceeded" {
+                                return Err("quota: ChatGPT: your plan's image generation limit is used up for now".to_string());
+                            }
+                            let base64 = item["result"].as_str().unwrap_or("").to_string();
+                            if item["status"] == "completed" && !base64.is_empty() {
+                                image = Some(GeneratedImage {
+                                    saved_path: item["savedPath"].as_str().map(PathBuf::from),
+                                    base64,
+                                    revised_prompt: item["revisedPrompt"].as_str().map(str::to_string),
+                                });
+                            }
+                        }
+                        "agentMessage" => final_text = item["text"].as_str().unwrap_or("").to_string(),
+                        _ => {}
+                    }
+                }
+                "error" => {
+                    let text = message["params"]["error"]["message"].as_str().unwrap_or("").to_string();
+                    if !message["params"]["willRetry"].as_bool().unwrap_or(false) && !text.is_empty() {
+                        return Err(format!("{}: ChatGPT: {text}", classify(&text)));
+                    }
+                }
+                "turn/completed" => {
+                    let turn = &message["params"]["turn"];
+                    if turn["status"] != "completed" {
+                        let text = turn["error"]["message"].as_str().unwrap_or("the turn did not complete").to_string();
+                        let info = turn["error"]["codexErrorInfo"].to_string();
+                        let kind = if info.to_lowercase().contains("usagelimit") { "quota" } else { classify(&text) };
+                        return Err(format!("{kind}: ChatGPT: {text}"));
+                    }
+                    return image.ok_or_else(|| {
+                        let said = final_text.trim();
+                        if said.is_empty() { "provider_error: ChatGPT did not generate an image".to_string() }
+                        else { format!("provider_error: ChatGPT did not generate an image. It said: {}", said.chars().take(300).collect::<String>()) }
+                    });
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(IMAGE_TURN_TIMEOUT, collect)
+        .await
+        .map_err(|_| "timeout: ChatGPT did not finish the image in time".to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +757,7 @@ pub async fn chatgpt_login_start(app: AppHandle, device_code: bool) -> Result<Ch
         };
         if finished.success {
             SIGNED_IN.store(2, Ordering::Relaxed);
+            reset_warm();
         }
         let _ = app.emit("chatgpt-login-finished", finished);
     });
@@ -564,6 +775,7 @@ pub async fn chatgpt_logout() -> Result<(), String> {
     let mut server = AppServer::start().await?;
     server.request("account/logout", Value::Null).await?;
     SIGNED_IN.store(1, Ordering::Relaxed);
+    reset_warm();
     Ok(())
 }
 
@@ -585,6 +797,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Live: generates one image from a reference image on the ChatGPT plan.
+    /// `SPACRON_REFERENCE_IMAGE=<png> cargo test --lib live_image -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_image_generation_with_reference() {
+        let reference = PathBuf::from(std::env::var("SPACRON_REFERENCE_IMAGE").expect("SPACRON_REFERENCE_IMAGE"));
+        let started = std::time::Instant::now();
+        let image = generate_image("Recolor the attached icon: make the circle red, keep everything else.", &[reference]).await.expect("image");
+        println!("generated in {:?}: saved={:?} base64={} revised={:?}", started.elapsed(), image.saved_path, image.base64.len(), image.revised_prompt);
+        assert!(image.base64.len() > 1000);
+    }
+
     /// Live: needs Codex installed and signed in with ChatGPT.
     /// `cargo test --lib chatgpt -- --ignored --nocapture`
     #[tokio::test]
@@ -593,9 +817,16 @@ mod tests {
         let models = list_models().await.expect("model list");
         println!("models: {:?}", models.iter().map(|m| &m.id).collect::<Vec<_>>());
         assert!(models.len() > 1);
-        let text = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 2+2?").await.expect("completion");
+        let cold = std::time::Instant::now();
+        let text = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 2+2?", None, None).await.expect("completion");
+        println!("cold reply in {:?}", cold.elapsed());
         println!("reply: {text}");
         assert!(text.contains('4'));
+        // The second request reuses the warm server instead of starting one.
+        let started = std::time::Instant::now();
+        let again = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 3+3?", None, None).await.expect("warm completion");
+        println!("warm reply in {:?}: {again}", started.elapsed());
+        assert!(again.contains('6'));
     }
 
     #[test]

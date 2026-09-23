@@ -56,7 +56,7 @@ export default function NewFolderModal() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: 'Choose where to create the folder',
+        title: 'Choose where to create the project',
       });
       if (typeof selected === 'string') {
         setParentDir(selected);
@@ -108,7 +108,7 @@ export default function NewFolderModal() {
       className="nf-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Create a new folder"
+      aria-label="Create a project"
       tabIndex={-1}
       ref={backdropRef}
       onClick={handleBackdropClick}
@@ -131,14 +131,14 @@ export default function NewFolderModal() {
             </svg>
           </div>
           <div className="nf-head-text">
-            <h2 className="nf-title">Create a new folder</h2>
-            <p className="nf-subtitle">Start a fresh project from scratch.</p>
+            <h2 className="nf-title">Create a project</h2>
+            <p className="nf-subtitle">Start a fresh project in a new folder.</p>
           </div>
         </div>
 
         <div className="nf-body">
           <div className="nf-field">
-            <span className="nf-label">Folder name</span>
+            <span className="nf-label">Project name</span>
             <input
               ref={inputEl}
               value={name}
@@ -206,7 +206,7 @@ export default function NewFolderModal() {
             Cancel
           </button>
           <button type="button" className="nf-btn primary" disabled={!canCreate} onClick={() => void confirm()}>
-            {busy ? 'Creating…' : 'Create folder'}
+            {busy ? 'Creating…' : 'Create project'}
           </button>
         </div>
       </div>

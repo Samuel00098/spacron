@@ -1,4 +1,6 @@
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useNativeSystemIcon } from '$lib/react/useNativeSystemIcon';
 import { get } from '$lib/stores/storeCompat';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -6,10 +8,8 @@ import AppShell from '$lib/components/layout/AppShell.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
-import QuickCaptureModal from '$lib/components/shared/QuickCaptureModal.tsx';
 import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import AgentPlacementModal from '$lib/components/shared/AgentPlacementModal.tsx';
-import WorkspaceNameModal from '$lib/components/shared/WorkspaceNameModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
 import SettingsModal from '$lib/components/shared/SettingsModal.tsx';
@@ -19,16 +19,14 @@ import { useStore } from '$lib/react/useStore';
 import {
   settingsOpen,
   closeSettings,
-  quickCaptureOpen,
-  closeQuickCapture,
   agentSpawnOpen,
   closeAgentSpawn,
 } from '$lib/stores/layout';
 import {
-  newWorkspacePromptOpen,
   newFolderPromptOpen,
   cloneRepoPromptOpen,
   initializeWorkspaces,
+  openProjectByPath,
   saveProjectState,
   activeProjectId,
 } from '$lib/stores/workspace';
@@ -44,8 +42,6 @@ import {
   userShortcuts,
   matchShortcut,
   type KeyboardShortcut,
-  onboardingCompleted,
-  reconcileOnboardingFlag,
   backgroundImageEnabled,
   interfaceTransparency,
   backgroundImageBlur,
@@ -73,8 +69,6 @@ const ZOOM_LEVELS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
  */
 const EXIT_RECLAIM_BUDGET_MS = 4_000;
 
-const OnboardingWalkthrough = lazy(() => import('$lib/components/workspace/OnboardingWalkthrough.tsx'));
-
 function zoomIn() {
   uiZoom.update((z) => {
     const next = ZOOM_LEVELS.find((level) => level > z);
@@ -92,22 +86,43 @@ function zoomOut() {
 export default function App() {
   useNativeSystemIcon();
   const isSettingsOpen = useStore(settingsOpen);
-  const isQuickCaptureOpen = useStore(quickCaptureOpen);
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
-  const isNewWorkspacePromptOpen = useStore(newWorkspacePromptOpen);
   const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
   const isCloneRepoPromptOpen = useStore(cloneRepoPromptOpen);
-  const hasCompletedOnboarding = useStore(onboardingCompleted);
 
   useEffect(() => {
     if (isTauriRuntime()) {
       initApiKeyCache();
       loadThemes();
       initBackground();
-      reconcileOnboardingFlag();
     }
 
-    initializeWorkspaces();
+    const workspacesReady = initializeWorkspaces();
+    const openLaunchPaths = async (paths: string[]) => {
+      try {
+        for (const path of paths) await openProjectByPath(path);
+      } catch (error) {
+        console.error('Failed to open the project passed to Spacron:', error);
+      }
+    };
+    void workspacesReady.then(async () => {
+      if (!isTauriRuntime()) return;
+      try {
+        await openLaunchPaths(await invoke<string[]>('app_launch_paths'));
+      } catch (error) {
+        console.error('Failed to read the paths passed to Spacron:', error);
+      }
+    });
+    // A second launch (Explorer's "Open with Spacron" while this window is
+    // already open) exits at once and forwards its paths here instead.
+    let unlistenOpenPaths: (() => void) | undefined;
+    if (isTauriRuntime()) {
+      void listen<string[]>('app:open-paths', (event) => {
+        void workspacesReady.then(() => openLaunchPaths(event.payload));
+      }).then((unlisten) => {
+        unlistenOpenPaths = unlisten;
+      });
+    }
     initDefaultCommands();
     if (isTauriRuntime()) {
       requestNotificationPermission();
@@ -244,6 +259,7 @@ export default function App() {
       unsubscribeFontSize();
       unsubscribeFontFamily();
       unlistenClose?.();
+      unlistenOpenPaths?.();
       unsubscribeShortcuts();
       unsubFrost();
       unsubBgEnabled();
@@ -263,23 +279,14 @@ export default function App() {
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}
 
-      {isQuickCaptureOpen && <QuickCaptureModal onclose={closeQuickCapture} />}
-
       {isAgentSpawnOpen && <AgentSpawnModal onclose={closeAgentSpawn} />}
 
       {/* Layers over the spawn modal — every spawn path (manual or orchestrator)
           routes its "worktree or main repo?" question through this one host. */}
       <AgentPlacementModal />
 
-      {isNewWorkspacePromptOpen && <WorkspaceNameModal />}
       {isNewFolderPromptOpen && <NewFolderModal />}
       {isCloneRepoPromptOpen && <CloneRepoModal />}
-
-      {!hasCompletedOnboarding && (
-        <Suspense fallback={null}>
-          <OnboardingWalkthrough />
-        </Suspense>
-      )}
 
     </>
   );

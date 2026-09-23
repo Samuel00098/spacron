@@ -1,11 +1,109 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: unknown) => cmd === 'ai_agent_capabilities' ? Promise.resolve({}) : invoke(cmd, args) }));
+const caps = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: unknown) => cmd === 'ai_agent_capabilities' ? Promise.resolve(caps.value) : invoke(cmd, args) }));
+const listeners = vi.hoisted(() => ({ handler: null as null | ((event: { payload: { requestId: string; delta: string } }) => void), unlisten: vi.fn() }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: (_name: string, handler: typeof listeners.handler) => { listeners.handler = handler; return Promise.resolve(listeners.unlisten); } }));
 import { AgentTransport, DEFAULT_AGENT_BUDGETS, filePage, nativeTools, validateToolCall } from './agent-transport';
 import { brainToolProfile } from './brain-tools';
 
 describe('native agent transport', () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => { invoke.mockReset(); caps.value = {}; });
+
+  it('streams only the text of its own request, restarts it per attempt, and stops listening', async () => {
+    const transport = new AgentTransport('kilocode', 'm');
+    const seen: string[] = [];
+    transport.stream = { start: () => seen.push('<start>'), delta: (text) => seen.push(text) };
+    invoke.mockImplementation((_cmd: string, args: { request: { requestId: string; stream: boolean } }) => {
+      expect(args.request.stream).toBe(true);
+      listeners.handler?.({ payload: { requestId: 'someone-else', delta: 'x' } });
+      listeners.handler?.({ payload: { requestId: args.request.requestId, delta: 'Hel' } });
+      listeners.handler?.({ payload: { requestId: args.request.requestId, delta: 'lo' } });
+      return Promise.resolve({ text: 'Hello', calls: [], assistant: {} });
+    });
+    await expect(transport.request('system', 'task')).resolves.toBe('Hello');
+    expect(seen).toEqual(['<start>', 'Hel', 'lo']);
+    expect(listeners.unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends unstreamed requests when nothing listens', async () => {
+    invoke.mockResolvedValue({ text: 'ok', calls: [], assistant: {} });
+    await new AgentTransport('kilocode', 'm').request('system', 'task');
+    expect(invoke.mock.calls[0][1].request.stream).toBe(false);
+  });
+
+  it('falls back to the text tool protocol when the catalogue reports no native tools', async () => {
+    caps.value = { nativeTools: false };
+    const transport = new AgentTransport('openrouter', 'tool-less');
+    invoke.mockResolvedValue({ text: '{"tool_calls":[{"id":"r1","name":"read_file","args":{"path":"a.ts"}}]}', calls: [], assistant: { role: 'assistant' } });
+    const raw = await transport.request('system', 'task');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0][1].request).toMatchObject({ textMode: true, tools: [] });
+    expect(JSON.parse(raw).tool_calls[0]).toMatchObject({ name: 'read_file' });
+    expect(transport.state.textFallback).toBe(true);
+  });
+
+  it('retries once in text mode when the provider rejects native tools on the first round', async () => {
+    const transport = new AgentTransport('openrouter', 'tool-less');
+    invoke.mockRejectedValueOnce('unsupported_tools: openrouter / tool-less (404): No endpoints found that support tool use')
+      .mockResolvedValueOnce({ text: 'Plain answer.', calls: [], assistant: {} });
+    await expect(transport.request('system', 'task')).resolves.toBe('Plain answer.');
+    expect(invoke.mock.calls[0][1].request).toMatchObject({ textMode: false });
+    expect(invoke.mock.calls[1][1].request).toMatchObject({ textMode: true, tools: [] });
+  });
+
+  it('does not switch protocols once native tool history exists', async () => {
+    const result = { id: 'r1', name: 'read_file' as const, ok: true, output: 'x' };
+    const checkpoint = { provider: 'openrouter', model: 'm', summary: '', results: [result],
+      exchanges: [{ assistant: { role: 'assistant', tool_calls: [{ id: 'r1' }] }, results: [result] }] };
+    invoke.mockRejectedValue('unsupported_tools: no tools');
+    await expect(new AgentTransport('openrouter', 'm', checkpoint).request('system', 'task')).rejects.toBe('unsupported_tools: no tools');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+  it('retries an empty inference once with the same model, budget, and completed tool evidence', async () => {
+    const save = vi.fn();
+    const model = 'deepseek/deepseek-v4-flash-0731:free';
+    const result = { id: 'write-1', name: 'write_file' as const, ok: true, output: 'Saved a.ts' };
+    const checkpoint = { provider: 'openrouter', model, summary: '', results: [result],
+      exchanges: [{ assistant: { role: 'assistant', tool_calls: [{ id: 'write-1' }] }, results: [result] }] };
+    const transport = new AgentTransport('openrouter', model, checkpoint, save);
+    invoke.mockRejectedValueOnce('empty_response: model returned neither text nor tools')
+      .mockResolvedValueOnce({ text: 'The file was saved.', calls: [], assistant: {} });
+    await expect(transport.request('system', 'task')).resolves.toBe('The file was saved.');
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]).toEqual(invoke.mock.calls[0]);
+    expect(invoke.mock.calls[1][1].request).toMatchObject({ provider: 'openrouter', model, exchanges: checkpoint.exchanges });
+    expect(transport.state).toEqual(checkpoint);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('stops after two empty responses with actionable guidance', async () => {
+    invoke.mockRejectedValue(new Error('empty_response: model returned neither text nor tools'));
+    const transport = new AgentTransport('openrouter', 'model');
+    await expect(transport.request('system', 'task')).rejects.toThrow('on two attempts');
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(transport.state.pending).toBeUndefined();
+  });
+
+  it.each(['authentication: bad key', 'output_limit: truncated', 'protocol: invalid tool arguments', 'rate_limit: slow down'])(
+    'does not add inference retries for %s', async (error) => {
+      invoke.mockRejectedValue(error);
+      await expect(new AgentTransport('openrouter', 'model').request('system', 'task')).rejects.toBe(error);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('does not retry an empty response after cancellation', async () => {
+    const controller = new AbortController();
+    invoke.mockImplementation(async (command) => {
+      if (command === 'ai_agent_cancel') return;
+      controller.abort();
+      throw 'empty_response: model returned neither text nor tools';
+    });
+    await expect(new AgentTransport('openrouter', 'model', undefined, undefined, controller.signal).request('system', 'task')).rejects.toThrow();
+    expect(invoke.mock.calls.filter(([command]) => command === 'ai_agent_turn')).toHaveLength(1);
+  });
+
   it('uses the larger default output budget while respecting provider limits', async () => {
     expect(DEFAULT_AGENT_BUDGETS.outputTokens).toBe(32_768);
     const transport = new AgentTransport('openai', 'm', undefined, undefined, undefined, { outputTokens: undefined });
@@ -15,6 +113,26 @@ describe('native agent transport', () => {
 
     expect(invoke).toHaveBeenCalledWith('ai_agent_turn', expect.objectContaining({
       request: expect.objectContaining({ maxOutputTokens: 32_768 }),
+    }));
+  });
+
+  it('raises the output budget for the recovery pass and clamps it to the model cap', async () => {
+    const transport = new AgentTransport('openai', 'm', undefined, undefined, undefined, { outputTokens: undefined });
+    invoke.mockResolvedValue({ text: 'done', calls: [], assistant: {} });
+
+    await transport.request('system', 'task', undefined, undefined, false, 131_072);
+
+    expect(invoke).toHaveBeenCalledWith('ai_agent_turn', expect.objectContaining({
+      request: expect.objectContaining({ maxOutputTokens: 131_072 }),
+    }));
+
+    // A model whose catalogue reports a smaller output cap wins over the raise.
+    invoke.mockClear();
+    const capped = new AgentTransport('openai', 'small', undefined, undefined, undefined, { outputTokens: undefined });
+    (capped as unknown as { capabilities: { outputTokens?: number } }).capabilities = { outputTokens: 65_536 };
+    await capped.request('system', 'task', undefined, undefined, false, 131_072);
+    expect(invoke).toHaveBeenCalledWith('ai_agent_turn', expect.objectContaining({
+      request: expect.objectContaining({ maxOutputTokens: 65_536 }),
     }));
   });
 
@@ -107,5 +225,40 @@ describe('native agent transport', () => {
     expect(names).toContain('update_todos');
     expect(validateToolCall({ id: '1', name: 'update_todos', args: { todos: ['[ ] a'] } })).toBeNull();
     expect(validateToolCall({ id: '1', name: 'update_todos', args: {} })).toContain('todos');
+  });
+
+  it('accepts fractional tap coordinates, which the integer type would reject', () => {
+    const call = { id: '1', name: 'emulator_tap' as const, args: { target: 'emulator-5554', x: 0.5, y: 0.25 } };
+    expect(validateToolCall(call)).toBeNull();
+    expect(call.args).toEqual({ target: 'emulator-5554', x: 0.5, y: 0.25 });
+  });
+
+  it('coerces a stringified coordinate instead of failing the round', () => {
+    const call = { id: '1', name: 'emulator_swipe' as const, args: { target: 'e', x1: '0.5', y1: '0.8', x2: 0.5, y2: 0.2 } };
+    expect(validateToolCall(call)).toBeNull();
+    expect(call.args.x1).toBe(0.5);
+    expect(call.args.y1).toBe(0.8);
+  });
+
+  it('refuses a tap with no coordinates rather than tapping the corner', () => {
+    expect(validateToolCall({ id: '1', name: 'emulator_tap', args: { target: 'e' } })).toContain('x');
+    expect(validateToolCall({ id: '1', name: 'emulator_tap', args: { target: 'e', x: 'middle', y: 0.5 } })).toContain('x');
+  });
+
+  it('exposes the device tools to the model in full mode only', () => {
+    const full = nativeTools(brainToolProfile('full').allowed).map((t) => t.name);
+    expect(full).toContain('emulator_tap');
+    expect(full).toContain('emulator_logcat');
+    const ask = nativeTools(brainToolProfile('ask').allowed).map((t) => t.name);
+    expect(ask).toContain('emulator_logcat');
+    expect(ask).not.toContain('emulator_tap');
+  });
+});
+
+describe('generate_image schema', () => {
+  it('is offered natively with an array of reference paths', () => {
+    const tool = nativeTools(brainToolProfile('full').allowed).find((t) => t.name === 'generate_image');
+    expect(tool?.parameters).toMatchObject({ required: ['prompt'], properties: { reference_images: { type: 'array' } } });
+    expect(validateToolCall({ id: '1', name: 'generate_image', args: { prompt: 'x', reference_images: ['a.png'] } })).toBeNull();
   });
 });

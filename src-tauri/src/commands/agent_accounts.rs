@@ -511,18 +511,33 @@ pub async fn usage_remove_account(provider: String, account_id: String) -> Resul
     Ok(())
 }
 
-/// The environment a launched agent needs to use the selected account.
+/// The environment a launched agent needs to use an account.
 ///
 /// Empty for the default account — the CLI's own default behaviour is already
 /// correct there, and setting the variable to `~/.claude` would only add a way
 /// for it to be wrong.
+///
+/// `account_id` is normally omitted, which means "whichever account the user
+/// selected". Failover passes one explicitly: a successor has to launch under a
+/// *different* account from the one that ran out, and it must do that without
+/// moving the user's global selection — the picker in Settings says which
+/// account the user works as, and a handover is not the user changing their
+/// mind. An unknown or credential-less id falls back to the selection rather
+/// than failing the launch, because a launch must never be blocked by this.
 #[tauri::command(async)]
-pub async fn usage_account_env(provider: String) -> HashMap<String, String> {
+pub async fn usage_account_env(
+    provider: String,
+    account_id: Option<String>,
+) -> HashMap<String, String> {
     let mut env = HashMap::new();
     let Some(spec) = provider_spec(&provider) else {
         return env;
     };
-    let account_id = selected_account(&provider);
+    let account_id = match account_id.as_deref() {
+        Some(requested) if requested == DEFAULT_ACCOUNT_ID => return env,
+        Some(requested) if account_id_is_safe(requested) => requested.to_string(),
+        _ => selected_account(&provider),
+    };
     if account_id == DEFAULT_ACCOUNT_ID {
         return env;
     }
@@ -544,21 +559,76 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Resolve the credential file the meter should read for a provider — the
-/// selected account's, not unconditionally the home one.
-pub(crate) fn active_credential_path(provider: &str) -> Option<PathBuf> {
-    let spec = provider_spec(provider)?;
-    let path = credential_path(spec, &selected_account(provider))?;
-    if path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
 /// True when this provider participates in account switching at all.
 pub(crate) fn supports_accounts(provider: &str) -> bool {
     provider_spec(provider).is_some()
+}
+
+/// The credential file for one *named* account, whether or not it is selected.
+///
+/// [`active_credential_path`] answers "what should the meter read right now";
+/// this answers "what would this other account read", which is the question
+/// failover asks before handing work to it. Returns `None` when the account has
+/// no credential of its own — see [`has_own_login`] for why that is not the
+/// same as "signed out".
+pub(crate) fn account_credential_path(provider: &str, account_id: &str) -> Option<PathBuf> {
+    let spec = provider_spec(provider)?;
+    let path = credential_path(spec, account_id)?;
+    path.is_file().then_some(path)
+}
+
+/// Whether this account has a login that is genuinely its own.
+///
+/// The default account always does. A *managed* account only does when the CLI
+/// wrote a credential file into its relocated config directory — which is the
+/// normal case on Windows and Linux, and never the case on macOS for Claude
+/// Code, whose OAuth credentials live in the login Keychain as one item per
+/// CLI. A managed macOS Claude account therefore resolves to the *same* login
+/// as the default one, and handing work to it would be a handover into the
+/// account that just ran out. Callers use this to skip it.
+pub(crate) fn has_own_login(provider: &str, account_id: &str) -> bool {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return true;
+    }
+    account_credential_path(provider, account_id).is_some()
+}
+
+/// Every account id Spacron knows for a provider, default first.
+///
+/// Shares [`usage_list_accounts`]'s directory scan without its label reads, so
+/// a caller that only needs the ids does not open a credential-adjacent file
+/// per account on every poll.
+pub(crate) fn account_ids(provider: &str) -> Vec<String> {
+    let mut ids = vec![DEFAULT_ACCOUNT_ID.to_string()];
+    let Some(spec) = provider_spec(provider) else {
+        return ids;
+    };
+    if let Some(root) = managed_root().map(|root| root.join(spec.provider)) {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            let mut managed: Vec<String> = entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| account_id_is_safe(name))
+                .collect();
+            managed.sort();
+            ids.extend(managed);
+        }
+    }
+    ids
+}
+
+/// A human label for an account, for the failover roster. Never a token.
+pub(crate) fn account_label(provider: &str, account_id: &str) -> String {
+    provider_spec(provider)
+        .and_then(|spec| label_for(spec, account_id))
+        .unwrap_or_else(|| {
+            if account_id == DEFAULT_ACCOUNT_ID {
+                "Default account".to_string()
+            } else {
+                account_id.to_string()
+            }
+        })
 }
 
 #[cfg(test)]
@@ -587,7 +657,7 @@ mod tests {
             );
         }
         for spec in ACCOUNT_PROVIDERS {
-            let env = runtime.block_on(usage_account_env(spec.provider.to_string()));
+            let env = runtime.block_on(usage_account_env(spec.provider.to_string(), None));
             println!("{:<8} launch env: {env:?}", spec.provider);
         }
         println!("--- end ---\n");
@@ -698,6 +768,51 @@ mod tests {
     fn a_traversal_id_resolves_to_no_directory_at_all() {
         let spec = provider_spec("codex").expect("codex");
         assert!(config_dir_for(spec, "../escape").is_none());
+    }
+
+    #[test]
+    fn the_default_account_always_counts_as_its_own_login() {
+        // It is the user's home config, and on macOS it is the account the
+        // login Keychain item belongs to. A managed id that has no credential
+        // file is the case failover must skip.
+        assert!(has_own_login("claude", DEFAULT_ACCOUNT_ID));
+        assert!(!has_own_login("claude", "an-account-that-does-not-exist"));
+    }
+
+    #[test]
+    fn an_explicit_account_env_does_not_consult_the_users_selection() {
+        // The whole point: a successor launches under another account without
+        // moving the picker the user set.
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let env = runtime.block_on(usage_account_env(
+            "claude".to_string(),
+            Some(DEFAULT_ACCOUNT_ID.to_string()),
+        ));
+        assert!(
+            env.is_empty(),
+            "the default account needs no config-dir override"
+        );
+
+        // A traversal id must not reach `config_dir_for` as itself; it falls
+        // back to the selection, which is at worst the default account.
+        let escaped = runtime.block_on(usage_account_env(
+            "claude".to_string(),
+            Some("../../etc".to_string()),
+        ));
+        assert!(!escaped
+            .values()
+            .any(|value| value.contains("..")));
+    }
+
+    #[test]
+    fn every_provider_lists_its_default_account_id() {
+        for spec in ACCOUNT_PROVIDERS {
+            let ids = account_ids(spec.provider);
+            assert_eq!(ids.first().map(String::as_str), Some(DEFAULT_ACCOUNT_ID));
+        }
+        // An unknown provider still answers with the default rather than an
+        // empty list, so a caller never sees "this CLI has no accounts at all".
+        assert_eq!(account_ids("nope"), vec![DEFAULT_ACCOUNT_ID.to_string()]);
     }
 
     #[test]

@@ -15,11 +15,10 @@ describe('agent provider catalogue', () => {
     expect(isChatAgentProvider('npm run dev')).toBe(false);
   });
 
-  it('exposes provider-native model choices and preserves live capability ids', () => {
-    const codex = getAgentProviderCapabilities('codex');
-    expect(codex.models.map((model) => model.id)).toEqual(['default']);
-    expect(getAgentProviderCapabilities('claude').models.map((model) => model.id))
-      .toEqual(['default', 'fable', 'opus', 'sonnet']);
+  it('pre-lists no models for any CLI and preserves live capability ids', () => {
+    for (const command of ['codex', 'claude', 'cursor-agent', 'grok', 'opencode']) {
+      expect(getAgentProviderCapabilities(command).models.map((model) => model.id)).toEqual(['default']);
+    }
 
     expect(mergeAgentProviderModels('codex', [
       { id: 'vendor/new-model', label: 'New model', description: 'Reported by the agent.' },
@@ -45,6 +44,13 @@ describe('agent provider catalogue', () => {
       permissionArgs: '--permission-mode bypassPermissions',
       runtimeArgs: '--effort xhigh',
     });
+
+    expect(getAgentProviderLaunchOptions('opencode', {
+      model: 'opencode/claude-fable-5-1',
+      reasoningEffort: 'high',
+    // The interactive `opencode` TUI silently ignores `--variant` (only
+    // `opencode run` takes it), so no reasoning flag is sent.
+    })).toEqual({ permissionArgs: undefined, runtimeArgs: '--model opencode/claude-fable-5-1' });
   });
 
   it('preserves CLI defaults for inherit and rejects unsafe model values', () => {
@@ -62,8 +68,14 @@ describe('agent provider catalogue', () => {
         ['gpt-5.6-sol-high', 'GPT-5.6 Sol 1M High'],
         ['composer-2.5', 'Composer 2.5'],
       ]);
-    const grokModels = parseLiveAgentModels('grok', 'Available models:\n  * grok-4.6 (default)');
+    const grokModels = parseLiveAgentModels('grok', 'Available models:\n  - grok-4.6');
     expect(grokModels.map((model) => [model.id, model.label]))
-      .toEqual([['grok-4.6', 'grok-4.6']]);
+      .toEqual([['grok-4.6', 'Grok 4.6']]);
+    const openCodeModels = parseLiveAgentModels('opencode', 'opencode/claude-fable-5-1\nopencode/gpt-5.6-sol');
+    expect(openCodeModels.map((model) => [model.id, model.label]))
+      .toEqual([
+        ['opencode/claude-fable-5-1', 'Claude Fable 5.1'],
+        ['opencode/gpt-5.6-sol', 'GPT 5.6 Sol'],
+      ]);
   });
 });

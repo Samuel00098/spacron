@@ -1,6 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
-import { getAppFlag, setAppFlag } from '$lib/services/app-flags';
 import { useSettingsStore } from './zustand/settings';
+import type { McpServer } from '$lib/services/mcp-servers';
+import { DEFAULT_MEDIA_GENERATION, type MediaGenerationSettings } from '$lib/services/media-generation';
 
 function persistentWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   if (typeof window === 'undefined') {
@@ -143,6 +144,34 @@ export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges',
 // never asked for it, so this is opt-in rather than opt-out.
 export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 
+// ─── Failover on usage limits ───────────────────────────────────────────────
+// When an agent is about to run out of usage mid-feature, move the unfinished
+// work to one that still has headroom instead of letting it stop at the wall.
+// The work stays in the same task, the same worktree and the same branch, so a
+// handover changes who is typing and nothing else. See
+// `services/orchestrator/agent-failover.ts` for the ladder and
+// `agent-handover.ts` for what actually happens.
+export const agentFailover = persistentWritable('agentFailover', true);
+// Headroom, in percent, at which the work moves. The brief asked for "3-5%,
+// mid-feature": switching *before* the wall is what leaves the outgoing agent
+// enough left to be asked to wrap up and commit, which is the whole difference
+// between a handover and a crash. Raising this towards 99 forces the path to
+// fire on demand, which is how it gets exercised without staging a real limit.
+export const agentFailoverHeadroomPercent = persistentWritable('agentFailoverHeadroomPercent', 4);
+// Whether the ladder may cross to a *different* CLI on its own. A same-CLI
+// account hop spends only the user's own plan and always happens; a
+// cross-provider hop may spend money on a different service.
+export const agentFailoverCrossProvider = persistentWritable('agentFailoverCrossProvider', true);
+/**
+ * User-managed MCP servers, handed to every agent CLI. Spacron's own server and
+ * the Playwright one are not in here — they are owned by the app and by
+ * `agentBrowserTools` respectively. See `services/mcp-servers.ts`.
+ */
+export const mcpServers = persistentWritable<McpServer[]>('mcpServers', []);
+
+/** Image/video generation provider and models — see `services/media-generation.ts`. */
+export const mediaGeneration = persistentWritable<MediaGenerationSettings>('mediaGeneration', DEFAULT_MEDIA_GENERATION);
+
 // Hold an OS sleep inhibitor for as long as any agent is mid-turn, so a long
 // unattended run isn't suspended halfway through by the machine's idle timer.
 // The refcount, the platform calls and the "idle sleep only, never the display"
@@ -169,6 +198,7 @@ export const keepSystemAwake = persistentWritable('keepSystemAwake', false);
 // of truth for the flag tables and the mode type — and is re-exported here so
 // store consumers keep one import path.
 import type { AgentPermissionMode } from '$lib/services/agent-permissions';
+import type { CustomSkill } from '$lib/services/orchestrator/skills';
 export type { AgentPermissionMode };
 export const agentPermissionMode = persistentWritable<AgentPermissionMode>('agentPermissionMode', 'yolo');
 export const agentCmdOverrides = persistentWritable<Record<string, string>>('agentCmdOverrides', {});
@@ -481,8 +511,10 @@ export const aiProviders: AiProviderDef[] = [
     keyUrl: 'https://opencode.ai/zen',
     defaultModel: 'glm-5.3-flash',
     models: [
-      { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', description: 'OpenCode Zen model using its chat-completions endpoint.' },
-      { id: 'big-pickle', label: 'Big Pickle', description: 'Free OpenCode Zen model.', free: true },
+      // No free models here: OpenCode's free tier answers every client except
+      // OpenCode itself with 403 FreeTierError, so it can never work from Spacron.
+      { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', description: 'OpenCode Zen model using its chat-completions endpoint. Needs Zen balance.' },
+      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: 'OpenCode Zen model using its chat-completions endpoint. Needs Zen balance.' },
     ],
   },
   {
@@ -787,6 +819,11 @@ export const xaiRealtimeVoiceOptions: VoiceOption[] = [
  */
 export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
 
+/** Built-in orchestrator skills the user switched off in Settings (by skill id). */
+export const orchestratorDisabledSkills = persistentWritable<string[]>('orchestratorDisabledSkills', []);
+/** Skills the user wrote themselves; see services/orchestrator/skills.ts. */
+export const orchestratorCustomSkills = persistentWritable<CustomSkill[]>('orchestratorCustomSkills', []);
+
 export const currentVoiceInputModel = derived(
   [voiceInputProvider, voiceInputModelByProvider],
   ([$provider, $map]) => {
@@ -946,7 +983,10 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
   { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', category: 'View' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
-  { id: 'newWorkspace',   label: 'New Workspace',   category: 'Workspace' },
+  { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', category: 'View' },
+  // Id kept as-is so any saved custom binding keeps working; it opens the
+  // new-project-folder prompt now that workspaces are gone.
+  { id: 'newWorkspace',   label: 'Create Project', category: 'Project' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     category: 'View' },
   { id: 'goToEditor',     label: 'Go to Editor',       category: 'View' },
   { id: 'goToPreview',    label: 'Go to Preview',      category: 'View' },
@@ -970,7 +1010,6 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'zoomIn',         label: 'Zoom In',         category: 'Window' },
   { id: 'zoomOut',        label: 'Zoom Out',        category: 'Window' },
   { id: 'resetZoom',      label: 'Reset Zoom',      category: 'Window' },
-  { id: 'quickCapture',  label: 'Quick Capture',     category: 'Workspace' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     category: 'Workspace' },
   // openDailyNote removed
   // toggleSketch removed
@@ -985,7 +1024,8 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
   { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
-  { id: 'newWorkspace',   label: 'New Workspace',   keys: 'Ctrl+N' },
+  { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', keys: 'Ctrl+Shift+J' },
+  { id: 'newWorkspace',   label: 'Create Project', keys: 'Ctrl+N' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },
   { id: 'goToEditor',     label: 'Go to Editor',       keys: 'Ctrl+E' },
   { id: 'goToPreview',    label: 'Go to Preview',      keys: 'Ctrl+Shift+V' },
@@ -1009,7 +1049,6 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'zoomIn',         label: 'Zoom In',         keys: 'Ctrl+=' },
   { id: 'zoomOut',        label: 'Zoom Out',        keys: 'Ctrl+-' },
   { id: 'resetZoom',      label: 'Reset Zoom',      keys: 'Ctrl+0' },
-  { id: 'quickCapture',  label: 'Quick Capture',     keys: 'Ctrl+Shift+Space' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     keys: 'Ctrl+Shift+A' },
   // openDailyNote removed
   // toggleSketch removed
@@ -1135,41 +1174,6 @@ export const backgroundImageEnabled = persistentWritable<boolean>('backgroundIma
 export const backgroundImageOpacity = persistentWritable<number>('backgroundImageOpacity', 100);
 export const backgroundImageBlur = persistentWritable<number>('backgroundImageBlur', 0);
 
-// Onboarding
-export const onboardingCompleted = persistentWritable<boolean>('onboardingCompleted', false);
-
-// The onboarding flag is mirrored to a durable backend file as well as
-// localStorage: WebView localStorage flushes lazily and can lose the "completed"
-// write when the OS is shut down abruptly, which made the tour re-appear on every
-// relaunch. The backend file is the durable source of truth.
-const ONBOARDING_FLAG = 'onboardingCompleted';
-
-/** Mark onboarding complete in both localStorage and the durable backend store. */
-export function markOnboardingCompleted() {
-  onboardingCompleted.set(true);
-  void setAppFlag(ONBOARDING_FLAG, 'true');
-}
-
-/** Reset onboarding so the tour shows again, clearing the durable flag too. */
-export function markOnboardingIncomplete() {
-  onboardingCompleted.set(false);
-  void setAppFlag(ONBOARDING_FLAG, 'false');
-}
-
-/**
- * Reconcile the onboarding flag against the durable backend store on startup.
- * Recovers the "completed" state when localStorage lost it, and backfills the
- * backend for users who finished onboarding before this durable store existed.
- */
-export async function reconcileOnboardingFlag() {
-  const durable = await getAppFlag(ONBOARDING_FLAG);
-  if (durable === 'true') {
-    if (!get(onboardingCompleted)) onboardingCompleted.set(true);
-  } else if (durable === null && get(onboardingCompleted)) {
-    void setAppFlag(ONBOARDING_FLAG, 'true');
-  }
-}
-
 // Terminal
 export const terminalShell = persistentWritable<string>('terminalShell', ''); // empty = auto-detect
 export const terminalCursorStyle = persistentWritable<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar');
@@ -1237,7 +1241,6 @@ export function updateSetting(key: string, value: unknown) {
     case 'closeBehavior':    closeBehavior.set(value as CloseBehavior); break;
     case 'appearance':       appearance.set(value as 'system' | 'light' | 'dark'); break;
     case 'accentColor':      accentColor.set(value as string); break;
-    case 'onboardingCompleted': onboardingCompleted.set(value as boolean); break;
     case 'terminalShell':    terminalShell.set(value as string); break;
     case 'terminalFontSize': terminalFontSize.set(value as number); break;
     case 'terminalRenderer': terminalRenderer.set(value as 'webgl' | 'canvas' | 'dom'); break;
@@ -1292,8 +1295,6 @@ export function resetSettingsToDefault() {
   backgroundImageEnabled.set(false);
   backgroundImageOpacity.set(100);
   backgroundImageBlur.set(0);
-  onboardingCompleted.set(false);
-  void setAppFlag(ONBOARDING_FLAG, 'false');
   terminalShell.set('');
   terminalCursorStyle.set('bar');
   terminalScrollback.set(5000);

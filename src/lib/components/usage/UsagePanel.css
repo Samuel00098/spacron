@@ -1,88 +1,83 @@
-/* Base styling for the usage breakdown. AppShell.css turns the mounted
-   instance into a transparent, inline section of the left-sidebar Bento card.
-   Frost recipe is the canonical side-panel one — see [[glass-panel-recipe]]:
-   the color-mix layer must stay LAST in the background shorthand, and no
-   ancestor may establish a backdrop root or the blur samples nothing.
+/* The usage disclosure: the expanded half of the Navigator footer's readout.
+   Still one screenful of "who, how much, when does it reset" — every element
+   here answers one of those three — but it is an INLINE SECTION of the left
+   sidebar's Bento card, not a floating popover.
 
-   It is deliberately FROSTED HEAVIER than the app's chrome panels. At the
-   shared `--frost-chrome` (0.45) this floats over the terminal — a surface
-   that is itself dark, busy and full of text — and a 5px meter bar read as
-   part of whatever was behind it. Panels that dock to an edge can afford to
-   be see-through; a popover over live text cannot. `--usage-veil` therefore
-   lifts the chrome value toward opaque while still tracking it, so a solid
-   theme (`--frost-chrome: 1`) stays fully solid and a glass theme keeps its
-   blur without giving up legibility. The oblique sheen across the top-left
-   is what still reads it as glass.
+   That distinction is the whole reason this file was rewritten. It used to
+   carry a full `position: fixed` popover design — viewport anchoring, its own
+   frost recipe, two drop shadows, a travelling rim light — and then
+   `AppShell.css` spent ~100 lines undoing every one of those declarations for
+   the only place the panel is ever mounted (`<UsagePanel />` in the sidebar
+   column, and nowhere else). Two files describing one widget, the second
+   cancelling the first, is how a 5px meter ends up with three different
+   backgrounds depending on theme. One owner now: this file.
 
-   Still one screenful of "who, how much, when it resets" — every element here
-   answers one of those three questions — but sized to be *read*, not squinted
-   at. It was originally matched to Orca's compact popover (300px, 8–10px type);
-   at that size the meters were legible only if you already knew what they said,
-   which defeats a panel whose whole job is to be glanceable. Everything scaled
-   together rather than just the frame: widening the box while leaving 9px text
-   inside would have made it emptier, not clearer. */
+   The sidebar card supplies the surface, the border, the blur and the rim, so
+   this section paints almost nothing — a radial accent wash with no rectangular
+   perimeter, so the disclosure reads as a lit part of the card rather than a
+   panel boxed inside it. */
 
 .usage-panel {
-  position: fixed;
-  bottom: 52px;
-  left: 12px;
-  z-index: 1400;
-  width: min(384px, calc(100vw - 24px));
-  max-height: min(600px, calc(100vh - 68px));
+  /* Its own query container. The panel lives in a rail the user can drag
+     between 180px and 600px, so every "is there room for this?" decision below
+     has to ask the RAIL, not the window. The viewport media queries this
+     replaced asked the wrong thing in both directions: they fired on a 1920px
+     screen with a 180px rail, and stayed quiet on an 800px window with a 600px
+     one. */
+  container-type: inline-size;
+  container-name: usage;
+
+  /* One column of the sidebar's flex layout. `0 1 auto` with `min-height: 0`
+     is what lets it hold its preferred height while still yielding to the
+     project tree above when the window gets short — it is the last thing in
+     the column that can afford to give space back. */
   display: flex;
   flex-direction: column;
-  /* 0.45 → 82%, 1.0 (solid themes) → 100%. */
-  --usage-veil: calc((var(--frost-chrome, 0.45) * 0.33 + 0.67) * 100%);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
-  border-radius: 12px;
-  /* The frame is rigid: it never moves, never resizes, and never grows past
-     the viewport — `.usage-list` below is the only thing that scrolls, and only
-     vertically. `touch-action: pan-y` is the other half of that promise: a
-     trackpad pan or touch drag anywhere on the panel scrolls the list instead
-     of panning/zooming the surface itself. */
+  flex: 0 1 auto;
+  min-height: 0;
+
+  /* A FIXED opening height, carried in from the store, not a shrink-to-fit.
+     Two things were wrong with sizing it from content. The old cap was 240px —
+     under the height of one two-window provider row (~165px) plus this header —
+     so the panel could never show a whole agent; the second meter was always
+     cut off at the fold. And it was only ever a cap: the real height came out
+     of a flex negotiation with the project tree, whose basis is its own
+     content, so the panel opened a different size depending on how many
+     projects were in the rail that day.
+
+     `--usage-panel-height` is the stored preference (see `usagePanelHeight` in
+     stores/usage.ts) and the drag handle writes it. 68% is not a second opinion
+     about the height — it is the guard that keeps a preference set on a tall
+     window from filling the whole rail on a short one. */
+  height: var(--usage-panel-height, 320px);
+  max-height: 68%;
+
+  /* The gutter that lines the meters up under the provider name rather than
+     under its brand mark. Declared once here because four rules share it and
+     the container queries below retire it as one decision. */
+  --usage-indent: 39px;
+
   overflow: hidden;
+  /* A trackpad pan or touch drag anywhere on the panel scrolls the list rather
+     than panning the surface. */
   touch-action: pan-y;
-  /* Two shadows, not one: the tight ring separates the panel from whatever it
-     covers even where the drop shadow is lost against a dark terminal. */
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.5),
-    0 18px 48px rgba(0, 0, 0, 0.55);
-  /* Layer order matters: the corner glint, then the oblique band raked across
-     the surface, then — LAST, per the recipe — the veil the blur shows
-     through. The band is what gives the panel a direction, so it reads as a
-     pane of glass lying over the workspace rather than a hole cut in it. */
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 34%, transparent 62%),
-    linear-gradient(
-      118deg,
-      transparent 12%,
-      color-mix(in srgb, var(--text-primary) 5%, transparent) 30%,
-      color-mix(in srgb, var(--text-primary) 7%, transparent) 38%,
-      transparent 56%
-    ),
-    color-mix(in srgb, var(--bg-secondary) var(--usage-veil), transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
+
+  /* A radial wash has no rectangular perimeter, so this stays a distinctive
+     part of the sidebar instead of reading as a panel inside it. */
+  background: radial-gradient(
+    ellipse at 12% 8%,
+    color-mix(in srgb, var(--accent) 16%, transparent),
+    transparent 68%
+  );
+  /* Opacity and offset only. Animating height here would relayout the whole
+     sidebar column — and re-measure any terminal in it — on every open. */
   animation: usage-in var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
-/* The usage panel is a floating overlay, not part of the drawer's clipped
-   content column. This lets it extend over the left rail while the rail keeps
-   its own layout and footer in place. */
-.app-shell .left-utility-panel.left-sidebar {
-  overflow: visible;
-}
-
-.app-shell .left-utility-panel.left-sidebar > .usage-panel {
-  z-index: 10000;
-}
-
-/* Rises out of the dock it is anchored to, so the motion points back at what
-   was clicked. */
 @keyframes usage-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.985);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -96,41 +91,46 @@
   }
 }
 
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
 .usage-head {
   flex: none;
   display: grid;
+  /* Row 1 is the drag handle (full width), row 2 the title, row 3 the caption;
+     the actions column spans rows 2–3 beside them. */
   grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: start;
-  gap: 8px;
-  padding: 10px 13px;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  grid-template-rows: auto auto auto;
+  align-items: center;
+  gap: 0 8px;
+  padding: 8px 10px 6px;
 }
 
+/* Two-way, and bounded by what the sidebar can actually spare — the handle
+   used to be growth-only (`Math.max(startHeight, …)`), so a drag that overshot
+   could not be taken back without closing the panel. */
 .usage-drag-handle {
   grid-column: 1 / -1;
+  grid-row: 1;
   justify-self: center;
   width: 48px;
-  height: 14px;
-  margin: -7px 0 0;
-  padding: 5px 0;
+  height: 12px;
+  margin: -4px 0 2px;
+  padding: 4px 0;
   border: 0;
   border-radius: 999px;
   background: transparent;
-  cursor: grab;
+  cursor: ns-resize;
   touch-action: none;
-}
-
-.usage-drag-handle:active {
-  cursor: grabbing;
 }
 
 .usage-drag-handle span {
   display: block;
-  width: 30px;
+  width: 28px;
   height: 3px;
   margin: 0 auto;
   border-radius: 999px;
   background: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  transition: background var(--dur-fast, 0.12s) var(--ease-out, ease);
 }
 
 .usage-drag-handle:hover span,
@@ -144,22 +144,71 @@
 }
 
 .usage-title {
+  grid-column: 1;
+  grid-row: 2;
   display: flex;
-  align-items: baseline;
-  gap: 7px;
-  font-size: 13.5px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
+.usage-title-glyph {
+  flex: none;
+  width: 23px;
+  height: 23px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 72%),
+    color-mix(in srgb, var(--bg-primary) 48%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 4px 14px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.usage-title-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* "updated 4m ago" is the least-loaded fact in the header, and at 10.5px beside
+   an 11.5px title it was reading as a second title. It truncates before the
+   word "Usage" ever does. */
 .usage-head-age {
-  font-size: 10.5px;
+  min-width: 0;
+  font-size: 9.5px;
   font-weight: 400;
   color: var(--text-tertiary, var(--text-secondary));
-  opacity: 0.8;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One line, always. It wrapped to two at the default rail width, which pushed
+   the first meter below the fold in a panel whose entire job is to be glanced
+   at — and it is the one line here that says nothing the rows do not. */
+.usage-subtitle {
+  grid-column: 1;
+  grid-row: 3;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-tertiary, var(--text-secondary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .usage-head-actions {
+  grid-column: 2;
+  grid-row: 2 / span 2;
   display: flex;
   align-items: center;
   justify-self: end;
@@ -168,56 +217,60 @@
 
 .usage-head-actions .live-ticker {
   flex: 0 0 auto;
-  margin: 6px 0 0;
-}
-
-.usage-close {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 5px;
-  transition:
-    background-color var(--dur-fast, 0.15s) var(--ease-out, ease),
-    color var(--dur-fast, 0.15s) var(--ease-out, ease);
+  margin: 0;
 }
 
 .usage-close {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+    color var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
 
 .usage-close:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.07));
   color: var(--text-primary);
 }
 
-/* Sits outside the scroll area (below the list, when nothing reports numbers),
-   so it must not be squeezed by the flex:1 list above it. */
+/* ── Rows ───────────────────────────────────────────────────────────────── */
+
+/* Sits outside the scroll area, so it must not be squeezed by the flex:1 list
+   above it. */
 .usage-empty {
   flex: none;
   margin: 0;
-  padding: 22px 18px;
+  padding: 8px 14px 12px;
   text-align: center;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: 10.5px;
+  line-height: 1.45;
   color: var(--text-tertiary, var(--text-secondary));
 }
 
 .usage-list {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: 2px 6px 7px;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: none;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   /* A drag inside the panel is always a scroll, never a text selection being
      swept across the meters — the rows are a readout, not a document. The two
-     bits worth copying (the account line and the note) opt back in below. */
+     bits worth copying opt back in below. */
   user-select: none;
 }
 
@@ -229,25 +282,36 @@
 .usage-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 9px 11px 10px;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 7px 8px 8px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-primary) 32%, transparent);
+  transition: background var(--dur-fast, 0.12s) var(--ease-out, ease);
 }
 
-.usage-row + .usage-row {
-  margin-top: 1px;
+.usage-row[data-reporting='true'] {
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%),
+    color-mix(in srgb, var(--bg-primary) 34%, transparent);
 }
 
-/* A provider with nothing to report recedes, but stays legible — it is still
-   answering a question ("not signed in"), just a quieter one. */
-.usage-row[data-reporting='false'] {
-  opacity: 0.72;
+.usage-row:hover {
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%),
+    color-mix(in srgb, var(--bg-primary) 44%, transparent);
 }
 
+/* Wrap, rather than shrink. Without this the name is the only flexible item on
+   the line — the mark, the plan pill and the account switcher all opt out — so
+   at the default rail width "Claude Code" ellipsised down to "C" while a 108px
+   switcher kept its full size beside it. Wrapping settles it in the right
+   order: flex wraps on hypothetical sizes BEFORE it shrinks anything, so the
+   switcher drops to its own line and the name keeps its text. */
 .usage-row-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 4px 9px;
   min-width: 0;
 }
 
@@ -259,22 +323,27 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent);
   overflow: hidden;
 }
 
 .usage-row-mark svg,
 .usage-row-mark img {
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
 }
 
 .usage-row-name {
-  font-size: 12.5px;
+  flex: 1 1 auto;
+  /* A floor, so the name is never reduced past the point of identifying the
+     agent — below this the switcher wraps away instead. */
+  min-width: 6ch;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
@@ -284,22 +353,23 @@
 
 .usage-row-plan {
   flex: none;
-  font-size: 9px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 1px 4px;
-  border-radius: 999px;
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--text-primary) 8%, transparent);
 }
 
 .usage-row-account {
-  font-size: 10.5px;
+  margin-top: -3px;
+  padding-left: var(--usage-indent);
+  font-size: 11px;
   line-height: 1.35;
   color: var(--text-tertiary, var(--text-secondary));
   opacity: 0.85;
-  padding-left: 29px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -308,27 +378,32 @@
 .usage-row-meters {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-left: 29px;
+  gap: 10px;
+  padding-left: var(--usage-indent);
 }
 
 .usage-row-note {
   margin: 0;
-  padding-left: 29px;
+  padding-left: var(--usage-indent);
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--text-tertiary, var(--text-secondary));
 }
 
 .usage-row-credits {
-  margin-left: 29px;
+  margin-left: var(--usage-indent);
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
   font-size: 11px;
   color: var(--text-secondary);
 }
 
 .usage-row-credits summary {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
   cursor: pointer;
-  color: var(--text-primary);
 }
 
 .usage-row-credit-list {
@@ -346,7 +421,6 @@
   justify-content: space-between;
   gap: 8px;
 }
-
 
 /* The Connect / Reconnect action on a web-session row. Sits inline at the end
    of the explanation rather than on its own line: the sentence and the fix are
@@ -375,240 +449,68 @@
   cursor: default;
 }
 
-/* Responsive adjustments for smaller screens or constrained viewports */
-@media (max-width: 480px) {
-  .usage-panel {
-    bottom: 48px;
-    left: 8px;
-    width: calc(100vw - 16px);
-    max-height: calc(100vh - 56px);
-    border-radius: 10px;
-  }
+/* ── Narrowing the rail ──────────────────────────────────────────────────
+   Three steps, each retiring the least useful thing left rather than scaling
+   everything down together: first the decoration, then the gutter, then the
+   type. The meter bar and its percentage survive all three, because they are
+   the answer the panel exists to give. */
 
-  .usage-head {
-    padding: 8px 11px;
-  }
-
-  .usage-empty {
-    padding: 16px 14px;
-    font-size: 11.5px;
-  }
-
-  .usage-row {
-    padding: 7px 9px 8px;
-  }
-
-  .usage-row-account,
-  .usage-row-meters,
-  .usage-row-note {
-    padding-left: 22px;
-  }
-}
-
-@media (max-width: 360px) {
-  .usage-row-account,
-  .usage-row-meters,
-  .usage-row-note {
-    padding-left: 18px;
-  }
-}
-
-@media (max-height: 520px) {
-  .usage-panel {
-    bottom: 42px;
-    max-height: calc(100vh - 48px);
-  }
-
-  .usage-head {
-    padding: 6px 10px;
-  }
-
-  .usage-row {
-    padding: 6px 8px 7px;
-  }
-}
-
-/* Redesigned usage dashboard */
-.usage-panel {
-  width: min(440px, calc(100vw - 32px));
-  max-height: min(680px, calc(100vh - 68px));
-  border-radius: 16px;
-  border-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
-  background: rgb(var(--bg-secondary-rgb, 18, 18, 22)) !important;
-  background-image: none !important;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.24),
-    0 20px 56px rgba(0, 0, 0, 0.42);
-}
-
-.usage-head {
-  grid-template-columns: minmax(0, 1fr) max-content;
-  padding: 16px 17px 14px;
-  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
-}
-
-.usage-title {
-  grid-column: 1;
-  grid-row: 1;
-  font-size: 15px;
-  letter-spacing: -0.01em;
-}
-
-.usage-subtitle {
-  grid-column: 1;
-  grid-row: 2;
-  margin-top: 3px;
-  font-size: 11px;
-  color: var(--text-tertiary, var(--text-secondary));
-}
-
-.usage-head-actions {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
-}
-
-.usage-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-}
-
-.usage-row,
-.usage-row + .usage-row {
-  gap: 10px;
-  margin-top: 0;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--text-primary) 9%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
-  transition:
-    border-color var(--dur-fast, 0.12s) var(--ease-out, ease),
-    background var(--dur-fast, 0.12s) var(--ease-out, ease);
-}
-
-.usage-row:hover {
-  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
-}
-
-.usage-row[data-reporting='false'] {
-  opacity: 1;
-  background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
-}
-
-.usage-row-head {
-  gap: 9px;
-}
-
-.usage-row-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-}
-
-.usage-row-mark svg,
-.usage-row-mark img {
-  width: 18px;
-  height: 18px;
-}
-
-.usage-row-name {
-  font-size: 13px;
-}
-
-.usage-row-plan {
-  font-size: 9.5px;
-  padding: 3px 6px;
-}
-
-.usage-row-account {
-  padding-left: 39px;
-  margin-top: -7px;
-  font-size: 11px;
-}
-
-.usage-row-meters {
-  gap: 10px;
-  padding-left: 39px;
-}
-
-.usage-row-note {
-  padding-left: 39px;
-}
-
-.usage-row-credits {
-  margin-left: 39px;
-  padding-top: 9px;
-  border-top: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
-  font-size: 11px;
-}
-
-.usage-row-credits summary {
-  min-height: 24px;
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-}
-
-.usage-empty {
-  padding: 34px 24px;
-}
-
-@media (max-width: 480px) {
-  .usage-panel {
-    left: 8px;
-    bottom: 48px;
-    width: calc(100vw - 16px);
-    max-height: calc(100vh - 60px);
-    border-radius: 14px;
-  }
-
-  .usage-head {
-    padding: 14px 14px 12px;
-  }
-
-  .usage-list {
-    padding: 8px;
-  }
-
-  .usage-row {
-    padding: 12px;
-  }
-
-  .usage-row-account,
-  .usage-row-meters,
-  .usage-row-note {
-    padding-left: 39px;
-  }
-}
-
-@media (max-width: 360px) {
-  .usage-title {
-    font-size: 14px;
-  }
-
+/* Below this the subtitle can no longer fit on one line, and it is a caption
+   for a header that already says "Usage". */
+@container usage (max-width: 272px) {
   .usage-subtitle {
-    max-width: 170px;
-    line-height: 1.35;
+    display: none;
   }
 
+  .usage-head {
+    padding-bottom: 7px;
+  }
+}
+
+/* The 39px gutter buys alignment under the provider name. Past this point it
+   is spending a sixth of the rail on indentation while the meter it indents
+   runs out of room, so the meters move back to the row edge. */
+@container usage (max-width: 250px) {
+  .usage-panel {
+    --usage-indent: 0px;
+  }
+
+  .usage-row-account {
+    margin-top: 0;
+  }
+
+  .usage-row-mark {
+    width: 26px;
+    height: 26px;
+  }
+
+  .usage-row-mark svg,
+  .usage-row-mark img {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+@container usage (max-width: 212px) {
   .usage-row {
-    padding: 11px;
+    padding: 6px 7px 7px;
   }
 
   .usage-row-plan {
     display: none;
   }
 
+  .usage-row-name {
+    font-size: 12px;
+  }
+
   .usage-row-account,
-  .usage-row-meters,
-  .usage-row-note,
-  .usage-row-credits {
-    padding-left: 0;
-    margin-left: 0;
+  .usage-row-credits,
+  .usage-row-credit-list {
+    font-size: 10px;
+  }
+
+  .usage-row-note {
+    font-size: 10.5px;
   }
 }

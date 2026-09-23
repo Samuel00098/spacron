@@ -2958,6 +2958,149 @@ async fn emulator_logcat(
 }
 
 // ---------------------------------------------------------------------------
+// In-process entry for the orchestrator brain
+// ---------------------------------------------------------------------------
+//
+// The orchestrator runs inside the app, not behind the HTTP server, so it
+// cannot reach these tools the way a CLI agent does — it has no MCP client. It
+// calls them through here instead, which routes to the *same* handlers above
+// rather than to a second copy of the logic. That matters more than it looks:
+// target validation and the normalized-to-pixel conversion are the fiddly part,
+// and a divergent second implementation is how the orchestrator would end up
+// tapping a different spot than an agent given the same coordinates.
+//
+// `emulator_screenshot` is the one tool that cannot pass through unchanged. It
+// answers with a base64 image, and the brain's provider layer has no vision
+// path — the bytes would land in the transcript as tens of thousands of useless
+// characters and blow the tool-output cap. So it is intercepted below and
+// written to a file instead.
+
+/// The emulator tools the orchestrator may call. Names match the MCP tools
+/// exactly, so a prompt, a memory note, or a user instruction that says
+/// `emulator_tap` means the same thing on both sides.
+pub const ORCHESTRATOR_EMULATOR_TOOLS: &[&str] = &[
+    "emulator_list",
+    "emulator_boot",
+    "emulator_shutdown",
+    "emulator_screenshot",
+    "emulator_tap",
+    "emulator_swipe",
+    "emulator_key",
+    "emulator_text",
+    "emulator_rotate",
+    "emulator_logcat",
+];
+
+/// Unwrap a handler's JSON-RPC envelope into the plain text the brain's tool
+/// loop expects: the `content[0].text` on success, the error message on
+/// failure.
+fn unwrap_tool_text(response: Json<JsonRpcResponse>) -> Result<String, String> {
+    let JsonRpcResponse { result, error, .. } = response.0;
+    if let Some(err) = error {
+        return Err(err.message);
+    }
+    result
+        .and_then(|value| {
+            value
+                .get("content")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("text"))
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| "The emulator tool returned no text content.".to_string())
+}
+
+/// Capture a screen to a file and describe it, instead of returning the image.
+///
+/// The path goes to the OS temp directory rather than the project: a screenshot
+/// is a transient artifact of one turn, and writing it into the repo would put
+/// binaries in the user's `git status` that nobody asked for.
+async fn screenshot_to_file(
+    platform: &str,
+    target: &str,
+) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("spacron-screenshots");
+    fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // `target` is already validated by `require_target`, so it holds nothing
+    // that could climb out of the directory.
+    let safe_target = target.replace(':', "-");
+
+    if platform == "ios" {
+        let png = mobile::ios_screenshot(target.to_string()).await?;
+        let bytes = decode_base64(&png)?;
+        let path = dir.join(format!("{safe_target}-{stamp}.png"));
+        fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        return Ok(format!(
+            "iOS simulator screenshot saved to {}. iOS is view-only here: no touch input and no reported dimensions.",
+            path.display()
+        ));
+    }
+
+    let frame = mobile::android_screencap(target.to_string()).await?;
+    let bytes = decode_base64(&frame.image)?;
+    let path = dir.join(format!("{safe_target}-{stamp}.jpg"));
+    fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(format!(
+        "Android screenshot saved to {} ({}x{}). You cannot see this image — it is for the user to open. \
+         Use the dimensions for coordinate maths if you need pixels, though emulator_tap and emulator_swipe \
+         take normalized 0.0-1.0 coordinates and do the conversion themselves. To learn what is actually on \
+         screen, read emulator_logcat or ask the user.",
+        path.display(),
+        frame.width,
+        frame.height
+    ))
+}
+
+/// Decode the standard-alphabet base64 the mobile commands produce.
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|e| format!("The device returned an image that could not be decoded: {e}"))
+}
+
+/// Call one emulator tool by name, as the orchestrator brain.
+///
+/// `args` is the tool's argument object exactly as the MCP `arguments` member
+/// would carry it, so the handlers below parse it unchanged.
+pub async fn call_emulator_tool(
+    name: &str,
+    args: serde_json::Value,
+) -> Result<String, String> {
+    let params = serde_json::json!({ "arguments": args });
+
+    // Screenshot never reaches its handler: the file-writing variant replaces
+    // it wholesale. Argument parsing is duplicated here only because the
+    // handler owns its own, and there is no smaller seam to borrow.
+    if name == "emulator_screenshot" {
+        let arg_map = tool_args(&params);
+        let platform =
+            resolve_platform(arg_map.and_then(|a| a.get("platform")).and_then(|v| v.as_str()))?;
+        let target = require_target(arg_map.and_then(|a| a.get("target")).and_then(|v| v.as_str()))?;
+        return screenshot_to_file(platform, &target).await;
+    }
+
+    let response = match name {
+        "emulator_list" => emulator_list(None).await,
+        "emulator_boot" => emulator_boot(None, &params).await,
+        "emulator_shutdown" => emulator_shutdown(None, &params).await,
+        "emulator_tap" => emulator_tap(None, &params).await,
+        "emulator_swipe" => emulator_swipe(None, &params).await,
+        "emulator_key" => emulator_key(None, &params).await,
+        "emulator_text" => emulator_text(None, &params).await,
+        "emulator_rotate" => emulator_rotate(None, &params).await,
+        "emulator_logcat" => emulator_logcat(None, &params).await,
+        other => return Err(format!("'{other}' is not an emulator tool.")),
+    };
+    unwrap_tool_text(response)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -3149,6 +3292,50 @@ impl axum::serve::Listener for NoDelayListener {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The orchestrator's allowlist and the MCP tool list are two hand-written
+    /// copies of the same set. If a tool is added to one and not the other,
+    /// either the orchestrator silently loses a capability the agents have, or
+    /// it advertises one that `call_emulator_tool` will refuse at runtime.
+    #[test]
+    fn orchestrator_allowlist_matches_the_served_emulator_tools() {
+        let served: Vec<String> = all_tools(&[])
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .filter(|n| n.starts_with("emulator_"))
+            .map(str::to_string)
+            .collect();
+        let mut allowed: Vec<String> = ORCHESTRATOR_EMULATOR_TOOLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut served_sorted = served.clone();
+        served_sorted.sort();
+        allowed.sort();
+        assert_eq!(
+            served_sorted, allowed,
+            "the emulator tools served over MCP and the ones the orchestrator may call have drifted"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_emulator_tool_refuses_a_name_it_does_not_route() {
+        let err = call_emulator_tool("emulator_install", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.contains("emulator_install"), "unexpected error: {err}");
+    }
+
+    /// A missing `target` must come back as the handler's own argument error,
+    /// which proves the envelope unwrapping reaches the error branch rather
+    /// than swallowing it into a success with empty text.
+    #[tokio::test]
+    async fn call_emulator_tool_surfaces_handler_argument_errors() {
+        let err = call_emulator_tool("emulator_tap", serde_json::json!({ "x": 0.5, "y": 0.5 }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("target"), "unexpected error: {err}");
+    }
 
     fn preset(command: &str, name: &str) -> AgentPreset {
         AgentPreset {

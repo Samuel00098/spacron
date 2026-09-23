@@ -64,7 +64,6 @@ export const layout: Writable<LayoutState> = {
 };
 
 export const settingsOpen = writable(false);
-export const quickCaptureOpen = writable(false);
 export const envManagerOpen = writable(false);
 export const agentSpawnOpen = writable(false);
 export const terminalRoomOpen = writable(false);
@@ -97,7 +96,6 @@ export const homeScreenOpen = writable(false);
 // Mirror the modal flags out of Zustand for non-React (writable) consumers.
 useLayoutStore.subscribe((state) => {
   settingsOpen.set(state.settingsOpen);
-  quickCaptureOpen.set(state.quickCaptureOpen);
   envManagerOpen.set(state.envManagerOpen);
   agentSpawnOpen.set(state.agentSpawnOpen);
 });
@@ -109,8 +107,6 @@ useLayoutStore.subscribe((state) => {
 // looks smooth.
 export function openSettings(tab?: import('$lib/types/layout').SettingsTab) { useLayoutStore.getState().openSettings(tab); }
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
-export function openQuickCapture() { useLayoutStore.getState().openQuickCapture(); }
-export function closeQuickCapture() { useLayoutStore.getState().closeQuickCapture(); }
 export function openAgentSpawn() { useLayoutStore.getState().openAgentSpawn(); }
 export function closeAgentSpawn() { useLayoutStore.getState().closeAgentSpawn(); }
 export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }

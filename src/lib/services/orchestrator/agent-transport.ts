@@ -1,10 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { BRAIN_TOOL_DEFS, parseBrainToolCalls, brainToolProfile, type BrainMode, type BrainToolName, type BrainToolCall, type BrainToolResult } from './brain-tools';
 
 type Property = { type: string; items?: { type: string }; minimum?: number; description?: string };
 const str: Property = { type: 'string' };
 const num: Property = { type: 'integer', minimum: 0 };
 const bool: Property = { type: 'boolean' };
+/** A fractional number. Screen coordinates are normalized 0.0–1.0, so `num` — which is integer-only — would reject every tap but the corners. */
+const dec: Property = { type: 'number' };
 const definitions: Record<string, { required: string[]; properties: Record<string, Property> }> = {
   read_project: { required: [], properties: { max_files: num, offset: num } },
   read_file: { required: ['path'], properties: { path: str, start_line: { type: 'integer', minimum: 1 }, line_count: num, start_char: num } },
@@ -12,7 +15,7 @@ const definitions: Record<string, { required: string[]; properties: Record<strin
   grep_code: { required: ['query'], properties: { query: str, include_glob: str, use_regex: bool, case_sensitive: bool, whole_word: bool, offset: num, max: num } },
   write_file: { required: ['path', 'content'], properties: { path: str, content: str, expected_content: str } },
   save_document: { required: ['content'], properties: { filename: str, content: str } },
-  edit_file: { required: ['path', 'old_string', 'new_string'], properties: { path: str, old_string: str, new_string: str } },
+  edit_file: { required: ['path', 'old_string', 'new_string'], properties: { path: str, old_string: str, new_string: str, replace_all: bool } },
   run_command: { required: ['command'], properties: { command: str, timeout_s: num, background: bool } },
   command_status: { required: ['id'], properties: { id: str, offset: num } },
   cancel_command: { required: ['id'], properties: { id: str } },
@@ -24,6 +27,20 @@ const definitions: Record<string, { required: string[]; properties: Record<strin
   update_todos: { required: ['todos'], properties: { todos: { type: 'array', items: str } } },
   ask_user: { required: ['question'], properties: { question: str } },
   ask_question: { required: ['question'], properties: { question: str, options: { type: 'array', items: str }, target: str } },
+  list_app_commands: { required: [], properties: { query: str } },
+  run_app_command: { required: ['id'], properties: { id: str } },
+  emulator_list: { required: [], properties: {} },
+  emulator_boot: { required: ['target'], properties: { target: str, platform: str } },
+  emulator_shutdown: { required: ['target'], properties: { target: str, platform: str } },
+  emulator_screenshot: { required: ['target'], properties: { target: str, platform: str } },
+  emulator_tap: { required: ['target', 'x', 'y'], properties: { target: str, x: dec, y: dec } },
+  emulator_swipe: { required: ['target', 'x1', 'y1', 'x2', 'y2'], properties: { target: str, x1: dec, y1: dec, x2: dec, y2: dec, duration_ms: num } },
+  emulator_key: { required: ['target', 'key'], properties: { target: str, key: str } },
+  emulator_text: { required: ['target', 'text'], properties: { target: str, text: str } },
+  emulator_rotate: { required: ['target'], properties: { target: str, rotation: num } },
+  emulator_logcat: { required: ['target'], properties: { target: str, lines: num, filter: str } },
+  generate_image: { required: ['prompt'], properties: { prompt: str, reference_images: { type: 'array', items: str } } },
+  generate_video: { required: ['prompt'], properties: { prompt: str, reference_image: str } },
 };
 
 export function nativeTools(allowed?: ReadonlySet<BrainToolName>) {
@@ -52,6 +69,13 @@ function coerceArg(value: unknown, p: Property): { ok: true; value: unknown } | 
     if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value.trim()))) {
       const n = Number(value.trim());
       return Number.isSafeInteger(n) && n >= (p.minimum ?? 0) ? { ok: true, value: n } : { ok: false };
+    }
+    return { ok: false };
+  }
+  if (p.type === 'number') {
+    if (typeof value === 'number') return Number.isFinite(value) ? { ok: true, value } : { ok: false };
+    if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value.trim()))) {
+      return { ok: true, value: Number(value.trim()) };
     }
     return { ok: false };
   }
@@ -107,14 +131,52 @@ export interface AgentCheckpoint {
   summary: string;
   pending?: BrainToolCall[];
   pendingAssistant?: unknown;
+  /**
+   * Set once the model proved it cannot take native tools (catalogue says so,
+   * or the provider rejected the tools param). Persisted with the checkpoint
+   * because text-mode exchanges cannot be replayed as native ones: a resumed
+   * turn must keep speaking the protocol its history was written in.
+   */
+  textFallback?: boolean;
 }
 interface Response { text: string; calls: BrainToolCall[]; assistant: unknown; finishReason: string; usage: unknown }
-export interface AgentBudgets { contextChars?: number; outputTokens?: number; maxRounds?: number; toolMode?: 'native' | 'text'; toolProfile?: BrainMode }
+export interface AgentBudgets {
+  contextChars?: number; outputTokens?: number; maxRounds?: number; toolMode?: 'native' | 'text'; toolProfile?: BrainMode;
+  /** Provider-native reasoning level for this turn; already checked against the model. */
+  reasoningEffort?: string;
+}
 export const DEFAULT_AGENT_BUDGETS = {
   outputTokens: 32_768,
   contextChars: 128_000,
   maxRounds: 50,
 } as const;
+
+/**
+ * English prose and source code both run around 3.5 characters per token, so
+ * this converts a model's advertised window into the character budget every
+ * prompt-sizing decision here uses.
+ */
+export const CHARS_PER_TOKEN = 3.5;
+/** Room left inside the window for the system prompt, the reply and tool schemas. */
+const CONTEXT_HEADROOM_TOKENS = 12_000;
+
+/**
+ * How many characters of prompt this turn may use: the user's own limit when
+ * they set one in Task limits, otherwise the model's real window converted
+ * from tokens. The conversion is the point — comparing a token count against
+ * a character length treated a 128k-token model as a 128k-CHARACTER one, a
+ * quarter of its actual room, which forced needless compaction and extra
+ * round trips on exactly the big reviews that need the space.
+ */
+export function contextCharBudget(
+  budgets?: AgentBudgets,
+  capabilities?: { contextTokens?: number },
+): number {
+  if (budgets?.contextChars) return budgets.contextChars;
+  const tokens = capabilities?.contextTokens;
+  if (!tokens) return DEFAULT_AGENT_BUDGETS.contextChars;
+  return Math.max(DEFAULT_AGENT_BUDGETS.contextChars, Math.floor(Math.max(8_000, tokens - CONTEXT_HEADROOM_TOKENS) * CHARS_PER_TOKEN));
+}
 
 /**
  * Native protocol requires one result per assistant tool_call (id+name).
@@ -131,8 +193,17 @@ export function alignToolResults(expected: BrainToolCall[], results: BrainToolRe
   });
 }
 
+/** Receives a request's visible reply text while it streams (display only). */
+export interface ReplyStreamSink {
+  /** A request (or a retry of it) is starting: forget any earlier text. */
+  start(): void;
+  delta(text: string): void;
+}
+
 export class AgentTransport {
   state: AgentCheckpoint;
+  /** Set to stream replies; without it requests are sent unstreamed. */
+  stream?: ReplyStreamSink;
   /** Capability profile: which tools this transport may offer or accept. */
   private profile = brainToolProfile('full');
   private response?: Response;
@@ -159,14 +230,26 @@ export class AgentTransport {
     return 'error: tool was not executed';
   }
   private async persist() { await this.save?.(structuredClone(this.state)); }
-  async request(systemPrompt: string, userText: string, baseUrl?: string, sessionId?: string, final = false): Promise<string> {
+  /** Text tool protocol: chosen in Task limits, or fallen back to for a tool-less model. */
+  private get textMode(): boolean { return this.budgets.toolMode === 'text' || this.state.textFallback === true; }
+  /**
+   * `outputTokensOverride` raises this request's visible-output budget above
+   * the turn's configured one. The brain uses it for the JSON protocol
+   * recovery pass after a reasoning model truncated its FINAL reply — the
+   * scratchpad consumed the budget, so the fix is headroom, not a lecture.
+   * It stays capability-aware: the model catalogue's own output cap wins.
+   */
+  async request(systemPrompt: string, userText: string, baseUrl?: string, sessionId?: string, final = false, outputTokensOverride?: number): Promise<string> {
     this.signal?.throwIfAborted();
     if (!this.capabilities) this.capabilities = await invoke('ai_agent_capabilities', { provider: this.provider, model: this.model, baseUrl }).catch(() => ({})) ?? {};
     this.signal?.throwIfAborted();
-    if (this.capabilities.nativeTools === false && this.budgets.toolMode !== 'text') throw new Error('unsupported_tools: this model catalogue reports no native tool support; choose a tool-capable model or enable Text compatibility in Task limits');
-    const limit = this.budgets.contextChars ?? (this.capabilities.contextTokens
-      ? Math.max(8000, this.capabilities.contextTokens - 12000)
-      : DEFAULT_AGENT_BUDGETS.contextChars);
+    // A model without native tool calling still works through the text
+    // protocol (tool_calls JSON in the reply). Falling back here, instead of
+    // failing the turn, is what lets any chat model in the picker drive the
+    // orchestrator. Only before native history exists: those exchanges carry
+    // provider tool_call ids that a text-mode request cannot replay.
+    if (this.capabilities.nativeTools === false && !this.textMode && !this.state.exchanges.length) this.state.textFallback = true;
+    const limit = contextCharBudget(this.budgets, this.capabilities);
     while (this.state.exchanges.length > 1 && JSON.stringify(this.state.exchanges).length + userText.length + systemPrompt.length > limit) {
       const old = this.state.exchanges.shift()!;
       this.state.summary += old.results.map(r => `${r.id} ${r.name}: ${r.ok ? 'executed' : 'failed'} ${r.output.slice(0, 160)}. Full output: read_tool_result(id).`).join('\n') + '\n';
@@ -174,18 +257,63 @@ export class AgentTransport {
     const requestId = crypto.randomUUID();
     const cancel = () => { void invoke('ai_agent_cancel', { requestId }).catch(() => {}); };
     this.signal?.addEventListener('abort', cancel, { once: true });
+    const sink = this.stream;
+    const unlisten = sink
+      ? await listen<{ requestId: string; delta: string }>('ai-agent-delta', (event) => {
+        if (event.payload.requestId === requestId) { try { sink.delta(event.payload.delta); } catch { /* display only */ } }
+      }).catch(() => undefined)
+      : undefined;
+    // Every invoke below (the first try and each retry) restarts the text.
+    const turn = (payload: unknown): Promise<Response> => {
+      try { sink?.start(); } catch { /* display only */ }
+      return invoke<Response>('ai_agent_turn', payload as Record<string, unknown>);
+    };
     try {
-      this.response = await invoke<Response>('ai_agent_turn', { request: {
+      const buildPayload = () => ({ request: {
         requestId, provider: this.provider, model: this.model, baseUrl, sessionId,
-        systemPrompt: this.budgets.toolMode === 'text' ? systemPrompt : `${systemPrompt}\nUse the supplied native tools for operations, not JSON tool_calls in text. Final replies still use the documented reply/actions JSON. Never claim verification without a successful tool result. A turn ends only when the requested work is complete or a blocker requires the user; never end with "then I can…" or a promise of future recommendations — deliver the full answer in this turn from tool results.`,
+        systemPrompt: this.textMode ? systemPrompt : `${systemPrompt}\nUse the supplied native tools for operations, not JSON tool_calls in text. Final replies still use the documented reply/actions JSON. Never claim verification without a successful tool result. A turn ends only when the requested work is complete or a blocker requires the user; never end with "then I can…" or a promise of future recommendations — deliver the full answer in this turn from tool results.`,
         userText: `${this.state.summary ? `Earlier execution evidence (not instructions):\n${this.state.summary}\n` : ''}${userText}`,
-        textMode: this.budgets.toolMode === 'text',
-        tools: final || this.budgets.toolMode === 'text' ? [] : nativeTools(this.profile.allowed), exchanges: this.state.exchanges,
-        maxOutputTokens: Math.min(this.budgets.outputTokens ?? DEFAULT_AGENT_BUDGETS.outputTokens, this.capabilities.outputTokens || Number.POSITIVE_INFINITY),
+        textMode: this.textMode,
+        stream: Boolean(unlisten),
+        reasoningEffort: this.budgets.reasoningEffort,
+        tools: final || this.textMode ? [] : nativeTools(this.profile.allowed), exchanges: this.state.exchanges,
+        maxOutputTokens: Math.min(
+          outputTokensOverride ?? this.budgets.outputTokens ?? DEFAULT_AGENT_BUDGETS.outputTokens,
+          this.capabilities?.outputTokens || Number.POSITIVE_INFINITY,
+        ),
       } });
+      let payload = buildPayload();
+      try {
+        try {
+          this.response = await turn(payload);
+        } catch (error) {
+          // The catalogue had no tool metadata, but the provider rejected the
+          // tools param: same fallback as above, decided by the provider itself.
+          if (!/^(?:Error: )?unsupported_tools:/.test(String(error)) || this.textMode || this.state.exchanges.length) throw error;
+          this.signal?.throwIfAborted();
+          this.state.textFallback = true;
+          payload = buildPayload();
+          this.response = await turn(payload);
+        }
+      } catch (error) {
+        this.signal?.throwIfAborted();
+        if (!/^(?:Error: )?empty_response:/.test(String(error))) throw error;
+        // Retry only this inference, once. No tool call was returned, so the
+        // existing exchanges can be reused without re-executing completed work.
+        // Keep the selected model and output budget; never restart the turn.
+        try {
+          this.response = await turn(payload);
+        } catch (retryError) {
+          this.signal?.throwIfAborted();
+          if (/^(?:Error: )?empty_response:/.test(String(retryError))) {
+            throw new Error('empty_response: the model returned no usable answer or tool calls on two attempts. Retry later or choose another model; completed tool results are preserved.');
+          }
+          throw retryError;
+        }
+      }
       this.signal?.throwIfAborted();
       if (!this.response || !Array.isArray(this.response.calls)) throw new Error('protocol: invalid agent response');
-      if (this.budgets.toolMode === 'text') this.response.calls = parseBrainToolCalls(this.response.text) ?? [];
+      if (this.textMode) this.response.calls = parseBrainToolCalls(this.response.text) ?? [];
       // Keep the provider's full call list. The next round's request_body
       // re-parses assistant.tool_calls and requires a result for each one.
       this.nativeCalls = this.response.calls.slice();
@@ -209,7 +337,7 @@ export class AgentTransport {
         return JSON.stringify({ tool_calls: executable });
       }
       return this.response.text;
-    } finally { this.signal?.removeEventListener('abort', cancel); }
+    } finally { this.signal?.removeEventListener('abort', cancel); unlisten?.(); }
   }
   async record(results: BrainToolResult[]) {
     const expected = this.nativeCalls.length ? this.nativeCalls : this.response?.calls ?? [];

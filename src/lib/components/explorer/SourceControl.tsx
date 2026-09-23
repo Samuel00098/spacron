@@ -942,7 +942,7 @@ export default function SourceControl() {
               </button>
               {branches?.has_remote && (
                 isUnpublished ? (
-                  <span className="sync-badge unpublished" title="This branch is not on the remote yet - Push to publish it">unpublished</span>
+                  <span className="sync-badge unpublished" title="This branch is not on the remote yet: push to publish it">unpublished</span>
                 ) : (aheadCount > 0 || behindCount > 0) && (
                   <span className="sync-badge" title={`${aheadCount} ahead / ${behindCount} behind ${branches?.upstream}`}>
                     {aheadCount > 0 && <span className="ahead">&uarr;{aheadCount}</span>}

@@ -356,6 +356,12 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // `google_accounts.json` (as this entry used to) reported Antigravity as
         // signed in whenever the Gemini CLI had ever logged in, which is a
         // different tool and often a stale file.
+        //
+        // `auth_path` stays None, but the login is not unknowable: the item's
+        // presence in the OS credential store is a marker of its own, read by
+        // `antigravity_credential_present` (Windows). That is what lets the
+        // badge say "Signed in" here instead of the keychain-blind
+        // "Installed" it used to fall back to.
         auth_path: None,
         // No usable usage endpoint — this was checked live, so don't re-derive
         // it from the fact that Antigravity is a Google product:
@@ -434,6 +440,18 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         command: "cline",
         aliases: &[],
         name: "Cline",
+        auth_path: None,
+        probe: None,
+        supports_usage: false,
+    },
+    // DeepSeek Harness has no terminal UI: the tile opens a web panel and
+    // delegation runs it headless (see `commands/deepseek_harness.rs`). Its key
+    // is the DeepSeek one from AI Connections, so there is no auth file.
+    ProviderSpec {
+        provider: "deepseek-harness",
+        command: "dsh",
+        aliases: &[],
+        name: "DeepSeek Harness",
         auth_path: None,
         probe: None,
         supports_usage: false,
@@ -762,16 +780,30 @@ fn iso8601_to_epoch_secs(text: &str) -> Option<i64> {
 /// it, which is a worse failure than showing nothing. Everything else, and the
 /// default account itself, resolves to the home path exactly as before.
 fn auth_file(spec: &ProviderSpec) -> Option<PathBuf> {
+    auth_file_for(spec, None)
+}
+
+/// As [`auth_file`], but for a *named* account rather than the selected one.
+///
+/// `None` keeps the existing behaviour exactly — the selected account, falling
+/// back to `$HOME` for providers that don't switch. `Some(id)` is what failover
+/// uses to ask "how much headroom does that *other* account have", which has to
+/// be answerable before a handover rather than after it.
+fn auth_file_for(spec: &ProviderSpec, account: Option<&str>) -> Option<PathBuf> {
     if crate::commands::agent_accounts::supports_accounts(spec.provider) {
-        if let Some(path) = crate::commands::agent_accounts::active_credential_path(spec.provider) {
+        let resolved = match account {
+            Some(id) => id.to_string(),
+            None => crate::commands::agent_accounts::selected_account(spec.provider),
+        };
+        if let Some(path) =
+            crate::commands::agent_accounts::account_credential_path(spec.provider, &resolved)
+        {
             return Some(path);
         }
-        // A selected account with no credential yet (directory created, login
-        // not finished) is genuinely signed out; falling back to the default
+        // An account with no credential yet (directory created, login not
+        // finished) is genuinely signed out; falling back to the default
         // account's file here would report the wrong account's numbers.
-        if crate::commands::agent_accounts::selected_account(spec.provider)
-            != crate::commands::agent_accounts::DEFAULT_ACCOUNT_ID
-        {
+        if resolved != crate::commands::agent_accounts::DEFAULT_ACCOUNT_ID {
             return None;
         }
     }
@@ -906,6 +938,61 @@ fn keychain_credential(provider: &str) -> Credential {
     }
 }
 
+/// The credential-store target Antigravity files its OAuth tokens under.
+///
+/// Verified against a signed-in install: `cmdkey /list` reports
+/// `LegacyGeneric:target=gemini:antigravity`. That is the Electron `keytar`
+/// convention (`service:account`), which is *not* the name `keyring` would
+/// build for the same pair — see [`antigravity_credential_present`].
+const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
+
+/// Whether Antigravity has a credential in the OS store.
+///
+/// Antigravity is the one CLI whose login Spacron can *see* but whose token it
+/// deliberately never reads: existence is the whole question a badge asks, so
+/// only existence is checked — `CredentialBlob` is never touched, and nothing
+/// read here is logged or returned to the webview (rule 2).
+///
+/// Read straight from the credential store rather than through the `keyring`
+/// crate, which cannot address this item: on Windows `keyring` names its
+/// entries `{user}.{service}` (Spacron's own stores appear as
+/// `github_token.com.samue.spacron`), and `gemini:antigravity` belongs to the
+/// colon-joined convention `keytar` writes. Asking `keyring` for it would fail
+/// to find a credential that is plainly there.
+#[cfg(windows)]
+fn antigravity_credential_present() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let target: Vec<u16> = ANTIGRAVITY_CREDENTIAL_TARGET
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: `target` is NUL-terminated and outlives the call, and `credential`
+    // is the out-pointer the API writes on success. A failure leaves it null,
+    // which is checked before anything is freed.
+    let read = unsafe {
+        CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut credential)
+    };
+    if read.is_err() || credential.is_null() {
+        return false;
+    }
+    // SAFETY: the call succeeded, so this is the allocation it handed back.
+    unsafe { CredFree(credential as *const std::ffi::c_void) };
+    true
+}
+
+/// Everywhere else the token sits in a platform keychain whose item name has not
+/// been identified, so the honest answer is "cannot tell" — which the badge
+/// renders as its middle state, never as a false "signed out".
+#[cfg(not(windows))]
+fn antigravity_credential_present() -> bool {
+    false
+}
+
 /// Whether the OS keychain holds a credential for this provider — the question
 /// the accounts list asks, without ever seeing the credential itself.
 ///
@@ -931,16 +1018,19 @@ pub(crate) fn keychain_has_credential(provider: &str) -> bool {
 /// so relocating the config dir does not give a second account its own
 /// credential. Claude account switching on macOS therefore moves settings but
 /// not the login.
-fn credential_json(spec: &ProviderSpec) -> Credential {
-    if let Some(path) = auth_file(spec) {
+fn credential_json(spec: &ProviderSpec, account: Option<&str>) -> Credential {
+    if let Some(path) = auth_file_for(spec, account) {
         return match read_auth_json(&path) {
             Ok(json) => Credential::Json(json),
             Err(e) => Credential::Unreadable(e),
         };
     }
+    let resolved = match account {
+        Some(id) => id.to_string(),
+        None => crate::commands::agent_accounts::selected_account(spec.provider),
+    };
     if crate::commands::agent_accounts::supports_accounts(spec.provider)
-        && crate::commands::agent_accounts::selected_account(spec.provider)
-            != crate::commands::agent_accounts::DEFAULT_ACCOUNT_ID
+        && resolved != crate::commands::agent_accounts::DEFAULT_ACCOUNT_ID
     {
         return Credential::Missing;
     }
@@ -1014,7 +1104,7 @@ fn build_detected(spec: &ProviderSpec, installed: bool, signed_in: bool) -> Dete
         signed_in,
         detects_sign_in: spec.auth_path.is_some()
             || spec.probe.is_some()
-            || matches!(spec.provider, "gemini" | "cody" | "copilot"),
+            || marker_sign_in_detectable(spec.provider),
         supports_usage: spec.supports_usage,
     }
 }
@@ -1025,7 +1115,8 @@ fn build_detected(spec: &ProviderSpec, installed: bool, signed_in: bool) -> Dete
 ///  2. a per-provider marker — Gemini's settings file records the login method
 ///     (its OAuth token itself lives in the OS keychain), Cody is
 ///     authenticated through documented environment variables, Copilot
-///     records its login in `~/.copilot/config.json`;
+///     records its login in `~/.copilot/config.json`, Antigravity holds a
+///     credential item in the OS store;
 ///  3. a bounded runtime probe of the CLI's own status command, for a
 ///     provider that declares one.
 ///
@@ -1046,6 +1137,7 @@ async fn signed_in_by_file_or_marker(spec: &ProviderSpec, force: bool) -> bool {
         "gemini" if gemini_settings_marker() => return true,
         "cody" if cody_env_or_marker() => return true,
         "copilot" if copilot_login_marker() => return true,
+        "antigravity" if antigravity_credential_present() => return true,
         _ => {}
     }
     if let Some(probe) = spec.probe {
@@ -1131,6 +1223,24 @@ fn copilot_login_marker() -> bool {
 /// never disagree.
 fn cody_env_or_marker() -> bool {
     std::env::var("SRC_ACCESS_TOKEN").is_ok() || std::env::var("CODY_ACCESS_TOKEN").is_ok()
+}
+
+/// Providers whose sign-in is knowable through a per-OS marker rather than a
+/// credential file or a CLI probe.
+///
+/// This is the single source of truth for that set: [`build_detected`] derives
+/// `detects_sign_in` from it and the mechanism test below asserts the two agree,
+/// so a provider that gains a marker cannot end up reporting one without the
+/// other.
+fn marker_sign_in_detectable(provider: &str) -> bool {
+    match provider {
+        "gemini" | "cody" | "copilot" => true,
+        // Antigravity is only knowable where its credential-store item can be
+        // read. Claiming detectability on another platform would turn "we
+        // cannot tell" into a wrong "signed out".
+        "antigravity" => cfg!(windows),
+        _ => false,
+    }
 }
 
 /// Bounded run of a read-only sign-in check (e.g. `copilot auth status`); a
@@ -1243,11 +1353,15 @@ const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 /// The endpoint is gated behind this beta header; without it the request 404s.
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 
-async fn fetch_claude(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderUsage {
+async fn fetch_claude(
+    client: &reqwest::Client,
+    spec: &ProviderSpec,
+    account: Option<&str>,
+) -> ProviderUsage {
     // File first, then the macOS Keychain — see `credential_json`. On macOS the
     // file does not exist at all for a normal install, so without the keychain
     // arm this returned SignedOut for every signed-in Mac user.
-    let json = match credential_json(spec) {
+    let json = match credential_json(spec, account) {
         Credential::Json(json) => json,
         Credential::Missing => return ProviderUsage::blank(spec, UsageStatus::SignedOut),
         Credential::Unreadable(e) => return ProviderUsage::failed(spec, e),
@@ -1423,8 +1537,12 @@ const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
-async fn fetch_codex(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderUsage {
-    let Some(path) = auth_file(spec) else {
+async fn fetch_codex(
+    client: &reqwest::Client,
+    spec: &ProviderSpec,
+    account: Option<&str>,
+) -> ProviderUsage {
+    let Some(path) = auth_file_for(spec, account) else {
         return ProviderUsage::blank(spec, UsageStatus::SignedOut);
     };
     let json = match read_auth_json(&path) {
@@ -2884,17 +3002,31 @@ struct CachedUsage {
 /// whenever the wifi hiccups trains the user to distrust it.
 static CACHE: Mutex<Option<HashMap<String, CachedUsage>>> = Mutex::new(None);
 
-fn cached(provider: &str, ttl: Duration) -> Option<ProviderUsage> {
+/// The cache key for one reading.
+///
+/// Keyed by provider *and* account, not provider alone. Failover reads a
+/// non-selected account's headroom through the same fetchers, and a shared key
+/// would let the work account's numbers be served for the personal one — a
+/// handover decided on the wrong meter, which is the specific mistake this
+/// feature exists to avoid.
+fn cache_key(provider: &str, account: Option<&str>) -> String {
+    match account {
+        Some(id) => format!("{provider}@{id}"),
+        None => provider.to_string(),
+    }
+}
+
+fn cached(provider: &str, account: Option<&str>, ttl: Duration) -> Option<ProviderUsage> {
     let guard = CACHE.lock().ok()?;
-    let entry = guard.as_ref()?.get(provider)?;
+    let entry = guard.as_ref()?.get(&cache_key(provider, account))?;
     let fresh = entry.at.elapsed().map(|e| e < ttl).unwrap_or(false);
     fresh.then(|| entry.usage.clone())
 }
 
-fn remember(usage: &ProviderUsage) {
+fn remember(usage: &ProviderUsage, account: Option<&str>) {
     if let Ok(mut guard) = CACHE.lock() {
         guard.get_or_insert_with(HashMap::new).insert(
-            usage.provider.clone(),
+            cache_key(&usage.provider, account),
             CachedUsage {
                 usage: usage.clone(),
                 at: SystemTime::now(),
@@ -2904,9 +3036,9 @@ fn remember(usage: &ProviderUsage) {
 }
 
 /// The previous reading regardless of age, used to survive a transient failure.
-fn last_good(provider: &str) -> Option<ProviderUsage> {
+fn last_good(provider: &str, account: Option<&str>) -> Option<ProviderUsage> {
     let guard = CACHE.lock().ok()?;
-    let entry = guard.as_ref()?.get(provider)?;
+    let entry = guard.as_ref()?.get(&cache_key(provider, account))?;
     (entry.usage.status == UsageStatus::Ok).then(|| entry.usage.clone())
 }
 
@@ -2934,15 +3066,100 @@ pub async fn usage_fetch_all(force: Option<bool>) -> Vec<ProviderUsage> {
     let fetches = PROVIDERS
         .iter()
         .filter(|spec| spec.supports_usage)
-        .map(|spec| fetch_one(&client, spec, ttl));
+        .map(|spec| fetch_one(&client, spec, ttl, None));
 
     futures_util::future::join_all(fetches).await
+}
+
+/// One account's headroom, for the failover ladder.
+///
+/// The panel shows the *selected* account. This shows every account, which is a
+/// different question and only failover asks it: before moving unfinished work
+/// to another login, Spacron has to know that login has room — "same plan, same
+/// limit" is otherwise a handoff straight into a second stop.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsage {
+    pub provider: String,
+    pub account_id: String,
+    /// Email where the CLI records one, else the account id. Never a token.
+    pub label: String,
+    /// Whether this account is the user's current selection for that CLI.
+    pub active: bool,
+    /// Whether this account resolves to a login that is genuinely its own.
+    ///
+    /// False for a managed Claude account on macOS, where the login Keychain
+    /// holds one item per CLI and a relocated config dir shares the default
+    /// account's credential. Handing work to such an account would hand it back
+    /// to the login that just ran out, so the ladder skips it rather than
+    /// hopping into the same limit under a different name.
+    pub distinct_login: bool,
+    pub usage: ProviderUsage,
+}
+
+/// Read usage for **every** account of every account-capable CLI.
+///
+/// Concurrent across accounts, and it shares [`fetch_one`]'s per-account cache,
+/// so the failover watch adds no extra network traffic over the panel's own
+/// poll for whichever account happens to be selected.
+#[tauri::command(async)]
+pub async fn usage_fetch_accounts(force: Option<bool>) -> Vec<AccountUsage> {
+    use crate::commands::agent_accounts as accounts;
+
+    let force = force.unwrap_or(false);
+    let ttl = if force { Duration::ZERO } else { CACHE_TTL };
+
+    let Ok(client) = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build() else {
+        return Vec::new();
+    };
+
+    let mut jobs = Vec::new();
+    for spec in PROVIDERS.iter().filter(|spec| spec.supports_usage) {
+        if !accounts::supports_accounts(spec.provider) {
+            continue;
+        }
+        let selected = accounts::selected_account(spec.provider);
+        for id in accounts::account_ids(spec.provider) {
+            let distinct_login = accounts::has_own_login(spec.provider, &id);
+            let label = accounts::account_label(spec.provider, &id);
+            let active = id == selected;
+            let client = &client;
+            jobs.push(async move {
+                // An account with no login of its own is never read. On macOS
+                // that read would return the *default* account's numbers under
+                // this account's name, which is worse than no reading at all.
+                let usage = if distinct_login {
+                    fetch_one(client, spec, ttl, Some(&id)).await
+                } else {
+                    let mut blank = ProviderUsage::blank(spec, UsageStatus::SignedOut);
+                    blank.note = Some(
+                        "This account shares the CLI's system-keychain login, so it has no                          headroom of its own."
+                            .to_string(),
+                    );
+                    blank
+                };
+                AccountUsage {
+                    provider: spec.provider.to_string(),
+                    account_id: id,
+                    label,
+                    active,
+                    distinct_login,
+                    usage,
+                }
+            });
+        }
+    }
+
+    futures_util::future::join_all(jobs).await
 }
 
 async fn fetch_one(
     client: &reqwest::Client,
     spec: &'static ProviderSpec,
     ttl: Duration,
+    // `account`: which account to read. `None` means the selected one — the
+    // ordinary panel path, unchanged.
+    account: Option<&str>,
 ) -> ProviderUsage {
     // A CLI that is not installed cannot be signed in; skip the disk and the
     // network entirely. Checked BEFORE the freshness cache so an uninstall
@@ -2955,7 +3172,7 @@ async fn fetch_one(
     // row permanently. They gate on a linked session instead, below.
     if !is_web_only(spec.provider) && which(spec.command).is_none() {
         let usage = ProviderUsage::blank(spec, UsageStatus::NotInstalled);
-        remember(&usage);
+        remember(&usage, account);
         return usage;
     }
     // An unconnected web-only provider is reported as not installed so the
@@ -2968,19 +3185,19 @@ async fn fetch_one(
         && crate::commands::web_session::stored_cookie(spec.provider).is_none()
     {
         let usage = ProviderUsage::blank(spec, UsageStatus::NotInstalled);
-        remember(&usage);
+        remember(&usage, account);
         return usage;
     }
 
     if !ttl.is_zero() {
-        if let Some(hit) = cached(spec.provider, ttl) {
+        if let Some(hit) = cached(spec.provider, account, ttl) {
             return hit;
         }
     }
 
     let usage = match spec.provider {
-        "claude" => fetch_claude(client, spec).await,
-        "codex" => fetch_codex(client, spec).await,
+        "claude" => fetch_claude(client, spec, account).await,
+        "codex" => fetch_codex(client, spec, account).await,
         "grok" => fetch_grok(client, spec).await,
         "gemini" => fetch_gemini(client, spec).await,
         "kimi" => fetch_kimi(client, spec).await,
@@ -2994,12 +3211,12 @@ async fn fetch_one(
     // A failed poll keeps the last real numbers on screen, marked with their own
     // (older) timestamp, rather than replacing them with an error state.
     if usage.status == UsageStatus::Error {
-        if let Some(previous) = last_good(spec.provider) {
+        if let Some(previous) = last_good(spec.provider, account) {
             return previous;
         }
     }
 
-    remember(&usage);
+    remember(&usage, account);
     usage
 }
 
@@ -3490,7 +3707,12 @@ mod tests {
     #[test]
     fn only_claude_reads_a_credential_out_of_the_keychain() {
         assert_eq!(keychain_service("claude"), Some("Claude Code-credentials"));
-        for provider in ["codex", "gemini", "copilot", "cody", "opencode", "amp"] {
+        // Antigravity is in this list on purpose, and it is not the same thing
+        // as "antigravity is unreadable": its item's name (`gemini:antigravity`)
+        // is the colon-joined one `keytar` writes, which this crate's own
+        // `{user}.{service}` naming can never address. It is read directly from
+        // the store instead (see `antigravity_credential_present`).
+        for provider in ["codex", "gemini", "copilot", "cody", "opencode", "amp", "antigravity"] {
             assert_eq!(keychain_service(provider), None, "{provider}");
         }
     }
@@ -3860,13 +4082,14 @@ mod tests {
     #[test]
     fn sign_in_mechanism_and_detects_sign_in_always_agree() {
         // A provider can only report sign-in through one of three mechanisms:
-        // a credential file, a settings/env marker (gemini, cody), or a
-        // runtime probe (copilot). If the mechanism set and `detects_sign_in`
-        // disagree, the badge lies in one direction or the other.
+        // a credential file, a settings/env/credential-store marker (gemini,
+        // cody, copilot, antigravity), or a runtime probe (copilot). If the
+        // mechanism set and `detects_sign_in` disagree, the badge lies in one
+        // direction or the other.
         for spec in PROVIDERS {
             let has_mechanism = spec.auth_path.is_some()
                 || spec.probe.is_some()
-                || matches!(spec.provider, "gemini" | "cody" | "copilot");
+                || marker_sign_in_detectable(spec.provider);
             let agent = build_detected(spec, true, false);
             assert_eq!(
                 agent.detects_sign_in, has_mechanism,
@@ -3893,6 +4116,18 @@ mod tests {
             supports_usage: false,
         };
         assert!(!signed_in_by_file_or_marker(&spec, false).await);
+    }
+
+    #[test]
+    fn antigravity_sign_in_is_claimed_only_where_it_can_be_read() {
+        // The credential-store target is the Windows one. On any other platform
+        // the badge has to stay in its middle state instead of guessing.
+        assert_eq!(marker_sign_in_detectable("antigravity"), cfg!(windows));
+        assert!(marker_sign_in_detectable("gemini"));
+        assert!(!marker_sign_in_detectable("pi"));
+        // The probe itself answers with a bool on every platform, and a missing
+        // item is the ordinary "not signed in", never a panic.
+        let _ = antigravity_credential_present();
     }
 
     #[test]

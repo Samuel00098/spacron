@@ -71,6 +71,9 @@ const PERPLEXITY_URL: &str = "https://api.perplexity.ai/chat/completions";
 const COHERE_URL: &str = "https://api.cohere.com/compatibility/v1/chat/completions";
 const OPENCODE_URL: &str = "https://opencode.ai/zen/v1/chat/completions";
 const OPENCODE_GO_URL: &str = "https://opencode.ai/zen/go/v1/chat/completions";
+// Kilo Gateway speaks OpenRouter's dialect: same catalogue shape, same
+// `reasoning` field on replies, and `:free` model ids.
+const KILOCODE_URL: &str = "https://api.kilo.ai/api/gateway/chat/completions";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const GOOGLE_AUDIO_TRANSCRIPTION_PROMPT: &str = "Transcribe this speech into clean, accurate text. Keep the speaker's exact technical terms, code words, file paths, flags, package names, and URLs. Use natural punctuation and paragraph breaks when they are obvious from the audio. Return only the transcript.";
@@ -114,6 +117,7 @@ const PERPLEXITY_MODELS_URL: &str = "https://api.perplexity.ai/models";
 const COHERE_MODELS_URL: &str = "https://api.cohere.com/v1/models";
 const OPENCODE_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
 const OPENCODE_GO_MODELS_URL: &str = "https://opencode.ai/zen/go/v1/models";
+const KILOCODE_MODELS_URL: &str = "https://api.kilo.ai/api/gateway/models";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const GOOGLE_MODELS_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
@@ -137,8 +141,11 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "cohere",
     "opencode",
     "opencode-go",
+    "kilocode",
     "ollama",
     "lmstudio",
+    // ChatGPT subscription through the user's Codex CLI: no key, see chatgpt.rs.
+    "chatgpt",
 ];
 
 // Local providers run on the user's machine, configured by a server URL rather
@@ -150,9 +157,21 @@ fn is_known_provider(provider: &str) -> bool {
     KNOWN_PROVIDERS.contains(&provider)
 }
 
-// Choice-only decision service; never offered as a chat provider.
+// Keys that only image/video generation uses (`commands::media`). They are
+// stored like any other key but are never chat providers.
+const MEDIA_KEY_PROVIDERS: &[&str] = &["fal", "replicate", "typesafe"];
+
 fn is_key_provider(provider: &str) -> bool {
-    is_known_provider(provider) || provider == "typesafe"
+    is_known_provider(provider) || MEDIA_KEY_PROVIDERS.contains(&provider)
+}
+
+/// The saved key for an image/video provider, read backend-side only.
+pub(crate) fn media_api_key(provider: &str) -> Result<String, String> {
+    if !is_key_provider(provider) {
+        return Err(format!("unknown provider: {provider}"));
+    }
+    provider_api_key_get(provider.to_string())?
+        .ok_or_else(|| format!("not_configured: no {provider} API key is saved. Add it in Settings > AI Connections."))
 }
 
 fn is_local_provider(provider: &str) -> bool {
@@ -202,6 +221,7 @@ fn completion_endpoint(provider: &str, base_url: Option<&str>, model: Option<&st
         "cohere" => COHERE_URL.to_string(),
         "opencode" => OPENCODE_URL.to_string(),
         "opencode-go" => OPENCODE_GO_URL.to_string(),
+        "kilocode" => KILOCODE_URL.to_string(),
         p if is_local_provider(p) => {
             local_endpoint(base_url.unwrap_or_default(), "chat/completions")
         }
@@ -230,6 +250,7 @@ fn model_catalogue_endpoint(provider: &str, base_url: Option<&str>) -> String {
         "cohere" => COHERE_MODELS_URL.to_string(),
         "opencode" => OPENCODE_MODELS_URL.to_string(),
         "opencode-go" => OPENCODE_GO_MODELS_URL.to_string(),
+        "kilocode" => KILOCODE_MODELS_URL.to_string(),
         p if is_local_provider(p) => {
             local_endpoint(base_url.unwrap_or_default(), "models")
         }
@@ -406,11 +427,21 @@ fn json_string_array_contains(value: Option<&serde_json::Value>, needle: &str) -
 }
 
 fn openrouter_model_matches_purpose(item: &serde_json::Value, id: &str, purpose: ModelPurpose) -> bool {
+    let architecture = item.get("architecture");
     if purpose == ModelPurpose::Chat {
-        return true;
+        // Image/audio-only generators are listed too; the orchestrator needs a
+        // text reply. Entries without modality metadata are kept.
+        return match architecture
+            .and_then(|a| a.get("output_modalities"))
+            .and_then(|m| m.as_array())
+        {
+            Some(outputs) => outputs
+                .iter()
+                .any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("text"))),
+            None => true,
+        };
     }
 
-    let architecture = item.get("architecture");
     let input_audio = json_string_array_contains(
         architecture.and_then(|a| a.get("input_modalities")),
         "audio",
@@ -478,6 +509,61 @@ fn openai_is_chat_model(id: &str) -> bool {
         || id.starts_with("o1")
         || id.starts_with("o3")
         || id.starts_with("o4")
+}
+
+/// OpenAI chat-family ids that exist but reject `/v1/chat/completions` ("only
+/// supported in v1/responses"): the `-pro` tier, codex, deep research and
+/// computer use. They stay listed so the user can see them, but disabled —
+/// selecting one used to fail every orchestrator turn with a 404.
+fn openai_is_responses_only_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.split('-').any(|part| part == "pro" || part == "codex")
+        || id.contains("deep-research")
+        || id.contains("computer-use")
+}
+
+/// Gemini also lists TTS, image-generation, native-audio/Live and embedding
+/// models, some of which even advertise `generateContent`, but none of them
+/// return a text reply the orchestrator can use.
+fn google_is_text_chat_model(id: &str) -> bool {
+    !text_matches_any(
+        id,
+        &[
+            "tts", "image", "imagen", "veo", "native-audio", "live", "embedding", "aqa",
+            "computer-use", "robotics",
+        ],
+    )
+}
+
+/// Generic OpenAI-compatible catalogues (Mistral, Together, Fireworks, …) mix
+/// embedding, rerank, OCR, moderation, speech and image models in with chat.
+/// Trust structured metadata where the provider sends it, otherwise drop the
+/// families that can never answer a chat completion.
+fn catalogue_item_is_chat_model(item: &serde_json::Value, id: &str) -> bool {
+    // Mistral: `capabilities.completion_chat`.
+    if let Some(chat) = item
+        .get("capabilities")
+        .and_then(|c| c.get("completion_chat"))
+        .and_then(|v| v.as_bool())
+    {
+        return chat;
+    }
+    // Together: `type` is chat/language/code for text models.
+    if let Some(kind) = item.get("type").and_then(|v| v.as_str()) {
+        if matches!(
+            kind.to_ascii_lowercase().as_str(),
+            "image" | "embedding" | "rerank" | "moderation" | "audio" | "transcribe" | "video"
+        ) {
+            return false;
+        }
+    }
+    !text_matches_any(
+        id,
+        &[
+            "embed", "rerank", "whisper", "tts", "transcribe", "moderation", "ocr", "guard",
+            "flux", "stable-diffusion", "sdxl", "imagen",
+        ],
+    )
 }
 
 /// Groq serves transcription and safety models alongside chat LLMs; drop those.
@@ -795,6 +881,10 @@ pub fn provider_api_key_exists(provider: String) -> Result<bool, String> {
     if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
     }
+    // A ChatGPT sign-in stands in for a key: Codex owns the credential.
+    if provider == super::chatgpt::PROVIDER {
+        return Ok(super::chatgpt::signed_in());
+    }
     Ok(provider_api_key_get(provider)?.is_some())
 }
 
@@ -802,6 +892,9 @@ pub fn provider_api_key_exists(provider: String) -> Result<bool, String> {
 pub fn provider_api_key_set(provider: String, api_key: String) -> Result<(), String> {
     if !is_key_provider(&provider) {
         return Err("Unknown provider".to_string());
+    }
+    if provider == super::chatgpt::PROVIDER {
+        return Err("ChatGPT uses Sign in with ChatGPT, not an API key.".to_string());
     }
     let api_key = api_key.trim().to_string();
     let entry = keychain_entry(&provider)?;
@@ -891,7 +984,7 @@ pub fn remote_token_delete(id: String) -> Result<(), String> {
 }
 
 fn resolve_api_key(provider: &str, provided_api_key: &str) -> Result<String, String> {
-    if is_local_provider(provider) {
+    if is_local_provider(provider) || provider == super::chatgpt::PROVIDER {
         return Ok(String::new());
     }
     let provided_api_key = provided_api_key.trim();
@@ -1162,6 +1255,13 @@ fn opencode_model_uses_chat_completions(provider: &str, model: &str) -> bool {
     }
 }
 
+/// OpenCode's free tier (`big-pickle` and the `*-free` models) answers every
+/// client except OpenCode itself with `403 FreeTierError`, whatever the key.
+fn opencode_model_is_free_tier(model: &str) -> bool {
+    let id = model.to_ascii_lowercase();
+    id == "big-pickle" || id.ends_with("-free")
+}
+
 /// Extract the visible answer from an OpenAI-compatible choice.
 ///
 /// Most local models put their answer in `message.content`, but S1-mini's LM
@@ -1233,7 +1333,13 @@ async fn run_completion(
     max_tokens: u32,
     session_id: Option<&str>,
 ) -> Result<String, String> {
-    let client = shared_http_client(Duration::from_secs(45))?;
+    if provider == super::chatgpt::PROVIDER {
+        return super::chatgpt::complete(model, system_prompt, user_text, None, None).await;
+    }
+    // Total-request timeout for a NON-streaming reply. 45s was shorter than a
+    // reasoning model takes to think and then write an orchestrator answer, so
+    // slow-but-healthy requests surfaced as "could not reach the model".
+    let client = shared_http_client(Duration::from_secs(180))?;
 
     match provider {
         "anthropic" => {
@@ -1766,10 +1872,16 @@ pub async fn ai_transcribe_audio(
     }
 }
 
-/// Generic single-shot completion with a caller-supplied system prompt. Powers
+/// One-shot system+user completion with a caller-supplied system prompt. Powers
 /// the agent orchestrator "brain" (routing a natural-language request to the
-/// right terminal agent). Shares the same provider plumbing as the other AI
-/// commands; the caller is responsible for the system prompt's contract.
+/// right terminal agent) and the short AI features. Shares the same provider
+/// plumbing as the other AI commands; the caller is responsible for the system
+/// prompt's contract.
+///
+/// `max_tokens` raises the visible-output budget for callers that know they
+/// need a longer reply — the orchestrator's recovery pass uses this after a
+/// reasoning model spent its default budget thinking — and is still subject to
+/// the reasoning-headroom ceiling.
 #[tauri::command]
 pub async fn ai_complete(
     system_prompt: String,
@@ -1779,6 +1891,7 @@ pub async fn ai_complete(
     api_key: String,
     base_url: Option<String>,
     session_id: Option<String>,
+    max_tokens: Option<u32>,
 ) -> Result<String, String> {
     if !is_known_provider(&provider) {
         return Err("Unknown provider".to_string());
@@ -1821,7 +1934,7 @@ pub async fn ai_complete(
         system_prompt,
         &user_text,
         0.3,
-        8192,
+        max_tokens.unwrap_or(8192),
         session_id.as_deref(),
     )
     .await?;
@@ -1897,6 +2010,18 @@ pub async fn list_provider_models(
     let api_key = resolve_api_key(&provider, &api_key)?;
     let base_url = resolve_base_url(&provider, &base_url)?;
     let purpose = purpose.unwrap_or(ModelPurpose::Chat);
+    if provider == super::chatgpt::PROVIDER {
+        if !matches!(purpose, ModelPurpose::Chat) {
+            return Ok(Vec::new());
+        }
+        return Ok(super::chatgpt::list_models().await?.into_iter().map(|m| ModelInfo {
+            id: m.id,
+            label: m.label,
+            description: m.description,
+            supported: true,
+            support_reason: None,
+        }).collect());
+    }
 
     let timeout_secs = if is_local_provider(&provider) { 2 } else { 20 };
     let client = shared_http_client(Duration::from_secs(timeout_secs))?;
@@ -1975,7 +2100,7 @@ pub async fn list_provider_models(
                     .map(|arr| arr.iter().any(|v| v.as_str() == Some("generateContent")))
                     .unwrap_or(false);
                 match purpose {
-                    ModelPurpose::Chat if !supports_generate => continue,
+                    ModelPurpose::Chat if !supports_generate || !google_is_text_chat_model(&id) => continue,
                     ModelPurpose::Stt if !id.to_ascii_lowercase().contains("chirp") => continue,
                     _ => {}
                 }
@@ -2124,14 +2249,18 @@ pub async fn list_provider_models(
                         // xAI has no separate STT/TTS models today.
                         ModelPurpose::Stt => continue,
                         ModelPurpose::Chat => {
-                            if xai_is_realtime_model(&id) {
+                            // grok-*-image / grok-imagine-* generate media
+                            // and reject a chat completion outright.
+                            if xai_is_realtime_model(&id)
+                                || text_matches_any(&id, &["image", "imagine", "video"])
+                            {
                                 continue;
                             }
                         }
                     },
                     "deepseek" | "mistral" | "together" | "fireworks" | "cerebras"
                     | "nvidia" | "moonshot" | "sambanova" | "perplexity" | "opencode" | "opencode-go" => {
-                        if purpose != ModelPurpose::Chat {
+                        if purpose != ModelPurpose::Chat || !catalogue_item_is_chat_model(&item, &id) {
                             continue;
                         }
                     }
@@ -2155,16 +2284,28 @@ pub async fn list_provider_models(
                     .get("description")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let supported = !matches!(provider.as_str(), "opencode" | "opencode-go")
-                    || opencode_model_uses_chat_completions(&provider, &id);
+                let support_reason = if matches!(provider.as_str(), "opencode" | "opencode-go")
+                    && opencode_model_is_free_tier(&id)
+                {
+                    Some("OpenCode's free models only run inside the OpenCode app; any other client gets a 403.")
+                } else if matches!(provider.as_str(), "opencode" | "opencode-go")
+                    && !opencode_model_uses_chat_completions(&provider, &id)
+                {
+                    Some("This model uses an OpenCode protocol that Spacron does not support yet.")
+                } else if provider == "openai"
+                    && purpose == ModelPurpose::Chat
+                    && openai_is_responses_only_model(&id)
+                {
+                    Some("This model only runs on OpenAI's Responses API, which Spacron does not support yet.")
+                } else {
+                    None
+                };
                 out.push(ModelInfo {
                     id,
                     label,
                     description: truncate_desc(desc),
-                    supported,
-                    support_reason: (!supported).then(|| {
-                        "This model uses an OpenCode protocol that Spacron does not support yet.".to_string()
-                    }),
+                    supported: support_reason.is_none(),
+                    support_reason: support_reason.map(str::to_string),
                 });
             }
             out
@@ -2455,6 +2596,31 @@ pub async fn check_local_provider_online(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chat_catalogues_drop_or_disable_models_chat_completions_cannot_run() {
+        use super::*;
+        for id in ["gpt-5-pro", "o3-pro-2025-06-10", "gpt-5-codex", "o3-deep-research", "computer-use-preview"] {
+            assert!(openai_is_responses_only_model(id), "{id}");
+        }
+        for id in ["gpt-5", "gpt-4.1-mini", "o4-mini", "chatgpt-4o-latest"] {
+            assert!(!openai_is_responses_only_model(id), "{id}");
+        }
+        for id in ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-image-preview", "gemini-2.0-flash-live-001", "gemini-embedding-001"] {
+            assert!(!google_is_text_chat_model(id), "{id}");
+        }
+        assert!(google_is_text_chat_model("gemini-2.5-pro"));
+        assert!(!catalogue_item_is_chat_model(&json!({"capabilities":{"completion_chat":false}}), "mistral-large"));
+        assert!(catalogue_item_is_chat_model(&json!({"capabilities":{"completion_chat":true}}), "mistral-large"));
+        assert!(!catalogue_item_is_chat_model(&json!({"type":"embedding"}), "m2-bert"));
+        assert!(!catalogue_item_is_chat_model(&json!({}), "mistral-embed"));
+        assert!(catalogue_item_is_chat_model(&json!({}), "deepseek-chat"));
+        let image_only = json!({"architecture":{"output_modalities":["image"]}});
+        let text = json!({"architecture":{"output_modalities":["text","image"]}});
+        assert!(!openrouter_model_matches_purpose(&image_only, "x/img", ModelPurpose::Chat));
+        assert!(openrouter_model_matches_purpose(&text, "x/chat", ModelPurpose::Chat));
+        assert!(openrouter_model_matches_purpose(&json!({}), "x/chat", ModelPurpose::Chat));
+    }
+
     #[tokio::test]
     async fn provider_redirects_keep_credentials_and_body_on_the_same_origin() {
         use axum::{routing::post, Router};
@@ -2500,7 +2666,7 @@ mod tests {
         adapt_chat_shape, audio_format_from_mime_type, audio_mime_type_is_safe, base_url_is_safe,
         build_audio_transcription_multipart_body, extract_anthropic_text, extract_google_text,
         is_known_provider, is_local_provider, local_endpoint, model_id_is_safe,
-        opencode_model_uses_chat_completions,
+        opencode_model_is_free_tier, opencode_model_uses_chat_completions,
         openai_is_realtime_model, openrouter_audio_chat_model_is_unsupported, redact_secrets,
         apply_completion_auth, completion_auth, completion_endpoint, embedded_error_message,
         model_catalogue_endpoint, reply_was_truncated, resolve_base_url, spent_reasoning_tokens,
@@ -2806,6 +2972,7 @@ mod tests {
         assert!(is_known_provider("cohere"));
         assert!(is_known_provider("opencode"));
         assert!(is_known_provider("opencode-go"));
+        assert!(is_known_provider("kilocode"));
         assert!(is_known_provider("ollama"));
         assert!(is_known_provider("lmstudio"));
     }
@@ -2845,6 +3012,7 @@ mod tests {
             ("cohere", COHERE_URL, COHERE_MODELS_URL),
             ("opencode", super::OPENCODE_URL, super::OPENCODE_MODELS_URL),
             ("opencode-go", super::OPENCODE_GO_URL, super::OPENCODE_GO_MODELS_URL),
+            ("kilocode", super::KILOCODE_URL, super::KILOCODE_MODELS_URL),
         ];
 
         for (provider, completion, models) in hosted {
@@ -3134,6 +3302,14 @@ mod tests {
         assert!(!opencode_model_uses_chat_completions("opencode", "gpt-5.6-sol"));
         assert!(opencode_model_uses_chat_completions("opencode-go", "kimi-k3"));
         assert!(!opencode_model_uses_chat_completions("opencode-go", "qwen3.8-max"));
+    }
+
+    #[test]
+    fn opencode_free_tier_models_are_recognised() {
+        assert!(opencode_model_is_free_tier("big-pickle"));
+        assert!(opencode_model_is_free_tier("mimo-v2.5-free"));
+        assert!(!opencode_model_is_free_tier("mimo-v2.5-pro"));
+        assert!(!opencode_model_is_free_tier("glm-5.3-flash"));
     }
 
     #[test]
