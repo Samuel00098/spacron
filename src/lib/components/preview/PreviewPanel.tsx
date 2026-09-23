@@ -347,7 +347,9 @@ export default function PreviewPanel() {
   const consoleBodyRef = useRef<HTMLDivElement>(null);
   const [screenshotting, setScreenshotting] = useState(false);
   const [clearingData, setClearingData] = useState(false);
-  const [tempPort, setTempPort] = useState(port);
+  // Held as text while typing so the field can be cleared and retyped; it only
+  // becomes a port when committed (Enter or blur).
+  const [tempPort, setTempPort] = useState(String(port));
   const [inputUrl, setInputUrl] = useState(() => previewAddressBarValue(currentUrlValue));
   const [inspectMode, setInspectMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -663,8 +665,13 @@ export default function PreviewPanel() {
   }, [activeTabId, desiredUrl, proxyStartedValue, tabLoadState, clearLoadFeedbackTimer, updateTabLoadState]);
 
   const handlePortChange = useCallback(() => {
-    if (tempPort >= 1 && tempPort <= 65535) {
-      setTargetPort(tempPort);
+    const next = Number(tempPort);
+    if (Number.isInteger(next) && next >= 1 && next <= 65535) {
+      setTargetPort(next);
+      setTempPort(String(next));
+    } else {
+      // Empty or out of range: put the port that is actually in use back.
+      setTempPort(String(portRef.current));
     }
   }, [tempPort]);
 
@@ -1549,14 +1556,14 @@ export default function PreviewPanel() {
 
     (async () => {
       await loadProxyState();
-      setTempPort(portRef.current);
+      setTempPort(String(portRef.current));
       // Always silently ensure the background proxy server is running.
       // This is needed for both external web browsing AND local dev proxying.
       // We do NOT auto-start proxyStarted (dev mode) — user can toggle that manually.
       await ensureProxyRunning();
 
       unsubscribePort = targetPort.subscribe((val) => {
-        setTempPort(val);
+        setTempPort(String(val));
       });
 
       unsubscribeUrl = currentUrl.subscribe((val) => {
@@ -1976,15 +1983,15 @@ export default function PreviewPanel() {
           <span className="label">Port:</span>
           <div className="port-combo">
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               list="common-ports"
               className="port-input"
               value={tempPort}
-              onChange={(e) => setTempPort(Number(e.target.value))}
+              onChange={(e) => setTempPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
               onBlur={handlePortChange}
               onKeyDown={(e) => e.key === 'Enter' && handlePortChange()}
-              min={1}
-              max={65535}
+              maxLength={5}
               title="Dev server port (type custom or pick common)"
             />
             <datalist id="common-ports">
