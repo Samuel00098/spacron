@@ -111,6 +111,7 @@ import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDow
 import { get } from '$lib/stores/storeCompat';
 import { computerUseSupported } from '$lib/stores/computerUse';
 import ComputerUseDetails from './ComputerUseDetails';
+import BrowserToolsDetails from './BrowserToolsDetails';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
@@ -3043,7 +3044,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </p>
                   <SettingRow
                     title="Let agents use a browser"
-                    detail="Runs `npx @playwright/mcp@latest --isolated` per agent, so it needs Node on your PATH and downloads a browser the first time. Sessions are isolated because agents run concurrently and a shared browser profile can only be held by one of them. Adds a spacron-playwright entry to agent config files, including the global ones for Codex and droid, and removes it again when you turn this off."
+                    detail="Also gives the chat its own browser window. Needs Node.js. Each agent gets an isolated browser, because agents run concurrently and a shared profile can only be held by one of them. Adds a spacron-playwright entry to agent config files, including the global ones for Codex and droid, and removes it again when you turn this off. The chat asks before its first visit to each outside website."
                   >
                     <Toggle
                       label="Toggle agent browser tools"
@@ -3051,6 +3052,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       onChange={agentBrowserTools.set}
                     />
                   </SettingRow>
+                  {currentAgentBrowserTools ? <BrowserToolsDetails /> : null}
                 </Section>
 
                 <Section title="Computer use">

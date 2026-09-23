@@ -38,6 +38,7 @@ import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
 import { usageState } from './usage';
 import { agentBrowserTools, mcpServers } from './settings';
+import { setBrowserToolsAvailable } from '$lib/services/orchestrator/brain-tools';
 import {
   codexTable,
   droidEntry,
@@ -477,6 +478,10 @@ export function initMcpBridge(): void {
   // build time, so one push at startup is all it needs.
   void setMcpAssistantNames(ASSISTANT_NAMES);
 
+  // The chat's browser follows the same switch as the agents' (Settings →
+  // Agents → Browser), so turning it off takes the tools away from both.
+  agentBrowserTools.subscribe((on) => setBrowserToolsAvailable(on === true));
+
   // An agent reporting on its own turn. This is the deterministic counterpart
   // to the screen-scraping in `agent-turn-watch.ts`: instead of matching an
   // English phrase against the PTY tail and hoping, the agent says what it is
@@ -651,7 +656,79 @@ export async function buildMcpServerConfig(): Promise<Record<string, unknown>> {
  * look at it" — a clean browser each run, no stale login state.
  */
 const PLAYWRIGHT_COMMAND = 'npx';
-const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest', '--isolated'];
+
+/**
+ * The Playwright MCP version every Spacron browser runs. It was `@latest`,
+ * which made npm re-resolve the tag on every launch (~28 s warm on Windows)
+ * and let an upstream release change the tools under us. Must equal
+ * `PLAYWRIGHT_MCP_VERSION` in `src-tauri/src/commands/browser_tools.rs` — a
+ * test reads that line — because Rust installs it and runs the chat's browser.
+ */
+export const PLAYWRIGHT_MCP_VERSION = '0.0.82';
+
+/**
+ * Where the pinned server is installed and where its output goes, from Rust.
+ * Fetched once per app run (and again after an install from Settings); while
+ * unknown, or when not installed, agents get the pinned npx command instead.
+ */
+interface BrowserToolsStatus {
+  version: string;
+  cliPath: string | null;
+  installedVersion: string | null;
+  outputDir: string;
+}
+let browserStatus: Promise<BrowserToolsStatus | null> | null = null;
+
+function browserToolsStatus(): Promise<BrowserToolsStatus | null> {
+  if (!browserStatus) {
+    browserStatus = invoke<BrowserToolsStatus>('browser_tools_status')
+      .then((s) => (s && typeof s === 'object' ? s : null))
+      .catch(() => null);
+  }
+  return browserStatus;
+}
+
+/** Re-read the install after Settings installed or removed it. */
+export function refreshBrowserToolsStatus(): Promise<BrowserToolsStatus | null> {
+  browserStatus = null;
+  return browserToolsStatus();
+}
+
+/** The saved sign-in for a project, when the user made one (Settings). */
+async function projectSignInState(projectRoot: string | null | undefined): Promise<string | null> {
+  if (!projectRoot) return null;
+  try {
+    const state = await invoke<{ path: string; exists: boolean }>('browser_sign_in_state', { projectRoot });
+    return state?.exists ? state.path : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The argv that starts the agent browser.
+ *
+ * `node <cli.js>` from the pinned install when present (~1.3 s), else the
+ * pinned npx (`-y`, see above). Always `--isolated`. `--output-dir` keeps
+ * snapshots and screenshots out of the project: Playwright's default is the
+ * current directory, which for an agent is the user's repo. With a project
+ * sign-in, `--storage-state` starts each agent's isolated browser from it —
+ * signed in, yet with no shared profile, so parallel agents do not collide.
+ *
+ * `projectRoot` is `null` for the global configs (Codex, droid): one file
+ * serves every project, so it can never carry one project's sign-in.
+ */
+async function playwrightArgv(projectRoot: string | null | undefined): Promise<{ command: string; args: string[] }> {
+  const status = await browserToolsStatus();
+  const storageState = await projectSignInState(projectRoot);
+  const extra = [
+    '--isolated',
+    ...(status?.outputDir ? ['--output-dir', status.outputDir] : []),
+    ...(storageState ? ['--storage-state', storageState] : []),
+  ];
+  if (status?.cliPath) return { command: 'node', args: [status.cliPath, ...extra] };
+  return { command: PLAYWRIGHT_COMMAND, args: ['-y', `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, ...extra] };
+}
 
 /**
  * Our key for it, in every config file.
@@ -666,18 +743,19 @@ const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest', '--isolated'];
 const BROWSER_SERVER_KEY = 'spacron-playwright';
 
 /** The `{ command, args }` shape every CLI here uses except opencode. */
-const PLAYWRIGHT_STDIO_ENTRY = { command: PLAYWRIGHT_COMMAND, args: PLAYWRIGHT_ARGS };
+async function playwrightStdioEntry(projectRoot: string | null | undefined) {
+  return playwrightArgv(projectRoot);
+}
 
 /**
  * opencode takes the executable and its arguments as one flat array under
  * `type: "local"`, and wants `enabled` set explicitly — the same divergence its
  * remote entries already have.
  */
-const PLAYWRIGHT_OPENCODE_ENTRY = {
-  type: 'local',
-  command: [PLAYWRIGHT_COMMAND, ...PLAYWRIGHT_ARGS],
-  enabled: true,
-};
+async function playwrightOpencodeEntry(projectRoot: string | null | undefined) {
+  const { command, args } = await playwrightArgv(projectRoot);
+  return { type: 'local', command: [command, ...args], enabled: true };
+}
 
 /**
  * How long an agent should wait for the browser server to finish starting.
@@ -729,15 +807,6 @@ function wantsBrowserTools(): boolean {
     // a browser nobody asked for is worse than omitting one they did.
     return false;
   }
-}
-
-/**
- * The browser entry to merge, or `null` meaning "remove any we wrote before".
- * Every config writer passes this through so the toggle works in both
- * directions on the next project open or agent launch.
- */
-function browserEntry<T>(entry: T): T | null {
-  return wantsBrowserTools() ? entry : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -930,7 +999,7 @@ export async function mcpLaunchFlags(
     const servers: Record<string, unknown> = { 'spacron-mcp': { type: 'sse', url } };
     // This file is rewritten on every launch, so an omitted entry is already a
     // removed one — no delete branch needed here, unlike the merging writers.
-    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(projectRoot);
     for (const { key, server } of enabledServers(userServers())) {
       servers[key] = standardEntry(server);
     }
@@ -1133,7 +1202,7 @@ async function injectProjectMcpJson(
 
     const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     servers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
-    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(projectRoot);
     else delete servers[BROWSER_SERVER_KEY];
     for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), standardEntry))) {
       if (entry === null) delete servers[key];
@@ -1210,12 +1279,13 @@ async function injectCursorConfig(
   httpUrl: string,
 ): Promise<void> {
   if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
   await mergeJsonMcpConfig(
     `${projectRoot}/.cursor/mcp.json`,
     'mcpServers',
     (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
-      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
+      [BROWSER_SERVER_KEY]: browser,
       ...mergeMap(userServers(), keys, standardEntry),
     }),
     'Cursor',
@@ -1234,12 +1304,13 @@ async function injectGeminiConfig(
   httpUrl: string,
 ): Promise<void> {
   if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
   await mergeJsonMcpConfig(
     `${projectRoot}/.gemini/settings.json`,
     'mcpServers',
     (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
-      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_STDIO_ENTRY),
+      [BROWSER_SERVER_KEY]: browser,
       ...mergeMap(userServers(), keys, standardEntry),
     }),
     'Gemini CLI',
@@ -1257,12 +1328,13 @@ async function injectOpencodeConfig(
   httpUrl: string,
 ): Promise<void> {
   if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightOpencodeEntry(projectRoot) : null;
   await mergeJsonMcpConfig(
     `${projectRoot}/opencode.json`,
     'mcp',
     (keys) => ({
       'spacron-mcp': { type: 'remote', url: httpUrl, enabled: true },
-      [BROWSER_SERVER_KEY]: browserEntry(PLAYWRIGHT_OPENCODE_ENTRY),
+      [BROWSER_SERVER_KEY]: browser,
       ...mergeMap(userServers(), keys, opencodeEntry),
     }),
     'opencode',
@@ -1290,7 +1362,7 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
 
     const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     servers['spacron-mcp'] = { type: 'http', url: httpUrl, disabled: false };
-    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = PLAYWRIGHT_STDIO_ENTRY;
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(null);
     else delete servers[BROWSER_SERVER_KEY];
     for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), droidEntry))) {
       if (entry === null) delete servers[key];
@@ -1425,10 +1497,12 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
 
     if (wantsBrowserTools()) {
       // TOML wants the argv split into `command` + `args`, unlike opencode's
-      // single array. Values are literals we control, so no escaping is needed.
-      const args = PLAYWRIGHT_ARGS.map((a) => `"${a}"`).join(', ');
+      // single array. Codex's config is global, so no project sign-in. Paths
+      // may hold backslashes: JSON string escaping is valid TOML escaping.
+      const argv = await playwrightStdioEntry(null);
+      const args = argv.args.map((a) => JSON.stringify(a)).join(', ');
       content +=
-        `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = "${PLAYWRIGHT_COMMAND}"\nargs = [${args}]\n` +
+        `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = ${JSON.stringify(argv.command)}\nargs = [${args}]\n` +
         `startup_timeout_sec = ${BROWSER_STARTUP_TIMEOUT_SEC}\n`;
     }
 

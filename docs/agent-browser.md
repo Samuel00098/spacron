@@ -1,6 +1,6 @@
 # Agent browser — design
 
-Status: **DESIGN — not started.** Written 2026-09-23.
+Status: **Built 2026-09-23 — see "As built" at the end, which supersedes the plan where they differ.** Written 2026-09-23.
 Companion to [computer-use.md](computer-use.md); settles the browser half of
 [browser-pillar-spike.md](browser-pillar-spike.md) for *agents* (Design Mode for
 the user is a separate question and is not decided here).
@@ -237,6 +237,62 @@ navigating to the wrong `localhost` ([remote-invoke-seam-gap note](../.spacron/m
 | **2** | Orchestrator read tools: navigate, snapshot, screenshot-to-file, console, network, tabs, wait, find — with the origin policy | Chat can open the local dev server, read the page, report console errors |
 | **3** | Orchestrator input tools + taint gate + audit rows | Chat can fill and submit a local form; an external page cannot trigger an unasked command |
 | **4** | Project profile / My Chrome modes for CLI agents | Profile lock verified with two agents on one project |
+
+## As built (2026-09-23)
+
+| Piece | Where |
+|---|---|
+| Pinned install, MCP stdio client, chat sessions, test, sign-in | `src-tauri/src/commands/browser_tools.rs` |
+| Agent config entries (pinned argv, output dir, sign-in) | `src/lib/stores/mcpBridge.ts` (`playwrightArgv`) |
+| Chat tools | `brain-tools.ts` (`BRAIN_BROWSER_*`), `agent-transport.ts` (schemas), executor + approvals in `stores/orchestrator.ts` |
+| Website rule | `externalOrigin` / `approvalRuleKey` in `command-policy.ts` |
+| Settings | `BrowserToolsDetails.tsx` under Settings → Agents → Browser |
+
+**Measured** (Windows 11, warm): `npx @playwright/mcp@latest` ~28 s to start →
+pinned `npx` 14 s → installed `node cli.js` **2.3 s** (handshake + tool list).
+
+Differences from the plan above:
+
+- **Pinned to 0.0.82**, installed under `%APPDATA%/spacron/tools/playwright-mcp`
+  (Settings → Install), and started with `node cli.js`; pinned `npx` is the
+  fallback. The TS and Rust constants are held equal by a test.
+- **`--output-dir`** is always passed. Playwright's default is the current
+  directory, so agents were writing `.playwright-mcp/` into the user's repo.
+- **Signed-in browsing uses `--storage-state`, not a project profile.** The user
+  signs in once per project in a browser Spacron opens; the cookies are saved
+  under `%APPDATA%/spacron/browser-state/` (outside the project), and every
+  agent's *isolated* browser starts from them — no profile lock, agents stay
+  parallel. Global configs (Codex, droid) never carry a project's sign-in.
+  **"My Chrome" (`--extension`) was not built**: it hands an agent every login
+  the user has, and needs a browser extension; revisit only if asked for.
+- **Chat tool set (20).** Not exposed: `browser_file_upload` and `browser_drop`
+  (local file paths), **`browser_run_code_unsafe` (upstream: "RCE-equivalent" —
+  it runs code in the server process, so no approval makes it safe)**, and
+  `browser_fill_form` / `browser_emulate_media` (argument shapes the chat's
+  schemas cannot express). Any `filename` argument is stripped in Rust, since it
+  writes a file wherever it points. The element argument is `target`, not `ref`.
+- **Website rule.** Local origins (localhost, 127.x, ::1, *.localhost) open
+  freely. The first visit to each outside origin asks in every access mode;
+  "Approve" covers the turn, "Always allow" the conversation. After **every**
+  call the page's final URL is checked, because a click or redirect navigates
+  too: an unallowed outside origin sends the page back to `about:blank` and the
+  model is told to ask. `browser_evaluate` asks every time, with no standing
+  rule. Outside pages' text is wrapped as untrusted and taints the turn (same
+  gate as computer use: file writes and non-read-only commands ask).
+- `file:`, `javascript:`, `data:` and other non-web URLs are refused in Rust,
+  for `browser_navigate` and for `browser_tabs` opening a tab.
+
+**Trap found while building:** with a long `PATH` (a dev shell had 184 entries)
+`cmd.exe` cannot find `npx`, and npx's own inner shell then cannot find the
+package it installed. Children get `agent_probe::search_path()` trimmed to
+6000 characters, and `npm`/`npx` run as `node <npm>/bin/<tool>-cli.js`.
+
+**Verified:** Rust tests including real-server ones (npx fallback and installed
+path both load a page); store tests for the website rule, redirect guard,
+untrusted wrapping and evaluate prompt; the sign-in browser launches and saves
+state. **Not yet seen in the running app:** the Settings panel, the chat's
+headed browser window, and a real sign-in round trip with an agent. Remote
+workspaces are not special-cased yet: the chat's browser runs on this machine.
 
 ## Open questions
 

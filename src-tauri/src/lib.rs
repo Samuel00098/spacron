@@ -177,6 +177,9 @@ pub fn run() {
             let pty_manager = app_state.pty_manager.clone();
             let app_handle = app.handle().clone();
             app.manage(app_state);
+            // The chat's Playwright browsers, one per conversation
+            // (docs/agent-browser.md). Children are kill_on_drop, so they die with the app.
+            app.manage(Arc::new(commands::browser_tools::BrowserSessions::default()));
             commands::images::allow_image_dirs(app.handle(), &config_dir);
 
             let read_cb: mcp::ReadFn = {
@@ -529,6 +532,14 @@ pub fn run() {
             commands::mcp::mcp_desktop_revoke,
             commands::mcp::mcp_desktop_activity,
             commands::mcp::mcp_desktop_set_blocked_apps,
+            commands::browser_tools::browser_tools_status,
+            commands::browser_tools::browser_tools_install,
+            commands::browser_tools::browser_tools_check,
+            commands::browser_tools::browser_call_tool,
+            commands::browser_tools::browser_close_session,
+            commands::browser_tools::browser_sign_in_state,
+            commands::browser_tools::browser_forget_sign_in,
+            commands::browser_tools::browser_sign_in,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

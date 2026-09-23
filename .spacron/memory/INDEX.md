@@ -85,6 +85,7 @@ short enough that it says what the note is *about*, never what it says.
 
 - [path-confinement-layers](path-confinement-layers.md) — the two confinement steps, and which one does not normalize `..`
 - [computer-use-grants](computer-use-grants.md) — the blocking grant handshake between the desktop MCP tools and the permission dialog
+- [agent-browser-install](agent-browser-install.md) — the pinned Playwright MCP install, its PATH trap, and what must change together on a version bump
 
 ## Build, release & repo hygiene
 

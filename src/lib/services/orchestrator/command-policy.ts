@@ -86,6 +86,8 @@ export function classifyCommand(command: string): CommandSafety {
 export function approvalRuleKey(tool: string, command?: string): string {
   // One risky app command allowed must not allow every other one.
   if (tool === 'run_app_command') return `app:${(command ?? '').trim()}`;
+  // A website allowed once is allowed per origin, whichever browser tool opens it.
+  if (tool === 'browser_navigate' || tool === 'browser_tabs') return `origin:${(command ?? '').trim()}`;
   if (tool !== 'run_command') return tool === 'write_file' || tool === 'edit_file' ? 'edit' : tool;
   const text = (command ?? '').trim().replace(/\s+/g, ' ');
   if (UNSAFE_SHELL_RE.test(text) || SEGMENT_SPLIT_RE.test(text)) return `cmd=${text}`;
@@ -109,5 +111,29 @@ export function describeRule(tool: string, command?: string): string {
   if (key.startsWith('cmd:')) return `\`${key.slice(4)}\` commands`;
   if (key.startsWith('cmd=')) return `\`${key.slice(4)}\``;
   if (key.startsWith('app:')) return `the \`${key.slice(4)}\` app command`;
+  if (key.startsWith('origin:')) return `opening ${key.slice(7)}`;
   return key.replace(/_/g, ' ');
+}
+
+/**
+ * The origin of an http(s) URL when it is an OUTSIDE website, or null when it
+ * is local (the user's own dev server, the preview proxy) or not a web URL at
+ * all (Rust refuses those). Outside origins need the user's approval before
+ * the chat's browser opens them, and their text is untrusted (see
+ * docs/agent-browser.md, "Safety").
+ */
+export function externalOrigin(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '0.0.0.0' || /^127(\.\d{1,3}){3}$/.test(host)) {
+    return null;
+  }
+  return url.origin;
 }

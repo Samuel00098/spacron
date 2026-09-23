@@ -6,12 +6,15 @@ const listeners = vi.hoisted(() => ({ handler: null as null | ((event: { payload
 vi.mock('@tauri-apps/api/event', () => ({ listen: (_name: string, handler: typeof listeners.handler) => { listeners.handler = handler; return Promise.resolve(listeners.unlisten); } }));
 import { AgentTransport, DEFAULT_AGENT_BUDGETS, filePage, nativeTools, validateToolCall } from './agent-transport';
 import {
+  BRAIN_BROWSER_ACT_TOOLS,
+  BRAIN_BROWSER_LOOK_TOOLS,
   BRAIN_DESKTOP_ACT_TOOLS,
   BRAIN_DESKTOP_SEE_TOOLS,
   BRAIN_READONLY_TOOLS,
   BRAIN_WRITE_TOOLS,
   brainToolProfile,
   buildBrainToolsPrompt,
+  setBrowserToolsAvailable,
   setDesktopToolsAvailable,
 } from './brain-tools';
 
@@ -310,5 +313,43 @@ describe('computer-use tools (docs/computer-use.md)', () => {
   it('runs acts one at a time and reads concurrently', () => {
     for (const t of BRAIN_DESKTOP_ACT_TOOLS) expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
     for (const t of BRAIN_DESKTOP_SEE_TOOLS) expect(BRAIN_READONLY_TOOLS.has(t)).toBe(true);
+  });
+});
+
+describe('chat browser tools (docs/agent-browser.md)', () => {
+  afterEach(() => setBrowserToolsAvailable(false));
+
+  it('are offered only while the browser switch is on, and act only in full mode', () => {
+    setBrowserToolsAvailable(false);
+    expect(nativeTools(brainToolProfile('full').allowed).some((t) => t.name.startsWith('browser_'))).toBe(false);
+    setBrowserToolsAvailable(true);
+    const full = nativeTools(brainToolProfile('full').allowed).map((t) => t.name);
+    for (const t of [...BRAIN_BROWSER_LOOK_TOOLS, ...BRAIN_BROWSER_ACT_TOOLS]) expect(full).toContain(t);
+    const ask = nativeTools(brainToolProfile('ask').allowed).map((t) => t.name);
+    expect(ask).toContain('browser_snapshot');
+    expect(ask).not.toContain('browser_click');
+    expect(ask).not.toContain('browser_evaluate');
+    expect(buildBrainToolsPrompt()).toContain('BROWSER LOOP');
+  });
+
+  it('never offers the tools that reach outside the page', () => {
+    setBrowserToolsAvailable(true);
+    const names = nativeTools(brainToolProfile('full').allowed).map((t) => t.name);
+    for (const banned of ['browser_file_upload', 'browser_drop', 'browser_run_code_unsafe']) expect(names).not.toContain(banned);
+  });
+
+  it('matches Playwright MCP 0.0.82 argument names (target, not ref)', () => {
+    setBrowserToolsAvailable(true);
+    expect(validateToolCall({ id: '1', name: 'browser_click', args: { target: 'e6', element: 'Save' } })).toBeNull();
+    expect(validateToolCall({ id: '1', name: 'browser_click', args: { ref: 'e6' } })).toContain('target');
+    expect(validateToolCall({ id: '1', name: 'browser_take_screenshot', args: { scale: 'css' } })).toBeNull();
+    expect(validateToolCall({ id: '1', name: 'browser_console_messages', args: {} })).toContain('level');
+  });
+
+  it('runs every browser tool in order', () => {
+    for (const t of [...BRAIN_BROWSER_LOOK_TOOLS, ...BRAIN_BROWSER_ACT_TOOLS]) {
+      expect(BRAIN_READONLY_TOOLS.has(t)).toBe(false);
+      expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
+    }
   });
 });

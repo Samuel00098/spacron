@@ -1983,6 +1983,80 @@ describe('orchestrator chat actions', () => {
       expect(invoke).toHaveBeenCalledWith('mcp_desktop_end_chat_turn', { chatId: desktopCalls[0].chatId });
     });
 
+    describe('chat browser (docs/agent-browser.md)', () => {
+      const mountBrowser = (pages: Record<string, string>) => {
+        mountFiles({});
+        const base = invoke.getMockImplementation()!;
+        const calls: Array<{ name: string; args: any }> = [];
+        let current = 'about:blank';
+        invoke.mockImplementation(async (command: string, args?: any) => {
+          if (command === 'browser_call_tool') {
+            calls.push({ name: args.name, args: args.args });
+            if (args.name === 'browser_navigate') current = args.args.url;
+            if (args.name === 'browser_click') current = pages[args.args.target] ?? current;
+            return { text: `### Page\n- Page URL: ${current}`, pageUrl: current, isError: false };
+          }
+          return base(command, args);
+        });
+        return calls;
+      };
+
+      it('opens local pages at once, and sends a click that lands on an unallowed site back to a blank page', async () => {
+        const calls = mountBrowser({ e6: 'https://ads.example.net/landing' });
+        const thread = createChatThread('project-1', { provider: 'deepseek' });
+        const outputs: string[] = [];
+        routeOrchestratorRequest.mockImplementation(async (_text, _agents, context) => {
+          outputs.push((await context.toolExecutor({ id: 'n', name: 'browser_navigate', args: { url: 'http://localhost:5173' } })).output);
+          outputs.push((await context.toolExecutor({ id: 'c', name: 'browser_click', args: { target: 'e6' } })).output);
+          return { reply: 'Done.', actions: [], viaLLM: true };
+        });
+
+        await sendChatMessage('project-1', '/repo', 'check my app', fullAccess(thread.id));
+
+        expect(threadMessages(thread.id).some((m) => m.type === 'approval')).toBe(false);
+        expect(outputs[0]).toContain('localhost:5173');
+        expect(outputs[0]).not.toContain('untrusted');
+        expect(outputs[1]).toContain('https://ads.example.net, which the user has not allowed');
+        expect(calls.at(-1)).toEqual({ name: 'browser_navigate', args: { url: 'about:blank' } });
+      });
+
+      it('asks before an outside website even with Full access, and marks what it says as untrusted', async () => {
+        mountBrowser({});
+        const thread = createChatThread('project-1', { provider: 'deepseek' });
+        const outputs: string[] = [];
+        routeOrchestratorRequest.mockImplementation(async (_text, _agents, context) => {
+          outputs.push((await context.toolExecutor({ id: 'n', name: 'browser_navigate', args: { url: 'https://docs.example.org/guide' } })).output);
+          return { reply: 'Read it.', actions: [], viaLLM: true };
+        });
+
+        const pending = sendChatMessage('project-1', '/repo', 'read the guide', fullAccess(thread.id));
+        await vi.advanceTimersByTimeAsync(1);
+        const card = threadMessages(thread.id).find((m) => m.type === 'approval');
+        expect(card?.inlineRequest?.prompt).toContain('https://docs.example.org');
+        await sendChatMessage('project-1', '/repo', 'Approve', fullAccess(thread.id));
+        await pending;
+
+        expect(outputs[0]).toContain('<untrusted_web_content origin="https://docs.example.org"');
+      });
+
+      it('asks every time before running JavaScript in the page, with no standing rule offered', async () => {
+        mountBrowser({});
+        const thread = createChatThread('project-1', { provider: 'deepseek' });
+        routeOrchestratorRequest.mockImplementation(async (_text, _agents, context) => {
+          await context.toolExecutor({ id: 'e', name: 'browser_evaluate', args: { function: '() => document.cookie' } });
+          return { reply: 'Done.', actions: [], viaLLM: true };
+        });
+
+        const pending = sendChatMessage('project-1', '/repo', 'what is on the page', fullAccess(thread.id));
+        await vi.advanceTimersByTimeAsync(1);
+        const card = threadMessages(thread.id).find((m) => m.type === 'approval');
+        expect(card?.inlineRequest?.prompt).toContain('document.cookie');
+        expect(card?.inlineRequest?.options?.map((o: { id: string }) => o.id)).toEqual(['approve', 'deny']);
+        await sendChatMessage('project-1', '/repo', 'Deny', fullAccess(thread.id));
+        await pending;
+      });
+    });
+
     it('saves documents into the project docs folder without clobbering an existing one', async () => {
       const files = mountFiles({ '/repo/docs/research.md': 'older notes' });
       const thread = createChatThread('project-1', { provider: 'deepseek' });

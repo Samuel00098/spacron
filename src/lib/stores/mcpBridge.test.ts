@@ -68,10 +68,24 @@ async function mockBackend(opts: { url?: string | undefined; writeFails?: boolea
  */
 async function mockModule(
   existingFiles: Record<string, string> = {},
-  opts: { browserTools?: boolean; servers?: unknown[] } = {},
+  opts: {
+    browserTools?: boolean;
+    servers?: unknown[];
+    /** What `browser_tools_status` answers; omitted = not installed. */
+    browserStatus?: { cliPath: string | null; outputDir: string };
+    /** Project roots that have a saved sign-in, and its file. */
+    signIns?: Record<string, string>;
+  } = {},
 ) {
   invokeMock.mockImplementation(async (cmd: string, args?: Record<string, string>) => {
     if (cmd === 'mcp_server_url') return URL;
+    if (cmd === 'browser_tools_status') {
+      return opts.browserStatus ? { version: '0.0.82', installedVersion: null, ...opts.browserStatus } : undefined;
+    }
+    if (cmd === 'browser_sign_in_state') {
+      const path = opts.signIns?.[args?.projectRoot ?? ''];
+      return { path: path ?? 'unused', exists: path !== undefined };
+    }
     if (cmd === 'mcp_server_http_url') return HTTP_URL;
     if (cmd === 'fs_read_file') {
       const found = existingFiles[args?.path ?? ''];
@@ -347,7 +361,7 @@ describe('agent browser tools (Playwright MCP)', () => {
     const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
     expect(config.mcpServers['spacron-playwright']).toEqual({
       command: 'npx',
-      args: ['-y', '@playwright/mcp@latest', '--isolated'],
+      args: ['-y', '@playwright/mcp@0.0.82', '--isolated'],
     });
     // The Spacron server is still there — this is an addition, not a swap.
     expect(config.mcpServers['spacron-mcp']).toEqual({ type: 'sse', url: URL });
@@ -369,7 +383,7 @@ describe('agent browser tools (Playwright MCP)', () => {
 
     expect(JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-playwright']).toEqual({
       type: 'local',
-      command: ['npx', '-y', '@playwright/mcp@latest', '--isolated'],
+      command: ['npx', '-y', '@playwright/mcp@0.0.82', '--isolated'],
       enabled: true,
     });
   });
@@ -381,7 +395,7 @@ describe('agent browser tools (Playwright MCP)', () => {
     const toml = writtenGlobal('codex')!;
     expect(toml).toContain('[mcp_servers.spacron-playwright]');
     expect(toml).toContain('command = "npx"');
-    expect(toml).toContain('args = ["-y", "@playwright/mcp@latest", "--isolated"]');
+    expect(toml).toContain('args = ["-y", "@playwright/mcp@0.0.82", "--isolated"]');
     expect(toml).toContain('[mcp_servers.spacron-mcp]');
   });
 
@@ -432,6 +446,56 @@ describe('agent browser tools (Playwright MCP)', () => {
     const config = JSON.parse(written('C:/work/repo/.mcp.json')!);
     expect(config.mcpServers['spacron-playwright']).toBeUndefined();
     expect(config.mcpServers['spacron-mcp']).toBeDefined();
+  });
+
+  it('runs the pinned install with node, and keeps its output out of the project', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, {
+      browserTools: true,
+      browserStatus: { cliPath: 'C:\\Users\\dev\\AppData\\Roaming\\spacron\\tools\\playwright-mcp\\node_modules\\@playwright\\mcp\\cli.js', outputDir: 'C:\\Temp\\spacron-playwright\\agents' },
+    });
+    await injectMcpConfigForAgent('claude', 'C:/work/repo');
+
+    const entry = JSON.parse(written('C:/work/repo/.mcp.json')!).mcpServers['spacron-playwright'];
+    expect(entry.command).toBe('node');
+    expect(entry.args[0]).toMatch(/cli\.js$/);
+    expect(entry.args).toContain('--isolated');
+    expect(entry.args.slice(entry.args.indexOf('--output-dir'))).toEqual(['--output-dir', 'C:\\Temp\\spacron-playwright\\agents']);
+  });
+
+  it('escapes Windows paths in the Codex TOML', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({}, {
+      browserTools: true,
+      browserStatus: { cliPath: 'C:\\tools\\cli.js', outputDir: 'C:\\Temp\\out' },
+    });
+    await injectMcpConfigForAgent('codex', 'C:/work/repo');
+
+    const toml = writtenGlobal('codex')!;
+    // A bare backslash is an escape in a TOML basic string; `\t` would have
+    // become a tab and the path would point nowhere.
+    expect(toml).toContain('command = "node"');
+    expect(toml).toContain('args = ["C:\\\\tools\\\\cli.js", "--isolated", "--output-dir", "C:\\\\Temp\\\\out"]');
+  });
+
+  it("starts a project's agents from its saved sign-in, but never writes one into a global config", async () => {
+    const signIns = { 'C:/work/repo': 'C:\\Users\\dev\\AppData\\Roaming\\spacron\\browser-state\\abc.json' };
+    const { injectMcpConfigForAgent } = await mockModule({}, { browserTools: true, signIns });
+    await injectMcpConfigForAgent('opencode', 'C:/work/repo');
+    await injectMcpConfigForAgent('codex', 'C:/work/repo');
+
+    const opencode = JSON.parse(written('C:/work/repo/opencode.json')!).mcp['spacron-playwright'].command as string[];
+    expect(opencode.slice(opencode.indexOf('--storage-state'))).toEqual(['--storage-state', signIns['C:/work/repo']]);
+    expect(opencode).toContain('--isolated');
+    // Codex's config serves every project: one project's cookies must not leak
+    // into another project's agents.
+    expect(writtenGlobal('codex')).not.toContain('--storage-state');
+  });
+
+  it('pins the same Playwright MCP version as the Rust side', async () => {
+    const { PLAYWRIGHT_MCP_VERSION } = await mockModule();
+    const { readFileSync } = await import('node:fs');
+    const rust = readFileSync('src-tauri/src/commands/browser_tools.rs', 'utf8');
+    const pinned = rust.match(/pub const PLAYWRIGHT_MCP_VERSION: &str = "([^"]+)";/)?.[1];
+    expect(pinned).toBe(PLAYWRIGHT_MCP_VERSION);
   });
 
   it("leaves a playwright server the user configured themselves alone", async () => {

@@ -7,6 +7,7 @@ pub mod app_flags;
 pub mod audio;
 pub mod background;
 pub mod browser_shim;
+pub mod browser_tools;
 pub mod chatgpt;
 pub mod deepseek_harness;
 pub mod db;

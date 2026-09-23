@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalRuleKey, classifyCommand, describeRule, ruleAllows } from './command-policy';
+import { approvalRuleKey, classifyCommand, describeRule, ruleAllows, externalOrigin } from './command-policy';
 
 describe('classifyCommand', () => {
   it.each([
@@ -67,5 +67,30 @@ describe('approval rules', () => {
     expect(ruleAllows(rules, 'run_command', 'npm run deploy')).toBe(false);
     expect(ruleAllows(rules, 'edit_file')).toBe(false);
     expect(describeRule('run_command', 'npm run check')).toBe('`npm run check` commands');
+  });
+});
+
+describe('externalOrigin (chat browser, docs/agent-browser.md)', () => {
+  it('treats the user\'s own machine as local', () => {
+    for (const url of ['http://localhost:5173', 'http://app.localhost/x', 'http://127.0.0.1:8080', 'http://[::1]:3000', 'http://0.0.0.0:4000']) {
+      expect(externalOrigin(url)).toBeNull();
+    }
+  });
+
+  it('returns the origin of an outside website', () => {
+    expect(externalOrigin('https://docs.example.org/guide?x=1')).toBe('https://docs.example.org');
+    expect(externalOrigin('http://192.168.1.20:3000')).toBe('http://192.168.1.20:3000');
+    // Not a hostname trick: "localhost" as a subdomain of someone else's site.
+    expect(externalOrigin('https://localhost.evil.test')).toBe('https://localhost.evil.test');
+  });
+
+  it('ignores what is not a web URL (Rust refuses those outright)', () => {
+    for (const url of ['file:///C:/x', 'about:blank', 'not a url', '', null]) expect(externalOrigin(url)).toBeNull();
+  });
+
+  it('keeps one standing rule per origin', () => {
+    expect(approvalRuleKey('browser_navigate', 'https://a.test')).toBe('origin:https://a.test');
+    expect(approvalRuleKey('browser_tabs', 'https://a.test')).toBe('origin:https://a.test');
+    expect(describeRule('browser_navigate', 'https://a.test')).toBe('opening https://a.test');
   });
 });
