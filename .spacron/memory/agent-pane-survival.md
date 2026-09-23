@@ -8,8 +8,11 @@
   panes stay mounted must NOT filter by `openProjectIds`, or leaving a project
   unmounts its running agents' xterms and the return trip replays the TUI into a
   fresh one (blank or garbled). `mountedAgentRoomIds` reads `allProjectSessions`
-  unbounded for this reason. (The personal terminal room's `terminalHostProjectIds`
-  is still bounded — same trap, not fixed as of 2026-09-23.)
+  unbounded for this reason. The personal terminal room's `terminalHostProjectIds`
+  likewise adds every project with a live shell, and the room itself stays mounted
+  (hidden) while any other project has one — even when the active project has it
+  closed. In that case the active project's panel is passed `isActiveProject=false`
+  so a closed room never auto-opens a shell.
 - **Backend PTY ids restart at 1 on every launch.** A saved `backendSessionId` is
   only meaningful under the same backend run; `terminal_instance_id` names the run
   and is saved as `ptyInstance`. Restore re-attaches only on a match (webview

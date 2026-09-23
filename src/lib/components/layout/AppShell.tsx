@@ -115,6 +115,8 @@ import {
   sessions as terminalSessions,
   devSessions as devTerminalSessions,
   allProjectSessions,
+  projectTerminalStates,
+  devProjectTerminalStates,
   commandHistory,
 } from '$lib/stores/terminal';
 import { toggleChatModeTranscription, toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
@@ -123,6 +125,7 @@ import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
+import type { TerminalSessionInfo } from '$lib/stores/terminal';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
@@ -614,14 +617,39 @@ export default function AppShell() {
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
-  // Stable order so a panel never changes position (and gets re-parented) as
-  // projects come and go; the active project is always included even if
-  // `openProjectIds` hasn't caught up mid-switch.
+  const shellProjectStates = useStore(projectTerminalStates);
+  const devShellProjectStates = useStore(devProjectTerminalStates);
+  // Every project that gets a (possibly parked) terminal panel: the open ones,
+  // the active one even if `openProjectIds` hasn't caught up mid-switch, and any
+  // project that still has a live shell. That last set is what keeps a project's
+  // terminals mounted after you leave it through the Projects sidebar — that is
+  // usually a workspace switch, which empties `openProjectIds`, and dropping the
+  // panel there disposed every xterm so the way back replayed scrollback into
+  // fresh ones. See `.spacron/memory/agent-pane-survival.md`.
+  //
+  // Order is sticky: a project keeps its slot for as long as it is listed, so a
+  // panel never moves (and gets re-parented) when the open list is rebuilt.
+  const terminalHostOrderRef = useRef<string[]>([]);
+  // Projects other than the active one with a live personal shell, per room.
+  const backgroundShellProjects = useMemo(() => {
+    const collect = (states: Map<string, { sessions: TerminalSessionInfo[] }>) =>
+      [...states]
+        .filter(([pid, state]) =>
+          pid !== activeProjectIdValue &&
+          state.sessions.some((session) => session.isRunning && !session.hidden && !isAgentSession(session)),
+        )
+        .map(([pid]) => pid);
+    return { terminal: collect(shellProjectStates), dev: collect(devShellProjectStates) };
+  }, [shellProjectStates, devShellProjectStates, activeProjectIdValue]);
   const terminalHostProjectIds = useMemo(() => {
-    const ids = [...openProjectIdList];
-    if (activeProjectIdValue && !ids.includes(activeProjectIdValue)) ids.push(activeProjectIdValue);
-    return ids;
-  }, [openProjectIdList, activeProjectIdValue]);
+    const wanted = new Set(openProjectIdList);
+    if (activeProjectIdValue) wanted.add(activeProjectIdValue);
+    for (const pid of [...backgroundShellProjects.terminal, ...backgroundShellProjects.dev]) wanted.add(pid);
+    const kept = terminalHostOrderRef.current.filter((pid) => wanted.has(pid));
+    const next = [...kept, ...[...wanted].filter((pid) => !kept.includes(pid))];
+    terminalHostOrderRef.current = next;
+    return next;
+  }, [openProjectIdList, activeProjectIdValue, backgroundShellProjects]);
 
   const nextAppearance = currentAppearance === 'light'
     ? 'dark'
@@ -2929,7 +2957,10 @@ export default function AppShell() {
                 className={`terminal-project-layer${pid === activeProjectIdValue ? '' : ' parked'}`}
                 inert={pid !== activeProjectIdValue}
               >
-                <TerminalPanel projectId={pid} isActiveProject={pid === activeProjectIdValue} />
+                {/* A room kept mounted only for OTHER projects' shells parks the
+                    active project's panel too, so a closed room never auto-opens
+                    a shell. */}
+                <TerminalPanel projectId={pid} isActiveProject={pid === activeProjectIdValue && terminalRoomOpen} />
               </div>
             ))
           ) : (
@@ -2953,7 +2984,7 @@ export default function AppShell() {
                 <TerminalPanel
                   devMode={true}
                   projectId={pid}
-                  isActiveProject={pid === activeProjectIdValue}
+                  isActiveProject={pid === activeProjectIdValue && devTerminalRoomOpen}
                 />
               </div>
             ))
@@ -3335,9 +3366,15 @@ export default function AppShell() {
     const isSplit = ambientLayout === 'gallery';
     const isExpanded = stageExpandedRoom !== null;
 
+    // The terminal rooms also stay mounted (hidden, off the stage) while another
+    // project still has a live shell in them: the room is per project, and
+    // unmounting it because the project you switched TO has it closed would
+    // dispose every other project's parked xterm with it.
     const persistentStageRooms: RoomId[] = [
       ...(['terminal', 'dev-terminal', 'preview', 'sketch', 'deepseek'] as RoomId[]).filter((room) =>
-        openRooms.includes(room),
+        openRooms.includes(room) ||
+        (room === 'terminal' && backgroundShellProjects.terminal.length > 0) ||
+        (room === 'dev-terminal' && backgroundShellProjects.dev.length > 0),
       ),
       ...Array.from(new Set([...openRooms.filter(isAgentRoomId), ...mountedAgentRoomIds])).sort(
         (a, b) => getAgentRoomSessionId(a) - getAgentRoomSessionId(b),
