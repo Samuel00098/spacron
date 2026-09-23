@@ -1701,7 +1701,7 @@ export default function ChatModePanel() {
             )}
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
-                <h2 className="chat-mode-empty-heading">{projectName ? `What’s next for ${projectName}?` : 'What’s next for your project?'}</h2>
+                <h2 className="chat-mode-empty-heading">{projectName ? `What should we work on in ${projectName}?` : 'What should we work on?'}</h2>
               </div>
             ) : messages.map((message, messageIndex) => {
               if (message.type === 'completion') {
