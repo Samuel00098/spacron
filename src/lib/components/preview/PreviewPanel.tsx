@@ -2447,7 +2447,7 @@ export default function PreviewPanel() {
                       </span>
                     )}
                     {log.url && (
-                      <span className="console-source" title={`${log.url} - ${log.timestamp}`}>
+                      <span className="console-source" title={`${log.url}: ${log.timestamp}`}>
                         {shortConsoleSource(log.url)}
                       </span>
                     )}

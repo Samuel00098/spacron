@@ -1092,7 +1092,7 @@ export default function ProjectHUD() {
                   const state = session.isExecuting ? 'working' : 'running';
                   const hover = [name, agentType, task && task !== name ? task : null, state]
                     .filter(Boolean)
-                    .join(' — ');
+                    .join(': ');
                   return (
                     <button
                       key={session.id}

@@ -569,7 +569,7 @@ describe('Chat turn presentation', () => {
         expect(formatted).toContain('Typecheck: DID NOT COMPLETE');
         expect(formatted).toContain('This change is unverified.');
         // The edit keeps an amber badge, never a green or a red one.
-        expect(formatted).toContain('[unverified — the check never finished] 🟡');
+        expect(formatted).toContain('[unverified: the check never finished] 🟡');
         // And it is not told to fix what a command that reported nothing said.
         expect(formatted).toContain('The command never finished, so nothing was checked.');
         expect(formatted).not.toContain('Fix what the command reported');

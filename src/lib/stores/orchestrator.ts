@@ -4363,7 +4363,7 @@ async function undoLastTurnEdits(conversationKey: string, rootPath: string): Pro
   // reply that reads like compliance and changes nothing. Say plainly that
   // there is nothing to restore instead.
   if (records.length === 0) {
-    return 'I have no record of a file I changed directly in this conversation, so there is nothing for me to restore.\nDirect-edit undo only covers files I wrote myself. Changes made by a dispatched agent are not included — review those with `git diff` and revert them with git.';
+    return 'I have no record of a file I changed directly in this conversation, so there is nothing for me to restore.\nDirect-edit undo only covers files I wrote myself. Changes made by a dispatched agent are not included: review those with `git diff` and revert them with git.';
   }
   const restored: string[] = [];
   const skipped: string[] = [];

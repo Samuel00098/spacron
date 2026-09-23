@@ -361,8 +361,7 @@ export default function EmbeddedPanel() {
           <code>{setup.install}</code>
           {guide ? (
             <>
-              {' '}
-              — open the{' '}
+              : open the{' '}
               <a
                 className="embedded-guide-link"
                 href={guide.url}

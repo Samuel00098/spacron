@@ -1451,7 +1451,7 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
         : item.verificationOutcome === 'fail'
           ? ' [verification failed] 🔴'
           : item.verificationOutcome === 'inconclusive'
-            ? ' [unverified — the check never finished] 🟡'
+            ? ' [unverified: the check never finished] 🟡'
             : ' [not verified] 🟡';
       lines.push(`- ${item.task}${files.length > 0 ? ` (${files.join(', ')})` : ''}${badge}`);
       if (item.evidence && !item.evidence.includes(item.task)) lines.push(`  - ${item.evidence}`);
@@ -1495,7 +1495,7 @@ export function formatStructuredReport(report: CompletionReport, existingText = 
     // looking for a failure.
     if (v.tests === 'inconclusive' || v.typecheck === 'inconclusive' || v.build === 'inconclusive') {
       lines.push('');
-      lines.push('_A check marked DID NOT COMPLETE timed out or lost its session — it reports nothing about the code. This change is unverified._');
+      lines.push('_A check marked DID NOT COMPLETE timed out or lost its session: it reports nothing about the code. This change is unverified._');
     }
   }
 

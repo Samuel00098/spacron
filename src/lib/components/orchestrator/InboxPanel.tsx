@@ -99,7 +99,7 @@ function statusLabel(entry: InboxEntry): string {
 /** The whole entry as plain text, for the expanded row's copy button. */
 function copyText(entry: InboxEntry): string {
   const { reason, summary } = entry.detail;
-  const parts = [`${formatAgentIdentity(entry.agentName, entry.agentType)} — ${entry.title}`, absoluteTime(entry.ts)];
+  const parts = [`${formatAgentIdentity(entry.agentName, entry.agentType)}: ${entry.title}`, absoluteTime(entry.ts)];
   if (entry.kind === 'mail') {
     parts.push('', entry.body);
   } else {
