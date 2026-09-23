@@ -19,5 +19,19 @@ single file owns.
   anonymous caller (app-wide token, no `agent_token` arg) is refused, never
   granted — there would be no session to revoke it from.
 
+- The chat's grants are keyed by conversation and must end with the turn:
+  the orchestrator store calls `mcp_desktop_end_chat_turn` on every turn end
+  (finished, failed, cancelled). Miss one path and the chat keeps control of a
+  window into its next reply.
+
+## The hit-test trap (2026-09-23)
+
+`win::window_at` decides whether a coordinate click would land on the granted
+window. It skips **click-through** windows only. It must never skip "our own
+windows": that was the first version, to see through the control indicator,
+and it let a click over Spacron's permission dialog pass the check. The
+indicator stays out of the way because `desktop/indicator.rs` sets
+WS_EX_TRANSPARENT on it — keep that flag, or every coordinate click is refused.
+
 Related: [[agent-report-status]] (same identity resolution),
 [[modal-open-count-gate]] (why the dialog is rendered conditionally).

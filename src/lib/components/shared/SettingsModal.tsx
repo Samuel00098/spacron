@@ -110,6 +110,7 @@ import { ChatGptSignIn } from './ChatGptSignIn';
 import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDownloading, updateProgress } from '$lib/stores/updater';
 import { get } from '$lib/stores/storeCompat';
 import { computerUseSupported } from '$lib/stores/computerUse';
+import ComputerUseDetails from './ComputerUseDetails';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
@@ -3054,11 +3055,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Computer use">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Let agents look at the other apps on your computer: list your open windows,
-                    read what is in one, and take a screenshot of it. Agents can look but not click
-                    or type yet. Every agent asks you first, for each window, and its permission
-                    ends with its session. Spacron's own windows, password managers and Windows
-                    security prompts are never shown to an agent.
+                    Let agents, and the chat, use the other apps on your computer: list your open
+                    windows, read what is in one, take a screenshot, and click and type in it. Each
+                    one asks you first, separately for looking at and for controlling each window.
+                    An agent's permission ends with its session; the chat's ends with its reply.
+                    While an agent is in control an orange frame surrounds the window, only one
+                    agent can control the computer at a time, and it waits while you are using the
+                    mouse or keyboard. Press <kbd>Ctrl+Alt+Esc</kbd> at any time to stop every agent
+                    and withdraw every permission. Spacron's own windows, password managers and
+                    Windows security prompts are never shown to an agent.
                   </p>
                   <SettingRow
                     title="Allow computer use"
@@ -3075,6 +3080,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       onChange={computerUse.set}
                     />
                   </SettingRow>
+                  {currentComputerUse && computerUseAvailable === true ? <ComputerUseDetails /> : null}
                 </Section>
 
                 <Section title="Agents">

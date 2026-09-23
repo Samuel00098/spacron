@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Spacron — agent in control</title>
+    <!-- Computer-use control frame (src-tauri/src/desktop/indicator.rs). Shown
+         click-through over the window an agent is controlling. No IPC: the
+         window is in no capability file, and text arrives by eval or in the
+         URL fragment. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font: 600 12px/1.3 system-ui, 'Segoe UI', sans-serif;
+      }
+      .frame {
+        position: fixed;
+        inset: 0;
+        border: 3px solid #f59e0b;
+        border-radius: 10px;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+      }
+      .banner {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100% - 32px);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: rgba(20, 20, 24, 0.92);
+        color: #fff;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        white-space: nowrap;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        flex: none;
+        border-radius: 50%;
+        background: #f59e0b;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .action {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-weight: 500;
+        opacity: 0.8;
+      }
+      .stop {
+        flex: none;
+        font-weight: 500;
+        opacity: 0.8;
+      }
+      kbd {
+        font: inherit;
+        font-weight: 700;
+        opacity: 1;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame"></div>
+    <div class="banner">
+      <span class="dot"></span>
+      <span id="who">An agent is controlling this window</span>
+      <span class="action" id="action"></span>
+      <span class="stop">· <kbd id="stop">Ctrl+Alt+Esc</kbd> to stop</span>
+    </div>
+    <script src="desktop-indicator.js"></script>
+  </body>
+</html>

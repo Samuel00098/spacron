@@ -147,6 +147,9 @@ export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 // windows. OFF by default, and while off the tools are not even listed to
 // agents. Even when on, every window needs the user's per-agent permission.
 export const computerUse = persistentWritable('computerUse', false);
+// Apps (image names like `slack.exe`) agents may never see or control, on top
+// of the built-in list of password managers and security prompts.
+export const computerUseBlockedApps = persistentWritable<string[]>('computerUseBlockedApps', []);
 
 // ─── Failover on usage limits ───────────────────────────────────────────────
 // When an agent is about to run out of usage mid-feature, move the unfinished

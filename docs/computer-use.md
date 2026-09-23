@@ -355,6 +355,77 @@ Differences from the design above:
   40 / 5000 / 12 s) and UIA calls time out after 2 s connect / 5 s transaction,
   so a hung app cannot stall an agent.
 
+## Phases 2 and 4 — as built (2026-09-23)
+
+Act tools: `desktop_focus_window`, `desktop_click`, `desktop_type`,
+`desktop_key`, `desktop_scroll`, `desktop_drag`. All UIA work and all input run
+on one long-lived worker thread (`win.rs`, "The UI Automation worker"), which
+is what keeps element refs alive between calls and makes acts sequential.
+
+What each act goes through, in order:
+
+1. **Control grant** for that exact window (a separate dialog from "see";
+   control implies see, not the reverse).
+2. **Rate limit**: 10 acts per second per caller.
+3. **Wait for the user**: if real (non-injected) mouse or keyboard input
+   happened in the last 1.5 s, wait up to 5 s for quiet, then refuse.
+4. **Input lease**: one caller at a time; released after 30 s idle, when the
+   caller's grants end, or by the stop shortcut.
+5. **Indicator** shown over the window (`desktop/indicator.rs`,
+   `static/desktop-indicator.{html,js}`).
+6. **Backend checks** right before input: same process still owns the window;
+   not elevated (UIPI would drop the input silently); brought to the front via
+   `AttachThreadInput` if needed; for pointer input, the window a real click
+   would reach is the target (or its own dialog or menu); for keys, keyboard
+   focus is in the target and not in a password field.
+7. **Activity log**: memory ring (Settings shows the last 20) plus
+   `%APPDATA%/spacron/computer-use-activity.jsonl`. Typed text is logged by
+   length only.
+
+Refs: `e…` from `desktop_ui_tree`, `f…` from `desktop_find`; each walk replaces
+only its own kind for that caller and window, so a search does not invalidate
+the tree the agent is reading. Clicking a ref uses Invoke / Toggle /
+SelectionItem / ExpandCollapse when the element supports one (no pointer, no
+focus needed), else a real click at its centre. `replace` typing uses
+ValuePattern when writable.
+
+Phase 4 (hardening) shipped with it: a user-editable **blocked apps** list,
+**current permissions** with Withdraw, and **recent actions**, all in Settings →
+Agents → Computer use.
+
+**Security review before shipping (self-review, 2026-09-23).** Found and fixed:
+
+- *Critical:* the hit-test skipped **all** of Spacron's windows (to see through
+  the indicator), so a coordinate click over Spacron's own window, such as a
+  permission dialog, would have passed the check and landed on Spacron. It now
+  skips only click-through windows, which the indicator is and Spacron's main
+  window is not.
+- "Same process" was accepted as the target for clicks and focus, so a second
+  window of the same app (another browser window) could receive input. Now only
+  the window itself, windows it owns (its dialogs), and its popup menus count.
+- Ctrl+V / Shift+Insert would paste the user's clipboard into an agent-controlled
+  app; paste is refused (use `desktop_type`).
+- `desktop_key` did not check where keyboard focus was; it now runs the same
+  focus check as typing.
+- The spike's ALT-key trick for the foreground lock sent an ALT press to
+  whatever app was in front, which is input to an ungranted window, and it did
+  not even work under a real foreground lock. It was replaced with
+  `AttachThreadInput`.
+
+A second reviewer should still go over `win.rs` ("Acting") and the grant flow;
+this review was done by the same agent that wrote the code.
+
+Verified on Windows 11 at 125% scaling with an opt-in test
+(`real_acts_drive_a_test_window`) that drives a throwaway WinForms window
+through the full tool path: invoke by ref, checkbox toggle, typing `héllo ✓`,
+a key press, ValuePattern replace, a real pointer click at normalized
+coordinates, and the refusals (password field, Alt+F4, stale ref, second caller
+while the lease is held). **Not yet seen in the running app:** the indicator
+window, the permission dialogs, the Settings panel, and the stop shortcut
+(unit-tested with a stand-in; the real `RegisterHotKey` path has not been
+pressed by a person). Also untested: elevated targets, multiple monitors,
+150%+ scaling.
+
 ## Testing
 
 - **Unit (Rust):** grant scope checks, lease hand-off and expiry, key blocklist,

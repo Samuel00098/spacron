@@ -357,3 +357,77 @@ pub fn mcp_desktop_grant_respond(
     handle.get()?.desktop.respond(&request_id, allow);
     Ok(())
 }
+
+/// Run one computer-use tool on behalf of the in-app orchestrator.
+///
+/// Same handlers, grants, lease and checks as a CLI agent's call — the only
+/// differences are the identity (the chat conversation, whose grants end with
+/// the turn) and that screenshots come back as a file path, because the
+/// orchestrator's providers cannot see images. `name` comes straight from a
+/// model's tool call, so it is checked against the tool list here.
+#[tauri::command]
+pub async fn mcp_call_desktop_tool(
+    handle: State<'_, McpServer>,
+    chat_id: String,
+    name: String,
+    args: serde_json::Value,
+) -> Result<String, String> {
+    if !crate::desktop::is_desktop_tool(&name) {
+        return Err(format!("'{name}' is not a computer-use tool."));
+    }
+    if chat_id.trim().is_empty() {
+        return Err("Computer use needs the chat's id.".into());
+    }
+    let desktop = handle.get()?.desktop.clone();
+    let caller = crate::desktop::DesktopCaller {
+        key: crate::desktop::CallerKey::Chat(chat_id),
+        agent_name: None,
+    };
+    let result = crate::desktop::call_tool(&desktop, caller, &name, args.as_object()).await?;
+    Ok(result["content"][0]["text"].as_str().unwrap_or_default().to_string())
+}
+
+/// A chat turn ended (finished, failed or was cancelled): its computer-use
+/// grants end with it.
+#[tauri::command]
+pub fn mcp_desktop_end_chat_turn(handle: State<'_, McpServer>, chat_id: String) -> Result<(), String> {
+    handle.get()?.desktop.end_chat_turn(&chat_id);
+    Ok(())
+}
+
+/// Every computer-use permission currently granted, for Settings.
+#[tauri::command]
+pub fn mcp_desktop_grants(handle: State<'_, McpServer>) -> Result<Vec<crate::desktop::GrantSummary>, String> {
+    Ok(handle.get()?.desktop.active_grants())
+}
+
+/// Withdraw every permission one agent or chat holds.
+#[tauri::command]
+pub fn mcp_desktop_revoke(handle: State<'_, McpServer>, caller: String) -> Result<(), String> {
+    handle.get()?.desktop.revoke(&caller);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopActivity {
+    entries: Vec<crate::desktop::ActivityEntry>,
+    log_path: Option<String>,
+}
+
+/// Recent computer-use actions (newest first) and where the full log lives.
+#[tauri::command]
+pub fn mcp_desktop_activity(handle: State<'_, McpServer>) -> Result<DesktopActivity, String> {
+    Ok(DesktopActivity {
+        entries: handle.get()?.desktop.recent_activity(),
+        log_path: crate::desktop::activity_log_path().map(|p| p.display().to_string()),
+    })
+}
+
+/// Apps (image names such as `slack.exe`) the user never wants agents to see
+/// or control, on top of the built-in list.
+#[tauri::command]
+pub fn mcp_desktop_set_blocked_apps(handle: State<'_, McpServer>, apps: Vec<String>) -> Result<(), String> {
+    handle.get()?.desktop.set_blocked_apps(apps);
+    Ok(())
+}

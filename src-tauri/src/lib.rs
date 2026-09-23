@@ -230,17 +230,30 @@ pub fn run() {
                 })
             };
 
-            // An agent asking to see the desktop. The tool call blocks until
-            // the frontend's dialog answers through `mcp_desktop_grant_respond`
-            // (or times out) — see `desktop::DesktopState::ensure`.
-            let desktop_grant_fn: desktop::GrantEmitFn = {
-                let ah = app_handle.clone();
-                Arc::new(move |request| {
-                    let _ = ah.emit("mcp:desktop-grant-request", request);
-                })
+            // Computer use (docs/computer-use.md). A grant request blocks the
+            // agent's tool call until the frontend's dialog answers through
+            // `mcp_desktop_grant_respond` (or it times out); the indicator is a
+            // native overlay window; notices become toasts.
+            let desktop_hooks = {
+                let grant_ah = app_handle.clone();
+                let notice_ah = app_handle.clone();
+                #[cfg(windows)]
+                let indicator_ah = app_handle.clone();
+                desktop::DesktopHooks {
+                    grant: Arc::new(move |request| {
+                        let _ = grant_ah.emit("mcp:desktop-grant-request", request);
+                    }),
+                    #[cfg(windows)]
+                    indicator: Arc::new(move |state| desktop::indicator::update(&indicator_ah, state)),
+                    #[cfg(not(windows))]
+                    indicator: Arc::new(|_| {}),
+                    notice: Arc::new(move |message| {
+                        let _ = notice_ah.emit("mcp:desktop-notice", message);
+                    }),
+                }
             };
 
-            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn, report_fn, desktop_grant_fn) {
+            match mcp::start(0, read_cb, spawn_fn, deliver_emit_fn, report_fn, desktop_hooks) {
                 Ok((handle, port)) => {
                     app.manage(mcp::McpServer(Some(handle)));
                     eprintln!("MCP server started on port {}", port);
@@ -510,6 +523,12 @@ pub fn run() {
             commands::mcp::mcp_computer_use_supported,
             commands::mcp::mcp_set_computer_use,
             commands::mcp::mcp_desktop_grant_respond,
+            commands::mcp::mcp_call_desktop_tool,
+            commands::mcp::mcp_desktop_end_chat_turn,
+            commands::mcp::mcp_desktop_grants,
+            commands::mcp::mcp_desktop_revoke,
+            commands::mcp::mcp_desktop_activity,
+            commands::mcp::mcp_desktop_set_blocked_apps,
         ])
         .build(tauri::generate_context!())
         .expect("error while building forge application")

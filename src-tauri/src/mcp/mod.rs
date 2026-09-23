@@ -460,7 +460,7 @@ pub fn start(
     spawn_fn: SpawnFn,
     deliver_emit_fn: DeliverEmitFn,
     report_fn: ReportFn,
-    desktop_grant_fn: crate::desktop::GrantEmitFn,
+    desktop_hooks: crate::desktop::DesktopHooks,
 ) -> Result<(McpServerHandle, u16), String> {
     // Bind now, synchronously, and *keep* the socket. This used to probe with a
     // throwaway listener, drop it, and rebind for real inside the spawned task
@@ -492,7 +492,7 @@ pub fn start(
     // launch would be a config file authenticating as an agent that no longer
     // exists. These die with the process, and every agent gets a fresh one.
     let agent_tokens: AgentTokens = Arc::new(std::sync::Mutex::new(HashMap::new()));
-    let desktop = Arc::new(crate::desktop::DesktopState::new(desktop_grant_fn));
+    let desktop = crate::desktop::DesktopState::new(desktop_hooks);
 
     let server_state = Arc::new(ServerState {
         desktop: desktop.clone(),
@@ -2440,7 +2440,10 @@ async fn handle_tool_call(
                 .values()
                 .find(|e| e.session_id == session_id)
                 .map(|e| e.name.clone());
-            let desktop_caller = crate::desktop::DesktopCaller { session_id, agent_name };
+            let desktop_caller = crate::desktop::DesktopCaller {
+                key: crate::desktop::CallerKey::Session(session_id),
+                agent_name,
+            };
             match crate::desktop::call_tool(&state.desktop, desktop_caller, name, args).await {
                 Ok(result) => Json(JsonRpcResponse::success(id, result)),
                 Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
@@ -3563,7 +3566,7 @@ mod tests {
             assistant_names: Arc::new(Mutex::new(Vec::new())),
             reserved_names: Arc::new(Mutex::new(Vec::new())),
             sse_sessions: Arc::new(DashMap::new()),
-            desktop: Arc::new(crate::desktop::DesktopState::new(Arc::new(|_| {}))),
+            desktop: crate::desktop::DesktopState::new(crate::desktop::DesktopHooks::noop()),
         }
     }
 
@@ -4166,9 +4169,12 @@ mod tests {
             Arc::new(|_| {}),
             // Computer-use permission requests: the stand-in frontend declines
             // every one, so a test never shows a real window to anything.
-            Arc::new(move |req: &crate::desktop::GrantRequest| {
-                let _ = grant_tx.send(req.request_id.clone());
-            }),
+            crate::desktop::DesktopHooks {
+                grant: Arc::new(move |req: &crate::desktop::GrantRequest| {
+                    let _ = grant_tx.send(req.request_id.clone());
+                }),
+                ..crate::desktop::DesktopHooks::noop()
+            },
         )
         .expect("server should start");
 
@@ -4395,7 +4401,7 @@ mod tests {
         let off = listed_tool_names(&post_mcp(&base, &token, list.clone()).await);
         assert!(!off.iter().any(|n| n.starts_with("desktop_")), "listed while off: {off:?}");
 
-        handle.desktop.set_enabled(true);
+        handle.desktop.enable_for_test();
         let on = listed_tool_names(&post_mcp(&base, &token, list).await);
         // Only where the platform can actually do it.
         assert_eq!(on.iter().any(|n| n == "desktop_list_windows"), crate::desktop::supported());
@@ -4405,7 +4411,7 @@ mod tests {
     async fn desktop_tools_refuse_an_unidentified_caller() {
         let (base, token, handle) = boot();
         wait_until_listening(&base, &token).await;
-        handle.desktop.set_enabled(true);
+        handle.desktop.enable_for_test();
 
         let body = post_mcp(
             &base,
@@ -4425,7 +4431,7 @@ mod tests {
     async fn a_declined_desktop_grant_reaches_the_agent_as_an_error() {
         let (base, token, handle) = boot();
         wait_until_listening(&base, &token).await;
-        handle.desktop.set_enabled(true);
+        handle.desktop.enable_for_test();
         let agent_token = handle.mint_agent_token();
         assert!(handle.bind_agent_token(&agent_token, 7));
 
