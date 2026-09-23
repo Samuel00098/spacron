@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { get } from '$lib/stores/storeCompat';
-import { activeProject } from '$lib/stores/workspace';
+import { activeProject, activeWorkspace } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
 import { stopChatTurn, sendChatMessage, enqueueChatMessage, resendEditedChatMessage, hasResumableTurn, resumeOrchestratorTurn, dismissResumableTurn, orchestratorTasks, resolveProjectFilePath, chatMessageQueues, removeQueuedChatMessage, steerQueuedChatMessage, editImageInThread, type QueuedChatMessage } from '$lib/stores/orchestrator';
 import {
@@ -611,6 +611,9 @@ function ChatInputDialog({
 
 export default function ChatModePanel() {
   const project = useStore(activeProject);
+  const workspace = useStore(activeWorkspace);
+  const pendingProjectPath = workspace?.active_project_path ?? workspace?.project_paths?.[0];
+  const projectName = project?.name ?? pendingProjectPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const threadState = useStore(chatThreadState);
   const allTasks = useStore(orchestratorTasks);
   const defaultProvider = useStore(aiProvider);
@@ -1698,7 +1701,7 @@ export default function ChatModePanel() {
             )}
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
-                <h2 className="chat-mode-empty-heading">{project ? `What’s next for ${project.name}?` : 'What’s next for your project?'}</h2>
+                <h2 className="chat-mode-empty-heading">{projectName ? `What’s next for ${projectName}?` : 'What’s next for your project?'}</h2>
               </div>
             ) : messages.map((message, messageIndex) => {
               if (message.type === 'completion') {
