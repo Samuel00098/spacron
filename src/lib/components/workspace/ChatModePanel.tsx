@@ -1699,7 +1699,7 @@ export default function ChatModePanel() {
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
                 <h2 className="chat-mode-empty-brand">Spacron</h2>
-                <p className="chat-mode-empty-subtitle">Chat with your workspace</p>
+                <p className="chat-mode-empty-subtitle">{project ? `What’s next for ${project.name}?` : 'What’s next for your project?'}</p>
                 <div className="chat-mode-suggestions">
                   {['What is the current project status?', 'Review the current changes', 'Build this feature'].map((suggestion) => (
                     <button key={suggestion} type="button" onClick={() => updateDraft(suggestion)}>{suggestion}</button>
@@ -1960,7 +1960,7 @@ export default function ChatModePanel() {
                   void submit();
                 }
               }}
-              placeholder={pendingRequest ? 'Answer the request above…' : (project ? `What’s next for ${project.name}?` : 'Select a project first')}
+              placeholder={pendingRequest ? 'Answer the request above…' : (project ? 'Talk to the orchestrator…' : 'Select a project first')}
               disabled={!project || Boolean(pendingRequest)}
               aria-label="Message the orchestrator"
             />
