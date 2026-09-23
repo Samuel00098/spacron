@@ -381,7 +381,7 @@ export default function VoiceHistoryPanel() {
                   onChange={(event) => setCustomFrom(event.target.value)}
                   aria-label="From date"
                 />
-                <span className="vh-date-dash">–</span>
+                <span className="vh-date-dash">to</span>
                 <input
                   type="date"
                   value={customTo}

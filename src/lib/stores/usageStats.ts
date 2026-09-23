@@ -341,7 +341,7 @@ export function formatTokens(n: number): string {
 
 /** $1.8 → "$1.80". Null renders as a dash: the total is only partial. */
 export function formatUsd(usd: number | null): string {
-  if (usd == null) return '—';
+  if (usd == null) return 'n/a';
   return `$${usd.toFixed(2)}`;
 }
 
@@ -414,7 +414,7 @@ export function currentScanState(state: UsageStatsState): ScanState | null {
 
 /** 0.42 → "42%". `null` renders as a dash. */
 export function formatPercent(fraction: number | null): string {
-  if (fraction == null || !Number.isFinite(fraction)) return '—';
+  if (fraction == null || !Number.isFinite(fraction)) return 'n/a';
   return `${Math.round(fraction * 100)}%`;
 }
 

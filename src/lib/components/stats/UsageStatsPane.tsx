@@ -178,7 +178,7 @@ function Toggle({
 }
 
 function formatDuration(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes <= 0) return '—';
+  if (!Number.isFinite(minutes) || minutes <= 0) return 'n/a';
   if (minutes < 1) return '<1m';
   if (minutes < 60) return `${Math.round(minutes)}m`;
   const hours = Math.floor(minutes / 60);
@@ -440,7 +440,7 @@ function ActivitySection({ summary }: { summary: ActivitySummary | null }) {
         />
         <StatTile
           icon={ICON_SINCE}
-          value={since ?? '—'}
+          value={since ?? 'n/a'}
           label="Tracking since"
           hint="When the first agent event was recorded"
         />
@@ -669,8 +669,8 @@ function SessionsTable({
                   </span>
                 )}
               </td>
-              <td>{row.model ?? '—'}</td>
-              <td className="stats-branch">{row.branch ?? '—'}</td>
+              <td>{row.model ?? 'n/a'}</td>
+              <td className="stats-branch">{row.branch ?? 'n/a'}</td>
               <td className="stats-num">{row.turns}</td>
               <td className="stats-num">{formatTokens(sessionTokens(row))}</td>
               <td className="stats-num">

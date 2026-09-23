@@ -93,7 +93,7 @@ describe('formatUsd', () => {
   });
 
   it('dashes an unpriced total rather than lying with $0.00', () => {
-    expect(formatUsd(null)).toBe('—');
+    expect(formatUsd(null)).toBe('n/a');
   });
 });
 
@@ -278,7 +278,7 @@ describe('formatPercent', () => {
   });
 
   it('renders null as a dash rather than 0%', () => {
-    expect(formatPercent(null)).toBe('—');
+    expect(formatPercent(null)).toBe('n/a');
   });
 });
 
