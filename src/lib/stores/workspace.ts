@@ -284,6 +284,24 @@ const projectStateCache = new Map<string, ProjectWorkspaceState>();
 let restoreProjectStateGeneration = 0;
 let projectAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let isRestoringProjectState = false;
+
+// Which backend run the live PTY ids belong to. The backend numbers sessions
+// from 1 on every launch, so after a relaunch a saved `backendSessionId` names
+// whatever unrelated session holds that number now — re-attaching to it gave one
+// project's agent pane another project's (or another agent's) shell, and the
+// saved agent was never relaunched. Only a webview reload, where the backend
+// kept its shells alive, may re-attach.
+let ptyInstanceId: string | null = null;
+async function loadPtyInstanceId(): Promise<string | null> {
+  if (ptyInstanceId) return ptyInstanceId;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    ptyInstanceId = await invoke<string>('terminal_instance_id');
+  } catch {
+    ptyInstanceId = null;
+  }
+  return ptyInstanceId;
+}
 export const isProjectSwitching = syncWritable<boolean>('isProjectSwitching', false);
 
 function cancelPendingProjectAutosave() {
@@ -386,6 +404,8 @@ interface PersistedProjectState {
   selectedPath?: string | null;
   terminalLayout?: string;
   terminalPanes?: PersistedTerminalPane[];
+  /** The backend run the panes' `backendSessionId`s belong to — see `ptyInstanceId`. */
+  ptyInstance?: string | null;
   /** The workspace's ambient room arrangement (Focus / Split / Gallery). */
   ambient?: AmbientLayout;
   /**
@@ -528,6 +548,7 @@ function saveProjectStateToStorage(projectId: string) {
     expandedPaths: Array.from(get(expandedPaths)).slice(0, 500),
     selectedPath: get(selectedPath),
     terminalLayout: 'single',
+    ptyInstance: ptyInstanceId,
     terminalPanes,
     ambient: get(layoutSnapshot).ambient,
     splitSlots: get(layoutSnapshot).splitSlots.slice(0, MAX_SPLIT_SLOTS),
@@ -668,6 +689,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
   });
 
   const terminalLayout = typeof r.terminalLayout === 'string' ? r.terminalLayout : undefined;
+  const ptyInstance = typeof r.ptyInstance === 'string' && r.ptyInstance.length <= 64 ? r.ptyInstance : null;
 
   const ambient: AmbientLayout | undefined =
     r.ambient === 'focus' || r.ambient === 'development' || r.ambient === 'gallery' || r.ambient === 'preview' || r.ambient === 'vibe'
@@ -763,7 +785,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     preview = { tabs, activeTabId, targetPort: targetPortVal, proxyStarted: proxyStartedVal };
   }
 
-  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ambient, splitSlots, focusedRoom, expandedRoom, splitPresets, minimizedRooms, roomOrder, devTerminalOpen, layout, preview };
+  return { openFiles, activeFile, expandedPaths, selectedPath, terminalPanes, terminalLayout, ptyInstance, ambient, splitSlots, focusedRoom, expandedRoom, splitPresets, minimizedRooms, roomOrder, devTerminalOpen, layout, preview };
 }
 
 /**
@@ -879,6 +901,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
   useWorkspaceStore.getState().setSwitchingPhase('Restoring project…');
   try {
     const { invoke } = await import('@tauri-apps/api/core');
+    // Before anything can be saved: every save stamps its pane ids with this.
+    await loadPtyInstanceId();
     if (generation !== restoreProjectStateGeneration) return;
     try {
       await invoke('workspace_set_active', { projectId });
@@ -1165,6 +1189,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           }
           useWorkspaceStore.getState().setSwitchingPhase('Restoring terminals…');
           const spawnedIds: number[] = [];
+          // Saved ids from an earlier backend run name nothing of ours now.
+          const canReattach = ptyInstanceId === null || persisted.ptyInstance === ptyInstanceId;
           // Recreate a session only for panes that actually held one, keeping
           // each session in its original pane slot and leaving empty panes empty.
           //
@@ -1193,7 +1219,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
               // reload). Restore them with assignPane:false so they surface as
               // rooms; if their backend PTY is gone (cold start), relaunch the CLI
               // into a fresh room rather than leaving a dead shell behind.
-              const attachedId = pane.backendSessionId
+              const attachedId = canReattach && pane.backendSessionId
                 ? await attachTerminalSession(pane.backendSessionId, pane.cwd || rootPath, undefined, projectId, metadata, { assignPane: false })
                 : null;
               if (attachedId !== null) {
@@ -1208,7 +1234,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
             }
             // Legacy plain-terminal panes (persisted before only agents were
             // saved): keep the original behaviour of restoring into the grid.
-            const attachedId = pane.backendSessionId
+            const attachedId = canReattach && pane.backendSessionId
               ? await attachTerminalSession(pane.backendSessionId, pane.cwd || rootPath, i, projectId, metadata)
               : null;
             // `projectId` is REQUIRED here. Without it the session is created in

@@ -121,6 +121,23 @@ pub fn terminal_attach(
     Ok(Response::new(replay))
 }
 
+/// Identifies this backend process. PTY ids come from a counter that restarts at
+/// 1 on every launch, so a session id saved by the frontend only names the same
+/// shell when it was saved under the same instance — after a relaunch it names
+/// whatever unrelated session happens to hold that number now.
+#[tauri::command]
+pub fn terminal_instance_id() -> String {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{nanos}", std::process::id())
+    })
+    .clone()
+}
+
 /// List available shells on the system
 #[tauri::command]
 pub fn terminal_list_shells() -> Result<Vec<ShellConfig>, String> {

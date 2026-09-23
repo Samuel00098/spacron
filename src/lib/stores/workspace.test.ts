@@ -24,6 +24,13 @@ describe('persisted stage arrangement', () => {
     expect(sanitise({ layout: { rightDrawerTool: 'review' } })?.layout?.rightSidebarTab).toBe('review');
     expect(sanitise({ layout: { rightSidebarTab: 'unknown' } })?.layout?.rightSidebarTab).toBe('files');
   });
+  it('keeps the backend run that saved pane ids belong to', () => {
+    // Without it every restore after a relaunch treats saved PTY ids as live and
+    // re-attaches to whatever session now holds the same number.
+    expect(sanitise({ ptyInstance: '1234-99' })?.ptyInstance).toBe('1234-99');
+    expect(sanitise({})?.ptyInstance).toBeNull();
+    expect(sanitise({ ptyInstance: 7 })?.ptyInstance).toBeNull();
+  });
   it('brings the tiling and the primary room back', () => {
     const state = sanitise({
       openFiles: [],

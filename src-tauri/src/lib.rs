@@ -393,6 +393,7 @@ pub fn run() {
             commands::env_vars::env_vault_import_dotenv,
             commands::terminal::terminal_create,
             commands::terminal::terminal_attach,
+            commands::terminal::terminal_instance_id,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
             commands::browser_shim::browser_shim_path,

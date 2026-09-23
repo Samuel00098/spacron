@@ -39,6 +39,7 @@ short enough that it says what the note is *about*, never what it says.
 - [shortcut-key-matching](shortcut-key-matching.md) — `matchShortcut` compares produced characters, not key codes
 - [dropdown-menu-sizing](dropdown-menu-sizing.md) — the shared `Dropdown` sizes to content, then clamps in a second layout pass
 - [command-palette-registry](command-palette-registry.md) — the palette auto-registers menu, layout and settings actions; merge, never replace
+- [agent-pane-survival](agent-pane-survival.md) — what keeps a running agent's pane alive across project/workspace switches and relaunches
 - [room-liveness-invariant](room-liveness-invariant.md) — why closing a terminal room ends its shells, and the single close gate that keeps it true
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the `expandedRoom` invariants, and why Split must switch `ambientLayout`
 - [per-project-persistence](per-project-persistence.md) — how a project remembers its stage, and what the sanitiser must learn

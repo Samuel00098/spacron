@@ -823,18 +823,19 @@ export default function AppShell() {
   // project's agent pane mounted-but-hidden. Disposing it instead would tear
   // down its xterm, and rebuilding one replays the raw scrollback into a fresh
   // terminal, which is what leaves an agent TUI drawing garbage.
-  // Bounded to the projects currently open in this workspace. Terminal state
-  // outlives a workspace switch (the pty map is process-global), so without this
-  // the stage would keep mounting panes for a workspace the user has left.
+  // NOT bounded to the projects open in this workspace. Most project switches
+  // from the Projects sidebar are workspace switches (a standalone project is
+  // its own recents entry), and `openWorkspace` empties `openProjectIds` — so a
+  // bound here unmounted every agent pane of the project you just left while
+  // its agent kept running, and coming back replayed the TUI into a fresh
+  // xterm, blank or garbled. A running agent is always mounted; closing its
+  // project kills it, which is what takes the pane away.
   const mountedAgentRoomIds = useMemo<AgentRoomId[]>(
-    () => {
-      const open = new Set(openProjectIdList);
-      return crossProjectSessions
+    () =>
+      crossProjectSessions
         .filter((session) => session.isRunning && isAgentSession(session))
-        .filter((session) => !session.projectId || open.has(session.projectId))
-        .map((session) => `agent:${session.id}` as AgentRoomId);
-    },
-    [crossProjectSessions, openProjectIdList],
+        .map((session) => `agent:${session.id}` as AgentRoomId),
+    [crossProjectSessions],
   );
 
   // Auto-focus a freshly spawned agent so it opens in the focus screen. The
