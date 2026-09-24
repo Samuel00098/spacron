@@ -26,24 +26,26 @@
               transform var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
 
-/* Light: a pale tint of the deep green vanishes into a white tile at 22px, so
-   the button is solid green with a white arrow at rest, and darkens on hover.
+/* Light: hollow like dark mode, then filled green on hover. The ring is the
+   full-strength deep green (not the 60% mix dark mode uses), because a faded
+   ring on a white tile is what made the first version hard to see.
    `bg-palette-light` covers light wallpapers, which take the light colours
    without the `light-theme` class. */
 :root.light-theme .agent-update-btn,
 html.bg-palette-light:not(.has-bg-media) .agent-update-btn {
   --update-ink: #ffffff;
-  background: var(--update-color);
-  border-color: var(--update-color);
-  color: var(--update-ink);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--update-color) 45%, transparent);
+  background: color-mix(in srgb, var(--update-color) 6%, transparent);
+  border: 1.5px solid var(--update-color);
+  color: var(--update-color);
+  box-shadow: none;
 }
 
 :root.light-theme .agent-update-btn:hover,
 html.bg-palette-light:not(.has-bg-media) .agent-update-btn:hover {
-  background: color-mix(in srgb, var(--update-color) 82%, #000000);
-  border-color: color-mix(in srgb, var(--update-color) 82%, #000000);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--update-color) 22%, transparent);
+  background: var(--update-color);
+  border-color: var(--update-color);
+  color: var(--update-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--update-color) 20%, transparent);
 }
 
 .agent-update-btn:hover {
