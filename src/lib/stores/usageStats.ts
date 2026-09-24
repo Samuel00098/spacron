@@ -20,17 +20,7 @@ export const RANGE_30D = '30d';
 export const RANGE_90D = '90d';
 export const RANGE_ALL = 'all';
 
-/**
- * The CLIs whose logs carry token counts, mirroring `PROVIDERS` in
- * `usage_stats.rs`. Grok, Gemini, Copilot, Cursor, Droid, Antigravity and
- * Verdent are absent because their logs record no usable usage at all (see the
- * table in `usage_stats.rs` for what each one actually writes) — they surface
- * in the rate-limit meters (`stores/usage.ts`) instead, which is a live reading
- * rather than a tally.
- *
- * Ids are launch commands, so a card or row can render the CLI's own brand mark
- * straight from its provider id.
- */
+/** Initial picker labels until the backend returns its scanned provider list. */
 export const PROVIDER_ALL = 'all';
 export const PROVIDER_CLAUDE = 'claude';
 export const PROVIDER_CODEX = 'codex';
@@ -214,6 +204,7 @@ export const usageStatsState = writable<UsageStatsState>({
 });
 
 let inFlight: Promise<void> | null = null;
+let inFlightKey = '';
 
 /** Tauri rejects with plain strings as often as with `Error`s. */
 function errorText(err: unknown): string {
@@ -229,15 +220,22 @@ function errorText(err: unknown): string {
  */
 export async function refreshStatsSnapshot(): Promise<void> {
   if (!isTauriRuntime()) return;
-  if (inFlight) return inFlight;
+  const { provider, scope, range } = get(usageStatsState);
+  const key = `${provider}\0${scope}\0${range}`;
+  if (inFlight) {
+    if (inFlightKey === key) return inFlight;
+    await inFlight;
+    return refreshStatsSnapshot();
+  }
+  inFlightKey = key;
 
   inFlight = (async () => {
-    const { provider, scope, range } = get(usageStatsState);
     usageStatsState.update((s) => ({ ...s, loading: true, error: null }));
     try {
       const { invoke } = await import('@tauri-apps/api/core');
+      const overviewRequest = invoke<StatsOverview>('stats_get_overview', { scope, range });
       if (provider === PROVIDER_ALL) {
-        const overview = await invoke<StatsOverview>('stats_get_overview', { scope, range });
+        const overview = await overviewRequest;
         usageStatsState.update((s) => ({
           ...s,
           overview,
@@ -245,14 +243,15 @@ export async function refreshStatsSnapshot(): Promise<void> {
           lastFetchedAt: Date.now(),
         }));
       } else {
-        const snapshot = await invoke<StatsSnapshot>('stats_get_snapshot', {
+        const [overview, snapshot] = await Promise.all([overviewRequest, invoke<StatsSnapshot>('stats_get_snapshot', {
           provider,
           scope,
           range,
           limit: SNAPSHOT_LIMIT,
-        });
+        })]);
         usageStatsState.update((s) => ({
           ...s,
+          overview,
           snapshot,
           loading: false,
           lastFetchedAt: Date.now(),
@@ -263,6 +262,7 @@ export async function refreshStatsSnapshot(): Promise<void> {
       usageStatsState.update((s) => ({ ...s, loading: false, error: errorText(err) }));
     } finally {
       inFlight = null;
+      inFlightKey = '';
     }
   })();
 
@@ -270,7 +270,7 @@ export async function refreshStatsSnapshot(): Promise<void> {
 }
 
 export function selectStatsProvider(provider: string): void {
-  usageStatsState.update((s) => ({ ...s, provider }));
+  usageStatsState.update((s) => ({ ...s, provider, snapshot: s.provider === provider ? s.snapshot : null }));
   void refreshStatsSnapshot();
 }
 

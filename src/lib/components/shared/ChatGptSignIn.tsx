@@ -5,6 +5,8 @@ import { providerApiKeyExists } from '$lib/services/ai-keychain';
 import { ProviderBrandMark } from './providerBrands';
 import { showToast } from '$lib/stores/notification';
 import { refreshModelCapabilities } from '$lib/services/model-capabilities';
+import { accountsState, activeAccount } from '$lib/stores/agentAccounts';
+import { useStore } from '$lib/react/useStore';
 
 interface ChatGptStatus {
   installed: boolean;
@@ -44,6 +46,8 @@ export function ChatGptSignIn({
   const [checking, setChecking] = useState(false);
   const [pending, setPending] = useState<LoginStart | null>(null);
   const [starting, setStarting] = useState(false);
+  const accounts = useStore(accountsState);
+  const codexAccountId = activeAccount(accounts, 'codex')?.id;
 
   const refresh = useCallback(async () => {
     setChecking(true);
@@ -59,7 +63,7 @@ export function ChatGptSignIn({
     }
   }, [onSignedInChange]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh, codexAccountId]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

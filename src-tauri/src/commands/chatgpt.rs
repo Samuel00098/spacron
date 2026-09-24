@@ -42,10 +42,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 static SIGNED_IN: AtomicU8 = AtomicU8::new(0);
 
 fn codex_home() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(dir));
-    }
-    dirs::home_dir().map(|home| home.join(".codex"))
+    crate::commands::agent_accounts::selected_codex_home()
 }
 
 /// Cheap, offline check used by `provider_api_key_exists`: a ChatGPT login in
@@ -79,6 +76,7 @@ struct AppServer {
     next_id: u64,
     /// The tail of Codex's stderr, quoted when it exits unexpectedly.
     stderr: std::sync::Arc<Mutex<String>>,
+    account_home: Option<PathBuf>,
 }
 
 /// Codex's npm package is a node launcher around a native binary. Running the
@@ -184,6 +182,8 @@ impl AppServer {
             "-c", "mcp_servers={}",
             "-c", "web_search=disabled",
         ])?;
+        let account_home = codex_home();
+        if let Some(ref home) = account_home { command.env("CODEX_HOME", home); }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -210,7 +210,7 @@ impl AppServer {
                 }
             });
         }
-        let mut server = AppServer { child, stdin, lines: BufReader::new(stdout).lines(), next_id: 0, stderr };
+        let mut server = AppServer { child, stdin, lines: BufReader::new(stdout).lines(), next_id: 0, stderr, account_home };
         tokio::time::timeout(STARTUP_TIMEOUT, server.request_inner("initialize", json!({
             "clientInfo": {"name": "spacron", "title": "Spacron", "version": env!("CARGO_PKG_VERSION")},
             "capabilities": null,
@@ -364,10 +364,11 @@ static WARM: Mutex<Option<Warm>> = Mutex::new(None);
 fn take_warm() -> Option<Warm> {
     let mut warm = WARM.lock().unwrap_or_else(|e| e.into_inner()).take()?;
     let alive = matches!(warm.server.child.try_wait(), Ok(None));
-    (alive && warm.last_used.elapsed() < WARM_IDLE && warm.turns < WARM_MAX_TURNS).then_some(warm)
+    (alive && warm.server.account_home == codex_home() && warm.last_used.elapsed() < WARM_IDLE && warm.turns < WARM_MAX_TURNS).then_some(warm)
 }
 
 fn keep_warm(mut warm: Warm) {
+    if warm.server.account_home != codex_home() { return; }
     warm.last_used = Instant::now();
     let stamp = warm.last_used;
     {
@@ -388,6 +389,11 @@ fn keep_warm(mut warm: Warm) {
 fn reset_warm() {
     let stale = WARM.lock().unwrap_or_else(|e| e.into_inner()).take();
     drop(stale);
+}
+
+pub(crate) fn account_changed() {
+    SIGNED_IN.store(0, Ordering::Relaxed);
+    reset_warm();
 }
 
 /// Streams the reply's visible text as Codex produces it.

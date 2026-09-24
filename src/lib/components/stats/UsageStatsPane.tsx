@@ -94,11 +94,6 @@ const RANGE_OPTIONS: DropdownOption[] = [
   { value: RANGE_7D, label: 'Last 7 days' },
 ];
 
-const PROVIDER_OPTIONS: DropdownOption[] = PROVIDER_TABS.map((t) => ({
-  value: t.id,
-  label: t.label,
-}));
-
 // ---------------------------------------------------------------------------
 // Small pieces
 // ---------------------------------------------------------------------------
@@ -203,6 +198,44 @@ function dayTokens(d: DailyPoint): number {
   return (
     d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheWriteTokens
   );
+}
+
+/** Trailing active days for the selected range. `snapshot.daily` is already
+ *  range-filtered by the backend, so the fixed windows want only their own
+ *  tail and `all` wants every recorded day. */
+function rangePoints(daily: DailyPoint[], range: string): DailyPoint[] {
+  if (range === RANGE_7D) return lastDailyPoints(daily, 7);
+  if (range === RANGE_30D) return lastDailyPoints(daily, 30);
+  if (range === RANGE_90D) return lastDailyPoints(daily, 90);
+  return daily;
+}
+
+/** Merge a long daily series down to at most `maxCols` columns by summing
+ *  consecutive points, so an all-time view traces the whole lifetime as a
+ *  density strip instead of overflowing the pane. A merged column keeps its
+ *  first day as its label anchor. */
+function dailyColumns(daily: DailyPoint[], maxCols: number): DailyPoint[] {
+  if (daily.length <= maxCols) return daily;
+  const stride = Math.ceil(daily.length / maxCols);
+  const out: DailyPoint[] = [];
+  for (let i = 0; i < daily.length; i += stride) {
+    const slice = daily.slice(i, i + stride);
+    const acc: DailyPoint = {
+      day: slice[0].day,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    for (const p of slice) {
+      acc.inputTokens += p.inputTokens;
+      acc.outputTokens += p.outputTokens;
+      acc.cacheReadTokens += p.cacheReadTokens;
+      acc.cacheWriteTokens += p.cacheWriteTokens;
+    }
+    out.push(acc);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -689,7 +722,9 @@ function SessionsTable({
 
 function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
   const { summary } = snapshot;
-  const points = lastDailyPoints(snapshot.daily);
+  // The chart honours the Range picker: fixed windows draw their trailing
+  // active days, all-time draws the whole lifetime (bucketed to fit).
+  const points = dailyColumns(rangePoints(snapshot.daily, snapshot.range), 90);
   const maxDay = Math.max(1, ...points.map(dayTokens));
   const zeroCache = zeroCacheReadShare(summary);
 
@@ -776,7 +811,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
                   </div>
                   {points.length <= 12 && (
                     <span className="stats-chart-label">
-                      {shortDayLabel(d.day).split(' ')[1]}
+                      {shortDayLabel(d.day)}
                     </span>
                   )}
                 </div>
@@ -837,15 +872,15 @@ function shareCardFor(
   loaded: StatsOverview | StatsSnapshot,
   isOverview: boolean,
   stats: { provider: string; scope: string; range: string },
-  activity: ActivitySummary | null
+  activity: ActivitySummary | null,
+  providerLabel: string
 ): ShareCardData {
   const summary = loaded.summary;
   const overview = isOverview ? (loaded as StatsOverview) : null;
   const tokens = overview ? overview.totalTokens : totalTokens(summary);
 
   return buildShareCard({
-    providerLabel:
-      PROVIDER_TABS.find((t) => t.id === stats.provider)?.label ?? 'Usage',
+    providerLabel,
     rangeLabel:
       RANGE_OPTIONS.find((o) => o.value === stats.range)?.label ?? 'All time',
     scopeNote: stats.scope === SCOPE_SPACRON ? 'managed worktrees only' : null,
@@ -929,6 +964,14 @@ export default function UsageStatsPane() {
 
   const scan = currentScanState($stats);
   const isOverview = $stats.provider === PROVIDER_ALL;
+  const providerOptions: DropdownOption[] = [
+    { value: PROVIDER_ALL, label: 'Overview' },
+    ...($stats.overview?.providers ?? []).map((card) => ({ value: card.id, label: card.label })),
+  ];
+  if (!providerOptions.some((option) => option.value === $stats.provider)) {
+    const known = PROVIDER_TABS.find((tab) => tab.id === $stats.provider);
+    providerOptions.push({ value: $stats.provider, label: known?.label ?? $stats.provider });
+  }
 
   // Tracking off: one clear switch, with the "why" spelled out.
   if (scan && !scan.enabled) {
@@ -937,8 +980,8 @@ export default function UsageStatsPane() {
         <h3>Usage stats</h3>
         <div className="settings-card-body">
           <p className="shell-hint" style={{ marginTop: 0 }}>
-            Spacron can tally tokens and cost across your Claude Code, Codex and
-            OpenCode sessions by scanning the transcript files those CLIs write
+            Spacron can tally tokens and cost across supported agent sessions
+            by scanning the transcript files those CLIs write
             to disk. Stats are estimates. No API key is used, and nothing is
             sent anywhere.
           </p>
@@ -975,7 +1018,8 @@ export default function UsageStatsPane() {
 
   const loaded = isOverview ? $stats.overview : $stats.snapshot;
   const shareData = loaded
-    ? shareCardFor(loaded, isOverview, $stats, activity.summary)
+    ? shareCardFor(loaded, isOverview, $stats, activity.summary,
+        providerOptions.find((option) => option.value === $stats.provider)?.label ?? 'Usage')
     : null;
 
   return (
@@ -989,7 +1033,7 @@ export default function UsageStatsPane() {
         </div>
         <div className="stats-tab-select">
           <Dropdown
-            options={PROVIDER_OPTIONS}
+            options={providerOptions}
             value={$stats.provider}
             onChange={selectStatsProvider}
             ariaLabel="Provider"

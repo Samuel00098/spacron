@@ -111,7 +111,10 @@ export default function AccountSwitcher({
       showToast('Open a project first to sign in to an account', 'warning');
       return;
     }
-    await selectAccount(provider, accountId);
+    if (!await selectAccount(provider, accountId)) {
+      showToast(`Could not switch ${providerName} account`, 'error');
+      return;
+    }
     const env = await accountEnvFor(provider);
     if (accountId !== DEFAULT_ACCOUNT_ID && Object.keys(env).length === 0) {
       // The directory is gone, or this CLI has no config-dir override. Running
@@ -164,7 +167,9 @@ export default function AccountSwitcher({
                 data-active={account.active ? 'true' : 'false'}
                 role="menuitem"
                 onClick={() => {
-                  void selectAccount(provider, account.id);
+                  void selectAccount(provider, account.id).then((selected) => {
+                    if (!selected) showToast(`Could not switch ${providerName} account`, 'error');
+                  });
                   setOpen(false);
                 }}
               >

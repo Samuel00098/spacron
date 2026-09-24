@@ -352,7 +352,10 @@ let inFlight: Promise<void> | null = null;
  */
 export async function refreshUsage(force = false): Promise<void> {
   if (!isTauriRuntime()) return;
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    if (!force) return inFlight;
+    await inFlight;
+  }
 
   inFlight = (async () => {
     usageState.update((s) => ({ ...s, loading: true }));

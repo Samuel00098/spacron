@@ -17,6 +17,7 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import type { ProviderUsage } from '$lib/stores/usage';
+import { refreshUsage } from '$lib/stores/usage';
 
 export interface WebSessionStatus {
   provider: string;
@@ -114,14 +115,24 @@ export async function disconnectWebSession(provider: string): Promise<void> {
   }
 }
 
-export async function selectAccount(provider: string, accountId: string): Promise<void> {
-  if (!isTauriRuntime()) return;
+export async function selectAccount(provider: string, accountId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
   try {
     const invoke = await invoker();
     await invoke('usage_select_account', { provider, accountId });
-    await refreshAccounts();
+    accountsState.update((s) => ({
+      ...s,
+      accounts: s.accounts.map((account) => account.provider === provider
+        ? { ...account, active: account.id === accountId }
+        : account),
+      error: null,
+    }));
+    void refreshAccounts();
+    void refreshUsage(true);
+    return true;
   } catch (err) {
     accountsState.update((s) => ({ ...s, error: String(err) }));
+    return false;
   }
 }
 

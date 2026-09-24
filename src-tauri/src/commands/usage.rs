@@ -806,6 +806,9 @@ fn auth_file_for(spec: &ProviderSpec, account: Option<&str>) -> Option<PathBuf> 
         if resolved != crate::commands::agent_accounts::DEFAULT_ACCOUNT_ID {
             return None;
         }
+        if spec.provider == "codex" && std::env::var_os("CODEX_HOME").is_some_and(|value| !value.is_empty()) {
+            return None;
+        }
     }
     let segments = spec.auth_path?;
     let mut path = home_dir()?;
@@ -3010,7 +3013,12 @@ static CACHE: Mutex<Option<HashMap<String, CachedUsage>>> = Mutex::new(None);
 /// handover decided on the wrong meter, which is the specific mistake this
 /// feature exists to avoid.
 fn cache_key(provider: &str, account: Option<&str>) -> String {
-    match account {
+    let selected = if crate::commands::agent_accounts::supports_accounts(provider) {
+        Some(account.map(str::to_string).unwrap_or_else(|| crate::commands::agent_accounts::selected_account(provider)))
+    } else {
+        account.map(str::to_string)
+    };
+    match selected {
         Some(id) => format!("{provider}@{id}"),
         None => provider.to_string(),
     }

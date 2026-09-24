@@ -243,9 +243,17 @@ pub const SCOPE_ALL: &str = "all";
 
 /// The CLIs whose on-disk logs carry real token counts.
 ///
-/// The omissions are findings rather than a backlog — re-verified 2026-08-12 by
-/// reading the actual logs of every agent CLI installed on the dev machine. Do
-/// not add a provider without first confirming its logs really carry counts:
+/// The set is **data, not code**: every provider is a row in
+/// [`builtin_provider_sources`], and a user can add or override providers via
+/// `config_dir/usage-stats/providers.json` without recompiling. On top of that,
+/// [`scan_convention_sessions`] picks up any CLI that follows the shared
+/// `<dot>/agent/sessions` layout purely by looking — so a freshly installed
+/// agent appears here without a registry entry.
+///
+/// The *omissions* below are findings rather than a backlog — re-verified
+/// 2026-08-12 by reading the actual logs of every agent CLI installed on the
+/// dev machine. Their logs do not carry per-turn counts, so scanning them would
+/// invent numbers:
 ///
 /// * **Grok** — `~/.grok/sessions/<url-encoded cwd>/` holds `prompt_history`
 ///   and message counts, no usage fields.
@@ -269,26 +277,242 @@ pub const PROVIDER_COMMAND_CODE: &str = "command-code";
 /// Query-only pseudo-provider: every provider folded together.
 pub const PROVIDER_ALL: &str = "all";
 
-/// Display names, and the order the Overview lists them in.
+/// How a provider's on-disk logs are parsed. One format per provider; the
+/// registry maps every format to exactly one scanner.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum SourceFormat {
+    /// Claude Code JSONL (`message.usage`, cross-file fork ownership).
+    Claude,
+    /// Codex rollout logs (cumulative `token_count` events, diffed per turn).
+    Codex,
+    /// One JSON file per message under `storage/message/<sessionId>/`.
+    OpenCode,
+    /// The shared `{"type":"session",…}` + `{"type":"message",…}` JSONL that
+    /// Pi, OMP and Command Code all write (see `parse_session_jsonl`).
+    Session,
+    /// Aider `--analytics-log` JSONL (`message_send` events carry the counts).
+    Aider,
+}
+
+impl Default for SourceFormat {
+    fn default() -> Self {
+        SourceFormat::Session
+    }
+}
+
+/// One scannable provider: display identity plus the home-relative paths its
+/// logs live under. The built-in list is the "every machine gets these" set;
+/// `providers.json` replaces or extends it.
+#[derive(Clone, Debug)]
+struct ProviderSource {
+    provider: String,
+    label: String,
+    format: SourceFormat,
+    /// `~`-relative roots. For `OpenCode` the root is the `storage/message`
+    /// parent whose children are session directories.
+    paths: Vec<String>,
+}
+
+/// JSON shape of one entry in `config_dir/usage-stats/providers.json`.
+#[derive(serde::Deserialize)]
+struct ProviderEntry {
+    provider: String,
+    #[serde(default)]
+    label: Option<String>,
+    /// Omit to keep the built-in format when overriding a known provider, or to
+    /// default to the shared session format for a brand-new one.
+    #[serde(default)]
+    format: Option<SourceFormat>,
+    /// Empty paths disable a built-in provider (its rows stop being scanned).
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(default)]
+struct RegistryFile {
+    sources: Vec<ProviderEntry>,
+}
+
+impl Default for RegistryFile {
+    fn default() -> Self {
+        RegistryFile { sources: Vec::new() }
+    }
+}
+
+/// The providers scanned on every sweep. Kilo and Aider ship here because they
+/// are installed CLIs users already spawn from Spacron; everything else writing
+/// a readable format arrives via [`scan_convention_sessions`] or a
+/// `providers.json` entry.
 ///
 /// The ids are launch commands, matching `AI_AGENT_PRESETS` in
 /// `src/lib/stores/runs.ts` — that is what lets the Overview card render each
 /// provider's real brand mark without a second lookup table.
-pub const PROVIDERS: &[(&str, &str)] = &[
-    (PROVIDER_CLAUDE, "Claude"),
-    (PROVIDER_CODEX, "Codex"),
-    (PROVIDER_OPENCODE, "OpenCode"),
-    (PROVIDER_PI, "Pi"),
-    (PROVIDER_OMP, "OMP"),
-    (PROVIDER_COMMAND_CODE, "Command Code"),
-];
+fn builtin_provider_sources() -> Vec<ProviderSource> {
+    vec![
+        ProviderSource {
+            provider: PROVIDER_CLAUDE.to_string(),
+            label: "Claude".to_string(),
+            format: SourceFormat::Claude,
+            paths: vec![".claude/projects".into(), ".claude/transcripts".into()],
+        },
+        ProviderSource {
+            provider: PROVIDER_CODEX.to_string(),
+            label: "Codex".to_string(),
+            format: SourceFormat::Codex,
+            paths: vec![".codex/sessions".into(), ".codex/archived_sessions".into()],
+        },
+        ProviderSource {
+            provider: PROVIDER_OPENCODE.to_string(),
+            label: "OpenCode".to_string(),
+            format: SourceFormat::OpenCode,
+            paths: vec![".local/share/opencode/storage/message".into()],
+        },
+        ProviderSource {
+            provider: PROVIDER_PI.to_string(),
+            label: "Pi".to_string(),
+            format: SourceFormat::Session,
+            paths: vec![".pi/agent/sessions".into()],
+        },
+        ProviderSource {
+            provider: PROVIDER_OMP.to_string(),
+            label: "OMP".to_string(),
+            format: SourceFormat::Session,
+            paths: vec![".omp/agent/sessions".into()],
+        },
+        ProviderSource {
+            provider: PROVIDER_COMMAND_CODE.to_string(),
+            label: "Command Code".to_string(),
+            format: SourceFormat::Session,
+            paths: vec![".commandcode/projects".into()],
+        },
+        // Kilo is an OpenCode lineage: its pre-SQLite session store is the same
+        // `storage/message/<sessionId>/<messageId>.json` layout.
+        ProviderSource {
+            provider: "kilo".to_string(),
+            label: "Kilo".to_string(),
+            format: SourceFormat::OpenCode,
+            paths: vec![".local/share/kilo/storage/message".into()],
+        },
+        // Aider only writes analytics where it is told to (`--analytics-log` or
+        // `AIDER_ANALYTICS_LOG`); `~/.aider` is the conventional place for it.
+        ProviderSource {
+            provider: "aider".to_string(),
+            label: "Aider".to_string(),
+            format: SourceFormat::Aider,
+            paths: vec![".aider".into()],
+        },
+    ]
+}
 
-fn provider_label(id: &str) -> &str {
-    PROVIDERS
+fn registry_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("usage-stats").join("providers.json")
+}
+
+/// Merge `providers.json` over the built-ins. A bad or missing file falls back
+/// to the built-ins untouched — mirroring how the ledger store itself behaves.
+fn load_provider_sources(config_dir: &Path) -> Vec<ProviderSource> {
+    let mut sources = builtin_provider_sources();
+    let Ok(text) = fs::read_to_string(registry_path(config_dir)) else {
+        return sources;
+    };
+    let Ok(parsed) = serde_json::from_str::<RegistryFile>(&text) else {
+        return sources;
+    };
+    for entry in parsed.sources {
+        if entry.paths.is_empty() {
+            sources.retain(|s| s.provider != entry.provider);
+            continue;
+        }
+        match sources.iter_mut().find(|s| s.provider == entry.provider) {
+            Some(builtin) => {
+                if let Some(format) = entry.format {
+                    builtin.format = format;
+                }
+                builtin.paths = entry.paths;
+                if let Some(label) = entry.label {
+                    builtin.label = label;
+                }
+            }
+            None => {
+                let label = entry
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| prettify_provider_label(&entry.provider));
+                sources.push(ProviderSource {
+                    provider: entry.provider,
+                    label,
+                    format: entry.format.unwrap_or(SourceFormat::Session),
+                    paths: entry.paths,
+                })
+            }
+        }
+    }
+    sources
+}
+
+/// Turn a directory-derived id (`command-foo`) into a display label.
+fn prettify_provider_label(id: &str) -> String {
+    id.split(['-', '_'])
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let mut chars = p.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Display label for a provider id, from the registry or prettified.
+fn label_for(provider: &str, sources: &[ProviderSource]) -> String {
+    sources
         .iter()
-        .find(|(k, _)| *k == id)
-        .map(|(_, label)| *label)
-        .unwrap_or(id)
+        .find(|s| s.provider == provider)
+        .map(|s| s.label.clone())
+        .unwrap_or_else(|| prettify_provider_label(provider))
+}
+
+/// Unregistered providers arrive through the convention session sweep.
+fn source_format(sources: &[ProviderSource], provider: &str) -> SourceFormat {
+    sources
+        .iter()
+        .find(|s| s.provider == provider)
+        .map(|s| s.format)
+        .unwrap_or(SourceFormat::Session)
+}
+
+/// The provider cards the Overview lists: every registered source in registry
+/// order, then any provider that has ledger rows but is not registered yet —
+/// the canonical sign it arrived via the convention sweep.
+fn surface_providers(store: &StoreFile, sources: &[ProviderSource]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for s in sources {
+        if !s.paths.is_empty() && seen.insert(s.provider.clone()) {
+            out.push((s.provider.clone(), s.label.clone()));
+        }
+    }
+    for row in &store.days {
+        if row.turns > 0 && seen.insert(row.provider.clone()) {
+            out.push((row.provider.clone(), prettify_provider_label(&row.provider)));
+        }
+    }
+    out
+}
+
+fn surface_providers_with_discovery(store: &StoreFile, sources: &[ProviderSource], home: &Path) -> Vec<(String, String)> {
+    let mut out = surface_providers(store, sources);
+    let mut seen: HashSet<String> = out.iter().map(|(id, _)| id.clone()).collect();
+    for (id, _) in discover_convention_sessions(sources, home) {
+        if seen.insert(id.clone()) {
+            out.push((id.clone(), prettify_provider_label(&id)));
+        }
+    }
+    out
 }
 pub const RANGE_7D: &str = "7d";
 pub const RANGE_30D: &str = "30d";
@@ -736,14 +960,6 @@ fn aggregate_turns(turns: &[ParsedTurn]) -> ParsedFile {
     out
 }
 
-/// The two directories Claude Code writes session logs to.
-fn claude_log_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".claude").join("projects"),
-        home.join(".claude").join("transcripts"),
-    ]
-}
-
 /// Whether a cwd lives inside a Spacron-managed worktree. Two shapes exist:
 /// `<root>/.spacron/worktrees/<branch>` (current) and the legacy sibling
 /// `<parent>/.spacron-worktrees/<repo>` (pre-0.7.4).
@@ -1015,10 +1231,10 @@ fn scan_state_of(store: &StoreFile, is_scanning: bool) -> ScanState {
 ///    file `hasDeferredClaims`.
 ///
 /// Returns (files processed, files skipped).
-fn scan_claude(store: &mut StoreFile, home: &Path) -> (usize, usize) {
+fn scan_claude(store: &mut StoreFile, roots: &[PathBuf]) -> (usize, usize) {
     let mut files: Vec<PathBuf> = Vec::new();
-    for dir in claude_log_dirs(home) {
-        walk_jsonl_files(&dir, &mut files);
+    for dir in roots {
+        walk_jsonl_files(dir, &mut files);
     }
     files.sort();
     let current_paths: HashSet<String> = files.iter().map(|p| path_string(p)).collect();
@@ -1343,14 +1559,6 @@ fn mtime_ms_of(meta: &fs::Metadata) -> i64 {
 // Codex
 // ---------------------------------------------------------------------------
 
-/// Codex rollout logs. `sessions/` is date-nested; `archived_sessions/` is flat.
-fn codex_log_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".codex").join("sessions"),
-        home.join(".codex").join("archived_sessions"),
-    ]
-}
-
 /// Codex ships JSONL *fixtures* inside `~/.codex/.tmp/plugins/**`, which parse
 /// perfectly and would be counted as real usage. Anything under a dot-directory
 /// below `.codex` is tooling, not history.
@@ -1481,10 +1689,10 @@ fn parse_codex_session(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
     (meta, turns)
 }
 
-fn scan_codex(store: &mut StoreFile, home: &Path) -> (usize, usize) {
+fn scan_codex(store: &mut StoreFile, roots: &[PathBuf]) -> (usize, usize) {
     let mut files: Vec<PathBuf> = Vec::new();
-    for dir in codex_log_dirs(home) {
-        walk_jsonl_files(&dir, &mut files);
+    for dir in roots {
+        walk_jsonl_files(dir, &mut files);
     }
     files.retain(|p| !is_codex_fixture(p));
     files.sort();
@@ -1496,15 +1704,8 @@ fn scan_codex(store: &mut StoreFile, home: &Path) -> (usize, usize) {
 // OpenCode
 // ---------------------------------------------------------------------------
 
-/// OpenCode writes one JSON file per message under
+/// OpenCode and its lineage write one JSON file per message under
 /// `storage/message/<sessionId>/<messageId>.json`.
-fn opencode_message_root(home: &Path) -> PathBuf {
-    home.join(".local")
-        .join("share")
-        .join("opencode")
-        .join("storage")
-        .join("message")
-}
 
 /// Parse a whole OpenCode *session directory*.
 ///
@@ -1601,38 +1802,39 @@ fn parse_opencode_session(dir: &Path) -> (FileMeta, Vec<ParsedTurn>) {
     (meta, turns)
 }
 
-fn scan_opencode(store: &mut StoreFile, home: &Path) -> (usize, usize) {
-    let root = opencode_message_root(home);
-    let Ok(entries) = fs::read_dir(&root) else {
-        return (0, 0);
-    };
+fn scan_opencode(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usize, usize) {
     let mut units: Vec<ScanUnit> = Vec::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(children) = fs::read_dir(&dir) else {
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root) else {
             continue;
         };
-        let (mut newest, mut total) = (0i64, 0u64);
-        for child in children.filter_map(|c| c.ok()) {
-            if let Ok(meta) = child.metadata() {
-                newest = newest.max(mtime_ms_of(&meta));
-                total = total.saturating_add(meta.len());
+        for entry in entries.filter_map(|e| e.ok()) {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
             }
+            let Ok(children) = fs::read_dir(&dir) else {
+                continue;
+            };
+            let (mut newest, mut total) = (0i64, 0u64);
+            for child in children.filter_map(|c| c.ok()) {
+                if let Ok(meta) = child.metadata() {
+                    newest = newest.max(mtime_ms_of(&meta));
+                    total = total.saturating_add(meta.len());
+                }
+            }
+            if total == 0 {
+                continue;
+            }
+            units.push(ScanUnit {
+                path: dir,
+                mtime_ms: newest,
+                size: total,
+            });
         }
-        if total == 0 {
-            continue;
-        }
-        units.push(ScanUnit {
-            path: dir,
-            mtime_ms: newest,
-            size: total,
-        });
     }
     units.sort_by(|a, b| a.path.cmp(&b.path));
-    scan_simple(store, PROVIDER_OPENCODE, units, parse_opencode_session)
+    scan_simple(store, provider, units, parse_opencode_session)
 }
 
 // ---------------------------------------------------------------------------
@@ -1779,14 +1981,20 @@ fn first_u64(value: &Value, keys: &[&str]) -> u64 {
     0
 }
 
-/// Scan one `<root>/<project slug>/<session>.jsonl` tree.
+/// Scan a `<root>/<project slug>/<session>.jsonl` tree per root.
 ///
 /// Command Code writes `<uuid>.checkpoints.jsonl` and `<uuid>.meta.json`
 /// beside each session; the checkpoint file carries no usage but is large, so
 /// skipping it is worth a line.
-fn scan_session_jsonl(store: &mut StoreFile, provider: &str, root: PathBuf) -> (usize, usize) {
+fn scan_session_jsonl(
+    store: &mut StoreFile,
+    provider: &str,
+    roots: &[PathBuf],
+) -> (usize, usize) {
     let mut files: Vec<PathBuf> = Vec::new();
-    walk_jsonl_files(&root, &mut files);
+    for root in roots {
+        walk_jsonl_files(root, &mut files);
+    }
     files.retain(|p| {
         !p.file_name()
             .and_then(|n| n.to_str())
@@ -1798,34 +2006,232 @@ fn scan_session_jsonl(store: &mut StoreFile, provider: &str, root: PathBuf) -> (
     scan_simple(store, provider, units, parse_session_jsonl)
 }
 
-/// Sweep every provider. Each scanner owns its own files and rows; the only
-/// shared state is the ledger they append to.
-fn run_scan(store: &mut StoreFile, home: &Path) -> (usize, usize) {
+// ---------------------------------------------------------------------------
+// Aider
+// ---------------------------------------------------------------------------
+
+/// Parse one Aider `--analytics-log` JSONL file.
+///
+/// Aider writes no analytics by default — the log only exists where the user
+/// pointed `--analytics-log` or `AIDER_ANALYTICS_LOG` (both a CLI flag and a
+/// YAML `analytics-log:` key), and `~/.aider` is the conventional home for it.
+///
+/// Only the `message_send` event carries a model call, with the exact per-request
+/// counts on `properties` and a unix-seconds `time`:
+///
+/// | field | maps to |
+/// |---|---|
+/// | `properties.prompt_tokens` | input |
+/// | `properties.completion_tokens` | output |
+/// | `properties.main_model` | model (`provider/model` when prefixed) |
+/// | `time` | day + timestamp |
+///
+/// Everything else (`launched`, `repo`, `exit`) is lifecycle noise with no
+/// numbers. The log carries no cwd or session id — AgentPeek, the project this
+/// format was reverse-engineered from, documents the same gap — so every turn
+/// lands on the file stem's session and a project derived from the path.
+fn parse_aider_log(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
+    let meta = FileMeta::default();
+    let mut turns: Vec<ParsedTurn> = Vec::new();
+    let fallback_session_id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let Ok(text) = fs::read_to_string(path) else {
+        return (meta, turns);
+    };
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if row.get("event").and_then(Value::as_str) != Some("message_send") {
+            continue;
+        }
+        let Some(props) = row.get("properties").filter(|p| p.is_object()) else {
+            continue;
+        };
+        let input = first_u64(props, &["prompt_tokens"]);
+        let output = first_u64(props, &["completion_tokens"]);
+        if input + output == 0 {
+            continue;
+        }
+        let Some(secs) = row.get("time").and_then(Value::as_i64) else {
+            continue;
+        };
+        turns.push(ParsedTurn {
+            dedupe_key: None,
+            session_id: fallback_session_id.clone(),
+            ts_ms: secs * 1000,
+            day: utc_date_str(secs),
+            model: props
+                .get("main_model")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+        });
+    }
+    (meta, turns)
+}
+
+/// Cheap gate for a potential Aider log: does it carry at least one
+/// `message_send` with real counts? Keeps the scanner from fingerprinting
+/// non-analytics files that happen to sit under `~/.aider`.
+fn aider_log_has_usage(path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if row.get("event").and_then(Value::as_str) != Some("message_send") {
+            continue;
+        }
+        let Some(props) = row.get("properties") else {
+            continue;
+        };
+        if first_u64(props, &["prompt_tokens"]) + first_u64(props, &["completion_tokens"]) > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn scan_aider(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usize, usize) {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        walk_jsonl_files(root, &mut files);
+    }
+    files.sort();
+    let units: Vec<ScanUnit> = files
+        .iter()
+        .filter(|f| aider_log_has_usage(f))
+        .filter_map(|p| unit_from_file(p))
+        .collect();
+    scan_simple(store, provider, units, parse_aider_log)
+}
+
+// ---------------------------------------------------------------------------
+// Registry sweep + convention discovery
+// ---------------------------------------------------------------------------
+
+/// Tier 2: any CLI that mirrors the shared `<dot>/agent/sessions` layout is
+/// read with the session parser and attributed to the dot-directory's name, so
+/// a freshly installed agent appears in the ledger without a registry entry.
+///
+/// Two homes are swept — `~/<dot>` and `~/.config/<dot>` — and registered
+/// providers are skipped, because their roots are already scanned by name.
+/// The [`probe_session_tree`] gate keeps the sweep from claiming trees that
+/// merely share the path shape.
+fn discover_convention_sessions(sources: &[ProviderSource], home: &Path) -> Vec<(String, PathBuf)> {
+    let claimed: HashSet<String> = sources.iter().map(|s| s.provider.clone()).collect();
+    let mut discovered: Vec<(String, PathBuf)> = Vec::new();
+    for base in [home.to_path_buf(), home.join(".config")] {
+        let Ok(entries) = fs::read_dir(&base) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let name = dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.trim_start_matches('.').to_string())
+                .unwrap_or_default();
+            if name.is_empty() || claimed.contains(&name) {
+                continue;
+            }
+            let sessions = dir.join("agent").join("sessions");
+            if sessions.is_dir() && probe_session_tree(&sessions) {
+                discovered.push((name, sessions));
+            }
+        }
+    }
+
+    discovered
+}
+
+fn scan_convention_sessions(
+    store: &mut StoreFile,
+    sources: &[ProviderSource],
+    home: &Path,
+) -> (usize, usize) {
     let mut processed = 0usize;
     let mut skipped = 0usize;
-    for (p, s) in [
-        scan_claude(store, home),
-        scan_codex(store, home),
-        scan_opencode(store, home),
-        scan_session_jsonl(
-            store,
-            PROVIDER_PI,
-            home.join(".pi").join("agent").join("sessions"),
-        ),
-        scan_session_jsonl(
-            store,
-            PROVIDER_OMP,
-            home.join(".omp").join("agent").join("sessions"),
-        ),
-        scan_session_jsonl(
-            store,
-            PROVIDER_COMMAND_CODE,
-            home.join(".commandcode").join("projects"),
-        ),
-    ] {
+    for (name, root) in discover_convention_sessions(sources, home) {
+        let (p, s) = scan_session_jsonl(store, &name, &[root]);
         processed += p;
         skipped += s;
     }
+    (processed, skipped)
+}
+
+/// Cheap gate: does this `agent/sessions` tree contain a file that is really
+/// the session JSONL shape? A wrong guess costs nothing (the parser yields zero
+/// turns for foreign files) but should not claim arbitrary trees.
+fn probe_session_tree(root: &Path) -> bool {
+    let mut files: Vec<PathBuf> = Vec::new();
+    walk_jsonl_files(root, &mut files);
+    files.truncate(8);
+    for f in &files {
+        let Ok(text) = fs::read_to_string(f) else {
+            continue;
+        };
+        for line in text.lines().take(200) {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row.get("type").and_then(Value::as_str) == Some("session") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Resolve a `~`-relative `foo/bar` registry path against the home dir. The
+/// registry stores forward slashes (universal across OSes); splitting and
+/// re-joining normalizes to the platform separator so fingerprint keys stay
+/// byte-identical to the paths the scanners build themselves. Joining a string
+/// that already contains `/` would leave mixed separators on Windows and flip
+/// every changed-file check to a full reparse.
+fn home_join(home: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .filter(|p| !p.is_empty())
+        .fold(home.to_path_buf(), |acc, part| acc.join(part))
+}
+
+/// Sweep every provider the registry names, then discover any convention-shaped
+/// CLI that is not registered. Each scanner owns its own files and rows; the
+/// only shared state is the ledger they append to.
+fn run_scan(store: &mut StoreFile, config_dir: &Path, home: &Path) -> (usize, usize) {
+    let sources = load_provider_sources(config_dir);
+    let mut processed = 0usize;
+    let mut skipped = 0usize;
+    for spec in &sources {
+        let roots: Vec<PathBuf> = spec.paths.iter().map(|p| home_join(home, p)).collect();
+        let (p, s) = match spec.format {
+            SourceFormat::Claude => scan_claude(store, &roots),
+            SourceFormat::Codex => scan_codex(store, &roots),
+            SourceFormat::OpenCode => scan_opencode(store, &spec.provider, &roots),
+            SourceFormat::Session => scan_session_jsonl(store, &spec.provider, &roots),
+            SourceFormat::Aider => scan_aider(store, &spec.provider, &roots),
+        };
+        processed += p;
+        skipped += s;
+    }
+    // Convention sweep: read-only discovery for unregistered CLIs. It follows
+    // after the registered scans so a registered provider is never scanned
+    // twice in one pass.
+    let (p, s) = scan_convention_sessions(store, &sources, home);
+    processed += p;
+    skipped += s;
     store.last_scan_completed_at = Some(now_ms());
     (processed, skipped)
 }
@@ -2118,6 +2524,7 @@ fn build_recent_sessions(
     store: &StoreFile,
     provider: &str,
     scope: &str,
+    sources: &[ProviderSource],
     limit: usize,
 ) -> Vec<SessionRow> {
     const MAX_SESSION_FILES: usize = 40;
@@ -2155,12 +2562,15 @@ fn build_recent_sessions(
             continue;
         }
         // Each provider needs its own reader — running the Claude parser over a
-        // Codex rollout yields an empty, silently wrong row.
-        let (file_meta, turns) = match row_provider.as_str() {
-            PROVIDER_CODEX => parse_codex_session(&path),
-            PROVIDER_OPENCODE => parse_opencode_session(&path),
-            PROVIDER_PI | PROVIDER_OMP | PROVIDER_COMMAND_CODE => parse_session_jsonl(&path),
-            _ => parse_session_turns(&path),
+        // Codex rollout yields an empty, silently wrong row. The provider's
+        // registered format picks the reader; convention-discovered providers
+        // use the shared session format.
+        let (file_meta, turns) = match source_format(sources, &row_provider) {
+            SourceFormat::Codex => parse_codex_session(&path),
+            SourceFormat::OpenCode => parse_opencode_session(&path),
+            SourceFormat::Session => parse_session_jsonl(&path),
+            SourceFormat::Aider => parse_aider_log(&path),
+            SourceFormat::Claude => parse_session_turns(&path),
         };
         let parsed = aggregate_turns(&turns);
         if parsed.turns == 0 {
@@ -2193,7 +2603,7 @@ fn build_recent_sessions(
         sessions.push(SessionRow {
             session_id,
             provider: row_provider.clone(),
-            provider_label: provider_label(&row_provider).to_string(),
+            provider_label: label_for(&row_provider, sources),
             last_active_at: last,
             duration_minutes,
             project_label: label,
@@ -2256,7 +2666,7 @@ pub async fn stats_refresh(
     let home = dirs::home_dir().ok_or_else(|| "Could not find the home directory".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut store = load_store(&config_dir);
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config_dir, &home);
         store.last_scan_error = scan_error_note(processed, skipped);
         save_store(&config_dir, &store);
         scan_state_of(&store, false)
@@ -2287,7 +2697,7 @@ async fn store_after_first_scan(config_dir: PathBuf) -> Result<StoreFile, String
     let home = dirs::home_dir().ok_or_else(|| "Could not find the home directory".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut store = load_store(&config_dir);
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config_dir, &home);
         store.last_scan_error = scan_error_note(processed, skipped);
         save_store(&config_dir, &store);
         store
@@ -2296,9 +2706,10 @@ async fn store_after_first_scan(config_dir: PathBuf) -> Result<StoreFile, String
     .map_err(|e| format!("The usage scan crashed: {e}"))
 }
 
-/// Everything one provider's pane renders, in one call. Provider: any id in
-/// [`PROVIDERS`], or `all`. Scope: `spacron` (managed worktrees only) or `all`.
-/// Range: `7d` / `30d` / `90d` / `all`.
+/// Everything one provider's pane renders, in one call. Provider: any id from
+/// the source registry (see [`load_provider_sources`]), or `all`. Scope:
+/// `spacron` (managed worktrees only) or `all`. Range: `7d` / `30d` / `90d` /
+/// `all`.
 #[tauri::command(async)]
 pub async fn stats_get_snapshot(
     state: tauri::State<'_, AppState>,
@@ -2312,7 +2723,8 @@ pub async fn stats_get_snapshot(
     let range = range.unwrap_or_else(|| RANGE_ALL.to_string());
     let limit = limit.unwrap_or(10);
     let config_dir = state.config_dir.clone();
-    let store = store_after_first_scan(config_dir).await?;
+    let store = store_after_first_scan(config_dir.clone()).await?;
+    let sources = load_provider_sources(&config_dir);
 
     let rows = filter_rows(&store, &provider, &scope, &range);
     Ok(Snapshot {
@@ -2321,7 +2733,7 @@ pub async fn stats_get_snapshot(
         daily: build_daily(&rows),
         model_breakdown: build_breakdown(&rows, |r| r.model.clone(), 5),
         project_breakdown: build_breakdown(&rows, |r| r.project_key.clone(), 5),
-        recent_sessions: build_recent_sessions(&store, &provider, &scope, limit),
+        recent_sessions: build_recent_sessions(&store, &provider, &scope, &sources, limit),
         provider,
         scope,
         range,
@@ -2339,7 +2751,8 @@ pub async fn stats_get_overview(
     let scope = scope.unwrap_or_else(|| SCOPE_ALL.to_string());
     let range = range.unwrap_or_else(|| RANGE_ALL.to_string());
     let config_dir = state.config_dir.clone();
-    let store = store_after_first_scan(config_dir).await?;
+    let store = store_after_first_scan(config_dir.clone()).await?;
+    let sources = load_provider_sources(&config_dir);
 
     let all_rows = filter_rows(&store, PROVIDER_ALL, &scope, &range);
     let summary = build_summary(&all_rows);
@@ -2348,7 +2761,11 @@ pub async fn stats_get_overview(
         + summary.cache_read_tokens
         + summary.cache_write_tokens;
 
-    let providers = PROVIDERS
+    let available = match dirs::home_dir() {
+        Some(home) => surface_providers_with_discovery(&store, &sources, &home),
+        None => surface_providers(&store, &sources),
+    };
+    let providers = available
         .iter()
         .map(|(id, label)| {
             let rows = filter_rows(&store, id, &scope, &range);
@@ -2579,20 +2996,21 @@ mod tests {
     fn incremental_scan_replaces_not_doubles() {
         let dir = std::env::temp_dir().join(format!("spacron-stats-scan-{}", now_ms()));
         let home = dir.join("home");
+        let config = dir.join("config");
         let projects = home.join(".claude").join("projects").join("-repo");
         fs::create_dir_all(&projects).unwrap();
         let file = projects.join("s1.jsonl");
         fs::write(&file, session_lines("/repo", "claude-sonnet-4-5").join("\n")).unwrap();
 
         let mut store = StoreFile::default();
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 1);
         assert_eq!(skipped, 0);
         let turns_before: u64 = store.days.iter().map(|d| d.turns).sum();
         assert_eq!(turns_before, 2);
 
         // Unchanged: second scan skips everything.
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 0);
         assert_eq!(skipped, 1);
 
@@ -2607,7 +3025,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let (processed, _) = run_scan(&mut store, &home);
+        let (processed, _) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 1);
         let turns_after: u64 = store.days.iter().map(|d| d.turns).sum();
         assert_eq!(turns_after, 3, "rescan must replace, never double-count");
@@ -2626,7 +3044,7 @@ mod tests {
 
         // Fingerprints for deleted files get pruned.
         fs::remove_file(&file).unwrap();
-        run_scan(&mut store, &home);
+        run_scan(&mut store, &config, &home);
         assert!(store.files.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
@@ -2726,6 +3144,7 @@ mod tests {
     fn forked_session_turns_are_owned_exactly_once() {
         let dir = std::env::temp_dir().join(format!("spacron-stats-fork-{}", now_ms()));
         let home = dir.join("home");
+        let config = dir.join("config");
         let projects = home.join(".claude").join("projects").join("-repo");
         fs::create_dir_all(&projects).unwrap();
 
@@ -2746,7 +3165,7 @@ mod tests {
         fs::write(&fork, fork_lines.join("\n")).unwrap();
 
         let mut store = StoreFile::default();
-        let (processed, _) = run_scan(&mut store, &home);
+        let (processed, _) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 2);
 
         // m1+m2 are claimed by s1 (sorted first); s2 owns only m3. The ledger
@@ -2761,14 +3180,14 @@ mod tests {
         assert!(s2.has_deferred_claims);
 
         // Unchanged rescan: everything is reused, no re-counting.
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 0);
         assert_eq!(skipped, 2);
 
         // The owner disappears → the deferring fork re-parses and claims the
         // copies. Totals stay identical.
         fs::remove_file(&original).unwrap();
-        let (processed, _) = run_scan(&mut store, &home);
+        let (processed, _) = run_scan(&mut store, &config, &home);
         assert_eq!(processed, 1, "deferred file re-parses to reclaim the keys");
         let total_turns: u64 = store.days.iter().map(|d| d.turns).sum();
         assert_eq!(total_turns, 3, "reclaiming must not double-count either");
@@ -3218,11 +3637,13 @@ mod tests {
     #[ignore]
     fn real_logs_totals() {
         let home = dirs::home_dir().expect("home");
+        let config = std::env::temp_dir().join("spacron-stats-real-config");
         let mut store = StoreFile::default();
-        let (processed, skipped) = run_scan(&mut store, &home);
+        let (processed, skipped) = run_scan(&mut store, &config, &home);
         println!("processed {processed} unit(s), skipped {skipped}");
-        for (id, label) in PROVIDERS {
-            let rows = filter_rows(&store, id, SCOPE_ALL, RANGE_ALL);
+        let sources = load_provider_sources(&config);
+        for (id, label) in surface_providers(&store, &sources) {
+            let rows = filter_rows(&store, &id, SCOPE_ALL, RANGE_ALL);
             let s = build_summary(&rows);
             let total =
                 s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens;
@@ -3248,5 +3669,329 @@ mod tests {
         };
         assert!(!rebuilt.enabled);
         assert_eq!(rebuilt.schema_version, SCHEMA_VERSION);
+    }
+
+    // -----------------------------------------------------------------------
+    // Registry + auto-discovery
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn builtin_sources_cover_the_installed_clis() {
+        let sources = builtin_provider_sources();
+        let find = |id: &str| sources.iter().find(|s| s.provider == id).expect(id);
+
+        assert_eq!(sources.len(), 8, "six original providers + Kilo + Aider");
+        assert_eq!(find(PROVIDER_CLAUDE).format, SourceFormat::Claude);
+        assert_eq!(find(PROVIDER_CODEX).format, SourceFormat::Codex);
+        assert_eq!(find(PROVIDER_PI).format, SourceFormat::Session);
+        // Kilo is scanned through OpenCode's reader: its pre-SQLite session
+        // store is that exact `storage/message/<session>/<message>.json` shape.
+        assert_eq!(find("kilo").format, SourceFormat::OpenCode);
+        assert_eq!(find("kilo").label, "Kilo");
+        assert_eq!(
+            find("kilo").paths,
+            vec![".local/share/kilo/storage/message".to_string()]
+        );
+        assert_eq!(find("aider").format, SourceFormat::Aider);
+        assert_eq!(find("aider").paths, vec![".aider".to_string()]);
+    }
+
+    /// A registry file must be able to add a provider, override a built-in's
+    /// paths and label, and disable one — the three moves a user needs to track
+    /// a CLI Spacron does not ship a source for.
+    #[test]
+    fn registry_file_extends_overrides_and_disables() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-registry-{}", now_ms()));
+        let config = dir.join("config");
+        let registry = config.join("usage-stats");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(
+            registry.join("providers.json"),
+            r#"{
+                "sources": [
+                    { "provider": "pi", "label": "Pi CLI", "paths": [".pi/my-sessions"] },
+                    { "provider": "kilo", "paths": [".kilo/custom-message"] },
+                    { "provider": "omp", "paths": [] },
+                    { "provider": "misti", "format": "session", "paths": [".misti/sessions"] }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let sources = load_provider_sources(&config);
+        let pi = sources.iter().find(|s| s.provider == "pi").unwrap();
+        assert_eq!(pi.label, "Pi CLI", "label override wins");
+        assert_eq!(pi.paths, vec![".pi/my-sessions".to_string()]);
+        assert_eq!(pi.format, SourceFormat::Session, "omitted format is kept");
+        assert_eq!(sources.iter().find(|s| s.provider == "kilo").unwrap().format, SourceFormat::OpenCode,
+            "a path override must not change the built-in parser");
+        assert!(
+            !sources.iter().any(|s| s.provider == "omp"),
+            "empty paths disable a built-in"
+        );
+        let misti = sources.iter().find(|s| s.provider == "misti").unwrap();
+        assert_eq!(misti.format, SourceFormat::Session, "new entry defaults to session");
+        assert_eq!(misti.label, "Misti", "new entry label is prettified");
+
+        // A bad file falls back to the built-ins untouched, like the ledger store.
+        fs::write(registry.join("providers.json"), "{not json").unwrap();
+        assert_eq!(load_provider_sources(&config).len(), 8);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// End to end: a registry entry is scanned under its own provider id, and
+    /// the Overview lists it alongside the built-ins.
+    #[test]
+    fn registry_entry_scans_and_surfaces() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-regscan-{}", now_ms()));
+        let home = dir.join("home");
+        let config = dir.join("config");
+        let registry = config.join("usage-stats");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(
+            registry.join("providers.json"),
+            r#"{"sources":[{"provider":"flor","format":"session","paths":[".flor/sessions"]}]}"#,
+        )
+        .unwrap();
+
+        let empty = surface_providers(&StoreFile::default(), &load_provider_sources(&config));
+        assert!(empty.iter().any(|(id, label)| id == "flor" && label == "Flor"),
+            "a registered agent is selectable before it has usage data");
+
+        let sessions = home.join(".flor").join("sessions").join("ses1");
+        fs::create_dir_all(&sessions).unwrap();
+        write_fixture(
+            &sessions,
+            "s1.jsonl",
+            &[
+                r#"{"type":"session","id":"ses1","cwd":"/repo"}"#.to_string(),
+                r#"{"type":"message","timestamp":"2026-09-20T10:00:00Z","message":{"provider":"xai","model":"grok-4","usage":{"input":100,"output":40,"cacheRead":0,"cacheWrite":0}}}"#.to_string(),
+            ],
+        );
+
+        let mut store = StoreFile::default();
+        run_scan(&mut store, &config, &home);
+        let rows = filter_rows(&store, "flor", SCOPE_ALL, RANGE_ALL);
+        let s = build_summary(&rows);
+        assert_eq!(s.turns, 1);
+        assert_eq!(s.input_tokens, 100);
+        assert_eq!(s.output_tokens, 40);
+
+        let surfaced = surface_providers(&store, &load_provider_sources(&config));
+        assert!(
+            surfaced.iter().any(|(id, label)| id == "flor" && label == "Flor"),
+            "registry providers appear in the Overview"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `~/.aider` analytics only counts `message_send` rows that carry real
+    /// numbers; lifecycle events and zero-count sends are noise.
+    #[test]
+    fn aider_log_parses_message_send_counts() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-aider-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = write_fixture(
+            &dir,
+            "chat.jsonl",
+            &[
+                r#"{"event":"launched","time":1758000000}"#.to_string(),
+                r#"{"event":"message_send","time":1758000000,"properties":{"main_model":"anthropic/claude-sonnet-4-5","prompt_tokens":1200,"completion_tokens":300}}"#.to_string(),
+                r#"{"event":"message_send","time":1758086400,"properties":{"main_model":"gemini/gemini-2.5-flash","prompt_tokens":0,"completion_tokens":0}}"#.to_string(),
+                r#"{"event":"exit","time":1758090000}"#.to_string(),
+            ],
+        );
+
+        let (meta, turns) = parse_aider_log(&path);
+        assert_eq!(turns.len(), 1, "zero-count sends are skipped");
+        assert_eq!(turns[0].input_tokens, 1200);
+        assert_eq!(turns[0].output_tokens, 300);
+        assert_eq!(turns[0].model.as_deref(), Some("anthropic/claude-sonnet-4-5"));
+        assert_eq!(turns[0].day, utc_date_str(1_758_000_000));
+        assert_eq!(turns[0].session_id, "chat", "session falls back to the file stem");
+        assert_eq!(turns[0].cache_read_tokens, 0, "the log carries no cache split");
+        assert!(meta.cwd.is_none(), "the analytics log carries no cwd");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Tier 3, end to end: `~/.aider/analytics.jsonl` lands under provider
+    /// `aider` through the registry, and an unchanged rescan skips it.
+    #[test]
+    fn run_scan_reads_aider_analytics() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-aider-scan-{}", now_ms()));
+        let home = dir.join("home");
+        let config = dir.join("config");
+        let aider_dir = home.join(".aider");
+        fs::create_dir_all(&aider_dir).unwrap();
+        write_fixture(
+            &aider_dir,
+            "analytics.jsonl",
+            &[
+                r#"{"event":"message_send","time":1758000000,"properties":{"main_model":"aider/claude-sonnet-4-5","prompt_tokens":900,"completion_tokens":100}}"#.to_string(),
+            ],
+        );
+
+        let mut store = StoreFile::default();
+        let (processed, _) = run_scan(&mut store, &config, &home);
+        assert_eq!(processed, 1);
+        let rows = filter_rows(&store, "aider", SCOPE_ALL, RANGE_ALL);
+        let s = build_summary(&rows);
+        assert_eq!(s.turns, 1);
+        assert_eq!(s.input_tokens, 900);
+        assert_eq!(s.output_tokens, 100);
+        assert_eq!(s.top_model.as_deref(), Some("aider/claude-sonnet-4-5"));
+
+        let (_, skipped) = run_scan(&mut store, &config, &home);
+        assert_eq!(skipped, 1, "unchanged analytics files are skipped");
+
+        // A stray, unrelated jsonl under ~/.aider contributes nothing at all.
+        write_fixture(&aider_dir, "notes.jsonl", &[r#"{"note":"hello"}"#.to_string()]);
+        let (processed, _) = run_scan(&mut store, &config, &home);
+        assert_eq!(processed, 0, "files without message_send usage never register");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Kilo's pre-SQLite store is OpenCode's layout under Kilo's data root; the
+    /// built-in source must read it without a registry entry.
+    #[test]
+    fn run_scan_reads_kilo_store() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-kilo-{}", now_ms()));
+        let home = dir.join("home");
+        let config = dir.join("config");
+        fs::create_dir_all(&config).unwrap();
+        let session = home
+            .join(".local")
+            .join("share")
+            .join("kilo")
+            .join("storage")
+            .join("message")
+            .join("ses_kilo");
+        fs::create_dir_all(&session).unwrap();
+        fs::write(
+            session.join("msg1.json"),
+            r#"{"role":"assistant","providerID":"kilo","modelID":"claude-sonnet-4-5","path":{"root":"/repo"},"time":{"created":1758000000000},"tokens":{"input":50,"output":20,"reasoning":0,"cache":{"read":10,"write":5}}}"#,
+        )
+        .unwrap();
+
+        let mut store = StoreFile::default();
+        let (processed, _) = run_scan(&mut store, &config, &home);
+        assert_eq!(processed, 1, "the Kilo session directory registered");
+        let rows = filter_rows(&store, "kilo", SCOPE_ALL, RANGE_ALL);
+        let s = build_summary(&rows);
+        assert_eq!(s.turns, 1);
+        assert_eq!(s.input_tokens, 50);
+        assert_eq!(s.output_tokens, 20);
+        assert_eq!(s.cache_read_tokens, 10);
+        assert_eq!(s.cache_write_tokens, 5);
+        assert_eq!(rows[0].day, "2025-09-16");
+        assert_eq!(
+            s.top_model.as_deref(),
+            Some("kilo/claude-sonnet-4-5"),
+            "recorded as providerID/modelID like OpenCode"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Tier 2: a CLI Spacron has never heard of, writing the shared
+    /// `<dot>/agent/sessions` shape under either swept home, is scanned under
+    /// its directory name and surfaces in the Overview.
+    #[test]
+    fn convention_sweep_discovers_unregistered_clis() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-discover-{}", now_ms()));
+        let home = dir.join("home");
+        let config = dir.join("config");
+        fs::create_dir_all(&config).unwrap();
+
+        let session_rows = || {
+            vec![
+                r#"{"type":"session","id":"ses1","cwd":"/repo"}"#.to_string(),
+                r#"{"type":"message","timestamp":"2026-09-20T10:00:00Z","message":{"provider":"xai","model":"grok-4","usage":{"input":100,"output":40,"cacheRead":0,"cacheWrite":0}}}"#.to_string(),
+            ]
+        };
+
+        // `~/misti/agent/sessions` — the home-root sweep.
+        let misti = home.join("misti").join("agent").join("sessions").join("ses1");
+        fs::create_dir_all(&misti).unwrap();
+        write_fixture(&misti, "s1.jsonl", &session_rows());
+
+        // `~/.config/flor/agent/sessions` — the config-dir sweep.
+        let flor = home
+            .join(".config")
+            .join("flor")
+            .join("agent")
+            .join("sessions")
+            .join("ses2");
+        fs::create_dir_all(&flor).unwrap();
+        write_fixture(&flor, "s2.jsonl", &session_rows());
+
+        let quiet = home.join(".quiet").join("agent").join("sessions");
+        fs::create_dir_all(&quiet).unwrap();
+        write_fixture(&quiet, "s1.jsonl", &[r#"{"type":"session","id":"ses-quiet"}"#.to_string()]);
+
+        // A registered provider's tree must not be double-scanned by the sweep
+        // under a second id — `.config/pi` mirrors a built-in's name.
+        let claimed = home.join(".config").join("pi").join("agent").join("sessions");
+        fs::create_dir_all(&claimed).unwrap();
+        write_fixture(&claimed, "s3.jsonl", &session_rows());
+
+        let mut store = StoreFile::default();
+        run_scan(&mut store, &config, &home);
+
+        for id in ["misti", "flor"] {
+            let rows = filter_rows(&store, id, SCOPE_ALL, RANGE_ALL);
+            assert_eq!(rows.len(), 1, "{id} was discovered and scanned");
+            assert_eq!(rows[0].input_tokens, 100);
+        }
+        assert!(
+            !store.files.values().any(|fp| fp.provider == "pi"),
+            "claimed names are skipped by the sweep"
+        );
+
+        let surfaced = surface_providers(&store, &load_provider_sources(&config));
+        assert!(
+            surfaced.iter().any(|(id, label)| id == "misti" && label == "Misti")
+                && surfaced.iter().any(|(id, label)| id == "flor" && label == "Flor"),
+            "discovered providers surface in the Overview with prettified labels"
+        );
+        let available = surface_providers_with_discovery(&store, &load_provider_sources(&config), &home);
+        assert!(available.iter().any(|(id, label)| id == "quiet" && label == "Quiet"),
+            "a discovered agent appears before it records token usage");
+        let recent = build_recent_sessions(&store, "misti", SCOPE_ALL, &load_provider_sources(&config), 10);
+        assert_eq!(recent.len(), 1, "discovered sessions use the session parser in detail views");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The sweep must not claim a tree that merely has the path shape — the
+    /// files have to actually be session JSONL.
+    #[test]
+    fn convention_sweep_ignores_foreign_trees() {
+        let dir = std::env::temp_dir().join(format!("spacron-stats-foreign-{}", now_ms()));
+        let home = dir.join("home");
+        let config = dir.join("config");
+        fs::create_dir_all(&config).unwrap();
+
+        // Right path shape, wrong content (no `{"type":"session"}` header).
+        let foreign = home.join("noise").join("agent").join("sessions");
+        fs::create_dir_all(&foreign).unwrap();
+        write_fixture(
+            &foreign,
+            "n1.jsonl",
+            &[r#"{"type":"message","message":{"usage":{"input":0,"output":0}}}"#.to_string()],
+        );
+
+        let mut store = StoreFile::default();
+        run_scan(&mut store, &config, &home);
+        assert!(
+            store.days.is_empty() && store.files.is_empty(),
+            "a foreign tree is never claimed"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

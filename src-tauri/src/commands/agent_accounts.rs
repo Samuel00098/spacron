@@ -156,6 +156,11 @@ fn account_id_is_safe(id: &str) -> bool {
 /// managed one otherwise.
 pub fn config_dir_for(spec: &AccountProvider, account_id: &str) -> Option<PathBuf> {
     if account_id == DEFAULT_ACCOUNT_ID {
+        if spec.provider == "codex" {
+            if let Some(home) = std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+                return Some(PathBuf::from(home));
+            }
+        }
         let mut path = home_dir()?;
         path.extend(spec.home_dir);
         return Some(path);
@@ -240,6 +245,12 @@ pub fn selected_account(provider: &str) -> String {
         }
     }
     selected
+}
+
+/// Config directory for the selected Codex account, including the default.
+pub(crate) fn selected_codex_home() -> Option<PathBuf> {
+    let spec = provider_spec("codex")?;
+    config_dir_for(spec, &selected_account("codex"))
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +438,11 @@ pub async fn usage_select_account(provider: String, account_id: String) -> Resul
 
     let mut selected = load_selection();
     selected.insert(provider, account_id);
-    save_selection(&selected)
+    save_selection(&selected)?;
+    if spec.provider == "codex" {
+        crate::commands::chatgpt::account_changed();
+    }
+    Ok(())
 }
 
 /// Create an empty managed account directory and return its id.
