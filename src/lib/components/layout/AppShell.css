@@ -672,23 +672,57 @@
   pointer-events: auto;
 }
 
-/* The Split layout control lives in the stage chrome instead of consuming a
-   bottom strip. Reserve a slim top band so it never sits over a room header or
-   steals the room's close/maximize controls. */
-.app-shell .rooms-table.ambient-gallery:has(.split-layout-control),
-.app-shell .rooms-table.ambient-focus:has(.split-layout-control) {
-  padding-top: 46px;
+/* The Split layout control is rendered by the stage but portaled into the
+   overlay row (`.stage-layout-control-host`), where it sits in the bottom-right
+   corner level with the prompt bar. That keeps the stage free of a reserved top
+   band, so panes start right under the title bar like the Chat window does. */
+.app-shell .workspace-overlays {
+  container-type: inline-size;
+  container-name: workspace-overlays;
+}
+
+.app-shell .workspace-overlays > .stage-layout-control-host {
+  position: absolute;
+  right: 20px;
+  bottom: 14px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.app-shell .workspace-overlays > .stage-layout-control-host:empty {
+  display: none;
 }
 
 .app-shell .split-layout-control {
-  position: absolute;
-  top: 9px;
-  right: 10px;
-  z-index: 40;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   pointer-events: auto;
+}
+
+/* Keep the prompt bar centred but clear of the corner control: shrink it
+   symmetrically until there is room for both on one row. */
+@container workspace-overlays (max-width: 1500px) {
+  .app-shell .workspace-overlays:has(.split-layout-control) > .composer-strip {
+    width: min(720px, 100% - 560px);
+  }
+}
+
+/* Too narrow to share a row: the control joins the overlay column's flow as
+   its own right-aligned row above the bar (so the measured `--overlay-clear`
+   grows and the stage still clears it), and the bar takes its width back. */
+@container workspace-overlays (max-width: 1080px) {
+  .app-shell .workspace-overlays:has(.split-layout-control) > .composer-strip {
+    width: min(720px, 100%);
+  }
+
+  .app-shell .workspace-overlays > .stage-layout-control-host {
+    position: static;
+    align-self: flex-end;
+    height: auto;
+  }
 }
 
 .app-shell .split-layout-count {

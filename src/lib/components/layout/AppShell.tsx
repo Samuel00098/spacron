@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { isWebkitGtk, viewTransitionsReliable } from '$lib/utils/tauri';
 import TitleBar from './TitleBar.tsx';
 import UpdateBanner from '$lib/components/shared/UpdateBanner.tsx';
@@ -752,6 +752,10 @@ export default function AppShell() {
 
   const roomsTableRef = useRef<HTMLElement | null>(null);
   const overlaysRef = useRef<HTMLDivElement | null>(null);
+  // The Split/expanded layout control renders from the stage but paints in the
+  // bottom-right of the overlay row, beside the prompt bar, so the stage can
+  // start directly under the title bar.
+  const [layoutControlHost, setLayoutControlHost] = useState<HTMLDivElement | null>(null);
   const [overlaysHeight, setOverlaysHeight] = useState(128);
 
   useEffect(() => {
@@ -3457,7 +3461,7 @@ export default function AppShell() {
 
     return (
       <>
-        {((isExpanded || isSplit) && visibleRooms.length > 0) && (
+        {((isExpanded || isSplit) && visibleRooms.length > 0) && layoutControlHost && createPortal(
           <div
             className={`split-layout-control${isExpanded ? ' expanded-layout-control' : ''}`}
             aria-label={isExpanded ? 'Expanded panel controls' : 'Split layout controls'}
@@ -3477,6 +3481,7 @@ export default function AppShell() {
                     value={stageExpandedRoom ?? ''}
                     onChange={(room) => focusRoom(room as RoomId)}
                     ariaLabel="Change expanded panel"
+                    direction="up"
                   />
                 </div>
               )
@@ -3494,7 +3499,8 @@ export default function AppShell() {
                 }}
               />
             ) : null}
-          </div>
+          </div>,
+          layoutControlHost,
         )}
         <div
           className={`focused-room stage-layers${stageModifier}${stageExpansionMotion ? ` stage-${stageExpansionMotion}` : ''}${stageIsVacant ? ' empty-stage' : ''}`}
@@ -3602,6 +3608,7 @@ export default function AppShell() {
               {/* The room dock used to sit here as its own strip. Its launchers
                   now live in the prompt bar's Tools menu, and its layout
                   actions inline beside it. */}
+              <div ref={setLayoutControlHost} className="stage-layout-control-host" />
               <div className="composer-strip">
                 <FloatingPromptBar
                   trailingControls={
