@@ -428,8 +428,20 @@ function TerminalPane({
   // is deliberately unchanged, so the OSC 11 answer a TUI negotiates is identical
   // and only the see-through glass is traded away — and only for the user who
   // opted into WebGL. Canvas (the default) and DOM keep the wallpaper.
+  //
+  // Every renderer carries the surface's real RGB, read from the same token that
+  // paints the scrim (`--terminal-surface-rgb`). Canvas/DOM used to carry black
+  // at alpha 0, so on the grey panel every CLI that shades its own chrome
+  // against the reported background (Codex's input box, Claude Code's prompt
+  // bar) blended toward black and landed on the panel's own grey: invisible.
+  // A CLI reads this once at launch, so an agent started before a theme switch
+  // keeps its old shade until it is restarted.
   function terminalBackground() {
-    return renderer === 'webgl' ? 'rgb(0, 0, 0)' : 'rgba(0, 0, 0, 0)';
+    const fallback = isLightTheme ? '0, 0, 0' : '32, 32, 36';
+    const rgb = typeof document === 'undefined'
+      ? fallback
+      : getComputedStyle(document.documentElement).getPropertyValue('--terminal-surface-rgb').trim() || fallback;
+    return renderer === 'webgl' ? `rgb(${rgb})` : `rgba(${rgb}, 0)`;
   }
 
   // The terminal's palette is deliberately independent from the app theme.

@@ -221,6 +221,9 @@ vi.mock('$lib/stores/terminal', () => ({
 }));
 
 import { cleanupStaleWorktrees, trackedWorktrees, reclaimProjectWorktrees, orchestratorTasks, chatMessages, createOrchestratorTask, deleteOrchestratorTask, loadProjectOrchestratorTasks, launchOrchestratorTask, unlinkOrchestratorTask, resendOrchestratorGoal, resumeBlockedOrchestratorTask, renameOrchestratorAgent, sendChatMessage, stopChatTurn, hasResumableTurn, resumeOrchestratorTurn, dismissResumableTurn, recordUnwatchedAgentReport, getAgentOutputRefs, runBrainCommand, formatBrainRunResult, resetOrchestratorCachesForTests, enqueueChatMessage, steerQueuedChatMessage, postEditCheckCommand, closeBrainShell, splitReplyForInput } from './orchestrator';
+// Static, so it is the same instance the statically imported orchestrator reads
+// (a dynamic import after vi.resetModules() would be a fresh copy).
+import * as agentTurns from './agentTurnState';
 import { resetTurnEditsForTests } from '$lib/services/orchestrator/turn-edit-undo';
 import { makeActivityEvent } from '$lib/services/orchestrator/activity-log';
 import { buildAgentCharter, buildAgentTaskMessage } from '$lib/services/orchestrator/agent-charter';
@@ -3522,12 +3525,14 @@ describe('recordUnwatchedAgentReport', () => {
     chatMessages.set({});
   });
 
-  it('files the report as a completion card under the task that owns the session', () => {
+  it('files the report as a completion card under the task that owns the session', async () => {
     const task = createOrchestratorTask('project-1', 'Ship the retry backoff', 'claude');
     orchestratorTasks.update((all) =>
       all.map((t) => (t.id === task.id ? { ...t, status: 'in-progress' as const, assignedSessionId: 7, name: 'Iris' } : t)),
     );
     chatMessages.set({});
+    // The agent is mid-turn on a task it was sent: this report closes it.
+    agentTurns.noteAgentPrompted(7, 'Ship the retry backoff');
 
     const filedUnder = recordUnwatchedAgentReport(7, { kind: 'finished', detail: 'Tests pass.' }, 'Agent');
 
@@ -3551,6 +3556,25 @@ describe('recordUnwatchedAgentReport', () => {
     });
   });
 
+  it('files one card per finish when the hook and the report both fire', async () => {
+    const turns = agentTurns;
+    allSessionsValue.push({ id: 14, projectId: 'project-3', agentName: 'Nova', taskSummary: 'Fix login' });
+    turns.noteAgentPrompted(14, 'Fix login');
+
+    // The Stop hook's watcher closes the turn first...
+    turns.noteAgentTurnEnded(14, 'finished');
+    // ...then the agent's own report_status for the same finish arrives.
+    const filedUnder = recordUnwatchedAgentReport(14, { kind: 'finished', detail: 'Done.' }, 'Agent');
+
+    expect(filedUnder).toBeNull();
+    expect(get(chatMessages)['project-3'] ?? []).toHaveLength(0);
+  });
+
+  it('files nothing for an agent that was never given a task', () => {
+    allSessionsValue.push({ id: 15, projectId: 'project-3', agentName: 'Idle', taskSummary: null });
+    expect(recordUnwatchedAgentReport(15, { kind: 'finished' }, 'Agent')).toBeNull();
+  });
+
   it('files an unattributed report under the open project', () => {
     getActiveTerminalProjectId.mockReturnValue('project-9');
 
@@ -3568,8 +3592,9 @@ describe('recordUnwatchedAgentReport', () => {
     });
   });
 
-  it('uses the session to find the project when no task owns it', () => {
+  it('uses the session to find the project when no task owns it', async () => {
     allSessionsValue.push({ id: 12, projectId: 'project-3', agentName: 'Vale', taskSummary: 'Refactor the parser' });
+    agentTurns.noteAgentPrompted(12, 'Refactor the parser');
 
     const filedUnder = recordUnwatchedAgentReport(12, { kind: 'failed', reason: 'Build broke.' }, 'Agent');
 

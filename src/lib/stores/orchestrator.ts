@@ -106,7 +106,7 @@ import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-l
 import { estimateFileOverlap } from '$lib/services/jev';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
-import { agentTurnStates, turnEndWasCounted } from '$lib/stores/agentTurnState';
+import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted } from '$lib/stores/agentTurnState';
 import { getSessionHeaderSummary } from '$lib/stores/terminal';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -3521,6 +3521,18 @@ export function recordUnwatchedAgentReport(
   const told = describeTurnEnd({ ...signal, via: 'declared' } as AgentTurnOutcome);
   if (!told) return null;
 
+  // One notification per turn, from the same turn state the Agent Fleet reads.
+  // A report for a session that is working closes that turn (the Fleet leaves
+  // Working here). A report for one whose turn already ended is that same end
+  // arriving twice: Claude Code's Stop hook and the agent's own report_status
+  // both fire for one finish, and whichever came second used to file a second
+  // card. A report from an agent that was never given a task has nothing to
+  // report on. Only an unattributed report (no session) is filed as-is.
+  if (sessionId != null) {
+    if (get(agentTurnStates)[sessionId]?.phase !== 'working') return null;
+    noteAgentTurnEnded(sessionId, signal.kind);
+  }
+
   const task =
     sessionId == null
       ? undefined
@@ -3564,7 +3576,8 @@ export function recordUnwatchedAgentReport(
       // The card's second line. A report outside a task has no title to show,
       // and a blank line there reads as a rendering bug rather than as absence.
       taskTitle:
-        task?.title
+        (sessionId != null ? getSessionHeaderSummary(sessionId) : null)
+        || task?.title
         || session?.taskSummary?.trim()
         || session?.paneTitle?.trim()
         || 'Status report',
