@@ -35,6 +35,8 @@ import {
 } from '$lib/services/agent-permissions';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import LiveTicker from '$lib/components/shared/LiveTicker';
+import AgentUpdateButton, { useAgentUpdating } from '$lib/components/shared/AgentUpdateButton';
+import { refreshAgentUpdatesIfStale } from '$lib/stores/agentUpdates';
 import './AgentsPane.css';
 
 type AgentRow = {
@@ -86,6 +88,12 @@ export default function AgentsPane() {
   useEffect(() => {
     void refreshUsage();
   }, []);
+
+  // Update checks need detection's installed list, so they follow each scan
+  // (gated to one registry round trip per half hour inside the store).
+  useEffect(() => {
+    refreshAgentUpdatesIfStale();
+  }, [lastFetchedAt]);
 
   // Detection state refreshes itself while the tab is open — no Rescan button.
   // Same 30s cadence as the usage panel; `refreshUsage` dedupes in-flight calls.
@@ -283,6 +291,7 @@ function AgentRowView({
   // deliberate choice, and offering to install it would be noise.
   const notInstalled = !row.hidden && !row.detected?.installed;
   const installDocs = installDocsFor(row.command, row.name);
+  const updating = useAgentUpdating(row.command);
 
   // The clicked segment always becomes the active one — a toggle that flips to
   // the *other* mode when you click the one already lit reads as broken, which
@@ -318,7 +327,7 @@ function AgentRowView({
 
   return (
     <li className={`agents-row${row.hidden ? ' hidden' : ''}`} data-installed={row.detected?.installed ? 'true' : 'false'}>
-      <div className="agents-row-main">
+      <div className={`agents-row-main${updating ? ' agent-updating' : ''}`} aria-busy={updating || undefined}>
         <span className="agents-row-mark" aria-hidden="true">
           <AgentBrandMark command={row.command} name={row.name} />
         </span>
@@ -330,6 +339,9 @@ function AgentRowView({
               <span className="agents-row-badge">Built-in</span>
             ) : (
               <span className="agents-row-badge custom">Custom</span>
+            )}
+            {!row.hidden && row.detected?.installed && (
+              <AgentUpdateButton command={row.command} name={row.name} />
             )}
           </div>
           <div className="agents-row-cmd-line">

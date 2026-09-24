@@ -129,6 +129,7 @@ import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 // openDailyNote removed
 // toggleSketch removed
+import { startAgentUpdateChecks } from '$lib/stores/agentUpdates';
 import './AppShell.css';
 
 type AuxPanelId =
@@ -663,6 +664,9 @@ export default function AppShell() {
   useEffect(() => {
     devActiveSessionIdRef.current = currentDevActiveSessionId;
   }, [currentDevActiveSessionId]);
+  // Agent CLI update checks: app-wide, a few registry requests every 6 hours.
+  useEffect(() => startAgentUpdateChecks(), []);
+
   const zoom = useSettingsStore((s) => s.uiZoom);
   const showSnapshotsTab = useSettingsStore((s) => s.showSnapshotsTab);
 

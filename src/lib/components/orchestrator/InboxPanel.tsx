@@ -18,6 +18,16 @@ import {
   formatAgentIdentity,
   type InboxEntry,
 } from '$lib/services/orchestrator/inbox';
+import {
+  agentUpdates,
+  agentUpdateNotices,
+  agentUpdateInboxEntries,
+  markAgentUpdateNoticesRead,
+  clearAgentUpdateNotices,
+  commandOfUpdateEntry,
+  installAgentUpdate,
+  updateFor,
+} from '$lib/stores/agentUpdates';
 import StatusIcon, { type StatusIconKind } from './statusIcons';
 import JevNeedsInputTag from './JevNeedsInputTag';
 import './InboxPanel.css';
@@ -33,6 +43,7 @@ const STATUS_ICON: Record<string, { kind: StatusIconKind; cls: string }> = {
   report: { kind: 'report', cls: 'info' },
   handoff: { kind: 'handoff', cls: 'accent' },
   ask: { kind: 'ask', cls: 'warn' },
+  update: { kind: 'update', cls: 'accent' },
 };
 
 function relativeTime(ts: number, now: number): string {
@@ -87,6 +98,8 @@ function statusLabel(entry: InboxEntry): string {
       return 'Question';
     case 'report':
       return 'Report';
+    case 'update':
+      return 'Update available';
     case 'done':
       if (entry.detail.endedBy === 'inferred') return 'Went quiet';
       if (entry.detail.endedBy === 'exit') return 'Exited';
@@ -100,7 +113,7 @@ function statusLabel(entry: InboxEntry): string {
 function copyText(entry: InboxEntry): string {
   const { reason, summary } = entry.detail;
   const parts = [`${formatAgentIdentity(entry.agentName, entry.agentType)}: ${entry.title}`, absoluteTime(entry.ts)];
-  if (entry.kind === 'mail') {
+  if (entry.kind === 'mail' || entry.kind === 'update') {
     parts.push('', entry.body);
   } else {
     if (reason) parts.push('', reason);
@@ -137,6 +150,8 @@ export default function InboxPanel() {
   const allChat = useStore(chatMessages);
   const inbox = useStore(inboxState);
   const tasks = useStore(orchestratorTasks);
+  const updates = useStore(agentUpdates);
+  const updateNotices = useStore(agentUpdateNotices);
 
   const panelRef = useRef<HTMLDivElement>(null);
   /** The one open row, by entry id. Session state, never persisted: an inbox
@@ -148,9 +163,16 @@ export default function InboxPanel() {
     if (!projectId) return [];
     const cards = getMailboxCards(projectId, { limit: MAX_ENTRIES, actionableOnly: true, includeSeen: true });
     const completions = (allChat[projectId] ?? []).filter((m) => m.completion);
-    return mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)).slice(0, MAX_ENTRIES);
+    // Agent update notices are app-wide (an agent CLI is installed once per
+    // machine), so they join every project's list with their own read state.
+    return [
+      ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)),
+      ...agentUpdateInboxEntries(updates, updateNotices),
+    ]
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, MAX_ENTRIES);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allMail, allChat, inbox, projectId]);
+  }, [allMail, allChat, inbox, projectId, updates, updateNotices]);
 
   const unread = countUnread(entries);
 
@@ -210,16 +232,20 @@ export default function InboxPanel() {
 
   const handleMarkAll = useCallback(() => {
     markAllRead(projectId, entries);
+    markAgentUpdateNoticesRead(entries.map((e) => e.id));
   }, [projectId, entries]);
 
   const handleClearAll = useCallback(() => {
-    clearInbox(projectId, entries.map((e) => e.id));
+    const ids = entries.map((e) => e.id);
+    clearInbox(projectId, ids);
+    clearAgentUpdateNotices(ids);
   }, [projectId, entries]);
 
   const handleClearEntry = useCallback(
     (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       clearInbox(projectId, [id]);
+      clearAgentUpdateNotices([id]);
     },
     [projectId],
   );
@@ -232,6 +258,7 @@ export default function InboxPanel() {
       setExpandedId((current) => {
         if (current === id) return null;
         markRead(projectId, [id]);
+        markAgentUpdateNoticesRead([id]);
         return id;
       });
     },
@@ -273,6 +300,17 @@ export default function InboxPanel() {
     },
     [tasks],
   );
+
+  /** "Update now" for an update row whose update is still pending. */
+  const updateAction = (entry: InboxEntry): { busy: boolean; run: () => void } | undefined => {
+    if (entry.kind !== 'update') return undefined;
+    const command = commandOfUpdateEntry(entry.id);
+    if (!command || !updateFor(updates, command)) return undefined;
+    return {
+      busy: updates.updating.includes(command),
+      run: () => void installAgentUpdate(command),
+    };
+  };
 
   if (!open || !projectId) return null;
 
@@ -382,6 +420,7 @@ export default function InboxPanel() {
                       copied={copiedId === entry.id}
                       onCopy={() => handleCopy(entry)}
                       onShow={showTerminal(entry)}
+                      update={updateAction(entry)}
                     />
                   )}
                 </div>
@@ -404,18 +443,20 @@ function InboxRowDetail({
   copied,
   onCopy,
   onShow,
+  update,
 }: {
   entry: InboxEntry;
   copied: boolean;
   onCopy: () => void;
   onShow?: () => void;
+  update?: { busy: boolean; run: () => void };
 }) {
   const { reason, summary, summaryPending, elapsedSec, to, files, worktreeBranch, handover } = entry.detail;
   const elapsed = formatSecs(elapsedSec);
   // A recap that merely echoes the agent's own sentence is not a second thing to
   // read.
   const recap = summary && summary !== reason ? summary : null;
-  const said = entry.kind === 'mail' ? !!entry.body : !!(reason || recap || summaryPending);
+  const said = entry.kind !== 'completion' ? !!entry.body : !!(reason || recap || summaryPending);
 
   return (
     <div className="inbox-detail" id={`inbox-detail-${entry.id}`}>
@@ -429,7 +470,7 @@ function InboxRowDetail({
         <span className="inbox-detail-fact">{absoluteTime(entry.ts)}</span>
       </div>
 
-      {entry.kind === 'mail' ? (
+      {entry.kind !== 'completion' ? (
         <p className="inbox-detail-message">{entry.body}</p>
       ) : (
         <>
@@ -484,6 +525,11 @@ function InboxRowDetail({
         {onShow && (
           <button className="inbox-detail-action" onClick={onShow}>
             Show terminal
+          </button>
+        )}
+        {update && (
+          <button className="inbox-detail-action" onClick={update.run} disabled={update.busy}>
+            {update.busy ? 'Updating…' : entry.status === 'failed' ? 'Try again' : 'Update now'}
           </button>
         )}
         <button className="inbox-detail-action" onClick={onCopy}>

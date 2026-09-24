@@ -353,13 +353,28 @@
   white-space: nowrap;
 }
 
-.project-pin-mark {
+/* The pinned mark (shared/PinIcon, variant "mark"): a pushpin tilted into
+   the board, accent-coloured, with its head lightly filled so it reads at 11px
+   where a line-only pin turns into a scribble. */
+.pin-icon-mark {
   flex-shrink: 0;
+  color: var(--accent);
+  transform: rotate(45deg);
+  transform-origin: 50% 50%;
+}
+
+.pin-icon-mark .pin-icon-head {
+  fill: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.project-pin-mark {
   /* Beside the name, not pushed to the edge by the row's space-between
      (which is there to park the Active badge on the right). */
   margin-right: auto;
-  color: var(--text-muted);
-  opacity: 0.8;
+}
+
+.project-thread-pin {
+  margin-left: 1px;
 }
 
 .project-active-badge {

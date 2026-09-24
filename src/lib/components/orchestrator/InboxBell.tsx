@@ -11,6 +11,7 @@ import {
   mergeInboxEntries,
   countUnread,
 } from '$lib/services/orchestrator/inbox';
+import { agentUpdates, agentUpdateNotices, agentUpdateInboxEntries } from '$lib/stores/agentUpdates';
 import './InboxBell.css';
 
 /** Matches the panel's window so the badge can't count rows the list won't show. */
@@ -30,6 +31,8 @@ export default function InboxBell() {
   const allMail = useStore(mailbox);
   const allChat = useStore(chatMessages);
   const inbox = useStore(inboxState);
+  const updates = useStore(agentUpdates);
+  const updateNotices = useStore(agentUpdateNotices);
 
   const unread = useMemo(() => {
     const projectId = project?.id ?? '';
@@ -37,10 +40,15 @@ export default function InboxBell() {
     const cards = getMailboxCards(projectId, { limit: MAX_ENTRIES, actionableOnly: true, includeSeen: true });
     const completions = (allChat[projectId] ?? []).filter((m) => m.completion);
     return countUnread(
-      mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)).slice(0, MAX_ENTRIES),
+      [
+        ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)),
+        ...agentUpdateInboxEntries(updates, updateNotices),
+      ]
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, MAX_ENTRIES),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allMail, allChat, inbox, project?.id]);
+  }, [allMail, allChat, inbox, project?.id, updates, updateNotices]);
 
   return (
     <button

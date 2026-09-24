@@ -36,7 +36,7 @@ import type { MailboxCard, MailboxKind } from './mailbox';
 /** Cap the id lists so a long-lived project can't grow this file without bound. */
 export const MAX_TRACKED_IDS = 500;
 
-export type InboxStatus = 'done' | 'failed' | 'blocked' | MailboxKind;
+export type InboxStatus = 'done' | 'failed' | 'blocked' | 'update' | MailboxKind;
 
 /**
  * The facts a row keeps back until the user opens it.
@@ -83,7 +83,8 @@ export interface InboxEntryDetail {
 export interface InboxEntry {
   /** The underlying message id — a mailbox message id or a chat message id. */
   id: string;
-  kind: 'mail' | 'completion';
+  /** `update` rows come from `stores/agentUpdates.ts`, not from this module. */
+  kind: 'mail' | 'completion' | 'update';
   ts: number;
   read: boolean;
   /** The agent the entry is about, for the row's leading label. */

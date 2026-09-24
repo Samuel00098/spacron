@@ -5,7 +5,7 @@
 // sets the colour via CSS (e.g. `.inbox-row-glyph.ok { color: var(--success) }`)
 // and light/dark parity is automatic.
 
-export type StatusIconKind = 'done' | 'failed' | 'blocked' | 'report' | 'handoff' | 'ask';
+export type StatusIconKind = 'done' | 'failed' | 'blocked' | 'report' | 'handoff' | 'ask' | 'update';
 
 function glyph(kind: StatusIconKind) {
   switch (kind) {
@@ -44,6 +44,14 @@ function glyph(kind: StatusIconKind) {
         <>
           <line x1="5" y1="12" x2="19" y2="12" />
           <polyline points="12 5 19 12 12 19" />
+        </>
+      );
+    case 'update':
+      return (
+        <>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 7v8" />
+          <polyline points="8.5 11.5 12 15 15.5 11.5" />
         </>
       );
     case 'ask':

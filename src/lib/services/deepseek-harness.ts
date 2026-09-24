@@ -261,6 +261,12 @@ export function deepSeekLaunchLine(files: WorkerFiles, taskPath: string): string
 /** Why a worker cannot run here, worded for the user, or null when it can. */
 export async function deepSeekWorkerProblem(): Promise<string | null> {
   if (get(remoteTarget)) return 'DeepSeek Harness runs on this computer only, not in a remote workspace.';
+  // Lazy: the update store pulls in the usage store, and this module sits on
+  // the orchestrator's import path, where a new static edge shifts load order.
+  const { isAgentUpdating } = await import('$lib/stores/agentUpdates');
+  if (isAgentUpdating(DEEPSEEK_HARNESS_COMMAND)) {
+    return 'DeepSeek Harness is updating. Try again when the update finishes.';
+  }
   const status = await invoke<DeepSeekHarnessStatus>('deepseek_harness_status');
   return status.problem;
 }

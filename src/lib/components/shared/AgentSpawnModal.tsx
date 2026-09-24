@@ -43,6 +43,8 @@ import {
 import { getAgentBrand } from './agentBrands';
 import { AgentBrandMark } from './useAgentBrand';
 import AgentLaunchConfigFields from './AgentLaunchConfigFields';
+import AgentUpdateButton from './AgentUpdateButton';
+import { agentUpdates, isAgentUpdating, refreshAgentUpdatesIfStale } from '$lib/stores/agentUpdates';
 import { loadLiveAgentProviderModels, prewarmLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import { getAgentProviderLaunchOptions } from '$lib/services/agent-provider-catalogue';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
@@ -56,6 +58,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
   const $usage = useStore(usageState);
+  const $agentUpdates = useStore(agentUpdates);
   const layout = useStore(layoutSnapshot);
   const isDev = layout.ambient === 'development';
 
@@ -144,6 +147,22 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     onclose();
     void runAgentSignIn({ command, name, cwd, projectId, isDev });
   };
+
+  // An agent that starts updating while picked is dropped from the plan: its
+  // files are being replaced, so a spawn now would start a half-installed CLI.
+  useEffect(() => {
+    if (!$agentUpdates.updating.length) return;
+    setSpawnCounts((prev) => {
+      if (!$agentUpdates.updating.some((c) => prev.has(c))) return prev;
+      const next = new Map(prev);
+      for (const command of $agentUpdates.updating) next.delete(command);
+      return next;
+    });
+  }, [$agentUpdates.updating]);
+
+  useEffect(() => {
+    refreshAgentUpdatesIfStale();
+  }, [$usage.lastFetchedAt]);
 
   useEffect(() => {
     void refreshUsage();
@@ -241,6 +260,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   }, [spawnPresets, activeCommand]);
 
   const incrementSpawn = (command: string) => {
+    if (isAgentUpdating(command)) return;
     setActiveCommand(command);
     setSpawnPlacements((prev) => {
       if (prev.has(command)) return prev;
@@ -276,6 +296,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   };
 
   const handleTileClick = (command: string) => {
+    if (isAgentUpdating(command)) return;
     setActiveCommand(command);
     const count = spawnCounts.get(command) ?? 0;
     if (count === 0) {
@@ -322,7 +343,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   };
 
   const handleSpawnConfirm = useCallback(async () => {
-    const selected = Array.from(spawnCounts.entries()).filter(([, count]) => count > 0);
+    const selected = Array.from(spawnCounts.entries()).filter(
+      ([cmd, count]) => count > 0 && !isAgentUpdating(cmd)
+    );
     if (!selected.length) return;
 
     // DeepSeek Harness has no terminal UI: its tile opens one web panel for the
@@ -510,11 +533,13 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                   brand.color === 'mono' ? 'var(--text-primary)' : brand.color;
                 const det = detectedByCommand.get(preset.command);
                 const offerSignIn = shouldOfferSignIn(det);
+                const updating = $agentUpdates.updating.includes(preset.command);
 
                 return (
                   <div
                     key={preset.id}
-                    className={`asm-agent-tile${isSelected ? ' selected' : ''}${isActive ? ' active' : ''}`}
+                    className={`asm-agent-tile${isSelected ? ' selected' : ''}${isActive ? ' active' : ''}${updating ? ' agent-updating' : ''}`}
+                    aria-disabled={updating || undefined}
                     style={{ ['--logo' as string]: logoColor }}
                     onClick={() => handleTileClick(preset.command)}
                     role="button"
@@ -525,8 +550,12 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                         handleTileClick(preset.command);
                       }
                     }}
-                    aria-label={`Select ${preset.name}`}
+                    aria-label={updating ? `${preset.name} is updating` : `Select ${preset.name}`}
                   >
+                    <span className="asm-tile-update agent-update-slot">
+                      <AgentUpdateButton command={preset.command} name={preset.name} />
+                    </span>
+
                     {count > 0 && (
                       <span
                         className={`asm-tile-count-badge${brand.color === 'mono' ? ' mono' : ''}`}

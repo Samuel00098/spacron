@@ -52,6 +52,7 @@ import {
   togglePath,
 } from './projectListPrefs';
 import './ProjectHUD.css';
+import PinIcon from '$lib/components/shared/PinIcon';
 
 function getFilename(path: string): string {
   const normalized = path.replace(/\\/g, '/');
@@ -827,9 +828,7 @@ export default function ProjectHUD() {
                 <span className="project-sidebar-card-name" title={p.name}>{p.name}</span>
               )}
               {isPinnedProject && (
-                <svg className="project-pin-mark" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-label="Pinned project" role="img">
-                  <path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5v8h2v-8h5v-2c-1.66 0-3-1.34-3-3Z" />
-                </svg>
+                <PinIcon variant="mark" size={12} className="project-pin-mark" label="Pinned project" />
               )}
               {p.isActive && (
                 <span className="project-active-badge">
@@ -923,9 +922,7 @@ export default function ProjectHUD() {
                         setProjectPinned(p.path, !isPinnedProject);
                       }}
                     >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5v8h2v-8h5v-2c-1.66 0-3-1.34-3-3Z" />
-                      </svg>
+                      <PinIcon variant={isPinnedProject ? 'off' : 'plain'} size={12} />
                       <span>{isPinnedProject ? 'Unpin Project' : 'Pin to Top'}</span>
                     </button>
 
@@ -1019,9 +1016,7 @@ export default function ProjectHUD() {
                             <span className="project-thread-title-line">
                               <strong>{row.title || 'New conversation'}</strong>
                               {row.thread?.pinned && (
-                                <svg className="project-thread-pin" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-label="Pinned thread" role="img">
-                                  <path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5v8h2v-8h5v-2c-1.66 0-3-1.34-3-3Z" />
-                                </svg>
+                                <PinIcon variant="mark" size={11} className="project-thread-pin" label="Pinned thread" />
                               )}
                             </span>
                             <span className="project-thread-meta">

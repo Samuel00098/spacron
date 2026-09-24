@@ -7,6 +7,17 @@ and `src/lib/services/deepseek-harness.ts`. What they cannot tell you:
   `next` (0.1.5-rc.x) failed with ETARGET on an unpublished
   `dsh-client-ui-sidebar-documentpreview@^0.1.5-rc.3`. Only `0.1.7-alpha.1`
   installed. Re-check before bumping `PINNED_VERSION`.
+  **2026-09-24:** tags are now `latest` 0.1.5-rc.3 (still older), `next`
+  0.1.7-rc.1, `alpha` 0.1.7-alpha.2, and both 0.1.7 builds install. rc.1 keeps
+  `lib/bin.js`, boots the web profile with Spacron's patches, and runs the
+  headless worker to a FAILED turn line on a fake key, same as alpha.1. Not
+  re-checked on rc.1: the pi-ai model catalog, the rules-file names, and the
+  panel in a browser, so `PINNED_VERSION` stays alpha.1. The in-app updater
+  (`agent_updates.rs`) follows the highest dist-tag for prerelease installs,
+  so it offers rc.1.
+- **Test-installing a dsh version:** give the scratch folder its own
+  `package.json` first. Without one npm walks up to the nearest folder with a
+  `node_modules` (on the dev box that is the home folder) and installs there.
 - **Why not the preview proxy alone:** tried and measured. dsh's WebSocket
   needs its `SameSite=Strict` cookie and a `127.0.0.1` Origin; a cross-site
   iframe never sends the cookie, and the local-dev WS bridge forwards neither.

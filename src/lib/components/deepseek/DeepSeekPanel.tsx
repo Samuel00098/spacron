@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
-import { deepSeekPanelRoot, deepSeekPlacements, startDeepSeekHarnessWeb } from '$lib/services/deepseek-harness';
+import { DEEPSEEK_HARNESS_COMMAND, deepSeekPanelRoot, deepSeekPlacements, startDeepSeekHarnessWeb } from '$lib/services/deepseek-harness';
+import { agentUpdates } from '$lib/stores/agentUpdates';
 import type { WorktreeInfo, WorktreeStatus } from '$lib/services/orchestrator/worktree-manager';
 import { subscribeWorktreeStatus } from '$lib/services/orchestrator/worktree-status-poll';
 import './DeepSeekPanel.css';
@@ -31,11 +32,14 @@ export default function DeepSeekPanel() {
   const root = project?.root_path ? deepSeekPanelRoot(placements, project.id, project.root_path) : null;
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [attempt, setAttempt] = useState(0);
+  // Rust stops every dsh web process before an update replaces its files; the
+  // effect below starts a fresh one on the new version once it finishes.
+  const updating = useStore(agentUpdates).updating.includes(DEEPSEEK_HARNESS_COMMAND);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
-    if (!root || remote) return;
+    if (!root || remote || updating) return;
     let cancelled = false;
     setState({ kind: 'starting' });
     startDeepSeekHarnessWeb(root)
@@ -48,13 +52,22 @@ export default function DeepSeekPanel() {
     return () => {
       cancelled = true;
     };
-  }, [root, remote, attempt]);
+  }, [root, remote, attempt, updating]);
 
   if (remote) {
     return <Message title="Not available here" body="DeepSeek Harness runs on this computer only, not in a remote workspace." />;
   }
   if (!root) {
     return <Message title="Open a project" body="DeepSeek Harness opens on the project you have open." />;
+  }
+  if (updating) {
+    return (
+      <Message
+        title="Updating DeepSeek Harness…"
+        body="The new version installs in the background. The panel restarts on it when the update finishes."
+        busy
+      />
+    );
   }
   if (state.kind === 'error') {
     return <Message title="DeepSeek Harness did not start" body={state.message} onRetry={retry} />;

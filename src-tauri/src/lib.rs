@@ -294,6 +294,8 @@ pub fn run() {
             commands::chatgpt::chatgpt_login_start,
             commands::chatgpt::chatgpt_login_cancel,
             commands::chatgpt::chatgpt_logout,
+            commands::agent_updates::agent_updates_check,
+            commands::agent_updates::agent_update_install,
             commands::deepseek_harness::deepseek_harness_status,
             commands::deepseek_harness::deepseek_harness_worker_files,
             commands::deepseek_harness::deepseek_harness_write_task,
