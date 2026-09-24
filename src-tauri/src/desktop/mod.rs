@@ -1319,14 +1319,18 @@ fn screenshot_to_file(info: &WindowInfo, img: image::RgbaImage) -> Result<serde_
         .unwrap_or(0);
     let path = dir.join(format!("window-{}-{stamp}.png", info.id));
     std::fs::write(&path, png).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
-    Ok(text(format!(
-        "Screenshot of \"{}\" saved to {} ({}x{}). You cannot see this image — it is for the user to open. \
-         To learn what is in the window, use desktop_ui_tree or desktop_find.",
+    let mut result = text(format!(
+        "Screenshot of \"{}\" saved to {} ({}x{}). If your model accepts images, it is attached to this result; \
+         if not, it is for the user to open, and desktop_ui_tree or desktop_find tell you what is in the window.",
         info.title,
         path.display(),
         img.width(),
         img.height()
-    )))
+    ));
+    // Not part of MCP: the chat's command reads it to attach the image for
+    // models that can see (commands/secrets/agent_turn/vision.rs).
+    result["images"] = serde_json::json!([path.display().to_string()]);
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

@@ -215,6 +215,8 @@ relay, so the tools are refused for callers whose session is remote
 
 ### No vision: the UI tree is its eyes
 
+> **Update 2026-09-24:** the chat now attaches screenshots for models that accept images (see `.spacron/memory/orchestrator-vision.md`). The UI tree stays the primary way to read and act on a window; the rest of this section still describes text-only models.
+
 No provider path in this repo sends images to the model
 ([orchestrator-emulator-tools note](../.spacron/memory/orchestrator-emulator-tools.md)).
 So for the orchestrator:

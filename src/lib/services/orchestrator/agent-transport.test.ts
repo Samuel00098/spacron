@@ -4,7 +4,7 @@ const caps = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: unknown) => cmd === 'ai_agent_capabilities' ? Promise.resolve(caps.value) : invoke(cmd, args) }));
 const listeners = vi.hoisted(() => ({ handler: null as null | ((event: { payload: { requestId: string; delta: string } }) => void), unlisten: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: (_name: string, handler: typeof listeners.handler) => { listeners.handler = handler; return Promise.resolve(listeners.unlisten); } }));
-import { AgentTransport, DEFAULT_AGENT_BUDGETS, filePage, nativeTools, validateToolCall } from './agent-transport';
+import { AgentTransport, DEFAULT_AGENT_BUDGETS, alignToolResults, filePage, nativeTools, validateToolCall } from './agent-transport';
 import {
   BRAIN_BROWSER_ACT_TOOLS,
   BRAIN_BROWSER_LOOK_TOOLS,
@@ -351,5 +351,42 @@ describe('chat browser tools (docs/agent-browser.md)', () => {
       expect(BRAIN_READONLY_TOOLS.has(t)).toBe(false);
       expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
     }
+  });
+});
+
+describe('images for vision models (agent_turn/vision.rs decides who gets them)', () => {
+  it('keeps a result\'s screenshot files when aligning results to calls', () => {
+    const aligned = alignToolResults(
+      [{ id: 'a', name: 'desktop_screenshot', args: {} }],
+      [{ id: 'a', name: 'desktop_screenshot', ok: true, output: 'saved', images: ['C:/tmp/shot.png'] }],
+      () => 'missing',
+    );
+    expect(aligned[0].images).toEqual(['C:/tmp/shot.png']);
+    const plain = alignToolResults([{ id: 'b', name: 'read_file', args: {} }], [{ id: 'b', name: 'read_file', ok: true, output: 'x' }], () => '');
+    expect('images' in plain[0]).toBe(false);
+  });
+});
+
+describe('images on the wire to Rust', () => {
+  beforeEach(() => { invoke.mockReset(); caps.value = {}; });
+
+  it('sends the user\'s attached images and the round\'s screenshots along with the text', async () => {
+    const message = 'Fix the layout\n--- Attached file: shot.png (image/png) ---\nThe binary attachment was saved at C:/Temp/spacron/pasted/shot.png. Inspect it when relevant.\n--- End attached file ---';
+    const transport = new AgentTransport('anthropic', 'claude-sonnet-4-5');
+    invoke.mockResolvedValueOnce({ text: '', calls: [{ id: 'a', name: 'emulator_screenshot', args: { target: 'emulator-5554' } }], assistant: { role: 'assistant' } });
+    await transport.request('system', message);
+    expect(invoke.mock.calls[0][1].request.userImages).toEqual(['C:/Temp/spacron/pasted/shot.png']);
+
+    await transport.record([{ id: 'a', name: 'emulator_screenshot', ok: true, output: 'saved', images: ['C:/Temp/spacron-screenshots/emulator-1.jpg'] }]);
+    invoke.mockResolvedValueOnce({ text: 'Done.', calls: [], assistant: {} });
+    await transport.request('system', message);
+    const second = invoke.mock.calls[1][1].request;
+    expect(second.exchanges[0].results[0].images).toEqual(['C:/Temp/spacron-screenshots/emulator-1.jpg']);
+  });
+
+  it('sends no image paths when the message has none', async () => {
+    invoke.mockResolvedValueOnce({ text: 'ok', calls: [], assistant: {} });
+    await new AgentTransport('deepseek', 'deepseek-chat').request('system', 'plain task');
+    expect(invoke.mock.calls[0][1].request.userImages).toEqual([]);
   });
 });

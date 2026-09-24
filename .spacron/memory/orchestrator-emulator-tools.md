@@ -27,12 +27,13 @@ two drift, but the last two are on you:
 
 Traps that are already handled, and would come back if the code is rewritten:
 
-- **The brain has no vision.** No provider path in this repo sends images.
-  `emulator_screenshot` therefore writes a file to the OS temp dir and returns
-  its path and size; it never returns base64, which would blow the 32k tool
-  cap with characters the model cannot read. The model is told in its tool
-  description that the file is for the user and that logcat is how *it* learns
-  what happened.
+- **Screenshots are files, never base64 in the text.** `emulator_screenshot`
+  writes a file to the OS temp dir and returns its path and size; base64 in
+  the tool output would blow the 32k cap with characters no model reads as an
+  image. Since 2026-09-24 the executor lifts that path out of the output (the
+  handler's fixed "screenshot saved to <path>" wording — change it and the
+  regex in the store's emulator case together) so models that accept images
+  get the picture attached; see [[orchestrator-vision]].
 - **Arg types are exact on the Rust side** (`as_f64`, `as_str`). A stringified
   `"0.5"` reads as absent, and the resulting "needs 'x' and 'y'" error names
   arguments the model can see it sent — so it retries identically until the

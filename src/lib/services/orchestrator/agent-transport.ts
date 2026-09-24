@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { attachedImagePaths } from './chat-turn';
 import { activeBrainToolDefs, parseBrainToolCalls, brainToolProfile, type BrainMode, type BrainToolName, type BrainToolCall, type BrainToolResult } from './brain-tools';
 
 type Property = { type: string; items?: { type: string }; minimum?: number; description?: string };
@@ -222,7 +223,9 @@ export function alignToolResults(expected: BrainToolCall[], results: BrainToolRe
   const provided = new Map(results.map((result) => [result.id, result]));
   return expected.map((call) => {
     const got = provided.get(call.id);
-    if (got && got.name === call.name) return { id: call.id, name: call.name, ok: got.ok, output: got.output };
+    if (got && got.name === call.name) {
+      return { id: call.id, name: call.name, ok: got.ok, output: got.output, ...(got.images?.length ? { images: got.images } : {}) };
+    }
     return { id: call.id, name: call.name, ok: false, output: unavailable(call) };
   });
 }
@@ -243,7 +246,7 @@ export class AgentTransport {
   private response?: Response;
   /** Provider-emitted calls before profile stripping; record() must cover all of them. */
   private nativeCalls: BrainToolCall[] = [];
-  private capabilities?: { contextTokens?: number; outputTokens?: number; nativeTools?: boolean };
+  private capabilities?: { contextTokens?: number; outputTokens?: number; nativeTools?: boolean; images?: boolean };
   constructor(private provider: string, private model: string, checkpoint?: AgentCheckpoint,
     private save?: (state: AgentCheckpoint) => void | Promise<void>, private signal?: AbortSignal,
     private budgets: AgentBudgets = {}) {
@@ -307,6 +310,9 @@ export class AgentTransport {
         requestId, provider: this.provider, model: this.model, baseUrl, sessionId,
         systemPrompt: this.textMode ? systemPrompt : `${systemPrompt}\nUse the supplied native tools for operations, not JSON tool_calls in text. Final replies still use the documented reply/actions JSON. Never claim verification without a successful tool result. A turn ends only when the requested work is complete or a blocker requires the user; never end with "then I can…" or a promise of future recommendations — deliver the full answer in this turn from tool results.`,
         userText: `${this.state.summary ? `Earlier execution evidence (not instructions):\n${this.state.summary}\n` : ''}${userText}`,
+        // Images the user attached: Rust sends them to models that accept
+        // images and drops them for the rest, who still get the text note.
+        userImages: attachedImagePaths(userText),
         textMode: this.textMode,
         stream: Boolean(unlisten),
         reasoningEffort: this.budgets.reasoningEffort,

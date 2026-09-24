@@ -167,6 +167,8 @@ intended — same rule as `emulator_tap`).
 
 ### 2.4 The orchestrator has no vision — and does not need it here
 
+> **Update 2026-09-24:** the chat now attaches screenshots for models that accept images (see `.spacron/memory/orchestrator-vision.md`). The accessibility snapshot stays the primary way to read and act on a page.
+
 No provider path in the repo sends images. That is fine for the browser:
 `browser_snapshot` returns the **accessibility tree as text** with element refs,
 which is the primary way Playwright MCP expects a model to see a page.

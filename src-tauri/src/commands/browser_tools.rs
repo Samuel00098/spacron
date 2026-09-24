@@ -465,6 +465,8 @@ pub struct BrowserCallResult {
     /// orchestrator's origin policy checks it after every call, because a
     /// click can navigate just as well as `browser_navigate` can.
     pub page_url: Option<String>,
+    /// Screenshot files this call produced, for models that accept images.
+    pub images: Vec<String>,
     pub is_error: bool,
 }
 
@@ -561,15 +563,28 @@ pub async fn browser_call_tool(
         }
     };
     let mut text = String::new();
-    for item in result.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
-        if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if !text.is_empty() {
-                text.push('\n');
+    let mut images = Vec::new();
+    let out = output_dir(&format!("chat-{}", sanitize(&conversation)));
+    for (index, item) in result.get("content").and_then(|c| c.as_array()).into_iter().flatten().enumerate() {
+        match item.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(item.get("text").and_then(|t| t.as_str()).unwrap_or(""));
             }
-            text.push_str(item.get("text").and_then(|t| t.as_str()).unwrap_or(""));
+            // Written from the image the server returned, so the path is ours
+            // (in the output dir) rather than parsed out of its text.
+            Some("image") => {
+                if let Some(path) = save_image(&out, index, item) {
+                    images.push(path);
+                }
+            }
+            _ => {}
         }
     }
     Ok(BrowserCallResult {
+        images,
         page_url: page_url(&text),
         is_error: result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false),
         text,
@@ -581,6 +596,21 @@ pub async fn browser_call_tool(
 pub async fn browser_close_session(state: tauri::State<'_, Arc<BrowserSessions>>, conversation: String) -> Result<(), String> {
     state.close(&conversation).await;
     Ok(())
+}
+
+fn save_image(dir: &Path, index: usize, item: &serde_json::Value) -> Option<String> {
+    use base64::Engine as _;
+    let ext = match item.get("mimeType").and_then(|m| m.as_str()) {
+        Some("image/jpeg") => "jpg",
+        Some("image/webp") => "webp",
+        _ => "png",
+    };
+    let bytes = base64::engine::general_purpose::STANDARD.decode(item.get("data")?.as_str()?).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let path = dir.join(format!("shot-{stamp}-{index}.{ext}"));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.display().to_string())
 }
 
 fn sanitize(s: &str) -> String {

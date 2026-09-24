@@ -141,6 +141,8 @@ export interface ProjectReadContext {
 export interface BrainToolExecution {
   output: string;
   actions?: OrchestratorAction[];
+  /** Screenshot files, attached as images for models that accept them. */
+  images?: string[];
 }
 
 export type BrainToolExecutor = (call: BrainToolCall) => Promise<BrainToolExecution>;
@@ -2019,7 +2021,13 @@ async function executeBrainToolCalls(
       // again via `INCONCLUSIVE_RUN_RE` in `orchestrator/chat-turn.ts`, which
       // matches these same prefixes. Keep the two lists in step.
       return {
-        result: { id: call.id, name: call.name, ok: !/^error:|^TIMEOUT|^SESSION CLOSED|^exit [1-9]/i.test(String(executed.output ?? '')), output: String(executed.output ?? '') },
+        result: {
+          id: call.id,
+          name: call.name,
+          ok: !/^error:|^TIMEOUT|^SESSION CLOSED|^exit [1-9]/i.test(String(executed.output ?? '')),
+          output: String(executed.output ?? ''),
+          ...(executed.images?.length ? { images: executed.images } : {}),
+        },
         actions: executed.actions ?? [],
       };
     } catch (error) {

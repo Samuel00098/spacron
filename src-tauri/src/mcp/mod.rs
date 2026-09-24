@@ -3099,7 +3099,7 @@ async fn screenshot_to_file(
     let path = dir.join(format!("{safe_target}-{stamp}.jpg"));
     fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(format!(
-        "Android screenshot saved to {} ({}x{}). You cannot see this image — it is for the user to open. \
+        "Android screenshot saved to {} ({}x{}). If your model accepts images, it is attached to this result; if not, it is for the user to open. \
          Use the dimensions for coordinate maths if you need pixels, though emulator_tap and emulator_swipe \
          take normalized 0.0-1.0 coordinates and do the conversion themselves. To learn what is actually on \
          screen, read emulator_logcat or ask the user.",

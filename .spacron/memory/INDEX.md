@@ -78,6 +78,7 @@ short enough that it says what the note is *about*, never what it says.
 - [orchestrator-edit-scope-and-delegation](orchestrator-edit-scope-and-delegation.md) — the 3-file direct-edit limit and the ask-before-delegating gate; which three files must agree
 - [orchestrator-tool-calling](orchestrator-tool-calling.md) — the provider-agnostic FINAL vs tool_calls loop and where the executor lives; recovery-flag inventory and turn-completion contract; update_todos 5-state plan tool and its honesty invariants
 - [orchestrator-emulator-tools](orchestrator-emulator-tools.md) - how the orchestrator reaches the emulator, and the four lists that must agree
+- [orchestrator-vision](orchestrator-vision.md) — which models get images (Rust decides), the folder allowlist, and the per-provider wire shapes
 - [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe
 - [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 

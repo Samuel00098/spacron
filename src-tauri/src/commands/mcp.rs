@@ -371,7 +371,7 @@ pub async fn mcp_call_desktop_tool(
     chat_id: String,
     name: String,
     args: serde_json::Value,
-) -> Result<String, String> {
+) -> Result<ToolText, String> {
     if !crate::desktop::is_desktop_tool(&name) {
         return Err(format!("'{name}' is not a computer-use tool."));
     }
@@ -384,7 +384,21 @@ pub async fn mcp_call_desktop_tool(
         agent_name: None,
     };
     let result = crate::desktop::call_tool(&desktop, caller, &name, args.as_object()).await?;
-    Ok(result["content"][0]["text"].as_str().unwrap_or_default().to_string())
+    Ok(ToolText {
+        text: result["content"][0]["text"].as_str().unwrap_or_default().to_string(),
+        images: result["images"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+    })
+}
+
+/// A tool's text for the chat, plus any screenshot files it saved. The images
+/// are attached only for models that accept them; the text always goes.
+#[derive(serde::Serialize)]
+pub struct ToolText {
+    text: String,
+    images: Vec<String>,
 }
 
 /// A chat turn ended (finished, failed or was cancelled): its computer-use
