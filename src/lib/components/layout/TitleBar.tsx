@@ -11,7 +11,6 @@ import {
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
-import { canGoBack, canGoForward, navigateBack, navigateForward } from '$lib/stores/navigation';
 import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
@@ -33,10 +32,8 @@ export default function TitleBar() {
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const projectsMap = useWorkspaceStore((s) => s.projects);
   const activeProject = activeProjectId ? projectsMap.get(activeProjectId) : null;
-  const goBackEnabled = useStore(canGoBack);
   const currentInteractionMode = useStore(interactionMode);
   const modeShortcut = useSettingsStore((s) => s.userShortcuts.find((shortcut) => shortcut.id === 'toggleInteractionMode')?.keys);
-  const goForwardEnabled = useStore(canGoForward);
   const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightSidebarOpen = useStore(rightSidebarVisible);
@@ -64,13 +61,6 @@ export default function TitleBar() {
   }
 
 
-
-  async function goBack() {
-    await navigateBack();
-  }
-  async function goForward() {
-    await navigateForward();
-  }
 
   function toggleRightSidebar() {
     if (rightSidebarOpen) {
@@ -117,9 +107,10 @@ export default function TitleBar() {
         </div>
       </div>
 
-      {/* Navigation: Sidebar, Back, Forward */}
-      <div className="titlebar-nav">
-        {showWorkspaceTools && (
+      {/* Navigation: the left sidebar toggle. Only rendered with a workspace
+          open — an empty group would still draw its divider. */}
+      {showWorkspaceTools && (
+        <div className="titlebar-nav">
           <button
             className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
             onClick={toggleSidebar}
@@ -143,48 +134,8 @@ export default function TitleBar() {
               <path d="M6 8h1M6 12h1M6 16h1" />
             </svg>
           </button>
-        )}
-        <button
-          className="nav-btn tb-collapse-2"
-          onClick={goBack}
-          disabled={!goBackEnabled}
-          aria-label="Go back"
-          title="Back"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-        </button>
-        <button
-          className="nav-btn tb-collapse-2"
-          onClick={goForward}
-          disabled={!goForwardEnabled}
-          aria-label="Go forward"
-          title="Forward"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-        </button>
-      </div>
+        </div>
+      )}
 
       {/* Centre: the Code / Chat switch. It affects the whole window,
           so it sits in the window chrome rather than inside a collapsible
