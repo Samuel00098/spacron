@@ -171,6 +171,7 @@ fn provider_name(provider: &str) -> &'static str {
         "openai" => "OpenAI",
         "google" => "Google",
         "openrouter" => "OpenRouter",
+        "vercel" => "Vercel AI Gateway",
         "fal" => "fal",
         "replicate" => "Replicate",
         _ => "provider",

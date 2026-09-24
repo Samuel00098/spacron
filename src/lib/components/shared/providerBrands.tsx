@@ -28,6 +28,7 @@ const PROVIDER_ASSETS: Record<string, { file: string; color: string }> = {
   cohere: { file: 'cohere', color: '#FF7759' },
   ollama: { file: 'ollama', color: '#F5A524' },
   lmstudio: { file: 'lmstudio', color: '#60A5FA' },
+  vercel: { file: 'vercel', color: '#94A3B8' },
 };
 
 // These providers genuinely share their public brand with a bundled mark.

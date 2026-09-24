@@ -68,6 +68,10 @@ const NVIDIA_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const MOONSHOT_URL: &str = "https://api.moonshot.ai/v1/chat/completions";
 const SAMBANOVA_URL: &str = "https://api.sambanova.ai/v1/chat/completions";
 const PERPLEXITY_URL: &str = "https://api.perplexity.ai/chat/completions";
+// Vercel AI Gateway: one key fronting every provider. Chat is OpenAI-compatible
+// under /v1; transcription, image generation and the realtime WebSocket live
+// under the gateway's own /v4/ai routes (see `VERCEL_AI_BASE_URL`).
+const VERCEL_URL: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
 const COHERE_URL: &str = "https://api.cohere.com/compatibility/v1/chat/completions";
 const OPENCODE_URL: &str = "https://opencode.ai/zen/v1/chat/completions";
 const OPENCODE_GO_URL: &str = "https://opencode.ai/zen/go/v1/chat/completions";
@@ -118,6 +122,11 @@ const COHERE_MODELS_URL: &str = "https://api.cohere.com/v1/models";
 const OPENCODE_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
 const OPENCODE_GO_MODELS_URL: &str = "https://opencode.ai/zen/go/v1/models";
 const KILOCODE_MODELS_URL: &str = "https://api.kilo.ai/api/gateway/models";
+const VERCEL_MODELS_URL: &str = "https://ai-gateway.vercel.sh/v1/models";
+pub(crate) const VERCEL_AI_BASE_URL: &str = "https://ai-gateway.vercel.sh/v4/ai";
+const VERCEL_REALTIME_SECRET_URL: &str = "https://ai-gateway.vercel.sh/v1/realtime/client-secrets";
+/// Sent on every gateway /v4/ai request; the value the gateway's own SDK sends.
+pub(crate) const VERCEL_PROTOCOL_VERSION: &str = "0.0.1";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const GOOGLE_MODELS_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
@@ -142,6 +151,7 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "opencode",
     "opencode-go",
     "kilocode",
+    "vercel",
     "ollama",
     "lmstudio",
     // ChatGPT subscription through the user's Codex CLI: no key, see chatgpt.rs.
@@ -222,6 +232,7 @@ fn completion_endpoint(provider: &str, base_url: Option<&str>, model: Option<&st
         "opencode" => OPENCODE_URL.to_string(),
         "opencode-go" => OPENCODE_GO_URL.to_string(),
         "kilocode" => KILOCODE_URL.to_string(),
+        "vercel" => VERCEL_URL.to_string(),
         p if is_local_provider(p) => {
             local_endpoint(base_url.unwrap_or_default(), "chat/completions")
         }
@@ -251,6 +262,7 @@ fn model_catalogue_endpoint(provider: &str, base_url: Option<&str>) -> String {
         "opencode" => OPENCODE_MODELS_URL.to_string(),
         "opencode-go" => OPENCODE_GO_MODELS_URL.to_string(),
         "kilocode" => KILOCODE_MODELS_URL.to_string(),
+        "vercel" => VERCEL_MODELS_URL.to_string(),
         p if is_local_provider(p) => {
             local_endpoint(base_url.unwrap_or_default(), "models")
         }
@@ -412,6 +424,22 @@ fn xai_is_realtime_model(id: &str) -> bool {
 fn groq_is_stt_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("whisper") || id.contains("transcribe") || id.contains("asr")
+}
+
+/// The gateway's catalogue tags every model with a `type` (language,
+/// transcription, realtime, image, video, speech, embedding, ...), so each
+/// picker filters on that rather than guessing from the id.
+fn vercel_model_matches_purpose(item: &serde_json::Value, purpose: ModelPurpose) -> bool {
+    let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match purpose {
+        // Some image generators (Nano Banana) are typed `language` because
+        // they also talk; their `image-generation` tag keeps them out.
+        ModelPurpose::Chat => {
+            kind == "language" && !json_string_array_contains(item.get("tags"), "image-generation")
+        }
+        ModelPurpose::Stt => kind == "transcription",
+        ModelPurpose::Realtime => kind == "realtime",
+    }
 }
 
 fn text_matches_any(value: &str, needles: &[&str]) -> bool {
@@ -1662,7 +1690,12 @@ pub async fn ai_transcribe_audio(
     base_url: Option<String>,
     vocabulary: Option<String>,
 ) -> Result<String, String> {
-    if provider != "google" && provider != "openai" && provider != "openrouter" && !is_local_provider(&provider) {
+    if provider != "google"
+        && provider != "openai"
+        && provider != "openrouter"
+        && provider != "vercel"
+        && !is_local_provider(&provider)
+    {
         return Err("Selected provider does not support transcription yet.".to_string());
     }
 
@@ -1821,6 +1854,39 @@ pub async fn ai_transcribe_audio(
 
             let payload: serde_json::Value = response.json().await.map_err(|err| {
                 format!("OpenRouter transcription returned an invalid response: {err}")
+            })?;
+
+            Ok(payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string())
+        }
+        "vercel" => {
+            // The gateway's transcription route takes base64 audio as JSON and
+            // picks the model from a header. Vocabulary has no portable slot
+            // across the providers behind it, so it is left to the polish pass.
+            let response = client
+                .post(format!("{VERCEL_AI_BASE_URL}/transcription-model"))
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .header("ai-gateway-protocol-version", VERCEL_PROTOCOL_VERSION)
+                .header("ai-transcription-model-specification-version", "4")
+                .header("ai-model-id", &model)
+                .json(&json!({ "audio": audio_b64, "mediaType": mime_type }))
+                .send()
+                .await
+                .map_err(|err| safe_request_error("Failed to contact Vercel AI Gateway transcription", err))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let preview = redact_secrets(&body.chars().take(200).collect::<String>());
+                return Err(format!("Vercel AI Gateway transcription failed ({status}): {preview}"));
+            }
+
+            let payload: serde_json::Value = response.json().await.map_err(|err| {
+                format!("Vercel AI Gateway transcription returned an invalid response: {err}")
             })?;
 
             Ok(payload
@@ -2269,6 +2335,11 @@ pub async fn list_provider_models(
                             continue;
                         }
                     }
+                    "vercel" => {
+                        if !vercel_model_matches_purpose(&item, purpose) {
+                            continue;
+                        }
+                    }
                     p if is_local_provider(p) => {
                         // Local providers — no structured metadata, return all
                     }
@@ -2534,6 +2605,52 @@ pub async fn xai_realtime_client_secret() -> Result<String, String> {
         .unwrap_or("");
     if token.is_empty() {
         return Err("xAI Realtime returned no client secret.".to_string());
+    }
+    Ok(token.to_string())
+}
+
+/// Mint a single-use, short-lived client secret for a Vercel AI Gateway
+/// realtime (speech-to-speech) session.
+///
+/// Same shape as `xai_realtime_client_secret`: the renderer opens the WebSocket
+/// itself and presents this token as an `ai-gateway-auth.<token>` subprotocol,
+/// so the long-lived gateway key never leaves Rust. The token is bound to one
+/// model, so the model id is part of the request.
+#[tauri::command]
+pub async fn vercel_realtime_client_secret(model: String) -> Result<String, String> {
+    let model = model.trim().to_string();
+    if !model_id_is_safe(&model) {
+        return Err("Invalid realtime model id".to_string());
+    }
+    let api_key = resolve_api_key("vercel", "")?;
+    let client = shared_http_client(Duration::from_secs(30))?;
+    let response = client
+        .post(VERCEL_REALTIME_SECRET_URL)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header("ai-gateway-protocol-version", VERCEL_PROTOCOL_VERSION)
+        // The gateway rejects anything over 300 s. The token only has to live
+        // until the WebSocket opens; the call itself outlasts it.
+        .json(&json!({ "model": model, "expiresIn": 300 }))
+        .send()
+        .await
+        .map_err(|err| safe_request_error("Failed to contact Vercel AI Gateway realtime", err))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let preview = redact_secrets(&body.chars().take(300).collect::<String>());
+        return Err(format!(
+            "Vercel AI Gateway realtime token request failed ({status}): {preview}"
+        ));
+    }
+
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|err| format!("Vercel AI Gateway realtime returned an invalid response: {err}"))?;
+    let token = payload.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    if token.is_empty() {
+        return Err("Vercel AI Gateway realtime returned no client secret.".to_string());
     }
     Ok(token.to_string())
 }
@@ -2978,6 +3095,7 @@ mod tests {
         assert!(is_known_provider("opencode"));
         assert!(is_known_provider("opencode-go"));
         assert!(is_known_provider("kilocode"));
+        assert!(is_known_provider("vercel"));
         assert!(is_known_provider("ollama"));
         assert!(is_known_provider("lmstudio"));
     }
@@ -3018,6 +3136,7 @@ mod tests {
             ("opencode", super::OPENCODE_URL, super::OPENCODE_MODELS_URL),
             ("opencode-go", super::OPENCODE_GO_URL, super::OPENCODE_GO_MODELS_URL),
             ("kilocode", super::KILOCODE_URL, super::KILOCODE_MODELS_URL),
+            ("vercel", super::VERCEL_URL, super::VERCEL_MODELS_URL),
         ];
 
         for (provider, completion, models) in hosted {

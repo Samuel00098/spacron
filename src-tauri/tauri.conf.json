@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost http://127.0.0.1:*; font-src 'self'; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss://api.x.ai; frame-src 'self' http://127.0.0.1:* https://www.youtube.com https://www.youtube-nocookie.com; object-src 'none'; worker-src 'self' blob:;",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost http://127.0.0.1:*; font-src 'self'; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss://api.x.ai wss://ai-gateway.vercel.sh; frame-src 'self' http://127.0.0.1:* https://www.youtube.com https://www.youtube-nocookie.com; object-src 'none'; worker-src 'self' blob:;",
       "assetProtocol": {
         "enable": true,
         "scope": [

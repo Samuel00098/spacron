@@ -289,7 +289,8 @@ fn apply_reasoning(r: &AgentRequest, wire: ReasoningWire, body: &mut Value, toke
             };
             tokens
         }
-        "openrouter" => { body["reasoning"] = json!({"effort":effort}); tokens }
+        // The Vercel AI Gateway takes OpenRouter's shape too (its docs' own example).
+        "openrouter" | "vercel" => { body["reasoning"] = json!({"effort":effort}); tokens }
         _ => { body["reasoning_effort"] = json!(effort); tokens }
     }
 }

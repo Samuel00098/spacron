@@ -32,14 +32,9 @@ import {
   aiProviders,
   currentAiModel,
   getProviderDef,
-  openaiRealtimeModel,
-  openaiRealtimeVoice,
-  openaiLiveModel,
-  openaiLiveVoice,
+  getRealtimeEngineConfig,
   setAiModel,
   voiceConversationEngine,
-  xaiRealtimeModel,
-  xaiRealtimeVoice,
   type AiModelOption,
   type AiProviderId,
 } from '$lib/stores/settings';
@@ -61,7 +56,6 @@ import {
   isRealtimeVoiceSupported,
   REALTIME_VOICE_INSTRUCTIONS,
   startRealtimeVoiceSession,
-  type RealtimeVoiceProvider,
   type RealtimeVoiceSession,
   type RealtimeVoiceState,
 } from '$lib/services/realtime-voice';
@@ -1320,11 +1314,8 @@ export default function ChatModePanel() {
   async function startChatVoiceMode() {
     if (!project || !thread) return;
     voiceThreadIdRef.current = thread.id;
-    const engine = get(voiceConversationEngine);
-    const provider: RealtimeVoiceProvider =
-      engine === 'xai-realtime' ? 'xai' : engine === 'openai-live' ? 'openai-live' : 'openai';
-    const label = provider === 'xai' ? 'Grok Realtime' : provider === 'openai-live' ? 'GPT Live' : 'GPT Realtime';
-    const keyProvider = provider === 'xai' ? 'xai' : 'openai';
+    const engineConfig = getRealtimeEngineConfig(get(voiceConversationEngine));
+    const { provider, label, keyProvider } = engineConfig;
     if (!isRealtimeVoiceSupported(provider)) {
       showToast(
         `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or the dictate button to speak text instead.`,
@@ -1335,7 +1326,7 @@ export default function ChatModePanel() {
     }
     if (!isProviderApiKeyConfiguredLocal(keyProvider)) {
       showToast(
-        `${label} needs an ${keyProvider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`,
+        `${label} needs ${engineConfig.keyName} API key. Add it in Settings, or switch the conversation engine.`,
         'warning',
       );
       openSettings();
@@ -1357,8 +1348,8 @@ export default function ChatModePanel() {
     try {
       const session = await startRealtimeVoiceSession({
         provider,
-        model: get(provider === 'xai' ? xaiRealtimeModel : provider === 'openai-live' ? openaiLiveModel : openaiRealtimeModel),
-        voice: get(provider === 'xai' ? xaiRealtimeVoice : provider === 'openai-live' ? openaiLiveVoice : openaiRealtimeVoice),
+        model: get(engineConfig.model),
+        voice: get(engineConfig.voice),
         instructions: REALTIME_VOICE_INSTRUCTIONS,
         callbacks: {
           onStateChange: (state) => {

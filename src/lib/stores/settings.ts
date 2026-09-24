@@ -247,12 +247,13 @@ export type AiProviderId =
   | 'opencode'
   | 'opencode-go'
   | 'kilocode'
+  | 'vercel'
   | 'chatgpt'
   | 'ollama'
   | 'lmstudio'
   | 'local';
 
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'ollama' | 'lmstudio' | 'local';
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local';
 
 export interface AiModelOption {
   id: string;
@@ -568,6 +569,25 @@ export const aiProviders: AiProviderDef[] = [
     ],
   },
   {
+    id: 'vercel',
+    label: 'Vercel AI Gateway',
+    keyLabel: 'Vercel AI Gateway API key',
+    keyPlaceholder: 'vck_...',
+    keyUrl: 'https://vercel.com/docs/ai-gateway/authentication',
+    // One key for every provider behind the gateway. The same key also powers
+    // dictation, image/video generation and the realtime voice engine; the live
+    // list (typed by the gateway itself) replaces these once the key is saved.
+    defaultModel: 'anthropic/claude-sonnet-5',
+    models: [
+      { id: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5', description: 'Anthropic through the gateway.' },
+      { id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5', description: 'Anthropic flagship through the gateway.' },
+      { id: 'openai/gpt-5.6-sol', label: 'GPT 5.6 Sol', description: 'OpenAI through the gateway.' },
+      { id: 'google/gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Google through the gateway.' },
+      { id: 'spacexai/grok-4.7', label: 'Grok 4.7', description: 'xAI through the gateway.' },
+      { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', description: 'Low-cost DeepSeek through the gateway.' },
+    ],
+  },
+  {
     id: 'ollama',
     label: 'Ollama',
     local: true,
@@ -670,6 +690,15 @@ export const openRouterVoiceInputModels: AiModelOption[] = [
   { id: 'google/chirp-3', label: 'Google Chirp 3', description: 'Google speech recognition through OpenRouter.' },
 ];
 
+export const vercelVoiceInputModels: AiModelOption[] = [
+  { id: 'openai/gpt-4o-mini-transcribe', label: 'GPT-4o Mini Transcribe', description: 'Low-cost OpenAI STT through the gateway.' },
+  { id: 'openai/gpt-4o-transcribe', label: 'GPT-4o Transcribe', description: 'Higher-quality OpenAI STT through the gateway.' },
+  { id: 'openai/whisper-1', label: 'OpenAI Whisper 1', description: 'Stable Whisper through the gateway.' },
+  { id: 'google/gemini-3.5-transcribe', label: 'Gemini 3.5 Transcribe', description: 'Google speech recognition through the gateway.' },
+  { id: 'spacexai/grok-stt', label: 'Grok STT', description: 'xAI speech recognition through the gateway.' },
+  { id: 'fish-audio/transcribe-1', label: 'Fish Audio Transcribe 1', description: 'Fish Audio speech recognition through the gateway.' },
+];
+
 export const openAiVoiceInputModels: AiModelOption[] = [
   { id: 'whisper-1', label: 'Whisper 1', description: 'OpenAI Whisper STT model.' },
 ];
@@ -687,6 +716,8 @@ export function getVoiceInputModelOptions(provider: VoiceInputProviderId): AiMod
       return getProviderDef('google').models.filter((model) => model.id.startsWith('gemini'));
     case 'openrouter':
       return openRouterVoiceInputModels;
+    case 'vercel':
+      return vercelVoiceInputModels;
     case 'openai':
       return openAiVoiceInputModels;
     case 'ollama':
@@ -712,6 +743,8 @@ export function getDefaultVoiceInputModel(provider: VoiceInputProviderId): strin
       return getProviderDef('google').defaultModel;
     case 'openrouter':
       return 'openai/whisper-1';
+    case 'vercel':
+      return 'openai/gpt-4o-mini-transcribe';
     case 'openai':
       return 'whisper-1';
     case 'ollama':
@@ -767,8 +800,10 @@ export const voiceAiModelByProvider = persistentWritable<Record<string, string>>
  *   flat per minute (~$0.05/min).
  * - 'openai-live': OpenAI GPT-Live over WebRTC. The voice model delegates
  *   project work to Spacron's existing orchestrator.
+ * - 'vercel-realtime': any realtime model behind the Vercel AI Gateway (OpenAI,
+ *   Gemini Live, Grok Voice) over one WebSocket. Requires the gateway key.
  */
-export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime' | 'openai-live';
+export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime' | 'openai-live' | 'vercel-realtime';
 export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'openai-realtime');
 export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
 export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
@@ -818,6 +853,56 @@ export const xaiRealtimeVoiceOptions: VoiceOption[] = [
   { id: 'leo', label: 'Leo', description: 'Male voice' },
 ];
 
+export const vercelRealtimeModel = persistentWritable<string>('vercelRealtimeModel', 'openai/gpt-realtime-2');
+export const vercelRealtimeVoice = persistentWritable<string>('vercelRealtimeVoice', '');
+
+export const vercelRealtimeModelOptions: VoiceModelOption[] = [
+  { id: 'openai/gpt-realtime-2', label: 'GPT Realtime 2', description: 'OpenAI realtime through the gateway.' },
+  { id: 'openai/gpt-realtime-mini', label: 'GPT Realtime Mini', description: 'Cheaper OpenAI realtime through the gateway.' },
+  { id: 'google/gemini-3.8-live', label: 'Gemini 3.8 Live', description: 'Google Live API through the gateway.' },
+  { id: 'spacexai/grok-voice-think-fast-2.0', label: 'Grok Voice Think Fast 2.0', description: 'xAI realtime voice through the gateway.' },
+];
+
+const geminiLiveVoiceOptions: VoiceOption[] = [
+  { id: 'Puck', label: 'Puck', description: 'Upbeat voice' },
+  { id: 'Charon', label: 'Charon', description: 'Informative voice' },
+  { id: 'Kore', label: 'Kore', description: 'Firm voice' },
+  { id: 'Fenrir', label: 'Fenrir', description: 'Excitable voice' },
+  { id: 'Aoede', label: 'Aoede', description: 'Breezy voice' },
+];
+
+/**
+ * Voices depend on which lab's model the gateway routes to, so the picker
+ * follows the model's `owner/` prefix. An empty id lets the model use its own
+ * default voice, which is what a model we have no list for gets.
+ */
+export function getVercelRealtimeVoiceOptions(model: string): VoiceOption[] {
+  const owner = model.split('/')[0];
+  const voices = owner === 'openai' ? openaiRealtimeVoiceOptions
+    : owner === 'google' ? geminiLiveVoiceOptions
+      : owner === 'spacexai' || owner === 'xai' ? xaiRealtimeVoiceOptions
+        : [];
+  return [{ id: '', label: 'Model default', description: "The model's own default voice" }, ...voices];
+}
+
+/**
+ * Everything a voice surface needs to start a call on one engine: which
+ * transport, what to call it, whose key it needs and where its model/voice
+ * picks live. The chat panel and the floating bar both read this.
+ */
+export function getRealtimeEngineConfig(engine: VoiceConversationEngine) {
+  switch (engine) {
+    case 'xai-realtime':
+      return { provider: 'xai' as const, label: 'Grok Realtime', keyProvider: 'xai' as const, keyName: 'an xAI', model: xaiRealtimeModel, voice: xaiRealtimeVoice };
+    case 'openai-live':
+      return { provider: 'openai-live' as const, label: 'GPT Live', keyProvider: 'openai' as const, keyName: 'an OpenAI', model: openaiLiveModel, voice: openaiLiveVoice };
+    case 'vercel-realtime':
+      return { provider: 'vercel' as const, label: 'Vercel AI Gateway voice', keyProvider: 'vercel' as const, keyName: 'a Vercel AI Gateway', model: vercelRealtimeModel, voice: vercelRealtimeVoice };
+    default:
+      return { provider: 'openai' as const, label: 'GPT Realtime', keyProvider: 'openai' as const, keyName: 'an OpenAI', model: openaiRealtimeModel, voice: openaiRealtimeVoice };
+  }
+}
+
 /**
  * When on, the orchestrator gives a soft audible nudge (a short chime) each
  * time an agent finishes/blocks/fails, independent of whether the voice
@@ -850,7 +935,7 @@ export function setVoiceInputModel(provider: Exclude<VoiceInputProviderId, 'webs
 }
 
 export function voiceInputUsesModelTranscription(provider: VoiceInputProviderId): boolean {
-  return provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
+  return provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'vercel' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
 }
 
 export const currentVoiceAiModel = derived(
@@ -1235,6 +1320,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
     case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
     case 'xaiRealtimeVoice': xaiRealtimeVoice.set(value as string); break;
+    case 'vercelRealtimeModel': vercelRealtimeModel.set(value as string); break;
+    case 'vercelRealtimeVoice': vercelRealtimeVoice.set(value as string); break;
     case 'aiProvider': aiProvider.set(value as AiProviderId); break;
     case 'aiModelByProvider': aiModelByProvider.set(value as Record<string, string>); break;
     case 'aiBaseUrlByProvider': aiBaseUrlByProvider.set(value as Record<string, string>); break;
@@ -1287,6 +1374,8 @@ export function resetSettingsToDefault() {
   openaiLiveVoice.set('marin');
   xaiRealtimeModel.set('grok-voice-latest');
   xaiRealtimeVoice.set('eve');
+  vercelRealtimeModel.set('openai/gpt-realtime-2');
+  vercelRealtimeVoice.set('');
   announceAgentCompletions.set(true);
   uiZoom.set(100);
   uiFontSize.set(14);

@@ -330,6 +330,7 @@ pub fn run() {
             commands::secrets::openai_realtime_connect,
             commands::secrets::openai_live_connect,
             commands::secrets::xai_realtime_client_secret,
+            commands::secrets::vercel_realtime_client_secret,
             commands::models::list_downloadable_models,
             commands::models::download_model,
             commands::models::cancel_download,

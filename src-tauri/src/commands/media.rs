@@ -1,5 +1,5 @@
 //! Image and video generation on API-key providers: OpenAI, Google, OpenRouter,
-//! fal and Replicate. The ChatGPT-plan path lives in `chatgpt::generate_image`;
+//! Vercel AI Gateway, fal and Replicate. The ChatGPT-plan path lives in `chatgpt::generate_image`;
 //! `images::generate_media` picks between them and saves the result.
 //!
 //! Every function returns the finished file's bytes. Errors carry the same
@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const PROVIDERS: &[&str] = &["chatgpt", "openai", "google", "openrouter", "fal", "replicate"];
+pub const PROVIDERS: &[&str] = &["chatgpt", "openai", "google", "openrouter", "vercel", "fal", "replicate"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -49,6 +49,8 @@ pub fn default_model(provider: &str, kind: Kind) -> Option<&'static str> {
         ("google", Kind::Image) => "gemini-2.5-flash-image",
         ("google", Kind::Video) => "veo-3.0-fast-generate-001",
         ("openrouter", Kind::Image) => "google/gemini-2.5-flash-image",
+        ("vercel", Kind::Image) => "openai/gpt-image-2",
+        ("vercel", Kind::Video) => "google/veo-3.1-fast-generate-001",
         ("fal", Kind::Image) => "fal-ai/nano-banana",
         ("fal", Kind::Video) => "fal-ai/veo3/fast",
         ("replicate", Kind::Image) => "black-forest-labs/flux-schnell",
@@ -62,6 +64,7 @@ fn provider_label(provider: &str) -> &'static str {
         "openai" => "OpenAI",
         "google" => "Google",
         "openrouter" => "OpenRouter",
+        "vercel" => "Vercel AI Gateway",
         "fal" => "fal",
         "replicate" => "Replicate",
         _ => "The provider",
@@ -223,6 +226,8 @@ pub async fn generate(
             ("google", Kind::Image) => google_image(api_key, &model, prompt, &refs).await,
             ("google", Kind::Video) => google_video(api_key, &model, prompt, &refs).await,
             ("openrouter", Kind::Image) => openrouter_image(api_key, &model, prompt, &refs).await,
+            ("vercel", Kind::Image) => vercel_image(api_key, &model, prompt, &refs).await,
+            ("vercel", Kind::Video) => vercel_video(api_key, &model, prompt, &refs).await,
             ("fal", _) => fal(api_key, &model, kind, prompt, &refs).await,
             ("replicate", _) => replicate(api_key, &model, kind, prompt, &refs).await,
             _ => Err(unsupported(provider, kind)),
@@ -235,7 +240,7 @@ pub async fn generate(
 
 fn unsupported(provider: &str, kind: Kind) -> String {
     match kind {
-        Kind::Video => format!("unsupported: {} cannot generate videos. Pick Google, OpenAI, fal or Replicate for video in Settings > AI Connections.", provider_label(provider)),
+        Kind::Video => format!("unsupported: {} cannot generate videos. Pick Google, OpenAI, Vercel AI Gateway, fal or Replicate for video in Settings > AI Connections.", provider_label(provider)),
         Kind::Image => format!("unsupported: {} cannot generate images.", provider_label(provider)),
     }
 }
@@ -405,6 +410,77 @@ async fn openrouter_image(key: &str, model: &str, prompt: &str, refs: &[Referenc
     } else {
         Ok(Media { extension: extension_from_url(url, "png"), bytes: download("openrouter", http.get(url)).await?, revised_prompt: None })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Vercel AI Gateway: its own /v4/ai image and video routes, any gateway model
+// id (`openai/gpt-image-2`, `bfl/flux-2-pro`, `google/veo-3.1-...`). The model
+// rides the `ai-model-id` header, as the gateway's SDK sends it.
+// ---------------------------------------------------------------------------
+
+fn vercel_post(http: &reqwest::Client, key: &str, path: &str, spec_header: &str, model: &str) -> reqwest::RequestBuilder {
+    use super::secrets::{VERCEL_AI_BASE_URL, VERCEL_PROTOCOL_VERSION};
+    http.post(format!("{VERCEL_AI_BASE_URL}/{path}"))
+        .bearer_auth(key)
+        .header("ai-gateway-protocol-version", VERCEL_PROTOCOL_VERSION)
+        .header(spec_header, "4")
+        .header("ai-model-id", model)
+}
+
+/// The gateway hands images back as bare base64 with no media type, so the
+/// extension comes from the file's own magic bytes.
+fn image_extension_from_bytes(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => "jpg",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "webp",
+        [b'G', b'I', b'F', b'8', ..] => "gif",
+        _ => "png",
+    }
+}
+
+async fn vercel_image(key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
+    let http = client()?;
+    let mut body = json!({"prompt": prompt, "n": 1});
+    if !refs.is_empty() {
+        body["files"] = refs
+            .iter()
+            .map(|r| json!({"type": "file", "mediaType": r.mime, "data": r.base64}))
+            .collect();
+    }
+    let reply = send_json("vercel", vercel_post(&http, key, "image-model", "ai-image-model-specification-version", model).json(&body)).await?;
+    let data = reply["images"][0].as_str().ok_or("provider_error: Vercel AI Gateway returned no image; pick a model of type image")?;
+    let bytes = decode_b64("vercel", data)?;
+    Ok(Media { extension: image_extension_from_bytes(&bytes).into(), bytes, revised_prompt: None })
+}
+
+async fn vercel_video(key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
+    let http = client()?;
+    let mut body = json!({"prompt": prompt, "n": 1});
+    if let Some(r) = refs.first() {
+        body["image"] = json!({"type": "file", "mediaType": r.mime, "data": r.base64});
+    }
+    let started = send_json("vercel", vercel_post(&http, key, "video-model/start", "ai-video-model-specification-version", model).json(&body)).await?;
+    let operation = started.get("operation").cloned().ok_or("protocol: Vercel AI Gateway returned no video operation")?;
+    let video = loop {
+        let status = send_json("vercel", vercel_post(&http, key, "video-model/status", "ai-video-model-specification-version", model)
+            .json(&json!({"operation": operation}))).await?;
+        match status["status"].as_str().unwrap_or("") {
+            "completed" => break status["videos"][0].clone(),
+            "error" => {
+                let message = status["error"].as_str().unwrap_or("the video failed");
+                return Err(if message.to_lowercase().contains("quota") { format!("quota: Vercel AI Gateway: {message}") } else { format!("provider_error: Vercel AI Gateway: {message}") });
+            }
+            "cancelled" => return Err("provider_error: Vercel AI Gateway: the video was cancelled".into()),
+            _ => tokio::time::sleep(POLL_EVERY).await,
+        }
+    };
+    let mime = video["mediaType"].as_str().unwrap_or("video/mp4");
+    let bytes = match video["type"].as_str() {
+        Some("base64") => decode_b64("vercel", video["data"].as_str().unwrap_or(""))?,
+        Some("url") => download("vercel", http.get(video["url"].as_str().unwrap_or(""))).await?,
+        _ => return Err("provider_error: Vercel AI Gateway finished but returned no video".into()),
+    };
+    Ok(Media { bytes, extension: extension_from_mime(mime, "mp4"), revised_prompt: None })
 }
 
 // ---------------------------------------------------------------------------

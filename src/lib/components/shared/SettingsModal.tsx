@@ -82,6 +82,10 @@ import {
   xaiRealtimeModelOptions,
   xaiRealtimeVoice,
   xaiRealtimeVoiceOptions,
+  vercelRealtimeModel,
+  vercelRealtimeModelOptions,
+  vercelRealtimeVoice,
+  getVercelRealtimeVoiceOptions,
   wordWrap,
   type AiModelOption,
   mediaGeneration,
@@ -238,6 +242,7 @@ const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
   { id: 'google', label: 'Google Gemini' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'vercel', label: 'Vercel AI Gateway' },
   { id: 'ollama', label: 'Ollama' },
   { id: 'lmstudio', label: 'LM Studio' },
   { id: 'local', label: 'Local Offline (Whisper/Parakeet)' },
@@ -1458,6 +1463,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [groqKeyExists, setGroqKeyExists] = useState(false);
   const [openaiKeyExists, setOpenaiKeyExists] = useState(false);
   const [xaiKeyExists, setXaiKeyExists] = useState(false);
+  const [vercelKeyExists, setVercelKeyExists] = useState(false);
   const [providerLiveModels, setProviderLiveModels] = useState<Record<string, AiModelOption[]>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [providerModelError, setProviderModelError] = useState('');
@@ -1577,6 +1583,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const liveVoice = useStore(openaiLiveVoice);
   const grokRealtimeModel = useStore(xaiRealtimeModel);
   const grokRealtimeVoice = useStore(xaiRealtimeVoice);
+  const gatewayRealtimeModel = useStore(vercelRealtimeModel);
+  const gatewayRealtimeVoice = useStore(vercelRealtimeVoice);
   const announceCompletions = useStore(announceAgentCompletions);
   const baseUrls = useStore(aiBaseUrlByProvider);
   const defaultAccentColor = currentActiveTheme?.colors?.accent ?? (currentAppearance === 'dark' ? '#ffffff' : '#000000');
@@ -1634,6 +1642,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     const live = providerRealtimeModels['xai'];
     if (!live || live.length === 0) return xaiRealtimeModelOptions;
     const curated = new Map(xaiRealtimeModelOptions.map((m) => [m.id, m]));
+    return live.map((m) => curated.get(m.id) ?? m);
+  }, [providerRealtimeModels]);
+
+  const vercelRealtimeModelsMerged = useMemo(() => {
+    const live = providerRealtimeModels['vercel'];
+    if (!live || live.length === 0) return vercelRealtimeModelOptions;
+    const curated = new Map(vercelRealtimeModelOptions.map((m) => [m.id, m]));
     return live.map((m) => curated.get(m.id) ?? m);
   }, [providerRealtimeModels]);
 
@@ -1775,7 +1790,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }, [providerSttModels]);
 
-  const loadRealtimeModels = useCallback(async (prov: 'openai' | 'xai', force = false) => {
+  const loadRealtimeModels = useCallback(async (prov: 'openai' | 'xai' | 'vercel', force = false) => {
     if (!isTauriRuntime()) return;
 
     const hasKey = await providerApiKeyExists(prov).catch(() => false);
@@ -1857,6 +1872,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     providerApiKeyExists('xai')
       .then((exists) => { if (active) setXaiKeyExists(exists); })
       .catch(() => { if (active) setXaiKeyExists(false); });
+    providerApiKeyExists('vercel')
+      .then((exists) => { if (active) setVercelKeyExists(exists); })
+      .catch(() => { if (active) setVercelKeyExists(false); });
     return () => { active = false; };
   }, []);
 
@@ -1876,6 +1894,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
     void loadRealtimeModels('openai');
     void loadRealtimeModels('xai');
+    void loadRealtimeModels('vercel');
   }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels]);
 
   useEffect(() => {
@@ -2673,7 +2692,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Conversation engine">
                   <SettingRow
                     title="Engine"
-                    detail={conversationEngine === 'xai-realtime'
+                    detail={conversationEngine === 'vercel-realtime'
+                      ? 'One live speech-to-speech call through your Vercel AI Gateway key, to an OpenAI, Gemini Live or Grok voice model. Billed by the gateway at the model’s own rate.'
+                      : conversationEngine === 'xai-realtime'
                       ? 'One live speech-to-speech call to xAI Grok, with sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
                       : conversationEngine === 'openai-live'
                         ? 'OpenAI GPT Live handles the spoken conversation and delegates project work to Spacron’s orchestrator over a full-duplex WebRTC session.'
@@ -2685,6 +2706,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
                         { id: 'openai-live', label: 'GPT Live (OpenAI)' },
                         { id: 'xai-realtime', label: 'Grok Realtime (xAI)' },
+                        { id: 'vercel-realtime', label: 'Vercel AI Gateway' },
                       ]}
                       onChange={(value) => voiceConversationEngine.set(value as VoiceConversationEngine)}
                       ariaLabel="Voice conversation engine"
@@ -2806,6 +2828,56 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         <SettingRow title="xAI API key" detail="Grok Realtime needs an xAI API key.">
                           <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
                             <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No xAI API key configured</span>
+                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
+                              Add API key
+                            </button>
+                          </div>
+                        </SettingRow>
+                      )}
+                    </>
+                  )}
+                  {conversationEngine === 'vercel-realtime' && (
+                    <>
+                      <SettingRow title="Realtime model">
+                        <ModelSelect
+                          value={gatewayRealtimeModel}
+                          models={vercelRealtimeModelsMerged}
+                          onChange={(value) => {
+                            vercelRealtimeModel.set(value);
+                            // Voices belong to the model's lab; a voice from
+                            // the previous model would be rejected.
+                            if (!getVercelRealtimeVoiceOptions(value).some((v) => v.id === get(vercelRealtimeVoice))) {
+                              vercelRealtimeVoice.set('');
+                            }
+                          }}
+                          label="Realtime model"
+                          renderIcon={() => providerIcon('vercel')}
+                        />
+                      </SettingRow>
+                      {vercelKeyExists && (
+                        <div className="settings-action-row">
+                          <button
+                            type="button"
+                            className="settings-secondary"
+                            onClick={() => void loadRealtimeModels('vercel', true)}
+                            disabled={realtimeModelLoading}
+                          >
+                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
+                          </button>
+                        </div>
+                      )}
+                      <SettingRow title="Voice">
+                        <StyledSelect
+                          value={gatewayRealtimeVoice}
+                          options={getVercelRealtimeVoiceOptions(gatewayRealtimeModel).map((v) => ({ id: v.id, label: v.label }))}
+                          onChange={vercelRealtimeVoice.set}
+                          ariaLabel="Realtime voice"
+                        />
+                      </SettingRow>
+                      {!vercelKeyExists && (
+                        <SettingRow title="Vercel AI Gateway API key" detail="This engine needs a Vercel AI Gateway API key.">
+                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No Vercel AI Gateway API key configured</span>
                             <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
                               Add API key
                             </button>

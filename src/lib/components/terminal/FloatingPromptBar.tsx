@@ -29,14 +29,10 @@ import {
 } from '$lib/services/realtime-voice';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import {
-  openaiRealtimeModel,
-  openaiRealtimeVoice,
-  openaiLiveModel,
-  openaiLiveVoice,
+  getRealtimeEngineConfig,
   userShortcuts,
   voiceConversationEngine,
-  xaiRealtimeModel,
-  xaiRealtimeVoice,
+  type VoiceConversationEngine,
 } from '$lib/stores/settings';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
@@ -485,11 +481,9 @@ export default function FloatingPromptBar({
   );
 
   const startRealtimeVoiceMode = useCallback(
-    (engine: 'openai-realtime' | 'xai-realtime' | 'openai-live') => {
-      const provider =
-        engine === 'xai-realtime' ? ('xai' as const) : engine === 'openai-live' ? ('openai-live' as const) : ('openai' as const);
-      const label = provider === 'xai' ? 'Grok Realtime' : provider === 'openai-live' ? 'GPT Live' : 'GPT Realtime';
-      const keyProvider = provider === 'xai' ? 'xai' : 'openai';
+    (engine: VoiceConversationEngine) => {
+      const engineConfig = getRealtimeEngineConfig(engine);
+      const { provider, label, keyProvider } = engineConfig;
       if (!isRealtimeVoiceSupported(provider)) {
         showToast(
           `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or use Ctrl+Alt+M to dictate instead.`,
@@ -500,7 +494,7 @@ export default function FloatingPromptBar({
       }
       if (!isProviderApiKeyConfiguredLocal(keyProvider)) {
         showToast(
-          `${label} needs an ${keyProvider === 'xai' ? 'xAI' : 'OpenAI'} API key. Add it in Settings, or switch the conversation engine.`,
+          `${label} needs ${engineConfig.keyName} API key. Add it in Settings, or switch the conversation engine.`,
           'warning'
         );
         openSettings();
@@ -524,9 +518,7 @@ export default function FloatingPromptBar({
       setIsRefining(true); // "thinking" orb while the call connects
       setVoicePhase('thinking');
 
-      const model = get(
-        provider === 'xai' ? xaiRealtimeModel : provider === 'openai-live' ? openaiLiveModel : openaiRealtimeModel
-      );
+      const model = get(engineConfig.model);
       // Opened BEFORE the call connects so the transcript callbacks always have
       // somewhere to land. A call that connects and says nothing is dropped
       // when the record closes, so a failed handshake leaves no empty row.
@@ -546,9 +538,7 @@ export default function FloatingPromptBar({
           const session = await startRealtimeVoiceSession({
             provider,
             model,
-            voice: get(
-              provider === 'xai' ? xaiRealtimeVoice : provider === 'openai-live' ? openaiLiveVoice : openaiRealtimeVoice
-            ),
+            voice: get(engineConfig.voice),
             instructions: REALTIME_VOICE_INSTRUCTIONS,
             callbacks: {
               onStateChange: (state) => {

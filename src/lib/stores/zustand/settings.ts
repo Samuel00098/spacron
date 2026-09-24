@@ -11,10 +11,11 @@ export type AiProviderId =
   | 'groq'
   | 'xai'
   | 'kilocode'
+  | 'vercel'
   | 'chatgpt'
   | 'ollama'
   | 'lmstudio';
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'ollama' | 'lmstudio' | 'local';
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local';
 export interface KeyboardShortcut {
   id: string;
   label: string;
@@ -221,6 +222,10 @@ function createSettingsState() {
     // stores/settings.ts. Undeclared, the wrapper's boot read hit undefined and
     // the toggle reset every launch, so turning it on could never stick.
     transcriptionAutoSend: persistentValue('transcriptionAutoSend', false),
+    // Vercel AI Gateway realtime voice picks (stores/settings.ts). Declared so
+    // they survive a restart.
+    vercelRealtimeModel: persistentValue('vercelRealtimeModel', 'openai/gpt-realtime-2'),
+    vercelRealtimeVoice: persistentValue('vercelRealtimeVoice', ''),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
     // Orchestrator skills (services/orchestrator/skills.ts): built-ins switched
     // off, and the user's own. Shape kept inline so this store stays leaf-level.
@@ -315,6 +320,8 @@ const defaults: SettingsValues = {
   voiceAiProvider: 'groq',
   voiceAiModelByProvider: {},
   transcriptionAutoSend: false,
+  vercelRealtimeModel: 'openai/gpt-realtime-2',
+  vercelRealtimeVoice: '',
   announceAgentCompletions: true,
   orchestratorDisabledSkills: [],
   orchestratorCustomSkills: [],
@@ -426,6 +433,8 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       voiceAiProvider: 'voiceAiProvider',
       voiceAiModelByProvider: 'voiceAiModelByProvider',
       transcriptionAutoSend: 'transcriptionAutoSend',
+      vercelRealtimeModel: 'vercelRealtimeModel',
+      vercelRealtimeVoice: 'vercelRealtimeVoice',
       announceAgentCompletions: 'announceAgentCompletions',
       aiProvider: 'aiProvider',
       aiModelByProvider: 'aiModelByProvider',

@@ -10,7 +10,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export type MediaKind = 'image' | 'video';
-export type MediaProviderId = 'chatgpt' | 'openai' | 'google' | 'openrouter' | 'fal' | 'replicate';
+export type MediaProviderId = 'chatgpt' | 'openai' | 'google' | 'openrouter' | 'vercel' | 'fal' | 'replicate';
 
 export interface MediaGenerationSettings {
   imageProvider: 'auto' | MediaProviderId;
@@ -45,6 +45,7 @@ export const MEDIA_PROVIDERS: MediaProviderInfo[] = [
   { id: 'openai', label: 'OpenAI API', image: true, video: true, imageDefault: 'gpt-image-1', videoDefault: 'sora-2' },
   { id: 'google', label: 'Google Gemini', image: true, video: true, imageDefault: 'gemini-2.5-flash-image', videoDefault: 'veo-3.0-fast-generate-001' },
   { id: 'openrouter', label: 'OpenRouter', image: true, video: false, imageDefault: 'google/gemini-2.5-flash-image' },
+  { id: 'vercel', label: 'Vercel AI Gateway', image: true, video: true, imageDefault: 'openai/gpt-image-2', videoDefault: 'google/veo-3.1-fast-generate-001' },
   { id: 'fal', label: 'fal', image: true, video: true, imageDefault: 'fal-ai/nano-banana', videoDefault: 'fal-ai/veo3/fast', keyUrl: 'https://fal.ai/dashboard/keys' },
   { id: 'replicate', label: 'Replicate', image: true, video: true, imageDefault: 'black-forest-labs/flux-schnell', videoDefault: 'google/veo-3-fast', keyUrl: 'https://replicate.com/account/api-tokens' },
 ];

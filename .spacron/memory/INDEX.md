@@ -81,6 +81,7 @@ short enough that it says what the note is *about*, never what it says.
 - [orchestrator-vision](orchestrator-vision.md) — which models get images (Rust decides), the folder allowlist, and the per-provider wire shapes
 - [model-capabilities](model-capabilities.md) — where model vision/reasoning/tools come from, where they are saved, and what triggers the background refresh
 - [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe
+- [vercel-ai-gateway](vercel-ai-gateway.md) — the `vercel` provider across chat, dictation, media and realtime voice: what was verified live, what still needs a key
 - [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 
 ## Security & confinement
@@ -91,6 +92,7 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Build, release & repo hygiene
 
+- [cargo-check-in-agent-shell](cargo-check-in-agent-shell.md) — why whisper-rs-sys fails to build in a sandboxed agent shell, and the env var that fixes it
 - [release-flow](release-flow.md) — cutting a release, including the `cargo metadata` step everybody forgets
 - [npm-audit-fix-edgesout-bug](npm-audit-fix-edgesout-bug.md) — npm 10.9.7 aborts every dependency bump; the legacy-peer-deps workaround and how to check it
 - [sidecar-externalbin-deadlock](sidecar-externalbin-deadlock.md) — why `build.rs` stamps a placeholder sidecar; never revert it

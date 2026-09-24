@@ -20,9 +20,15 @@ import { downsamplePcmChunks, requestMicrophoneStream } from '$lib/services/voic
  *   (`xai_realtime_client_secret`), streaming 24 kHz PCM16 both ways.
  * - 'openai-live' — WebRTC to OpenAI GPT-Live. Rust creates the session with
  *   client delegation; the renderer returns delegation results to the session.
+ * - 'vercel' — WebSocket to the Vercel AI Gateway, which fronts OpenAI, Gemini
+ *   Live and Grok realtime models. The gateway speaks its own normalized event
+ *   protocol (the AI SDK's realtime v4 events, e.g. `audio-delta`), not
+ *   OpenAI's; `fromGatewayEvent`/`toGatewayEvent` translate at the edge so the
+ *   handler below stays single. Token minted in Rust
+ *   (`vercel_realtime_client_secret`), 24 kHz PCM16 both ways like xAI.
  */
 
-export type RealtimeVoiceProvider = 'openai' | 'xai' | 'openai-live';
+export type RealtimeVoiceProvider = 'openai' | 'xai' | 'openai-live' | 'vercel';
 
 export type RealtimeVoiceState = 'connecting' | 'listening' | 'thinking' | 'speaking';
 
@@ -156,6 +162,91 @@ type RealtimeEvent = {
   response?: { status?: string; status_details?: { error?: { message?: string } } };
 };
 
+const VERCEL_REALTIME_URL = 'wss://ai-gateway.vercel.sh/v4/ai/realtime-model';
+
+/** One Vercel AI Gateway server event (AI SDK realtime v4), loosely typed. */
+type GatewayServerEvent = {
+  type?: string;
+  delta?: string;
+  transcript?: string;
+  callId?: string;
+  name?: string;
+  arguments?: string;
+  status?: string;
+  message?: string;
+};
+
+/**
+ * Map a gateway server event onto the OpenAI-shaped event the shared handler
+ * understands. Events with no counterpart return null and are dropped.
+ */
+export function fromGatewayEvent(event: GatewayServerEvent): RealtimeEvent | null {
+  switch (event.type) {
+    case 'speech-started':
+      return { type: 'input_audio_buffer.speech_started' };
+    case 'speech-stopped':
+      return { type: 'input_audio_buffer.speech_stopped' };
+    case 'input-transcription-completed':
+      return { type: 'conversation.item.input_audio_transcription.completed', transcript: event.transcript };
+    case 'response-created':
+      return { type: 'response.created' };
+    case 'audio-delta':
+    case 'audio-chunk':
+      return { type: 'response.output_audio.delta', delta: event.delta };
+    case 'audio-transcript-delta':
+      return { type: 'response.output_audio_transcript.delta', delta: event.delta };
+    case 'audio-transcript-done':
+      return { type: 'response.output_audio_transcript.done', transcript: event.transcript };
+    case 'function-call-arguments-done':
+      return {
+        type: 'response.function_call_arguments.done',
+        call_id: event.callId,
+        name: event.name,
+        arguments: event.arguments,
+      };
+    case 'response-done':
+      return { type: 'response.done', response: { status: event.status } };
+    case 'error':
+      return { type: 'error', error: { message: event.message } };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Map an OpenAI-shaped client event onto the gateway's protocol. `toolNames`
+ * carries call id → tool name from the incoming calls, because the gateway's
+ * function output names its tool (Gemini needs it) and OpenAI's does not.
+ */
+export function toGatewayEvent(
+  event: Record<string, any>,
+  toolNames: Map<string, string>,
+): Record<string, unknown> | null {
+  switch (event.type) {
+    case 'input_audio_buffer.append':
+      return { type: 'input-audio-append', audio: event.audio };
+    case 'response.create':
+      return { type: 'response-create' };
+    case 'conversation.item.create': {
+      const item = event.item ?? {};
+      if (item.type === 'function_call_output') {
+        const name = toolNames.get(item.call_id);
+        toolNames.delete(item.call_id);
+        return {
+          type: 'conversation-item-create',
+          item: { type: 'function-call-output', callId: item.call_id, ...(name ? { name } : {}), output: item.output },
+        };
+      }
+      // Background announcements. The gateway only takes user text items, and
+      // the text already says it did not come from the user.
+      const text = item.content?.find((part: any) => typeof part?.text === 'string')?.text;
+      return text ? { type: 'conversation-item-create', item: { type: 'text-message', role: 'user', text } } : null;
+    }
+    default:
+      return null;
+  }
+}
+
 export async function startRealtimeVoiceSession(options: {
   provider?: RealtimeVoiceProvider;
   model: string;
@@ -186,6 +277,10 @@ export async function startRealtimeVoiceSession(options: {
 
   // Transport hooks, filled in by the provider-specific connect below.
   let transportSend: ((json: string) => void) | null = null;
+  // Protocol translation for transports that do not speak OpenAI's events
+  // (the Vercel gateway). A null result means "nothing to send / ignore".
+  let encodeOutgoing: ((event: Record<string, unknown>) => Record<string, unknown> | null) | null = null;
+  let decodeIncoming: ((raw: unknown) => RealtimeEvent | null) | null = null;
   let transportClose: (() => void) | null = null;
   let channelReady = false;
 
@@ -262,8 +357,10 @@ export async function startRealtimeVoiceSession(options: {
 
   const send = (event: Record<string, unknown>) => {
     if (ended || !transportSend) return;
+    const wire = encodeOutgoing ? encodeOutgoing(event) : event;
+    if (!wire) return;
     try {
-      transportSend(JSON.stringify(event));
+      transportSend(JSON.stringify(wire));
     } catch {
       /* channel is closing — the transport's close handler reports it */
     }
@@ -472,11 +569,14 @@ export async function startRealtimeVoiceSession(options: {
 
   const handleRawMessage = (data: unknown) => {
     if (typeof data !== 'string') return;
+    let parsed: unknown;
     try {
-      handleEvent(JSON.parse(data) as RealtimeEvent);
+      parsed = JSON.parse(data);
     } catch {
-      /* non-JSON frame — ignore */
+      return; /* non-JSON frame — ignore */
     }
+    const event = decodeIncoming ? decodeIncoming(parsed) : (parsed as RealtimeEvent);
+    if (event) handleEvent(event);
   };
 
   // --- Connect ---
@@ -560,16 +660,37 @@ export async function startRealtimeVoiceSession(options: {
       if (ended) throw new Error('Voice session was cancelled.');
       await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } else {
-      // xAI Grok Realtime over WebSocket. The minutes-lived client secret is
-      // minted in Rust and presented as a subprotocol (never a URL parameter,
-      // so it can't leak into logs).
-      const secret = await invoke<string>('xai_realtime_client_secret');
+      // xAI Grok Realtime or the Vercel AI Gateway, both over WebSocket. The
+      // minutes-lived client secret is minted in Rust and presented as a
+      // subprotocol (never a URL parameter, so it can't leak into logs).
+      const gateway = provider === 'vercel';
+      const label = gateway ? 'Vercel AI Gateway voice' : 'Grok Realtime';
+      const secret = gateway
+        ? await invoke<string>('vercel_realtime_client_secret', { model })
+        : await invoke<string>('xai_realtime_client_secret');
       if (ended) throw new Error('Voice session was cancelled.');
 
-      const socket = new WebSocket(
-        `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(model)}`,
-        [`xai-client-secret.${secret}`],
-      );
+      if (gateway) {
+        const toolNames = new Map<string, string>();
+        encodeOutgoing = (event) => toGatewayEvent(event, toolNames);
+        decodeIncoming = (raw) => {
+          const event = raw as GatewayServerEvent;
+          if (event?.type === 'function-call-arguments-done' && event.callId && event.name) {
+            toolNames.set(event.callId, event.name);
+          }
+          return fromGatewayEvent(event);
+        };
+      }
+
+      const socket = gateway
+        ? new WebSocket(
+          `${VERCEL_REALTIME_URL}?ai-model-id=${encodeURIComponent(model)}`,
+          ['ai-gateway-realtime.v1', `ai-gateway-auth.${secret}`],
+        )
+        : new WebSocket(
+          `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(model)}`,
+          [`xai-client-secret.${secret}`],
+        );
       transportSend = (json) => socket.send(json);
       transportClose = () => {
         stopPlayback();
@@ -594,21 +715,51 @@ export async function startRealtimeVoiceSession(options: {
 
       await new Promise<void>((resolve, reject) => {
         socket.onopen = () => resolve();
-        socket.onerror = () => reject(new Error('Could not connect to Grok Realtime.'));
-        socket.onclose = () => reject(new Error('Grok Realtime refused the connection.'));
+        socket.onerror = () => reject(new Error(`Could not connect to ${label}.`));
+        socket.onclose = (event) =>
+          reject(new Error(`${label} refused the connection${event.reason ? `: ${event.reason}` : '.'}`));
       });
       if (ended) throw new Error('Voice session was cancelled.');
 
       socket.onmessage = (event) => handleRawMessage(event.data);
       socket.onerror = null;
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (!ended) {
-          callbacks.onError?.('Grok voice connection lost. Check your network and try again.');
+          callbacks.onError?.(
+            event.reason
+              ? `${label} closed the call: ${event.reason}`
+              : `${label} connection lost. Check your network and try again.`,
+          );
           teardown(true);
         }
       };
 
-      send({
+      if (gateway) {
+        // The gateway maps this normalized config onto whichever lab's session
+        // the model belongs to. It is sent raw: the translator only knows
+        // OpenAI-shaped events, and this one has no OpenAI twin to map from.
+        const pcm = { type: 'audio/pcm', rate: XAI_AUDIO_RATE };
+        socket.send(JSON.stringify({
+          type: 'session-update',
+          config: {
+            instructions,
+            ...(voice ? { voice } : {}),
+            outputModalities: ['audio'],
+            inputAudioFormat: pcm,
+            outputAudioFormat: pcm,
+            // Without this the user's side of the call is never transcribed.
+            // OpenAI needs a named model for it; the others transcribe natively.
+            inputAudioTranscription: model.startsWith('openai/') ? { model: 'gpt-4o-mini-transcribe' } : {},
+            turnDetection: { type: 'server-vad', threshold: 0.5, prefixPaddingMs: 300, silenceDurationMs: 700 },
+            tools: [{
+              type: 'function',
+              name: ORCHESTRATOR_TOOL.name,
+              description: ORCHESTRATOR_TOOL.description,
+              parameters: ORCHESTRATOR_TOOL.parameters,
+            }],
+          },
+        }));
+      } else send({
         type: 'session.update',
         session: {
           voice,
