@@ -561,10 +561,19 @@
   width: 100%;
 }
 
+/* A textarea that starts one line tall; TasksPanel.tsx grows it with its
+   text up to max-height, after which it scrolls. */
 .tasks-panel .add-task-input {
+  display: block;
   width: 100%;
-  height: 30px;
-  padding: 0 58px 0 10px;
+  min-height: 30px;
+  max-height: 160px;
+  padding: 7px 58px 7px 10px;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 70%),
     rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.5);
@@ -593,11 +602,12 @@
   opacity: 0.55;
 }
 
+/* Pinned to the bottom row so the buttons stay beside the last line as the
+   box grows; bottom: 3px centres a 24px button in the 30px min height. */
 .tasks-panel .add-task-actions {
   position: absolute;
   right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: 3px;
   display: flex;
   gap: 2px;
   align-items: center;

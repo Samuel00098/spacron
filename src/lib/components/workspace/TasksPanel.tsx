@@ -195,9 +195,60 @@ export default function TasksPanel() {
     setNewTaskInputs((prev) => ({ ...prev, [status]: '' }));
   }
 
-  function handleInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>, status: TaskStatus) {
-    if (e.key === 'Enter') submitTask(status);
+  // Enter adds the task; Shift+Enter breaks the line. An IME mid-composition
+  // owns Enter, so it never submits a half-typed word.
+  function handleInputKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>, status: TaskStatus) {
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    submitTask(status);
   }
+
+  // The add-task boxes start one line tall and grow with their text up to the
+  // CSS max-height, then scroll. Re-measured whenever the text changes (typing,
+  // voice, submit clearing it) and whenever a box's width changes, since a
+  // narrower column wraps the same text onto more lines.
+  const taskInputEls = useRef<Map<TaskStatus, HTMLTextAreaElement>>(new Map());
+  function autosizeTaskInput(el: HTMLTextAreaElement) {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+  }
+  useLayoutEffect(() => {
+    taskInputEls.current.forEach(autosizeTaskInput);
+  }, [newTaskInputs]);
+  const taskInputWidths = useRef(new WeakMap<Element, number>());
+  const taskInputObserver = useRef<ResizeObserver | null>(null);
+  if (!taskInputObserver.current && typeof ResizeObserver !== 'undefined') {
+    taskInputObserver.current = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        if (taskInputWidths.current.get(entry.target) === width) continue;
+        taskInputWidths.current.set(entry.target, width);
+        autosizeTaskInput(entry.target as HTMLTextAreaElement);
+      }
+    });
+  }
+  useEffect(() => () => taskInputObserver.current?.disconnect(), []);
+  function bindTaskInput(status: TaskStatus, el: HTMLTextAreaElement | null) {
+    const prev = taskInputEls.current.get(status);
+    if (prev === el) return;
+    if (prev) taskInputObserver.current?.unobserve(prev);
+    if (el) {
+      taskInputEls.current.set(status, el);
+      taskInputObserver.current?.observe(el);
+    } else {
+      taskInputEls.current.delete(status);
+    }
+  }
+  // Stable per-column ref callbacks, so React does not detach and re-attach
+  // (and re-observe) every box on every render.
+  const taskInputRefs = useMemo(
+    () =>
+      Object.fromEntries(
+        columns.map((c) => [c.id, (el: HTMLTextAreaElement | null) => bindTaskInput(c.id, el)]),
+      ) as StatusRecord<(el: HTMLTextAreaElement | null) => void>,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // voiceBaseInputs/voiceDraftInputs are write-mostly bookkeeping used inside
   // the voice session callbacks — never rendered directly — so plain refs
@@ -297,7 +348,7 @@ export default function TasksPanel() {
       event.preventDefault();
       const taskInput = (activeElement as HTMLElement).closest('.kanban-col')?.querySelector('.add-task-input');
       const taskInputIndex = taskInput
-        ? Array.from(panelEl.querySelectorAll('.add-task-input')).indexOf(taskInput as HTMLInputElement)
+        ? Array.from(panelEl.querySelectorAll('.add-task-input')).indexOf(taskInput as HTMLTextAreaElement)
         : -1;
       const preferredStatus = taskInputIndex >= 0 ? columns[taskInputIndex]?.id : null;
       void toggleVoiceInput(preferredStatus ?? 'todo');
@@ -753,9 +804,10 @@ export default function TasksPanel() {
                       </div>
                     )}
                     <div className="add-task-input-wrap">
-                      <input
+                      <textarea
+                        ref={taskInputRefs[col.id]}
                         className="add-task-input"
-                        type="text"
+                        rows={1}
                         placeholder="New task…"
                         value={newTaskInputs[col.id]}
                         onChange={(e) => setNewTaskInputs((prev) => ({ ...prev, [col.id]: e.target.value }))}
