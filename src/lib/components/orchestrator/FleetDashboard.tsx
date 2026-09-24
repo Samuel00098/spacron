@@ -60,6 +60,13 @@ import {
 } from '$lib/services/orchestrator/worktree-manager';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 import { agentTurnStates, type AgentTurnPhase } from '$lib/stores/agentTurnState';
+import { layout } from '$lib/stores/layout';
+import {
+  DEEPSEEK_HARNESS_COMMAND,
+  deepSeekAgentName,
+  deepSeekPanelRoot,
+  deepSeekPlacements,
+} from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
@@ -75,7 +82,7 @@ import './FleetDashboard.css';
 /** How often the per-card diff stat is refreshed. Three cheap git reads each. */
 const POLL_MS = 5000;
 
-type FleetStatus = 'working' | 'idle' | 'awaiting' | 'finished' | 'failed' | 'exited';
+type FleetStatus = 'working' | 'idle' | 'awaiting' | 'finished' | 'failed' | 'exited' | 'open';
 
 
 /** Where the agent is doing its work — decides which actions the card offers. */
@@ -106,6 +113,8 @@ interface FleetRow {
   live: boolean;
   /** The agent's own header summary (see `sessionHeaderSummary`), if any. */
   summary: string | null;
+  /** The DeepSeek panel's row: no terminal, so its status is not turn-driven. */
+  deepseekPanel?: boolean;
   sessionId: number | null;
   task: OrchestratorTask | null;
   status: FleetStatus;
@@ -146,6 +155,9 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
   finished: 'Finished',
   failed: 'Failed',
   exited: 'Exited',
+  // The DeepSeek panel: its web UI does not report turns to Spacron, so the
+  // card says what is known (the panel is open) rather than guessing.
+  open: 'Open',
 };
 
 /**
@@ -186,7 +198,8 @@ const STATUS_ORDER: Record<FleetStatus, number> = {
   failed: 2,
   finished: 3,
   idle: 4,
-  exited: 5,
+  open: 5,
+  exited: 6,
 };
 
 /** What a card says when the agent has no header summary to show. */
@@ -197,6 +210,7 @@ const SUMMARY_FALLBACK: Record<FleetStatus, string> = {
   finished: 'Finished its task',
   failed: 'Stopped with an error',
   exited: 'Closed',
+  open: 'Open in its panel',
 };
 
 /**
@@ -244,6 +258,9 @@ function FleetEmpty({ title, children }: { title: string; children: React.ReactN
 export default function FleetDashboard() {
   const project = useStore(activeProject);
   const projectId = project?.id ?? null;
+  const projectRoot = project?.root_path ?? null;
+  const deepseekOpen = useStore(layout).deepseekVisible;
+  const placements = useStore(deepSeekPlacements);
   const tasks = useStore(orchestratorTasks);
   // All three session stores, per the lookup gotcha in
   // `.spacron/memory/agent-worktrees.md`: `sessions` is the active project's
@@ -349,13 +366,43 @@ export default function FleetDashboard() {
       });
     }
 
+    // The DeepSeek panel is an agent without a terminal: dsh's own web UI in a
+    // room. Terminal-session rows can never see it, so it joins from the room
+    // being open, working where its placement says (main repo or worktree).
+    if (deepseekOpen && projectRoot) {
+      const worktree = placements[projectId]?.worktree ?? null;
+      const panelRoot = deepSeekPanelRoot(placements, projectId, projectRoot);
+      const key = worktree ? worktree.path : `deepseek:${projectId}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          projectId,
+          agentName: deepSeekAgentName(
+            panelRoot,
+            allSessions.map((session) => session.agentName ?? '').filter(Boolean),
+          ),
+          agentPreset: DEEPSEEK_HARNESS_COMMAND,
+          placement: worktree ? 'worktree' : 'main',
+          worktree,
+          repoPath: worktree?.path ?? null,
+          baseCommit: worktree?.baseCommit ?? null,
+          live: true,
+          summary: null,
+          sessionId: null,
+          task: null,
+          status: 'open',
+          deepseekPanel: true,
+        });
+      }
+    }
+
     // Isolated agents lead: theirs are the cards holding a decision (merge or
     // discard), while a main-repo card is only ever review.
     return [...byKey.values()].sort((a, b) => {
       if (a.placement !== b.placement) return a.placement === 'worktree' ? -1 : 1;
       return a.agentName.localeCompare(b.agentName);
     });
-  }, [projectId, tasks, activeSessions, devProjectSessions, crossProjectSessions]);
+  }, [projectId, projectRoot, tasks, activeSessions, devProjectSessions, crossProjectSessions, deepseekOpen, placements]);
 
   const refreshStats = useCallback(
     async (list: FleetRow[]) => {
@@ -443,7 +490,7 @@ export default function FleetDashboard() {
     () =>
       rows.map((row) => {
         const turn = row.sessionId !== null ? turnStates[row.sessionId] : undefined;
-        const status = statusFor(row.task, row.live, turn?.phase);
+        const status = row.deepseekPanel ? 'open' : statusFor(row.task, row.live, turn?.phase);
         return {
           ...row,
           status,

@@ -40,6 +40,7 @@ import {
   devSessions,
   devPaneAssignments,
   allProjectSessions,
+  isOrchestratorTrackedSession,
 } from '$lib/stores/terminal';
 import {
   terminalFontSize,
@@ -56,7 +57,7 @@ import { activeProject, projects } from '$lib/stores/workspace';
 import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
 import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/runHistory';
-import { AGENT_ATTENTION_PATTERN } from '$lib/services/orchestrator/agent-signals';
+import { attentionReason, containsAttentionRequest } from '$lib/services/orchestrator/agent-signals';
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
 import './TerminalPane.css';
@@ -254,6 +255,8 @@ function TerminalPane({
   const seenDevUrlsRef = useRef<Set<string>>(new Set());
   const seenBuildRef = useRef(false);
   const lastAgentAttentionAtRef = useRef(0);
+  // The question last alerted for, so a TUI redrawing it never alerts again.
+  const lastAgentAttentionTextRef = useRef('');
 
   const [currentShellCwd, setCurrentShellCwd] = useState<string | null>(null);
 
@@ -355,10 +358,22 @@ function TerminalPane({
     // card/inbox entry. The terminal toast is only the safety net for an
     // unwatched follow-up; letting both paths run double-notifies one question.
     if (hasTurnSignalListener(sessionId)) return;
-    if (!AGENT_ATTENTION_PATTERN.test(text)) return;
+    // Same for any agent the orchestrator owns (adopted or dispatched, which
+    // covers the spawn panel and a typed launch): its turn watcher files the
+    // needs-input card and OS notification once per turn. This toast ran
+    // beside it on every output chunk, so a CLI redrawing a question it had
+    // already asked re-alerted every cooldown: the same notification again.
+    if (isOrchestratorTrackedSession(sessionId)) return;
+    // The strict matcher: a prose question counts only with a real choice on
+    // screen, so a finished reply ending "Do you want to...?" is not a gate.
+    if (!containsAttentionRequest(text)) return;
+    // Once per question, however often the screen redraws it.
+    const question = attentionReason(text);
+    if (question === lastAgentAttentionTextRef.current) return;
     const now = Date.now();
     if (now - lastAgentAttentionAtRef.current < AGENT_ATTENTION_COOLDOWN) return;
     lastAgentAttentionAtRef.current = now;
+    lastAgentAttentionTextRef.current = question;
     const label = getSessionLabel(info, get(sessions));
     showToast(`${label} is waiting for your response`, 'warning', 10000, true, {
       label: 'Focus',
