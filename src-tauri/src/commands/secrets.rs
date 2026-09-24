@@ -1334,7 +1334,7 @@ async fn run_completion(
     session_id: Option<&str>,
 ) -> Result<String, String> {
     if provider == super::chatgpt::PROVIDER {
-        return super::chatgpt::complete(model, system_prompt, user_text, None, None).await;
+        return super::chatgpt::complete(model, system_prompt, user_text, &[], None, None).await;
     }
     // Total-request timeout for a NON-streaming reply. 45s was shorter than a
     // reasoning model takes to think and then write an orchestrator answer, so

@@ -67,7 +67,7 @@ import {
 } from '$lib/services/realtime-voice';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
 import { REASONING_LABELS, reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
-import ModelCapabilityBadges, { ModelCapabilityIcons } from './ModelCapabilityBadges';
+import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
 import {
   sendTranscriptionNow,
   transcriptionActive,
@@ -2014,7 +2014,12 @@ export default function ChatModePanel() {
                 }}
                 loadingProvider={loadingModelsFor}
                 boundarySelector=".chat-mode-panel"
-                onPreviewProvider={(provider) => refreshLiveModels(provider as AiProviderId)}
+                onPreviewProvider={(provider) => {
+                  // Ask again each time: a model that refused an image this
+                  // session is text-only now, and its icon should say so.
+                  forgetModelVision(provider);
+                  refreshLiveModels(provider as AiProviderId);
+                }}
                 onRefresh={(provider) => ensureLiveModels(provider as AiProviderId, true)}
                 renderEngineIcon={(command, name) => <ProviderBrandMark id={command} label={name} />}
                 renderModelBadges={(provider, modelId, modelIds) => (

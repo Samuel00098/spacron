@@ -394,9 +394,13 @@ fn reset_warm() {
 pub type OnDelta<'a> = Option<&'a (dyn Fn(&str) + Send + Sync)>;
 
 /// Run one prompt through the user's ChatGPT plan and return the final text.
-pub async fn complete(model: &str, system_prompt: &str, user_text: &str, effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
+///
+/// `images` are image files to show the model with the prompt (screenshots,
+/// the user's attachments); Codex reads them itself as `localImage` inputs.
+/// The caller has already checked the paths (agent_turn/vision.rs).
+pub async fn complete(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
     if let Some(mut warm) = take_warm() {
-        match run_turn(&mut warm.server, model, system_prompt, user_text, effort, on_delta).await {
+        match run_turn(&mut warm.server, model, system_prompt, user_text, images, effort, on_delta).await {
             Ok(text) => {
                 warm.turns += 1;
                 keep_warm(warm);
@@ -410,12 +414,12 @@ pub async fn complete(model: &str, system_prompt: &str, user_text: &str, effort:
         }
     }
     let mut server = AppServer::start().await?;
-    let text = run_turn(&mut server, model, system_prompt, user_text, effort, on_delta).await?;
+    let text = run_turn(&mut server, model, system_prompt, user_text, images, effort, on_delta).await?;
     keep_warm(Warm { server, turns: 1, last_used: Instant::now() });
     Ok(text)
 }
 
-async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
+async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
     let mut params = json!({
         "ephemeral": true,
         "baseInstructions": format!("{system_prompt}\n\nYou are running as a text model inside Spacron. Your own built-in shell, file, web and image tools are disabled here: never try to use them. Any Spacron tools listed above (such as generate_image) ARE available: call them with the tool_calls JSON described above and Spacron runs them. Never tell the user a listed tool is unavailable. Answer only in the format described above."),
@@ -433,9 +437,13 @@ async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user
     }
     let thread = server.request("thread/start", params).await?;
     let thread_id = thread["thread"]["id"].as_str().ok_or("protocol: Codex returned no thread id")?.to_string();
+    let mut input = vec![json!({"type": "text", "text": user_text, "text_elements": []})];
+    for path in images {
+        input.push(json!({"type": "localImage", "path": path.to_string_lossy()}));
+    }
     let mut turn = json!({
         "threadId": thread_id,
-        "input": [{"type": "text", "text": user_text, "text_elements": []}],
+        "input": input,
     });
     if let Some(effort) = effort.filter(|e| !e.is_empty() && *e != "default") {
         turn["effort"] = json!(effort);
@@ -818,13 +826,13 @@ mod tests {
         println!("models: {:?}", models.iter().map(|m| &m.id).collect::<Vec<_>>());
         assert!(models.len() > 1);
         let cold = std::time::Instant::now();
-        let text = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 2+2?", None, None).await.expect("completion");
+        let text = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 2+2?", &[], None, None).await.expect("completion");
         println!("cold reply in {:?}", cold.elapsed());
         println!("reply: {text}");
         assert!(text.contains('4'));
         // The second request reuses the warm server instead of starting one.
         let started = std::time::Instant::now();
-        let again = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 3+3?", None, None).await.expect("warm completion");
+        let again = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 3+3?", &[], None, None).await.expect("warm completion");
         println!("warm reply in {:?}: {again}", started.elapsed());
         assert!(again.contains('6'));
     }

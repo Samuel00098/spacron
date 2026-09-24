@@ -4,6 +4,15 @@ The chat sends images only to models that accept them; every other model gets
 exactly the text request it got before. **Rust decides, in one place**:
 `accepts_images` in `commands/secrets/agent_turn.rs` (catalogue modality, else
 `vision::model_accepts_images` by name, minus endpoints in `images_refused`).
+Order of evidence: the provider's own catalogue → what any published catalogue
+says for the same bare model name (`vision::from_catalogues`, filled from
+OpenRouter/Kilo/Groq lists and OpenRouter's public list, fetched once per
+session by `ensure_public_catalogue`) → name rules (GPT/o-series and Grok by
+version number, never by a list of names; that list went stale on gpt-6).
+The ChatGPT plan passes images as Codex `localImage` inputs (paths, checked by
+`vision::allowed_image_path`). The picker's icons ask `ai_models_accept_images`,
+the same function. To audit every configured provider for free:
+`cargo test --lib live_model_capability_audit -- --ignored --nocapture`.
 The frontend only passes file paths along (`BrainToolResult.images`,
 `userImages`); it never decides.
 
