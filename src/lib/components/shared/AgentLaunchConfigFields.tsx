@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import Dropdown from './Dropdown';
+import ReasoningSlider from './ReasoningSlider';
 import {
   getAgentProviderCapabilities,
   type AgentProviderModel,
@@ -141,21 +142,11 @@ export default function AgentLaunchConfigFields({
 
       <label className="agent-launch-config-field">
         <span>Reasoning level</span>
-        <Dropdown
+        <ReasoningSlider
           value={effortUsable ? reasoningEffort : 'default'}
-          options={[
-            { value: 'default', label: defaultReasoningLabel },
-            ...options.reasoning.map(({ effort, disabled }) => ({
-              value: effort,
-              label: REASONING_LABELS[effort] ?? effort,
-              disabled,
-              tooltip: disabled ? 'The selected model does not support this level.' : undefined,
-            })),
-          ]}
-          onChange={(value) => onReasoningChange(value as ChatReasoningEffort)}
-          ariaLabel={`${capabilities.label} reasoning level`}
-          boundarySelector={boundarySelector}
-          menuMaxHeight={220}
+          levels={options.reasoning.filter((entry) => !entry.disabled).map((entry) => entry.effort)}
+          onChange={onReasoningChange}
+          defaultLabel={defaultReasoningLabel}
           disabled={!hasReasoningControl}
         />
         {!hasReasoningControl && (

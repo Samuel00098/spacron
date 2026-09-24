@@ -28,6 +28,7 @@ import {
   zeroCacheReadShare,
   shortDayLabel,
   lastDailyPoints,
+  calendarDailyPoints,
   heatmapRows,
   busiestDay,
   tokenMix,
@@ -200,13 +201,11 @@ function dayTokens(d: DailyPoint): number {
   );
 }
 
-/** Trailing active days for the selected range. `snapshot.daily` is already
- *  range-filtered by the backend, so the fixed windows want only their own
- *  tail and `all` wants every recorded day. */
+/** The fixed ranges are calendar windows, including days with no activity. */
 function rangePoints(daily: DailyPoint[], range: string): DailyPoint[] {
-  if (range === RANGE_7D) return lastDailyPoints(daily, 7);
-  if (range === RANGE_30D) return lastDailyPoints(daily, 30);
-  if (range === RANGE_90D) return lastDailyPoints(daily, 90);
+  if (range === RANGE_7D) return calendarDailyPoints(daily, 7);
+  if (range === RANGE_30D) return calendarDailyPoints(daily, 30);
+  if (range === RANGE_90D) return calendarDailyPoints(daily, 90);
   return daily;
 }
 
@@ -722,23 +721,22 @@ function SessionsTable({
 
 function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
   const { summary } = snapshot;
-  // The chart honours the Range picker: fixed windows draw their trailing
-  // active days, all-time draws the whole lifetime (bucketed to fit).
+  // Fixed windows include quiet calendar days; all-time is bucketed to fit.
   const points = dailyColumns(rangePoints(snapshot.daily, snapshot.range), 90);
   const maxDay = Math.max(1, ...points.map(dayTokens));
   const zeroCache = zeroCacheReadShare(summary);
 
-  if (totalTokens(summary) <= 0) {
-    return (
-      <p className="shell-hint stats-empty-hint">
-        No usage found for this provider in this range. Widen the range, or
-        come back after running a session. This pane re-scans by itself.
-      </p>
-    );
-  }
+  const noUsage = totalTokens(summary) <= 0;
 
   return (
     <>
+      {noUsage && (
+        <p className="shell-hint stats-empty-hint">
+          No usage found for this provider in this range. Widen the range, or
+          come back after running a session. This pane re-scans by itself.
+        </p>
+      )}
+      {!noUsage && <>
       <div className="stats-tiles">
         <StatTile
           icon={ICON_TOKENS}
@@ -774,6 +772,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
         <span>{formatTokens(summary.cacheWriteTokens)} cache write</span>
         <span>{summary.turns} turns</span>
       </div>
+      </>}
 
       {points.length > 0 && (
         <div className="stats-chart-wrap">
@@ -835,6 +834,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
         </div>
       )}
 
+      {!noUsage && <>
       <div className="stats-breakdowns">
         <div className="stats-breakdown-col">
           <h4>By model</h4>
@@ -859,6 +859,7 @@ function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
           emptyHint="No sessions in this range."
         />
       </div>
+      </>}
     </>
   );
 }

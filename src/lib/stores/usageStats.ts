@@ -203,8 +203,7 @@ export const usageStatsState = writable<UsageStatsState>({
   lastFetchedAt: 0,
 });
 
-let inFlight: Promise<void> | null = null;
-let inFlightKey = '';
+let selectionVersion = 0;
 
 /** Tauri rejects with plain strings as often as with `Error`s. */
 function errorText(err: unknown): string {
@@ -221,21 +220,15 @@ function errorText(err: unknown): string {
 export async function refreshStatsSnapshot(): Promise<void> {
   if (!isTauriRuntime()) return;
   const { provider, scope, range } = get(usageStatsState);
-  const key = `${provider}\0${scope}\0${range}`;
-  if (inFlight) {
-    if (inFlightKey === key) return inFlight;
-    await inFlight;
-    return refreshStatsSnapshot();
-  }
-  inFlightKey = key;
-
-  inFlight = (async () => {
+  const version = ++selectionVersion;
+  const selected = () => version === selectionVersion;
+  const request = (async () => {
     usageStatsState.update((s) => ({ ...s, loading: true, error: null }));
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const overviewRequest = invoke<StatsOverview>('stats_get_overview', { scope, range });
       if (provider === PROVIDER_ALL) {
-        const overview = await overviewRequest;
+        const overview = await invoke<StatsOverview>('stats_get_overview', { scope, range });
+        if (!selected()) return;
         usageStatsState.update((s) => ({
           ...s,
           overview,
@@ -243,30 +236,32 @@ export async function refreshStatsSnapshot(): Promise<void> {
           lastFetchedAt: Date.now(),
         }));
       } else {
-        const [overview, snapshot] = await Promise.all([overviewRequest, invoke<StatsSnapshot>('stats_get_snapshot', {
+        if (!get(usageStatsState).overview || get(usageStatsState).overview?.scope !== scope || get(usageStatsState).overview?.range !== range) {
+          void invoke<StatsOverview>('stats_get_overview', { scope, range }).then((overview) => {
+            usageStatsState.update((s) => s.scope === scope && s.range === range ? { ...s, overview } : s);
+          }).catch((error) => console.error('[usageStats] provider list refresh failed', error));
+        }
+        const snapshot = await invoke<StatsSnapshot>('stats_get_snapshot', {
           provider,
           scope,
           range,
           limit: SNAPSHOT_LIMIT,
-        })]);
+        });
+        if (!selected()) return;
         usageStatsState.update((s) => ({
           ...s,
-          overview,
           snapshot,
           loading: false,
           lastFetchedAt: Date.now(),
         }));
       }
     } catch (err) {
+      if (!selected()) return;
       console.error('[usageStats] refresh failed', err);
       usageStatsState.update((s) => ({ ...s, loading: false, error: errorText(err) }));
-    } finally {
-      inFlight = null;
-      inFlightKey = '';
     }
   })();
-
-  return inFlight;
+  return request;
 }
 
 export function selectStatsProvider(provider: string): void {
@@ -285,6 +280,7 @@ export async function scanAndRefresh(): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   try {
     await invoke('stats_refresh');
+    usageStatsState.update((s) => ({ ...s, overview: null }));
   } catch (err) {
     console.error('[usageStats] scan failed', err);
     usageStatsState.update((s) => ({ ...s, error: errorText(err) }));
@@ -400,6 +396,17 @@ export function shortDayLabel(date: string): string {
 /** The trailing `n` daily points, oldest first — what the chart draws. */
 export function lastDailyPoints(daily: DailyPoint[], n = 10): DailyPoint[] {
   return daily.slice(-n);
+}
+
+/** Calendar windows include quiet days, so every provider gets the same number
+ * of columns even when its transcript contains only a few active days. */
+export function calendarDailyPoints(daily: DailyPoint[], days: number, now = new Date()): DailyPoint[] {
+  const byDay = new Map(daily.map((point) => [point.day, point]));
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Array.from({ length: days }, (_, index) => {
+    const day = new Date(today - (days - index - 1) * 86_400_000).toISOString().slice(0, 10);
+    return byDay.get(day) ?? { day, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  });
 }
 
 /**

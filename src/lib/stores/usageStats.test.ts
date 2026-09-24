@@ -1,8 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { get } from './storeCompat';
 import {
   breakdownShare,
   breakdownTokens,
   busiestDay,
+  calendarDailyPoints,
+  selectStatsProvider,
+  usageStatsState,
   currentScanState,
   formatPercent,
   formatTokens,
@@ -25,6 +29,7 @@ import {
   type StatsSummary,
   type UsageStatsState,
 } from './usageStats';
+
 
 function summary(partial: Partial<StatsSummary> = {}): StatsSummary {
   return {
@@ -178,6 +183,41 @@ describe('lastDailyPoints', () => {
     const days = ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04'].map((d) => day({ day: d }));
     expect(lastDailyPoints(days, 10).map((d) => d.day)).toEqual(days.map((d) => d.day));
     expect(lastDailyPoints(days, 2).map((d) => d.day)).toEqual(['2026-08-03', '2026-08-04']);
+  });
+});
+
+describe('calendarDailyPoints', () => {
+  it('renders exactly 90 calendar columns including quiet days for any provider', () => {
+    const points = calendarDailyPoints([day({ day: '2026-09-23', inputTokens: 12 })], 90, new Date('2026-09-24T12:00:00Z'));
+    expect(points).toHaveLength(90);
+    expect(points[0].day).toBe('2026-06-27');
+    expect(points[89].day).toBe('2026-09-24');
+    expect(points[88].inputTokens).toBe(12);
+    expect(points[89].inputTokens).toBe(0);
+  });
+});
+
+describe('provider switching', () => {
+  it('shows the latest provider without waiting for an older snapshot', async () => {
+    const pending = new Map<string, (value: unknown) => void>();
+    const invokeMock = vi.fn((command: string, args: { provider?: string }) => {
+      if (command !== 'stats_get_snapshot') throw new Error(`unexpected ${command}`);
+      return new Promise((resolve) => { pending.set(args.provider!, resolve); });
+    });
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: { invoke: invokeMock } });
+    usageStatsState.update((s) => ({ ...s, provider: PROVIDER_ALL, overview: { scope: 'all', range: 'all' } as never }));
+    try {
+      selectStatsProvider('claude');
+      selectStatsProvider('codex');
+      await vi.waitFor(() => expect(pending.size).toBe(2));
+      pending.get('codex')!({ provider: 'codex' });
+      await vi.waitFor(() => expect(get(usageStatsState).snapshot?.provider).toBe('codex'));
+      pending.get('claude')!({ provider: 'claude' });
+      await Promise.resolve();
+      expect(get(usageStatsState).snapshot?.provider).toBe('codex');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
