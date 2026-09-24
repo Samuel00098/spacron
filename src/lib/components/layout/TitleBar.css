@@ -116,8 +116,22 @@
 /* Center — a real flex item so it shrinks and truncates between the nav and
    the right-hand controls instead of floating over them (the old absolute
    centring overlapped the search bar at medium widths). */
+/*
+ * Left and right groups share the spare width equally (both `flex: 1 1 0`), so
+ * the centre slot between them sits on the bar's true middle rather than
+ * midway between two groups of different widths. `min-width: max-content`
+ * stops either group shrinking under its own buttons: when one side needs more
+ * than half, it takes it and the centre slides over instead of overlapping.
+ */
+.titlebar .titlebar-left {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: max-content;
+}
+
 .titlebar .titlebar-center {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -298,9 +312,10 @@
 .titlebar .titlebar-right {
   display: flex;
   align-items: center;
-  margin-left: auto;
+  justify-content: flex-end;
+  flex: 1 1 0;
+  min-width: max-content;
   gap: 3px;
-  flex-shrink: 0;
   -webkit-app-region: no-drag;
   app-region: no-drag;
   z-index: 2;

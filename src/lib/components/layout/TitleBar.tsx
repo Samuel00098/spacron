@@ -73,69 +73,73 @@ export default function TitleBar() {
 
   return (
     <div className="titlebar" data-tauri-drag-region>
-      {/* Brand */}
-      <div className="titlebar-brand">
-        <div className="titlebar-icon">
-          {!iconError ? (
-            <img
-              src={iconSrc}
-              alt="Spacron"
-              className="titlebar-app-icon"
-              onError={() => setIconError(true)}
-            />
-          ) : (
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              className="titlebar-app-icon"
-              aria-hidden="true"
-            >
-              <rect width="16" height="16" rx="3.5" fill="#2f343b" />
-              <polyline
-                points="2.5,10 4.5,8 2.5,6"
+      {/* Left: brand + sidebar toggle. Grows in step with the right group so the
+          centre slot lands on the true middle of the bar (see TitleBar.css). */}
+      <div className="titlebar-left" data-tauri-drag-region>
+        {/* Brand */}
+        <div className="titlebar-brand">
+          <div className="titlebar-icon">
+            {!iconError ? (
+              <img
+                src={iconSrc}
+                alt="Spacron"
+                className="titlebar-app-icon"
+                onError={() => setIconError(true)}
+              />
+            ) : (
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
                 fill="none"
-                stroke="#aeb6c2"
-                strokeWidth="1.4"
+                className="titlebar-app-icon"
+                aria-hidden="true"
+              >
+                <rect width="16" height="16" rx="3.5" fill="#2f343b" />
+                <polyline
+                  points="2.5,10 4.5,8 2.5,6"
+                  fill="none"
+                  stroke="#aeb6c2"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <rect x="5.5" y="7.3" width="5" height="1.2" rx="0.6" fill="rgba(255,255,255,0.5)" />
+              </svg>
+            )}
+          </div>
+        </div>
+
+        {/* Navigation: the left sidebar toggle. Only rendered with a workspace
+            open — an empty group would still draw its divider. */}
+        {showWorkspaceTools && (
+          <div className="titlebar-nav">
+            <button
+              className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
+              onClick={toggleSidebar}
+              aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+              aria-pressed={sidebarVisible}
+              title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-              />
-              <rect x="5.5" y="7.3" width="5" height="1.2" rx="0.6" fill="rgba(255,255,255,0.5)" />
-            </svg>
-          )}
-        </div>
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+                <path d="M6 8h1M6 12h1M6 16h1" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
-
-      {/* Navigation: the left sidebar toggle. Only rendered with a workspace
-          open — an empty group would still draw its divider. */}
-      {showWorkspaceTools && (
-        <div className="titlebar-nav">
-          <button
-            className={`nav-btn sidebar-toggle-btn${sidebarVisible ? ' active' : ''}`}
-            onClick={toggleSidebar}
-            aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
-            aria-pressed={sidebarVisible}
-            title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M9 4v16" />
-              <path d="M6 8h1M6 12h1M6 16h1" />
-            </svg>
-          </button>
-        </div>
-      )}
 
       {/* Centre: the Code / Chat switch. It affects the whole window,
           so it sits in the window chrome rather than inside a collapsible
@@ -193,7 +197,7 @@ export default function TitleBar() {
       </div>
 
       {/* Right side: Mode switcher + Settings + Window controls */}
-      <div className="titlebar-right">
+      <div className="titlebar-right" data-tauri-drag-region>
 
         {showWorkspaceTools && (
           <>
