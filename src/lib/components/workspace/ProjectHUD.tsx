@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
 import {
@@ -32,6 +32,7 @@ import {
   closeChatThread,
   createChatThread,
   selectChatThread,
+  setChatThreadArchived,
   toggleChatThreadPinned,
   type ChatThread,
   type ChatThreadStatus,
@@ -41,6 +42,15 @@ import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/sett
 import { requestRoomControl } from '$lib/stores/layoutControl';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
+import {
+  HIDDEN_PROJECTS_KEY,
+  PINNED_PROJECTS_KEY,
+  applyProjectPrefs,
+  loadPathSet,
+  normalizeProjectPath,
+  savePathSet,
+  togglePath,
+} from './projectListPrefs';
 import './ProjectHUD.css';
 
 function getFilename(path: string): string {
@@ -54,13 +64,6 @@ const EXPANDED_PROJECTS_KEY = 'spacron.hud.expandedProjects';
 interface KnownProject {
   id: string;
   root_path: string;
-}
-
-// Recents paths and project roots come from the same backend, but compare
-// separator- and case-insensitively so a Windows path spelled either way still
-// finds its project.
-function normalizeProjectPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
 function mergeKnownProjects(prev: Map<string, KnownProject>, incoming: Iterable<KnownProject>): Map<string, KnownProject> {
@@ -278,6 +281,42 @@ export default function ProjectHUD() {
     }
   });
 
+  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => loadPathSet(HIDDEN_PROJECTS_KEY));
+  const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(() => loadPathSet(PINNED_PROJECTS_KEY));
+  // Per-project "Archived" thread group; collapsed unless opened this session.
+  const [openArchivedGroups, setOpenArchivedGroups] = useState<Set<string>>(new Set());
+
+  function setProjectHidden(path: string, hidden: boolean) {
+    setHiddenProjects((prev) => {
+      const next = togglePath(prev, path, hidden);
+      savePathSet(HIDDEN_PROJECTS_KEY, next);
+      return next;
+    });
+  }
+
+  function unhideAllProjects() {
+    const next = new Set<string>();
+    savePathSet(HIDDEN_PROJECTS_KEY, next);
+    setHiddenProjects(next);
+  }
+
+  function setProjectPinned(path: string, pinned: boolean) {
+    setPinnedProjects((prev) => {
+      const next = togglePath(prev, path, pinned);
+      savePathSet(PINNED_PROJECTS_KEY, next);
+      return next;
+    });
+  }
+
+  function toggleArchivedGroup(path: string) {
+    setOpenArchivedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
   const inputRef = useRef<HTMLInputElement | null>(null);
   const projectRenameInputRef = useRef<HTMLInputElement | null>(null);
   const lastCardClickRef = useRef<{ path: string; at: number }>({ path: '', at: 0 });
@@ -435,8 +474,16 @@ export default function ProjectHUD() {
         (p) => p.name.toLowerCase().includes(query) || p.path.toLowerCase().includes(query)
       );
     }
-    return sortItems(list, projectSort);
-  }, [projectItems, query, projectSort]);
+    return applyProjectPrefs(sortItems(list, projectSort), hiddenProjects, pinnedProjects);
+  }, [projectItems, query, projectSort, hiddenProjects, pinnedProjects]);
+
+  // Hidden projects that are still in the list, for the Projects menu's
+  // "Hidden Projects" section. A hidden path since removed from the list simply
+  // has nothing to show.
+  const hiddenProjectItems = useMemo(
+    () => projectItems.filter((item) => item.path && hiddenProjects.has(normalizeProjectPath(item.path))),
+    [projectItems, hiddenProjects],
+  );
 
   // Popovers stay open only while the user is interacting with that popover.
   useEffect(() => {
@@ -699,6 +746,10 @@ export default function ProjectHUD() {
       const bActivity = b.thread?.lastActivityAt ?? b.task?.completedAt ?? b.task?.startedAt ?? b.task?.createdAt ?? b.session?.lastActivatedAt ?? 0;
       return bActivity - aActivity;
     });
+    const liveChatRows = chatRows.filter((row) => !row.thread?.archived);
+    const archivedChatRows = chatRows.filter((row) => row.thread?.archived);
+    const archivedOpen = openArchivedGroups.has(p.path);
+    const isPinnedProject = Boolean(p.path) && pinnedProjects.has(normalizeProjectPath(p.path));
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
     const isExpanded = p.path ? expandedProjects.has(p.path) : false;
@@ -774,6 +825,11 @@ export default function ProjectHUD() {
                 />
               ) : (
                 <span className="project-sidebar-card-name" title={p.name}>{p.name}</span>
+              )}
+              {isPinnedProject && (
+                <svg className="project-pin-mark" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-label="Pinned project" role="img">
+                  <path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5v8h2v-8h5v-2c-1.66 0-3-1.34-3-3Z" />
+                </svg>
               )}
               {p.isActive && (
                 <span className="project-active-badge">
@@ -856,6 +912,44 @@ export default function ProjectHUD() {
                   <span>Rename Project</span>
                 </button>
 
+                {p.path && (
+                  <>
+                    <button
+                      type="button"
+                      className="hud-options-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setActiveMenuKey(null);
+                        setProjectPinned(p.path, !isPinnedProject);
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5v8h2v-8h5v-2c-1.66 0-3-1.34-3-3Z" />
+                      </svg>
+                      <span>{isPinnedProject ? 'Unpin Project' : 'Pin to Top'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="hud-options-menu-item"
+                      role="menuitem"
+                      title="Hide from the list. Unhide it from the Projects menu."
+                      onClick={() => {
+                        setActiveMenuKey(null);
+                        setProjectHidden(p.path, true);
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a13.2 13.2 0 0 1-1.67 2.68" />
+                        <path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3 8 10 8a9.7 9.7 0 0 0 5.39-1.61" />
+                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                        <line x1="2" y1="2" x2="22" y2="22" />
+                      </svg>
+                      <span>Hide Project</span>
+                    </button>
+                  </>
+                )}
+
                 <div className="hud-options-menu-divider" />
 
                 <button
@@ -902,12 +996,19 @@ export default function ProjectHUD() {
                 <span className="project-threads-empty">No threads yet</span>
               ) : (
                 <div className="project-thread-list">
-                  {chatRows.map((row) => {
+                  {liveChatRows.length === 0 && (
+                    <span className="project-threads-empty">No active threads</span>
+                  )}
+                  {[...liveChatRows, ...(archivedOpen ? archivedChatRows : [])].map((row, rowIndex) => {
                     const isSelected = row.thread?.id === activeThreadId;
                     const terminalSession = row.session
                       ?? (row.task?.assignedSessionId != null ? sessionById.get(row.task.assignedSessionId) ?? null : null);
                     return (
-                      <div key={row.id} className={`project-thread-row-wrap${isSelected ? ' selected' : ''}`}>
+                      <Fragment key={row.id}>
+                      {rowIndex === liveChatRows.length && (
+                        <div className="project-threads-archived-label">Archived</div>
+                      )}
+                      <div className={`project-thread-row-wrap${isSelected ? ' selected' : ''}${row.thread?.archived ? ' archived' : ''}`}>
                         <button
                           type="button"
                           className={`project-thread-row status-${row.status}`}
@@ -969,6 +1070,17 @@ export default function ProjectHUD() {
                                 <button
                                   type="button"
                                   role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setChatThreadArchived(row.thread!.id, !row.thread!.archived);
+                                    setThreadMenuId(null);
+                                  }}
+                                >
+                                  {row.thread.archived ? 'Unarchive' : 'Archive'}
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
                                   className="danger"
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -999,8 +1111,22 @@ export default function ProjectHUD() {
                           </button>
                         )}
                       </div>
+                      </Fragment>
                     );
                   })}
+                  {archivedChatRows.length > 0 && (
+                    <button
+                      type="button"
+                      className={`project-threads-archived-toggle${archivedOpen ? ' open' : ''}`}
+                      onClick={() => toggleArchivedGroup(p.path)}
+                      aria-expanded={archivedOpen}
+                    >
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="9 6 15 12 9 18" />
+                      </svg>
+                      <span>{archivedOpen ? 'Hide archived' : `Archived (${archivedChatRows.length})`}</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1276,6 +1402,41 @@ export default function ProjectHUD() {
                             </span>
                           )}
                         </button>
+                        {hiddenProjectItems.length > 0 && (
+                          <>
+                            <div className="hud-options-menu-divider" />
+                            <div className="hud-options-menu-header">Hidden Projects</div>
+                            {hiddenProjectItems.map((hiddenProject) => (
+                              <button
+                                key={`${hiddenProject.workspaceId}-${hiddenProject.path}`}
+                                type="button"
+                                className="hud-options-menu-item"
+                                role="menuitem"
+                                title={`Unhide ${hiddenProject.path}`}
+                                onClick={() => setProjectHidden(hiddenProject.path, false)}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                                <span>Unhide {hiddenProject.name}</span>
+                              </button>
+                            ))}
+                            {hiddenProjectItems.length > 1 && (
+                              <button
+                                type="button"
+                                className="hud-options-menu-item"
+                                role="menuitem"
+                                onClick={() => {
+                                  unhideAllProjects();
+                                  setActiveMenuKey(null);
+                                }}
+                              >
+                                <span>Unhide All</span>
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1321,7 +1482,9 @@ export default function ProjectHUD() {
                     {filteredProjects.map((p) => renderProjectCard(p))}
                     {filteredProjects.length === 0 && !search && (
                       <div className="projects-section-empty-hint">
-                        No projects yet. Open a folder to begin.
+                        {hiddenProjectItems.length > 0
+                          ? 'Every project is hidden. Unhide them from the Projects menu.'
+                          : 'No projects yet. Open a folder to begin.'}
                       </div>
                     )}
                   </div>

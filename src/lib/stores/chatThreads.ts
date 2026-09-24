@@ -354,6 +354,7 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     unreadCount: Math.max(0, Math.floor(asNumber(raw.unreadCount) ?? 0)),
     draft: asString(raw.draft) ?? '',
     pinned: raw.pinned === true,
+    archived: raw.archived === true,
     order: asNumber(raw.order) ?? undefined,
     agentCheckpoint: isRecord(raw.agentCheckpoint) && Array.isArray(raw.agentCheckpoint.exchanges) && Array.isArray(raw.agentCheckpoint.results)
       && typeof raw.agentCheckpoint.provider === 'string' && typeof raw.agentCheckpoint.model === 'string' && typeof raw.agentCheckpoint.summary === 'string'
@@ -656,6 +657,18 @@ export function toggleChatThreadPinned(threadId: string): boolean {
   return updateChatThread(threadId, { pinned: !thread.pinned, updatedAt: Date.now() });
 }
 
+/** Archive or restore a thread. Archiving also unpins it: a pin says "keep this
+ *  in front of me", which an archived thread by definition is not. */
+export function setChatThreadArchived(threadId: string, archived: boolean): boolean {
+  const thread = getChatThread(threadId);
+  if (!thread) return false;
+  return updateChatThread(threadId, {
+    archived,
+    ...(archived ? { pinned: false } : {}),
+    updatedAt: Date.now(),
+  });
+}
+
 /** Remove a thread without silently creating a replacement conversation. */
 export function deleteChatThread(threadId: string): boolean {
   void deleteAgentCheckpoint(threadId).catch(console.error);
@@ -749,7 +762,8 @@ export function appendThreadMessage(message: ChatMessage): boolean {
       Object.entries(current.threadsByProject).map(([projectId, threads]) => [
         projectId,
         threads.map((entry) => entry.id === message.threadId
-          ? { ...entry, status: nextStatus, updatedAt: message.ts, lastActivityAt: message.ts }
+          // Writing in an archived thread brings it back: it is in use again.
+          ? { ...entry, status: nextStatus, updatedAt: message.ts, lastActivityAt: message.ts, ...(message.role === 'user' ? { archived: false } : {}) }
           : entry),
       ]),
     ),

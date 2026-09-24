@@ -154,6 +154,10 @@ export interface ChatThread {
   unreadCount: number;
   draft: string;
   pinned?: boolean;
+  /** Put away by the user: listed under the project's collapsed "Archived"
+   *  group instead of with the live threads. A flag rather than a `status`,
+   *  because status is recomputed from activity and would drop it. */
+  archived?: boolean;
   order?: number;
 }
 

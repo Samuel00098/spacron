@@ -70,10 +70,10 @@
   z-index: 10000;
   width: max-content;
   min-width: 260px;
-  padding: 8px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 14px;
@@ -91,7 +91,7 @@
 }
 
 .tools-group-label {
-  padding: 0 6px 5px;
+  padding: 0 6px 7px;
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.06em;
@@ -103,7 +103,9 @@
 .tools-group-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(150px, 1fr));
-  gap: 2px;
+  /* Enough air that two lit (open) items side by side or stacked read as
+     separate keys rather than one merged slab. */
+  gap: 6px 8px;
 }
 
 .tools-item {

@@ -19,6 +19,7 @@ import {
   repairThreadSummaries,
   resetChatThreadsForTests,
   selectChatThread,
+  setChatThreadArchived,
   setThreadDraft,
   toggleChatThreadPinned,
 } from './chatThreads';
@@ -277,6 +278,24 @@ describe('chat thread state', () => {
 
     expect(get(chatThreadState).threadsByProject['project-a'][0].status).toBe('working');
     expect(get(chatThreadState).messagesByThread[thread.id][0].inlineRequest?.answer).toBe('staging');
+  });
+
+  it('archives a thread, unpinning it, and a new user message restores it', () => {
+    const thread = createChatThread('project-a', { title: 'Old work' }, 100);
+    toggleChatThreadPinned(thread.id);
+    expect(setChatThreadArchived(thread.id, true)).toBe(true);
+    expect(get(chatThreadState).threadsByProject['project-a'][0]).toMatchObject({ archived: true, pinned: false });
+
+    appendThreadMessage({
+      id: 'm-reply', threadId: thread.id, projectId: 'project-a', type: 'agent', role: 'assistant', text: 'late reply', ts: 200,
+    } as never);
+    expect(get(chatThreadState).threadsByProject['project-a'][0].archived).toBe(true);
+
+    appendThreadMessage({
+      id: 'm-user', threadId: thread.id, projectId: 'project-a', type: 'user', role: 'user', text: 'picking this up again', ts: 300,
+    } as never);
+    expect(get(chatThreadState).threadsByProject['project-a'][0].archived).toBe(false);
+    expect(setChatThreadArchived('missing', true)).toBe(false);
   });
 
   it('supports lifecycle actions without recreating a deleted last thread', () => {
