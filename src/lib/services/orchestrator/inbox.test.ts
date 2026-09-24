@@ -163,7 +163,9 @@ describe('completionEntry', () => {
       }),
       false,
     );
-    expect(quiet?.body).toBe('Went quiet, with no completion reported.');
+    // A finish nobody reported, only guessed from output going quiet, is noise:
+    // it is left out of the inbox entirely rather than filed as "went quiet".
+    expect(quiet).toBeNull();
 
     // A process that exits cleanly has ended, but that is not evidence the
     // work was finished — `/exit` and Ctrl-D exit cleanly too.

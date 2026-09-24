@@ -94,6 +94,9 @@ export default function AgentNotifications() {
   const doneTimers = useRef<Map<string, number>>(new Map());
   // Completion ids already raised as an OS notification while the app was hidden.
   const systemPinged = useRef<Set<string>>(new Set());
+  // OS pings cover completions from this point on, in every project. Opening
+  // the app must not replay the finished history as a burst of notifications.
+  const osBaselineRef = useRef(Date.now());
 
   // Only surface completions that land *after* we start watching a project, so
   // opening a project doesn't dump its whole finished-task history on screen.
@@ -107,7 +110,8 @@ export default function AgentNotifications() {
   useEffect(() => {
     for (const timer of doneTimers.current.values()) clearTimeout(timer);
     doneTimers.current.clear();
-    systemPinged.current.clear();
+    // `systemPinged` is deliberately kept: OS pings span every project, and
+    // clearing it here would re-ping another project's finishes on a switch.
     setReplyingId(null);
     setReplyText('');
   }, [projectId]);
@@ -212,22 +216,30 @@ export default function AgentNotifications() {
   // the window is hidden OR it's visible but another app is focused (so the
   // stack is off in another workspace). When the app is focused and visible the
   // floating card already is the notification, so nothing fires.
+  //
+  // Every project, not only the open one: an agent finishing in another
+  // project while you are away is exactly the finish you would otherwise miss.
+  // Each new completion is marked seen whether or not it pinged, so one that
+  // landed while you were looking at the app never pings later, when focus
+  // happens to move away. Clicking the OS notification brings Spacron forward
+  // (`commands/notification.rs`).
   useEffect(() => {
-    if (!shouldUseSystemNotification()) return;
-    for (const g of completionGroups) {
-      for (const m of g.members) {
-        if (systemPinged.current.has(m.id)) continue;
-        systemPinged.current.add(m.id);
+    const away = shouldUseSystemNotification();
+    for (const [pid, msgs] of Object.entries(allChat)) {
+      const recent = (msgs ?? []).slice(-20);
+      for (const m of recent) {
         const c = m.completion;
-        if (!c) continue;
+        if (!c || m.ts < osBaselineRef.current || systemPinged.current.has(m.id)) continue;
+        systemPinged.current.add(m.id);
+        // A silent completion is a guessed finish; it never interrupts.
+        if (!away || c.silent || getDismissedIds(pid).has(m.id)) continue;
         showSystemNotification(
           `${completionHeadline(c)} · ${formatAgentIdentity(c.agentName, c.agentType)}: ${c.taskTitle}`,
           c.status === 'done' ? 'success' : c.status === 'failed' ? 'error' : 'warning',
         );
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [completionGroups, projectId]);
+  }, [allChat]);
 
   const items = useMemo<NotifItem[]>(() => {
     const merged: NotifItem[] = [

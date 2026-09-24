@@ -215,6 +215,12 @@ export function mailEntry(card: MailboxCard, read: boolean): InboxEntry {
 export function completionEntry(msg: CompletionLike, read: boolean): InboxEntry | null {
   const c = msg.completion;
   if (!c) return null;
+  // A finish nobody reported, only guessed from output going quiet ("went
+  // quiet, with no completion reported"), is not news: a long compile looks
+  // the same, and a real finish is declared by the agent. These rows filled
+  // the inbox with noise, so they are left out of it (and its unread count)
+  // entirely; the card itself still stands in the conversation that owns it.
+  if (c.status === 'done' && c.endedBy === 'inferred') return null;
   return {
     id: msg.id,
     kind: 'completion',

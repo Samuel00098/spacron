@@ -35,7 +35,9 @@ fn show_system_notification(app: AppHandle, payload: NotificationPayload) -> Res
     Toast::new(&app_id)
         .title(&payload.title)
         .text1(&payload.body)
-        .duration(Duration::Short)
+        // Long (~25 s): the click handler below only runs while the toast is
+        // on screen, and the short one was gone before you could reach it.
+        .duration(Duration::Long)
         .on_activated(move |_| {
             focus_main_window(focus_app.clone());
             Ok(())
