@@ -309,6 +309,7 @@ pub fn run() {
             commands::secrets::agent_turn::ai_agent_turn,
             commands::secrets::agent_turn::ai_agent_cancel,
             commands::secrets::agent_turn::ai_agent_capabilities,
+            commands::secrets::agent_turn::ai_models_accept_images,
             commands::secrets::agent_turn::ai_agent_probe,
             commands::images::generate_media,
             commands::images::allow_generations_dir,

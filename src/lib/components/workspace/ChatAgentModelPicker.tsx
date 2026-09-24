@@ -22,6 +22,7 @@ export default function ChatAgentModelPicker({
   onChange,
   renderEngineIcon,
   onRefresh,
+  renderModelBadges,
 }: {
   agents: ChatEngineOption[];
   provider: string;
@@ -37,6 +38,12 @@ export default function ChatAgentModelPicker({
   renderEngineIcon?: (command: string, name: string) => React.ReactNode;
   /** Explicit refresh affordance shown in the menu footer. */
   onRefresh?: (provider: string) => void;
+  /**
+   * Extra content at the end of each model row (the chat uses it for the
+   * model's capability icons). `modelIds` is the whole list being shown, so a
+   * renderer can load answers for all of it at once.
+   */
+  renderModelBadges?: (provider: string, modelId: string, modelIds: string[]) => React.ReactNode;
 }) {
   const EngineIcon = renderEngineIcon
     ? ({ command, name }: { command: string; name: string }) => <>{renderEngineIcon(command, name)}</>
@@ -62,6 +69,7 @@ export default function ChatAgentModelPicker({
     return previewModels.filter((entry) => entry.label.toLocaleLowerCase().includes(query));
   }, [modelQuery, previewModels]);
   const unavailableModelCount = filteredModels.filter((entry) => entry.supported === false).length;
+  const previewModelIds = useMemo(() => previewModels.map((entry) => entry.id), [previewModels]);
 
   function placeMenu() {
     const anchor = rootRef.current?.getBoundingClientRect();
@@ -233,6 +241,7 @@ export default function ChatAgentModelPicker({
                   <span className="chat-agent-model-model-label">{entry.label}</span>
                   {entry.supported === false && <span className="chat-agent-model-model-status">Not supported yet</span>}
                 </span>
+                {renderModelBadges && entry.id !== 'default' ? renderModelBadges(previewProvider, entry.id, previewModelIds) : null}
                 {previewProvider === provider && entry.id === model && (
                   <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
                 )}

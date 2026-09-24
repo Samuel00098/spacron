@@ -105,6 +105,22 @@ pub fn ai_agent_capabilities(provider: String, model: String, base_url: Option<S
     caps
 }
 
+/// Which of a provider's models accept images, for the model picker's
+/// capability icons. One call per list, and the same answer the chat's own
+/// requests use (`accepts_images`), so an icon never promises vision a turn
+/// would not deliver.
+#[tauri::command]
+pub fn ai_models_accept_images(provider: String, models: Vec<String>, base_url: Option<String>) -> HashMap<String, bool> {
+    models
+        .into_iter()
+        .take(2000)
+        .map(|m| {
+            let accepts = accepts_images(&provider, base_url.as_deref(), &m);
+            (m, accepts)
+        })
+        .collect()
+}
+
 /// Whether requests to this model carry images: the catalogue's word or the
 /// model's name (`vision::model_accepts_images`), unless the endpoint already
 /// refused an image this session.
@@ -724,6 +740,16 @@ mod tests {
         assert_eq!(results["role"], "user");
         assert!(results["content"][0]["text"].as_str().unwrap().contains("attached as images"));
         assert_eq!(results["content"][1]["type"], "image_url");
+    }
+    #[test]
+    fn the_picker_gets_one_answer_per_model_matching_the_chat() {
+        let answers = ai_models_accept_images("openai".into(), vec!["gpt-4o".into(), "gpt-3.5-turbo".into(), "o3-mini".into()], None);
+        assert_eq!(answers.get("gpt-4o"), Some(&true));
+        assert_eq!(answers.get("gpt-3.5-turbo"), Some(&false));
+        assert_eq!(answers.get("o3-mini"), Some(&false));
+        for (model, accepts) in &answers {
+            assert_eq!(ai_agent_capabilities("openai".into(), model.clone(), None)["images"], *accepts, "{model}");
+        }
     }
     #[test]
     fn capabilities_always_answer_the_image_question() {

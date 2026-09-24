@@ -1,0 +1,83 @@
+/* What the selected chat model supports: text, vision, reasoning. Sits in the
+   composer's settings row, next to the reasoning picker, at the same 30px
+   height as the dropdowns around it. */
+.app-shell .chat-model-caps {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 4px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.app-shell .chat-model-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  opacity: 0.35;
+  cursor: default;
+  transition: opacity var(--dur-base, 0.15s) var(--ease-out, ease-out), color var(--dur-base, 0.15s) var(--ease-out, ease-out);
+}
+
+.app-shell .chat-model-cap.is-on {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.app-shell .chat-model-cap svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Narrow composer: the settings become a two-column grid; the badges take a
+   cell of their own rather than squeezing the pickers. */
+@container chat-composer (max-width: 420px) {
+  .app-shell .chat-mode-composer-settings .chat-model-caps {
+    justify-self: start;
+  }
+}
+
+/* One model row in the picker: only the supported icons, small, at the row's
+   trailing edge before the selected checkmark. */
+.chat-model-caps-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  padding-left: 8px;
+  flex-shrink: 0;
+}
+
+/* Not prefixed with .app-shell: the picker menu is portaled outside it. */
+.chat-model-caps-inline .chat-model-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  opacity: 0.7;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.chat-model-caps-inline .chat-model-cap svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

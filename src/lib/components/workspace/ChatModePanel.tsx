@@ -67,6 +67,7 @@ import {
 } from '$lib/services/realtime-voice';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
 import { REASONING_LABELS, reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
+import ModelCapabilityBadges, { ModelCapabilityIcons } from './ModelCapabilityBadges';
 import {
   sendTranscriptionNow,
   transcriptionActive,
@@ -2016,6 +2017,9 @@ export default function ChatModePanel() {
                 onPreviewProvider={(provider) => refreshLiveModels(provider as AiProviderId)}
                 onRefresh={(provider) => ensureLiveModels(provider as AiProviderId, true)}
                 renderEngineIcon={(command, name) => <ProviderBrandMark id={command} label={name} />}
+                renderModelBadges={(provider, modelId, modelIds) => (
+                  <ModelCapabilityIcons provider={provider} model={modelId} siblings={modelIds} />
+                )}
                 onChange={(provider, model) => {
                   if (!thread || !providerIds.has(provider as AiProviderId)) return;
                   const nextProvider = provider as AiProviderId;
@@ -2057,6 +2061,7 @@ export default function ChatModePanel() {
                   />
                 </div>
               )}
+              <ModelCapabilityBadges provider={selectedProvider} model={selectedModel} />
               {modelErrors[selectedProvider] && (
                 <button
                   type="button"
