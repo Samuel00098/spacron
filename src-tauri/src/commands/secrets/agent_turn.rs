@@ -133,20 +133,27 @@ pub fn ai_agent_capabilities(provider: String, model: String, base_url: Option<S
 /// and reasoning as the provider's list published it (`null` when it did not
 /// say — the frontend's built-in rules answer then). One call per list.
 #[tauri::command]
+// `async` so Tauri runs it off the main thread (a sync command blocks the UI
+// for as long as it runs); nothing in it waits on the network.
 pub async fn ai_models_capabilities(provider: String, models: Vec<String>, base_url: Option<String>) -> HashMap<String, Value> {
-    ensure_public_catalogue().await;
+    ensure_public_catalogue_soon();
     answer_models(&provider, models, base_url.as_deref())
 }
 
 fn answer_models(provider: &str, models: Vec<String>, base_url: Option<&str>) -> HashMap<String, Value> {
-    let meta = metadata().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // Both locks once for the whole list, not once per model.
+    let meta = metadata().lock().unwrap_or_else(|e| e.into_inner());
+    let refused = vision::images_refused().lock().unwrap_or_else(|e| e.into_inner());
     models
         .into_iter()
         .take(2000)
         .map(|m| {
-            let known = meta.get(&chat_shape_key(provider, base_url, &m));
+            let key = chat_shape_key(provider, base_url, &m);
+            let known = meta.get(&key);
+            let vision = !refused.contains(&key)
+                && vision::model_accepts_images(provider, &m, known.and_then(|k| k["images"].as_bool()));
             let caps = json!({
-                "vision": accepts_images(provider, base_url, &m),
+                "vision": vision,
                 // The provider's own list first; else what another catalogue
                 // says about the same model (icon only, see capabilities.rs).
                 "reasoning": known.and_then(|k| k["reasoning"].as_bool()).or_else(|| capabilities::reasoning_from_catalogues(&m)),
@@ -166,23 +173,46 @@ pub async fn ai_refresh_model_capabilities(provider: Option<String>) -> Vec<Stri
     capabilities::refresh(provider, true).await
 }
 
+/// Start loading OpenRouter's public catalogue if nothing is known yet, and
+/// return at once. Nobody waits on the network: the picker's icons and the
+/// chat's image decision answer from what is known now (saved answers, then
+/// name rules), and the icons redraw when the catalogue lands
+/// (`model-capabilities-updated`).
+fn ensure_public_catalogue_soon() {
+    if vision::catalogue_known() {
+        return;
+    }
+    tauri::async_runtime::spawn(async {
+        if ensure_public_catalogue().await {
+            capabilities::announce_all();
+        }
+    });
+}
+
 /// Load OpenRouter's public model catalogue once per session (no key needed):
 /// it publishes input modalities for hundreds of models that other providers
 /// serve under the same names without saying what they accept. Best-effort —
-/// offline, the name rules in `vision` answer instead.
-async fn ensure_public_catalogue() {
+/// offline, the name rules in `vision` answer instead. Returns whether it
+/// learned anything. Only the background refresh awaits this.
+async fn ensure_public_catalogue() -> bool {
     static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if vision::catalogue_known() || TRIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
+        return false;
     }
-    let Ok(client) = shared_http_client(Duration::from_secs(8)) else { return };
-    let Ok(response) = client.get(OPENROUTER_MODELS_URL).send().await else { return };
-    let Ok(payload) = response.json::<Value>().await else { return };
+    let Ok(client) = shared_http_client(Duration::from_secs(8)) else { return false };
+    let Ok(response) = client.get(OPENROUTER_MODELS_URL).send().await else { return false };
+    let Ok(payload) = response.json::<Value>().await else { return false };
+    let mut learned = false;
     for item in payload["data"].as_array().into_iter().flatten() {
         if let (Some(id), Some(accepts)) = (item["id"].as_str(), vision::catalogue_accepts_images(item)) {
             vision::learn(id, accepts);
+            learned = true;
+        }
+        if let (Some(id), Some(reasons)) = (item["id"].as_str(), capabilities::catalogue_reasoning(item)) {
+            capabilities::learn_reasoning(id, reasons);
         }
     }
+    learned
 }
 
 /// Whether requests to this model carry images: the catalogue's word or the
@@ -504,7 +534,7 @@ async fn send_turn(r: &AgentRequest, on_delta: OnDelta<'_>) -> Result<AgentRespo
     let mut wire = ReasoningWire::Native;
     let mut streaming = on_delta.is_some() && !stream_refused().lock().unwrap_or_else(|e| e.into_inner()).contains(&cache_key);
     let wants_images = !r.user_images.is_empty() || r.exchanges.last().is_some_and(|x| x.results.iter().any(|res| !res.images.is_empty()));
-    if wants_images { ensure_public_catalogue().await; }
+    if wants_images { ensure_public_catalogue_soon(); }
     let mut images_on = wants_images && accepts_images(&r.provider, base.as_deref(), &r.model);
     for attempt in 0..5u64 {
         let mut body = request_body(r, shape, wire, images_on)?;
@@ -578,7 +608,7 @@ async fn send_chatgpt_turn(r: &AgentRequest, on_delta: OnDelta<'_>) -> Result<Ag
     // latest round's screenshots, for a model that accepts them. Codex reads
     // the files itself, so only checked paths go out, not bytes.
     let key = chat_shape_key(&r.provider, None, &r.model);
-    ensure_public_catalogue().await;
+    ensure_public_catalogue_soon();
     let mut images: Vec<std::path::PathBuf> = Vec::new();
     if accepts_images(&r.provider, None, &r.model) {
         let latest = r.exchanges.last().map(|x| x.results.iter().flat_map(|res| res.images.iter()).collect::<Vec<_>>()).unwrap_or_default();
@@ -836,6 +866,23 @@ mod tests {
         for (model, caps) in &answers {
             assert_eq!(ai_agent_capabilities("openai".into(), model.clone(), None)["images"], caps["vision"], "{model}");
         }
+    }
+    #[test]
+    fn answering_a_big_list_is_fast() {
+        // Realistic sizes: ~1000 catalogue names, a 450-model provider list.
+        for i in 0..1000 { vision::learn(&format!("vendor/model-{i}"), i % 2 == 0); }
+        let models: Vec<String> = (0..450).map(|i| format!("other/model-{i}-variant")).collect();
+        // First use loads the saved capability file: a one-time cost, not
+        // what opening the picker costs.
+        let warm = std::time::Instant::now();
+        let _ = answer_models("openrouter", vec!["warm-up".into()], None);
+        println!("first use (loads saved file) took {:?}", warm.elapsed());
+        let started = std::time::Instant::now();
+        let answers = answer_models("openrouter", models, None);
+        let took = started.elapsed();
+        println!("answer_models(450) took {took:?}");
+        assert_eq!(answers.len(), 450);
+        assert!(took < std::time::Duration::from_millis(250), "{took:?}");
     }
     #[test]
     fn capabilities_always_answer_the_image_question() {

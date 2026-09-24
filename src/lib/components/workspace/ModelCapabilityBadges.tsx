@@ -51,12 +51,16 @@ export function forgetModelVision(provider?: string): void {
 function useCaps(provider: string, model: string, siblings?: string[]): ModelCaps | null {
   // Re-render when answers arrive or Rust's background refresh drops them.
   const version = useStore(modelCapabilitiesVersion);
+  const known = capsFor(provider, model);
   useEffect(() => {
+    // A row whose model is answered does no work at all: with 400+ rows, each
+    // re-checking the whole list on every update was the slow part.
+    if (known) return;
     void loadModelCaps(provider, siblings?.length ? siblings : [model], baseUrlFor(provider));
     // `siblings` is a batching hint only; its identity must not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, model, version]);
-  return capsFor(provider, model);
+  }, [provider, model, version, known]);
+  return known;
 }
 
 // --- icons ---------------------------------------------------------------------

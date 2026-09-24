@@ -8,11 +8,15 @@ import {
   type DesktopActivityEntry,
   type DesktopGrant,
 } from '$lib/stores/computerUse';
+import './SettingsDetailRows.css';
 
 /**
  * Settings → Agents → Computer use, below the switch: the apps agents may
- * never touch, the permissions currently granted (with Revoke), and what
+ * never touch, the permissions currently granted (with Withdraw), and what
  * agents recently did. Rendered only while computer use is on.
+ *
+ * Each part is a standard settings row (title and explanation on the left,
+ * the control on the right), so it lines up with the switch above it.
  *
  * Grants and activity live in Rust memory and change while this is open, so
  * they are polled every few seconds rather than read once.
@@ -21,13 +25,25 @@ const REFRESH_MS = 3000;
 const SHOWN_ACTIVITY = 20;
 
 const KIND_LABEL: Record<DesktopGrant['kind'], string> = {
-  window_list: 'can see the window list',
-  window: 'can see',
-  control: 'can control',
+  window_list: 'Can see the list of open windows',
+  window: 'Can see',
+  control: 'Can control',
 };
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function Row({ title, detail, children }: { title: string; detail: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="settings-control-row">
+      <div className="settings-control-copy">
+        <span>{title}</span>
+        <small>{detail}</small>
+      </div>
+      <div className="settings-control settings-detail-control">{children}</div>
+    </div>
+  );
 }
 
 export default function ComputerUseDetails() {
@@ -58,44 +74,47 @@ export default function ComputerUseDetails() {
     computerUseBlockedApps.set(apps);
   };
 
-  // One row per caller, listing what it holds, so Revoke is unambiguous.
+  // One entry per agent, listing what it holds, so Withdraw is unambiguous.
   const byCaller = new Map<string, DesktopGrant[]>();
   for (const g of grants) byCaller.set(g.caller, [...(byCaller.get(g.caller) ?? []), g]);
 
   return (
     <>
-      <div style={{ marginTop: '14px' }}>
-        <div className="agent-add-title">Never show these apps to agents</div>
-        <small className="shell-hint">
-          One program per line, e.g. <code>slack.exe</code>. Password managers, Windows security
-          prompts and Spacron itself are always hidden.
-        </small>
+      <Row
+        title="Hidden apps"
+        detail={
+          <>
+            Agents never see or control these programs. One per line, e.g. <code>slack.exe</code>. Password
+            managers, Windows security prompts and Spacron itself are always hidden.
+          </>
+        }
+      >
         <textarea
-          className="agent-input mcp-textarea"
+          className="agent-input"
           placeholder={'slack.exe\noutlook.exe'}
           value={blockedText}
           onChange={(e) => setBlockedText(e.target.value)}
           onBlur={saveBlocked}
           aria-label="Apps hidden from agents"
-          style={{ marginTop: '8px' }}
+          spellCheck={false}
         />
-      </div>
+      </Row>
 
-      <div style={{ marginTop: '14px' }}>
-        <div className="agent-add-title">Current permissions</div>
+      <Row
+        title="Current permissions"
+        detail="What each agent may see or control right now. Permissions end with the agent's session, or the chat's reply; withdraw one here at any time."
+      >
         {byCaller.size === 0 ? (
-          <small className="shell-hint">No agent has any permission right now.</small>
+          <span className="settings-detail-empty">No agent has any permission right now.</span>
         ) : (
-          <div className="agent-list">
+          <div className="settings-detail-list">
             {[...byCaller.entries()].map(([caller, list]) => (
-              <div className="agent-row" key={caller}>
-                <div className="agent-meta">
-                  <div className="agent-name-row">
-                    <span className="agent-name">{list[0].agent}</span>
-                  </div>
-                  <small className="shell-hint">
-                    {list.map((g) => `${KIND_LABEL[g.kind]} ${g.kind === 'window_list' ? '' : g.target}`.trim()).join(' · ')}
-                  </small>
+              <div className="settings-detail-item" key={caller}>
+                <div className="settings-detail-item-text">
+                  <span className="settings-detail-item-title">{list[0].agent}</span>
+                  <span className="settings-detail-item-sub">
+                    {list.map((g) => (g.kind === 'window_list' ? KIND_LABEL[g.kind] : `${KIND_LABEL[g.kind]} ${g.target}`)).join(' · ')}
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -110,37 +129,41 @@ export default function ComputerUseDetails() {
             ))}
           </div>
         )}
-      </div>
+      </Row>
 
-      <div style={{ marginTop: '14px' }}>
-        <div className="agent-add-title">Recent actions</div>
+      <Row
+        title="Recent actions"
+        detail={
+          logPath ? (
+            <>
+              The last {SHOWN_ACTIVITY} clicks, keys and typing. Typed text is logged by length only. Full log:{' '}
+              <code>{logPath}</code>
+            </>
+          ) : (
+            `The last ${SHOWN_ACTIVITY} clicks, keys and typing. Typed text is logged by length only.`
+          )
+        }
+      >
         {activity.length === 0 ? (
-          <small className="shell-hint">No agent has clicked or typed anything yet.</small>
+          <span className="settings-detail-empty">No agent has clicked or typed anything yet.</span>
         ) : (
-          <div className="agent-list">
+          <div className="settings-detail-list">
             {activity.map((a, i) => (
-              <div className="agent-row" key={`${a.atMs}-${i}`}>
-                <div className="agent-meta">
-                  <div className="agent-name-row">
-                    <span className="agent-name">
-                      {a.ok ? '' : '✕ '}
-                      {a.agent} · {a.window}
-                    </span>
-                  </div>
-                  <small className="shell-hint">
+              <div className={`settings-detail-item${a.ok ? '' : ' is-refused'}`} key={`${a.atMs}-${i}`}>
+                <div className="settings-detail-item-text">
+                  <span className="settings-detail-item-title">
+                    {a.ok ? '' : 'Refused · '}
+                    {a.agent} · {a.window}
+                  </span>
+                  <span className="settings-detail-item-sub">
                     {formatTime(a.atMs)} · {a.detail}
-                  </small>
+                  </span>
                 </div>
               </div>
             ))}
           </div>
         )}
-        {logPath ? (
-          <small className="shell-hint" style={{ display: 'block', marginTop: '8px' }}>
-            Full log: <code>{logPath}</code>
-          </small>
-        ) : null}
-      </div>
+      </Row>
     </>
   );
 }

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { refreshBrowserToolsStatus, PLAYWRIGHT_MCP_VERSION } from '$lib/stores/mcpBridge';
+import './SettingsDetailRows.css';
 
 /**
  * Settings → Agents → Browser, below the switch (docs/agent-browser.md):
@@ -36,6 +37,7 @@ export default function BrowserToolsDetails() {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<'install' | 'check' | 'sign-in' | null>(null);
   const [message, setMessage] = useState<string>('');
+  const [messageFor, setMessageFor] = useState<'tools' | 'signin'>('tools');
   const [signedIn, setSignedIn] = useState(false);
   const [startUrl, setStartUrl] = useState('');
 
@@ -63,6 +65,7 @@ export default function BrowserToolsDetails() {
 
   const install = async () => {
     setBusy('install');
+    setMessageFor('tools');
     setMessage('Installing… this downloads the browser tools once (about 20 seconds).');
     try {
       await invoke('browser_tools_install');
@@ -78,6 +81,7 @@ export default function BrowserToolsDetails() {
 
   const check = async () => {
     setBusy('check');
+    setMessageFor('tools');
     setMessage('Starting the browser server the way an agent would…');
     try {
       const r = await invoke<Check>('browser_tools_check');
@@ -96,6 +100,7 @@ export default function BrowserToolsDetails() {
   const signIn = async () => {
     if (!root) return;
     setBusy('sign-in');
+    setMessageFor('signin');
     setMessage('A browser window opened. Sign in to what this project\'s agents need, then close the window.');
     try {
       const url = startUrl.trim();
@@ -111,6 +116,7 @@ export default function BrowserToolsDetails() {
 
   const forget = async () => {
     if (!root) return;
+    setMessageFor('signin');
     try {
       await invoke('browser_forget_sign_in', { projectRoot: root });
       setMessage('Forgotten. Agents launched from now on start signed out.');
@@ -122,68 +128,82 @@ export default function BrowserToolsDetails() {
 
   const installed = !!status?.cliPath;
 
-  return (
-    <div style={{ marginTop: '14px' }}>
-      <div className="agent-list">
-        <div className="agent-row">
-          <div className="agent-meta">
-            <div className="agent-name-row">
-              <span className="agent-name">Playwright MCP {PLAYWRIGHT_MCP_VERSION}</span>
-            </div>
-            <small className="shell-hint">
-              {installed
-                ? 'Installed. Agent browsers start in about 2 seconds.'
-                : status?.installedVersion
-                  ? `Version ${status.installedVersion} is installed; Spacron now uses ${PLAYWRIGHT_MCP_VERSION}. Reinstall to update.`
-                  : 'Not installed: agents download it through npx each time, which is much slower. Needs Node.js.'}
-            </small>
-          </div>
-          <button type="button" className="bg-btn" disabled={busy !== null} onClick={() => void install()}>
-            {installed ? 'Reinstall' : 'Install'}
-          </button>
-          <button type="button" className="bg-btn" disabled={busy !== null} onClick={() => void check()}>
-            Test
-          </button>
-        </div>
+  const tone = (text: string) =>
+    /^(Not working|Install failed|Sign-in failed|Could not)/.test(text) ? ' is-error' : /^(Working|Installed|Saved|Forgotten)/.test(text) ? ' is-ok' : '';
+  const status_ = (row: 'tools' | 'signin') =>
+    message && messageFor === row ? (
+      <span className={`settings-detail-status${tone(message)}`} role="status">
+        {message}
+      </span>
+    ) : null;
 
-        <div className="agent-row">
-          <div className="agent-meta">
-            <div className="agent-name-row">
-              <span className="agent-name">Sign-in for {project?.name ?? 'this project'}</span>
-            </div>
-            <small className="shell-hint">
-              {!root
-                ? 'Open a project to give its agents a signed-in browser.'
-                : signedIn
-                  ? "Saved. This project's agents start signed in; each still gets its own browser. Codex and droid use a global config and always start signed out."
-                  : 'Agents start with a clean, signed-out browser. Sign in once here to change that. The saved cookies stay on this computer, outside the project.'}
-            </small>
-            {root && installed ? (
-              <input
-                className="agent-input"
-                style={{ marginTop: '8px' }}
-                placeholder="Start page (optional), e.g. https://staging.example.com/login"
-                value={startUrl}
-                onChange={(e) => setStartUrl(e.target.value)}
-                aria-label="Sign-in start page"
-              />
-            ) : null}
-          </div>
-          <button type="button" className="bg-btn" disabled={!root || !installed || busy !== null} onClick={() => void signIn()} title={installed ? '' : 'Install the browser tools first'}>
-            {signedIn ? 'Sign in again' : 'Sign in'}
-          </button>
-          {signedIn ? (
-            <button type="button" className="bg-btn bg-btn-danger" disabled={busy !== null} onClick={() => void forget()}>
-              Forget
+  return (
+    <>
+      <div className="settings-control-row">
+        <div className="settings-control-copy">
+          <span>Playwright MCP {PLAYWRIGHT_MCP_VERSION}</span>
+          <small>
+            {installed
+              ? 'Installed. Agent browsers start in about 2 seconds.'
+              : status?.installedVersion
+                ? `Version ${status.installedVersion} is installed; Spacron now uses ${PLAYWRIGHT_MCP_VERSION}. Reinstall to update.`
+                : 'Not installed: agents download it through npx each time, which is much slower. Needs Node.js.'}
+          </small>
+        </div>
+        <div className="settings-control settings-detail-control">
+          <div className="settings-detail-actions">
+            <button type="button" className="bg-btn" disabled={busy !== null} onClick={() => void install()}>
+              {busy === 'install' ? 'Installing…' : installed ? 'Reinstall' : 'Install'}
             </button>
-          ) : null}
+            <button type="button" className="bg-btn" disabled={busy !== null} onClick={() => void check()}>
+              {busy === 'check' ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {status_('tools')}
         </div>
       </div>
-      {message ? (
-        <small className="shell-hint" style={{ display: 'block', marginTop: '8px' }} role="status">
-          {message}
-        </small>
-      ) : null}
-    </div>
+
+      <div className="settings-control-row">
+        <div className="settings-control-copy">
+          <span>Sign-in for {project?.name ?? 'this project'}</span>
+          <small>
+            {!root
+              ? 'Open a project to give its agents a signed-in browser.'
+              : signedIn
+                ? "Saved. This project's agents start signed in; each still gets its own browser. Codex and droid use a global config and always start signed out."
+                : 'Agents start with a clean, signed-out browser. Sign in once to change that; the saved cookies stay on this computer, outside the project.'}
+          </small>
+        </div>
+        <div className="settings-control settings-detail-control">
+          {root && installed ? (
+            <input
+              className="agent-input"
+              placeholder="Start page (optional), e.g. https://staging.example.com/login"
+              value={startUrl}
+              onChange={(e) => setStartUrl(e.target.value)}
+              aria-label="Sign-in start page"
+            />
+          ) : null}
+          <div className="settings-detail-actions">
+            <button
+              type="button"
+              className="bg-btn"
+              disabled={!root || !installed || busy !== null}
+              onClick={() => void signIn()}
+              title={installed ? '' : 'Install the browser tools first'}
+            >
+              {busy === 'sign-in' ? 'Waiting for the browser…' : signedIn ? 'Sign in again' : 'Sign in'}
+            </button>
+            {signedIn ? (
+              <button type="button" className="bg-btn bg-btn-danger" disabled={busy !== null} onClick={() => void forget()}>
+                Forget
+              </button>
+            ) : null}
+          </div>
+          {!installed && root ? <span className="settings-detail-note">Install the browser tools first.</span> : null}
+          {status_('signin')}
+        </div>
+      </div>
+    </>
   );
 }

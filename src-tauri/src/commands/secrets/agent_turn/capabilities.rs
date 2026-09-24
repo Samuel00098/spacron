@@ -196,6 +196,14 @@ pub fn start(handle: AppHandle) {
     });
 }
 
+/// Tell the frontend every provider's answers may have changed (the public
+/// catalogue arrived): it drops its cache and asks again.
+pub(super) fn announce_all() {
+    if let Some(handle) = app().get() {
+        let _ = handle.emit(UPDATED_EVENT, json!({}));
+    }
+}
+
 /// A key was just saved: learn that provider's models now.
 pub fn refresh_soon(provider: &str) {
     if app().get().is_none() {
@@ -211,7 +219,9 @@ pub fn refresh_soon(provider: &str) {
 /// any fetched within a day unless `force`. Listing models costs nothing; no
 /// model is called.
 pub(super) async fn refresh(only: Option<String>, force: bool) -> Vec<String> {
-    super::ensure_public_catalogue().await;
+    if super::ensure_public_catalogue().await {
+        announce_all();
+    }
     let mut done = Vec::new();
     for provider in super::super::KNOWN_PROVIDERS {
         if only.as_deref().is_some_and(|p| p != *provider) {

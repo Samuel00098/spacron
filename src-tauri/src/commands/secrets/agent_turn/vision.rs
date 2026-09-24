@@ -84,10 +84,19 @@ pub(super) fn from_catalogues(model: &str) -> Option<bool> {
     if let Some(v) = map.get(&name) {
         return Some(*v);
     }
-    map.iter()
-        .filter(|(known, _)| known.len() >= 4 && name.len() > known.len() && name.starts_with(known.as_str()) && name.as_bytes()[known.len()] == b'-')
-        .max_by_key(|(known, _)| known.len())
-        .map(|(_, v)| *v)
+    // Longest published prefix at a dash boundary: a handful of map lookups
+    // (one per dash, longest first) rather than a scan of every known name.
+    let mut end = name.len();
+    while let Some(dash) = name[..end].rfind('-') {
+        if dash < 4 {
+            break;
+        }
+        if let Some(v) = map.get(&name[..dash]) {
+            return Some(*v);
+        }
+        end = dash;
+    }
+    None
 }
 
 /// Whether a model accepts image input. `catalogue` is what the provider's
