@@ -58,6 +58,8 @@ import {
   type WorktreeInfo,
 } from '$lib/services/orchestrator/worktree-manager';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
+import { isAgentTurnInFlight } from '$lib/services/keep-awake';
+import { agentTurnStates, type AgentTurnPhase } from '$lib/stores/agentTurnState';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
@@ -73,7 +75,8 @@ import './FleetDashboard.css';
 /** How often the per-card diff stat is refreshed. Three cheap git reads each. */
 const POLL_MS = 5000;
 
-type FleetStatus = 'working' | 'awaiting' | 'finished' | 'failed' | 'exited';
+type FleetStatus = 'working' | 'idle' | 'awaiting' | 'finished' | 'failed' | 'exited';
+
 
 /** Where the agent is doing its work — decides which actions the card offers. */
 type FleetPlacement = 'worktree' | 'main';
@@ -136,6 +139,7 @@ function statKey(row: Pick<FleetRow, 'repoPath' | 'baseCommit'>): string {
 
 const STATUS_LABEL: Record<FleetStatus, string> = {
   working: 'Working',
+  idle: 'Idle',
   awaiting: 'Awaiting input',
   finished: 'Finished',
   failed: 'Failed',
@@ -143,22 +147,60 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
 };
 
 /**
- * Derive a card's status.
+ * Derive a card's status from the same events the agent notifications fire on
+ * (`stores/agentTurnState.ts`): a prompt handed over starts a turn, and the
+ * turn watcher's end (the done / needs-input card) closes it.
  *
- * Reads the orchestrator task where there is one — its `blocked`/`complete`
- * states come from the turn watcher, which since §0b is driven by a sentinel
- * the agent emits rather than a guess about its screen. A dashboard fed by
- * screen-scraped turn state would be presenting a guess as a fact, which is
- * why this item was sequenced after that one.
+ * - Working: it was handed a prompt and has not ended that turn yet, or the
+ *   orchestrator is running a task it dispatched (`leasedTurn`).
+ * - Idle: open, and nothing has been asked of it. An agent that was only
+ *   launched is idle however much its startup screen prints.
+ * - Finished / Awaiting input / Failed: how its last turn ended.
+ *
+ * A question outranks everything: an agent asking for input is not working.
  */
-function statusFor(task: OrchestratorTask | null, live: boolean): FleetStatus {
-  if (task) {
-    if (task.status === 'blocked') return 'awaiting';
-    if (task.status === 'complete') return 'finished';
-    if (task.status === 'failed' || task.status === 'cancelled') return 'failed';
-    if (task.status === 'in-progress') return live ? 'working' : 'exited';
+export function statusFor(
+  task: OrchestratorTask | null,
+  live: boolean,
+  turn: AgentTurnPhase | undefined,
+  leasedTurn: boolean,
+): FleetStatus {
+  if (!live) {
+    if (task?.status === 'complete') return 'finished';
+    if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
+    return 'exited';
   }
-  return live ? 'working' : 'exited';
+  if (task?.status === 'blocked' || turn === 'blocked') return 'awaiting';
+  if (turn === 'working' || leasedTurn) return 'working';
+  if (turn === 'finished') return 'finished';
+  if (turn === 'failed') return 'failed';
+  if (task?.status === 'complete') return 'finished';
+  if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
+  return 'idle';
+}
+
+/** A row as rendered: its live status and when its working stretch began. */
+type DisplayRow = FleetRow & { workingSince: number | null };
+
+/** Card order: working agents lead, then what needs you, what's done last. */
+const STATUS_ORDER: Record<FleetStatus, number> = {
+  working: 0,
+  awaiting: 1,
+  failed: 2,
+  finished: 3,
+  idle: 4,
+  exited: 5,
+};
+
+/** "42s", "3m 05s", "1h 12m". */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
 }
 
 function FleetEmpty({ title, children }: { title: string; children: React.ReactNode }) {
@@ -248,7 +290,7 @@ export default function FleetDashboard() {
         live,
         sessionId: session.id,
         task,
-        status: statusFor(task, live),
+        status: statusFor(task, live, undefined, false),
       });
     }
 
@@ -279,7 +321,7 @@ export default function FleetDashboard() {
         live,
         sessionId,
         task,
-        status: statusFor(task, live),
+        status: statusFor(task, live, undefined, false),
       });
     }
 
@@ -370,6 +412,41 @@ export default function FleetDashboard() {
   useLayoutEffect(() => {
     setSuppressEnter(false);
   }, []);
+
+  const turnStates = useStore(agentTurnStates);
+
+  const display = useMemo<DisplayRow[]>(
+    () =>
+      rows.map((row) => {
+        const turn = row.sessionId !== null ? turnStates[row.sessionId] : undefined;
+        // An orchestrator-dispatched task is working for as long as its watcher
+        // is armed. Adopted (hand-launched) agents are excluded: their watcher
+        // re-arms the moment a turn ends, so "armed" says nothing for them.
+        const leasedTurn =
+          row.sessionId !== null &&
+          row.task?.status === 'in-progress' &&
+          !row.task.adopted &&
+          isAgentTurnInFlight(row.sessionId);
+        const status = statusFor(row.task, row.live, turn?.phase, leasedTurn);
+        const workingSince = status === 'working' ? turn?.since ?? null : null;
+        return { ...row, status, workingSince };
+      }),
+    [rows, turnStates],
+  );
+
+  // A 1 s clock only while something is working: it drives the "for 2m 10s"
+  // timers and stops the moment the fleet goes quiet.
+  const anyWorking = display.some((row) => row.status === 'working');
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!anyWorking) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [anyWorking]);
+
+  /** The working strip under the header: collapsed to one line by default. */
+  const [stripOpen, setStripOpen] = useState(false);
 
   // Main-repo cards name the branch the agent is actually sitting on, which is
   // the checkout's — and it moves under them if you check something else out.
@@ -526,9 +603,19 @@ export default function FleetDashboard() {
     );
   }
 
-  const isolatedCount = rows.filter((row) => row.placement === 'worktree').length;
-  const workingCount = rows.filter((row) => row.status === 'working').length;
-  const awaitingCount = rows.filter((row) => row.status === 'awaiting').length;
+  const isolatedCount = display.filter((row) => row.placement === 'worktree').length;
+  const ordered = [...display].sort(
+    (a, b) =>
+      STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+      (a.status === 'working' ? (a.workingSince ?? 0) - (b.workingSince ?? 0) : 0) ||
+      a.agentName.localeCompare(b.agentName),
+  );
+  const working = ordered.filter((row) => row.status === 'working');
+  const awaitingCount = display.filter((row) => row.status === 'awaiting').length;
+  const idleCount = display.filter((row) => row.status === 'idle').length;
+  const readyCount = display.filter(readyToReview).length;
+  // Open only while there is something to list; it reopens with the next turn.
+  const stripExpanded = stripOpen && working.length > 0;
 
   /**
    * A worktree card whose agent has stopped and left unreviewed work is the
@@ -536,7 +623,7 @@ export default function FleetDashboard() {
    * at once. `!row.live` is the honest gate — a working agent's card is
    * mid-flight, not ready, however many files it has touched so far.
    */
-  function readyToReview(row: FleetRow): boolean {
+  function readyToReview(row: DisplayRow): boolean {
     return (
       row.placement === 'worktree' &&
       Boolean(row.worktree) &&
@@ -545,6 +632,350 @@ export default function FleetDashboard() {
       Boolean(stats[statKey(row)]?.files.length)
     );
   }
+
+  const renderCard = (row: DisplayRow) => {
+      const key = statKey(row);
+      const stat = stats[key];
+      const isBusy = busy.has(row.key);
+      const isExpanded = expanded === row.key;
+      const pendingConfirm = confirming?.key === row.key ? confirming.action : null;
+      const worktree = row.worktree;
+
+      // An isolated agent owns its whole worktree diff, so the reading IS
+      // its work. A main-repo agent shares the checkout with you and with
+      // every other main-repo agent, so it is credited only with the files
+      // that moved while it was the one producing output.
+      const allFiles = stat?.files ?? [];
+      const files =
+        row.placement === 'worktree' ? allFiles : filesOwnedBy(key, row.sessionId, allFiles);
+      const othersCount = row.placement === 'worktree' ? 0 : allFiles.length - files.length;
+      const additions =
+        row.placement === 'worktree'
+          ? stat?.total_additions ?? 0
+          : files.reduce((sum, file) => sum + file.additions, 0);
+      const deletions =
+        row.placement === 'worktree'
+          ? stat?.total_deletions ?? 0
+          : files.reduce((sum, file) => sum + file.deletions, 0);
+      const hasFiles = files.length > 0;
+
+      const ready = readyToReview(row);
+
+      return (
+        <article
+          className={`fleet-card status-${row.status} placement-${row.placement}${ready ? ' ready' : ''}`}
+          key={row.key}
+        >
+          {/* Identity and state in one two-line grid: the mark spans both
+              rows, name/status on top, branch/diffstat beneath. The mark
+              sits in a fixed tile because AgentBrandMark draws at 100% of
+              whatever contains it — an unsized parent lets a fetched
+              favicon render at its own intrinsic size. */}
+          <header className="fc-head">
+            <span className="fc-brand-tile">
+              <AgentBrandMark
+                command={row.agentPreset}
+                name={row.agentName}
+                className="fc-brand"
+              />
+            </span>
+            <span className="fc-name" title={row.task?.goal ?? row.agentName}>
+              {row.agentName}
+            </span>
+            <span className={`fc-status fc-status-${row.status}`}>
+              <i className="fc-status-dot" aria-hidden="true" />
+              {STATUS_LABEL[row.status]}
+            </span>
+            {worktree ? (
+              <span
+                className="fc-branch"
+                title={`Isolated worktree\n${worktree.branch}\nForked from ${worktree.baseBranch}\n${worktree.path}`}
+              >
+                {worktree.branch}
+              </span>
+            ) : (
+              /* Named for what it is. Without this the card would show a
+                 branch name identical to the user's own and read as if the
+                 agent had somewhere of its own to merge back from. */
+              <span
+                className="fc-branch"
+                title={`Running in the project root, with no worktree isolation.\nIts edits go straight into your checkout${mainBranch ? ` on ${mainBranch}` : ''}.`}
+              >
+                <span className="fc-placement">main repo</span>
+                {mainBranch && <span className="fc-branch-name">{mainBranch}</span>}
+              </span>
+            )}
+            {stat ? (
+              <span
+                className="fc-stat"
+                title={
+                  row.placement === 'worktree'
+                    ? 'Everything this agent changed in its own worktree'
+                    : 'Files that changed while this agent was the one working'
+                }
+              >
+                <span className="fc-add">+{additions}</span>
+                <span className="fc-del">&minus;{deletions}</span>
+              </span>
+            ) : (
+              <span className="fc-stat fc-stat-loading">…</span>
+            )}
+          </header>
+
+          {worktree?.stageConflict && (
+            <div className="fc-warning">
+              Staging is paused. This worktree conflicts with edits already in
+              your working tree. Resolve them in Source Control, then stage again.
+            </div>
+          )}
+
+          {/* The reason a quarantine exists: an agent that finished, work that
+              hasn't been reviewed. Read as a cue to look, not an alarm — the
+              card's diff is one click away, and merging or discarding is the
+              resolution. */}
+          {ready && (
+            <div className="fc-ready">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>
+                Ready to review: {files.length} file{files.length === 1 ? '' : 's'}, isolated on{' '}
+                <code>{worktree?.branch}</code>
+              </span>
+            </div>
+          )}
+
+          <button
+            className="fc-files-toggle"
+            onClick={() => {
+              setExpanded((current) => (current === row.key ? null : row.key));
+              setOpenFileKey(null);
+            }}
+            aria-expanded={isExpanded}
+            disabled={!hasFiles}
+          >
+            <svg
+              className={`fc-caret${isExpanded ? ' expanded' : ''}`}
+              width="9" height="9" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+            {!stat
+              ? 'Reading changes…'
+              : files.length === 0
+                ? 'No changes yet'
+                : `${files.length} changed file${files.length === 1 ? '' : 's'}`}
+          </button>
+
+          {isExpanded && stat && row.placement === 'main' && (
+            /* The rest of the checkout is deliberately not hidden in
+               silence. This agent shares the tree with you and with every
+               other main-repo agent, so "not attributed to it" covers your
+               own edits, another agent's, and anything that was already
+               changed before the panel started watching. */
+            <div className="fc-note">
+              {othersCount > 0
+                ? `Files that changed while this agent was working. ${othersCount} other changed
+                   file${othersCount === 1 ? '' : 's'} in your checkout ${othersCount === 1 ? 'is' : 'are'}
+                   not attributed to it.`
+                : 'Files that changed while this agent was working, out of everything uncommitted in your checkout.'}
+            </div>
+          )}
+
+          {isExpanded && stat && (
+            <div className="fc-files">
+              {files.map((file) => {
+                const fileKey = `${row.key}::${file.path}`;
+                const fileOpen = openFileKey === fileKey;
+                return (
+                  <div className="fc-file" key={file.path}>
+                    <button
+                      className="fc-file-row"
+                      onClick={() => setOpenFileKey(fileOpen ? null : fileKey)}
+                      title={`${fileOpen ? 'Hide' : 'Show'} diff for ${file.path}`}
+                    >
+                      <FileIcon name={file.path.split('/').pop() || ''} isDir={false} />
+                      <span className="fc-file-path">{file.path}</span>
+                      {row.placement === 'main' && isSharedFile(key, file.path) && (
+                        /* Two agents were producing output over the interval
+                           this file moved in, so which of them wrote it is
+                           not something the evidence can settle. Say so
+                           rather than letting one card claim it. */
+                        <span
+                          className="fc-file-shared"
+                          title="Another agent was also working when this file changed"
+                        >
+                          shared
+                        </span>
+                      )}
+                      <span className={`fc-file-badge ${file.status}`}>
+                        {file.status.charAt(0).toUpperCase()}
+                      </span>
+                      <span className="fc-file-stat">
+                        <span className="fc-add">+{file.additions}</span>
+                        <span className="fc-del">&minus;{file.deletions}</span>
+                      </span>
+                    </button>
+                    {fileOpen && (
+                      <div className="fc-file-diff">
+                        {/* Pointed at the agent's own repo, measured against
+                            the base the stat above used — `stat.base_commit`
+                            rather than `row.baseCommit`, because a main-repo
+                            row asks for HEAD without knowing its sha and the
+                            two views must agree. This is the §7 dependency:
+                            the diff viewer takes a repo path instead of
+                            assuming the active project. Read-only — merge and
+                            discard are the actions here, not partial staging
+                            of finished work belonging to someone else. */}
+                        <HunkDiffView
+                          projectId={row.projectId}
+                          repoPath={row.repoPath}
+                          filePath={file.path}
+                          side="unstaged"
+                          baseRef={stat.base_commit}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {pendingConfirm && worktree ? (
+            <div className="fc-confirm">
+              <span className="fc-confirm-text">
+                {pendingConfirm === 'merge' ? (
+                  <>
+                    Merge <strong>{worktree.branch}</strong> into{' '}
+                    <strong>{worktree.baseBranch}</strong>?
+                  </>
+                ) : (
+                  <>
+                    Delete the worktree and branch <strong>{worktree.branch}</strong>?
+                    Anything not yet in your working tree is staged first.
+                  </>
+                )}
+              </span>
+              <div className="fc-confirm-actions">
+                <button
+                  className={`fc-btn ${pendingConfirm === 'discard' ? 'danger' : 'primary'}`}
+                  onClick={() =>
+                    pendingConfirm === 'merge' ? doMerge(row) : doDiscard(row)
+                  }
+                  disabled={isBusy}
+                >
+                  {pendingConfirm === 'merge' ? 'Merge' : 'Discard'}
+                </button>
+                <button className="fc-btn" onClick={() => setConfirming(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Split into two groups so the row can't wrap into an
+               undifferentiated block of four equal buttons: the actions
+               that move work lead, navigation and destruction sit apart
+               and quiet.
+
+               A main-repo card carries only the right-hand group. Bring in,
+               Merge and Discard all name a branch this agent does not have:
+               its edits are already in your tree, so there is nothing to
+               copy across and nothing that could be thrown away without
+               throwing away your own work with it. Showing them greyed out
+               would just be four dead controls on every such card. */
+            <div className="fc-actions">
+              {worktree && (
+                <div className="fc-actions-main">
+                  <button
+                    className="fc-btn"
+                    onClick={() => doStage(row)}
+                    disabled={isBusy}
+                    title="Apply this agent's changes to your main checkout for local testing. Your main branch is not committed or pushed, and running agents keep their worktrees. Closed, fully brought-in worktrees are cleaned up automatically."
+                  >
+                    Bring in
+                  </button>
+                  <button
+                    className="fc-btn primary"
+                    onClick={() => setConfirming({ key: row.key, action: 'merge' })}
+                    disabled={isBusy}
+                    title={`Create a local merge commit from ${worktree.branch} in the main checkout. Nothing is pushed.`}
+                  >
+                    Merge into{' '}
+                    {/* The base branch is arbitrary-length; clamp it here so a
+                        long name can't blow the button out of the row. */}
+                    <span className="fc-btn-branch">{worktree.baseBranch}</span>
+                  </button>
+                </div>
+              )}
+              <div className="fc-actions-aside">
+                {/* The dedicated review pane — the Orca-style gate. Reading
+                    one file at a time inline (See changes) is fine for a
+                    glance; this is the focused surface for actually
+                    judging a finished worktree before merging it. */}
+                {worktree && hasFiles && (
+                  <button
+                    className="fc-btn review"
+                    onClick={() => setReviewing(row.key)}
+                    disabled={isBusy}
+                    title={`Open the full review of ${worktree.branch} against ${worktree.baseBranch}`}
+                  >
+                    Review
+                  </button>
+                )}
+                {/* Reading the work is the one thing every card can offer,
+                    whatever the placement. It drives the same disclosure as
+                    the file-count row above so there is one expanded state,
+                    not two that can disagree. */}
+                <button
+                  className="fc-btn quiet"
+                  onClick={() => {
+                    setExpanded((current) => (current === row.key ? null : row.key));
+                    setOpenFileKey(null);
+                  }}
+                  aria-expanded={isExpanded}
+                  disabled={!hasFiles}
+                  title={
+                    hasFiles
+                      ? `${isExpanded ? 'Hide' : 'Show'} the files this agent changed`
+                      : 'Nothing has changed yet'
+                  }
+                >
+                  {isExpanded ? 'Hide changes' : 'See changes'}
+                </button>
+                {row.sessionId !== null && (
+                  <button
+                    className="fc-btn quiet"
+                    onClick={() => setActiveSession(row.sessionId!)}
+                    title="Focus this agent's terminal"
+                  >
+                    Terminal
+                  </button>
+                )}
+                {worktree && (
+                  <button
+                    className="fc-btn quiet danger"
+                    onClick={() => setConfirming({ key: row.key, action: 'discard' })}
+                    // Refusing while the pane is live is the safety rule, not a
+                    // convenience: killing an agent mid-write and deleting its
+                    // checkout cannot be undone.
+                    disabled={isBusy || row.live}
+                    title={
+                      row.live
+                        ? 'Close this agent first. Discarding a worktree while it is still writing is unrecoverable.'
+                        : `Delete the worktree and branch ${worktree.branch}`
+                    }
+                  >
+                    Discard
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </article>
+      );
+  };
 
   return (
     <div className="fleet-root">
@@ -566,376 +997,60 @@ export default function FleetDashboard() {
         </span>
       </header>
 
-      {/* The fleet's state at a glance, before reading any card. Only states
-          that exist are shown, so a quiet fleet gets a quiet strip. */}
-      {(workingCount > 0 || awaitingCount > 0 || rows.some(readyToReview)) && (
-        <div className="fleet-summary">
-          {workingCount > 0 && (
-            <span className="fleet-chip fleet-chip-working">
-              <i aria-hidden="true" />
-              {workingCount} working
-            </span>
-          )}
+      {/* The fleet's state in one slim line. Working leads; clicking it opens
+          the list of who is working, on what, and for how long. */}
+      <div className={`fleet-strip${working.length > 0 ? ' is-active' : ''}${stripExpanded ? ' open' : ''}`}>
+        <button
+          type="button"
+          className="fleet-strip-bar"
+          onClick={() => setStripOpen((open) => !open)}
+          aria-expanded={stripExpanded}
+          disabled={working.length === 0}
+          title={working.length > 0 ? `${stripExpanded ? 'Hide' : 'Show'} the working agents` : 'No agent is working'}
+        >
+          <span className="fleet-strip-dot" aria-hidden="true" />
+          <span className="fleet-strip-working">
+            {working.length > 0 ? `${working.length} working` : 'None working'}
+          </span>
           {awaitingCount > 0 && (
-            <span className="fleet-chip fleet-chip-awaiting">
-              <i aria-hidden="true" />
-              {awaitingCount} need{awaitingCount === 1 ? 's' : ''} input
-            </span>
+            <span className="fleet-chip fleet-chip-awaiting">{awaitingCount} need{awaitingCount === 1 ? 's' : ''} input</span>
           )}
-          {rows.some(readyToReview) && (
-            <span className="fleet-chip fleet-chip-ready">
-              <i aria-hidden="true" />
-              {rows.filter(readyToReview).length} ready to review
-            </span>
+          {readyCount > 0 && <span className="fleet-chip fleet-chip-ready">{readyCount} ready</span>}
+          {idleCount > 0 && <span className="fleet-chip fleet-chip-idle">{idleCount} idle</span>}
+          {working.length > 0 && (
+            <svg className="fleet-strip-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
           )}
-        </div>
-      )}
-
-      <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>
-        {rows.map((row) => {
-          const key = statKey(row);
-          const stat = stats[key];
-          const isBusy = busy.has(row.key);
-          const isExpanded = expanded === row.key;
-          const pendingConfirm = confirming?.key === row.key ? confirming.action : null;
-          const worktree = row.worktree;
-
-          // An isolated agent owns its whole worktree diff, so the reading IS
-          // its work. A main-repo agent shares the checkout with you and with
-          // every other main-repo agent, so it is credited only with the files
-          // that moved while it was the one producing output.
-          const allFiles = stat?.files ?? [];
-          const files =
-            row.placement === 'worktree' ? allFiles : filesOwnedBy(key, row.sessionId, allFiles);
-          const othersCount = row.placement === 'worktree' ? 0 : allFiles.length - files.length;
-          const additions =
-            row.placement === 'worktree'
-              ? stat?.total_additions ?? 0
-              : files.reduce((sum, file) => sum + file.additions, 0);
-          const deletions =
-            row.placement === 'worktree'
-              ? stat?.total_deletions ?? 0
-              : files.reduce((sum, file) => sum + file.deletions, 0);
-          const hasFiles = files.length > 0;
-
-          const ready = readyToReview(row);
-
-          return (
-            <article
-              className={`fleet-card status-${row.status} placement-${row.placement}${ready ? ' ready' : ''}`}
-              key={row.key}
-            >
-              {/* Identity and state in one two-line grid: the mark spans both
-                  rows, name/status on top, branch/diffstat beneath. The mark
-                  sits in a fixed tile because AgentBrandMark draws at 100% of
-                  whatever contains it — an unsized parent lets a fetched
-                  favicon render at its own intrinsic size. */}
-              <header className="fc-head">
-                <span className="fc-brand-tile">
-                  <AgentBrandMark
-                    command={row.agentPreset}
-                    name={row.agentName}
-                    className="fc-brand"
-                  />
-                </span>
-                <span className="fc-name" title={row.task?.goal ?? row.agentName}>
-                  {row.agentName}
-                </span>
-                <span className={`fc-status fc-status-${row.status}`}>
-                  <i className="fc-status-dot" aria-hidden="true" />
-                  {STATUS_LABEL[row.status]}
-                </span>
-                {worktree ? (
-                  <span
-                    className="fc-branch"
-                    title={`Isolated worktree\n${worktree.branch}\nForked from ${worktree.baseBranch}\n${worktree.path}`}
-                  >
-                    {worktree.branch}
-                  </span>
-                ) : (
-                  /* Named for what it is. Without this the card would show a
-                     branch name identical to the user's own and read as if the
-                     agent had somewhere of its own to merge back from. */
-                  <span
-                    className="fc-branch"
-                    title={`Running in the project root, with no worktree isolation.\nIts edits go straight into your checkout${mainBranch ? ` on ${mainBranch}` : ''}.`}
-                  >
-                    <span className="fc-placement">main repo</span>
-                    {mainBranch && <span className="fc-branch-name">{mainBranch}</span>}
-                  </span>
-                )}
-                {stat ? (
-                  <span
-                    className="fc-stat"
-                    title={
-                      row.placement === 'worktree'
-                        ? 'Everything this agent changed in its own worktree'
-                        : 'Files that changed while this agent was the one working'
-                    }
-                  >
-                    <span className="fc-add">+{additions}</span>
-                    <span className="fc-del">&minus;{deletions}</span>
-                  </span>
-                ) : (
-                  <span className="fc-stat fc-stat-loading">…</span>
-                )}
-              </header>
-
-              {worktree?.stageConflict && (
-                <div className="fc-warning">
-                  Staging is paused. This worktree conflicts with edits already in
-                  your working tree. Resolve them in Source Control, then stage again.
-                </div>
-              )}
-
-              {/* The reason a quarantine exists: an agent that finished, work that
-                  hasn't been reviewed. Read as a cue to look, not an alarm — the
-                  card's diff is one click away, and merging or discarding is the
-                  resolution. */}
-              {ready && (
-                <div className="fc-ready">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <span>
-                    Ready to review: {files.length} file{files.length === 1 ? '' : 's'}, isolated on{' '}
-                    <code>{worktree?.branch}</code>
-                  </span>
-                </div>
-              )}
-
-              <button
-                className="fc-files-toggle"
-                onClick={() => {
-                  setExpanded((current) => (current === row.key ? null : row.key));
-                  setOpenFileKey(null);
-                }}
-                aria-expanded={isExpanded}
-                disabled={!hasFiles}
-              >
-                <svg
-                  className={`fc-caret${isExpanded ? ' expanded' : ''}`}
-                  width="9" height="9" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+          {working.length > 0 && <span className="fleet-strip-sweep" aria-hidden="true" />}
+        </button>
+        {stripExpanded && (
+          <ul className="fleet-strip-list">
+            {working.map((row) => (
+              <li key={row.key}>
+                <button
+                  type="button"
+                  className="fleet-strip-item"
+                  onClick={() => row.sessionId !== null && setActiveSession(row.sessionId)}
+                  disabled={row.sessionId === null}
+                  title="Focus this agent's terminal"
                 >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-                {!stat
-                  ? 'Reading changes…'
-                  : files.length === 0
-                    ? 'No changes yet'
-                    : `${files.length} changed file${files.length === 1 ? '' : 's'}`}
-              </button>
-
-              {isExpanded && stat && row.placement === 'main' && (
-                /* The rest of the checkout is deliberately not hidden in
-                   silence. This agent shares the tree with you and with every
-                   other main-repo agent, so "not attributed to it" covers your
-                   own edits, another agent's, and anything that was already
-                   changed before the panel started watching. */
-                <div className="fc-note">
-                  {othersCount > 0
-                    ? `Files that changed while this agent was working. ${othersCount} other changed
-                       file${othersCount === 1 ? '' : 's'} in your checkout ${othersCount === 1 ? 'is' : 'are'}
-                       not attributed to it.`
-                    : 'Files that changed while this agent was working, out of everything uncommitted in your checkout.'}
-                </div>
-              )}
-
-              {isExpanded && stat && (
-                <div className="fc-files">
-                  {files.map((file) => {
-                    const fileKey = `${row.key}::${file.path}`;
-                    const fileOpen = openFileKey === fileKey;
-                    return (
-                      <div className="fc-file" key={file.path}>
-                        <button
-                          className="fc-file-row"
-                          onClick={() => setOpenFileKey(fileOpen ? null : fileKey)}
-                          title={`${fileOpen ? 'Hide' : 'Show'} diff for ${file.path}`}
-                        >
-                          <FileIcon name={file.path.split('/').pop() || ''} isDir={false} />
-                          <span className="fc-file-path">{file.path}</span>
-                          {row.placement === 'main' && isSharedFile(key, file.path) && (
-                            /* Two agents were producing output over the interval
-                               this file moved in, so which of them wrote it is
-                               not something the evidence can settle. Say so
-                               rather than letting one card claim it. */
-                            <span
-                              className="fc-file-shared"
-                              title="Another agent was also working when this file changed"
-                            >
-                              shared
-                            </span>
-                          )}
-                          <span className={`fc-file-badge ${file.status}`}>
-                            {file.status.charAt(0).toUpperCase()}
-                          </span>
-                          <span className="fc-file-stat">
-                            <span className="fc-add">+{file.additions}</span>
-                            <span className="fc-del">&minus;{file.deletions}</span>
-                          </span>
-                        </button>
-                        {fileOpen && (
-                          <div className="fc-file-diff">
-                            {/* Pointed at the agent's own repo, measured against
-                                the base the stat above used — `stat.base_commit`
-                                rather than `row.baseCommit`, because a main-repo
-                                row asks for HEAD without knowing its sha and the
-                                two views must agree. This is the §7 dependency:
-                                the diff viewer takes a repo path instead of
-                                assuming the active project. Read-only — merge and
-                                discard are the actions here, not partial staging
-                                of finished work belonging to someone else. */}
-                            <HunkDiffView
-                              projectId={row.projectId}
-                              repoPath={row.repoPath}
-                              filePath={file.path}
-                              side="unstaged"
-                              baseRef={stat.base_commit}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {pendingConfirm && worktree ? (
-                <div className="fc-confirm">
-                  <span className="fc-confirm-text">
-                    {pendingConfirm === 'merge' ? (
-                      <>
-                        Merge <strong>{worktree.branch}</strong> into{' '}
-                        <strong>{worktree.baseBranch}</strong>?
-                      </>
-                    ) : (
-                      <>
-                        Delete the worktree and branch <strong>{worktree.branch}</strong>?
-                        Anything not yet in your working tree is staged first.
-                      </>
-                    )}
+                  <span className="fleet-strip-item-mark">
+                    <AgentBrandMark command={row.agentPreset} name={row.agentName} className="fc-brand" />
                   </span>
-                  <div className="fc-confirm-actions">
-                    <button
-                      className={`fc-btn ${pendingConfirm === 'discard' ? 'danger' : 'primary'}`}
-                      onClick={() =>
-                        pendingConfirm === 'merge' ? doMerge(row) : doDiscard(row)
-                      }
-                      disabled={isBusy}
-                    >
-                      {pendingConfirm === 'merge' ? 'Merge' : 'Discard'}
-                    </button>
-                    <button className="fc-btn" onClick={() => setConfirming(null)}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Split into two groups so the row can't wrap into an
-                   undifferentiated block of four equal buttons: the actions
-                   that move work lead, navigation and destruction sit apart
-                   and quiet.
-
-                   A main-repo card carries only the right-hand group. Bring in,
-                   Merge and Discard all name a branch this agent does not have:
-                   its edits are already in your tree, so there is nothing to
-                   copy across and nothing that could be thrown away without
-                   throwing away your own work with it. Showing them greyed out
-                   would just be four dead controls on every such card. */
-                <div className="fc-actions">
-                  {worktree && (
-                    <div className="fc-actions-main">
-                      <button
-                        className="fc-btn"
-                        onClick={() => doStage(row)}
-                        disabled={isBusy}
-                        title="Apply this agent's changes to your main checkout for local testing. Your main branch is not committed or pushed, and running agents keep their worktrees. Closed, fully brought-in worktrees are cleaned up automatically."
-                      >
-                        Bring in
-                      </button>
-                      <button
-                        className="fc-btn primary"
-                        onClick={() => setConfirming({ key: row.key, action: 'merge' })}
-                        disabled={isBusy}
-                        title={`Create a local merge commit from ${worktree.branch} in the main checkout. Nothing is pushed.`}
-                      >
-                        Merge into{' '}
-                        {/* The base branch is arbitrary-length; clamp it here so a
-                            long name can't blow the button out of the row. */}
-                        <span className="fc-btn-branch">{worktree.baseBranch}</span>
-                      </button>
-                    </div>
+                  <span className="fleet-strip-item-name">{row.agentName}</span>
+                  <span className="fleet-strip-item-goal">{row.task?.goal?.trim() || 'Working in its terminal'}</span>
+                  {row.workingSince !== null && (
+                    <span className="fleet-strip-item-time">{formatElapsed(now - row.workingSince)}</span>
                   )}
-                  <div className="fc-actions-aside">
-                    {/* The dedicated review pane — the Orca-style gate. Reading
-                        one file at a time inline (See changes) is fine for a
-                        glance; this is the focused surface for actually
-                        judging a finished worktree before merging it. */}
-                    {worktree && hasFiles && (
-                      <button
-                        className="fc-btn review"
-                        onClick={() => setReviewing(row.key)}
-                        disabled={isBusy}
-                        title={`Open the full review of ${worktree.branch} against ${worktree.baseBranch}`}
-                      >
-                        Review
-                      </button>
-                    )}
-                    {/* Reading the work is the one thing every card can offer,
-                        whatever the placement. It drives the same disclosure as
-                        the file-count row above so there is one expanded state,
-                        not two that can disagree. */}
-                    <button
-                      className="fc-btn quiet"
-                      onClick={() => {
-                        setExpanded((current) => (current === row.key ? null : row.key));
-                        setOpenFileKey(null);
-                      }}
-                      aria-expanded={isExpanded}
-                      disabled={!hasFiles}
-                      title={
-                        hasFiles
-                          ? `${isExpanded ? 'Hide' : 'Show'} the files this agent changed`
-                          : 'Nothing has changed yet'
-                      }
-                    >
-                      {isExpanded ? 'Hide changes' : 'See changes'}
-                    </button>
-                    {row.sessionId !== null && (
-                      <button
-                        className="fc-btn quiet"
-                        onClick={() => setActiveSession(row.sessionId!)}
-                        title="Focus this agent's terminal"
-                      >
-                        Terminal
-                      </button>
-                    )}
-                    {worktree && (
-                      <button
-                        className="fc-btn quiet danger"
-                        onClick={() => setConfirming({ key: row.key, action: 'discard' })}
-                        // Refusing while the pane is live is the safety rule, not a
-                        // convenience: killing an agent mid-write and deleting its
-                        // checkout cannot be undone.
-                        disabled={isBusy || row.live}
-                        title={
-                          row.live
-                            ? 'Close this agent first. Discarding a worktree while it is still writing is unrecoverable.'
-                            : `Delete the worktree and branch ${worktree.branch}`
-                        }
-                      >
-                        Discard
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </article>
-          );
-        })}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
+
+      <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>{ordered.map(renderCard)}</div>
 
       {reviewing &&
         (() => {

@@ -11,6 +11,7 @@ import { agentAttentionPhrases, agentLimitPhrases } from './agent-rules-file';
 import { hasTurnSignalChannel, onTurnSignal } from './agent-hook-signals';
 import { markTurnStart, recordTurnEnd } from '$lib/stores/activityStats';
 import { agentTurnEnded, agentTurnStarted } from '$lib/services/keep-awake';
+import { noteAgentTurnEnded } from '$lib/stores/agentTurnState';
 import { classifyDecision, confidentChoice } from '$lib/services/jev';
 import { stripTerminalOutput } from './activity-log';
 
@@ -256,6 +257,8 @@ export async function watchLeasedAgentTurn(
   try {
     const outcome = await watchTurnUntilDone(sessionId, opts);
     if (outcome.kind !== 'aborted') recordTurnEnd(sessionId, outcome.kind);
+    // The same end the notification card reports, for the Agent Fleet's state.
+    noteAgentTurnEnded(sessionId, outcome.kind);
     return outcome;
   } finally {
     agentTurnEnded(sessionId);

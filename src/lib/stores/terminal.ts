@@ -36,6 +36,7 @@ import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
 import { agentSessionClosed } from '$lib/services/keep-awake';
+import { forgetAgentTurnState, noteAgentLaunched, noteAgentPrompted } from './agentTurnState';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
@@ -773,7 +774,14 @@ function processSessionInput(id: number, data: string) {
       const command = buffer.trim();
       if (command) {
         const preset = detectAgentPresetFromCommand(buffer);
+        if (!preset && findSessionAnyProject(id)?.agentPreset) {
+          // A line submitted to an agent that is already running is a prompt:
+          // the start of a turn, as the fleet and notifications count them.
+          noteAgentPrompted(id);
+        }
         if (preset && !suppressAgentDetection.has(id)) {
+          // A fresh launch starts idle, whatever the pane ran before.
+          noteAgentLaunched(id);
           agentLaunchStartLengths.set(id, getSessionOutputLength(id));
           markSessionAgentPreset(id, preset);
           // Broadcast a genuine typed launch so the orchestrator can adopt it.
@@ -979,6 +987,7 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   // The watcher normally releases its own hold, but a process that dies without
   // the watch noticing would otherwise keep the machine awake for nothing.
   agentSessionClosed(id);
+  forgetAgentTurnState(id);
 
   if (session?.hidden || closing?.hidden) {
     // Hidden sessions (background probes) are invisible by contract: no pane,
@@ -1572,6 +1581,8 @@ export async function sendAgentInputLine(sessionId: number, text: string): Promi
   try {
     await pty.write(`${text}\r`);
     setSessionExecuting(sessionId, true);
+    // Answering the agent's question hands it the turn back.
+    noteAgentPrompted(sessionId);
     return true;
   } catch { return false; }
 }
@@ -1579,6 +1590,7 @@ export async function sendAgentInputLine(sessionId: number, text: string): Promi
 async function deliverPromptRaw(sessionId: number, text: string): Promise<boolean> {
   const pty = ptyInstances.get(sessionId);
   if (!pty) return false;
+  noteAgentPrompted(sessionId);
 
   const session = findSessionAnyProject(sessionId);
   const preset = session?.agentPreset;
