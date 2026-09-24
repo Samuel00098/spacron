@@ -1474,7 +1474,11 @@ input:focus {
 /* ─── Custom Global Tooltip ─────────────────── */
 .global-tooltip {
   position: fixed;
-  z-index: 10000; /* High z-index to show above modal backdrops */
+  /* Above every overlay, not just modal backdrops: dropdown menus (10020),
+     the titlebar layer (100000) and other popups sit higher than the old
+     10000, so a tooltip on something inside them showed behind them. A
+     tooltip never takes pointer events, so topmost is always safe. */
+  z-index: 2147483000;
   padding: 5px 8px;
   border-radius: 6px;
   font-size: 10.5px;
@@ -1488,7 +1492,13 @@ input:focus {
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-standard);
-  white-space: nowrap;
+  /* Short labels stay on one line; a sentence wraps at a readable width
+     instead of running across the screen. */
+  white-space: normal;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  line-height: 1.4;
+  overflow-wrap: break-word;
 }
 
 .global-tooltip.visible {
