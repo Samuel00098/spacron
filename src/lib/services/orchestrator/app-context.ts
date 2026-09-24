@@ -45,7 +45,6 @@ export const NAVIGABLE_VIEWS = [
   'db',
   'containers',
   'toolbox',
-  'youtube',
   'mobile',
   'sketch',
   'settings',

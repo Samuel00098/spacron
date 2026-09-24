@@ -48,6 +48,7 @@ const RETIRED_SHORTCUT_IDS = new Set([
   'canvasZoomOut',
   'canvasResetZoom',
   'goToOrchestrator',
+  'goToYoutube',
   'openDailyNote',
   'toggleSketch',
 ]);
@@ -72,7 +73,6 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
-    { id: 'goToYoutube', label: 'Go to YouTube', keys: 'Ctrl+Shift+Y' },
     { id: 'openSearch', label: 'Search in Files', keys: 'Ctrl+Shift+F' },
     { id: 'openEnvManager', label: 'Environment Manager', keys: 'Ctrl+Shift+E' },
     { id: 'saveFile', label: 'Save File', keys: 'Ctrl+S' },
@@ -341,7 +341,6 @@ const defaults: SettingsValues = {
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
-    { id: 'goToYoutube', label: 'Go to YouTube', keys: 'Ctrl+Shift+Y' },
     { id: 'openSearch', label: 'Search in Files', keys: 'Ctrl+Shift+F' },
     { id: 'openEnvManager', label: 'Environment Manager', keys: 'Ctrl+Shift+E' },
     { id: 'saveFile', label: 'Save File', keys: 'Ctrl+S' },

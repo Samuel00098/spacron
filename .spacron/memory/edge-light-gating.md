@@ -18,7 +18,7 @@ The always-on base ring is what makes a paused light still read as a border —
 the same property that lets the ring survive `prefers-reduced-motion`.
 
 Every other surface that gets the edge light (utility drawers, dock, prompt
-bar, usage/inbox/resource popovers, youtube) keeps its ambient lap — only room
+bar, usage/inbox/resource popovers) keeps its ambient lap — only room
 panels, the surfaces where work happens, are gated.
 
 If you add a new "working" signal (e.g. mobile streaming), gate it through the

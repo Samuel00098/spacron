@@ -109,7 +109,7 @@ pub fn run() {
                 // WebKit's capture-related requests — the frontend already
                 // gates the microphone behind its own consent dialog before
                 // the request ever reaches WebKit. MSE/EME are enabled for
-                // embedded players (e.g. the YouTube panel), which stream
+                // embedded players (e.g. a YouTube page in Preview), which stream
                 // through MediaSource. macOS and Windows configure all of
                 // this through their own webview runtimes.
                 if let Err(e) = window.with_webview(|webview| {
@@ -349,8 +349,6 @@ pub fn run() {
             commands::remote_deploy::remote_server_binary_status,
             commands::remote_deploy::remote_download_server,
             commands::http::fetch_agent_logo,
-            commands::music_library::music_library_scan,
-            commands::music_library::music_library_reveal,
             commands::notification::notification_show,
             commands::open_with::workspace_open_with_app,
             commands::launch::app_launch_paths,

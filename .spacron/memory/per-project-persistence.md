@@ -25,9 +25,9 @@ reason.
   `stores/zustand/layout.ts`.
 - The **Terminal** room is neither: `terminalRoomOpen` is its own writable in
   `stores/layout.ts`. It has to be saved and restored by name.
-- `sketchVisible` and `youtubeVisible` are still **not** per-project. They are
+- `sketchVisible` is still **not** per-project. It is
   app-global, so opening Sketch in one project leaves it open in the next.
-  Closing them does survive a switch (nothing puts them back), so this shows up
+  Closing it does survive a switch (nothing puts it back), so this shows up
   as leakage, not as lost state.
 
 ## Reading a *background* project's rooms

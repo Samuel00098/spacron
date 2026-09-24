@@ -93,8 +93,7 @@ spacron/
 │       │   ├── db/, http/              # DbExplorerPanel, HttpClientPanel
 │       │   ├── problems/               # Diagnostics list
 │       │   ├── toolbox/                # ToolboxPanel, EmbeddedPanel
-│       │   ├── containers/             # ContainersPanel
-│       │   └── youtube/                # YouTubePanel, FloatingYouTube
+│       │   └── containers/             # ContainersPanel
 │       ├── stores/                     # State management
 │       │   ├── storeCompat.ts          # Svelte-compatible writable/derived/get (vanilla TS)
 │       │   ├── orchestrator.ts         # Main orchestrator store (being decomposed)

@@ -256,7 +256,6 @@ interface ProjectWorkspaceState {
     fleetVisible: boolean;
     containersVisible: boolean;
     envVisible: boolean;
-    youtubeVisible: boolean;
     mobileVisible: boolean;
     sketchVisible: boolean;
     deepseekVisible: boolean;
@@ -433,7 +432,6 @@ interface PersistedProjectState {
     fleetVisible?: boolean;
     containersVisible?: boolean;
     envVisible?: boolean;
-    youtubeVisible?: boolean;
     mobileVisible?: boolean;
     sketchVisible?: boolean;
     deepseekVisible?: boolean;
@@ -571,7 +569,6 @@ function saveProjectStateToStorage(projectId: string) {
       fleetVisible: currentLayout.fleetVisible,
       containersVisible: currentLayout.containersVisible,
       envVisible: currentLayout.envVisible,
-      youtubeVisible: currentLayout.youtubeVisible,
       mobileVisible: currentLayout.mobileVisible,
       sketchVisible: currentLayout.sketchVisible,
       deepseekVisible: currentLayout.deepseekVisible,
@@ -737,7 +734,6 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       fleetVisible: Boolean(l.fleetVisible),
       containersVisible: Boolean(l.containersVisible),
       envVisible: Boolean(l.envVisible),
-      youtubeVisible: Boolean(l.youtubeVisible),
       mobileVisible: Boolean(l.mobileVisible),
       sketchVisible: Boolean(l.sketchVisible),
       deepseekVisible: Boolean(l.deepseekVisible),
@@ -860,7 +856,6 @@ export function saveProjectState(projectId: string) {
       fleetVisible: get(layout).fleetVisible,
       containersVisible: get(layout).containersVisible,
       envVisible: get(layout).envVisible,
-      youtubeVisible: get(layout).youtubeVisible,
       mobileVisible: get(layout).mobileVisible,
       sketchVisible: get(layout).sketchVisible,
       deepseekVisible: get(layout).deepseekVisible,
@@ -989,7 +984,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         fleetVisible: cached.layout.fleetVisible,
         containersVisible: cached.layout.containersVisible,
         envVisible: cached.layout.envVisible,
-        youtubeVisible: cached.layout.youtubeVisible,
         mobileVisible: cached.layout.mobileVisible,
         sketchVisible: cached.layout.sketchVisible,
         deepseekVisible: cached.layout.deepseekVisible,
@@ -1102,7 +1096,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           fleetVisible: false,
           containersVisible: false,
           envVisible: false,
-          youtubeVisible: false,
           mobileVisible: false,
           sketchVisible: false,
           deepseekVisible: false,
@@ -1132,7 +1125,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           fleetVisible: persisted.layout!.fleetVisible ?? false,
           containersVisible: persisted.layout!.containersVisible ?? false,
           envVisible: persisted.layout!.envVisible ?? false,
-          youtubeVisible: persisted.layout!.youtubeVisible ?? false,
           mobileVisible: persisted.layout!.mobileVisible ?? false,
           sketchVisible: persisted.layout!.sketchVisible ?? false,
           deepseekVisible: persisted.layout!.deepseekVisible ?? false,

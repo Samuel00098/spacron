@@ -68,7 +68,7 @@ export function toggleCommandPalette() {
 
 import { newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
 import { saveActiveFile, formatActiveFile } from './editor';
-import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings, toggleYoutubeVisible } from './layout';
+import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings } from './layout';
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
@@ -109,12 +109,6 @@ export function initDefaultCommands() {
       category: 'View',
       shortcut: 'Ctrl+Shift+F',
       action: () => toggleFloatingSearch(),
-    },
-    {
-      id: 'view.media_player',
-      name: 'Open Media Player',
-      category: 'View',
-      action: () => toggleYoutubeVisible(),
     },
     {
       id: 'project.env',

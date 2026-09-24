@@ -27,7 +27,6 @@ pub mod emulator_grpc;
 pub mod mobile;
 pub mod mobile_stream;
 pub mod ios_sim;
-pub mod music_library;
 pub mod notification;
 pub mod open_with;
 pub mod launch;

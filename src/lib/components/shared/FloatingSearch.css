@@ -24,7 +24,7 @@
   width: 720px;
   max-width: 90%;
   /* Frosted-glass casing — opaque base keeps results readable while the gloss
-     sheen + frost tint + backdrop blur match the media player. Solid theme
+     sheen + frost tint + backdrop blur match the side panels. Solid theme
      flattens it via global.css. */
   background-color: rgb(var(--bg-secondary-rgb, 18, 18, 22));
   background-image:

@@ -130,8 +130,7 @@ export function openRightSidebar() {
   }
 }
 /** Hide the right sidebar and its drawer tool. Like `openRightSidebar`, this
- *  stays out of the View Transition: the document-wide snapshot painted over
- *  the floating Media Player, which read as the player closing and reopening. */
+ *  stays out of the View Transition (see the note above `toggleSidebar`). */
 export function closeRightSidebar() {
   rightSidebarVisible.set(false);
   useLayoutStore.getState().setRightDrawerTool(null);
@@ -171,7 +170,6 @@ export function currentRightDrawerTool(): import('./zustand/layout').RightDrawer
  *  `withTransition` — a project switch runs its own. */
 export function applyRightDrawerTool(tool: import('./zustand/layout').RightDrawerTool | null) { useLayoutStore.getState().applyRightDrawerTool(tool); }
 export function setRightDrawerWidth(width: number) { useLayoutStore.getState().setRightDrawerWidth(width); }
-export function toggleYoutubeVisible() { withTransition(() => { useLayoutStore.getState().toggleYoutubeVisible(); }); }
 export function toggleOrchestratorVisible() { withTransition(() => { useLayoutStore.getState().toggleOrchestratorVisible(); }); }
 export function toggleMobileVisible() { withTransition(() => { useLayoutStore.getState().toggleMobileVisible(); }); }
 export function toggleTerminal() { withTransition(() => { useLayoutStore.getState().toggleTerminal(); }); }

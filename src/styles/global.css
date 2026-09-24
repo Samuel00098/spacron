@@ -1069,8 +1069,7 @@ input:focus {
   .session-tabs,
   .mode-tabs,
   .toolbox-tabs,
-  .json-code,
-  .yt-music-filters
+  .json-code
 ) {
   overscroll-behavior-x: none;
 }
@@ -1080,8 +1079,8 @@ input:focus {
 
    It lives in global.css and not in AppShell.css because "panel" spans two
    trees: the shell's rooms and side drawers, and the floating panels mounted
-   as SIBLINGS of `.app-shell` in `App.tsx` (usage meter, inbox, project HUD,
-   media player). Keeping the definition in the shell left the floating ones
+   as SIBLINGS of `.app-shell` in `App.tsx` (usage meter, inbox, project HUD).
+   Keeping the definition in the shell left the floating ones
    untreated — the usage meter was the one that gave it away.
 
    Two halves, and both are needed: the TINT settles a panel's field so text
@@ -1142,8 +1141,7 @@ input:focus {
 :root:not(.solid-theme) .app-shell .room-dock,
 :root:not(.solid-theme) .app-shell .composer-strip .floating-prompt-bar,
 :root:not(.solid-theme) .inbox-panel,
-:root:not(.solid-theme) .project-hud,
-:root:not(.solid-theme) .floating-youtube {
+:root:not(.solid-theme) .project-hud {
   background:
     linear-gradient(var(--panel-veil) 0 0),
     rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;
@@ -1226,8 +1224,7 @@ input:focus {
 .app-shell .right-utility-panel,
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar,
-.inbox-panel,
-.floating-youtube {
+.inbox-panel {
   --panel-edge-w: 1px;
   --panel-edge-lap: 7s;
   /* The accent is a graphite, not a hue (see
@@ -1243,8 +1240,7 @@ input:focus {
 :root.light-theme .app-shell .right-utility-panel,
 :root.light-theme .app-shell .room-dock,
 :root.light-theme .app-shell .composer-strip .floating-prompt-bar,
-:root.light-theme .inbox-panel,
-:root.light-theme .floating-youtube {
+:root.light-theme .inbox-panel {
   /* The accent is a dark slate in light themes, so the light itself flips to
      dark automatically — only the always-on base ring has to be told. */
   --panel-edge-base: rgba(0, 0, 0, 0.04);
@@ -1258,8 +1254,7 @@ input:focus {
 .app-shell .right-utility-panel::after,
 .app-shell .room-dock::after,
 .app-shell .composer-strip .floating-prompt-bar::after,
-.inbox-panel::after,
-.floating-youtube::after {
+.inbox-panel::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1320,7 +1315,7 @@ input:focus {
   animation-play-state: running;
 }
 
-/* `.inbox-panel` and `.floating-youtube` are `position: fixed` with a
+/* `.inbox-panel` is `position: fixed` with a
    `z-index`, which satisfies the positioning and stacking-context requirements
    on their own. These two do not:
 
@@ -1354,7 +1349,6 @@ input:focus {
    so they get a thinner, slower light — at room settings the ring reads as a
    spinning bezel on a 380px popover, and as a loading spinner on a pill. */
 .inbox-panel,
-.floating-youtube,
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar {
   --panel-edge-w: 1px;

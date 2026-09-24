@@ -839,7 +839,6 @@ const VIEW_TERMS: Array<{ view: string; re: RegExp }> = [
   { view: 'db', re: /\b(database|db)\b/i },
   { view: 'containers', re: /\b(containers?|docker)\b/i },
   { view: 'toolbox', re: /\btoolbox\b/i },
-  { view: 'youtube', re: /\b(youtube|yt)\b/i },
 ];
 
 /**
@@ -1461,8 +1460,8 @@ function buildSystemPrompt(
     '    Stop a running agent and close its terminal. Use when the user wants to close, stop, end, dismiss, release, or shut down an agent they are done with. "close everything"/"stop them all" → one close with target "all".',
     '',
     'APP-CONTROL actions — drive the application UI directly (no agent needed):',
-    '- {"kind": "navigate", "view": "<one of: editor, terminal, preview, review, http, tasks, db, containers, toolbox, pet, youtube, mobile, settings>"}',
-    '    Switch the active page/panel. "show me the editor" → editor; "open settings" → settings; "go back to the terminal" / "hide that panel" → terminal; "open youtube" → youtube; "android emulator" / "ios simulator" → mobile.',
+    '- {"kind": "navigate", "view": "<one of: editor, terminal, preview, review, http, tasks, db, containers, toolbox, pet, mobile, settings>"}',
+    '    Switch the active page/panel. "show me the editor" → editor; "open settings" → settings; "go back to the terminal" / "hide that panel" → terminal; "android emulator" / "ios simulator" → mobile.',
     '- {"kind": "open-file", "path": "<path relative to project root>", "line": <number or null>}',
     '    Open a file in the editor (optionally jump to a line). Use the open-files / project paths shown in the app state. Prefer this over spawning an agent when the user just wants to SEE or go to a file.',
     '- {"kind": "close-file", "path": "<path relative to project root>"}',

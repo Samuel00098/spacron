@@ -45,8 +45,6 @@ import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
-import YouTubePanel from '$lib/components/youtube/YouTubePanelLazy.tsx';
-import FloatingYouTube from '$lib/components/youtube/FloatingYouTube.tsx';
 import MobilePanel from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -77,7 +75,6 @@ import {
   RIGHT_SIDEBAR_NAVIGATOR_TABS,
   rightSidebarVisible,
   rightSidebarTab as rightSidebarTabStore,
-  toggleYoutubeVisible,
   openAgentSpawn,
   closeAgentSpawn,
   openEnvManager,
@@ -144,7 +141,6 @@ type AuxPanelId =
   | 'db'
   | 'containers'
   | 'toolbox'
-  | 'youtube'
   | 'env'
   | 'mobile'
   | 'sketch'
@@ -176,7 +172,6 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   db: 'Database',
   containers: 'Containers',
   toolbox: 'Toolbox',
-  youtube: 'Media Player',
   env: 'Environment',
   mobile: 'Mobile',
   sketch: 'Sketch',
@@ -258,7 +253,6 @@ type ShellLayoutKeys =
   | 'containersVisible'
   | 'toolboxVisible'
   | 'envVisible'
-  | 'youtubeVisible'
   | 'mobileVisible'
   | 'sketchVisible'
   | 'deepseekVisible'
@@ -284,7 +278,6 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   db: 'dbVisible',
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
-  youtube: 'youtubeVisible',
   env: 'envVisible',
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
@@ -438,7 +431,6 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
     );
   }
   if (id === 'preview') return <PreviewPanel />;
-  if (id === 'youtube') return <YouTubePanel />;
   if (id === 'mobile') return <MobilePanel />;
   if (id === 'sketch') {
     return (
@@ -593,7 +585,6 @@ export default function AppShell() {
         containersVisible: s.containersVisible,
         toolboxVisible: s.toolboxVisible,
         envVisible: s.envVisible,
-        youtubeVisible: s.youtubeVisible,
         mobileVisible: s.mobileVisible,
         sketchVisible: s.sketchVisible,
         deepseekVisible: s.deepseekVisible,
@@ -834,8 +825,8 @@ export default function AppShell() {
         { id: 'sketch' as const, visible: layoutState.sketchVisible },
         { id: 'deepseek' as const, visible: layoutState.deepseekVisible },
         // Right utility drawer: review/fleet/toolbox/http/db/containers/env/mobile +
-        // orchestrator. Left drawer: the nav tabs. YouTube: free-floating
-        // pop-up. None of those are rooms in the ambient grid.
+        // orchestrator. Left drawer: the nav tabs. None of those are rooms in
+        // the ambient grid.
       ].filter((panel) => panel.visible),
     [layoutState],
   );
@@ -1462,9 +1453,6 @@ export default function AppShell() {
           break;
         case 'goToToolbox':
           toggleToolboxVisible();
-          break;
-        case 'goToYoutube':
-          toggleYoutubeVisible();
           break;
         case 'openSearch':
           toggleFloatingSearch();
@@ -2542,18 +2530,6 @@ export default function AppShell() {
     },
   ];
 
-  // The Media Player is NOT a room — it is a free-floating pop-up window that
-  // collapses to a bar at the bottom-right. Its launcher therefore lives in the
-  // Utilities group with the other summoned tools, not in Rooms. Toggling it
-  // while it sits collapsed restores it rather than closing it.
-  const mediaPlayerItem: ActivityItem = {
-    id: 'youtube',
-    title: 'Media Player',
-    active: layoutState.youtubeVisible,
-    onClick: () => toggleYoutubeVisible(),
-    icon: <Icon><rect x="2" y="5" width="20" height="14" rx="4" /><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" /></Icon>,
-  };
-
 
   // Reachable three ways: the command palette, the sidebar's New Agent button,
   // and the prompt bar in code mode — where it is the only one of the three
@@ -2617,7 +2593,7 @@ export default function AppShell() {
     {
       id: 'utilities',
       label: 'Utilities',
-      items: [...rightNavigatorItems, ...drawerToolItems, mediaPlayerItem],
+      items: [...rightNavigatorItems, ...drawerToolItems],
     },
   ].filter((group) => group.items.length > 0);
   const paletteToolGroups: ToolMenuGroup[] = [
@@ -2901,8 +2877,6 @@ export default function AppShell() {
       return <Icon><path d="M14 2H6.5A1.5 1.5 0 0 0 5 3.5v17A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5V7Z" /><path d="M14 2v5h5" /><path d="M12 11.5v4" /><path d="M10 13.5h4" /><path d="M10 18.5h4" /></Icon>;
     case 'mobile':
       return <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>;
-    case 'youtube':
-      return <Icon><rect x="2" y="4.5" width="20" height="15" rx="4" /><path d="M10 9.2 15 12l-5 2.8V9.2z" /></Icon>;
     case 'env':
       return <Icon><path d="M12 2 4 6v6c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6l-8-4z" /><path d="M9.5 12.2l1.8 1.8 3.4-3.6" /></Icon>;
     case 'deepseek':
@@ -3557,18 +3531,7 @@ export default function AppShell() {
   }
 
   return (
-    <div
-      className="app-shell"
-      style={{
-        // Where the floating Media Player rests: right-aligned with the corner
-        // layout control and just above the prompt-bar row, following the right
-        // sidebar. Workspace (pre-zoom) px; FloatingYouTube.css scales them.
-        // `overlaysHeight` is the row's content box, so add back its 14px bottom
-        // padding before the 16px gap.
-        '--media-player-right': `${(rightSidebarOpen ? layoutState.rightDrawerWidth + 20 : 0) + 20}px`,
-        '--media-player-bottom': `${overlaysHeight + 14 + 16}px`,
-      } as React.CSSProperties}
-    >
+    <div className="app-shell">
       <TitleBar />
       <UpdateBanner />
 
@@ -3637,14 +3600,6 @@ export default function AppShell() {
             </div>
           </div>
         </div>
-
-        {/* Free-floating YouTube pop-up. Mounted at the app root (outside the
-            ambient rooms grid) so it overlays any page and survives Focus /
-            Split / Canvas switches without unmounting. */}
-        {layoutState.youtubeVisible && <FloatingYouTube onClose={() => toggleYoutubeVisible()} />}
-
-        {/* The Memory Graph, on exactly the same contract: a free-floating
-            window driven by its own layout flag, surviving mode switches. */}
 
         {/* Rendered conditionally, never mounted-and-null: `useModalFocus` inside
             it pins the app-wide modal count for as long as it is mounted. */}

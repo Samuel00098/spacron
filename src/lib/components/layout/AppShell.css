@@ -1360,7 +1360,7 @@ html.has-bg-media .app-shell .room-panel:hover {
 /* ── Traveling edge light: shell-specific variants ─────────────────────────
    The light itself — the registered `--panel-edge-angle`, the keyframes, the
    masked ring, and the tokens that colour it — lives in `global.css` under
-   "Panel surfaces", because the floating panels (inbox, HUD, media player) are
+   "Panel surfaces", because the floating panels (inbox, HUD) are
    siblings of `.app-shell` and need the same treatment from the same
    definition. Only the room-specific variants stay here. */
 
@@ -2760,7 +2760,7 @@ html.has-bg-media .app-shell .room-panel:hover {
      Each of those makes this strip a CSS "backdrop root", which isolates the
      floating prompt bar's backdrop-filter from the workspace behind it — the
      bar's frosted-glass blur then samples only this empty transparent strip and
-     the bar looks flat/transparent instead of frosted (matches the media player
+     the bar looks flat/transparent instead of frosted (it frosts correctly
      only once the strip is NOT a backdrop root). We previously gave this
      view-transition-name: spacron-composer to hold the bar steady during ambient
      mode switches; that is sacrificed for the glass. The strip floats over the
@@ -3645,8 +3645,7 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .rooms-workspace.resizing .minimized-room-stack,
-.app-shell .rooms-workspace.resizing .workspace-overlays,
-.app-shell:has(.rooms-workspace.resizing) .floating-youtube {
+.app-shell .rooms-workspace.resizing .workspace-overlays {
   transition: none !important;
 }
 

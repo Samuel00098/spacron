@@ -5,7 +5,7 @@ import { requestRoomControl } from '../layoutControl';
 
 export type { ActiveView, SidebarTab };
 
-const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'youtube', 'env', 'fleet', 'mobile']);
+const VALID_ACTIVE_VIEWS = new Set<ActiveView>(['editor', 'terminal', 'preview', 'settings', 'review', 'http', 'tasks', 'orchestrator', 'db', 'containers', 'toolbox', 'env', 'fleet', 'mobile']);
 // No 'review': a persisted 'review' tab from an older build fails this check and
 // falls back, which is exactly the migration we want.
 const VALID_SIDEBAR_TABS = new Set<SidebarTab>(['projects', 'files', 'search', 'git', 'snapshots', 'history', 'snippets', 'problems']);
@@ -73,7 +73,6 @@ const defaultLayout: LayoutState = {
   containersVisible: false,
   toolboxVisible: false,
   envVisible: false,
-  youtubeVisible: false,
   mobileVisible: false,
   sketchVisible: false,
   deepseekVisible: false,
@@ -204,7 +203,6 @@ interface LayoutActions {
   setRightDrawerTool: (tool: RightDrawerTool | null) => void;
   setLeftPanelWidth: (width: number) => void;
   setRightDrawerWidth: (width: number) => void;
-  toggleYoutubeVisible: () => void;
   toggleOrchestratorVisible: () => void;
   toggleMobileVisible: () => void;
   toggleTerminal: () => void;
@@ -250,11 +248,6 @@ const AUX_VIEW_FLAGS = {
   containers: 'containersVisible',
   toolbox: 'toolboxVisible',
   env: 'envVisible',
-  // NOTE: `youtube` is intentionally NOT listed here. It is a free-floating
-  // pop-up window (see FloatingYouTube), not an aux room — keeping it out of the
-  // aux-flag system means opening another panel never force-closes it, and the
-  // window survives ambient mode switches. Its `youtubeVisible` flag is toggled
-  // independently by `toggleYoutubeVisible`.
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
   deepseek: 'deepseekVisible',
@@ -391,13 +384,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       }
       if (view === 'env') {
         const next = { ...l, activeView: 'env' as const, lastAuxView: 'env' as const, envVisible: true, envManagerOpen: true, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, fleetVisible: false };
-        persistLayout(next);
-        return next;
-      }
-      if (view === 'youtube') {
-        // YouTube is a floating pop-up, not a view to switch to: just open the
-        // window and leave the current active view in place.
-        const next: LayoutState = { ...l, youtubeVisible: true };
         persistLayout(next);
         return next;
       }
@@ -612,28 +598,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       });
     }
-  },
-
-  toggleYoutubeVisible: () => {
-    if (getState().youtubeVisible) {
-      try {
-        const raw = localStorage.getItem('spacron_youtube_window');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed.minimized) {
-            window.dispatchEvent(new CustomEvent('spacron-youtube-restore'));
-            return;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-    set((l) => {
-      const next: LayoutState = { ...l, youtubeVisible: !l.youtubeVisible };
-      persistLayout(next);
-      return next;
-    });
   },
 
   toggleOrchestratorVisible: () => {
