@@ -4,6 +4,7 @@ import { layout, setActiveView } from './layout';
 import { activeFile, openFile } from './editor';
 import type { ActiveView } from '$lib/types/layout';
 import { useNavigationStore } from './zustand/navigation';
+import { layoutSnapshot, requestStageExpansion } from './layoutControl';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useNavigationStore.getState() as any)[key];
@@ -28,10 +29,20 @@ interface NavState {
   projectId: string | null;
   activeView: ActiveView;
   activeFile: string | null;
+  /** The panel zoomed to the full stage, or null when the stage is a grid. */
+  expandedRoom: string | null;
 }
 
 /** Deepest back stack kept. Beyond this the oldest entries are dropped. */
 const MAX_HISTORY = 200;
+
+/**
+ * How long after a workspace/project switch an expanded-panel change still counts
+ * as part of that switch. Opening a project restores its own saved stage through
+ * the AppShell command bus a moment later; recording that as a step of its own
+ * would make Back need two presses to leave the project.
+ */
+const CONTEXT_SETTLE_MS = 1000;
 
 let history: NavState[] = [];
 let currentIndex = -1;
@@ -54,7 +65,8 @@ export function recordNavigation(state: NavState) {
       current.workspaceId === state.workspaceId && 
       current.projectId === state.projectId && 
       current.activeView === state.activeView && 
-      current.activeFile === state.activeFile) {
+      current.activeFile === state.activeFile &&
+      current.expandedRoom === state.expandedRoom) {
     return;
   }
 
@@ -71,8 +83,18 @@ export function recordNavigation(state: NavState) {
   updateCanNav();
 }
 
+/** Fold a change into the current entry instead of adding a step for it. */
+function amendCurrentNavigation(state: NavState) {
+  if (isNavigatingHistory || currentIndex < 0) return;
+  history[currentIndex] = state;
+}
+
 async function applyState(state: NavState) {
   isNavigatingHistory = true;
+  // A project switch brings back that project's own stage, expanded panel and
+  // all, so the expansion is only driven here when the step stays in place.
+  const sameContext =
+    get(activeWorkspaceId) === state.workspaceId && get(activeProjectId) === state.projectId;
   try {
     // 1. Restore Workspace
     if (get(activeWorkspaceId) !== state.workspaceId) {
@@ -104,6 +126,12 @@ async function applyState(state: NavState) {
       } else {
         activeFile.set(null);
       }
+    }
+
+    // 5. Restore the expanded panel. AppShell applies it asynchronously; when
+    // its snapshot catches up it matches this entry, so no new step is recorded.
+    if (sameContext && (get(layoutSnapshot).expandedRoom ?? null) !== state.expandedRoom) {
+      requestStageExpansion(state.expandedRoom);
     }
   } catch (e) {
     console.error('Failed to apply navigation state:', e);
@@ -137,18 +165,22 @@ export function initNavigationHistory() {
     let lastProjectId = get(activeProjectId);
     let lastView = get(layout).activeView;
     let lastFile = get(activeFile);
+    let lastExpandedRoom = get(layoutSnapshot).expandedRoom ?? null;
+    let lastContextChangeAt = 0;
 
     // Record initial state
     recordNavigation({
       workspaceId: lastWorkspaceId,
       projectId: lastProjectId,
       activeView: lastView,
-      activeFile: lastFile
+      activeFile: lastFile,
+      expandedRoom: lastExpandedRoom
     });
 
     activeWorkspaceId.subscribe((wsId) => {
       if (wsId !== lastWorkspaceId) {
         lastWorkspaceId = wsId;
+        lastContextChangeAt = Date.now();
         triggerRecord();
       }
     });
@@ -156,6 +188,7 @@ export function initNavigationHistory() {
     activeProjectId.subscribe((pId) => {
       if (pId !== lastProjectId) {
         lastProjectId = pId;
+        lastContextChangeAt = Date.now();
         triggerRecord();
       }
     });
@@ -174,13 +207,31 @@ export function initNavigationHistory() {
       }
     });
 
-    function triggerRecord() {
-      recordNavigation({
+    // Expanding a panel, switching which panel is expanded, and collapsing
+    // back to the grid are each a step, so Back/Forward walk between them.
+    layoutSnapshot.subscribe((snapshot) => {
+      const room = snapshot.expandedRoom ?? null;
+      if (room === lastExpandedRoom) return;
+      lastExpandedRoom = room;
+      if (Date.now() - lastContextChangeAt < CONTEXT_SETTLE_MS) {
+        amendCurrentNavigation(currentState());
+      } else {
+        triggerRecord();
+      }
+    });
+
+    function currentState(): NavState {
+      return {
         workspaceId: lastWorkspaceId,
         projectId: lastProjectId,
         activeView: lastView,
-        activeFile: lastFile
-      });
+        activeFile: lastFile,
+        expandedRoom: lastExpandedRoom
+      };
+    }
+
+    function triggerRecord() {
+      recordNavigation(currentState());
     }
   }, 100);
 }

@@ -32,7 +32,9 @@ export type LayoutCommand =
       roomOrder?: string[];
       devTerminalOpen?: boolean;
     }
-  | { nonce: number; type: 'room'; op: RoomOp; room: string };
+  | { nonce: number; type: 'room'; op: RoomOp; room: string }
+  /** Zoom `room` to the full stage, or drop back to the grid when null. */
+  | { nonce: number; type: 'expand'; room: string | null };
 
 export interface LayoutRoomSnapshot {
   id: string;
@@ -107,6 +109,15 @@ export function requestRoomArrangement(
 /** Ask the workspace to focus / minimize / restore / close a room by name. */
 export function requestRoomControl(op: RoomOp, room: string): void {
   layoutControlCommand.set({ nonce: ++commandNonce, type: 'room', op, room });
+}
+
+/**
+ * Ask the workspace to expand `room` to the full stage, or to collapse back to
+ * the grid when `room` is null. A room that is no longer open is ignored. Used by
+ * the title bar's Back/Forward to step between expanded panels.
+ */
+export function requestStageExpansion(room: string | null): void {
+  layoutControlCommand.set({ nonce: ++commandNonce, type: 'expand', room });
 }
 
 /** AppShell publishes its current layout here so controllers can read it. */

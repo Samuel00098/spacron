@@ -1089,6 +1089,18 @@ export default function AppShell() {
       return;
     }
 
+    // Title-bar Back/Forward stepping between expanded panels. A room that has
+    // been closed since the history entry was made is skipped, not reopened.
+    if (layoutCommand.type === 'expand') {
+      const target = layoutCommand.room;
+      if (target === null) {
+        if (zoomedRoom !== null) setStageExpansion(null);
+      } else if (isKnownRoomId(target) && visibleRooms.includes(target) && target !== zoomedRoom) {
+        focusRoomMode(target);
+      }
+      return;
+    }
+
     if (layoutCommand.type !== 'room') return;
 
     const wanted = layoutCommand.room.trim().toLowerCase();
