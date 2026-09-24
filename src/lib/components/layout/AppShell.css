@@ -2108,8 +2108,11 @@ html.has-bg-media .app-shell .room-panel:hover {
 .app-shell .minimized-room-stack,
 .app-shell .rooms-table > .minimized-room-stack {
   position: fixed;
-  left: calc(12px + var(--left-nav-space, 0px));
-  bottom: 14px;
+  /* The strip scrolls sideways, so it clips vertically too. Pad it so a
+     chip's hover lift and shadow are not cut off, and pull the strip out by
+     the same amount so the chips themselves stay where they were. */
+  left: calc(6px + var(--left-nav-space, 0px));
+  bottom: 6px;
   z-index: 1200;
   display: flex;
   flex-wrap: nowrap;
@@ -2117,8 +2120,8 @@ html.has-bg-media .app-shell .room-panel:hover {
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: max(0px, calc((100vw - var(--left-nav-space, 0px) - var(--right-drawer-space, 0px)) / 2 - 388px));
-  padding: 0;
+  max-width: max(0px, calc((100vw - var(--left-nav-space, 0px) - var(--right-drawer-space, 0px)) / 2 - 376px));
+  padding: 8px 6px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -2134,9 +2137,9 @@ html.has-bg-media .app-shell .room-panel:hover {
 @media (max-width: 480px) {
   .app-shell .minimized-room-stack,
   .app-shell .rooms-table > .minimized-room-stack {
-    left: calc(8px + var(--left-nav-space, 0px));
-    bottom: 10px;
-    max-width: calc(100vw - 16px - var(--left-nav-space, 0px));
+    left: calc(2px + var(--left-nav-space, 0px));
+    bottom: 2px;
+    max-width: calc(100vw - 4px - var(--left-nav-space, 0px));
   }
 }
 
