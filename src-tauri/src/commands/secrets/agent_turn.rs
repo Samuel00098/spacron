@@ -5,8 +5,11 @@ use std::collections::HashSet;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
+mod capabilities;
 mod stream;
 mod vision;
+
+pub use capabilities::{refresh_soon, start as start_capability_refresh};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Tool {
@@ -75,7 +78,9 @@ pub struct AgentResponse {
 
 fn metadata() -> &'static Mutex<HashMap<String, Value>> {
     static META: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
-    META.get_or_init(|| Mutex::new(HashMap::new()))
+    // Starts from what was learned last run, so the icons are right before
+    // any model list has been fetched this session.
+    META.get_or_init(|| Mutex::new(capabilities::load()))
 }
 
 #[cfg(test)]
@@ -95,10 +100,16 @@ pub(super) fn remember_metadata(provider: &str, base: Option<&str>, payload: &Va
         if id.is_empty() { continue; }
         let context = item["context_length"].as_u64().or_else(|| item["inputTokenLimit"].as_u64()).or_else(|| item["context_window"].as_u64());
         let output = item["top_provider"]["max_completion_tokens"].as_u64().or_else(|| item["outputTokenLimit"].as_u64()).or_else(|| item["max_output_tokens"].as_u64());
-        let tools = item["supported_parameters"].as_array().map(|a| a.iter().any(|v| v == "tools"));
+        let tools = capabilities::catalogue_tools(item);
         let images = vision::catalogue_accepts_images(item);
         if let Some(accepts) = images { vision::learn(id, accepts); }
-        metadata().lock().unwrap_or_else(|e| e.into_inner()).insert(chat_shape_key(provider, base, id), json!({"contextTokens":context,"outputTokens":output,"nativeTools":tools,"images":images,"streaming":null,"structuredOutput":null}));
+        let reasoning = capabilities::catalogue_reasoning(item);
+        if let Some(reasons) = reasoning { capabilities::learn_reasoning(id, reasons); }
+        let reasoning_effort = capabilities::catalogue_reasoning_effort(item);
+        metadata().lock().unwrap_or_else(|e| e.into_inner()).insert(chat_shape_key(provider, base, id), json!({"contextTokens":context,"outputTokens":output,"nativeTools":tools,"images":images,"reasoning":reasoning,"reasoningEffort":reasoning_effort,"streaming":null,"structuredOutput":null}));
+    }
+    if entries.is_some_and(|e| !e.is_empty()) {
+        capabilities::save(&metadata().lock().unwrap_or_else(|e| e.into_inner()));
     }
 }
 
@@ -117,25 +128,42 @@ pub fn ai_agent_capabilities(provider: String, model: String, base_url: Option<S
     caps
 }
 
-/// Which of a provider's models accept images, for the model picker's
-/// capability icons. One call per list, and the same answer the chat's own
-/// requests use (`accepts_images`), so an icon never promises vision a turn
-/// would not deliver.
+/// What each of a provider's models can do, for the model picker's icons:
+/// vision (the same answer the chat's own requests use, `accepts_images`),
+/// and reasoning as the provider's list published it (`null` when it did not
+/// say — the frontend's built-in rules answer then). One call per list.
 #[tauri::command]
-pub async fn ai_models_accept_images(provider: String, models: Vec<String>, base_url: Option<String>) -> HashMap<String, bool> {
+pub async fn ai_models_capabilities(provider: String, models: Vec<String>, base_url: Option<String>) -> HashMap<String, Value> {
     ensure_public_catalogue().await;
     answer_models(&provider, models, base_url.as_deref())
 }
 
-fn answer_models(provider: &str, models: Vec<String>, base_url: Option<&str>) -> HashMap<String, bool> {
+fn answer_models(provider: &str, models: Vec<String>, base_url: Option<&str>) -> HashMap<String, Value> {
+    let meta = metadata().lock().unwrap_or_else(|e| e.into_inner()).clone();
     models
         .into_iter()
         .take(2000)
         .map(|m| {
-            let accepts = accepts_images(provider, base_url, &m);
-            (m, accepts)
+            let known = meta.get(&chat_shape_key(provider, base_url, &m));
+            let caps = json!({
+                "vision": accepts_images(provider, base_url, &m),
+                // The provider's own list first; else what another catalogue
+                // says about the same model (icon only, see capabilities.rs).
+                "reasoning": known.and_then(|k| k["reasoning"].as_bool()).or_else(|| capabilities::reasoning_from_catalogues(&m)),
+                "reasoningEffort": known.and_then(|k| k["reasoningEffort"].as_bool()),
+                "tools": known.and_then(|k| k["nativeTools"].as_bool()),
+            });
+            (m, caps)
         })
         .collect()
+}
+
+/// Fetch model lists now (Settings, or after signing in to a provider that
+/// has no key to save). `provider` = one provider, or every configured one.
+/// Returns the providers that were refreshed.
+#[tauri::command]
+pub async fn ai_refresh_model_capabilities(provider: Option<String>) -> Vec<String> {
+    capabilities::refresh(provider, true).await
 }
 
 /// Load OpenRouter's public model catalogue once per session (no key needed):
@@ -802,11 +830,11 @@ mod tests {
     #[test]
     fn the_picker_gets_one_answer_per_model_matching_the_chat() {
         let answers = answer_models("openai", vec!["gpt-4o".into(), "gpt-3.5-turbo".into(), "o3-mini".into()], None);
-        assert_eq!(answers.get("gpt-4o"), Some(&true));
-        assert_eq!(answers.get("gpt-3.5-turbo"), Some(&false));
-        assert_eq!(answers.get("o3-mini"), Some(&false));
-        for (model, accepts) in &answers {
-            assert_eq!(ai_agent_capabilities("openai".into(), model.clone(), None)["images"], *accepts, "{model}");
+        assert_eq!(answers["gpt-4o"]["vision"], true);
+        assert_eq!(answers["gpt-3.5-turbo"]["vision"], false);
+        assert_eq!(answers["o3-mini"]["vision"], false);
+        for (model, caps) in &answers {
+            assert_eq!(ai_agent_capabilities("openai".into(), model.clone(), None)["images"], caps["vision"], "{model}");
         }
     }
     #[test]
@@ -846,6 +874,67 @@ mod tests {
             match result { Ok(report) => println!("VERIFIED {provider}: {report}"), Err(error) => { println!("UNVERIFIED {provider}: {error}"); failures.push(provider); } }
         }
         assert!(failures.is_empty(), "Unverified configured providers: {failures:?}");
+    }
+
+    /// Live and paid (a few tiny requests): a real model must say what colour
+    /// a solid red image is — attached to the user's message, and returned as
+    /// a tool result (the screenshot path). Proves each wire shape is accepted.
+    /// `cargo test --lib live_vision_round_trip -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "Uses configured API keys and small paid requests; run explicitly"]
+    async fn live_vision_round_trip() {
+        let dir = std::env::temp_dir().join("spacron-screenshots");
+        std::fs::create_dir_all(&dir).unwrap();
+        // SPACRON_LIVE_COLOR=blue checks the answer is read, not guessed.
+        let colour = std::env::var("SPACRON_LIVE_COLOR").unwrap_or_else(|_| "red".into());
+        let rgba = match colour.as_str() { "blue" => [20, 40, 220, 255], "green" => [20, 180, 40, 255], _ => [220, 20, 30, 255] };
+        let shot = dir.join(format!("live-vision-{colour}.png"));
+        image::RgbaImage::from_pixel(256, 256, image::Rgba(rgba)).save(&shot).unwrap();
+        let shot = shot.display().to_string();
+        let ask = "What single colour fills the attached image? Answer with one lowercase word.";
+        let mut failures = Vec::new();
+        // SPACRON_LIVE_VISION="kilocode=stepfun/step-3.7-flash:free,openrouter=…"
+        // replaces the default list; SPACRON_LIVE_MAX_TOKENS caps each answer.
+        let defaults = "openai=gpt-4o-mini,google=gemini-flash-lite-latest,openrouter=google/gemini-3.1-flash-lite,kilocode=stepfun/step-3.7-flash:free,chatgpt=default";
+        let list = std::env::var("SPACRON_LIVE_VISION").unwrap_or_else(|_| defaults.into());
+        let cap: u32 = std::env::var("SPACRON_LIVE_MAX_TOKENS").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
+        let pairs: Vec<(String, String)> = list.split(',').filter_map(|p| p.split_once('=').map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))).collect();
+        for (provider, model) in &pairs {
+            let (provider, model, tool_round) = (provider.as_str(), model.as_str(), provider != "chatgpt");
+            if !provider_api_key_exists(provider.to_string()).unwrap_or(false) { println!("SKIPPED {provider}: not configured"); continue; }
+            if std::env::var("SPACRON_LIVE_PROVIDERS").is_ok_and(|only| !only.split(',').any(|p| p.trim() == provider)) { continue; }
+            // 1. Image attached to the user's message.
+            let mut r = request(provider);
+            r.model = model.into();
+            r.tools.clear();
+            r.system_prompt = "You describe images. Answer in one word.".into();
+            r.user_text = ask.into();
+            r.user_images = vec![shot.clone()];
+            r.max_output_tokens = Some(cap);
+            match send_turn(&r, None).await {
+                Ok(reply) if reply.text.to_lowercase().contains(colour.as_str()) => println!("SEES {provider} (attachment): {}", reply.text.trim()),
+                Ok(reply) => { println!("WRONG {provider} (attachment): {}", reply.text.trim()); failures.push(format!("{provider} attachment")); }
+                Err(e) => { println!("ERROR {provider} (attachment): {e}"); failures.push(format!("{provider} attachment")); }
+            }
+            if !tool_round { continue; }
+            // 2. Image returned as a tool result, the way screenshots arrive.
+            let mut r = request(provider);
+            r.model = model.into();
+            r.system_prompt = "Call take_screenshot exactly once, then say what single colour fills the screenshot, in one lowercase word.".into();
+            r.user_text = "What colour is on my screen?".into();
+            r.tools = vec![Tool { name: "take_screenshot".into(), description: "Screenshot the screen".into(), parameters: json!({"type":"object","properties":{},"additionalProperties":false}) }];
+            r.max_output_tokens = Some(cap);
+            let first = match send_turn(&r, None).await { Ok(f) => f, Err(e) => { println!("ERROR {provider} (tool call): {e}"); failures.push(format!("{provider} tool")); continue; } };
+            let Some(call) = first.calls.first().cloned() else { println!("NO-CALL {provider}: {}", first.text); failures.push(format!("{provider} tool")); continue; };
+            r.exchanges.push(Exchange { assistant: first.assistant, results: vec![ToolResult { id: call.id, name: call.name, ok: true, output: "Screenshot saved.".into(), images: vec![shot.clone()] }] });
+            r.tools.clear();
+            match send_turn(&r, None).await {
+                Ok(reply) if reply.text.to_lowercase().contains(colour.as_str()) => println!("SEES {provider} (tool result): {}", reply.text.trim()),
+                Ok(reply) => { println!("WRONG {provider} (tool result): {}", reply.text.trim()); failures.push(format!("{provider} tool")); }
+                Err(e) => { println!("ERROR {provider} (tool result): {e}"); failures.push(format!("{provider} tool")); }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
     }
 
     /// Live but free: lists every configured provider's chat models (no

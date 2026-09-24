@@ -57,6 +57,7 @@ import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
 import { initMcpBridge } from '$lib/stores/mcpBridge';
 import { initComputerUse } from '$lib/stores/computerUse';
+import { initModelCapabilities } from '$lib/services/model-capabilities';
 import DesktopGrantHost from '$lib/components/shared/DesktopGrantHost';
 import { applyUiFontSize } from '$lib/services/ui-typography';
 import { ensureWindowUsable, isTauriRuntime } from '$lib/utils/tauri';
@@ -136,6 +137,9 @@ export default function App() {
       // After the bridge: pushes the computer-use switch to the MCP server and
       // listens for the permission requests `DesktopGrantHost` answers.
       initComputerUse();
+      // Redraw model capability icons when Rust's background refresh (startup,
+      // or a newly saved API key) learns new model lists.
+      initModelCapabilities();
       // Tokens live in the OS keychain; load them into session memory so the
       // remote manager can prefill edit forms and reconnect without waiting.
       void hydrateRemoteTokens();

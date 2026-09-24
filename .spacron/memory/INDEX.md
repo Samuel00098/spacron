@@ -79,6 +79,7 @@ short enough that it says what the note is *about*, never what it says.
 - [orchestrator-tool-calling](orchestrator-tool-calling.md) — the provider-agnostic FINAL vs tool_calls loop and where the executor lives; recovery-flag inventory and turn-completion contract; update_todos 5-state plan tool and its honesty invariants
 - [orchestrator-emulator-tools](orchestrator-emulator-tools.md) - how the orchestrator reaches the emulator, and the four lists that must agree
 - [orchestrator-vision](orchestrator-vision.md) — which models get images (Rust decides), the folder allowlist, and the per-provider wire shapes
+- [model-capabilities](model-capabilities.md) — where model vision/reasoning/tools come from, where they are saved, and what triggers the background refresh
 - [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe
 - [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 

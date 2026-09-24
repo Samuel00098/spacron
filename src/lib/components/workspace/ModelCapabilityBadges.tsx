@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useEffect } from 'react';
+import { useStore } from '$lib/react/useStore';
 import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
+import { capsFor, forgetModelCaps, loadModelCaps, modelCapabilitiesVersion, type ModelCaps } from '$lib/services/model-capabilities';
 import { getProviderBaseUrl, isLocalProvider, type AiProviderId } from '$lib/stores/settings';
 import './ModelCapabilityBadges.css';
 
@@ -12,11 +13,13 @@ import './ModelCapabilityBadges.css';
  *
  * Both answers come from the same place the chat itself uses, so an icon
  * cannot promise something a turn would not do:
- * - vision: Rust's `accepts_images` (agent_turn.rs), through
- *   `ai_models_accept_images` — the catalogue's modalities where a provider
- *   publishes them, else the model's name, minus models that refused an image
- *   earlier this session;
- * - reasoning: `reasoningLevelsFor`, which also drives the reasoning picker.
+ * - vision: Rust's `accepts_images` (agent_turn.rs) — the provider's list,
+ *   else published catalogues for the same model, else the model's name,
+ *   minus models that refused an image earlier this session;
+ * - reasoning: the provider's list when it says; else `reasoningLevelsFor`,
+ *   which also drives the reasoning picker.
+ * Both arrive through services/model-capabilities.ts, which Rust keeps fresh in
+ * the background (startup, and whenever an API key is saved).
  */
 export interface ModelCapabilities {
   text: true;
@@ -24,16 +27,15 @@ export interface ModelCapabilities {
   reasoning: boolean;
 }
 
-export function modelCapabilities(provider: string, model: string, vision: boolean | null): ModelCapabilities {
-  return { text: true, vision, reasoning: reasoningLevelsFor(provider, model).length > 0 };
+/**
+ * Reasoning: what the provider's own list says when it says it; otherwise
+ * whether the reasoning menu has levels for the model.
+ */
+export function modelCapabilities(provider: string, model: string, vision: boolean | null, listedReasoning: boolean | null = null): ModelCapabilities {
+  return { text: true, vision, reasoning: listedReasoning ?? reasoningLevelsFor(provider, model).length > 0 };
 }
 
-// --- vision answers, fetched a provider's list at a time -----------------------
-
-/** provider → model → accepts images. Filled per provider, reused across renders. */
-const visionCache = new Map<string, Map<string, boolean>>();
-const pending = new Map<string, Promise<void>>();
-const listeners = new Set<() => void>();
+// --- answers from the shared capability store --------------------------------
 
 /** Same base URL rule as the chat's own requests (orchestrator-brain.ts), so both read the same catalogue entry. */
 function baseUrlFor(provider: string): string | null {
@@ -41,52 +43,20 @@ function baseUrlFor(provider: string): string | null {
   return isLocalProvider(id) ? getProviderBaseUrl(id) || null : null;
 }
 
-/** Ask Rust about every model in `models` that has no answer yet, in one call. */
-export function loadModelVision(provider: string, models: string[]): Promise<void> {
-  const known = visionCache.get(provider);
-  const missing = [...new Set(models)].filter((m) => m && !known?.has(m));
-  if (!missing.length) return Promise.resolve();
-  const key = `${provider}\u0000${missing.join('\u0000')}`;
-  const running = pending.get(key);
-  if (running) return running;
-  const job = invoke<Record<string, boolean>>('ai_models_accept_images', { provider, models: missing, baseUrl: baseUrlFor(provider) })
-    .then((answers) => {
-      const map = visionCache.get(provider) ?? new Map<string, boolean>();
-      for (const [model, accepts] of Object.entries(answers ?? {})) map.set(model, accepts === true);
-      visionCache.set(provider, map);
-      listeners.forEach((notify) => notify());
-    })
-    .catch(() => undefined)
-    .finally(() => pending.delete(key));
-  pending.set(key, job);
-  return job;
-}
-
-/**
- * Forget a provider's answers: a model that refused an image mid-session is
- * text-only from then on, and the next look should say so.
- */
+/** Kept for callers: drop a provider's answers so the picker asks again. */
 export function forgetModelVision(provider?: string): void {
-  if (provider) visionCache.delete(provider);
-  else visionCache.clear();
-  listeners.forEach((notify) => notify());
+  forgetModelCaps(provider);
 }
 
-function useVision(provider: string, model: string, siblings?: string[]): boolean | null {
-  const read = () => visionCache.get(provider)?.get(model) ?? null;
-  const [vision, setVision] = useState<boolean | null>(read);
+function useCaps(provider: string, model: string, siblings?: string[]): ModelCaps | null {
+  // Re-render when answers arrive or Rust's background refresh drops them.
+  const version = useStore(modelCapabilitiesVersion);
   useEffect(() => {
-    const update = () => setVision(read());
-    listeners.add(update);
-    update();
-    void loadModelVision(provider, siblings?.length ? siblings : [model]);
-    return () => {
-      listeners.delete(update);
-    };
+    void loadModelCaps(provider, siblings?.length ? siblings : [model], baseUrlFor(provider));
     // `siblings` is a batching hint only; its identity must not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, model]);
-  return vision;
+  }, [provider, model, version]);
+  return capsFor(provider, model);
 }
 
 // --- icons ---------------------------------------------------------------------
@@ -157,8 +127,8 @@ function badgesFor(caps: ModelCapabilities) {
  * list's answers in one call.
  */
 export function ModelCapabilityIcons({ provider, model, siblings }: { provider: string; model: string; siblings?: string[] }) {
-  const vision = useVision(provider, model, siblings);
-  const supported = badgesFor(modelCapabilities(provider, model, vision)).filter((b) => b.on);
+  const caps = useCaps(provider, model, siblings);
+  const supported = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null)).filter((b) => b.on);
   return (
     <span className="chat-model-caps-inline" aria-label={`Supports ${supported.map((b) => b.label.toLowerCase()).join(', ')}`}>
       {supported.map((b) => (
@@ -176,8 +146,8 @@ export function ModelCapabilityIcons({ provider, model, siblings }: { provider: 
  * visible as "vision".
  */
 export default function ModelCapabilityBadges({ provider, model }: { provider: string; model: string }) {
-  const vision = useVision(provider, model);
-  const badges = badgesFor(modelCapabilities(provider, model, vision));
+  const caps = useCaps(provider, model);
+  const badges = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null));
   return (
     <div className="chat-model-caps" role="list" aria-label={`What ${model || 'this model'} supports`}>
       {badges.map((b) => (

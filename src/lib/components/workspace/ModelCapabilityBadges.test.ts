@@ -15,17 +15,10 @@ describe('model capability badges', () => {
   });
 });
 
-describe('vision answers for a whole model list', () => {
-  it('asks Rust once for the models it has not seen, and remembers the answers', async () => {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const mock = vi.mocked(invoke);
-    mock.mockReset();
-    mock.mockResolvedValueOnce({ 'claude-sonnet-4-5': true, 'claude-2.1': false });
-    const { loadModelVision } = await import('./ModelCapabilityBadges');
-    await loadModelVision('anthropic', ['claude-sonnet-4-5', 'claude-2.1', 'claude-sonnet-4-5']);
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect(mock.mock.calls[0][1]).toMatchObject({ provider: 'anthropic', models: ['claude-sonnet-4-5', 'claude-2.1'] });
-    await loadModelVision('anthropic', ['claude-2.1']);
-    expect(mock).toHaveBeenCalledTimes(1);
+describe('listed reasoning', () => {
+  it('uses what the provider list says, over the built-in rule', () => {
+    expect(modelCapabilities('openrouter', 'some/plain-model', true, false).reasoning).toBe(false);
+    expect(modelCapabilities('together', 'new/thinker', false, true).reasoning).toBe(true);
+    expect(modelCapabilities('openai', 'o3', true, null).reasoning).toBe(true);
   });
 });

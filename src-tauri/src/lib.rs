@@ -177,6 +177,9 @@ pub fn run() {
             let pty_manager = app_state.pty_manager.clone();
             let app_handle = app.handle().clone();
             app.manage(app_state);
+            // Learn every configured provider's model capabilities in the
+            // background (and again when a key is saved); see agent_turn/capabilities.rs.
+            commands::secrets::agent_turn::start_capability_refresh(app.handle().clone());
             // The chat's Playwright browsers, one per conversation
             // (docs/agent-browser.md). Children are kill_on_drop, so they die with the app.
             app.manage(Arc::new(commands::browser_tools::BrowserSessions::default()));
@@ -309,7 +312,8 @@ pub fn run() {
             commands::secrets::agent_turn::ai_agent_turn,
             commands::secrets::agent_turn::ai_agent_cancel,
             commands::secrets::agent_turn::ai_agent_capabilities,
-            commands::secrets::agent_turn::ai_models_accept_images,
+            commands::secrets::agent_turn::ai_models_capabilities,
+            commands::secrets::agent_turn::ai_refresh_model_capabilities,
             commands::secrets::agent_turn::ai_agent_probe,
             commands::images::generate_media,
             commands::images::allow_generations_dir,

@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { providerApiKeyExists } from '$lib/services/ai-keychain';
 import { ProviderBrandMark } from './providerBrands';
 import { showToast } from '$lib/stores/notification';
+import { refreshModelCapabilities } from '$lib/services/model-capabilities';
 
 interface ChatGptStatus {
   installed: boolean;
@@ -67,6 +68,9 @@ export function ChatGptSignIn({
       setPending(null);
       if (event.payload.success) {
         showToast('Signed in with ChatGPT', 'success');
+        // No API key is saved for ChatGPT, so Rust's "key saved" refresh never
+        // fires: learn the plan's models (and what they support) here.
+        void refreshModelCapabilities('chatgpt');
       } else if (event.payload.error) {
         showToast(`ChatGPT sign-in failed: ${event.payload.error}`, 'error');
       }

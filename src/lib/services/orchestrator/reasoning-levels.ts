@@ -1,4 +1,5 @@
 import type { ChatReasoningEffort } from '$lib/types/chat';
+import { capsFor } from '$lib/services/model-capabilities';
 
 /**
  * The reasoning levels the orchestrator brain can ask for on a given
@@ -8,6 +9,16 @@ import type { ChatReasoningEffort } from '$lib/types/chat';
  * so a level listed here must be one that provider's API accepts.
  */
 export function reasoningLevelsFor(provider: string, model: string): ChatReasoningEffort[] {
+  const known = builtInLevels(provider, model);
+  if (known.length) return known;
+  // No built-in rule for this provider or model, but its own model list says
+  // a reasoning amount can be requested (learned in the background, see
+  // services/model-capabilities.ts): offer the common three. If the provider
+  // still rejects the parameter, Rust drops it and retries (downgrade_reasoning).
+  return capsFor(provider, model)?.reasoningEffort === true ? ['low', 'medium', 'high'] : [];
+}
+
+function builtInLevels(provider: string, model: string): ChatReasoningEffort[] {
   const id = (model || '').toLowerCase();
   // Gateways prefix a vendor ("openai/gpt-5"); the family is what decides.
   const bare = id.slice(id.lastIndexOf('/') + 1);

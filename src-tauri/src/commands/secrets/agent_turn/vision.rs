@@ -66,6 +66,11 @@ pub(super) fn learn(model: &str, accepts: bool) {
     *entry = *entry || accepts;
 }
 
+/// Everything learned so far, for saving to disk (`capabilities::save`).
+pub(super) fn known_names() -> std::collections::HashMap<String, bool> {
+    by_name().lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 pub(super) fn catalogue_known() -> bool {
     !by_name().lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
@@ -173,10 +178,25 @@ fn grok_version(m: &str) -> Option<u32> {
 /// The input modalities a model catalogue entry declares, when it declares
 /// them (OpenRouter: `architecture.input_modalities`).
 pub(super) fn catalogue_accepts_images(item: &Value) -> Option<bool> {
+    // The names in use today: OpenRouter/Kilo (`architecture.input_modalities`),
+    // Groq (`input_modalities`), models.dev-style lists (`modalities.input`),
+    // Mistral (`capabilities.vision`), and plain flags some hosts use.
     let modalities = item["architecture"]["input_modalities"]
         .as_array()
-        .or_else(|| item["input_modalities"].as_array())?;
-    Some(modalities.iter().any(|m| m.as_str() == Some("image")))
+        .or_else(|| item["input_modalities"].as_array())
+        .or_else(|| item["modalities"]["input"].as_array());
+    if let Some(list) = modalities {
+        return Some(list.iter().any(|m| m.as_str() == Some("image")));
+    }
+    ["capabilities.vision", "supports_vision", "supports_image_input", "vision"]
+        .iter()
+        .find_map(|path| {
+            let mut v = item;
+            for key in path.split('.') {
+                v = &v[key];
+            }
+            v.as_bool()
+        })
 }
 
 /// Does this error body say the provider rejected image input?
@@ -383,6 +403,9 @@ mod tests {
         assert_eq!(catalogue_accepts_images(&json!({"architecture":{"input_modalities":["text","image"]}})), Some(true));
         assert_eq!(catalogue_accepts_images(&json!({"architecture":{"input_modalities":["text"]}})), Some(false));
         assert_eq!(catalogue_accepts_images(&json!({"id":"x"})), None);
+        assert_eq!(catalogue_accepts_images(&json!({"modalities":{"input":["text","image"]}})), Some(true));
+        assert_eq!(catalogue_accepts_images(&json!({"capabilities":{"vision":false}})), Some(false));
+        assert_eq!(catalogue_accepts_images(&json!({"supports_image_input":true})), Some(true));
     }
 
     #[test]

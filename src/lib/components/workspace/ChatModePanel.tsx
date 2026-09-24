@@ -68,6 +68,7 @@ import {
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
 import { REASONING_LABELS, reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
 import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
+import { modelCapabilitiesVersion } from '$lib/services/model-capabilities';
 import {
   sendTranscriptionNow,
   transcriptionActive,
@@ -771,6 +772,9 @@ export default function ChatModePanel() {
   const liveModels = liveModelsByProvider[selectedProvider] ?? [];
   // Only the levels this provider's API accepts for this model; a saved level
   // the new model lacks shows (and is sent) as the provider default.
+  // Redraw when background-learned capabilities arrive: a model the built-in
+  // rules do not know may gain a reasoning menu from its provider's list.
+  useStore(modelCapabilitiesVersion);
   const reasoningLevels = reasoningLevelsFor(selectedProvider, selectedModel);
   const selectedReasoning: ChatReasoningEffort = thread?.reasoningEffort && reasoningLevels.includes(thread.reasoningEffort)
     ? thread.reasoningEffort

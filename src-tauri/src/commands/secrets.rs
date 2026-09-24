@@ -905,7 +905,12 @@ pub fn provider_api_key_set(provider: String, api_key: String) -> Result<(), Str
     } else {
         entry
             .set_password(&api_key)
-            .map_err(|err| format!("Failed to save the API key: {err}"))
+            .map_err(|err| format!("Failed to save the API key: {err}"))?;
+        // Learn what this provider's models can do (text, vision,
+        // reasoning) in the background, so the picker's icons are right the
+        // first time it opens. Listing models is free.
+        agent_turn::refresh_soon(&provider);
+        Ok(())
     }
 }
 
