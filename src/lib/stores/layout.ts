@@ -129,6 +129,13 @@ export function openRightSidebar() {
     useLayoutStore.getState().setRightDrawerTool(null);
   }
 }
+/** Hide the right sidebar and its drawer tool. Like `openRightSidebar`, this
+ *  stays out of the View Transition: the document-wide snapshot painted over
+ *  the floating Media Player, which read as the player closing and reopening. */
+export function closeRightSidebar() {
+  rightSidebarVisible.set(false);
+  useLayoutStore.getState().setRightDrawerTool(null);
+}
 export function setActiveView(view: ActiveView) {
   withTransition(() => {
     if (view === 'review') rightSidebarVisible.set(true);

@@ -4,13 +4,21 @@
    whole workspace and is independent of the ambient room layout. */
 
 .floating-youtube {
+  /* The player mounts outside `.zoom-content`, but its anchor comes from the
+     workspace's own (zoomed) px, so scale by the UI zoom to land in the same
+     place. AppShell sets both variables: right-aligned with the bottom-right
+     layout control, resting just above the prompt-bar row (open or minimized),
+     and shifted left of the right sidebar while it is open. */
+  --fy-zoom: calc(var(--ui-zoom-percent, 100) / 100);
+  --fy-right: calc(var(--media-player-right, 20px) * var(--fy-zoom));
+  --fy-bottom: calc(var(--media-player-bottom, 80px) * var(--fy-zoom));
   position: fixed;
-  right: 16px;
-  bottom: 48px;
+  right: var(--fy-right);
+  bottom: var(--fy-bottom);
   left: auto !important;
   top: auto !important;
-  max-width: calc(100 * var(--app-vw, 1vw) - 48px);
-  max-height: calc(100 * var(--app-vh, 1vh) - 160px);
+  max-width: calc(100 * var(--app-vw, 1vw) - var(--fy-right) - 24px);
+  max-height: calc(100 * var(--app-vh, 1vh) - var(--fy-bottom) - 64px);
   z-index: 120; /* above the room dock (z 8) / composer overlays, below modals (9999) */
   display: flex;
   flex-direction: column;
@@ -38,6 +46,9 @@
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   transition: width var(--dur-slow) var(--ease-out),
     height var(--dur-slow) var(--ease-out),
+    /* Glide with the prompt-bar row when the right sidebar opens or closes. */
+    right var(--dur-base, 0.2s) var(--ease-out, ease),
+    bottom var(--dur-base, 0.2s) var(--ease-out, ease),
     transform var(--dur-slow) var(--ease-out),
     border-color var(--dur-slow) var(--ease-out),
     box-shadow var(--dur-slow) var(--ease-out),

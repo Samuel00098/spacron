@@ -702,22 +702,28 @@
   pointer-events: auto;
 }
 
-/* Keep the prompt bar centred but clear of the corner control: shrink it
-   symmetrically until there is room for both on one row. */
+/* The overlay row narrows when the right sidebar opens. The bar stays centred
+   at full width; the corner control gives way instead: first it drops to its
+   compact form, then it steps up to its own right-aligned row above the bar.
+   In that row it joins the column's flow, so the measured `--overlay-clear`
+   grows and the stage still clears it. */
 @container workspace-overlays (max-width: 1500px) {
-  .app-shell .workspace-overlays:has(.split-layout-control) > .composer-strip {
-    width: min(720px, 100% - 560px);
+  .app-shell .workspace-overlays .split-layout-mode-label,
+  .app-shell .workspace-overlays .split-layout-count-full {
+    display: none;
+  }
+
+  .app-shell .workspace-overlays .split-layout-count-compact {
+    display: inline;
+  }
+
+  .app-shell .workspace-overlays .split-expanded-room-picker {
+    width: 150px;
+    min-width: 0;
   }
 }
 
-/* Too narrow to share a row: the control joins the overlay column's flow as
-   its own right-aligned row above the bar (so the measured `--overlay-clear`
-   grows and the stage still clears it), and the bar takes its width back. */
-@container workspace-overlays (max-width: 1080px) {
-  .app-shell .workspace-overlays:has(.split-layout-control) > .composer-strip {
-    width: min(720px, 100%);
-  }
-
+@container workspace-overlays (max-width: 1140px) {
   .app-shell .workspace-overlays > .stage-layout-control-host {
     position: static;
     align-self: flex-end;
@@ -3636,7 +3642,8 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .rooms-workspace.resizing .minimized-room-stack,
-.app-shell .rooms-workspace.resizing .workspace-overlays {
+.app-shell .rooms-workspace.resizing .workspace-overlays,
+.app-shell:has(.rooms-workspace.resizing) .floating-youtube {
   transition: none !important;
 }
 

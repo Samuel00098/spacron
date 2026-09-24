@@ -3,10 +3,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveProjectState, openProject } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
+  closeRightSidebar,
   openRightSidebar,
   rightSidebarVisible,
-  setRightDrawerTool,
-  setRightSidebarVisible,
   toggleSidebar,
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
@@ -64,8 +63,7 @@ export default function TitleBar() {
 
   function toggleRightSidebar() {
     if (rightSidebarOpen) {
-      setRightSidebarVisible(false);
-      setRightDrawerTool(null);
+      closeRightSidebar();
     } else {
       openRightSidebar();
     }

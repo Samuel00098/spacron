@@ -3557,7 +3557,18 @@ export default function AppShell() {
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      style={{
+        // Where the floating Media Player rests: right-aligned with the corner
+        // layout control and just above the prompt-bar row, following the right
+        // sidebar. Workspace (pre-zoom) px; FloatingYouTube.css scales them.
+        // `overlaysHeight` is the row's content box, so add back its 14px bottom
+        // padding before the 16px gap.
+        '--media-player-right': `${(rightSidebarOpen ? layoutState.rightDrawerWidth + 20 : 0) + 20}px`,
+        '--media-player-bottom': `${overlaysHeight + 14 + 16}px`,
+      } as React.CSSProperties}
+    >
       <TitleBar />
       <UpdateBanner />
 
