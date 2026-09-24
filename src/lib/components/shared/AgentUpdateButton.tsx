@@ -36,7 +36,7 @@ export default function AgentUpdateButton({ command, name }: { command: string; 
           <path d="M21 12a9 9 0 1 1-6.2-8.56" />
         </svg>
       ) : (
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M12 4v11" />
           <polyline points="7 10.5 12 15.5 17 10.5" />
           <path d="M5 20h14" />

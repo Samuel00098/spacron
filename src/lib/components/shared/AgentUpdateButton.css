@@ -1,4 +1,10 @@
+/* Green, not the accent: the accent is pure white in dark mode (and black in
+   light), which left the button a faint grey ring on a dark tile and hid the
+   icon on hover. `--success` has a bright value for dark and a deep one for
+   light, so it reads as "new version available" on both. */
 .agent-update-btn {
+  --update-color: var(--success, #2ee06d);
+  --update-ink: #04130a;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7,21 +13,30 @@
   height: 22px;
   padding: 0;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
-  background: color-mix(in srgb, var(--accent, #3b82f6) 14%, transparent);
-  color: var(--accent, #3b82f6);
+  border: 1px solid color-mix(in srgb, var(--update-color) 60%, transparent);
+  background: color-mix(in srgb, var(--update-color) 18%, transparent);
+  color: var(--update-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--update-color) 10%, transparent);
   cursor: pointer;
   box-sizing: border-box;
   transition: background var(--dur-fast, 0.15s) var(--ease-out, ease),
               color var(--dur-fast, 0.15s) var(--ease-out, ease),
               border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
+              box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease),
               transform var(--dur-fast, 0.15s) var(--ease-out, ease);
 }
 
+:root.light-theme .agent-update-btn {
+  --update-ink: #ffffff;
+  background: color-mix(in srgb, var(--update-color) 10%, #ffffff);
+  box-shadow: none;
+}
+
 .agent-update-btn:hover {
-  background: var(--accent, #3b82f6);
-  border-color: var(--accent, #3b82f6);
-  color: #ffffff;
+  background: var(--update-color);
+  border-color: var(--update-color);
+  color: var(--update-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--update-color) 22%, transparent);
 }
 
 .agent-update-btn:active {
@@ -29,7 +44,7 @@
 }
 
 .agent-update-btn:focus-visible {
-  outline: 2px solid var(--accent, #3b82f6);
+  outline: 2px solid var(--update-color);
   outline-offset: 2px;
 }
 

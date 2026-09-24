@@ -11,9 +11,12 @@
 //!   `<prefix>/lib/node_modules/<pkg>/…`, so the package is the nearest
 //!   `package.json` above the link's target.
 //!
-//! A CLI installed any other way (Claude's native installer, winget, a Volta
-//! shim) is skipped rather than "updated" through npm into a second copy the
-//! PATH never reaches. The install runs with `--prefix` set to the prefix the
+//! A CLI installed any other way (winget, a Volta shim) is skipped rather than
+//! "updated" through npm into a second copy the PATH never reaches. The one
+//! exception is a CLI in [`SELF_UPDATERS`]: a native build that ships its own
+//! update command (Claude Code's `claude update`). Spacron reads its version
+//! from `--version`, compares it with the same release on npm, and runs that
+//! command instead of npm. The install runs with `--prefix` set to the prefix the
 //! shim was found in for the same reason: npm's configured prefix can differ
 //! from the one on PATH (nvm, a moved `prefix`), and updating the other one
 //! would report success while the agent kept its old version.
@@ -59,6 +62,55 @@ struct NpmInstall {
     version: String,
     /// The global prefix the shim was found in, passed to `npm --prefix`.
     prefix: PathBuf,
+}
+
+/// A native CLI that updates itself. `package` is the npm package that
+/// publishes the same version numbers, used only to learn the newest version.
+#[derive(Debug)]
+struct SelfUpdater {
+    command: &'static str,
+    package: &'static str,
+    update_args: &'static [&'static str],
+}
+
+/// Checked 2026-09-24: `claude update` exists ("Check for updates and install
+/// if available"), `claude --version` prints `2.1.281 (Claude Code)`, and the
+/// npm tags carry the same numbers (`latest`, and `stable` for the stable
+/// channel).
+const SELF_UPDATERS: &[SelfUpdater] = &[SelfUpdater {
+    command: "claude",
+    package: "@anthropic-ai/claude-code",
+    update_args: &["update"],
+}];
+
+/// A native install found through [`SELF_UPDATERS`].
+#[derive(Debug, Clone)]
+struct NativeInstall {
+    exe: PathBuf,
+    version: String,
+    updater: &'static SelfUpdater,
+}
+
+#[derive(Debug, Clone)]
+enum Install {
+    Npm(NpmInstall),
+    Native(NativeInstall),
+}
+
+impl Install {
+    fn package(&self) -> &str {
+        match self {
+            Install::Npm(i) => &i.package,
+            Install::Native(i) => i.updater.package,
+        }
+    }
+
+    fn version(&self) -> &str {
+        match self {
+            Install::Npm(i) => &i.version,
+            Install::Native(i) => &i.version,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +190,96 @@ fn pick_update(installed: &str, tags: &serde_json::Map<String, serde_json::Value
         .filter_map(|text| parse_version(text).map(|v| (text, v)))
         .max_by(|(_, a), (_, b)| compare_versions(a, b))?;
     (compare_versions(&best.1, &current) == std::cmp::Ordering::Greater).then(|| best.0.to_string())
+}
+
+/// The version to offer a self-updating CLI: the tag its own channel follows,
+/// when that is newer. Claude Code's `autoUpdatesChannel: "stable"` makes
+/// `claude update` install the `stable` tag, so offering `latest` there would
+/// promise a version the update never delivers.
+fn pick_native_update(
+    installed: &str,
+    tags: &serde_json::Map<String, serde_json::Value>,
+    channel: &str,
+) -> Option<String> {
+    let current = parse_version(installed)?;
+    let text = tags.get(channel).or_else(|| tags.get("latest"))?.as_str()?;
+    let target = parse_version(text)?;
+    (compare_versions(&target, &current) == std::cmp::Ordering::Greater).then(|| text.to_string())
+}
+
+/// The release channel Claude Code updates from: `stable` or `latest`.
+fn claude_channel() -> String {
+    dirs::home_dir()
+        .map(|home| home.join(".claude").join("settings.json"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| json.get("autoUpdatesChannel")?.as_str().map(str::to_string))
+        .filter(|channel| channel == "stable")
+        .unwrap_or_else(|| "latest".to_string())
+}
+
+fn channel_for(updater: &SelfUpdater) -> String {
+    if updater.command == "claude" {
+        claude_channel()
+    } else {
+        "latest".to_string()
+    }
+}
+
+/// A child with no window, piped output, and the PATH a fresh terminal would
+/// have: a desktop app's PATH is frozen at launch, and install scripts shell
+/// out to `node`.
+fn hidden_command(program: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(path) = crate::commands::agent_probe::search_path() {
+        cmd.env("PATH", path);
+    }
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// The version a CLI prints for `--version`: its first token that parses.
+async fn cli_version(exe: &Path) -> Option<String> {
+    let mut cmd = hidden_command(exe);
+    cmd.arg("--version");
+    let output = tokio::time::timeout(Duration::from_secs(15), cmd.output()).await.ok()?.ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .map(|t| t.trim_start_matches('v'))
+        .find(|t| parse_version(t).is_some())
+        .map(str::to_string)
+}
+
+async fn find_native_install(command: &str) -> Option<NativeInstall> {
+    let updater = SELF_UPDATERS.iter().find(|u| u.command == command)?;
+    let exe = crate::commands::agent_probe::which(command)?;
+    let version = cli_version(&exe).await?;
+    Some(NativeInstall { exe, version, updater })
+}
+
+/// npm first (it says exactly which package and prefix), then a native
+/// self-updater.
+async fn find_install(command: &str) -> Option<Install> {
+    let lookup = command.to_string();
+    if let Some(npm) = tokio::task::spawn_blocking(move || find_npm_install(&lookup)).await.ok().flatten() {
+        return Some(Install::Npm(npm));
+    }
+    find_native_install(command).await.map(Install::Native)
+}
+
+fn pick_for(install: &Install, tags: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    match install {
+        Install::Npm(i) => pick_update(&i.version, tags),
+        Install::Native(i) => pick_native_update(&i.version, tags, &channel_for(i.updater)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,20 +402,19 @@ async fn fetch_dist_tags(
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Check each command. Commands that are not npm installs are left out of the
+/// Check each command. Commands Spacron cannot update are left out of the
 /// answer entirely, so "no row" means "Spacron cannot update this one".
 #[tauri::command]
 pub async fn agent_updates_check(commands: Vec<String>) -> Vec<AgentUpdateInfo> {
-    let installs: Vec<(String, NpmInstall)> = tokio::task::spawn_blocking(move || {
-        let mut seen = HashSet::new();
-        commands
-            .into_iter()
-            .filter(|c| seen.insert(c.clone()))
-            .filter_map(|c| find_npm_install(&c).map(|i| (c, i)))
-            .collect()
-    })
+    let mut seen = HashSet::new();
+    let commands: Vec<String> = commands.into_iter().filter(|c| seen.insert(c.clone())).collect();
+    let installs: Vec<(String, Install)> = futures_util::future::join_all(
+        commands.into_iter().map(|c| async move { find_install(&c).await.map(|i| (c, i)) }),
+    )
     .await
-    .unwrap_or_default();
+    .into_iter()
+    .flatten()
+    .collect();
 
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -286,14 +427,14 @@ pub async fn agent_updates_check(commands: Vec<String>) -> Vec<AgentUpdateInfo> 
     let checks = installs.into_iter().map(|(command, install)| {
         let client = client.clone();
         async move {
-            let latest = fetch_dist_tags(&client, &install.package).await;
-            let target = latest.as_ref().and_then(|tags| pick_update(&install.version, tags));
+            let latest = fetch_dist_tags(&client, install.package()).await;
+            let target = latest.as_ref().and_then(|tags| pick_for(&install, tags));
             AgentUpdateInfo {
                 command,
-                package: install.package,
+                package: install.package().to_string(),
                 update_available: target.is_some(),
-                latest: target.or_else(|| latest.map(|_| install.version.clone())),
-                installed: install.version,
+                latest: target.or_else(|| latest.map(|_| install.version().to_string())),
+                installed: install.version().to_string(),
             }
         }
     });
@@ -347,22 +488,22 @@ fn npm_invocation() -> Result<(PathBuf, Vec<PathBuf>), String> {
     }
 }
 
-/// Install the newest version of the npm package behind `command`, in a
-/// process with no window. Everything is re-derived here from the command, so
-/// the frontend cannot steer which package or version gets installed.
+/// Install the newest version of the CLI behind `command`, in a process with no
+/// window: `npm install -g` for an npm install, the CLI's own update command
+/// for a native one. Everything is re-derived here from the command, so the
+/// frontend cannot steer which package or version gets installed.
 #[tauri::command]
 pub async fn agent_update_install(command: String) -> Result<AgentUpdateResult, String> {
-    let lookup = command.clone();
-    let install = tokio::task::spawn_blocking(move || find_npm_install(&lookup))
+    let install = find_install(&command)
         .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| format!("`{command}` is not an npm install Spacron can update."))?;
+        .ok_or_else(|| format!("`{command}` is not an install Spacron can update."))?;
+    let package = install.package().to_string();
+    let from = install.version().to_string();
 
     {
         let mut guard = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
         if !guard.get_or_insert_with(HashSet::new).insert(command.clone()) {
-            return Err(format!("{} is already updating.", install.package));
+            return Err(format!("{package} is already updating."));
         }
     }
     let _in_flight = InFlightGuard(command.clone());
@@ -372,42 +513,72 @@ pub async fn agent_update_install(command: String) -> Result<AgentUpdateResult, 
         .user_agent("spacron-agent-updates")
         .build()
         .map_err(|e| e.to_string())?;
-    let tags = fetch_dist_tags(&client, &install.package)
+    let tags = fetch_dist_tags(&client, &package)
         .await
-        .ok_or_else(|| format!("Could not reach the npm registry for {}.", install.package))?;
-    let target = pick_update(&install.version, &tags)
-        .ok_or_else(|| format!("{} {} is already the newest version.", install.package, install.version))?;
+        .ok_or_else(|| format!("Could not reach the npm registry for {package}."))?;
+    let target =
+        pick_for(&install, &tags).ok_or_else(|| format!("{package} {from} is already the newest version."))?;
 
+    match install {
+        Install::Npm(npm) => install_npm(&command, npm, target).await,
+        Install::Native(native) => install_native(native, target).await,
+    }
+}
+
+async fn run_hidden(mut cmd: tokio::process::Command, what: &str) -> Result<std::process::Output, String> {
+    let child = cmd.spawn().map_err(|e| format!("Could not start {what}: {e}"))?;
+    tokio::time::timeout(INSTALL_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| format!("The update took longer than 15 minutes, so {what} was stopped."))?
+        .map_err(|e| format!("{what} did not finish: {e}"))
+}
+
+async fn install_native(native: NativeInstall, target: String) -> Result<AgentUpdateResult, String> {
+    let mut cmd = hidden_command(&native.exe);
+    cmd.args(native.updater.update_args);
+    let what = format!("`{} {}`", native.updater.command, native.updater.update_args.join(" "));
+    let output = run_hidden(cmd, &what).await?;
+
+    // The CLI's own report is not the answer; its version afterwards is.
+    let now = cli_version(&native.exe).await;
+    let moved = now
+        .as_deref()
+        .and_then(parse_version)
+        .zip(parse_version(&native.version))
+        .is_some_and(|(now, before)| compare_versions(&now, &before) == std::cmp::Ordering::Greater);
+    if moved {
+        return Ok(AgentUpdateResult {
+            package: native.updater.package.to_string(),
+            from: native.version,
+            to: now.unwrap_or(target),
+        });
+    }
+    let said = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said: Vec<&str> = said.lines().map(str::trim).filter(|l| !l.is_empty()).take(6).collect();
+    let mut message = format!("{what} finished, but {} is still at {}.", native.updater.command, native.version);
+    if !said.is_empty() {
+        message.push('\n');
+        message.push_str(&said.join("\n"));
+    }
+    Err(message)
+}
+
+async fn install_npm(command: &str, install: NpmInstall, target: String) -> Result<AgentUpdateResult, String> {
     if command == "dsh" {
         crate::commands::deepseek_harness::shutdown_all();
     }
 
     let (program, lead) = npm_invocation()?;
-    let mut cmd = tokio::process::Command::new(&program);
+    let mut cmd = hidden_command(&program);
     cmd.args(&lead)
         .args(["install", "--global", "--no-audit", "--no-fund", "--prefix"])
         .arg(&install.prefix)
-        .arg(format!("{}@{}", install.package, target))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    // A desktop app's PATH is frozen at launch; install scripts shell out to
-    // `node`, so give them the PATH a fresh terminal would have.
-    if let Some(path) = crate::commands::agent_probe::search_path() {
-        cmd.env("PATH", path);
-    }
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let child = cmd.spawn().map_err(|e| format!("Could not start npm: {e}"))?;
-    let output = tokio::time::timeout(INSTALL_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| format!("Updating {} took longer than 15 minutes and was stopped.", install.package))?
-        .map_err(|e| format!("npm did not finish: {e}"))?;
+        .arg(format!("{}@{}", install.package, target));
+    let output = run_hidden(cmd, "npm").await?;
 
     if !output.status.success() {
         return Err(npm_failure(&output.stderr, &output.stdout));
@@ -415,7 +586,7 @@ pub async fn agent_update_install(command: String) -> Result<AgentUpdateResult, 
 
     // Trust the manifest on disk over npm's exit code: a zero exit that left
     // the old version in place is still a failed update.
-    let lookup = command.clone();
+    let lookup = command.to_string();
     let now = tokio::task::spawn_blocking(move || find_npm_install(&lookup))
         .await
         .ok()
@@ -500,6 +671,15 @@ mod tests {
             ("alpha-win32-x64", "0.158.0-alpha.8-win32-x64"),
         ]);
         assert_eq!(pick_update("0.158.0-alpha.1", &codex).as_deref(), Some("0.158.0-alpha.8"));
+    }
+
+    #[test]
+    fn native_update_follows_its_channel() {
+        let claude = tags(&[("stable", "2.1.273"), ("next", "2.1.281"), ("latest", "2.1.281")]);
+        assert_eq!(pick_native_update("2.1.270", &claude, "latest").as_deref(), Some("2.1.281"));
+        assert_eq!(pick_native_update("2.1.270", &claude, "stable").as_deref(), Some("2.1.273"));
+        assert_eq!(pick_native_update("2.1.273", &claude, "stable"), None);
+        assert_eq!(pick_native_update("2.1.281", &claude, "latest"), None);
     }
 
     #[test]
