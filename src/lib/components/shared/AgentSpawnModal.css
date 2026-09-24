@@ -203,24 +203,16 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
+/* Selection is the fill tint (and the corner count badge), never an outline:
+   a colored border and ring around a clicked tile read as a focus glitch. */
 .asm-agent-tile.active,
 .asm-agent-tile.selected {
-  background: color-mix(in srgb, var(--logo, var(--accent)) 12%, #16161c);
-  border-color: var(--logo, var(--accent, #3b82f6));
+  background: color-mix(in srgb, var(--logo, var(--accent)) 16%, #16161c);
 }
 
 :root.light-theme .asm-agent-tile.active,
 :root.light-theme .asm-agent-tile.selected {
-  background: color-mix(in srgb, var(--logo, #000000) 7%, #ffffff);
-  border-color: var(--logo, #000000);
-}
-
-.asm-agent-tile.active {
-  box-shadow: 0 0 0 1.5px var(--logo, var(--accent, #3b82f6)), 0 4px 14px rgba(0, 0, 0, 0.35);
-}
-
-:root.light-theme .asm-agent-tile.active {
-  box-shadow: 0 0 0 1.5px var(--logo, #000000), 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: color-mix(in srgb, var(--logo, #000000) 9%, #ffffff);
 }
 
 /* Corner selection count badge */
@@ -802,18 +794,15 @@
   color: #000000;
 }
 
+/* Same rule as the agent tiles: the chosen placement is a fill, not a ring. */
 .asm-placement-card.selected {
-  background: color-mix(in srgb, var(--accent, #ffffff) 10%, #000000);
-  border-color: var(--accent, #ffffff);
+  background: color-mix(in srgb, var(--accent, #ffffff) 12%, #000000);
   color: var(--text-primary, #ffffff);
-  box-shadow: 0 0 0 1px var(--accent, #ffffff), 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 :root.light-theme .asm-placement-card.selected {
-  background: #f4f4f6;
-  border-color: #000000;
+  background: #ececf0;
   color: #000000;
-  box-shadow: 0 0 0 1px #000000, 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .asm-placement-card-header {
@@ -1111,4 +1100,28 @@
   .asm-confirm-btn {
     width: 100%;
   }
+}
+
+/* Nothing in the spawn panel draws a focus outline when it is clicked. The
+   keyboard keeps its ring (`:focus-visible`), so tabbing through still shows
+   where you are; text fields signal focus with their own border instead. */
+.asm-card :focus:not(:focus-visible),
+.asm-card input:focus,
+.asm-card textarea:focus {
+  outline: none;
+}
+
+/* A subtle press on the big choice targets. The app-wide button press
+   (global.css) shrinks to 96% and springs back with an overshoot, which on a
+   tile this wide reads as a heavy bounce. 1% and a plain ease-out is enough
+   to feel the click. */
+.asm-agent-tile,
+.asm-placement-card {
+  transition-timing-function: var(--ease-out) !important;
+}
+
+.asm-agent-tile:active:not(:disabled),
+.asm-placement-card:active:not(:disabled) {
+  transform: scale(0.99) !important;
+  filter: none !important;
 }

@@ -528,69 +528,12 @@
   opacity: 0.85;
 }
 
-/* Agent Pane Visual Borders & Glows */
+/* Agent panes stay flat like every terminal: no per-agent colored border and
+   no glowing rim on the focused one. The pane's own header already says
+   which agent it is, and a colored outline around a terminal read as noise. */
 .terminal-pane.agent-pane {
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
-}
-
-/* Custom borders based on agent preset command */
-.terminal-pane.agent-pane.agent-agy,
-.terminal-pane.agent-pane.agent-antigravity {
-  border-color: rgba(34, 211, 199, 0.3);
-}
-
-.terminal-pane.agent-pane.agent-claude {
-  border-color: rgba(52, 211, 153, 0.3);
-}
-
-.terminal-pane.agent-pane.agent-aider {
-  border-color: rgba(245, 176, 69, 0.3);
-}
-
-.terminal-pane.agent-pane.agent-cursor {
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.terminal-pane.agent-pane.agent-hermes {
-  border-color: color-mix(in srgb, var(--role-agent) 30%, transparent);
-}
-
-.terminal-pane.agent-pane.agent-grok {
-  border-color: color-mix(in srgb, var(--text-primary) 30%, transparent);
-}
-
-/* Active agent panes get intense glows */
-.terminal-pane.agent-pane.active.agent-agy,
-.terminal-pane.agent-pane.active.agent-antigravity {
-  border-color: #22d3c7 !important;
-  box-shadow: 0 0 10px rgba(34, 211, 199, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.terminal-pane.agent-pane.active.agent-claude {
-  border-color: #34d399 !important;
-  box-shadow: 0 0 10px rgba(52, 211, 153, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.terminal-pane.agent-pane.active.agent-aider {
-  border-color: #f5b045 !important;
-  box-shadow: 0 0 10px rgba(245, 176, 69, 0.25), 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.terminal-pane.agent-pane.active.agent-cursor {
-  border-color: var(--info) !important;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--info) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.terminal-pane.agent-pane.active.agent-hermes {
-  border-color: var(--role-agent) !important;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--role-agent) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.terminal-pane.agent-pane.active.agent-grok {
-  border-color: var(--text-primary) !important;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--text-primary) 25%, transparent), 0 4px 12px rgba(0, 0, 0, 0.2);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* Drag-over highlight when files are dragged into this pane */

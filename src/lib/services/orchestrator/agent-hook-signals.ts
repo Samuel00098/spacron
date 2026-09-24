@@ -271,6 +271,15 @@ function appendCommand(text: string, path: string): string {
 }
 
 /**
+ * Claude Code notification types that mean "the agent is waiting on you":
+ * a tool permission, an MCP input form (in-app or by URL), or an explicit
+ * request for input. Matched as a regex against the notification type.
+ * Source: code.claude.com/docs/en/hooks, Notification matchers (2026-09-24).
+ */
+export const NOTIFICATION_INPUT_TYPES =
+  'permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input';
+
+/**
  * The Claude Code settings document that installs the two hooks.
  *
  * Exported for tests. `Stop` fires when the agent finishes its turn;
@@ -287,6 +296,12 @@ export function buildClaudeHookSettings(nonce: string, path: string): unknown {
       ],
       Notification: [
         {
+          // Only notifications that ARE a request for the user. Unfiltered,
+          // this also fired on `idle_prompt` (the "waiting for your input"
+          // reminder a minute after a turn FINISHES), `agent_completed`,
+          // `auth_success` and the quota notices, and each one was reported
+          // as "needs your input", so a finished agent raised a question card.
+          matcher: NOTIFICATION_INPUT_TYPES,
           hooks: [{ type: 'command', command: appendCommand(`${INPUT_PREFIX}${nonce}`, path) }],
         },
       ],

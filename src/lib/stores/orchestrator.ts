@@ -106,6 +106,8 @@ import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-l
 import { estimateFileOverlap } from '$lib/services/jev';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
+import { agentTurnStates, turnEndWasCounted } from '$lib/stores/agentTurnState';
+import { getSessionHeaderSummary } from '$lib/stores/terminal';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
   leaseOrchestratorTerminal,
@@ -3351,6 +3353,15 @@ function notifyAdoptedTurnEnd(
   const told = describeTurnEnd(outcome);
   if (!told) return;
 
+  // Only a turn end that closed real work notifies. The Agent Fleet reads the
+  // same state (`stores/agentTurnState.ts`): the watcher has already reported
+  // this end there, and it only counts when the agent was working on a task
+  // it was given. An adopted watcher re-arms after every end, so without this
+  // an agent sitting idle at its prompt "finished" on every quiet spell, and a
+  // finished one later raised a "needs input" card with nothing to answer.
+  if (sessionId === undefined || !turnEndWasCounted(sessionId)) return;
+  const turn = get(agentTurnStates)[sessionId];
+
   logTaskActivity(
     task.id,
     told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
@@ -3396,7 +3407,10 @@ function notifyAdoptedTurnEnd(
 
   // The durable trace for this turn. A card lands only when a cue lands, so it
   // can never outnumber the chimes (shouldNudgeAdopted already deduped this one).
-  appendAgentTurnCard(task, name, told.status, told.reason, told.endedBy, silent, asked ? undefined : threadId);
+  // Named like the Agent Fleet card: the agent's own header summary, else the
+  // task it was sent.
+  const summary = getSessionHeaderSummary(sessionId) ?? turn?.task;
+  appendAgentTurnCard(task, name, told.status, told.reason, told.endedBy, silent, asked ? undefined : threadId, summary);
 }
 
 /**
@@ -3442,6 +3456,8 @@ function appendAgentTurnCard(
   silent = false,
   /** Conversation to mirror the card into, when one owns this agent. */
   threadId?: string,
+  /** The prompt the agent was actually sent, when known; names the card. */
+  sentTask?: string,
 ): void {
   appendChat(task.projectId, {
     id: msgId(),
@@ -3454,7 +3470,7 @@ function appendAgentTurnCard(
       agentType: task.agentPreset
         ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset
         : null,
-      taskTitle: task.title,
+      taskTitle: sentTask?.trim() || task.title,
       elapsedSec: null,
       reason,
       summary: null,

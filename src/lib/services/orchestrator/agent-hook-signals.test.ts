@@ -127,6 +127,18 @@ describe('buildClaudeHookSettings', () => {
     expect(settings.hooks.Stop[0].hooks[0].command).toContain(NONCE);
     expect(settings.hooks.Notification[0].hooks[0].command).toContain(NONCE);
   });
+
+  it('reports "needs input" only for notifications that ask the user something', () => {
+    const matcher = new RegExp(`^(?:${settings.hooks.Notification[0].matcher})$`);
+    for (const asks of ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input']) {
+      expect(matcher.test(asks)).toBe(true);
+    }
+    // The idle reminder fires a minute after a turn FINISHES; reading it as a
+    // question is what raised input cards on agents that had simply finished.
+    for (const informs of ['idle_prompt', 'agent_completed', 'auth_success', 'quota_auto_resume_fired']) {
+      expect(matcher.test(informs)).toBe(false);
+    }
+  });
 });
 
 describe('channel routing', () => {

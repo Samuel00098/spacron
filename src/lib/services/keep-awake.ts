@@ -153,15 +153,6 @@ export function resetKeepAwake(): Promise<void> {
   return reconcile();
 }
 
-/**
- * Whether the orchestrator is watching a turn on this session right now. A
- * watched turn can sit silent for a long while (a model thinking before it
- * prints), which the terminal's output-driven `isExecuting` flag reads as idle.
- */
-export function isAgentTurnInFlight(sessionId: number): boolean {
-  return workingSessions.has(sessionId);
-}
-
 /** How many agent turns are in flight, for callers that cannot subscribe. */
 export function workingAgentCount(): number {
   return workingSessions.size;

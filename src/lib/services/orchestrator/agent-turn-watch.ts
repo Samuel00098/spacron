@@ -402,6 +402,10 @@ async function watchTurnUntilDone(
       // before any buffer scan, so a genuine finished/blocked hook always wins.
       // And because this check fires on the per-poll `recent` tail, a prompt
       // that scrolls past it is still caught by the wider idle rescan below.
+      //
+      // "Unambiguous" is the matcher's job: a prose question only counts with
+      // an actual choice on screen, so a finished turn that closes with "Do
+      // you want to also add tests?" is not read as a gate here.
       if (sawActivity && containsAttentionRequest(recent, attentionPhrases)) {
         return { kind: 'blocked', reason: attentionReason(recent, attentionPhrases), via: 'inferred' };
       }

@@ -36,7 +36,7 @@ import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
 import { agentSessionClosed } from '$lib/services/keep-awake';
-import { forgetAgentTurnState, noteAgentLaunched, noteAgentPrompted } from './agentTurnState';
+import { forgetAgentTurnState, noteAgentLaunched, noteAgentLineSubmitted, noteAgentPrompted } from './agentTurnState';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
@@ -767,6 +767,15 @@ export function suppressSessionAgentDetection(id: number): () => void {
 // submitted. The executing flag is cleared by TerminalPane once the command's
 // output goes idle, giving us a live "in use" signal for manually-typed
 // commands — not just prompt-bar/agent runs.
+/**
+ * The text of a typed line, without the printable halves of escape sequences
+ * the input buffer keeps once their ESC byte is dropped: bracketed-paste
+ * markers (`[200~`, `[201~`) and arrow/navigation keys (`[A`, `[1;5C`, ...).
+ */
+function typedLine(buffer: string): string {
+  return buffer.replace(/\[20[01]~/g, '').replace(/\[[0-9;]*[A-Za-z~]/g, '').trim();
+}
+
 function processSessionInput(id: number, data: string) {
   let buffer = sessionInputBuffers.get(id) ?? '';
   for (const ch of data) {
@@ -774,10 +783,12 @@ function processSessionInput(id: number, data: string) {
       const command = buffer.trim();
       if (command) {
         const preset = detectAgentPresetFromCommand(buffer);
-        if (!preset && findSessionAnyProject(id)?.agentPreset) {
-          // A line submitted to an agent that is already running is a prompt:
-          // the start of a turn, as the fleet and notifications count them.
-          noteAgentPrompted(id);
+        // A line the user submitted to a running agent is a prompt. xterm
+        // sends the Enter key as its own write, while everything Spacron types
+        // itself (launch lines, charters, auto-answers) arrives as one
+        // `text\r` chunk, so a lone Enter is what tells the two apart.
+        if (!preset && data === '\r' && findSessionAnyProject(id)?.agentPreset) {
+          noteAgentLineSubmitted(id, typedLine(buffer));
         }
         if (preset && !suppressAgentDetection.has(id)) {
           // A fresh launch starts idle, whatever the pane ran before.
@@ -1470,6 +1481,7 @@ export function sendPromptToSession(sessionId: number, text: string, agentPreset
       session && !session.briefed
         ? buildAgentCharter(text, { name: session.agentName ?? null })
         : text;
+    noteAgentPrompted(sessionId, text);
     void deliverPromptRaw(sessionId, payload);
     markSessionBriefed(sessionId, true);
     return;
@@ -1571,6 +1583,7 @@ async function waitForComposerQuiescent(sessionId: number): Promise<void> {
 
 export async function sendAgentPromptDirect(sessionId: number, text: string): Promise<boolean> {
   if (!text) return false;
+  noteAgentPrompted(sessionId, text);
   return deliverPromptRaw(sessionId, text);
 }
 
@@ -1590,7 +1603,6 @@ export async function sendAgentInputLine(sessionId: number, text: string): Promi
 async function deliverPromptRaw(sessionId: number, text: string): Promise<boolean> {
   const pty = ptyInstances.get(sessionId);
   if (!pty) return false;
-  noteAgentPrompted(sessionId);
 
   const session = findSessionAnyProject(sessionId);
   const preset = session?.agentPreset;
@@ -2012,7 +2024,9 @@ async function autoBriefSession(id: number, preset: string) {
 
     const name = session.agentName || null;
     const brief = buildAgentCharter('', { name });
-    const success = await sendAgentPromptDirect(id, brief);
+    // Straight to delivery, not `sendAgentPromptDirect`: the charter is setup,
+    // not a task, so it must not mark the agent as working.
+    const success = await deliverPromptRaw(id, brief);
     if (success) {
       markSessionBriefed(id, true);
     }
@@ -2069,6 +2083,33 @@ export function getSessionLabel(session: TerminalSessionInfo, allSessions: Termi
   if (sameRole.length <= 1) return role;
   const idx = sameRole.findIndex((s) => s.id === session.id);
   return idx === -1 ? role : `${role} ${idx + 1}`;
+}
+
+/**
+ * The one-line summary an agent shows in its own header: the title its CLI
+ * sets (Claude Code titles the pane after the conversation, "◐ Fix the login
+ * redirect"), else the pane's task summary. The leading spinner/status glyph
+ * is dropped, and a title that is only the product's own name ("✳ Claude
+ * Code") says nothing, so it reads as no summary. Null when there is none.
+ */
+export function sessionHeaderSummary(
+  session: Pick<TerminalSessionInfo, 'paneTitle' | 'taskSummary' | 'agentPreset'> | null | undefined,
+): string | null {
+  if (!session) return null;
+  const product = getAgentDisplayName(session.agentPreset)?.toLowerCase() ?? '';
+  for (const raw of [session.paneTitle, session.taskSummary]) {
+    const text = (raw ?? '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    if (!text) continue;
+    const lower = text.toLowerCase();
+    if (lower === product || /^(claude code|codex( cli)?|gemini( cli)?|opencode|aider)$/i.test(text)) continue;
+    return text;
+  }
+  return null;
+}
+
+/** {@link sessionHeaderSummary} for a session id, in any project. */
+export function getSessionHeaderSummary(id: number): string | null {
+  return sessionHeaderSummary(findSessionAnyProject(id));
 }
 
 export function getSessionPaneDisplayTitle(session: TerminalSessionInfo, allSessions: TerminalSessionInfo[]): string {

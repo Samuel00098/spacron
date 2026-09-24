@@ -186,6 +186,7 @@ vi.mock('$lib/stores/agentPlacement', () => ({
 }));
 vi.mock('$lib/stores/terminal', () => ({
   sessions,
+  getSessionHeaderSummary: () => null,
   onSessionExit,
   onAgentDetected,
   spawnAgentPreset,
@@ -3043,6 +3044,11 @@ it('keeps the assistant offer in the next turn context', async () => {
     // leasedSessionLive needs the session to stay running for this task.
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 77, isRunning: true, ownerTaskId: adopted.id }] });
 
+    // The user types a prompt into the agent: a turn starts. Without one the
+    // agent is idle, and an idle agent's quiet spell must not notify at all.
+    const turns = await import('./agentTurnState');
+    turns.noteAgentPrompted(77, 'Fix the login redirect');
+
     // A real turn: ≥500 chars of new output (the watcher's minWorkChars gate)…
     getSessionOutputBuffer.mockReturnValue('x'.repeat(600));
     await vi.advanceTimersByTimeAsync(500); // a poll sees the growth
@@ -3060,6 +3066,41 @@ it('keeps the assistant offer in the next turn context', async () => {
     // The task stays in-progress — the watcher re-arms because the user is still
     // working in that terminal.
     expect(get(mod.orchestratorTasks)[0].status).toBe('in-progress');
+
+    if (previousWindow === undefined) delete g.window;
+    else g.window = previousWindow;
+    if (previousLocalStorage === undefined) delete g.localStorage;
+    else g.localStorage = previousLocalStorage;
+  });
+
+  it('stays silent when an adopted agent that was never prompted goes quiet', async () => {
+    // An agent opened and left alone draws its screen and sits at its prompt.
+    // The re-arming watcher still sees that as a turn that went quiet, but
+    // nobody gave it a task, so there is nothing finished to tell the user.
+    vi.resetModules();
+    const g = globalThis as unknown as { window?: unknown; localStorage?: unknown };
+    const previousWindow = g.window;
+    const previousLocalStorage = g.localStorage;
+    g.window = {};
+    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    sessionExitListeners.length = 0;
+    agentDetectedListeners.length = 0;
+    const mod = await import('./orchestrator');
+    mod.orchestratorTasks.set([]);
+
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 78, isRunning: true, ownerTaskId: null, agentName: null }] });
+    agentDetectedListeners[0]({ sessionId: 78, projectId: 'project-1', preset: 'claude' });
+    const adopted = get(mod.orchestratorTasks)[0];
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 78, isRunning: true, ownerTaskId: adopted.id }] });
+
+    // Its startup screen prints, then it sits idle past the fallback window.
+    getSessionOutputBuffer.mockReturnValue('x'.repeat(600));
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(91000);
+    await Promise.resolve();
+
+    const chat = get(mod.chatMessages)['project-1'] ?? [];
+    expect(chat.filter((m) => !!m.completion)).toHaveLength(0);
 
     if (previousWindow === undefined) delete g.window;
     else g.window = previousWindow;

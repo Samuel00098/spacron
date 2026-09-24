@@ -50,6 +50,7 @@ import {
   getAgentDisplayName,
   getSessionOutputProduced,
   isAgentSession,
+  sessionHeaderSummary,
 } from '$lib/stores/terminal';
 import { orchestratorTasks, stageAgentWorktree, markWorktreeMerged } from '$lib/stores/orchestrator';
 import {
@@ -58,7 +59,6 @@ import {
   type WorktreeInfo,
 } from '$lib/services/orchestrator/worktree-manager';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
-import { isAgentTurnInFlight } from '$lib/services/keep-awake';
 import { agentTurnStates, type AgentTurnPhase } from '$lib/stores/agentTurnState';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
@@ -104,6 +104,8 @@ interface FleetRow {
   baseCommit: string | null;
   /** True while the owning agent's pane is still alive. */
   live: boolean;
+  /** The agent's own header summary (see `sessionHeaderSummary`), if any. */
+  summary: string | null;
   sessionId: number | null;
   task: OrchestratorTask | null;
   status: FleetStatus;
@@ -151,19 +153,16 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
  * (`stores/agentTurnState.ts`): a prompt handed over starts a turn, and the
  * turn watcher's end (the done / needs-input card) closes it.
  *
- * - Working: it was handed a prompt and has not ended that turn yet, or the
- *   orchestrator is running a task it dispatched (`leasedTurn`).
+ * - Working: it was sent a task and has not ended that turn yet.
  * - Idle: open, and nothing has been asked of it. An agent that was only
- *   launched is idle however much its startup screen prints.
+ *   launched is idle however much its startup screen prints, and so is one
+ *   whose orchestrator task exists but has not been sent to it.
  * - Finished / Awaiting input / Failed: how its last turn ended.
- *
- * A question outranks everything: an agent asking for input is not working.
  */
 export function statusFor(
   task: OrchestratorTask | null,
   live: boolean,
   turn: AgentTurnPhase | undefined,
-  leasedTurn: boolean,
 ): FleetStatus {
   if (!live) {
     if (task?.status === 'complete') return 'finished';
@@ -171,11 +170,9 @@ export function statusFor(
     return 'exited';
   }
   if (task?.status === 'blocked' || turn === 'blocked') return 'awaiting';
-  if (turn === 'working' || leasedTurn) return 'working';
+  if (turn === 'working') return 'working';
   if (turn === 'finished') return 'finished';
   if (turn === 'failed') return 'failed';
-  if (task?.status === 'complete') return 'finished';
-  if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
   return 'idle';
 }
 
@@ -191,6 +188,30 @@ const STATUS_ORDER: Record<FleetStatus, number> = {
   idle: 4,
   exited: 5,
 };
+
+/** What a card says when the agent has no header summary to show. */
+const SUMMARY_FALLBACK: Record<FleetStatus, string> = {
+  working: 'Working on a task',
+  idle: 'No task yet',
+  awaiting: 'Waiting for your answer',
+  finished: 'Finished its task',
+  failed: 'Stopped with an error',
+  exited: 'Closed',
+};
+
+/**
+ * The line under the agent's name: the same summary its own pane header shows
+ * (the CLI's title for the conversation), then an orchestrator task's goal,
+ * then a plain word for its state. Never the prompt it was sent: a prompt is
+ * a question or an instruction, while the header says what the work is.
+ */
+export function summaryLine(
+  summary: string | null,
+  goal: string | null | undefined,
+  status: FleetStatus,
+): string {
+  return summary?.trim() || goal?.trim() || SUMMARY_FALLBACK[status];
+}
 
 /** "42s", "3m 05s", "1h 12m". */
 export function formatElapsed(ms: number): string {
@@ -274,6 +295,7 @@ export default function FleetDashboard() {
         (t) => t.assignedSessionId === session.id || t.lastSessionId === session.id,
       ) ?? null;
       const live = session.isRunning === true;
+      const summary = sessionHeaderSummary(session);
       byKey.set(key, {
         key,
         projectId,
@@ -288,9 +310,10 @@ export default function FleetDashboard() {
         repoPath: session.worktree?.path ?? null,
         baseCommit: session.worktree?.baseCommit ?? null,
         live,
+        summary,
         sessionId: session.id,
         task,
-        status: statusFor(task, live, undefined, false),
+        status: statusFor(task, live, undefined),
       });
     }
 
@@ -319,9 +342,10 @@ export default function FleetDashboard() {
         repoPath: task.worktree.path,
         baseCommit: task.worktree.baseCommit,
         live,
+        summary: sessionHeaderSummary(allSessions.find((s) => s.id === sessionId)),
         sessionId,
         task,
-        status: statusFor(task, live, undefined, false),
+        status: statusFor(task, live, undefined),
       });
     }
 
@@ -419,34 +443,25 @@ export default function FleetDashboard() {
     () =>
       rows.map((row) => {
         const turn = row.sessionId !== null ? turnStates[row.sessionId] : undefined;
-        // An orchestrator-dispatched task is working for as long as its watcher
-        // is armed. Adopted (hand-launched) agents are excluded: their watcher
-        // re-arms the moment a turn ends, so "armed" says nothing for them.
-        const leasedTurn =
-          row.sessionId !== null &&
-          row.task?.status === 'in-progress' &&
-          !row.task.adopted &&
-          isAgentTurnInFlight(row.sessionId);
-        const status = statusFor(row.task, row.live, turn?.phase, leasedTurn);
-        const workingSince = status === 'working' ? turn?.since ?? null : null;
-        return { ...row, status, workingSince };
+        const status = statusFor(row.task, row.live, turn?.phase);
+        return {
+          ...row,
+          status,
+          workingSince: status === 'working' ? turn?.since ?? null : null,
+        };
       }),
     [rows, turnStates],
   );
 
-  // A 1 s clock only while something is working: it drives the "for 2m 10s"
-  // timers and stops the moment the fleet goes quiet.
-  const anyWorking = display.some((row) => row.status === 'working');
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!anyWorking) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [anyWorking]);
-
-  /** The working strip under the header: collapsed to one line by default. */
-  const [stripOpen, setStripOpen] = useState(false);
+  /** Cards showing their details (changes, branch, actions). Closed by default. */
+  const [openCards, setOpenCards] = useState<Set<string>>(new Set());
+  const toggleCard = (key: string) =>
+    setOpenCards((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // Main-repo cards name the branch the agent is actually sitting on, which is
   // the checkout's — and it moves under them if you check something else out.
@@ -614,8 +629,7 @@ export default function FleetDashboard() {
   const awaitingCount = display.filter((row) => row.status === 'awaiting').length;
   const idleCount = display.filter((row) => row.status === 'idle').length;
   const readyCount = display.filter(readyToReview).length;
-  // Open only while there is something to list; it reopens with the next turn.
-  const stripExpanded = stripOpen && working.length > 0;
+
 
   /**
    * A worktree card whose agent has stopped and left unreviewed work is the
@@ -660,32 +674,48 @@ export default function FleetDashboard() {
       const hasFiles = files.length > 0;
 
       const ready = readyToReview(row);
+      const detailsOpen = openCards.has(row.key);
+      const activity = summaryLine(row.summary, row.task?.goal, row.status);
 
       return (
         <article
           className={`fleet-card status-${row.status} placement-${row.placement}${ready ? ' ready' : ''}`}
           key={row.key}
         >
-          {/* Identity and state in one two-line grid: the mark spans both
-              rows, name/status on top, branch/diffstat beneath. The mark
-              sits in a fixed tile because AgentBrandMark draws at 100% of
-              whatever contains it — an unsized parent lets a fetched
-              favicon render at its own intrinsic size. */}
-          <header className="fc-head">
+          {/* The whole card at rest: who, what it's on, and its state, in one
+              row. Clicking it opens the details below. The mark sits in a
+              fixed tile because AgentBrandMark draws at 100% of whatever
+              contains it; an unsized parent lets a fetched favicon render at
+              its own intrinsic size. */}
+          <button
+            type="button"
+            className="fc-row"
+            onClick={() => toggleCard(row.key)}
+            aria-expanded={detailsOpen}
+            title={detailsOpen ? 'Hide details' : 'Show changes, branch and actions'}
+          >
             <span className="fc-brand-tile">
-              <AgentBrandMark
-                command={row.agentPreset}
-                name={row.agentName}
-                className="fc-brand"
-              />
+              <AgentBrandMark command={row.agentPreset} name={row.agentName} className="fc-brand" />
             </span>
-            <span className="fc-name" title={row.task?.goal ?? row.agentName}>
-              {row.agentName}
+            <span className="fc-main">
+              <span className="fc-name">{row.agentName}</span>
+              <span className="fc-activity" title={activity}>{activity}</span>
             </span>
-            <span className={`fc-status fc-status-${row.status}`}>
+            <span
+              className={`fc-status fc-status-${row.status}`}
+              title={row.workingSince !== null ? `Working for ${formatElapsed(Date.now() - row.workingSince)}` : undefined}
+            >
               <i className="fc-status-dot" aria-hidden="true" />
               {STATUS_LABEL[row.status]}
             </span>
+            <svg className={`fc-row-caret${detailsOpen ? ' open' : ''}`} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+
+          {detailsOpen && (
+          <div className="fc-details">
+          <div className="fc-meta">
             {worktree ? (
               <span
                 className="fc-branch"
@@ -720,7 +750,7 @@ export default function FleetDashboard() {
             ) : (
               <span className="fc-stat fc-stat-loading">…</span>
             )}
-          </header>
+          </div>
 
           {worktree?.stageConflict && (
             <div className="fc-warning">
@@ -973,6 +1003,8 @@ export default function FleetDashboard() {
               </div>
             </div>
           )}
+          </div>
+          )}
         </article>
       );
   };
@@ -999,55 +1031,17 @@ export default function FleetDashboard() {
 
       {/* The fleet's state in one slim line. Working leads; clicking it opens
           the list of who is working, on what, and for how long. */}
-      <div className={`fleet-strip${working.length > 0 ? ' is-active' : ''}${stripExpanded ? ' open' : ''}`}>
-        <button
-          type="button"
-          className="fleet-strip-bar"
-          onClick={() => setStripOpen((open) => !open)}
-          aria-expanded={stripExpanded}
-          disabled={working.length === 0}
-          title={working.length > 0 ? `${stripExpanded ? 'Hide' : 'Show'} the working agents` : 'No agent is working'}
-        >
-          <span className="fleet-strip-dot" aria-hidden="true" />
-          <span className="fleet-strip-working">
-            {working.length > 0 ? `${working.length} working` : 'None working'}
-          </span>
-          {awaitingCount > 0 && (
-            <span className="fleet-chip fleet-chip-awaiting">{awaitingCount} need{awaitingCount === 1 ? 's' : ''} input</span>
-          )}
-          {readyCount > 0 && <span className="fleet-chip fleet-chip-ready">{readyCount} ready</span>}
-          {idleCount > 0 && <span className="fleet-chip fleet-chip-idle">{idleCount} idle</span>}
-          {working.length > 0 && (
-            <svg className="fleet-strip-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          )}
-          {working.length > 0 && <span className="fleet-strip-sweep" aria-hidden="true" />}
-        </button>
-        {stripExpanded && (
-          <ul className="fleet-strip-list">
-            {working.map((row) => (
-              <li key={row.key}>
-                <button
-                  type="button"
-                  className="fleet-strip-item"
-                  onClick={() => row.sessionId !== null && setActiveSession(row.sessionId)}
-                  disabled={row.sessionId === null}
-                  title="Focus this agent's terminal"
-                >
-                  <span className="fleet-strip-item-mark">
-                    <AgentBrandMark command={row.agentPreset} name={row.agentName} className="fc-brand" />
-                  </span>
-                  <span className="fleet-strip-item-name">{row.agentName}</span>
-                  <span className="fleet-strip-item-goal">{row.task?.goal?.trim() || 'Working in its terminal'}</span>
-                  {row.workingSince !== null && (
-                    <span className="fleet-strip-item-time">{formatElapsed(now - row.workingSince)}</span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
+      <div className={`fleet-strip${working.length > 0 ? ' is-active' : ''}`}>
+        <span className="fleet-strip-dot" aria-hidden="true" />
+        <span className="fleet-strip-working">
+          {working.length > 0 ? `${working.length} working` : 'None working'}
+        </span>
+        {awaitingCount > 0 && (
+          <span className="fleet-chip fleet-chip-awaiting">{awaitingCount} need{awaitingCount === 1 ? 's' : ''} input</span>
         )}
+        {readyCount > 0 && <span className="fleet-chip fleet-chip-ready">{readyCount} ready</span>}
+        {idleCount > 0 && <span className="fleet-chip fleet-chip-idle">{idleCount} idle</span>}
+        {working.length > 0 && <span className="fleet-strip-sweep" aria-hidden="true" />}
       </div>
 
       <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>{ordered.map(renderCard)}</div>

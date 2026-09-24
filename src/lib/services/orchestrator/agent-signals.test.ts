@@ -84,8 +84,21 @@ describe('countBellStream', () => {
 describe('containsAttentionRequest', () => {
   it('matches common confirmation prompts', () => {
     expect(containsAttentionRequest('Proceed? [y/n]')).toBe(true);
-    expect(containsAttentionRequest('Do you want to continue?')).toBe(true);
+    expect(containsAttentionRequest('Do you want to continue?\n❯ 1. Yes\n  2. No')).toBe(true);
     expect(containsAttentionRequest('Waiting for your response…')).toBe(true);
+  });
+
+  it('does not read a question in a finished reply as a gate', () => {
+    // A finished turn often closes by offering more work. The agent is back at
+    // its prompt; nothing is waiting on an answer.
+    expect(containsAttentionRequest('Done. Do you want to also add tests for the parser?')).toBe(false);
+    expect(containsAttentionRequest('All 12 tests pass. Would you like to see the diff?')).toBe(false);
+    expect(containsAttentionRequest('Shall I push this branch next?')).toBe(false);
+  });
+
+  it('reads a prose question as a gate when a choice is on screen', () => {
+    expect(containsAttentionRequest('Would you like to run it? (y/n)')).toBe(true);
+    expect(containsAttentionRequest('Do you want to make this edit?\n › Yes\n   No')).toBe(true);
   });
 
   it('ignores ordinary output', () => {

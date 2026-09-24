@@ -4,8 +4,10 @@ import {
   agentTurnStates,
   forgetAgentTurnState,
   noteAgentLaunched,
+  noteAgentLineSubmitted,
   noteAgentPrompted,
   noteAgentTurnEnded,
+  turnEndWasCounted,
 } from './agentTurnState';
 
 const phase = (id: number) => get(agentTurnStates)[id]?.phase;
@@ -53,5 +55,47 @@ describe('agent turn state', () => {
     noteAgentPrompted(6);
     forgetAgentTurnState(6);
     expect(phase(6)).toBeUndefined();
+  });
+
+  it('remembers the task it was sent, through the end of the turn', () => {
+    noteAgentPrompted(7, 'Fix the login redirect\nand add a test');
+    expect(get(agentTurnStates)[7].task).toBe('Fix the login redirect');
+    noteAgentTurnEnded(7, 'finished');
+    expect(get(agentTurnStates)[7].task).toBe('Fix the login redirect');
+    noteAgentLaunched(7);
+    expect(get(agentTurnStates)[7].task).toBeUndefined();
+  });
+
+  it('counts a typed line as a task, but not a slash command or a menu key', () => {
+    noteAgentLineSubmitted(8, '/model');
+    expect(phase(8)).toBeUndefined();
+    noteAgentLineSubmitted(8, '1');
+    expect(phase(8)).toBeUndefined();
+    noteAgentLineSubmitted(8, 'write a test for the parser');
+    expect(phase(8)).toBe('working');
+    expect(get(agentTurnStates)[8].task).toBe('write a test for the parser');
+  });
+
+  it('lets a one-key answer resume a turn that was waiting on it', () => {
+    noteAgentPrompted(9, 'Delete the old migrations');
+    noteAgentTurnEnded(9, 'blocked');
+    noteAgentLineSubmitted(9, 'y');
+    expect(phase(9)).toBe('working');
+    expect(get(agentTurnStates)[9].task).toBe('Delete the old migrations');
+  });
+
+  it('counts a turn end only when it closed work the agent was given', () => {
+    noteAgentLaunched(10);
+    noteAgentTurnEnded(10, 'finished');
+    expect(turnEndWasCounted(10)).toBe(false); // idle: nothing to report
+
+    noteAgentPrompted(10, 'Fix the login redirect');
+    noteAgentTurnEnded(10, 'finished');
+    expect(turnEndWasCounted(10)).toBe(true);
+
+    // The idle reminder after a finish, read as "needs input": not a new turn.
+    noteAgentTurnEnded(10, 'blocked');
+    expect(turnEndWasCounted(10)).toBe(false);
+    expect(phase(10)).toBe('finished');
   });
 });
