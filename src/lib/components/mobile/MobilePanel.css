@@ -21,28 +21,36 @@
   max-height: 100dvh;
 }
 
-/* ── Tabs ── */
+/* ── Tabs: one segmented control, so Android / iOS read as a single switch
+   rather than two loose buttons. ── */
 .mobile-panel .mobile-tabs {
-  height: 36px;
-  background: transparent;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.mobile-panel .mobile-tabs-track {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
 }
 
 .mobile-panel .mobile-tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 8px;
+  height: 26px;
+  padding: 0 14px;
+  border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 11.5px;
   font-weight: 600;
   font-family: inherit;
@@ -51,26 +59,22 @@
 }
 
 .mobile-panel .mobile-tab:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
 .mobile-panel .mobile-tab.active {
-  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  background: var(--bg-tertiary);
   border-color: var(--border);
   color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
+/* A quiet qualifier on the tab, not a second badge competing with the label. */
 .mobile-panel .mobile-tab-note {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 500;
   color: var(--text-muted);
-  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1.5px 5px;
+  opacity: 0.8;
 }
 
 /* ── Toolbar ── */
@@ -92,6 +96,15 @@
   white-space: nowrap;
 }
 
+/* Stream settings (size + live/snapshot) sit at the far end, so the device
+   and launch controls lead and the row wraps in whole groups. */
+.mobile-panel .mobile-stream-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 /* Which AVD to launch, said once under the toolbar. Deliberately a quiet line
    rather than a callout box: it is advice for the first launch, not a warning,
    and it sits directly above the stage where the picker's result appears. Both
@@ -100,7 +113,7 @@
 .mobile-panel .mobile-hint {
   flex-shrink: 0;
   margin: 0;
-  padding: 6px 10px 0;
+  padding: 8px 12px 0;
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-muted);
@@ -242,14 +255,19 @@
   place-items: center;
   overflow: auto;
   padding: 20px;
-  /* Theme-aware: the old hardcoded navy gradient stayed dark in every theme,
-     so in light mode the (correctly dark) text over it was unreadable. The
-     subtle center vignette now follows the theme palette. */
-  background: radial-gradient(
-    ellipse at 50% 30%,
-    color-mix(in srgb, var(--bg-tertiary) 55%, var(--bg-primary) 45%) 0%,
-    var(--bg-primary) 100%
-  );
+  /* No fill of its own: the stage is the panel's surface, so it takes the
+     theme's color in light and dark mode like the rest of the pane. A painted
+     vignette here read as a black box dropped into the panel. */
+  background: transparent;
+}
+
+/* The iOS tab lays out exactly like the Android one: chrome rows on top and
+   bottom, the stage taking every pixel between them. */
+.mobile-panel .mobile-ios {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Shared device chassis — layered rims + drop shadow, same language as the
@@ -648,8 +666,7 @@
    the last; the device chassis slims too so the screen fills the stage. ── */
 @media (max-height: 760px) {
   .mobile-panel .mobile-tabs {
-    height: 30px;
-    padding: 0 8px;
+    padding: 5px 8px;
   }
   .mobile-panel .mobile-tab {
     height: 24px;
@@ -680,7 +697,7 @@
 
 @media (max-height: 600px) {
   .mobile-panel .mobile-tabs {
-    height: 26px;
+    padding: 3px 8px;
   }
   .mobile-panel .mobile-tab {
     height: 22px;

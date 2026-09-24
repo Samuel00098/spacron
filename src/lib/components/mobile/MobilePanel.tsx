@@ -1015,18 +1015,24 @@ export default function MobilePanel() {
   return (
     <div className="mobile-panel">
       <div className="mobile-tabs">
-        <button
-          className={`mobile-tab${tab === 'android' ? ' active' : ''}`}
-          onClick={() => setTab('android')}
-        >
-          Android
-        </button>
-        <button
-          className={`mobile-tab${tab === 'ios' ? ' active' : ''}`}
-          onClick={() => setTab('ios')}
-        >
-          iOS {platform && platform !== 'macos' ? <span className="mobile-tab-note">macOS only</span> : null}
-        </button>
+        <div className="mobile-tabs-track" role="tablist" aria-label="Platform">
+          <button
+            className={`mobile-tab${tab === 'android' ? ' active' : ''}`}
+            onClick={() => setTab('android')}
+            role="tab"
+            aria-selected={tab === 'android'}
+          >
+            Android
+          </button>
+          <button
+            className={`mobile-tab${tab === 'ios' ? ' active' : ''}`}
+            onClick={() => setTab('ios')}
+            role="tab"
+            aria-selected={tab === 'ios'}
+          >
+            iOS {platform && platform !== 'macos' ? <span className="mobile-tab-note">macOS only</span> : null}
+          </button>
+        </div>
       </div>
 
       {tab === 'android' ? (
@@ -1066,6 +1072,17 @@ export default function MobilePanel() {
                 <polyline points="21 3 21 9 15 9" />
               </Ico>
             </button>
+            <button
+              className="mobile-icon-btn"
+              onClick={cycleRotation}
+              disabled={!selectedSerial}
+              title="Rotate 90° clockwise"
+            >
+              <Ico>
+                <path d="M23 4v6h-6" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </Ico>
+            </button>
 
             {tools?.emulator && avds.length > 0 && (
               <span className="mobile-avd">
@@ -1086,59 +1103,49 @@ export default function MobilePanel() {
               </span>
             )}
 
-            <button
-              className="mobile-icon-btn"
-              onClick={cycleRotation}
-              disabled={!selectedSerial}
-              title="Rotate 90° clockwise"
-            >
-              <Ico>
-                <path d="M23 4v6h-6" />
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-              </Ico>
-            </button>
+            <span className="mobile-stream-group">
+              {/* Resolution. Only meaningful for the live stream — the snapshot
+                  mirror's size is whatever `android_screencap` returns — so it is
+                  disabled (with the reason) rather than hidden in Snapshot mode,
+                  which would make the toolbar jump on every mode toggle. */}
+              <span
+                className="mobile-quality"
+                title={
+                  streamMode !== 'stream'
+                    ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
+                    : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
+                }
+              >
+                <span className="mobile-tool-label">Size</span>
+                <Dropdown
+                  options={[
+                    { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
+                    ...STREAM_SIDE_CHOICES.map((c) => ({
+                      value: String(c.side),
+                      label: `${c.side}p`,
+                      sublabel: c.sublabel,
+                    })),
+                  ]}
+                  value={formatStreamSideChoice(streamSide)}
+                  onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
+                  disabled={!selectedSerial || streamMode !== 'stream'}
+                  ariaLabel="Stream resolution"
+                />
+              </span>
 
-            {/* Resolution. Only meaningful for the live stream — the snapshot
-                mirror's size is whatever `android_screencap` returns — so it is
-                disabled (with the reason) rather than hidden in Snapshot mode,
-                which would make the toolbar jump on every mode toggle. */}
-            <span
-              className="mobile-quality"
-              title={
-                streamMode !== 'stream'
-                  ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
-                  : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
-              }
-            >
-              <span className="mobile-tool-label">Size</span>
-              <Dropdown
-                options={[
-                  { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
-                  ...STREAM_SIDE_CHOICES.map((c) => ({
-                    value: String(c.side),
-                    label: `${c.side}p`,
-                    sublabel: c.sublabel,
-                  })),
-                ]}
-                value={formatStreamSideChoice(streamSide)}
-                onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
-                disabled={!selectedSerial || streamMode !== 'stream'}
-                ariaLabel="Stream resolution"
-              />
+              <button
+                className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
+                onClick={toggleStreamMode}
+                disabled={!selectedSerial}
+                title={
+                  streamMode === 'stream'
+                    ? 'Live streaming is on. Click to switch to snapshot polling.'
+                    : 'Live streaming is off. Click to switch to the live stream.'
+                }
+              >
+                {streamMode === 'stream' ? 'Live' : 'Snapshot'}
+              </button>
             </span>
-
-            <button
-              className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
-              onClick={toggleStreamMode}
-              disabled={!selectedSerial}
-              title={
-                streamMode === 'stream'
-                  ? 'Live streaming is on. Click to switch to snapshot polling.'
-                  : 'Live streaming is off. Click to switch to the live stream.'
-              }
-            >
-              {streamMode === 'stream' ? 'Live' : 'Snapshot'}
-            </button>
           </div>
 
           {/* Which AVD to launch. The pane is developed and tested against
@@ -1326,6 +1333,23 @@ export default function MobilePanel() {
                 >
                   {isBooted(iosSelectedSim?.state) ? 'Shutdown' : 'Boot'}
                 </button>
+                {/* Same place as Android's: stream settings live in the
+                    toolbar, the bottom row is only the device's own keys. */}
+                {isBooted(iosSelectedSim?.state) && (
+                  <span className="mobile-stream-group">
+                    <button
+                      className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
+                      onClick={toggleIosStreamMode}
+                      title={
+                        iosStreamMode === 'stream'
+                          ? 'Live streaming is on. Click to switch to snapshot polling.'
+                          : 'Live streaming is off. Click to switch to the live stream.'
+                      }
+                    >
+                      {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
+                    </button>
+                  </span>
+                )}
               </div>
 
               <div className="mobile-stage">
@@ -1374,18 +1398,6 @@ export default function MobilePanel() {
               {isBooted(iosSelectedSim?.state) && (
                 <>
                   <div className="mobile-controls">
-                    <button
-                      className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
-                      onClick={toggleIosStreamMode}
-                      title={
-                        iosStreamMode === 'stream'
-                          ? 'Live streaming is on. Click to switch to snapshot polling.'
-                          : 'Live streaming is off. Click to switch to the live stream.'
-                      }
-                    >
-                      {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
-                    </button>
-                    <span className="mobile-controls-sep" />
                     <button className="mobile-key-btn" onClick={() => iosButton('home')} title="Home">
                       <Ico><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Ico>
                     </button>

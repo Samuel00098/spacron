@@ -161,6 +161,23 @@ function statusFor(task: OrchestratorTask | null, live: boolean): FleetStatus {
   return live ? 'working' : 'exited';
 }
 
+function FleetEmpty({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="fleet-empty">
+      <span className="fleet-empty-icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      </span>
+      <strong>{title}</strong>
+      <span>{children}</span>
+    </div>
+  );
+}
+
 export default function FleetDashboard() {
   const project = useStore(activeProject);
   const projectId = project?.id ?? null;
@@ -494,23 +511,24 @@ export default function FleetDashboard() {
   }
 
   if (!project) {
-    return <div className="fleet-empty">Open a project to see what its agents changed.</div>;
+    return (
+      <FleetEmpty title="No project open">Open a project to see what its agents changed.</FleetEmpty>
+    );
   }
 
   if (rows.length === 0) {
     return (
-      <div className="fleet-empty">
-        <strong>No agents running in this project.</strong>
-        <span>
-          Spawn agents and they show up here whether they take their own branch
-          and checkout or work directly in the main repo. Isolated ones ready to
-          review, merge, or throw away; main-repo ones ready to read.
-        </span>
-      </div>
+      <FleetEmpty title="No agents running in this project">
+        Spawn agents and they show up here, whether they take their own branch
+        and checkout or work directly in the main repo. Isolated ones are ready to
+        review, merge or throw away; main-repo ones are ready to read.
+      </FleetEmpty>
     );
   }
 
   const isolatedCount = rows.filter((row) => row.placement === 'worktree').length;
+  const workingCount = rows.filter((row) => row.status === 'working').length;
+  const awaitingCount = rows.filter((row) => row.status === 'awaiting').length;
 
   /**
    * A worktree card whose agent has stopped and left unreviewed work is the
@@ -547,6 +565,31 @@ export default function FleetDashboard() {
           {isolatedCount > 0 && isolatedCount < rows.length && ` · ${isolatedCount} isolated`}
         </span>
       </header>
+
+      {/* The fleet's state at a glance, before reading any card. Only states
+          that exist are shown, so a quiet fleet gets a quiet strip. */}
+      {(workingCount > 0 || awaitingCount > 0 || rows.some(readyToReview)) && (
+        <div className="fleet-summary">
+          {workingCount > 0 && (
+            <span className="fleet-chip fleet-chip-working">
+              <i aria-hidden="true" />
+              {workingCount} working
+            </span>
+          )}
+          {awaitingCount > 0 && (
+            <span className="fleet-chip fleet-chip-awaiting">
+              <i aria-hidden="true" />
+              {awaitingCount} need{awaitingCount === 1 ? 's' : ''} input
+            </span>
+          )}
+          {rows.some(readyToReview) && (
+            <span className="fleet-chip fleet-chip-ready">
+              <i aria-hidden="true" />
+              {rows.filter(readyToReview).length} ready to review
+            </span>
+          )}
+        </div>
+      )}
 
       <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>
         {rows.map((row) => {

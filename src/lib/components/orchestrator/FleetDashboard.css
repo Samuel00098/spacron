@@ -63,19 +63,93 @@
   flex-shrink: 0;
 }
 
+/* Empty states sit centred in the drawer with the panel's icon, the same
+   shape as the other tool panels' empty states. */
 .fleet-empty {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 32px 28px;
+  text-align: center;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.55;
 }
 
+.fleet-empty > span:last-child {
+  max-width: 340px;
+}
+
+.fleet-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
 .fleet-empty strong {
   color: var(--text-secondary);
   font-size: 13px;
+  font-weight: 600;
+}
+
+/* ─── Summary strip ──────────────────────────────── */
+.fleet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.fleet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fleet-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.fleet-chip-working {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.fleet-chip-working i {
+  animation: fc-pulse 1.8s ease-in-out infinite;
+}
+
+.fleet-chip-awaiting {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.fleet-chip-ready {
+  color: var(--success, #4ade80);
+  background: color-mix(in srgb, var(--success, #4ade80) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fleet-chip-working i { animation: none; }
 }
 
 /* Auto-fitting grid: one column on a narrow pane, more as the room grows. */
@@ -84,8 +158,10 @@
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 12px;
+  /* `min(100%, …)` so a drawer narrower than one card still fits it,
+     instead of the card overflowing sideways. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
   padding: 12px;
   align-content: start;
 }
@@ -94,10 +170,10 @@
 .fleet-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 11px 12px;
+  gap: 9px;
+  padding: 12px 13px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, transparent 65%),
     rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.55);
@@ -192,8 +268,8 @@
   grid-template-areas:
     "brand name   status"
     "brand branch stat";
-  column-gap: 8px;
-  row-gap: 1px;
+  column-gap: 10px;
+  row-gap: 2px;
   align-items: center;
   min-width: 0;
 }
@@ -206,15 +282,15 @@
 .fc-brand-tile {
   grid-area: brand;
   box-sizing: border-box;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px;
+  padding: 5px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 8px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, transparent 70%),
     var(--bg-tertiary);
@@ -506,7 +582,10 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 1px;
+  /* A hairline between what the agent did and what you can do about it. */
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle, var(--border));
 }
 
 .fc-actions-main,
