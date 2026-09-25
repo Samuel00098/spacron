@@ -1,6 +1,6 @@
 {
   "name": "spacron",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "description": "A lightweight developer workspace",
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
+    "dev:app": "tauri dev --no-watch",
     "server:build": "node scripts/build-server-sidecar.js",
     "version": "node scripts/sync-version.js && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/server/Cargo.toml src-tauri/opener/Cargo.toml"
   },
