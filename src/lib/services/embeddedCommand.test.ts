@@ -18,13 +18,21 @@ import {
   parseBoardListJson,
 } from './embeddedCommand';
 
+// Node only has a global `navigator` from v21; CI runs Node 20, where touching
+// it threw "navigator is not defined". Install a stand-in there and remove it
+// again, so the suite behaves the same on every Node version.
+const hadNavigator = typeof globalThis.navigator !== 'undefined';
+
 function stubPlatform(platform: string | undefined) {
-  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'platform');
   if (platform === undefined) {
-    if (descriptor?.configurable) Object.defineProperty(navigator, 'platform', descriptor);
-  } else {
-    Object.defineProperty(navigator, 'platform', { configurable: true, value: platform });
+    if (!hadNavigator) delete (globalThis as { navigator?: unknown }).navigator;
+    else delete (navigator as { platform?: string }).platform;
+    return;
   }
+  if (!hadNavigator) {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+  }
+  Object.defineProperty(navigator, 'platform', { configurable: true, value: platform });
 }
 
 describe('detectShellKind', () => {
