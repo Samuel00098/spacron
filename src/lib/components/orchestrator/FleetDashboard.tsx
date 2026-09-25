@@ -742,7 +742,13 @@ export default function FleetDashboard() {
             title={detailsOpen ? 'Hide details' : 'Show changes, branch and actions'}
           >
             <span className="fc-brand-tile">
-              <AgentBrandMark command={row.agentPreset} name={row.agentName} className="fc-brand" />
+              {/* The CLI's product name, not the assistant's: an unbundled CLI's
+                  logo is looked up by name, so "Nova" fetched the wrong one. */}
+              <AgentBrandMark
+                command={row.agentPreset}
+                name={getAgentDisplayName(row.agentPreset) ?? row.agentName}
+                className="fc-brand"
+              />
             </span>
             <span className="fc-main">
               <span className="fc-name">{row.agentName}</span>

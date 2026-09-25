@@ -98,6 +98,9 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   agy: 'Antigravity',
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
+  // The product name, not the command: the brand mark looks an unbundled
+  // CLI's logo up by name, and "dsh" found nothing (or the wrong logo).
+  dsh: 'DeepSeek Harness',
   pi: 'Pi',
   'cursor-agent': 'Cursor',
   // Legacy: the preset used to launch the bare `agent`. Sessions and stored
