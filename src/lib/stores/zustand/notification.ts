@@ -172,7 +172,10 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
       return { toasts: next.length > 5 ? next.slice(next.length - 5) : next };
     });
 
-    if (notifySystem) {
+    // A toast nobody can see is a lost message: whenever Spacron is hidden or
+    // another app has focus, every toast is mirrored to the OS as well.
+    // `notifySystem` additionally forces the OS ping while the app is focused.
+    if (notifySystem || shouldUseSystemNotification()) {
       void showDesktopNotification(hint ? `${message} ${hint}` : message, type);
     }
 

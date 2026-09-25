@@ -241,6 +241,22 @@ export default function AgentNotifications() {
     }
   }, [allChat]);
 
+  // The same rule for actionable mailbox cards — an agent asking a question or
+  // handing work over is the card you most need to see while you are away, and
+  // it used to float in the corner only. Every project, same baseline.
+  useEffect(() => {
+    const away = shouldUseSystemNotification();
+    for (const pid of Object.keys(allMail)) {
+      for (const card of getMailboxCards(pid, { actionableOnly: true })) {
+        if (card.createdAt < osBaselineRef.current || systemPinged.current.has(card.id)) continue;
+        systemPinged.current.add(card.id);
+        if (!away || getDismissedIds(pid).has(card.id)) continue;
+        const text = card.text.length > 180 ? `${card.text.slice(0, 177).trimEnd()}…` : card.text;
+        showSystemNotification(`${card.from}: ${text}`, 'warning');
+      }
+    }
+  }, [allMail]);
+
   const items = useMemo<NotifItem[]>(() => {
     const merged: NotifItem[] = [
       ...mailCards.map((card): NotifItem => ({ key: `mb-${card.id}`, ts: card.createdAt, kind: 'mail', card })),

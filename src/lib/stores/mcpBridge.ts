@@ -165,11 +165,9 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   const text = report.detail ? `${who} ${what}: ${report.detail}` : `${who} ${what}`;
   const tone = report.state === 'failed' ? 'error' : report.state === 'done' ? 'success' : 'warning';
 
-  showToast(text, tone, 8000);
-  // The toast is invisible to a user who is looking elsewhere, which is the
+  // showToast mirrors to the OS whenever the app is out of focus, which is the
   // whole case a "needs input" report exists for.
-  const { shouldUseSystemNotification, showSystemNotification } = await import('$lib/stores/zustand/notification');
-  if (shouldUseSystemNotification()) showSystemNotification(text, tone);
+  showToast(text, tone, 8000);
 }
 
 /** The agent's display name, or a neutral fallback if it has already gone. */
