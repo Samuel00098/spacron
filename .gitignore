@@ -54,6 +54,9 @@ opencode.json
 .kilo/
 .antigravitycli/
 
+# Website dev-server logs (runtime output, never source)
+website/site-server*.log
+
 # Cargo dev logs
 src-tauri/cargo_check.log
 src-tauri/cargo_output*.txt
