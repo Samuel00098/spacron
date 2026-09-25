@@ -47,6 +47,8 @@ function ToastIcon({ type }: { type: Toast['type'] }) {
 export default function Toasts() {
   const storeToasts = useNotificationStore((s) => s.toasts);
   const dismissToast = useNotificationStore((s) => s.dismissToast);
+  const pinToast = useNotificationStore((s) => s.pinToast);
+  const [openDetails, setOpenDetails] = useState<Set<string>>(() => new Set());
 
   // Mirror the store so a toast removed from it can finish its exit animation
   // (the original version relied on out:fly for this). `leaving` items linger for
@@ -106,7 +108,31 @@ export default function Toasts() {
           <div className="toast-icon">
             <ToastIcon type={toast.type} />
           </div>
-          <div className="toast-message">{toast.message}</div>
+          <div className="toast-message">
+            <div>{toast.message}</div>
+            {toast.hint && <div className="toast-hint">{toast.hint}</div>}
+            {toast.details && (
+              <>
+                <button
+                  className="toast-details-toggle"
+                  aria-expanded={openDetails.has(toast.id)}
+                  onClick={() => {
+                    // Reading the details should not race the auto-dismiss.
+                    pinToast(toast.id);
+                    setOpenDetails((cur) => {
+                      const next = new Set(cur);
+                      if (next.has(toast.id)) next.delete(toast.id);
+                      else next.add(toast.id);
+                      return next;
+                    });
+                  }}
+                >
+                  {openDetails.has(toast.id) ? 'Hide details' : 'Show details'}
+                </button>
+                {openDetails.has(toast.id) && <pre className="toast-details">{toast.details}</pre>}
+              </>
+            )}
+          </div>
           {toast.action && (
             <button
               className="toast-action"

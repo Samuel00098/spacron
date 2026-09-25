@@ -64,7 +64,7 @@
   border-radius: inherit;
   /* The fill has to out-contrast the track it sits in, or a 20% reading is
      indistinguishable from 0%. */
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
+  background: var(--accent);
   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
   transition: width var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }

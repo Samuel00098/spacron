@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { usageState } from '$lib/stores/usage';
 import { showToast } from '$lib/stores/notification';
+import { explainError } from '$lib/utils/explainError';
 import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
 import type { InboxEntry } from '$lib/services/orchestrator/inbox';
 
@@ -302,6 +303,7 @@ export function agentUpdateInboxEntries(state: AgentUpdatesState, notices: Notic
   }
   for (const failure of notices.failures) {
     if (cleared.has(failure.id)) continue;
+    const explained = explainError(failure.message, { subject: failure.name, action: 'update' });
     entries.push({
       id: failure.id,
       kind: 'update',
@@ -309,10 +311,10 @@ export function agentUpdateInboxEntries(state: AgentUpdatesState, notices: Notic
       read: read.has(failure.id),
       agentName: failure.name,
       title: 'Update failed',
-      body: failure.message,
+      body: explained.summary,
       status: 'failed',
       actionable: true,
-      detail: { reason: failure.message },
+      detail: { reason: failure.message, nextStep: explained.nextStep, technical: explained.details },
     });
   }
   return entries;

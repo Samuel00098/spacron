@@ -549,6 +549,19 @@
   color: var(--text-tertiary, var(--text-secondary));
 }
 
+.inbox-detail-technical > summary {
+  font-size: 10.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  cursor: pointer;
+  user-select: none;
+}
+
+.inbox-detail-technical > pre {
+  margin-top: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+
 .inbox-detail-pending {
   margin: 0;
   font-size: 11px;

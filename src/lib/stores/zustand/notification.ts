@@ -3,6 +3,7 @@ import { get } from '$lib/stores/storeCompat';
 import { notificationsEnabled } from '../settings';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { explainError } from '$lib/utils/explainError';
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 
 export interface Toast {
@@ -11,6 +12,10 @@ export interface Toast {
   type: 'info' | 'success' | 'warning' | 'error';
   duration?: number;
   action?: { label: string; onClick: () => void };
+  /** What to do about an error, in plain words. */
+  hint?: string;
+  /** The raw error text, shown behind "Show details". */
+  details?: string;
 }
 
 interface NotificationState {
@@ -23,6 +28,8 @@ interface NotificationState {
     action?: { label: string; onClick: () => void }
   ) => void;
   dismissToast: (id: string) => void;
+  /** Stop a toast from auto-dismissing, e.g. while its details are open. */
+  pinToast: (id: string) => void;
 }
 
 type NotificationDocument = Pick<Document, 'visibilityState' | 'hasFocus'>;
@@ -139,14 +146,26 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
     notifySystem = false,
     action?: { label: string; onClick: () => void }
   ) => {
-    const defaultDuration = type === 'error' ? 6000 : 3000;
+    // Errors and warnings are often raw output (npm, git, OS codes). Every one
+    // goes through the explainer so the toast leads with what happened and
+    // what to do, and the raw text waits behind "Show details".
+    let hint: string | undefined;
+    let details: string | undefined;
+    if (type === 'error' || type === 'warning') {
+      const explained = explainError(message);
+      message = explained.summary;
+      hint = explained.nextStep;
+      details = explained.details;
+    }
+
+    const defaultDuration = type === 'error' ? (hint ? 9000 : 6000) : 3000;
     const actualDuration = duration ?? defaultDuration;
 
     const activeToasts = getState().toasts;
     if (activeToasts.some((t) => t.message === message && t.type === type)) return;
 
     const id = Math.random().toString(36).substring(2, 9);
-    const newToast: Toast = { id, message, type, duration: actualDuration, action };
+    const newToast: Toast = { id, message, type, duration: actualDuration, action, hint, details };
 
     set((s) => {
       const next = [...s.toasts, newToast];
@@ -154,7 +173,7 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
     });
 
     if (notifySystem) {
-      void showDesktopNotification(message, type);
+      void showDesktopNotification(hint ? `${message} ${hint}` : message, type);
     }
 
     if (actualDuration > 0) {
@@ -173,5 +192,13 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
       toastTimers.delete(id);
     }
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+  },
+
+  pinToast: (id: string) => {
+    const timer = toastTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      toastTimers.delete(id);
+    }
   },
 }));

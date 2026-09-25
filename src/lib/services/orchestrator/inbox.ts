@@ -78,6 +78,10 @@ export interface InboxEntryDetail {
   worktreeBranch?: string;
   /** The orchestrator task, so the expanded row can offer "Show terminal". */
   taskId?: string | null;
+  /** For a failure: what the user should do about it, in plain words. */
+  nextStep?: string;
+  /** For a failure: the raw error output, shown behind a toggle. */
+  technical?: string;
 }
 
 export interface InboxEntry {

@@ -70,7 +70,13 @@ describe('agentUpdateInboxEntries', () => {
     const failure = { id: 'agent-update:failed:dsh:5', command: 'dsh', name: 'DeepSeek Harness', message: 'npm error code EBUSY', ts: 5 };
     const entries = agentUpdateInboxEntries(state({ byCommand: {} }), { ...noNotices, failures: [failure] });
     expect(entries).toEqual([
-      expect.objectContaining({ id: failure.id, status: 'failed', actionable: true, body: 'npm error code EBUSY' }),
+      expect.objectContaining({
+        id: failure.id,
+        status: 'failed',
+        actionable: true,
+        body: "DeepSeek Harness couldn't be updated because it's still running.",
+        detail: expect.objectContaining({ reason: 'npm error code EBUSY', technical: 'npm error code EBUSY' }),
+      }),
     ]);
   });
 });

@@ -115,6 +115,8 @@ function copyText(entry: InboxEntry): string {
   const parts = [`${formatAgentIdentity(entry.agentName, entry.agentType)}: ${entry.title}`, absoluteTime(entry.ts)];
   if (entry.kind === 'mail' || entry.kind === 'update') {
     parts.push('', entry.body);
+    if (entry.detail.nextStep) parts.push('', `What to do: ${entry.detail.nextStep}`);
+    if (entry.detail.technical) parts.push('', 'Details:', entry.detail.technical);
   } else {
     if (reason) parts.push('', reason);
     if (summary && summary !== reason) parts.push('', `Recap: ${summary}`);
@@ -471,7 +473,21 @@ function InboxRowDetail({
       </div>
 
       {entry.kind !== 'completion' ? (
-        <p className="inbox-detail-message">{entry.body}</p>
+        <>
+          <p className="inbox-detail-message">{entry.body}</p>
+          {entry.detail.nextStep && (
+            <div className="inbox-detail-block">
+              <span className="inbox-detail-label">What to do</span>
+              <p className="inbox-detail-message">{entry.detail.nextStep}</p>
+            </div>
+          )}
+          {entry.detail.technical && (
+            <details className="inbox-detail-technical">
+              <summary>Technical details</summary>
+              <pre className="inbox-detail-message muted mono">{entry.detail.technical}</pre>
+            </details>
+          )}
+        </>
       ) : (
         <>
           {reason && <p className="inbox-detail-message">{reason}</p>}
