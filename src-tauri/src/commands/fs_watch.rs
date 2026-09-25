@@ -183,12 +183,15 @@ mod tests {
 
         #[test]
         fn accepts_a_path_inside_an_open_project() {
-            let root = tempfile::tempdir().unwrap();
-            let nested = root.path().join("src");
+            let dir = tempfile::tempdir().unwrap();
+            // By its real path: macOS temp dirs sit under the `/var` ->
+            // `/private/var` symlink, and the app resolves project roots too.
+            let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).unwrap());
+            let nested = root.join("src");
             std::fs::create_dir(&nested).unwrap();
-            let roots = vec![root.path().to_path_buf()];
+            let roots = vec![root.clone()];
 
-            assert!(require_watchable(root.path().to_str().unwrap(), &roots).is_ok());
+            assert!(require_watchable(root.to_str().unwrap(), &roots).is_ok());
             assert!(require_watchable(nested.to_str().unwrap(), &roots).is_ok());
         }
 

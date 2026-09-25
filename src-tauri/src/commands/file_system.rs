@@ -887,6 +887,13 @@ pub fn glob_ignored_files(root_path: &str, pattern: &str, match_anywhere: bool, 
 #[cfg(test)]
 mod agent_file_tests {
     use super::*;
+
+    /// A temp dir by its real path. macOS temp dirs sit under the `/var` ->
+    /// `/private/var` symlink and confinement compares resolved paths; the app
+    /// resolves a project root when it opens it, so these tests must too.
+    fn real(path: &Path) -> PathBuf {
+        crate::commands::clean_path_buf(std::fs::canonicalize(path).unwrap())
+    }
     #[test]
     fn document_saves_never_overwrite_and_refuse_device_names() {
         let dir = tempfile::tempdir().unwrap();
@@ -903,8 +910,9 @@ mod agent_file_tests {
     #[test]
     fn checked_writes_detect_changes_and_do_not_overwrite_unread_files() {
         let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf()];
-        let path = dir.path().join("test.txt").to_string_lossy().to_string();
+        let base = real(dir.path());
+        let roots = vec![base.clone()];
+        let path = base.join("test.txt").to_string_lossy().to_string();
         write_file_checked(&path, "original", None, &roots).unwrap();
         assert!(write_file_checked(&path, "overwrite", None, &roots).is_err());
         std::fs::write(&path, "user change").unwrap();
@@ -916,7 +924,8 @@ mod agent_file_tests {
     #[test]
     fn ignored_files_are_listed_separately_without_flooding_from_ignored_dirs() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        let base = real(dir.path());
+        let root = base.as_path();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::create_dir_all(root.join("coverage")).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -940,10 +949,11 @@ mod agent_file_tests {
     #[test]
     fn glob_reaches_files_beyond_old_depth_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let deep = dir.path().join("a/b/c/d/e/f/g/h");
+        let base = real(dir.path());
+        let deep = base.join("a/b/c/d/e/f/g/h");
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(deep.join("target.ts"), "test").unwrap();
-        let paths = glob_files(&dir.path().to_string_lossy(), "target[.]ts$", true, 10, &[dir.path().to_path_buf()]).unwrap();
+        let paths = glob_files(&base.to_string_lossy(), "target[.]ts$", true, 10, &[base.clone()]).unwrap();
         assert_eq!(paths, vec!["a/b/c/d/e/f/g/h/target.ts"]);
     }
 }

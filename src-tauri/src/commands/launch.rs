@@ -43,13 +43,20 @@ fn resolve_project_path(path: PathBuf) -> Option<PathBuf> {
 mod tests {
     use super::{project_paths_from_args, resolve_project_path};
     use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// What `resolve_project_path` returns for a folder: its real path. On
+    /// macOS the temp dir itself sits under the `/var` -> `/private/var` symlink.
+    fn real(path: &Path) -> PathBuf {
+        crate::commands::clean_path_buf(fs::canonicalize(path).unwrap())
+    }
 
     #[test]
     fn folder_paths_are_preserved() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_project_path(root.path().to_path_buf()),
-            Some(root.path().to_path_buf())
+            Some(real(root.path()))
         );
     }
 
@@ -67,6 +74,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("main.rs");
         fs::write(&file, "fn main() {}").unwrap();
-        assert_eq!(resolve_project_path(file), Some(root.path().to_path_buf()));
+        assert_eq!(resolve_project_path(file), Some(real(root.path())));
     }
 }

@@ -4290,17 +4290,22 @@ mod tests {
     // in the index — a mock would just assert the code calls itself correctly.
 
     struct TestRepo {
-        dir: tempfile::TempDir,
+        _dir: tempfile::TempDir,
+        // The temp dir's real path. On macOS the temp dir sits under the
+        // `/var` -> `/private/var` symlink, and the confinement checks compare
+        // resolved paths, so a raw temp path reads as "outside the repository".
+        // The app never hits this: it resolves a project root when opening it.
+        root: std::path::PathBuf,
     }
 
     impl TestRepo {
         fn new() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
-            let root = dir.path();
+            let root = crate::commands::clean_path_buf(std::fs::canonicalize(dir.path()).expect("canonical tempdir"));
             let run = |args: &[&str]| {
                 let status = git_base()
                     .args(args)
-                    .current_dir(root)
+                    .current_dir(&root)
                     .status()
                     .expect("git available for tests");
                 assert!(status.success(), "git {:?} failed", args);
@@ -4308,11 +4313,11 @@ mod tests {
             run(&["init", "-q"]);
             run(&["config", "user.email", "test@example.com"]);
             run(&["config", "user.name", "Test"]);
-            Self { dir }
+            Self { _dir: dir, root }
         }
 
         fn path(&self) -> &std::path::Path {
-            self.dir.path()
+            &self.root
         }
 
         fn write(&self, rel: &str, content: &str) {
