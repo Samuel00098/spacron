@@ -183,6 +183,7 @@ pub fn run() {
             // The chat's Playwright browsers, one per conversation
             // (docs/agent-browser.md). Children are kill_on_drop, so they die with the app.
             app.manage(Arc::new(commands::browser_tools::BrowserSessions::default()));
+            app.manage(Arc::new(commands::mcp_client::McpClients::default()));
             commands::images::allow_image_dirs(app.handle(), &config_dir);
 
             let read_cb: mcp::ReadFn = {
@@ -543,6 +544,9 @@ pub fn run() {
             commands::browser_tools::browser_tools_check,
             commands::browser_tools::browser_call_tool,
             commands::browser_tools::browser_close_session,
+            commands::mcp_client::mcp_client_list_tools,
+            commands::mcp_client::mcp_client_call_tool,
+            commands::mcp_client::mcp_client_close,
             commands::browser_tools::browser_sign_in_state,
             commands::browser_tools::browser_forget_sign_in,
             commands::browser_tools::browser_sign_in,

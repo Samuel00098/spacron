@@ -94,3 +94,13 @@ describe('externalOrigin (chat browser, docs/agent-browser.md)', () => {
     expect(describeRule('browser_navigate', 'https://a.test')).toBe('opening https://a.test');
   });
 });
+
+describe('MCP approval rules', () => {
+  it('scopes "always allow" to one tool on one server', () => {
+    const rules = new Set([approvalRuleKey('mcp_call_tool', 'Tracker/close_issue')]);
+    expect(ruleAllows(rules, 'mcp_call_tool', 'Tracker/close_issue')).toBe(true);
+    expect(ruleAllows(rules, 'mcp_call_tool', 'Tracker/delete_project')).toBe(false);
+    expect(ruleAllows(rules, 'mcp_call_tool', 'Other/close_issue')).toBe(false);
+    expect(describeRule('mcp_call_tool', 'Tracker/close_issue')).toBe('`Tracker/close_issue`');
+  });
+});

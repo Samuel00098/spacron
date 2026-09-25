@@ -9,10 +9,12 @@
   min-height: 0;
   padding: 0 var(--chat-mode-panel-gutter) 24px;
   overflow: hidden;
-  background: var(--sidebar-bg, var(--bg-secondary));
-  border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent) 18%);
+  /* Same surface as the drawers and rooms (global.css `--major-panel-surface`),
+     flat and outline-free like them. */
+  background: var(--major-panel-surface, var(--bg-secondary));
+  border: 1px solid transparent;
   border-radius: var(--bento-radius, 16px);
-  box-shadow: var(--glass-shadow, 0 24px 60px rgba(0, 0, 0, 0.26));
+  box-shadow: none;
 }
 
 .app-shell .chat-mode-room-header {
@@ -1980,9 +1982,39 @@
   flex-shrink: 0;
 }
 .app-shell .chat-mode-composer-settings .chat-mode-reasoning-dropdown {
-  flex: 0 1 150px;
-  min-width: 110px;
+  flex: 0 1 152px;
+  min-width: 132px;
 }
+.app-shell .chat-mode-work-dropdown { flex: 0 1 100px; min-width: 85px; }
+.app-shell .chat-mode-file-mentions {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 5px);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+.app-shell .chat-mode-file-mentions button {
+  display: block;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.app-shell .chat-mode-file-mentions button:hover,
+.app-shell .chat-mode-file-mentions button[aria-selected='true'] { background: var(--bg-hover); }
 
 .app-shell .chat-mode-provider-warning {
   height: 30px;

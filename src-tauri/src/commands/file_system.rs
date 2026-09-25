@@ -606,20 +606,59 @@ pub fn fs_write_file(path: String, content: String, state: State<AppState>) -> R
 
 #[tauri::command(async)]
 pub fn save_document_file(filename: String, content: String) -> Result<String, String> {
-    if filename.is_empty()
-        || filename == "."
-        || filename == ".."
-        || filename.chars().any(|c| matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-    {
-        return Err("Invalid document filename".to_string());
-    }
     let directory = dirs::document_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
         .ok_or_else(|| "Could not find the user Documents folder".to_string())?;
-    std::fs::create_dir_all(&directory).map_err(|e| sanitize_io_error(e, &directory.to_string_lossy()))?;
-    let path = directory.join(&filename);
-    std::fs::write(&path, content).map_err(|e| sanitize_io_error(e, &path.to_string_lossy()))?;
-    Ok(path.to_string_lossy().into_owned())
+    save_document_in(&directory, &filename, &content)
+}
+
+/// Names Windows reserves for devices; writing to `CON.txt` opens the console,
+/// not a file, whatever the extension.
+const WINDOWS_RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+fn valid_document_filename(filename: &str) -> bool {
+    if filename.is_empty()
+        || filename.ends_with('.')
+        || filename.ends_with(' ')
+        || filename.chars().any(|c| c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return false;
+    }
+    let stem = filename.split('.').next().unwrap_or("").trim_end();
+    !WINDOWS_RESERVED_NAMES.iter().any(|reserved| stem.eq_ignore_ascii_case(reserved))
+}
+
+/// Write a new document into `directory` without ever replacing an existing
+/// file: a taken name becomes `stem-2.ext`, `stem-3.ext`, … (the same scheme the
+/// in-project save uses). `create_new` makes the claim atomic, so a file that
+/// appears between the check and the write is not clobbered either.
+fn save_document_in(directory: &Path, filename: &str, content: &str) -> Result<String, String> {
+    if !valid_document_filename(filename) {
+        return Err("Invalid document filename".to_string());
+    }
+    std::fs::create_dir_all(directory).map_err(|e| sanitize_io_error(e, &directory.to_string_lossy()))?;
+    let (stem, ext) = match filename.rfind('.') {
+        Some(dot) if dot > 0 => (&filename[..dot], &filename[dot..]),
+        _ => (filename, ""),
+    };
+    for n in 1..=50 {
+        let candidate = if n == 1 { filename.to_string() } else { format!("{stem}-{n}{ext}") };
+        let path = directory.join(&candidate);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(content.as_bytes())
+                    .map_err(|e| sanitize_io_error(e, &path.to_string_lossy()))?;
+                return Ok(path.to_string_lossy().into_owned());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(sanitize_io_error(e, &path.to_string_lossy())),
+        }
+    }
+    Err(format!("Documents already holds too many files named like {filename}; choose a different filename."))
 }
 
 fn write_lock() -> &'static std::sync::Mutex<()> {
@@ -848,6 +887,19 @@ pub fn glob_ignored_files(root_path: &str, pattern: &str, match_anywhere: bool, 
 #[cfg(test)]
 mod agent_file_tests {
     use super::*;
+    #[test]
+    fn document_saves_never_overwrite_and_refuse_device_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = save_document_in(dir.path(), "notes.md", "one").unwrap();
+        let second = save_document_in(dir.path(), "notes.md", "two").unwrap();
+        assert!(second.ends_with("notes-2.md"));
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "one");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "two");
+        for bad in ["", ".", "..", "CON", "con.txt", "Lpt1.md", "nul .txt", "a/b.md", "..\\x.md", "trail.", "trail ", "tab\tname.md"] {
+            assert!(save_document_in(dir.path(), bad, "x").is_err(), "{bad:?} should be refused");
+        }
+        assert!(save_document_in(dir.path(), "console.md", "ok").is_ok());
+    }
     #[test]
     fn checked_writes_detect_changes_and_do_not_overwrite_unread_files() {
         let dir = tempfile::tempdir().unwrap();

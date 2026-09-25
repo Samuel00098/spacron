@@ -45,9 +45,13 @@
     );
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid var(--border);
+  /* No drawn edge — a 3D rim plus the modal's deep ambient shadow. */
+  border: 1px solid transparent;
   border-radius: var(--radius-lg, 12px);
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    inset 0 -1px 0 var(--edge-lo),
+    0 32px 80px rgba(0, 0, 0, 0.5);
   animation: settingsScaleUp 0.3s var(--ease-spring);
   view-transition-name: spacron-settings-modal;
   isolation: isolate;
@@ -62,7 +66,11 @@
 
 /* Light-theme modal gets a brighter, crisper shadow */
 :root.light-theme .settings-modal {
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    inset 0 -1px 0 var(--edge-lo),
+    0 32px 80px rgba(0, 0, 0, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 :root.solid-theme .settings-overlay {
@@ -86,7 +94,7 @@
   min-height: 72px;
   padding: 18px 26px;
   gap: 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   /* Transparent so the modal's frosted-glass surface reads across the header. */
   background: transparent;
 }
@@ -129,8 +137,10 @@
   width: 100%;
   height: 36px;
   padding: 0 36px 0 36px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 9px;
+  /* Recessed search field. */
+  box-shadow: var(--edge-well);
   background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
   color: var(--text-primary);
   font: inherit;
@@ -144,9 +154,8 @@
 }
 
 .settings-search-input:focus {
-  border-color: var(--input-focus-border, var(--accent));
   background: var(--bg-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: var(--edge-well), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .settings-search-clear {
@@ -180,10 +189,13 @@
   display: grid;
   gap: 3px;
   padding: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 10px;
   background: var(--bg-secondary);
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    inset 0 -1px 0 var(--edge-lo),
+    0 18px 36px rgba(0, 0, 0, 0.32);
 }
 
 .settings-search-result {
@@ -355,19 +367,23 @@
 .settings-card {
   max-width: 760px;
   margin: 0 0 24px;
-  border: 1px solid var(--border);
+  /* No drawn edge — the card is defined by its 3D rim instead. */
+  border: 1px solid transparent;
   border-radius: var(--radius-lg, 12px);
   background: var(--bg-hover) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  box-shadow: inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07));
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.12)),
+    inset 0 -1px 0 var(--edge-lo, rgba(0, 0, 0, 0.18)),
+    var(--edge-drop, 0 1px 2px rgba(0, 0, 0, 0.35));
   overflow: visible;
 }
 
 .settings-card h3 {
   margin: 0;
   padding: 15px 22px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
@@ -391,7 +407,7 @@
   align-items: center;
   min-height: 70px;
   padding: 18px 22px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--hairline);
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 

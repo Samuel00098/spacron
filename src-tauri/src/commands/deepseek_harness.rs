@@ -1077,6 +1077,82 @@ fn rewrite_location(location: &str, dsh_port: u16, prefix: &str) -> String {
     location.to_string()
 }
 
+/// Makes dsh's page sit in the DeepSeek room like every other panel: its own
+/// canvas and sidebar fills go transparent so the room's frosted layer shows
+/// through, and `color-scheme` is pinned to `normal` because Chromium paints an
+/// opaque backdrop behind an iframe whose scheme differs from its embedder's
+/// (Spacron sets none). Colors that follow the Spacron theme cannot be baked in
+/// here — they change at runtime — so the script below takes them from the
+/// embedding window: `DeepSeekPanel.tsx` posts `spacron-panel-theme` messages.
+/// It accepts messages only from `window.parent` and only for the variables in
+/// `ALLOWED`, set through `style.setProperty`, so a message cannot add rules.
+/// dsh defines every `--dsw-*` token on `body` / `body[data-ds-dark-theme]`
+/// (dsh-client-ui-theme); re-check those selectors when bumping dsh.
+const PANEL_THEME_STYLE: &str = "<style id=\"spacron-panel-theme\">\
+:root{color-scheme:normal!important}\
+html,body{background:transparent!important}\
+body,body[data-ds-dark-theme]{--dsh-boot-bg:transparent!important;\
+--dsw-alias-bg-base:transparent!important;\
+--dsw-alias-bg-document-preview:transparent!important;\
+--dsw-alias-bg-module-platform:transparent!important;\
+--dsw-specific-sidebar-fill:transparent!important}\
+</style>";
+
+const PANEL_THEME_SCRIPT: &str = r#"<script id="spacron-panel-theme-bridge">(() => {
+  const ALLOWED = ['--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary',
+    '--dsw-alias-label-caption', '--dsw-alias-label-dimmed', '--dsw-alias-link', '--dsw-alias-border-l1',
+    '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-border-l4', '--dsw-elevation-stroke',
+    '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3', '--dsw-alias-bg-overlay',
+    '--dsw-alias-interactive-bg-hover', '--dsw-alias-markdown-code-block'];
+  let dark = null;
+  const applyDark = () => {
+    if (dark !== null && document.body.hasAttribute('data-ds-dark-theme') !== dark) {
+      document.body.toggleAttribute('data-ds-dark-theme', dark);
+    }
+  };
+  // dsh's own theme runtime may re-set the flag from its saved preference.
+  new MutationObserver(applyDark).observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
+  addEventListener('message', (event) => {
+    if (event.source !== window.parent) return;
+    const data = event.data;
+    if (!data || data.type !== 'spacron-panel-theme' || typeof data.vars !== 'object' || !data.vars) return;
+    const style = document.body.style;
+    for (const name of ALLOWED) {
+      const value = data.vars[name];
+      if (typeof value === 'string' && value.length > 0 && value.length < 100) style.setProperty(name, value, 'important');
+      else style.removeProperty(name);
+    }
+    if (typeof data.dark === 'boolean') { dark = data.dark; applyDark(); }
+  });
+  window.parent.postMessage({ type: 'spacron-panel-theme-ready' }, '*');
+})()</script>"#;
+
+/// Add [`PANEL_THEME_STYLE`] to `<head>` and [`PANEL_THEME_SCRIPT`] to the end
+/// of `<body>` (the script needs `document.body`). A document without those
+/// tags gets the style prepended and the script appended.
+fn inject_panel_theme(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len() + PANEL_THEME_STYLE.len() + PANEL_THEME_SCRIPT.len());
+    let (head, rest) = match lower.find("</head>") {
+        Some(at) => html.split_at(at),
+        None => ("", html),
+    };
+    out.push_str(head);
+    out.push_str(PANEL_THEME_STYLE);
+    match rest.to_ascii_lowercase().rfind("</body>") {
+        Some(at) => {
+            out.push_str(&rest[..at]);
+            out.push_str(PANEL_THEME_SCRIPT);
+            out.push_str(&rest[at..]);
+        }
+        None => {
+            out.push_str(rest);
+            out.push_str(PANEL_THEME_SCRIPT);
+        }
+    }
+    out
+}
+
 const HOP_BY_HOP: [&str; 8] = [
     "connection",
     "keep-alive",
@@ -1158,6 +1234,18 @@ async fn gateway_handler(AxumState(gw): AxumState<Arc<Gateway>>, req: Request) -
     };
 
     let status = upstream.status();
+    let is_plain_html = parts.method == axum::http::Method::GET
+        && status == StatusCode::OK
+        && upstream
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/html"))
+        && upstream
+            .headers()
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .is_none_or(|v| v.eq_ignore_ascii_case("identity"));
     let mut out_headers = HeaderMap::new();
     for (name, value) in upstream.headers() {
         let lower = name.as_str();
@@ -1174,6 +1262,18 @@ async fn gateway_handler(AxumState(gw): AxumState<Arc<Gateway>>, req: Request) -
         }
         out_headers.append(name.clone(), value.clone());
     }
+    if is_plain_html {
+        let html = match upstream.bytes().await {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("DeepSeek Harness is not responding: {e}")).into_response();
+            }
+        };
+        let mut response = Response::new(Body::from(inject_panel_theme(&html)));
+        *response.status_mut() = status;
+        *response.headers_mut() = out_headers;
+        return response;
+    }
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
     *response.status_mut() = status;
     *response.headers_mut() = out_headers;
@@ -1183,6 +1283,23 @@ async fn gateway_handler(AxumState(gw): AxumState<Arc<Gateway>>, req: Request) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_theme_lands_in_head_and_at_the_end_of_body() {
+        let page = "<!doctype html><HTML><head><title>dsh</title></HEAD><body><div id=app></div></BODY></html>";
+        let out = inject_panel_theme(page);
+        let style = out.find("spacron-panel-theme\"").unwrap();
+        let head_end = out.find("</HEAD>").unwrap();
+        let script = out.find("spacron-panel-theme-bridge").unwrap();
+        let body_end = out.find("</BODY>").unwrap();
+        assert!(style < head_end && head_end < script && script < body_end);
+        assert!(out.contains("<div id=app></div>"));
+        assert_eq!(out.matches("<style id=\"spacron-panel-theme\">").count(), 1);
+
+        // A fragment without head/body still gets both, in a working order.
+        let bare = inject_panel_theme("<p>hi</p>");
+        assert!(bare.starts_with(PANEL_THEME_STYLE) && bare.ends_with(PANEL_THEME_SCRIPT));
+    }
 
     #[test]
     fn upstream_path_requires_the_secret_prefix() {

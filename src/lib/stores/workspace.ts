@@ -362,6 +362,12 @@ function bindProjectAutosave() {
   ];
 
   for (const store of trackedStores) {
+    // An import cycle evaluated out of order (or a partial test mock) can leave
+    // a binding undefined here; skip it rather than throw from a microtask.
+    if (!store) {
+      console.warn('Project autosave: a tracked store was not initialised; it will not trigger saves.');
+      continue;
+    }
     store.subscribe(() => {
       scheduleProjectAutosave();
     });

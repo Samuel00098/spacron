@@ -74,6 +74,9 @@ const definitions: Record<string, { required: string[]; properties: Record<strin
   browser_resize: { required: ['width', 'height'], properties: { width: dec, height: dec } },
   browser_close: { required: [], properties: {} },
   browser_evaluate: { required: ['function'], properties: { function: str, target: str, element: str } },
+  mcp_list_tools: { required: [], properties: { server: str } },
+  // `arguments` is the target tool's own input, validated by its server.
+  mcp_call_tool: { required: ['server', 'tool'], properties: { server: str, tool: str, arguments: { type: 'object' } } },
   generate_image: { required: ['prompt'], properties: { prompt: str, reference_images: { type: 'array', items: str } } },
   generate_video: { required: ['prompt'], properties: { prompt: str, reference_image: str } },
 };
@@ -127,6 +130,21 @@ function coerceArg(value: unknown, p: Property): { ok: true; value: unknown } | 
     if (typeof value === 'string') return { ok: true, value };
     if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value: String(value) };
     if (typeof value === 'boolean') return { ok: true, value: String(value) };
+    return { ok: false };
+  }
+  if (p.type === 'object') {
+    const isPlain = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
+    if (isPlain(value)) return { ok: true, value };
+    // Models sometimes pass the object as JSON text.
+    if (typeof value === 'string') {
+      if (!value.trim()) return { ok: true, value: {} };
+      try {
+        const parsed: unknown = JSON.parse(value);
+        return isPlain(parsed) ? { ok: true, value: parsed } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    }
     return { ok: false };
   }
   if (p.type === 'array') {

@@ -49,6 +49,8 @@
   height: 6px;
   border-radius: 999px;
   overflow: hidden;
+  /* The bar is a groove the fill sits in, so it takes the recessed well. */
+  box-shadow: var(--edge-well);
   /* The empty half of the bar is a recess, not a surface — it should read as
      "unspent", which is quieter than the panel it sits on. Quiet, not
      invisible: at 10% the track vanished against the frost and a low

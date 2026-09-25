@@ -69,6 +69,13 @@ jobs:
             args: ''
             rust-targets: ''
 
+          # Windows on ARM (Snapdragon etc.), cross-compiled on the x64 runner.
+          # NSIS only: WiX 3 cannot produce an ARM64 .msi.
+          - platform: windows-latest
+            os: windows-arm64
+            args: '--target aarch64-pc-windows-msvc --bundles nsis'
+            rust-targets: 'aarch64-pc-windows-msvc'
+
           - platform: macos-26       # macOS Apple Silicon (arm64)
             os: macos
             args: '--target aarch64-apple-darwin'
@@ -100,6 +107,36 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf
+
+      # Windows on ARM is cross-compiled on the x64 runner (native ARM runners
+      # are not free for this private repo). whisper.cpp's ggml refuses MSVC for
+      # ARM ("use clang"), so C/C++ for the ARM64 target builds with clang-cl
+      # from VS's LLVM component, inside a vcvars x64_arm64 environment so CMake
+      # finds the ARM64 SDK libraries. `/EHsc` must be spelled out: cmake-rs
+      # replaces CMAKE_CXX_FLAGS, and clang-cl rejects ggml's `try` without it.
+      # See .spacron/memory/windows-arm64-whisper-build.md.
+      - name: Set up Windows ARM64 cross toolchain
+        if: matrix.os == 'windows-arm64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vs) { throw 'Visual Studio with the ARM64 build tools was not found on this runner' }
+          $llvm = "$vs\VC\Tools\Llvm\x64\bin"
+          if (-not (Test-Path "$llvm\clang-cl.exe")) { throw "clang-cl not found at $llvm" }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvarsall.bat`" x64_arm64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(PATH|INCLUDE|LIB|LIBPATH|VCToolsInstallDir|VCINSTALLDIR|VSINSTALLDIR|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion)=(.*)$') {
+              "$($Matches[1])=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+          $llvm, "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+          @(
+            'CMAKE_GENERATOR=Ninja'
+            'CC_aarch64_pc_windows_msvc=clang-cl'
+            'CXX_aarch64_pc_windows_msvc=clang-cl'
+            'CFLAGS_aarch64_pc_windows_msvc=--target=arm64-pc-windows-msvc'
+            'CXXFLAGS_aarch64_pc_windows_msvc=--target=arm64-pc-windows-msvc /EHsc'
+          ) | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
@@ -150,19 +187,23 @@ jobs:
       # asset per matrix leg is exactly the set of platforms it can offer.
       #
       # No second cargo build: tauri's `beforeBuildCommand` already produced
-      # `binaries/spacron-server-<host triple>` during the step above. This
+      # `binaries/spacron-server-<target triple>` during the step above. This
       # only names, hashes and uploads it.
       - name: Publish spacron-server artifact
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          # The leg's build target; empty means the host. A cross leg (Windows
+          # ARM64 on the x64 runner) must publish the ARM64 server, not a second
+          # copy of the host's.
+          TARGET_TRIPLE: ${{ matrix.rust-targets }}
         run: |
           set -euo pipefail
           # `tr -d '\r'` because this runs under Git Bash on the Windows leg,
           # where rustc's output is CRLF and the stray CR would corrupt the
           # asset name.
-          triple="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"
+          triple="${TARGET_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')}"
           ext=""
           case "$triple" in *windows*) ext=".exe" ;; esac
           asset="spacron-server-${triple}${ext}"

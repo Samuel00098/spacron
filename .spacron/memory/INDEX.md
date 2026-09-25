@@ -53,8 +53,10 @@ short enough that it says what the note is *about*, never what it says.
 - [session-close-label](session-close-label.md) — name a closed terminal from a snapshot, never from its process-wide id
 - [edge-light-gating](edge-light-gating.md) — the traveling edge light runs only while a room is working
 - [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`
-- [website-logo-sync](website-logo-sync.md) — website/public holds copies of the app icon; re-stamp it from src-tauri/icons and static/ when the icon changes
+- [website-logo-sync](website-logo-sync.md) — website/public copies the app icon and website/lib copies agentBrands; re-stamp both when the app side changes
+- [pricing-license-model](pricing-license-model.md) — $49 one-time license; Lemon Squeezy checkout + key-gated downloads wired (env vars pending); app-side activation not built yet
 - [website-motion-layer](website-motion-layer.md) — the html.js pre-paint gate behind the site's scroll reveals, and why every data-reveal page must mount ScrollFX
+- [website-em-dash-convention](website-em-dash-convention.md) — no em dashes in visible copy: `·` for separators, `:` / `,` / `.` for prose breaks
 - [resource-monitor-removed](resource-monitor-removed.md) — the CPU/RAM chip and its Rust side are deleted; `sysinfo` stays
 - [embedded-command-sentinel](embedded-command-sentinel.md) — completion sentinel is on a fresh line, per-run token, shell-dialect aware; interactive runs are unwrapped
 - [hidden-background-sessions](hidden-background-sessions.md) — hidden terminal sessions must be filtered from every user-facing surface; the one entry point and the one kill path
@@ -80,7 +82,7 @@ short enough that it says what the note is *about*, never what it says.
 - [orchestrator-emulator-tools](orchestrator-emulator-tools.md) - how the orchestrator reaches the emulator, and the four lists that must agree
 - [orchestrator-vision](orchestrator-vision.md) — which models get images (Rust decides), the folder allowlist, and the per-provider wire shapes
 - [model-capabilities](model-capabilities.md) — where model vision/reasoning/tools come from, where they are saved, and what triggers the background refresh
-- [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe
+- [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe, and the rules that keep the chat's MCP client safe
 - [vercel-ai-gateway](vercel-ai-gateway.md) — the `vercel` provider across chat, dictation, media and realtime voice: what was verified live, what still needs a key
 - [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 
@@ -92,10 +94,12 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Build, release & repo hygiene
 
-- [cargo-check-in-agent-shell](cargo-check-in-agent-shell.md) — why whisper-rs-sys fails to build in a sandboxed agent shell, and the env var that fixes it
 - [release-flow](release-flow.md) — cutting a release, including the `cargo metadata` step everybody forgets
 - [npm-audit-fix-edgesout-bug](npm-audit-fix-edgesout-bug.md) — npm 10.9.7 aborts every dependency bump; the legacy-peer-deps workaround and how to check it
 - [sidecar-externalbin-deadlock](sidecar-externalbin-deadlock.md) — why `build.rs` stamps a placeholder sidecar; never revert it
 - [build-scripts-are-esm](build-scripts-are-esm.md) — `scripts/*.js` are ESM; a `require` slip is red only in the release matrix
 - [msi-ice30-duplicate-sidecar](msi-ice30-duplicate-sidecar.md) — WiX ICE30 when a bin target and a sidecar share a filename
 - [windows-pathext-shims](windows-pathext-shims.md) — PATHEXT variants must outrank a bare bash script; `.cmd` needs `cmd /c`
+- [cargo-check-in-agent-shell](cargo-check-in-agent-shell.md) — why whisper-rs-sys fails to build in a sandboxed agent shell, and the env var that fixes it
+- [windows-arm64-whisper-build](windows-arm64-whisper-build.md) — why whisper needs clang-cl for Windows ARM64, and the env recipe that builds it
+- [tauri-dev-restarts](tauri-dev-restarts.md) — why the dev app seems to close itself, and the no-watch script / ignore file that stop it

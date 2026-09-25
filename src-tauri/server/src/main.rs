@@ -31,6 +31,8 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(serve(cfg))
 }
 
+const MIN_TOKEN_LEN: usize = 16;
+
 fn parse_args() -> anyhow::Result<ServerConfig> {
     let mut workspace: Option<PathBuf> = None;
     let mut port: u16 = 9000;
@@ -92,6 +94,13 @@ fn parse_args() -> anyhow::Result<ServerConfig> {
     let token = token.filter(|t| !t.is_empty()).ok_or_else(|| {
         anyhow::anyhow!("a token is required (pass --token or set SPACRON_TOKEN)")
     })?;
+    // The token is the only thing standing between the network and a shell on
+    // this box, so a guessable one is refused outright. The app mints 32 hex chars.
+    if token.chars().count() < MIN_TOKEN_LEN {
+        return Err(anyhow::anyhow!(
+            "the token must be at least {MIN_TOKEN_LEN} characters (try `openssl rand -hex 16`)"
+        ));
+    }
 
     let tls = match (cert, key) {
         (Some(c), Some(k)) => Some((c, k)),

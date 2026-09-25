@@ -1,5 +1,84 @@
-.reasoning-slider { display: flex; flex-direction: column; gap: 2px; min-width: 118px; }
-.reasoning-slider-value { color: var(--text-primary); font-size: 10.5px; line-height: 1.1; text-align: center; white-space: nowrap; }
-.reasoning-slider input[type='range'] { width: 100%; height: 12px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.reasoning-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 118px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-tertiary) 52%, transparent);
+}
+
+.reasoning-slider-value {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.reasoning-slider input[type='range'] {
+  width: 100%;
+  margin: 2px 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.reasoning-slider input[type='range']:focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 5px;
+}
+
 .reasoning-slider input[type='range']:disabled { cursor: default; opacity: .55; }
-.reasoning-slider-ends { display: flex; justify-content: space-between; color: var(--text-muted); font-size: 8px; line-height: 1; }
+
+.reasoning-slider-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.reasoning-slider-dropdown { position: relative; min-width: 0; }
+
+.reasoning-slider-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.reasoning-slider-trigger svg { flex: 0 0 auto; opacity: .6; transition: transform var(--dur-fast) var(--ease-out); }
+.reasoning-slider-trigger[aria-expanded='true'] svg { transform: rotate(180deg); }
+.reasoning-slider-trigger:disabled { opacity: .45; cursor: default; }
+
+/* The popover holds the SAME slider the spawn dialog shows inline, with its
+   own background, so the two read as one control. The component flips
+   `.down` / `.up` from the space around the trigger. */
+.reasoning-slider-popover {
+  position: absolute;
+  z-index: 40;
+  right: 0;
+  width: max(190px, 100%);
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--major-panel-surface, var(--bg-secondary));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+.reasoning-slider-popover.down { top: calc(100% + 7px); }
+.reasoning-slider-popover.up { bottom: calc(100% + 7px); }
+
+:root.light-theme .reasoning-slider-popover { box-shadow: 0 10px 28px rgba(28, 35, 50, 0.14); }

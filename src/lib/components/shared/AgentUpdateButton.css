@@ -1,10 +1,8 @@
-/* Green, not the accent: the accent is pure white in dark mode (and black in
-   light), which left the button a faint grey ring on a dark tile and hid the
-   icon on hover. `--success` has a bright value for dark and a deep one for
-   light, so it reads as "new version available" on both. */
+/* Accent, like the rest of the app: white in dark mode, black in light, with
+   `--on-accent` ink so the fill-read icon survives a full-strength hover. */
 .agent-update-btn {
-  --update-color: var(--success, #2ee06d);
-  --update-ink: #04130a;
+  --update-color: var(--accent, #ffffff);
+  --update-ink: var(--on-accent, #000000);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -24,28 +22,6 @@
               border-color var(--dur-fast, 0.15s) var(--ease-out, ease),
               box-shadow var(--dur-fast, 0.15s) var(--ease-out, ease),
               transform var(--dur-fast, 0.15s) var(--ease-out, ease);
-}
-
-/* Light: hollow like dark mode, then filled green on hover. The ring is the
-   full-strength deep green (not the 60% mix dark mode uses), because a faded
-   ring on a white tile is what made the first version hard to see.
-   `bg-palette-light` covers light wallpapers, which take the light colours
-   without the `light-theme` class. */
-:root.light-theme .agent-update-btn,
-html.bg-palette-light:not(.has-bg-media) .agent-update-btn {
-  --update-ink: #ffffff;
-  background: color-mix(in srgb, var(--update-color) 6%, transparent);
-  border: 1.5px solid var(--update-color);
-  color: var(--update-color);
-  box-shadow: none;
-}
-
-:root.light-theme .agent-update-btn:hover,
-html.bg-palette-light:not(.has-bg-media) .agent-update-btn:hover {
-  background: var(--update-color);
-  border-color: var(--update-color);
-  color: var(--update-ink);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--update-color) 20%, transparent);
 }
 
 .agent-update-btn:hover {

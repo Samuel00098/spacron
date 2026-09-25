@@ -24,6 +24,7 @@ pub mod media;
 pub mod keep_awake;
 pub mod lsp;
 pub mod mcp;
+pub mod mcp_client;
 pub mod emulator_grpc;
 pub mod mobile;
 pub mod mobile_stream;

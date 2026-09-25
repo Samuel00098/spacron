@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="static/icon.png" width="80" height="80" alt="Spacron Logo"><br>
-  <strong>A lightweight, terminal-first developer workspace for keyboard-centric professionals.</strong>
+  <strong>One workspace. One goal. A fleet of agents that builds it.</strong>
 </p>
 
 <p align="center">
@@ -13,19 +13,25 @@
   <img src="https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript" alt="TypeScript">
 </p>
 
-Spacron is a cross-platform desktop application that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, and git integration — all unified inside a single keyboard-driven window. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, no background cloud services, sub-second startup.
+Spacron is a cross-platform desktop workspace that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, git integration, and a **conversational agent fleet** — all unified inside a single keyboard- and voice-driven window. Tell the orchestrator your goal and it plans the work, edits up to 3 files itself, and delegates the rest to a team of coding CLIs that work in your shared repo — each told explicitly not to touch the others' files. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, sub-second startup.
+
+**You are always in control.** Every automated action — an orchestrator edit, a spawned agent, an approval card, a generation — has a plain manual path. Agent work sits on branches you review yourself, nothing runs without your say-so, and all of the classic terminal/editor/preview/git features work exactly the same with zero AI connections configured. See **[Doing It Yourself](docs/FEATURES.md#18-doing-it-yourself)**.
 
 ---
 
 ## ⚡ Key Features
 
-- **Multi-pane Terminal Grid** — Full PTY shell sessions using xterm.js, layout configuration (1/2/3/4 panes), automatic shell detection per platform, and drag-to-resize support.
-- **CodeMirror 6 Editor** — Syntax highlighting for 15+ languages, built-in Vim mode, minimap, formatting, format-on-save, and word wrap.
-- **Live Preview Proxy** — Built-in HTTP/WebSocket proxy that routes your local dev server through a managed port, injecting dev tools and the DOM inspector automatically.
-- **DOM Inspector** — Click any element in the live preview panel to inspect its tag, computed styles, selectors, and attributes, then send it (with a screenshot) straight to the AI prompt bar.
-- **Git Integration** — Review staged/unstaged changes, inspect diffs, view commit history, run commit/push actions, and discard files in milliseconds.
-- **Floating Command Palette** — A unified keyboard bar that triggers file, view, terminal, formatter, and settings actions instantly.
-- **Workspace Snapshots** — Capture your active layouts, editor states, and open tabs, and restore them with a single click.
+- **Agent Fleet & Orchestration** — A conversational orchestrator that understands your whole project. It plans each goal into 2–4 sub-tasks with disjoint file sets, edits at most 3 files per task itself, and delegates big work to agents over approval cards. The fleet (Claude Code, Codex, Cursor, Antigravity, Grok, OpenCode, and more) runs live as tiles with `APPROVED`/bounce review gates. Agents default to your shared main repo; per-agent isolated worktrees remain an option.
+- **Hands-off the shared tree** — When several agents work alongside you in the same repo, a standing charter, disjoint file sets, coordinator sequencing, and mailbox file-claims keep them from clobbering each other — never revert changes that aren't yours, commit only the files you changed.
+- **Voice-driven everything** — Tap **left Alt** anywhere for a live speech↔speech conversation; press **F9** to dictate into any field (terminals stay verbatim); the floating prompt bar is voice-first with staged prompts and file drag-and-drop.
+- **Generations** — Images and videos generate into `<project>/generations` on your ChatGPT plan or your own API keys (OpenAI, Google/Veo, OpenRouter, fal, Replicate), with an inline image viewer and paint-masked edits.
+- **Remote Workspace** — Attach Spacron to your own VPS/VM over Tailscale or SSH: the workspace (files, terminals, agents) lives on your box and reconnects mid-state from anywhere. No provisioned servers.
+- **Mobile Emulator** — Boot an Android phone AVD (or iOS simulator) and drive it with tap/swipe/type/rotate from the panel — no adb window needed.
+- **Terminal Grid** — Full PTY shell sessions (xterm.js), layouts from single to 9-grid, automatic per-platform shell detection, session roles, command blocks, and working-directory tracking.
+- **Editor & Preview** — CodeMirror 6 with 15+ languages, Vim mode, minimap, format-on-save; a live dev-server preview proxy with WebSocket support, device viewports, a DOM inspector, and an in-panel console.
+- **Tool Rooms** — One-click rooms for the HTTP client, SQLite database explorer, Docker containers, dev toolbox (JWT/JSON/regex/epoch/coder), environment manager, media player, sketch canvas, and project snapshots.
+- **Sign in with ChatGPT** — Run the whole fleet on your ChatGPT plan through Codex (no API key), or connect OpenAI/Anthropic/Google/OpenRouter/xAI keys and free Kilo Code models.
+- **Git Integration** — Diff, commit, push, discard, and ASCII commit history, all from the sidebar.
 
 ---
 
@@ -34,7 +40,7 @@ Spacron is a cross-platform desktop application that combines a real PTY termina
 Download the latest build for your platform from the **[official website](https://spacron.app)**.
 
 ### Windows
-Run the `.exe` setup installer.
+Run the `.exe` setup installer: `x64-setup.exe` for Intel/AMD PCs, `arm64-setup.exe` for Windows on ARM (Snapdragon and other ARM laptops).
 
 ### macOS
 Open the Apple Silicon `.dmg` disk image and drag Spacron into Applications.
@@ -67,12 +73,15 @@ Spacron ships **signed auto-updates**, so it keeps itself current after install.
 
 ## 🚀 Quick Start
 
-1. **Open Spacron.** Set up your theme and shortcuts inside the onboarding tour.
+1. **Open Spacron.** Use it however you like — type, dictate (tap **left Alt** for a live conversation, **F9** to transcribe), or just use your keyboard.
 2. **Create a Workspace** (`Ctrl+N`) or open an existing code directory (`Ctrl+O`).
 3. **Launch your Dev Server** inside the terminal (e.g., `npm run dev`).
 4. **Activate the Preview Proxy** (`Ctrl+Alt+P`) to launch the live preview split pane with the DOM Inspector.
 5. **Inspect elements** inside the preview and edit code in CodeMirror side-by-side.
 6. **Commit & Push** changes directly from the Git integration in the sidebar.
+7. **Bring in the fleet when you want it** — press `Ctrl+Shift+A` to spawn agents, or open the orchestrator, tell it your goal, and approve the plan. Or skip all of it: everything above is fully manual.
+
+> Want the full surface area? Read **[docs/FEATURES.md](docs/FEATURES.md)** — it documents every user-facing feature, including the **Doing It Yourself** section that maps each automated action to its manual equivalent.
 
 ---
 
@@ -82,6 +91,8 @@ Spacron ships **signed auto-updates**, so it keeps itself current after install.
 |---|---|---|---|
 | **Startup Speed** | **Sub-second (Native)** | 3–5 seconds | Fast |
 | **Workspace Shell** | **Tauri 2 (Rust)** | Electron (Node) | Native (Rust) |
+| **Agent Fleet & Orchestration** | **Yes (in shared repo)** | Extensions | No |
+| **Voice Control** | **Yes (realtime + dictation)** | No | No |
 | **Multi-pane PTY** | **Yes** | Integrated Tab | Primary focus |
 | **Code Editor** | **CodeMirror 6** | Monaco Editor | None |
 | **Port Preview Proxy** | **Yes + DOM Inspector** | Requires extension | None |
@@ -100,12 +111,27 @@ Below are Spacron's default keyboard shortcuts. You can customize them in the se
 | **New Workspace** | `Ctrl+N` | Workspace |
 | **Open Folder** | `Ctrl+O` | Workspace |
 | **Toggle Sidebar** | `Ctrl+B` | View |
-| **Focus Terminal** | `Ctrl+` ` ` | View |
-| **Focus Editor** | `Ctrl+E` | View |
-| **Toggle Preview Split** | `Ctrl+\` | Editor |
-| **Format Document** | `Alt+Shift+F` | Editor |
+| **Toggle Projects** | `Ctrl+K` | View |
+| **Switch Code / Chat Mode** | `Ctrl+Shift+J` | Workspace |
+| **Go to Terminal** | `Ctrl+`` ` ` | View |
+| **Go to Editor** | `Ctrl+E` | View |
+| **Go to Preview** | `Ctrl+Shift+V` | View |
+| **Go to Agent Fleet** | `Ctrl+Shift+G` | View |
+| **Go to HTTP Client** | `Ctrl+Shift+H` | View |
+| **Go to Database** | `Ctrl+Shift+B` | View |
+| **Go to Containers** | `Ctrl+Shift+C` | View |
+| **Go to Dev Toolbox** | `Ctrl+Shift+X` | View |
+| **Go to YouTube** | `Ctrl+Shift+Y` | View |
+| **Environment Manager** | `Ctrl+Shift+E` | View |
+| **Tasks** | `Ctrl+Shift+T` | View |
+| **Search in Files** | `Ctrl+Shift+F` | View |
+| **Save File** | `Ctrl+S` | File |
+| **New Terminal Tab** | `Ctrl+Shift+`` ` | Terminal |
+| **Spawn Agents** | `Ctrl+Shift+A` | Agent |
+| **Launch Voice Mode** | `Ctrl+Shift+M` | Voice |
+| **Transcribe (dictation)** | `F9` | Voice |
 | **Start Preview Proxy** | `Ctrl+Alt+P` | Preview |
-| **Toggle Scratchpad** | `Ctrl+Shift+N` | View |
+| **Format Document** | `Alt+Shift+F` | Editor |
 
 ---
 

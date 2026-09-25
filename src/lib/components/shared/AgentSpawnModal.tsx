@@ -489,16 +489,15 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M12 8V4H8" />
-                <rect width="16" height="12" x="4" y="8" rx="2" />
-                <path d="M2 14h2" />
-                <path d="M20 14h2" />
-                <line x1="9" y1="13" x2="9" y2="15" />
-                <line x1="15" y1="13" x2="15" y2="15" />
+                {/* Same glyph as the sidebar's New Agent button that opens this dialog. */}
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <line x1="19" y1="8" x2="19" y2="14" />
+                <line x1="16" y1="11" x2="22" y2="11" />
               </svg>
             </span>
             <div className="asm-title-text">

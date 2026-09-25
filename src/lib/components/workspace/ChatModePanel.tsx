@@ -23,6 +23,7 @@ import {
 import { openFile } from '$lib/stores/editor';
 import { setActiveView } from '$lib/stores/layout';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
+import ReasoningSlider from '$lib/components/shared/ReasoningSlider';
 import ChatAgentModelPicker from './ChatAgentModelPicker';
 import { todoProgress } from '$lib/services/orchestrator/chat-turn';
 import { ProviderBrandMark } from '$lib/components/shared/providerBrands';
@@ -60,7 +61,7 @@ import {
   type RealtimeVoiceState,
 } from '$lib/services/realtime-voice';
 import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
-import { REASONING_LABELS, reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
+import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
 import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
 import { modelCapabilitiesVersion } from '$lib/services/model-capabilities';
 import {
@@ -658,6 +659,9 @@ export default function ChatModePanel() {
   const [editingMessageDraft, setEditingMessageDraft] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [fileMention, setFileMention] = useState<{ start: number; end: number; query: string } | null>(null);
+  const [fileMatches, setFileMatches] = useState<string[]>([]);
+  const [fileMatchIndex, setFileMatchIndex] = useState(0);
   const [isComposerDragOver, setIsComposerDragOver] = useState(false);
   const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
   const [pendingSendCount, setPendingSendCount] = useState(0);
@@ -758,7 +762,7 @@ export default function ChatModePanel() {
   const providerIds = useMemo(() => new Set(orchestratorProviders.map((entry) => entry.id)), [orchestratorProviders]);
   const selectedProvider = thread?.provider && providerIds.has(thread.provider as AiProviderId)
     ? thread.provider as AiProviderId
-    : providerIds.has(defaultProvider) ? defaultProvider : 'openrouter';
+    : providerIds.has(defaultProvider) ? defaultProvider : 'chatgpt';
   const providerDef = getProviderDef(selectedProvider);
   const selectedModel = thread?.model?.trim()
     || (selectedProvider === defaultProvider ? defaultModel : modelByProvider[selectedProvider])
@@ -791,6 +795,39 @@ export default function ChatModePanel() {
     return [{ id: selectedModel, label: selectedModel, description: 'Saved model for this conversation.' }, ...source];
   }, [liveModels, providerDef.models, selectedModel]);
   const accessMode: ChatAccessMode = thread?.accessMode === 'full-access' ? 'full-access' : 'inherit';
+  const workMode = thread?.workMode === 'plan' ? 'plan' : 'build';
+
+  useEffect(() => {
+    if (!project || !fileMention) { setFileMatches([]); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      const escaped = fileMention.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      void invoke<string[]>('fs_glob_files', {
+        rootPath: project.root_path,
+        pattern: `(?i)${escaped || '.'}`,
+        matchAnywhere: false,
+        max: 30,
+      }).then((paths) => { if (!cancelled) { setFileMatches(paths); setFileMatchIndex(0); } })
+        .catch(() => { if (!cancelled) setFileMatches([]); });
+    }, 120);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [project?.root_path, fileMention?.query]);
+
+  function updateFileMention(value: string, cursor: number) {
+    const prefix = value.slice(0, cursor);
+    const match = /(?:^|\s)@([^\s@]*)$/.exec(prefix);
+    setFileMention(match ? { start: cursor - match[1].length - 1, end: cursor, query: match[1] } : null);
+  }
+
+  function pickFileMention(path: string) {
+    if (!thread || !fileMention) return;
+    const value = thread.draft;
+    const next = `${value.slice(0, fileMention.start)}@${path} ${value.slice(fileMention.end)}`;
+    updateDraft(next);
+    setFileMention(null);
+    const cursor = fileMention.start + path.length + 2;
+    requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(cursor, cursor); });
+  }
   const composerValue = thread?.draft ?? '';
   const chatPlacementRequest = project && thread && placementRequest?.source === 'orchestrator'
     && placementRequest.projectId === project.id && placementRequest.threadId === thread.id
@@ -1067,6 +1104,7 @@ export default function ChatModePanel() {
       provider: pendingSettings?.provider ?? selectedProvider,
       model: pendingSettings?.model ?? selectedModel,
       accessMode,
+      workMode,
     });
     setAttachments((current) => {
       revokeAttachmentPreviews(current);
@@ -1087,6 +1125,7 @@ export default function ChatModePanel() {
       orchestratorProvider: selectedProvider,
       orchestratorModel: selectedModel,
       accessMode,
+      workMode,
       chatMode: true,
       conversationalMode: true,
       });
@@ -1266,6 +1305,7 @@ export default function ChatModePanel() {
         orchestratorProvider: selectedProvider,
         orchestratorModel: selectedModel,
         accessMode,
+        workMode,
         voiceConversation: true,
         conversationalMode: true,
       });
@@ -1640,6 +1680,7 @@ export default function ChatModePanel() {
     const messageAttachments = attachments.map(({ previewUrl: _preview, ...rest }) => rest);
     revokeAttachmentPreviews(attachments);
     setThreadDraft(thread.id, '');
+    setFileMention(null);
     setAttachments([]);
     setPendingSendCount((count) => count + 1);
     try {
@@ -1652,6 +1693,7 @@ export default function ChatModePanel() {
         orchestratorProvider: selectedProvider,
         orchestratorModel: selectedModel,
         accessMode,
+        workMode,
         chatMode: true,
         conversationalMode: true,
         attachments: messageAttachments,
@@ -1942,9 +1984,18 @@ export default function ChatModePanel() {
               ref={textareaRef}
               value={composerValue}
               rows={1}
-              onChange={(event) => updateDraft(event.target.value)}
+              onChange={(event) => { updateDraft(event.target.value); updateFileMention(event.target.value, event.target.selectionStart); }}
               onPaste={(event) => void handlePaste(event)}
               onKeyDown={(event) => {
+                if (fileMention && fileMatches.length) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setFileMatchIndex((index) => (index + (event.key === 'ArrowDown' ? 1 : fileMatches.length - 1)) % fileMatches.length);
+                    return;
+                  }
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); pickFileMention(fileMatches[fileMatchIndex]); return; }
+                }
+                if (event.key === 'Escape' && fileMention) { setFileMention(null); return; }
                 // Enter sends; Shift+Enter keeps the native newline behavior.
                 // Ignore IME composition commits so East Asian input methods do
                 // not submit a message while the candidate text is composing.
@@ -1957,6 +2008,14 @@ export default function ChatModePanel() {
               disabled={!project || Boolean(pendingRequest)}
               aria-label="Message the orchestrator"
             />
+            {fileMention && fileMatches.length > 0 && (
+              <div className="chat-mode-file-mentions" role="listbox" aria-label="Project files">
+                {fileMatches.map((path, index) => (
+                  <button key={path} type="button" role="option" aria-selected={index === fileMatchIndex}
+                    onMouseDown={(event) => event.preventDefault()} onClick={() => pickFileMention(path)}>{path}</button>
+                ))}
+              </div>
+            )}
             {voiceActive && (
               <div className="chat-mode-composer-voice-stage" role="status" aria-label="Voice mode active">
                 <div className="chat-mode-composer-voice-spectrum">
@@ -2044,20 +2103,24 @@ export default function ChatModePanel() {
                   boundarySelector=".chat-mode-panel"
                 />
               </div>
+              <div className="chat-mode-work-dropdown">
+                <Dropdown value={workMode} options={[
+                  { value: 'build', label: 'Build', tooltip: 'Inspect and carry out the task using this thread’s access setting.' },
+                  { value: 'plan', label: 'Plan', tooltip: 'Inspect the project and propose a plan without edits or agent dispatch.' },
+                ]} onChange={(value) => {
+                  if (thread) updateChatThread(thread.id, { workMode: value === 'plan' ? 'plan' : 'build', updatedAt: Date.now() });
+                }} ariaLabel="Chat work mode" disabled={!thread} boundarySelector=".chat-mode-panel" />
+              </div>
               {reasoningLevels.length > 0 && (
                 <div className="chat-mode-reasoning-dropdown">
-                  <Dropdown
+                  <ReasoningSlider
                     value={selectedReasoning}
-                    options={(['default', ...reasoningLevels] as ChatReasoningEffort[]).map((level) => ({
-                      value: level,
-                      label: level === 'default' ? 'Default reasoning' : `${REASONING_LABELS[level]} reasoning`,
-                    })) as DropdownOption[]}
+                    levels={reasoningLevels}
                     onChange={(value) => {
-                      if (thread) updateChatThread(thread.id, { reasoningEffort: value as ChatReasoningEffort, updatedAt: Date.now() });
+                      if (thread) updateChatThread(thread.id, { reasoningEffort: value, updatedAt: Date.now() });
                     }}
-                    ariaLabel="Reasoning level"
                     disabled={!thread}
-                    boundarySelector=".chat-mode-panel"
+                    dropdown
                   />
                 </div>
               )}

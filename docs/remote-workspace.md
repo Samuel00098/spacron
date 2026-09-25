@@ -185,7 +185,7 @@ Those are Steps 2–5.
 
 ### Verification
 
-Run `spacron-server --workspace ~/repo --port 9000 --token dev` on the box (behind Tailscale),
+Run `spacron-server --workspace ~/repo --port 9000 --token $(openssl rand -hex 16)` on the box (behind Tailscale),
 point the app at `ws://<host>:9000/pty`, open a terminal, run `ls` / `htop`, resize, `exit`.
 Success = live output, correct resize reflow, clean exit code — and the local terminal still
 works unchanged with the flag off.

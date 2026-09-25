@@ -17,6 +17,7 @@ import {
   creatingType,
   creatingValue,
   deletePaths,
+  getCreateTarget,
   hideContextMenu,
   loadRootDirectory,
   loadingProjectRoots,
@@ -148,11 +149,13 @@ export default function FileExplorer() {
   }
 
   function startNewFile() {
-    if (project) startCreate(project.root_path, 'file');
+    const target = getCreateTarget();
+    if (target) startCreate(target, 'file');
   }
 
   function startNewDir() {
-    if (project) startCreate(project.root_path, 'dir');
+    const target = getCreateTarget();
+    if (target) startCreate(target, 'dir');
   }
 
   function refreshExplorer() {

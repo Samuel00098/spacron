@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getChangelogContent, parseChangelog } from '@/lib/changelog';
-import { getAgentBrand } from '../../src/lib/components/shared/agentBrands';
+import { getAgentBrand } from '@/lib/agentBrands';
 
 /**
  * Hero headline split into words so CSS can cascade them in one by one
@@ -82,25 +82,45 @@ function AgentIcon({ command, name, className = '' }: { command: string; name: s
 const agentNotes = [
   { cls: 'live', text: 'Your subscription, your quota' },
   { cls: '', text: 'Mix agents freely within one goal' },
+      { cls: 'live', text: 'Manual-first · nothing runs without your say-so' },
 ];
 
 const fleetRows = [
   { mark: '●', branch: 'main', who: 'goal set: subscription billing', command: undefined, state: 'planning', pending: true },
-  { mark: '◆', branch: 'feat/stripe-checkout', who: 'Claude Code', command: 'claude', state: '✓ 42 tests passing', pending: false },
-  { mark: '◆', branch: 'feat/usage-limits', who: 'Cursor', command: 'cursor-agent', state: '✓ typecheck clean', pending: false },
-  { mark: '◆', branch: 'fix/socket-close', who: 'Codex CLI', command: 'codex', state: '↻ review bounced, returned', pending: false },
+  { mark: '◆', branch: 'main · apps/billing', who: 'Claude Code', command: 'claude', state: '✓ 42 tests passing', pending: false },
+  { mark: '◆', branch: 'main · lib/usage-limits', who: 'Cursor', command: 'cursor-agent', state: '✓ typecheck clean', pending: false },
+  { mark: '◆', branch: 'main · apps/gateway', who: 'Codex CLI', command: 'codex', state: '↻ review bounced, returned', pending: false },
 ];
 
 const toolCards = [
+  { name: 'Agent fleet', body: 'Every running agent as a live card · tile, steer, and bounce work back' },
+  { name: 'Voice', body: 'Tap left Alt for a live voice conversation; F9 dictates into any field' },
   { name: 'Terminal grid', body: 'Drag-to-resize PTY panes, many sessions at once' },
   { name: 'Editor', body: 'CodeMirror with LSP, syntax modes, and Vim bindings' },
-  { name: 'Live preview', body: 'HTTP/WebSocket proxy with hot reload' },
-  { name: 'HTTP inspector', body: 'Watch every request your app makes' },
-  { name: 'Containers', body: 'Manage Docker without leaving the deck' },
-  { name: 'Database browser', body: 'Inspect SQLite schemas and rows' },
+  { name: 'Live preview', body: 'HTTP/WebSocket proxy with hot reload and a DOM inspector' },
+  { name: 'Chat workspace', body: 'Threaded conversations with your providers, right beside the code' },
+  { name: 'Generations', body: 'Images and videos render into your project, editable in place' },
+  { name: 'HTTP inspector', body: 'Send requests and watch every one your app makes' },
+  { name: 'Database browser', body: 'Inspect SQLite schemas and run queries safely' },
+  { name: 'Containers', body: 'Docker compose and container control without leaving the deck' },
+  { name: 'Mobile emulator', body: 'Boot an Android phone, then tap, swipe, and type on it from the panel' },
+  { name: 'Remote workspace', body: 'Attach your own VPS and pick the workspace back up mid-state' },
+];
+
+// One-time license. One key per user covers every machine and OS — the
+// TablePlus/Sublime playbook, minus the per-device tax.
+const licensePoints = [
+  { term: 'Perpetual license', note: 'Pay once, use forever. No subscription, no per-seat fees.' },
+  { term: 'Per-user key', note: 'One license covers all the computers where you are the primary user.' },
+  { term: '12 months of updates', note: 'Included with your key; optional renewal keeps you current.' },
+  { term: 'Local-first', note: 'Runs on your machine, with the agent subscriptions you already pay for.' },
 ];
 
 const GENERIC_CHANGELOG_HEADINGS = /^(added|changed|fixed|removed|deprecated|security)$/i;
+
+// Where "Buy now" goes. Set SPACRON_CHECKOUT_URL in env to your Lemon Squeezy
+// checkout link; until then the gated /download page stands in.
+const checkoutUrl = process.env.SPACRON_CHECKOUT_URL || '/download';
 
 export default async function HomePage() {
   const entries = parseChangelog(await getChangelogContent()).slice(0, 3);
@@ -154,14 +174,14 @@ export default async function HomePage() {
           ))}
         </h1>
         <p className="hero-lead" data-reveal style={{ ['--reveal-delay' as string]: '.55s' }}>
-          Spacron runs the coding CLIs you already use as one orchestrated team. An orchestrator splits your goal, builders work in isolated worktrees, and ownership checks keep them from stepping on each other.
+          Spacron runs the coding CLIs you already use as one orchestrated team. An orchestrator splits your goal into disjoint file sets, agents work your repo with instructions not to touch each other, and none of it is mandatory. Every action has a manual path you can take instead.
         </p>
         <div className="hero-actions" data-reveal style={{ ['--reveal-delay' as string]: '.7s' }}>
-          <a href="/download" className="btn btn-primary">Download Spacron</a>
+          <a href={checkoutUrl} className="btn btn-primary">Buy Spacron · $49</a>
           <a href="#how" className="btn btn-ghost">See how it works</a>
         </div>
         <p className="hero-os" data-reveal style={{ ['--reveal-delay' as string]: '.82s' }}>
-          Windows <span className="sep">&middot;</span> macOS <span className="sep">&middot;</span> Linux
+          Windows (x64 &amp; ARM) <span className="sep">&middot;</span> macOS (Apple Silicon) <span className="sep">&middot;</span> Linux
         </p>
 
         <div className="terminal" aria-hidden="true" data-reveal="scale" style={{ ['--reveal-delay' as string]: '.9s' }}>
@@ -169,15 +189,15 @@ export default async function HomePage() {
             <span className="terminal-dot" />
             <span className="terminal-dot" />
             <span className="terminal-dot" />
-            <span className="terminal-title">spacron — fleet chat</span>
+            <span className="terminal-title">spacron · fleet chat</span>
           </div>
           <div className="terminal-body">
             <div><span className="prompt">&gt;</span> <span className="cmd">build &quot;add subscription billing with Stripe&quot;</span></div>
-            <div><span className="dim">orchestrator: planning — 3 sub-tasks, disjoint file sets</span></div>
-            <div><span className="agent"><AgentIcon command="claude" name="Claude Code" />Claude Code</span> <span className="dim">&middot; worktree feat/stripe-checkout</span> <span className="ok">✓ 42 tests passing</span></div>
-            <div><span className="agent"><AgentIcon command="cursor-agent" name="Cursor" />Cursor</span> <span className="dim">&middot; worktree feat/usage-limits</span> <span className="ok">✓ typecheck clean</span></div>
-            <div><span className="agent"><AgentIcon command="codex" name="Codex CLI" />Codex CLI</span> <span className="dim">&middot; review — 1 bounce returned</span></div>
-            <div><span className="dim">all workers accepted — merged to main</span> <span className="terminal-cursor" /></div>
+            <div><span className="dim">orchestrator: planning · 3 sub-tasks, disjoint file sets</span></div>
+            <div><span className="agent"><AgentIcon command="claude" name="Claude Code" />Claude Code</span> <span className="dim">&middot; claims apps/billing</span> <span className="ok">✓ 42 tests passing</span></div>
+            <div><span className="agent"><AgentIcon command="cursor-agent" name="Cursor" />Cursor</span> <span className="dim">&middot; claims lib/usage-limits</span> <span className="ok">✓ typecheck clean</span></div>
+            <div><span className="agent"><AgentIcon command="codex" name="Codex CLI" />Codex CLI</span> <span className="dim">&middot; review · 1 bounce returned</span></div>
+            <div><span className="dim">all workers accepted · review bundled, committed to main</span> <span className="terminal-cursor" /></div>
           </div>
         </div>
       </section>
@@ -214,13 +234,13 @@ export default async function HomePage() {
       <section className="section" id="how">
         <p className="section-eyebrow" data-reveal>How it works</p>
         <h2 className="section-title" data-reveal>A Team, Not a Chat Window</h2>
-        <p className="section-lead" data-reveal>Everything a fleet needs under one roof — split the work, keep the work separate, review the work.</p>
+        <p className="section-lead" data-reveal>Everything a fleet needs under one roof: split the work, keep the work separate, review the work.</p>
 
         <div className="feature-row" id="how-worktree">
           <div className="feature-copy" data-reveal="left">
-            <h3>Every builder gets its own worktree</h3>
+            <h3>Together in your repo, told not to touch each other</h3>
             <p>
-              The orchestrator splits your goal into sub-tasks with disjoint file sets, then runs each builder in its own pane, in an isolated git worktree, on its own branch — so two agents can never collide. Reviews bounce weak work back with a critique; only accepted work reaches main.
+              The orchestrator splits your goal into sub-tasks with disjoint file sets, then gives every agent an explicit charter: do only your task, never revert changes that aren&apos;t yours, only touch the files you claimed. Agents work in your main repo by default so you see every edit, or each one can opt into its own isolated worktree when you want more separation. Reviews bounce weak work back with a critique in either case.
             </p>
           </div>
           <div className="dark-panel" aria-hidden="true" data-reveal="right">
@@ -241,7 +261,7 @@ export default async function HomePage() {
           <div className="feature-copy" data-reveal="right">
             <h3>An orchestrator that reads the whole deck</h3>
             <p>
-              The conversational orchestrator watches what you watch — the active file, your cursor, every open pane, the current branch, the task board. Ask it to find what&apos;s weak and get a concrete, evidence-backed answer in one turn. Hand it a goal and it plans, delegates, verifies, and reports back.
+              The conversational orchestrator watches what you watch: the active file, your cursor, every open pane, the current branch, the task board. Ask it to find what&apos;s weak and get a concrete, evidence-backed answer in one turn. Hand it a goal and it plans, delegates, verifies, and reports back.
             </p>
           </div>
           <div className="dark-panel" aria-hidden="true" data-reveal="left">
@@ -255,12 +275,31 @@ export default async function HomePage() {
             </div>
           </div>
         </div>
+
+        <div className="feature-row" id="do-it-yourself">
+          <div className="feature-copy" data-reveal="left">
+            <h3>Or skip the fleet entirely · it&apos;s all yours either way</h3>
+            <p>
+              Spacron is manual-first. You drive, it assists: agents only run when you say so, risky actions need your approval, edits land on branches you review and merge yourself. If you&apos;d rather build by hand, Spacron is simply a blazing-fast terminal, editor, preview proxy, and git panel. With zero AI configured, nothing forces itself on you.
+            </p>
+          </div>
+          <div className="dark-panel" aria-hidden="true" data-reveal="right">
+            <div className="chat-msg you">
+              <span className="role">you</span>
+              Skip the agents this time. Set up the repo scaffold and I&apos;ll write it by hand.
+            </div>
+            <div className="chat-msg bot">
+              <span className="role">orchestrator</span>
+              Nothing spawned. Scaffold is ready in the editor. Take it from here. The goal stays saved in the task board if you change your mind.
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="section" id="toolbox">
         <p className="section-eyebrow" data-reveal>The deck</p>
         <h2 className="section-title" data-reveal>Everything Else Under the Same Roof</h2>
-        <p className="section-lead" data-reveal>A fleet deck is more than chat. Spacron ships the rest of your workspace in the same window — keyboard-driven, local-first.</p>
+        <p className="section-lead" data-reveal>A fleet deck is more than chat. Spacron ships the rest of your workspace in the same window: keyboard-driven, local-first.</p>
         <div className="features">
           {toolCards.map((card) => (
             <div className="feature-card" key={card.name} data-reveal="scale">
@@ -278,7 +317,7 @@ export default async function HomePage() {
           <div className="insight-grid">
             {insights.map((insight) => (
               <Link href="/changelog" className="insight-card" key={insight.version} data-reveal="scale">
-                <span className="insight-date">v{insight.version} &mdash; {insight.date}</span>
+                <span className="insight-date">v{insight.version} &middot; {insight.date}</span>
                 <h3>{insight.title}</h3>
                 <p>{insight.excerpt}</p>
               </Link>
@@ -287,11 +326,39 @@ export default async function HomePage() {
         </section>
       )}
 
+      <section className="section" id="pricing">
+        <p className="section-eyebrow" data-reveal>Pricing</p>
+        <h2 className="section-title" data-reveal>One workspace. One license.</h2>
+        <p className="section-lead" data-reveal>
+          Pay once and own Spacron. It orchestrates the agent subscriptions you already have: no per-seat fees, no AI token upcharge, no cloud lock-in.
+        </p>
+        <div className="pricing" data-reveal="scale">
+          <div className="pricing-card">
+            <div className="pricing-head">
+              <span className="pricing-name">Spacron · Personal</span>
+              <span className="pricing-price">$49<span className="pricing-period">one-time</span></span>
+              <span className="pricing-sub">Perpetual license, per user · Windows (x64 &amp; ARM), macOS, Linux</span>
+            </div>
+            <ul className="pricing-list">
+              {licensePoints.map((point) => (
+                <li key={point.term}>
+                  <span className="check" aria-hidden="true">✓</span>
+                  <span><strong>{point.term}.</strong> {point.note}</span>
+                </li>
+              ))}
+            </ul>
+            <a href={checkoutUrl} className="btn btn-primary pricing-cta">Buy now · $49</a>
+            <p className="pricing-fineprint">30-day money-back guarantee &middot; your unique license key is emailed after checkout</p>
+            <p className="pricing-redeem"><a href="/download">Already bought? Redeem your license key &rarr;</a></p>
+          </div>
+        </div>
+      </section>
+
       <section className="final-cta">
         <h2 data-reveal="scale">Your codebase isn&apos;t<br />going to write itself.</h2>
         <p data-reveal>Spin up a fleet tonight. Tell Spacron the goal and watch the team work.</p>
         <div className="hero-actions" data-reveal>
-          <a href="/download" className="btn btn-primary">Get Spacron</a>
+          <a href={checkoutUrl} className="btn btn-primary">Buy Spacron · $49</a>
         </div>
       </section>
     </>

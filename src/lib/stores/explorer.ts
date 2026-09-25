@@ -59,6 +59,36 @@ export const creatingPath = syncWritable<string | null>('creatingPath', null);
 export const creatingType = syncWritable<'file' | 'dir'>('creatingType', 'file');
 export const creatingValue = syncWritable<string>('creatingValue', '');
 
+/**
+ * The directory the header New File / New Folder buttons target: the single
+ * selected folder, the parent of a single selected file, or the project root
+ * when nothing is selected (or the selection spans several items).
+ *
+ * Returns raw paths exactly as stored on the tree nodes, so the inline create
+ * input (which only renders when `creatingPath` equals a node's `entry.path`)
+ * lines up on Windows too.
+ */
+export function getCreateTarget(): string {
+  const project = get(activeProject);
+  if (!project) return '';
+  const root = project.root_path;
+  const selected = get(selectedPath);
+  const all = get(selectedPaths);
+  if (selected !== null && all.size === 1 && all.has(selected)) {
+    const projectRoot = findProjectRootForPath(selected);
+    const nodes = get(projectRootNodes).get(projectRoot ?? '') ?? [];
+    const node = findNodeByPath(nodes, selected);
+    if (node) {
+      if (node.entry.is_dir) return node.entry.path;
+      const raw = node.entry.path.replace(/[\\\/]+$/, '');
+      const lastSep = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+      const parent = lastSep >= 0 ? raw.slice(0, lastSep) : '';
+      if (parent && normalizePath(parent) !== normalizePath(root)) return parent;
+    }
+  }
+  return root;
+}
+
 export function startCreate(parentPath: string, type: 'file' | 'dir') {
   creatingPath.set(parentPath);
   creatingType.set(type);

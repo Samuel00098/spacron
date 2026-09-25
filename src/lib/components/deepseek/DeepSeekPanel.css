@@ -5,7 +5,9 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: var(--bg-primary);
+  /* See-through like the terminal and editor panes: the room behind supplies
+     the one frosted layer, and this is the same faint sheen they use. */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
 }
 
 .deepseek-panel__frame {
@@ -13,7 +15,10 @@
   width: 100%;
   min-height: 0;
   border: 0;
-  background: var(--bg-primary);
+  background: transparent;
+  /* Must match the page's pinned `normal` (the gateway injects it): Chromium
+     paints an opaque backdrop behind an iframe whose color-scheme differs. */
+  color-scheme: normal;
 }
 
 .deepseek-panel__warning {

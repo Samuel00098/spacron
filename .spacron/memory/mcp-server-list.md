@@ -1,11 +1,19 @@
 # User MCP servers: the namespace rule (2026-09-20)
 
 Settings > MCP lets the user add MCP servers; they are written into all six
-agent CLI configs. Spacron is an MCP **server** with a config *writer* — it is
-still not an MCP *client*, and the orchestrator does not import these servers'
-tools. That was a deliberate scope call, not an oversight: importing them needs
-a per-tool risk class routed through the approval cards, or the confinement
-work has a hole in it.
+agent CLI configs. Since 2026-09-24 the chat is also an MCP *client* for them
+(`commands/mcp_client.rs`, `services/orchestrator/mcp-client.ts`), through two
+generic brain tools, `mcp_list_tools` and `mcp_call_tool`, rather than one per
+server tool (the brain's tool set is static). The rules that make that safe,
+and must stay together:
+
+- The model names a server; the spec (command/URL/headers) always comes from
+  the user's list, never from the model.
+- A tool's `readOnlyHint` from its server is the only thing that skips the
+  approval card; every other call asks per `server/tool` unless Full access.
+  Read-only turns (voice) refuse non-read-only tools outright.
+- MCP output sets the turn's taint (`readForeignWindow`), like a website or
+  another app's window, so later writes/commands ask even in Full access.
 
 Two invariants hold the whole thing up. Break either and you corrupt files the
 user also edits by hand.

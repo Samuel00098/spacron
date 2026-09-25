@@ -34,7 +34,8 @@
 
 /* Light theme solid adjustments */
 :root.light-theme .asm-card {
-  background: #ffffff;
+  /* The shared off-white panel tone (global.css), not pure white. */
+  background: var(--major-panel-surface, #f6f6f4);
   border-color: rgba(0, 0, 0, 0.12);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.06);
 }
@@ -70,15 +71,11 @@
   height: 36px;
   flex-shrink: 0;
   border-radius: 10px;
-  color: var(--role-agent, #b48cff);
-  background: color-mix(in srgb, var(--role-agent, #b48cff) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--role-agent, #b48cff) 28%, var(--border, rgba(255, 255, 255, 0.1)));
-}
-
-:root.light-theme .asm-title-badge {
-  color: var(--role-agent, #6d28d9);
-  background: color-mix(in srgb, var(--role-agent, #6d28d9) 12%, #f3f4f6);
-  border-color: color-mix(in srgb, var(--role-agent, #6d28d9) 26%, rgba(0, 0, 0, 0.08));
+  /* The app's own monochrome accent (white in dark, black in light), not the
+     purple agent role colour. Flat fill, no outline. */
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  border: 1px solid transparent;
 }
 
 .asm-title-text {
@@ -185,7 +182,8 @@
 }
 
 :root.light-theme .asm-agent-tile {
-  background: #ffffff;
+  /* One step lighter than the card so a tile still reads without an outline. */
+  background: var(--major-panel-raised, #fbfbfa);
   border: 1px solid rgba(0, 0, 0, 0.1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
@@ -198,7 +196,7 @@
 }
 
 :root.light-theme .asm-agent-tile:hover {
-  background: #ffffff;
+  background: var(--major-panel-raised, #fbfbfa);
   border-color: rgba(0, 0, 0, 0.22);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
@@ -367,25 +365,25 @@
 }
 
 .asm-badge[data-tone='ready'] {
-  color: var(--success, #10b981);
-  border-color: color-mix(in srgb, var(--success, #10b981) 32%, transparent);
-  background: color-mix(in srgb, var(--success, #10b981) 12%, transparent);
+  color: var(--accent, #e8e8ec);
+  border-color: color-mix(in srgb, var(--accent, #e8e8ec) 32%, transparent);
+  background: color-mix(in srgb, var(--accent, #e8e8ec) 12%, transparent);
 }
 
 .asm-badge[data-tone='ready'] .asm-badge-dot {
-  background: var(--success, #10b981);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--success, #10b981) 70%, transparent);
+  background: var(--accent, #e8e8ec);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent, #e8e8ec) 70%, transparent);
 }
 
 .asm-badge[data-tone='partial'] {
-  color: var(--warning, #f59e0b);
-  border-color: color-mix(in srgb, var(--warning, #f59e0b) 32%, transparent);
-  background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
+  color: var(--accent, #e8e8ec);
+  border-color: color-mix(in srgb, var(--accent, #e8e8ec) 32%, transparent);
+  background: color-mix(in srgb, var(--accent, #e8e8ec) 12%, transparent);
 }
 
 .asm-badge[data-tone='partial'] .asm-badge-dot {
-  background: var(--warning, #f59e0b);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--warning, #f59e0b) 70%, transparent);
+  background: var(--accent, #e8e8ec);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent, #e8e8ec) 70%, transparent);
 }
 
 /* Sign-in button on the tile */
@@ -646,7 +644,7 @@
 }
 
 :root.light-theme .asm-config-agent-cmd {
-  background: #ffffff;
+  background: var(--major-panel-raised, #fbfbfa);
   border-color: rgba(0, 0, 0, 0.1);
   color: var(--text-secondary, #4b5563);
 }
@@ -678,7 +676,7 @@
 }
 
 :root.light-theme .asm-agent-tab {
-  background: #ffffff;
+  background: var(--major-panel-raised, #fbfbfa);
   border-color: rgba(0, 0, 0, 0.1);
   color: var(--text-secondary, #4b5563);
 }
@@ -768,7 +766,7 @@
 }
 
 :root.light-theme .asm-placement-card {
-  background: #ffffff;
+  background: var(--major-panel-raised, #fbfbfa);
   border-color: rgba(0, 0, 0, 0.1);
   color: var(--text-secondary, #4b5563);
 }
@@ -905,7 +903,7 @@
 }
 
 :root.light-theme .asm-footer {
-  background: #ffffff;
+  background: var(--major-panel-surface, #f6f6f4);
   border-top-color: rgba(0, 0, 0, 0.08);
 }
 

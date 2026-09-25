@@ -186,6 +186,14 @@ function migrateLegacySettings() {
     }
     localStorage.setItem('forge_migration_transcriptionAutoSendOff_v1', '1');
   }
+
+  // The ChatGPT plan became the default chat-mode brain after installs had
+  // already saved another provider. Move a saved choice onto it once; the
+  // guard means a deliberate switch away afterwards is never touched again.
+  if (!localStorage.getItem('forge_migration_chatgptDefault_v1')) {
+    persistValue('aiProvider', 'chatgpt');
+    localStorage.setItem('forge_migration_chatgptDefault_v1', '1');
+  }
 }
 
 migrateLegacySettings();
@@ -226,6 +234,17 @@ function createSettingsState() {
     // they survive a restart.
     vercelRealtimeModel: persistentValue('vercelRealtimeModel', 'openai/gpt-realtime-2'),
     vercelRealtimeVoice: persistentValue('vercelRealtimeVoice', ''),
+    // Hands-free voice engine and its per-engine model/voice picks
+    // (stores/settings.ts). Undeclared, they reset on every launch. The engine
+    // union is inlined to keep this store leaf-level; keep it and every default
+    // in step with stores/settings.ts.
+    voiceConversationEngine: persistentValue<'openai-realtime' | 'xai-realtime' | 'openai-live' | 'vercel-realtime'>('voiceConversationEngine', 'openai-realtime'),
+    openaiRealtimeModel: persistentValue('openaiRealtimeModel', 'gpt-realtime-2.1-mini'),
+    openaiRealtimeVoice: persistentValue('openaiRealtimeVoice', 'marin'),
+    openaiLiveModel: persistentValue('openaiLiveModel', 'gpt-live-1'),
+    openaiLiveVoice: persistentValue('openaiLiveVoice', 'marin'),
+    xaiRealtimeModel: persistentValue('xaiRealtimeModel', 'grok-voice-latest'),
+    xaiRealtimeVoice: persistentValue('xaiRealtimeVoice', 'eve'),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
     // Orchestrator skills (services/orchestrator/skills.ts): built-ins switched
     // off, and the user's own. Shape kept inline so this store stays leaf-level.
@@ -266,6 +285,10 @@ function createSettingsState() {
     agentWorktrees: persistentValue('agentWorktrees', true),
     autoStageAgentChanges: persistentValue('autoStageAgentChanges', false),
     agentBrowserTools: persistentValue('agentBrowserTools', false),
+    // Computer use (stores/settings.ts): same trap as above. Undeclared, the
+    // switch and the blocked-apps list reset on every launch.
+    computerUse: persistentValue('computerUse', false),
+    computerUseBlockedApps: persistentValue<string[]>('computerUseBlockedApps', []),
     // Failover: move unfinished work off an agent that is running out of usage,
     // rather than letting it stop mid-feature. See
     // `services/orchestrator/agent-failover.ts` for the ladder these three feed.
@@ -322,6 +345,13 @@ const defaults: SettingsValues = {
   transcriptionAutoSend: false,
   vercelRealtimeModel: 'openai/gpt-realtime-2',
   vercelRealtimeVoice: '',
+  voiceConversationEngine: 'openai-realtime',
+  openaiRealtimeModel: 'gpt-realtime-2.1-mini',
+  openaiRealtimeVoice: 'marin',
+  openaiLiveModel: 'gpt-live-1',
+  openaiLiveVoice: 'marin',
+  xaiRealtimeModel: 'grok-voice-latest',
+  xaiRealtimeVoice: 'eve',
   announceAgentCompletions: true,
   orchestratorDisabledSkills: [],
   orchestratorCustomSkills: [],
@@ -388,6 +418,8 @@ const defaults: SettingsValues = {
   agentWorktrees: true,
   autoStageAgentChanges: false,
   agentBrowserTools: false,
+  computerUse: false,
+  computerUseBlockedApps: [],
   agentFailover: true,
   agentFailoverHeadroomPercent: 4,
   agentFailoverCrossProvider: true,
@@ -435,6 +467,13 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       transcriptionAutoSend: 'transcriptionAutoSend',
       vercelRealtimeModel: 'vercelRealtimeModel',
       vercelRealtimeVoice: 'vercelRealtimeVoice',
+      voiceConversationEngine: 'voiceConversationEngine',
+      openaiRealtimeModel: 'openaiRealtimeModel',
+      openaiRealtimeVoice: 'openaiRealtimeVoice',
+      openaiLiveModel: 'openaiLiveModel',
+      openaiLiveVoice: 'openaiLiveVoice',
+      xaiRealtimeModel: 'xaiRealtimeModel',
+      xaiRealtimeVoice: 'xaiRealtimeVoice',
       announceAgentCompletions: 'announceAgentCompletions',
       aiProvider: 'aiProvider',
       aiModelByProvider: 'aiModelByProvider',
@@ -458,6 +497,8 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       agentWorktrees: 'agentWorktrees',
       autoStageAgentChanges: 'autoStageAgentChanges',
       agentBrowserTools: 'agentBrowserTools',
+      computerUse: 'computerUse',
+      computerUseBlockedApps: 'computerUseBlockedApps',
       agentFailover: 'agentFailover',
       agentFailoverHeadroomPercent: 'agentFailoverHeadroomPercent',
       agentFailoverCrossProvider: 'agentFailoverCrossProvider',

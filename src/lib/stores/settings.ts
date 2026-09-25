@@ -299,6 +299,22 @@ export interface AiProviderDef {
 export const CHATGPT_DEFAULT_MODEL = 'gpt-5.6-luna';
 
 export const aiProviders: AiProviderDef[] = [
+  // First on purpose: the user's own ChatGPT plan is the default brain.
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT subscription',
+    signIn: 'chatgpt',
+    keyLabel: 'ChatGPT sign-in',
+    keyPlaceholder: '',
+    keyUrl: 'https://developers.openai.com/codex/cli',
+    // Runs on the user's own ChatGPT plan through their Codex CLI. Keep this
+    // explicit so a fresh composer does not fall back to another connection's
+    // model or to a provider-specific default.
+    defaultModel: CHATGPT_DEFAULT_MODEL,
+    models: [
+      { id: CHATGPT_DEFAULT_MODEL, label: 'GPT-5.6 Luna', description: 'Default model for the signed-in ChatGPT subscription.' },
+    ],
+  },
   {
     id: 'openrouter',
     label: 'OpenRouter',
@@ -551,21 +567,6 @@ export const aiProviders: AiProviderDef[] = [
       { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B', description: 'Free NVIDIA model with tool calling.', free: true },
       { id: 'deepseek/deepseek-v4-flash-0731:free', label: 'DeepSeek V4 Flash', description: 'Free DeepSeek model with a 1M context.', free: true },
       { id: 'qwen/qwen3.8-27b:free', label: 'Qwen 3.8 27B', description: 'Free Qwen model.', free: true },
-    ],
-  },
-  {
-    id: 'chatgpt',
-    label: 'ChatGPT subscription',
-    signIn: 'chatgpt',
-    keyLabel: 'ChatGPT sign-in',
-    keyPlaceholder: '',
-    keyUrl: 'https://developers.openai.com/codex/cli',
-    // Runs on the user's own ChatGPT plan through their Codex CLI. Keep this
-    // explicit so a fresh composer does not fall back to another connection's
-    // model or to a provider-specific default.
-    defaultModel: CHATGPT_DEFAULT_MODEL,
-    models: [
-      { id: CHATGPT_DEFAULT_MODEL, label: 'GPT-5.6 Luna', description: 'Default model for the signed-in ChatGPT subscription.' },
     ],
   },
   {

@@ -819,7 +819,9 @@ function McpSettingsPane() {
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
           Add a hosted server by URL, or a local one by command. Each is written into every agent
           CLI's own config, so Claude Code, Codex, Gemini, droid, opencode and Cursor all get it.
-          Changes apply the next time a project opens or an agent launches.
+          Changes apply the next time a project opens or an agent launches. The chat can use them
+          too: tools a server marks read-only run straight away, and anything else asks you first
+          unless the chat has Full access.
         </p>
         {servers.length > 0 && (
           <div className="agent-list">

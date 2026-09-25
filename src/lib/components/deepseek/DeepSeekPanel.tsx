@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
@@ -14,6 +14,44 @@ type PanelState =
   | { kind: 'starting' }
   | { kind: 'ready'; url: string; mcpWarning: string | null }
   | { kind: 'error'; message: string };
+
+/**
+ * Spacron's current theme as the dsh token values the page bridge accepts.
+ * Backgrounds stay see-through like the other panels (the room behind is the
+ * frosted layer); only floating surfaces get the solid fill Spacron's own menus
+ * use, so dsh's popovers stay readable over busy wallpapers.
+ */
+function panelThemeMessage() {
+  const root = document.documentElement;
+  const css = getComputedStyle(root);
+  const read = (name: string) => css.getPropertyValue(name).trim();
+  const solid = read('--bg-secondary-rgb') ? `rgb(${read('--bg-secondary-rgb')})` : read('--bg-secondary');
+  const border = read('--border');
+  const muted = read('--text-muted');
+  return {
+    type: 'spacron-panel-theme',
+    dark: !root.classList.contains('light-theme'),
+    vars: {
+      '--dsw-alias-label-primary': read('--text-primary'),
+      '--dsw-alias-label-secondary': read('--text-secondary'),
+      '--dsw-alias-label-tertiary': muted,
+      '--dsw-alias-label-caption': muted,
+      '--dsw-alias-label-dimmed': muted,
+      '--dsw-alias-link': read('--accent'),
+      '--dsw-alias-border-l1': read('--border-subtle') || border,
+      '--dsw-alias-border-l2': border,
+      '--dsw-alias-border-l3': border,
+      '--dsw-alias-border-l4': border,
+      '--dsw-elevation-stroke': border,
+      '--dsw-alias-bg-layer-1': read('--input-bg') || read('--bg-tertiary'),
+      '--dsw-alias-bg-layer-2': read('--bg-tertiary'),
+      '--dsw-alias-bg-layer-3': solid,
+      '--dsw-alias-bg-overlay': solid,
+      '--dsw-alias-interactive-bg-hover': read('--bg-hover'),
+      '--dsw-alias-markdown-code-block': read('--bg-tertiary'),
+    },
+  };
+}
 
 /**
  * DeepSeek Harness's own web UI, in a room of its own.
@@ -37,6 +75,37 @@ export default function DeepSeekPanel() {
   const updating = useStore(agentUpdates).updating.includes(DEEPSEEK_HARNESS_COMMAND);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const frameUrl = state.kind === 'ready' ? state.url : null;
+
+  // Keep dsh's page in Spacron's colors. The gateway injects a small bridge
+  // into the page (deepseek_harness.rs, PANEL_THEME_SCRIPT) that says
+  // `spacron-panel-theme-ready` once loaded; answer it, and resend whenever the
+  // theme rewrites the root's classes or custom properties.
+  useEffect(() => {
+    if (!frameUrl) return;
+    const targetOrigin = new URL(frameUrl).origin;
+    const send = () => {
+      frameRef.current?.contentWindow?.postMessage(panelThemeMessage(), targetOrigin);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      if (event.data?.type === 'spacron-panel-theme-ready') send();
+    };
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(send);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    window.addEventListener('message', onMessage);
+    send();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener('message', onMessage);
+    };
+  }, [frameUrl]);
 
   useEffect(() => {
     if (!root || remote || updating) return;
@@ -92,6 +161,7 @@ export default function DeepSeekPanel() {
       )}
       <iframe
         key={state.url}
+        ref={frameRef}
         className="deepseek-panel__frame"
         src={state.url}
         // Not `title`: WebView2 shows an iframe's title as a native tooltip

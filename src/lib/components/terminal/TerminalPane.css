@@ -8,21 +8,14 @@
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
   overflow: hidden;
   position: relative;
-  border: 1px solid var(--border);
+  /* Flat and outline-free like the rooms (global.css "Flat edges"): the
+     border keeps its 1px width so nothing shifts, but draws nothing. */
+  border: 1px solid transparent;
   border-radius: var(--bento-radius, 12px);
-  box-shadow:
-    inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07)),
-    var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65));
+  box-shadow: none;
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
 }
 
-.terminal-pane.active {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
-  box-shadow:
-    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
-    inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent),
-    var(--glass-shadow, 0 24px 60px -20px rgba(0, 0, 0, 0.65));
-}
 
 .terminal-pane.dead {
   opacity: 0.55;
@@ -36,7 +29,6 @@
   position: absolute;
   inset: 0;
   z-index: 20;
-  border-color: var(--accent);
 }
 
 /* ── Floating pill title bar ── */
@@ -51,10 +43,8 @@
   margin: 9px 9px 3px;
   border-radius: 999px;
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), var(--frost-chrome, 0.62));
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  box-shadow:
-    0 2px 8px -2px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.07));
+  border: 1px solid transparent;
+  box-shadow: none;
   backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 135%));
   flex-shrink: 0;
@@ -64,16 +54,6 @@
 
 .terminal-pane:not(.active) .pane-titlebar {
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), calc(var(--frost-chrome, 0.62) * 0.82));
-  border-color: color-mix(in srgb, var(--border) 50%, transparent);
-  box-shadow: inset 0 1px 0 var(--glass-rim, rgba(255, 255, 255, 0.05));
-}
-
-.terminal-pane.active .pane-titlebar {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  box-shadow:
-    0 2px 10px -2px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.13)),
-    inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .terminal-pane .pane-titlebar.draggable {
@@ -289,21 +269,6 @@
   mix-blend-mode: screen;
 }
 
-/* Inner glow border — frosted glass rim inside the terminal content area */
-:root:not(.solid-theme) .terminal-pane .xterm-container::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  pointer-events: none;
-  border-radius: 6px;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.12)) 50%, transparent),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.15),
-    inset 1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 30%, transparent),
-    inset -1px 0 0 color-mix(in srgb, var(--glass-rim, rgba(255, 255, 255, 0.06)) 30%, transparent);
-}
-
 .terminal-pane:not(.active):not(.dead) .xterm-container {
   opacity: 0.96;
   filter: saturate(0.98);
@@ -361,6 +326,11 @@
   scrollbar-color: var(--scrollbar-thumb) transparent;
   background-color: transparent !important;
   overflow-y: scroll;
+  /* The global scroll-region list (global.css) gives every scroller a soft
+     top/bottom edge shadow tinted with `--bg-primary`. Over the near-black
+     terminal that tint is LIGHTER than the surface, so it painted a pale band
+     along the bottom of every terminal. The terminal needs no edge fade. */
+  box-shadow: none;
 }
 
 .terminal-pane .xterm-container .xterm-viewport::-webkit-scrollbar {

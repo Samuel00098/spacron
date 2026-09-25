@@ -12,7 +12,7 @@
   align-items: flex-end;
   gap: 12px;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--hairline);
 }
 
 .stats-controls {
@@ -77,7 +77,8 @@
 
 .stats-action-btn {
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 8px;
   color: var(--text-primary);
   font-size: 12px;
@@ -90,7 +91,7 @@
 
 .stats-action-btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-focus);
+  box-shadow: var(--edge-bevel-lift);
 }
 
 .stats-action-btn:disabled {
@@ -151,7 +152,8 @@
   flex-direction: column;
   gap: 3px;
   padding: 12px 14px;
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 10px;
   background: var(--bg-primary);
   min-width: 0;
@@ -182,7 +184,7 @@
 
 /* ── Daily chart ── */
 .stats-chart-wrap {
-  padding: 4px 18px 14px;
+  padding: 2px 18px 12px;
 }
 
 /* `align-items: stretch` is load-bearing: the bars are sized by percentage
@@ -191,10 +193,21 @@
    columns shrank to their label and the bars rendered at zero height — the
    chart looked empty apart from the day labels. */
 .stats-chart {
+  position: relative;
   display: flex;
   align-items: stretch;
-  gap: 5px;
-  height: 110px;
+  gap: 3px;
+  height: 84px;
+  /* Faint scale lines at 25/50/75/100% so bar heights read at a glance. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(25% - 0.5px),
+    var(--border-subtle, rgba(255, 255, 255, 0.06)) calc(25% - 0.5px),
+    var(--border-subtle, rgba(255, 255, 255, 0.06)) calc(25% + 0.5px),
+    transparent calc(25% + 0.5px),
+    transparent 25%
+  );
 }
 
 .stats-chart-col {
@@ -211,7 +224,7 @@
 .stats-chart-bar {
   position: relative;
   width: 100%;
-  max-width: 26px;
+  max-width: 18px;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -219,6 +232,16 @@
   overflow: hidden;
   border-radius: 3px 3px 0 0;
   background: var(--bg-secondary);
+  /* Each bar is a groove the segments fill, so it takes the recessed well. */
+  box-shadow: var(--edge-well);
+  transition: outline-color var(--dur-fast) var(--ease-out);
+}
+
+/* The bar column is the hover target: the tooltip lives on it, so tracing the
+   strip that can be read is the affordance, not a pointer on the tiny bar. */
+.stats-chart-col:hover .stats-chart-bar {
+  outline: 1px solid var(--focus-ring, rgba(255, 255, 255, 0.35));
+  outline-offset: -1px;
 }
 
 .stats-chart-seg {
@@ -241,7 +264,7 @@
 
 .stats-chart-label {
   color: var(--text-muted);
-  font-size: 9.5px;
+  font-size: 8.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -290,7 +313,8 @@
 }
 
 .stats-breakdown-col {
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 10px;
   padding: 10px 12px;
   background: var(--bg-primary);
@@ -350,6 +374,7 @@
   margin-top: 4px;
   border-radius: 2px;
   background: var(--bg-secondary);
+  box-shadow: var(--edge-well);
   overflow: hidden;
 }
 
@@ -367,7 +392,8 @@
 
 .stats-sessions-scroll {
   overflow-x: auto;
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 10px;
   background: var(--bg-primary);
 }
@@ -393,13 +419,13 @@
   letter-spacing: 0.05em;
   text-align: left;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--hairline);
   white-space: nowrap;
 }
 
 .stats-sessions td {
   padding: 7px 10px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--hairline);
   color: var(--text-secondary);
   white-space: nowrap;
   max-width: 180px;
@@ -523,7 +549,8 @@
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 8px;
   background: var(--bg-primary);
   color: var(--text-muted);
@@ -532,7 +559,7 @@
 
 .stats-icon-btn:hover:not(:disabled) {
   color: var(--text-primary);
-  border-color: var(--border-focus);
+  box-shadow: var(--edge-bevel-lift);
 }
 
 .stats-icon-btn:disabled {
@@ -557,7 +584,8 @@
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 10px;
   background: var(--bg-secondary);
   min-width: 0;
@@ -610,7 +638,8 @@
 
 .stats-panel {
   padding: 13px;
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel-lift);
   border-radius: 10px;
   background: var(--bg-secondary);
   min-width: 0;
@@ -638,7 +667,8 @@
   padding: 3px 8px;
   border-radius: 999px;
   background: var(--bg-primary);
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   color: var(--text-muted);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
@@ -663,7 +693,7 @@
   aspect-ratio: 1;
   border-radius: 2px;
   background: var(--bg-primary);
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
 }
 
 /* Four steps of one hue: the grid reads as intensity, not as categories. */
@@ -702,6 +732,7 @@
   border-radius: 999px;
   overflow: hidden;
   background: var(--bg-primary);
+  box-shadow: var(--edge-well);
 }
 
 .stats-mix-seg { display: block; height: 100%; }
@@ -750,16 +781,19 @@
 }
 
 /* Matches the provider grid's own gutter so it reads as a footnote to the
-   cards rather than a new section. */
+   cards rather than a new section. Spaced generously top and bottom so the
+   note sits on its own instead of crowding the grid above it or the
+   breakdowns below. */
 .stats-provider-note {
-  padding: 8px 18px 0;
-  line-height: 1.5;
+  padding: 18px 18px 22px;
+  line-height: 1.6;
   max-width: 62ch;
 }
 
 .stats-provider-card {
   padding: 12px 13px;
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   border-radius: 10px;
   background: var(--bg-secondary);
   min-width: 0;
@@ -783,7 +817,8 @@
   padding: 2px 7px;
   border-radius: 999px;
   background: var(--bg-primary);
-  border: 1px solid var(--border-subtle, var(--border));
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
   color: var(--text-muted);
   font-size: 9.5px;
   font-weight: 600;
@@ -792,7 +827,7 @@
 
 .stats-pill.is-on {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: var(--edge-accent-glow), var(--edge-bevel);
 }
 
 .stats-provider-sub {
@@ -819,6 +854,7 @@
   height: 4px;
   border-radius: 999px;
   background: var(--bg-primary);
+  box-shadow: var(--edge-well);
   overflow: hidden;
 }
 
@@ -834,7 +870,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px 18px;
-  padding: 12px 18px 0;
+  padding: 14px 18px 10px;
   color: var(--text-muted);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
@@ -845,7 +881,8 @@
    --------------------------------------------------------------------------
    The per-agent breakdown under the activity stat cards. Each agent is a
    square tile — mark, name, time worked, detail — stacked centred, and the
-   durations stay tabular so they read at a glance across the grid.
+   durations stay tabular so they read at a glance across the grid. Kept
+   smaller than the original so several agents don't tower over the section.
 
    The mark sizes its own svg/img: `useAgentBrand` falls back to a fetched
    favicon, which paints at its intrinsic size (often 256px) unless the
@@ -856,8 +893,8 @@
    resizable, so a fixed column count would only ever suit one of its widths. */
 .stats-activity-rows {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
   padding: 10px 18px 0;
 }
 
@@ -866,11 +903,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   aspect-ratio: 1 / 1;
-  padding: 12px 10px;
-  border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 12px;
+  padding: 8px;
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel);
+  border-radius: 10px;
   background: var(--bg-secondary);
   text-align: center;
   min-width: 0;
@@ -880,29 +918,29 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
 }
 
 .stats-activity-mark svg,
 .stats-activity-mark img {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
 }
 
 .stats-activity-name {
   max-width: 100%;
-  font-size: 12px;
-  font-weight: 550;
+  font-size: 11px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .stats-activity-figure {
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -910,7 +948,7 @@
 
 .stats-activity-sub {
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 9.5px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.35;
+  line-height: 1.3;
 }

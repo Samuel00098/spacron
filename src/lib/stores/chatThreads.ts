@@ -279,6 +279,7 @@ function createDefaultThread(projectId: string, messages: ChatMessage[], now: nu
     provider: null,
     model: null,
     accessMode: 'inherit',
+    workMode: 'build',
     reasoningEffort: 'default',
     taskId: lastMessage?.completion?.taskId ?? null,
     sessionId: null,
@@ -343,6 +344,7 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     provider: asProvider(raw.provider),
     model: asString(raw.model),
     accessMode: asAccessMode(raw.accessMode),
+    workMode: raw.workMode === 'plan' ? 'plan' : 'build',
     reasoningEffort: asReasoningEffort(raw.reasoningEffort),
     taskId: asString(raw.taskId),
     sessionId: asNumber(raw.sessionId),
@@ -582,7 +584,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
   now = Date.now(),
 ): ChatThread {
   const state = get(chatThreadState);
@@ -602,6 +604,7 @@ export function createChatThread(
     // Full access is the default: the orchestrator edits and runs commands
     // without a card per step. "Ask before edit" stays one click away.
     accessMode: overrides.accessMode ?? 'full-access',
+    workMode: overrides.workMode ?? activeThread?.workMode ?? 'build',
     reasoningEffort: overrides.reasoningEffort ?? 'default',
     taskId: overrides.taskId ?? null,
     sessionId: overrides.sessionId ?? null,
@@ -728,6 +731,7 @@ export function closeChatThread(threadId: string): boolean {
       provider: thread.provider,
       model: thread.model,
       accessMode: thread.accessMode,
+      workMode: thread.workMode,
       reasoningEffort: thread.reasoningEffort,
     });
   }

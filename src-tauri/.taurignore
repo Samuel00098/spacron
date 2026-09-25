@@ -1,0 +1,8 @@
+# `tauri dev` kills and relaunches the app on ANY change it sees under this
+# crate. These are never source: runtime/agent state, generated schemas, the
+# sidecar placeholder build.rs stamps, and logs. Without this, a write into one
+# of them restarts the app mid-session and looks like it closed by itself.
+.spacron/
+gen/
+binaries/
+*.log

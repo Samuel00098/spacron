@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
 import { copyTextToClipboard, readImageFromClipboard, readTextFromClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { isPointOverDropTarget } from '$lib/utils/drop-target';
@@ -420,8 +421,8 @@ function TerminalPane({
     } catch {}
   }
 
-  // The terminal is a DARK content surface in both light and dark app modes, and
-  // never follows the theme. See buildTerminalTheme() for the full reasoning.
+  // The terminal stays dark in both app modes. Its dark-mode grey matches the
+  // surrounding panels; light mode keeps the black content well for ANSI text.
   //
   // Alpha stays 0 so the frosted wallpaper still shows through; the darkness comes
   // from the scrim in TerminalPane.css (--terminal-surface-rgb). The RGB carried
@@ -1231,6 +1232,18 @@ function TerminalPane({
       theme: buildTerminalTheme(),
     });
     termRef.current = term;
+
+    // Don't answer OSC 10/11/12 color *queries* on a local Windows PTY. Codex
+    // re-asks for the default colors every time its pane regains focus, and
+    // ConPTY can't hand the reply back as a report: it re-encodes the bytes as
+    // keystrokes, so the child reads `]10;rgb:ffff/ffff/ffff\` as typed input.
+    // Unanswered, the CLI just keeps its default palette. Color *sets* (`10;#fff`)
+    // still reach xterm's built-in handler, and a remote box's Unix PTY carries
+    // the reply fine, so remote sessions keep answering.
+    if (isWindowsHost && !get(remoteTarget)) {
+      const swallowColorQuery = (data: string) => data.split(';').includes('?');
+      for (const ident of [10, 11, 12]) term.parser.registerOscHandler(ident, swallowColorQuery);
+    }
 
     // Keyboard copy/paste. On WebKitGTK (Linux) xterm's rows never fall through to
     // the browser's native clipboard shortcuts, so it has to be wired explicitly

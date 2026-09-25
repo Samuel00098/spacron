@@ -165,61 +165,51 @@
   user-select: none;
 }
 
-/* Left panel — frosted glass, right border */
+/* Left panel — frosted glass. No drawn edge: the 3D rim comes from the bevel
+   tokens (`--edge-hi` / `--edge-lo`, defined in global.css), so the panel reads
+   as a raised slab rather than an outlined box. */
 .app-shell .left-utility-panel {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 30%, transparent 60%),
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-right-color: rgba(255, 255, 255, 0.13);
+  border: 1px solid transparent;
   box-shadow:
-    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    var(--glass-glow, inset 0 1px 0 var(--edge-hi), inset 0 -1px 0 var(--edge-lo)),
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18);
 }
 
-/* Right panel — frosted glass, left border */
+/* Right panel — frosted glass. Mirrors the left panel exactly. */
 .app-shell .right-utility-panel {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 40%),
     color-mix(in srgb, var(--bg-secondary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-left-color: rgba(255, 255, 255, 0.13);
+  border: 1px solid transparent;
   box-shadow:
-    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
+    var(--glass-glow, inset 0 1px 0 var(--edge-hi), inset 0 -1px 0 var(--edge-lo)),
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18);
 }
 
 :root.solid-theme .app-shell .left-utility-panel,
 :root.solid-theme .app-shell .right-utility-panel {
-  background: var(--bg-secondary) !important;
+  background: var(--major-panel-surface) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-:root.light-theme .app-shell .left-utility-panel {
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
-    color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-color: rgba(0, 0, 0, 0.08);
-  border-right-color: rgba(0, 0, 0, 0.12);
-}
-
+:root.light-theme .app-shell .left-utility-panel,
 :root.light-theme .app-shell .right-utility-panel {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 30%, transparent 60%),
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-color: rgba(0, 0, 0, 0.08);
-  border-left-color: rgba(0, 0, 0, 0.12);
+  border-color: transparent;
 }
 
 .app-shell .right-drawer-resize-handle {
@@ -462,19 +452,15 @@
   gap: 16px;
 }
 
-/* The stage is a raised, rounded card — sitting flush against the left drawer
-   reads as one merged slab. Inset it by the same 16px the stage uses for its own
-   gap so the drawer stays visually separate.
-
-   Split gets the SAME 16px of clearance, just split differently: it carries
-   `padding: 8px` of its own, so 8px of margin puts its content edge in exactly
-   the place Focus's 16px + no padding does. Without this, only Focus was inset
-   and the entire stage lurched 16px sideways the instant you entered Split —
-   an un-animatable jump (margin on a container of live terminals must not be
-   transitioned; that is 300ms of full-subtree relayout). Removing the
-   discontinuity is free; animating it would not be. */
+/* Rooms sit 8px from each drawer — the same gutter the Chat window gets
+   (`.chat-mode-panel` fills the table, so its edge is the table's edge). Focus
+   and Split must land on the SAME 8px: Split no longer pads its sides, so an
+   equal margin puts both content edges in one place. Without that the stage
+   lurches sideways the instant you change mode — an un-animatable jump
+   (margin on a container of live terminals must not be transitioned; that is
+   300ms of full-subtree relayout). Removing the discontinuity is free. */
 .app-shell .rooms-content-horizontal:has(> .left-utility-panel) > .rooms-table.ambient-focus {
-  margin-left: 16px;
+  margin-left: 8px;
 }
 
 .app-shell .rooms-content-horizontal:has(> .left-utility-panel) > .rooms-table.ambient-gallery {
@@ -484,9 +470,9 @@
 /* Same clearance on the right, for the same reason. This matters more in Focus
    than it used to: the rail's cards now sit at the stage's right edge, so
    without it a card's border touches the utility panel's and the two read as
-   one surface. Mirrors the left rule exactly, including Split's 8px. */
+   one surface. Mirrors the left rule exactly. */
 .app-shell .rooms-content-horizontal:has(> .right-utility-panel) > .rooms-table.ambient-focus {
-  margin-right: 16px;
+  margin-right: 8px;
 }
 
 .app-shell .rooms-content-horizontal:has(> .right-utility-panel) > .rooms-table.ambient-gallery {
@@ -502,11 +488,14 @@
   view-transition-name: spacron-stage;
   /* Lit top bevel + contact/ambient shadow pair lifts the stage off the desk. */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 1px 0 var(--edge-hi, rgba(255, 255, 255, 0.09)),
+    inset 0 -1px 0 var(--edge-lo, rgba(0, 0, 0, 0.18)),
     0 2px 4px rgba(0, 0, 0, 0.28),
     0 14px 30px rgba(0, 0, 0, 0.34),
     0 34px 76px rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--border);
+  /* No border at all, not even a transparent one: its 1px would push the
+     room 1px further from the drawers than Split's, breaking the shared 8px. */
+  border: 0;
   overflow: clip;
   /* The stage is the frosted surface, not the panel inside it.
      `.room-panel`'s own blur can never work here: this element is the panel's
@@ -630,10 +619,12 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
-  padding: 8px;
-  padding-bottom: var(--overlay-clear);
+  /* No top/side padding: like the Chat window, rooms start level with the
+     drawers' top edge and 8px (the table's margin) from each drawer. The
+     bottom still clears the floating prompt bar. */
+  padding: 0 0 var(--overlay-clear);
 }
 
 /* Interaction mode is a presentation layer over the existing room stage. The
@@ -1044,10 +1035,17 @@
   display: grid;
   grid-template-columns: repeat(var(--split-cols, 2), minmax(0, 1fr));
   grid-auto-rows: minmax(180px, 1fr);
-  gap: 12px;
+  /* Same 8px as the gutter to each drawer, so every gap on the stage matches. */
+  gap: 8px;
   align-items: stretch;
   position: relative;
   overflow-y: auto;
+  /* The global scroll-region list gives `.split-grid` `scrollbar-gutter:
+     stable`, which reserves a scrollbar's width on the RIGHT edge only, even
+     when nothing scrolls. That made the grid sit ~4px further from the right
+     drawer than from the left one. A fitted grid never scrolls, so it
+     reserves nothing; the scrolling wall below reserves on both edges. */
+  scrollbar-gutter: auto;
 }
 
 /* 3-pane 2+1 and 4-pane 2×2: two explicit equal rows so the bottom pane
@@ -1070,6 +1068,7 @@
   grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
   grid-auto-rows: minmax(240px, 1fr);
   align-content: start;
+  scrollbar-gutter: stable both-edges;
 }
 .app-shell .stage-layers.split-grid > .stage-pane {
   position: static;
@@ -1144,20 +1143,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Containing block for the traveling edge light (`::after`, further down).
-     Safe for descendants: in every ambient the panel and the box that used to
-     resolve their absolute positions (`.stage-pane`, inset 0 with the panel as
-     its only flex child) occupy the same rectangle.
-
-     `isolation` is not decoration here — `position: relative` with `z-index:
-     auto` does NOT open a stacking context, so the ring's `z-index: 6` would
-     compete in whatever context is above the panel. In the Focus rail that is
-     the deck: cards overlap and paint in DOM order with no z-index ladder
-     (`.spacron/memory/focus-rail-pile.md` §3), so one card's ring would jump
-     on top of the cards stacked over it. Isolating keeps the ring inside its
-     own panel. It also matches `.focused-room .room-panel`, which already
-     isolates for the Chromium radius bug below. An element's own isolation
-     never affects its own backdrop-filter. */
+  /* `position: relative` gives descendants a containing block; `isolation`
+     opens a stacking context so a panel's own overlays cannot compete with
+     positioned siblings above it. In the Focus rail the deck overlaps cards in
+     DOM order with no z-index ladder (`.spacron/memory/focus-rail-pile.md` §3).
+     It also matches `.focused-room .room-panel`, which already isolates for
+     the Chromium radius bug below. An element's own isolation never affects
+     its own backdrop-filter. */
   position: relative;
   isolation: isolate;
   border-radius: 10px;
@@ -1167,10 +1159,11 @@
     color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  /* No drawn edge — the 3D rim is the bevel pair below. */
+  border: 1px solid transparent;
   box-shadow:
     inset 0 1px 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.26)),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    inset 0 -1px 0 var(--edge-lo, rgba(0, 0, 0, 0.18)),
     var(--glass-shadow, 0 24px 50px -12px rgba(0, 0, 0, 0.45));
   /* `backwards`, not `both`. A filled-forwards animation keeps *winning* over
      every later declaration of the same property for the element's whole life —
@@ -1213,7 +1206,7 @@
 }
 
 :root.solid-theme .app-shell .room-panel {
-  background: var(--bg-primary) !important;
+  background: var(--major-panel-surface) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
@@ -1225,7 +1218,7 @@
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-color: rgba(0, 0, 0, 0.1);
+  border-color: transparent;
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.35)),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.65),
@@ -1268,9 +1261,7 @@
 :root:not(.solid-theme) .app-shell .room-panel,
 :root:not(.solid-theme) .app-shell .left-utility-panel,
 :root:not(.solid-theme) .app-shell .right-utility-panel {
-  background:
-    linear-gradient(var(--panel-veil) 0 0),
-    rgba(var(--panel-tint-rgb), var(--panel-tint)) !important;
+  background: var(--major-panel-surface) !important;
   /* A modest blur rather than the base 40px: the tint is now carrying the
      readability, so the wallpaper only needs softening, not erasing. */
   backdrop-filter: blur(18px) saturate(130%) !important;
@@ -1327,11 +1318,14 @@
   -webkit-backdrop-filter: none !important;
 }
 
+/* The live room is marked by a GLOW, not an accent outline: a coloured line
+   around the panel was the thing that read as "sharp". */
 .app-shell .room-panel.featured {
-  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  border-color: transparent;
   box-shadow:
     0 22px 58px -40px color-mix(in srgb, var(--accent) 40%, rgba(0, 0, 0, 0.72)),
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+    0 0 22px -6px color-mix(in srgb, var(--accent) 30%, transparent),
+    inset 0 1px 0 var(--edge-hi);
 }
 
 .app-shell .room-panel:hover {
@@ -1355,39 +1349,6 @@ html.has-bg-media .app-shell .room-panel:hover {
 
 .app-shell .room-panel:hover .room-header {
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
-}
-
-/* ── Traveling edge light: shell-specific variants ─────────────────────────
-   The light itself — the registered `--panel-edge-angle`, the keyframes, the
-   masked ring, and the tokens that colour it — lives in `global.css` under
-   "Panel surfaces", because the floating panels (inbox, HUD) are
-   siblings of `.app-shell` and need the same treatment from the same
-   definition. Only the room-specific variants stay here. */
-
-/* The panel you are working in gets a brighter, quicker light so "which panel
-   is live" is answered by the same cue that separates them. */
-.app-shell .room-panel.featured::after {
-  --panel-edge-lap: 5s;
-  --panel-edge-w: 1px;
-  --panel-edge-core: color-mix(in srgb, var(--accent) 20%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 7%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.06);
-}
-
-/* The side drawers sit flush against the window edge, where half the ring is
-   off-screen chrome — keep them quieter than the rooms. */
-.app-shell .left-utility-panel::after,
-.app-shell .right-utility-panel::after {
-  --panel-edge-core: color-mix(in srgb, var(--accent) 12%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 4%, transparent);
-  --panel-edge-lap: 9s;
-}
-
-
-/* Light theme flips the base ring dark for every panel in `global.css`; only
-   the featured room's brighter base needs its own light-mode value. */
-:root.light-theme .app-shell .room-panel.featured::after {
-  --panel-edge-base: rgba(0, 0, 0, 0.05);
 }
 
 .app-shell .room-header {

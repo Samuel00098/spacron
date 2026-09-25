@@ -8,9 +8,9 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 const atkinson = Atkinson_Hyperlegible({ subsets: ['latin'], weight: ['400', '700'], variable: '--font-atkinson' });
 
 export const metadata: Metadata = {
-  title: 'Spacron — One workspace. One goal. A fleet that builds it.',
+  title: 'Spacron · One workspace. One goal. A fleet that builds it.',
   description:
-    'A keyboard-driven, local-first desktop workspace where a team of AI agents builds, tests, and reviews your code in parallel — PTY terminal grid, CodeMirror editor, live preview, git integration, and AI orchestration, built with Tauri 2 + React.',
+    'A keyboard-driven, local-first desktop workspace where a team of AI agents builds, tests, and reviews your code in parallel: PTY terminal grid, CodeMirror editor, live preview, git integration, and AI orchestration, built with Tauri 2 + React.',
   // Black mark on light browser chrome, white mark on dark. faviconThemeHook
   // below overrides this when the Spacron app's Preview supplies its theme.
   icons: {
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     shortcut: '/favicon.ico',
   },
   openGraph: {
-    title: 'Spacron — Agentic coding workspace',
+    title: 'Spacron · Agentic coding workspace',
     description:
       'Run a team of AI coding agents in parallel terminals. Terminal, editor, preview, git, and orchestration in one local-first window.',
     type: 'website',
@@ -53,17 +53,18 @@ const faviconThemeHook = `(function(){
 })();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const checkoutUrl = process.env.SPACRON_CHECKOUT_URL || '/download';
   // The desktop preview bridge intentionally decorates these root nodes with
   // its selected theme before React hydrates the preview document.
   return (
-    <html lang="en" className={`${inter.variable} ${atkinson.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${atkinson.variable}`} data-scroll-behavior="smooth" suppressHydrationWarning>
       <body suppressHydrationWarning>
         <script dangerouslySetInnerHTML={{ __html: jsHook }} />
         <script dangerouslySetInnerHTML={{ __html: faviconThemeHook }} />
         <ScrollFX />
         <div className="banner">
-          Spacron — agents, worktrees, and voice, orchestrated.{' '}
-          <a href="/download">Get the latest release →</a>
+          Spacron · agents, worktrees, and voice, orchestrated.{' '}
+          <a href={checkoutUrl}>Buy Spacron · $49 one-time →</a>
         </div>
         <div className="container">
           <nav className="nav">
@@ -73,18 +74,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <div className="nav-links">
               <a href="/#features">Features</a>
+              <a href="/#pricing">Pricing</a>
               <Link href="/changelog">Changelog</Link>
-              <a href="https://github.com/Samuel00098/spacron-releases/releases" target="_blank" rel="noopener noreferrer">
-                Releases
-              </a>
-              <a href="/download" className="nav-cta">Download</a>
+              <a href="/download">Redeem</a>
+              <a href={checkoutUrl} className="nav-cta">Buy now</a>
             </div>
           </nav>
           <main>{children}</main>
           <footer className="footer">
             <p>
               Spacron &middot; &copy; 2026 Samuel Solesi. All rights reserved. &middot;
-              <a href="https://github.com/Samuel00098/spacron-releases/releases" target="_blank" rel="noopener noreferrer"> Releases</a>
+              <a href="/download">Redeem your license</a>
             </p>
           </footer>
         </div>

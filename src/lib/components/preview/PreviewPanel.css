@@ -341,18 +341,12 @@
   display: flex;
   align-items: center;
   background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 9999px;
   height: 30px;
   padding: 0 4px 0 12px;
   gap: 6px;
-  transition: border-color var(--dur-fast) var(--ease-out);
   overflow: hidden;
-}
-
-.preview-panel .address-bar:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .preview-panel .protocol-badge {

@@ -406,15 +406,17 @@ html.bg-palette-light:not(.has-bg-media) {
   --glass-rim:         rgba(255, 255, 255, 0.12);
   --glass-rim-strong:  rgba(255, 255, 255, 0.24);
   --glass-shadow:      0 24px 50px -12px rgba(0, 0, 0, 0.45);
-  --glass-glow:        inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  /* The flat edge ring from "Flat edges" below, so every `var(--glass-glow)`
+     consumer gets the same visible outline. */
+  --glass-glow:        inset 0 0 0 1px var(--edge-line);
   /* Frost opacity hierarchy — base < chrome < content */
   --frost-base:        0.35;
   --frost-chrome:      0.45;
   --frost-surface:     0.55;
 
   /* ── Terminal surface ───────────────────── */
-  --terminal-surface:     #000000;
-  --terminal-surface-rgb: 0, 0, 0;
+  --terminal-surface:     #202024;
+  --terminal-surface-rgb: 32, 32, 36;
 
   /* ── TitleBar ───────────────────────────── */
   --titlebar-bg:     #141416;
@@ -884,9 +886,18 @@ button {
   outline: none;
 }
 
-input {
+/* Text fields are RECESSED, not outlined: an inset shadow presses the field
+   into the panel, which is what reads as depth. This is the shared `input`
+   base; component stylesheets refine it, and the global "Outline-free edges"
+   block at the bottom of this file keeps every field on the same treatment.
+   The `:not()` sits inside `:where()` so this base keeps plain `input`
+   specificity: a bare `:not([type])` adds a class's weight, and then this
+   padding beats every single-class field rule (the settings search text ran
+   under its icon that way). */
+input:where(:not([type='range'])) {
   background: var(--input-bg);
-  border: 1px solid var(--input-border);
+  border: 1px solid transparent;
+  box-shadow: var(--edge-well);
   color: var(--text-primary);
   padding: 4px 8px;
   border-radius: 4px;
@@ -894,8 +905,8 @@ input {
   outline: none;
 }
 
-input:focus {
-  border-color: var(--input-focus-border);
+input:where(:not([type='range'])):focus {
+  box-shadow: var(--edge-well), 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* One focus standard for the whole app. The resets above strip outlines so
@@ -1182,177 +1193,56 @@ input:focus {
   color: var(--titlebar-text) !important;
 }
 
-/* ── The traveling edge light ──
-   A conic gradient filling the pseudo-element, punched hollow by a two-layer
-   mask (border box minus content box) so only `padding` width paints. Two
-   diametrically opposite arcs lap the perimeter over a permanent base ring —
-   the base is what keeps the outline visible between passes, and what makes
-   this survive `prefers-reduced-motion` (the blanket rule below freezes the
-   animation, and a frozen ring is still an outline). Room panels take that
-   further: their lap is paused unless the room's agent is working (see the
-   gating rules after the shared block).
+/* ══ Flat edges — the surface system ═══════════════════════════════════════
+   Surfaces are FLAT and OUTLINE-FREE: no bevel, no drop shadow, no pressed-in
+   wells, and no drawn ring. A surface is separated from what is behind it by
+   its fill alone. `--edge-line` / `--edge-line-strong` are the one switch for
+   a 1px ring; they are transparent on purpose.
 
-   `--panel-edge-angle` MUST stay a registered property. An unregistered custom
-   property is not interpolatable, so the gradient would jump 0deg→360deg in a
-   single step instead of rotating.
+   Every value is decided here, once, for both themes. Dialling one mode
+   without looking at the other is how a theme pair drifts, so dark and light
+   are specified side by side.
 
-   Requirements on any element added to the list below: it must be positioned
-   (the ring is `inset: 0`), must clip (`overflow: hidden`), and must already
-   open a stacking context — a fixed/absolute element with a `z-index` does, and
-   `.room-panel` is given `isolation: isolate` in AppShell.css precisely for
-   this. Without one, the ring's `z-index: 6` escapes into the surrounding
-   context and can paint over unrelated siblings.
-
-   Cost is one masked-gradient repaint per panel per frame, which is why the lap
-   is slow and the ring is thin. Do NOT reach for `filter` / `opacity` /
-   `transform` to tune it — they look cheaper and cost more, and a transform
-   makes the element a backdrop root (`.spacron/memory/glass-panel-recipe.md`). */
-@property --panel-edge-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
+   The token names (`--edge-bevel`, `--edge-well`, …) are kept from the old 3D
+   system so every consumer flips to flat from here. `--edge-hi` / `--edge-lo`
+   (the old top/bottom rims) are transparent: a line on two sides only reads
+   as a bevel. `--edge-*` are applied across the app by the "Outline-free
+   edges" block at the bottom of this file. */
+:root {
+  --edge-line:        transparent;
+  --edge-line-strong: transparent;
+  --edge-hi:        transparent;
+  --edge-lo:        transparent;
+  --edge-drop:      0 0 0 0 transparent;
+  --edge-lift:      0 0 0 0 transparent;
+  /* Controls, chips, cards, panels. */
+  --edge-bevel:      inset 0 0 0 1px var(--edge-line);
+  --edge-bevel-lift: inset 0 0 0 1px var(--edge-line-strong);
+  /* Fields and tracks: the same flat ring as a control. */
+  --edge-well-hi:   transparent;
+  --edge-well-lo:   transparent;
+  --edge-well:      inset 0 0 0 1px var(--edge-line);
+  /* Selected/active emphasis. Kept as a slot (list it BEFORE the neutral ring
+     in a shadow list) but empty: selection is carried by the fill. */
+  --edge-accent-glow: 0 0 0 0 transparent;
+  /* Structural hairlines (panel headers, list separators). These are NOT
+     outlines around a surface — they separate stacked content inside one — so
+     they stay, one step quieter than --border. Set to transparent to remove
+     every remaining line in the app. */
+  --hairline:        rgba(255, 255, 255, 0.05);
 }
 
-@keyframes panel-edge-travel {
-  to {
-    --panel-edge-angle: 360deg;
-  }
+:root.light-theme {
+  --hairline:        rgba(0, 0, 0, 0.05);
 }
 
-.app-shell .room-panel,
-.app-shell .left-utility-panel,
-.app-shell .right-utility-panel,
-.app-shell .room-dock,
-.app-shell .composer-strip .floating-prompt-bar,
-.inbox-panel {
-  --panel-edge-w: 1px;
-  --panel-edge-lap: 7s;
-  /* The accent is a graphite, not a hue (see
-     `.spacron/memory/accent-and-icon-treatment.md`), so this reads as a light
-     sweeping the rim rather than a coloured chase. */
-  --panel-edge-core: color-mix(in srgb, var(--accent) 14%, transparent);
-  --panel-edge-glow: color-mix(in srgb, var(--accent) 5%, transparent);
-  --panel-edge-base: rgba(255, 255, 255, 0.04);
-}
-
-:root.light-theme .app-shell .room-panel,
-:root.light-theme .app-shell .left-utility-panel,
-:root.light-theme .app-shell .right-utility-panel,
-:root.light-theme .app-shell .room-dock,
-:root.light-theme .app-shell .composer-strip .floating-prompt-bar,
-:root.light-theme .inbox-panel {
-  /* The accent is a dark slate in light themes, so the light itself flips to
-     dark automatically — only the always-on base ring has to be told. */
-  --panel-edge-base: rgba(0, 0, 0, 0.04);
-}
-
-/* The project HUD is deliberately absent from this list: it is a full-attention
-   overlay you open, read and dismiss, and a light lapping its edge competes
-   with the thing you opened it to look at. It keeps the tint and takes no ring. */
-.app-shell .room-panel::after,
-.app-shell .left-utility-panel::after,
-.app-shell .right-utility-panel::after,
-.app-shell .room-dock::after,
-.app-shell .composer-strip .floating-prompt-bar::after,
-.inbox-panel::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  pointer-events: none;
-  border-radius: inherit;
-  padding: var(--panel-edge-w);
-  /* A long lit arc rather than a pinpoint: a thin comet reads as a firefly and
-     leaves most of the edge dark, which is the opposite of the point. Each
-     light holds its full-strength core for ~8deg and falls off long and soft
-     on the trailing side, so about a third of the perimeter is lit at any
-     moment. */
-  background:
-    conic-gradient(
-      from var(--panel-edge-angle),
-      transparent 0deg,
-      var(--panel-edge-glow) 14deg,
-      var(--panel-edge-core) 46deg,
-      var(--panel-edge-core) 54deg,
-      var(--panel-edge-glow) 108deg,
-      transparent 126deg,
-      transparent 180deg,
-      var(--panel-edge-glow) 194deg,
-      var(--panel-edge-core) 226deg,
-      var(--panel-edge-core) 234deg,
-      var(--panel-edge-glow) 288deg,
-      transparent 306deg,
-      transparent 360deg
-    ),
-    linear-gradient(var(--panel-edge-base) 0 0);
-  /* Border box minus content box = a ring `padding` thick. The legacy
-     `-webkit-mask-composite: xor` keyword is listed first for older WebKit
-     (WKWebView / WebKitGTK); Chromium takes the standard `exclude` below it. */
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: panel-edge-travel var(--panel-edge-lap) linear infinite;
-}
-
-/* Rooms keep their edge light PAUSED unless the room is working. Everywhere
-   else the lap is ambient chrome and stays running; on a room — the surface
-   where agents actually do things — a permanently traveling light is motion
-   that carries no information, which reads as alive for ten minutes and as an
-   itch after an hour. `is-working` is set by AppShell from the room's agent or
-   terminal session `isExecuting`, so the light sweeps only while work runs, and
-   the always-on base ring above is the resting outline (the same property
-   that lets this ring survive prefers-reduced-motion is what makes a paused
-   one still read as a border). */
-.app-shell .room-panel::after {
-  animation-play-state: paused;
-}
-.app-shell .room-panel.is-working::after {
-  animation-play-state: running;
-}
-
-/* `.inbox-panel` is `position: fixed` with a
-   `z-index`, which satisfies the positioning and stacking-context requirements
-   on their own. These two do not:
-
-   (`.usage-panel` and `.usage-dock` used to be listed here too. They are no
-   longer floating surfaces — both are inline sections of the left sidebar's
-   Bento card, which already carries the tint and the rim — so they have been
-   dropped from every list above rather than left to fight their own styling
-   with an `!important` background.)
-
-   `.room-dock` and `.floating-prompt-bar` are static flow elements. The dock
-   already opens a stacking context via its `view-transition-name`, but still
-   needs a containing block; the prompt bar needs both.
-
-   `isolation` and NOT a z-index bump: these sit among positioned siblings in the
-   shell, and the ring's `z-index: 6` would otherwise compete out there rather
-   than staying inside its own host. */
+/* `.room-dock` and the floating prompt bar are static flow elements laid out
+   among positioned siblings in the shell, so they need a containing block of
+   their own. */
 .app-shell .room-dock,
 .app-shell .composer-strip .floating-prompt-bar {
   position: relative;
   isolation: isolate;
-}
-
-/* Known limit, accepted: `.room-dock` is `overflow-x: auto`, and an absolutely
-   positioned pseudo-element inside a scroll container scrolls with its content.
-   The dock only scrolls when the icon row is wider than the window, so in
-   practice the ring stays put; if it ever does scroll, the ring travels with it
-   rather than staying pinned to the visible edge. Fixing that properly needs a
-   wrapper element around the scrolling row. */
-
-/* The small surfaces sit over live content and are a fraction of a room's size,
-   so they get a thinner, slower light — at room settings the ring reads as a
-   spinning bezel on a 380px popover, and as a loading spinner on a pill. */
-.inbox-panel,
-.app-shell .room-dock,
-.app-shell .composer-strip .floating-prompt-bar {
-  --panel-edge-w: 1px;
-  --panel-edge-lap: 9s;
 }
 
 /* ── Liquid Glass Cards (Apple-inspired Bento) ───────── */
@@ -1364,7 +1254,7 @@ input:focus {
     color-mix(in srgb, var(--bg-primary) calc(var(--frost-chrome, 0.45) * 100%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+  border: 1px solid transparent;
   border-radius: var(--bento-radius, 16px);
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.04)),
@@ -1379,7 +1269,6 @@ input:focus {
 }
 
 .bento-card:hover {
-  border-color: rgba(255, 255, 255, 0.20);
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.05)),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.35),
@@ -1389,12 +1278,15 @@ input:focus {
 }
 
 :root.light-theme .bento-card:hover {
-  border-color: rgba(0, 0, 0, 0.18);
+  box-shadow: 
+    var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.35)),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.08),
+    0 16px 36px -12px rgba(15, 20, 30, 0.18);
 }
 
-/* Active glow outline */
+/* Active emphasis — a glow, not an outline. */
 .bento-card.active-glow {
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.05)),
     inset 0 1px 0 0 var(--glass-rim-strong, rgba(255, 255, 255, 0.28)),
@@ -1418,7 +1310,7 @@ input:focus {
     color-mix(in srgb, #ffffff calc(var(--frost-chrome, 0.62) * 24%), transparent);
   backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  border-color: rgba(0, 0, 0, 0.10);
+  border-color: transparent;
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.35)),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.65), /* bright top rim catch */
@@ -1427,7 +1319,6 @@ input:focus {
 }
 
 :root.light-theme .bento-card.active-glow {
-  border-color: var(--accent);
   box-shadow: 
     var(--glass-glow, inset 0 0 0 1px rgba(255, 255, 255, 0.35)),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.65),
@@ -1481,8 +1372,8 @@ input:focus {
   background: rgba(var(--bg-tertiary-rgb, 34, 34, 42), 0.82);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  border: 1px solid transparent;
+  box-shadow: var(--edge-bevel-lift);
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-standard);
@@ -1503,8 +1394,6 @@ input:focus {
 :root:not(.solid-theme).light-theme .global-tooltip {
   background: rgba(255, 255, 255, 0.85);
   color: #111116;
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 /* Solid theme overrides */
@@ -1737,11 +1626,13 @@ input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 6px !important;
-  background: rgba(255, 255, 255, 0.08) !important;
+  height: 7px !important;
+  background: rgba(255, 255, 255, 0.13) !important;
   border-radius: 99px !important;
   outline: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid transparent !important;
+  /* The track is a groove, so it takes the recessed well. */
+  box-shadow: var(--edge-well) !important;
   transition: background-color var(--dur-base) var(--ease-out) !important;
 }
 
@@ -1753,12 +1644,12 @@ input[type='range']:hover {
 input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px !important;
-  height: 14px !important;
+  width: 16px !important;
+  height: 16px !important;
   border-radius: 50% !important;
   background: var(--text-primary, #ffffff) !important;
-  border: 1px solid rgba(0, 0, 0, 0.25) !important;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+  border: 1px solid var(--bg-tertiary) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.5) !important;
   cursor: pointer !important;
   transition: transform var(--dur-base) var(--ease-spring), background-color var(--dur-base) var(--ease-out) !important;
 }
@@ -1775,10 +1666,10 @@ input[type='range']::-webkit-slider-thumb:active {
 
 /* Light theme slider track override */
 :root.light-theme input[type='range'] {
-  background: rgba(0, 0, 0, 0.06) !important;
+  background: rgba(15, 20, 30, 0.14) !important;
 }
 :root.light-theme input[type='range']:hover {
-  background: rgba(0, 0, 0, 0.1) !important;
+  background: rgba(15, 20, 30, 0.2) !important;
 }
 
 /* 5. Smooth spring physics for all toggle switches */
@@ -1787,4 +1678,211 @@ input[type='range']::-webkit-slider-thumb:active {
 }
 .settings-toggle-dot {
   transition: transform var(--dur-slow) var(--ease-spring), background-color var(--dur-slow) var(--ease-spring) !important;
+}
+
+/* ══ Outline-free edges ════════════════════════════════════════════════════
+   THE app-wide layer that removes drawn outlines and puts the 3D edge system
+   (see "3D edges", above) in their place. One block rather than a hundred
+   small edits, because "no outlines anywhere" is a single decision — and
+   keeping it in one place is what stops a new component from silently
+   reintroducing its own 1px border later.
+
+   Component stylesheets load AFTER this file, so the overrides use
+   `!important` — the same lever the shell's panel tint already uses, for the
+   same reason. `border-width` is deliberately left alone and only the COLOUR
+   is cleared, so no element's box or layout shifts by a pixel.
+
+   Three families, and every element belongs to exactly one:
+   • RAISED CONTROLS — buttons, chips, tabs, toggles. Tight bevel at rest,
+     lift on hover, press-in on active.
+   • WELLS — text fields, search, selects, textareas, tracks. The field is
+     sunk into its panel, so it takes the inset shadow at rest.
+   • SURFACES — panels, cards and popovers. They float and do NOT react to
+     hover; they carry the lift bevel at rest.
+
+   Focus rings are untouched on purpose: removing a decorative outline must
+   never remove the keyboard-focus cue (see `:focus-visible` above). */
+
+/* ── 1. Clear every drawn outline ───────────────────────────────────────────
+   The explicit list covers the named surfaces; the attribute sweep catches
+   the long tail (-card, -panel, -popover, …) so a component that was never
+   enumerated still loses its line. Both only recolour the border. */
+:where(
+  button,
+  input,
+  select,
+  textarea,
+  .app-shell .room-panel,
+  .app-shell .left-utility-panel,
+  .app-shell .right-utility-panel,
+  .app-shell .left-sidebar,
+  .app-shell .right-sidebar,
+  .app-shell .room-dock,
+  .floating-prompt-bar,
+  .prompt-bubble,
+  .inbox-panel,
+  .project-hud,
+  .settings-modal,
+  .settings-search-results,
+  .context-menu,
+  .dd-menu,
+  .dropdown-menu,
+  .global-tooltip,
+  .bento-card
+),
+:where(
+  [class*='-card'],
+  [class*='-panel'],
+  [class*='-modal'],
+  [class*='-tile'],
+  [class*='-pill'],
+  [class*='-chip'],
+  [class*='-badge'],
+  [class*='-popover'],
+  [class*='-menu']
+) {
+  border-color: transparent !important;
+}
+
+/* ── 2. Raised controls ─────────────────────────────────────────────────── */
+:where(
+  button:not(.wc-btn):not(.wc-min):not(.wc-max),
+  .settings-toggle,
+  .settings-tab,
+  .drawer-tab-btn,
+  .drawer-close-btn,
+  .stats-action-btn,
+  .stats-pill,
+  .stats-badge
+) {
+  box-shadow: var(--edge-bevel) !important;
+}
+
+:where(
+  button:not(.wc-btn):not(.wc-min):not(.wc-max),
+  .settings-toggle,
+  .settings-tab,
+  .drawer-tab-btn,
+  .drawer-close-btn,
+  .stats-action-btn
+):hover:not(:disabled) {
+  box-shadow: var(--edge-bevel-lift) !important;
+}
+
+:where(
+  button:not(.wc-btn):not(.wc-min):not(.wc-max),
+  .settings-toggle,
+  .settings-tab,
+  .drawer-tab-btn,
+  .drawer-close-btn,
+  .stats-action-btn
+):active:not(:disabled) {
+  box-shadow: var(--edge-well) !important;
+}
+
+/* ── 3. Recessed wells ──────────────────────────────────────────────────── */
+:where(
+  input:not([type='range']):not([type='checkbox']):not([type='radio']),
+  select,
+  textarea,
+  .settings-search-input,
+  .usage-meter-track
+) {
+  box-shadow: var(--edge-well) !important;
+}
+
+/* ── 4. Raised surfaces ─────────────────────────────────────────────────────
+   Surfaces with a bespoke shadow of their own (the settings modal, bento
+   cards, the floating prompt bar and its bubble) are deliberately absent:
+   each is given the bevel INSIDE its own stylesheet alongside the ambient
+   shadow it already needs, so this block never flattens one. */
+:where(
+  .app-shell .room-panel,
+  .app-shell .left-utility-panel,
+  .app-shell .right-utility-panel,
+  .app-shell .room-dock,
+  .inbox-panel,
+  .project-hud,
+  .context-menu,
+  .dd-menu,
+  .dropdown-menu,
+  .stats-panel,
+  .stats-tile,
+  .stats-provider-card
+) {
+  box-shadow: var(--edge-bevel-lift) !important;
+}
+
+/* ── 5. Selected / active emphasis is an accent ring ────────────────────── */
+:where(
+  .titlebar-mode-btn.active,
+  .drawer-tab-btn.active,
+  .settings-tab.active,
+  .settings-toggle.active,
+  .stats-pill.is-on
+) {
+  box-shadow: var(--edge-accent-glow), var(--edge-bevel-lift) !important;
+}
+
+/* ── 6. Hairlines: structural separators stay, one step quieter ─────────────
+   Panel headers are the one place a line still earns its keep — it separates
+   stacked content inside a single surface. It is recoloured to `--hairline`
+   rather than removed; set that token to transparent to drop every one. */
+:where(
+  .settings-header,
+  .utility-drawer .drawer-header,
+  .file-explorer .explorer-header
+) {
+  border-bottom-color: var(--hairline) !important;
+}
+
+/* Large surfaces: a stable, flat tone in both themes. No outline, no top
+   highlight, no drop shadow; the fill alone separates them from the
+   workspace. Light mode is a neutral off-white, deliberately not cream and
+   not pure white. */
+:root {
+  --major-panel-surface: #202024;
+  --major-panel-rim: transparent;
+  --major-panel-shadow: 0 0 0 0 transparent;
+}
+
+:root.light-theme {
+  --major-panel-surface: #f6f6f4;
+  /* Tiles and cards sitting ON a panel: a hair lighter, still off-white. */
+  --major-panel-raised: #fbfbfa;
+  --terminal-surface: #000000;
+  --terminal-surface-rgb: 0, 0, 0;
+}
+
+:root .app-shell .room-panel,
+:root .app-shell .left-utility-panel,
+:root .app-shell .right-utility-panel,
+:root .floating-prompt-shell .floating-prompt-bar:not(.voice-active):not(.transcribing) {
+  background: var(--major-panel-surface) !important;
+}
+
+:root .app-shell .room-panel,
+:root .app-shell .left-utility-panel,
+:root .app-shell .right-utility-panel,
+:root .floating-prompt-shell .floating-prompt-bar:not(.agent-mode):not(.voice-active):not(.transcribing):not(.drag-over):not(.global-drag) {
+  box-shadow: var(--major-panel-shadow) !important;
+}
+
+/* Light mode: every floating panel takes the same off-white as the rooms. */
+:root.light-theme :is(
+  .inbox-panel,
+  .project-hud,
+  .settings-modal,
+  .context-menu,
+  .dd-menu,
+  .dropdown-menu,
+  .apm-card
+) {
+  background: var(--major-panel-surface) !important;
+}
+
+/* Agent terminals share the grey panel field in dark mode. Light mode keeps
+   the terminal's existing fill over the off-white room surface. */
+:root:not(.light-theme) .terminal-pane.agent-pane {
+  background: var(--major-panel-surface);
 }

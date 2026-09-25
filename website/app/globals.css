@@ -799,6 +799,273 @@ img { display: block; }
   line-height: 1.6;
 }
 
+/* ── Pricing ──────────────────────────────────────────────────────────── */
+
+.pricing {
+  display: grid;
+  place-items: center;
+  padding: 2.25rem 0 1rem;
+}
+
+.pricing-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 480px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 2rem 2rem 1.75rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.pricing-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.45;
+}
+
+.pricing-head {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1.4rem;
+}
+
+.pricing-name {
+  font-family: var(--font-heading);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.pricing-price {
+  font-family: var(--font-heading);
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: #fafafa;
+}
+
+.pricing-period {
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  margin-left: 0.35rem;
+}
+
+.pricing-sub {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+}
+
+.pricing-list {
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+  margin: 0 0 1.6rem;
+  padding: 0;
+}
+
+.pricing-list li {
+  display: flex;
+  gap: 0.65rem;
+  align-items: baseline;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.pricing-list .check {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.pricing-list strong { color: var(--text); font-weight: 600; }
+
+.pricing-cta {
+  width: 100%;
+}
+
+.pricing-fineprint {
+  margin-top: 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.pricing-redeem {
+  margin-top: 0.6rem;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.pricing-redeem a {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--text-muted);
+}
+
+.pricing-redeem a:hover { color: var(--text); text-decoration-color: var(--text); }
+
+/* ── Download gate ────────────────────────────────────────────────────── */
+
+.download-gate {
+  padding-top: 3rem;
+  padding-bottom: 5rem;
+}
+
+.download-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 2.25rem 2rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.download-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.45;
+}
+
+.download-card.is-unlocked::before {
+  background: linear-gradient(90deg, transparent, #3ddc84, transparent);
+  opacity: 0.7;
+}
+
+.download-title {
+  font-family: var(--font-heading);
+  font-size: clamp(1.8rem, 4vw, 2.3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 0.7rem;
+}
+
+.download-lead {
+  color: var(--text-secondary);
+  margin-bottom: 1.6rem;
+}
+
+.download-buy {
+  width: 100%;
+}
+
+.download-note {
+  margin-top: 1rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.download-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.9rem 0 1.6rem;
+}
+
+.download-sub {
+  font-family: var(--font-heading);
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.download-sub-lead {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 1.4rem;
+}
+
+.download-form {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.download-form label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.download-form label:not(:first-child) {
+  margin-top: 0.6rem;
+}
+
+.download-input {
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.download-input::placeholder { color: var(--text-muted); }
+.download-input:focus { outline: none; border-color: var(--text); }
+
+.download-form .btn {
+  margin-top: 1.1rem;
+  width: 100%;
+}
+
+.download-error {
+  color: #f87171;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.download-platforms {
+  display: grid;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.download-platforms .btn { width: 100%; }
+
+.download-platforms .pill {
+  font-size: 0.78rem;
+  font-weight: 500;
+  opacity: 0.65;
+}
+
+.link-btn {
+  display: block;
+  margin: 1.1rem auto 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--text-muted);
+  cursor: pointer;
+}
+
+.link-btn:hover { color: var(--text); text-decoration-color: var(--text); }
+
 /* ── Final CTA ───────────────────────────────────────────────────────── */
 
 .final-cta {

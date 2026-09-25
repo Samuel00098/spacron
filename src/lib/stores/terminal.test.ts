@@ -58,6 +58,11 @@ vi.mock('./notification', () => ({
 const invokeMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
+// workspace.ts and terminal.ts import each other (transitively). Entering the
+// cycle from terminal lets vitest's async module runner fire workspace's
+// queued autosave binding before terminal's stores exist; entering from
+// workspace finishes evaluating terminal first.
+import './workspace';
 import {
   appendToCommandBlock,
   applyOscPaneTitle,

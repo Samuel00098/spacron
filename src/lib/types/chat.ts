@@ -35,6 +35,7 @@ export type ChatProviderId = string;
 /** Per-thread agent authority. The composer exposes Default and Full access;
  * older values remain readable so existing persisted conversations migrate. */
 export type ChatAccessMode = 'inherit' | 'supervised' | 'auto-edits' | 'auto' | 'full-access';
+export type ChatWorkMode = 'plan' | 'build';
 
 /** Legacy per-agent setting retained only for persisted thread compatibility. */
 export type ChatReasoningEffort = 'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -137,6 +138,7 @@ export interface ChatThread {
   provider: ChatProviderId | null;
   model: string | null;
   accessMode: ChatAccessMode;
+  workMode: ChatWorkMode;
   reasoningEffort: ChatReasoningEffort;
   taskId: string | null;
   sessionId: number | null;

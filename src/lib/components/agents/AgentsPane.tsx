@@ -277,11 +277,6 @@ function AgentRowView({
   const yoloCapable = isYoloCapable(row.command);
   const effectiveArgs = resolveAgentLaunchArgs(row.command, mode, overrides);
   const effectiveCmd = resolveAgentLaunchCommand(row.command, overrides);
-  // How this agent receives its standing brief — a native rules file the CLI
-  // reads at startup, or the charter pasted into the terminal on spawn. The
-  // old "Coding CLI agents" section showed this as a per-row Rules-file
-  // checkbox; it lives here now so the brief channel is visible again.
-  const readsRulesFile = agentReadsRulesFile(row.command);
   // Which side of the per-row toggle is active. Only shown for CLIs that have a
   // bypass; 'custom' (a bespoke args/env override) leaves neither side lit.
   const rowMode = effectiveAgentMode(row.command, mode, overrides);
@@ -334,7 +329,7 @@ function AgentRowView({
 
         <div className="agents-row-meta">
           <div className="agents-row-name-row">
-            <span className="agents-row-name">{row.name}</span>
+            <span className="agents-row-name" title={row.note}>{row.name}</span>
             {row.isBuiltin ? (
               <span className="agents-row-badge">Built-in</span>
             ) : (
@@ -346,27 +341,7 @@ function AgentRowView({
           </div>
           <div className="agents-row-cmd-line">
             <code className="agents-row-cmd">{row.command}</code>
-            {readsRulesFile ? (
-              <span
-                className="agents-row-brief"
-                data-brief="rules"
-                title="Briefed through the instruction file(s) this CLI reads at startup. Spacron writes its standing brief there instead of pasting it into the terminal."
-              >
-                Rules file
-              </span>
-            ) : (
-              <span
-                className="agents-row-brief"
-                data-brief="paste"
-                title="Briefed by pasting the standing charter into the terminal when it spawns, because this CLI has no native rules file."
-              >
-                Pasted brief
-              </span>
-            )}
           </div>
-          {row.note && (
-            <p className="agents-row-note-text">{row.note}</p>
-          )}
         </div>
 
         <div className="agents-row-state">
@@ -563,6 +538,12 @@ function LaunchEditor({
   effectiveCmd: string;
   effectiveArgs: string;
 }) {
+  // How this agent receives its standing brief — a native rules file the CLI
+  // reads at startup, or the charter pasted into the terminal on spawn. Shown
+  // in the editor rather than on every row: it is per-agent configuration,
+  // only needed when a row is open.
+  const readsRulesFile = agentReadsRulesFile(row.command);
+
   const [cmd, setCmd] = useState(overrides.agentCmdOverrides[row.command] ?? '');
   const [args, setArgs] = useState(overrides.agentDefaultArgs[row.command] ?? '');
   const [envText, setEnvText] = useState(
@@ -663,6 +644,19 @@ function LaunchEditor({
   return (
     <div className="agents-editor">
       <p className="agents-editor-note">{launchNote}</p>
+      <p className="agents-editor-brief">
+        <span
+          className="agents-row-brief"
+          data-brief={readsRulesFile ? 'rules' : 'paste'}
+          title={
+            readsRulesFile
+              ? 'Briefed through the instruction file(s) this CLI reads at startup. Spacron writes its standing brief there instead of pasting it into the terminal.'
+              : 'Briefed by pasting the standing charter into the terminal when it spawns, because this CLI has no native rules file.'
+          }
+        >
+          {readsRulesFile ? 'Rules file' : 'Pasted brief'}
+        </span>
+      </p>
       {yoloFlag && (
         <p className="agents-editor-hint">
           This CLI's native bypass: <code>{yoloFlag}</code>

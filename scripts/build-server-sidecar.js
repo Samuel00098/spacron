@@ -86,7 +86,13 @@ function parseTargetArg() {
   return null;
 }
 
-const requestedTarget = parseTargetArg();
+// Tauri exports the triple it is building for to `beforeBuildCommand`. A cross
+// build (e.g. `tauri build --target aarch64-pc-windows-msvc` on an x64 runner)
+// bundles `binaries/<name>-<that triple>`, so both sidecars must be built for
+// it, not for the host this script happens to run on.
+const bundleTarget = process.env.TAURI_ENV_TARGET_TRIPLE || null;
+const requestedTarget =
+  parseTargetArg() || (bundleTarget && bundleTarget !== hostTriple() ? bundleTarget : null);
 const triple = requestedTarget || hostTriple();
 // The `.exe` follows the TARGET OS, not the machine building it.
 const ext = triple.includes('windows') ? '.exe' : '';
@@ -120,16 +126,16 @@ function buildSidecar(crate) {
 
 buildSidecar('spacron-server');
 
-// The browser shim agents are handed as their `BROWSER`. Staged for the HOST
-// only: it exists to be spawned on the machine running the app, so a cross
-// build aimed at a VPS has no use for it, and `bundle.externalBin` resolves
-// only the host triple at bundling time anyway. Skipping it keeps `--target`
-// a server-only concern.
-if (!requestedTarget || triple === hostTriple()) {
+// The browser shim agents are handed as their `BROWSER`. Staged only for the
+// triple an installer is being built for (the host, or Tauri's cross target):
+// it exists to be spawned on the machine running the app, so a `--target`
+// build aimed at a VPS has no use for it.
+const bundlingThisTriple = !requestedTarget || triple === hostTriple() || triple === bundleTarget;
+if (bundlingThisTriple) {
   buildSidecar('spacron-open');
 }
 
-if (requestedTarget && triple !== hostTriple()) {
+if (!bundlingThisTriple) {
   console.log(
     'build-server-sidecar: cross artifact staged — the VPS wizard will find it by name when deploying to that OS.',
   );

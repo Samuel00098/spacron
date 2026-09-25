@@ -60,6 +60,10 @@ const TOKEN_PROTO_PREFIX: &str = "token.";
 /// token and the `/lsp` route consumes it. The pre-shared secret never hits a URL.
 const LSP_TOKEN_TTL: Duration = Duration::from_secs(30);
 
+/// How long a connection presenting a wrong or missing token waits before it
+/// is refused.
+const FAILED_AUTH_DELAY: Duration = Duration::from_secs(1);
+
 /// How the server was launched.
 pub struct ServerConfig {
     /// Root the client's terminals are confined to. Canonicalized on startup.
@@ -321,6 +325,9 @@ async fn ws_handler(
         .map(|t| ct_eq(t.as_bytes(), state.token.as_bytes()))
         .unwrap_or(false);
     if !authorized {
+        // Slow every wrong guess down so the token can't be brute-forced at
+        // wire speed from one connection.
+        tokio::time::sleep(FAILED_AUTH_DELAY).await;
         return (StatusCode::UNAUTHORIZED, "invalid or missing token").into_response();
     }
 

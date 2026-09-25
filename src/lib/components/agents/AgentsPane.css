@@ -244,15 +244,15 @@
 }
 
 .agents-row-badge[data-tone='ready'] {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 25%, transparent);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .agents-row-badge[data-tone='partial'] {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .agents-row-badge[data-tone='absent'] {
@@ -299,20 +299,9 @@
 }
 
 .agents-row-brief[data-brief='rules'] {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 22%, transparent);
-  background: color-mix(in srgb, var(--success) 8%, transparent);
-}
-
-.agents-row-note-text {
-  display: flex;
-  align-items: flex-start;
-  gap: 5px;
-  margin: 2px 0 0;
-  font-size: 10.5px;
-  line-height: 1.45;
-  color: var(--text-muted);
-  opacity: 0.85;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 /* Fixed width so every row's status badge starts on the same vertical line —
@@ -534,6 +523,14 @@
   border-top: 1px dashed var(--border-subtle, var(--border));
   background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
   animation: agents-editor-in var(--dur-base) var(--ease-out);
+}
+
+.agents-editor-brief {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
 }
 
 @keyframes agents-editor-in {

@@ -915,6 +915,7 @@ impl PreviewManager {
             .route("/local-file", any(serve_local_file))
             .route("/local-file/{*file_path}", any(serve_local_file_path))
             .fallback(any(proxy_handler))
+            .layer(axum::middleware::from_fn(require_loopback_host))
             .with_state(state);
 
         let addr = SocketAddr::from(([127, 0, 0, 1], proxy_port));
@@ -986,6 +987,7 @@ impl PreviewManager {
             .route("/local-file", any(serve_local_file))
             .route("/local-file/{*file_path}", any(serve_local_file_path))
             .fallback(any(proxy_handler))
+            .layer(axum::middleware::from_fn(require_loopback_host))
             .with_state(state);
         let addr = SocketAddr::from(([127, 0, 0, 1], proxy_port));
 
@@ -1417,6 +1419,40 @@ fn local_dev_hosts(preferred_host: Option<&str>) -> Vec<&'static str> {
 /// directly from the file system. The `path` query parameter specifies the
 /// absolute file path. For HTML files, a `<base>` tag is injected so that
 /// relative URLs in the document resolve correctly through this same route.
+/// True when a `Host` header names this machine's loopback interface. The
+/// preview frame always loads from `http://127.0.0.1:{port}`; a request whose
+/// Host is any other name reached us through DNS rebinding (an attacker page
+/// whose domain now resolves to 127.0.0.1) and must not see project files or
+/// the dev server behind the proxy.
+fn is_loopback_host_header(host: &str) -> bool {
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((inner, _)) => inner,
+            None => return false,
+        }
+    } else {
+        host.rsplit_once(':').map_or(host, |(name, _)| name)
+    };
+    name == "127.0.0.1" || name == "::1" || name.eq_ignore_ascii_case("localhost")
+}
+
+/// Router layer enforcing [`is_loopback_host_header`] on every preview request.
+/// A request with no Host at all is not a browser (browsers always send one),
+/// so it cannot be a rebinding victim and is let through.
+async fn require_loopback_host(
+    req: Request<Body>,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let allowed = match req.headers().get("host") {
+        None => true,
+        Some(value) => value.to_str().map(is_loopback_host_header).unwrap_or(false),
+    };
+    if !allowed {
+        return (StatusCode::FORBIDDEN, "Preview only answers requests addressed to localhost").into_response();
+    }
+    next.run(req).await
+}
+
 async fn serve_local_file(
     State(state): State<ProxyState>,
     req: Request<Body>,
@@ -3442,10 +3478,20 @@ mod tests {
         html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
         inject_input_script, inject_media_script, inject_ytm_snippet, is_first_party_host, is_ytm_host,
         inject_preview_theme_script, inject_viewport_edge_style, local_file_error, preview_error_response,
-        proxy_request_allowed, wants_html_error,
+        is_loopback_host_header, proxy_request_allowed, wants_html_error,
         INPUT_FLAG, INPUT_SNIPPET, LOCAL_LOCATION_FLAG, MEDIA_FLAG, MEDIA_SNIPPET,
     };
     use axum::http::{HeaderMap, StatusCode};
+
+    #[test]
+    fn loopback_host_header_accepts_only_this_machine() {
+        for host in ["127.0.0.1:5173", "127.0.0.1", "localhost:3000", "LOCALHOST", "[::1]:8080", "[::1]"] {
+            assert!(is_loopback_host_header(host), "{host} should be allowed");
+        }
+        for host in ["evil.example:5173", "127.0.0.1.evil.example", "localhost.evil.example:80", "[::2]:80", "[::1", "10.0.0.5:80", ""] {
+            assert!(!is_loopback_host_header(host), "{host} should be refused");
+        }
+    }
 
     #[test]
     fn consent_form_params_dedupes_unescapes_and_skips_choice_flags() {
