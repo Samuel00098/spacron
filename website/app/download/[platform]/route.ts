@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { licensingMode, verifyDownloadToken } from '@/lib/license';
-import { downloadUrlFor, getLatestReleaseWithAssets, PLATFORMS, Platform } from '@/lib/releases';
+import { latestDownloadUrl, PLATFORMS, Platform } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,12 +26,12 @@ export async function GET(
     }
   }
 
-  const release = await getLatestReleaseWithAssets();
-  if (!release) {
+  const url = await latestDownloadUrl(platform as Platform);
+  if (!url) {
     return NextResponse.json({ ok: false, error: 'NO_RELEASE' }, { status: 503 });
   }
 
-  const response = NextResponse.redirect(downloadUrlFor(platform as Platform, release));
+  const response = NextResponse.redirect(url);
   response.headers.set('Cache-Control', 'no-store');
   response.headers.set('Referrer-Policy', 'no-referrer');
   return response;

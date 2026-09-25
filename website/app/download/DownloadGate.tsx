@@ -4,7 +4,8 @@ import { FormEvent, useEffect, useState } from 'react';
 import type { LicensingMode } from '@/lib/license';
 
 const PLATFORMS = [
-  { key: 'windows', label: 'Windows', sub: '.exe installer' },
+  { key: 'windows', label: 'Windows', sub: 'x64 .exe' },
+  { key: 'windows-arm64', label: 'Windows on ARM', sub: 'ARM64 .exe' },
   { key: 'mac', label: 'macOS', sub: 'Apple Silicon .dmg' },
   { key: 'linux', label: 'Linux', sub: '.AppImage' },
 ] as const;
