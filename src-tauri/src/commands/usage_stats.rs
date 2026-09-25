@@ -1704,8 +1704,8 @@ fn scan_codex(store: &mut StoreFile, roots: &[PathBuf]) -> (usize, usize) {
 // OpenCode
 // ---------------------------------------------------------------------------
 
-/// OpenCode and its lineage write one JSON file per message under
-/// `storage/message/<sessionId>/<messageId>.json`.
+// OpenCode and its lineage write one JSON file per message under
+// `storage/message/<sessionId>/<messageId>.json`.
 
 /// Parse a whole OpenCode *session directory*.
 ///
