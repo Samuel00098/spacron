@@ -168,7 +168,7 @@ type SettingsModalProps = {
 
 const tabs: { id: Tab; label: string; kicker: string; description: string }[] = [
   { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
-  { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Theme, window style and background media.' },
+  { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Visual style.' },
   { id: 'models', label: 'AI Connections', kicker: 'Providers and keys', description: 'Connect AI providers and manage their keys.' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
@@ -202,7 +202,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'hidden-files', tab: 'general', section: 'Workspace', label: 'Show hidden files', keywords: 'dot files explorer' },
   { id: 'snapshots', tab: 'general', section: 'Workspace', label: 'Show Workspace Snapshots', keywords: 'sidebar history' },
   { id: 'notifications', tab: 'general', section: 'Workspace', label: 'Notifications', keywords: 'alerts agents' },
-  { id: 'appearance-mode', tab: 'appearance', section: 'Theme', label: 'Appearance mode', keywords: 'light dark system theme', target: 'section' },
+  { id: 'appearance-mode', tab: 'appearance', section: 'Visual style', label: 'Mode', keywords: 'light dark system theme appearance', target: 'section' },
   { id: 'ui-zoom', tab: 'appearance', section: 'Appearance', label: 'UI zoom', keywords: 'scale size interface' },
   { id: 'ui-font-size', tab: 'appearance', section: 'Appearance', label: 'UI font size', keywords: 'application text size' },
   { id: 'accent-color', tab: 'appearance', section: 'Appearance', label: 'Accent color', keywords: 'colour highlight brand' },
@@ -530,6 +530,24 @@ function SelectField<T extends string>(props: {
   renderIcon?: (id: T) => React.ReactNode;
 }) {
   return <StyledSelect {...props} />;
+}
+
+/** A miniature Spacron window for the Mode picker: sidebar, a few chat lines,
+ *  and the composer. `half` shows only its right half, laid over a light mock
+ *  to draw the split System thumbnail. */
+function ModeMock({ tone, half = false }: { tone: 'light' | 'dark'; half?: boolean }) {
+  return (
+    <span className={`mode-mock mode-mock-${tone}${half ? ' mode-mock-half' : ''}`} aria-hidden="true">
+      <span className="mode-mock-side"><span className="mode-mock-dot" /></span>
+      <span className="mode-mock-main">
+        <span className="mode-mock-line accent" style={{ width: '42%' }} />
+        <span className="mode-mock-line" style={{ width: '64%' }} />
+        <span className="mode-mock-line" style={{ width: '48%' }} />
+        <span className="mode-mock-line accent" style={{ width: '38%' }} />
+        <span className="mode-mock-input"><span className="mode-mock-send" /></span>
+      </span>
+    </span>
+  );
 }
 
 function SettingRow({
@@ -2627,37 +2645,42 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'appearance' && (
               <>
-                <Section title="Theme">
-                  {/* Appearance mode — visual cards */}
-                  <div className="appearance-cards">
-                    {([
-                      { id: 'system' as const, label: 'System', detail: 'Follow device',
-                        icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> },
-                      { id: 'light'  as const, label: 'Light', detail: 'Bright surfaces',
-                        icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg> },
-                      { id: 'dark'   as const, label: 'Dark', detail: 'Dimmed surfaces',
-                        icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg> },
-                    ]).map(({ id, label, detail, icon }) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className={`appearance-card${currentAppearance === id ? ' selected' : ''}`}
-                        onClick={() => appearance.set(id)}
-                      >
-                        <span className={`appearance-preview appearance-preview-${id}`} aria-hidden="true">
-                          <span className="appearance-preview-top" />
-                          <span className="appearance-preview-body">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        </span>
-                        <span className="appearance-icon">{icon}</span>
-                        <span className="appearance-label">{label}</span>
-                        <small className="appearance-detail">{detail}</small>
-                      </button>
-                    ))}
-                  </div>
+                <Section title="Visual style">
+                  <SettingRow title="Mode">
+                    <div className="mode-picker" role="radiogroup" aria-label="Mode">
+                      {([
+                        { id: 'system' as const, label: 'System' },
+                        { id: 'light' as const, label: 'Light' },
+                        { id: 'dark' as const, label: 'Dark' },
+                      ]).map(({ id, label }) => {
+                        // System names the mode it resolved to, so the tooltip says what is on screen.
+                        const name = id === 'system' && currentActiveTheme
+                          ? `System (now ${currentActiveTheme.type === 'light' ? 'Light' : 'Dark'})`
+                          : label;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            role="radio"
+                            aria-checked={currentAppearance === id}
+                            aria-label={name}
+                            title={name}
+                            className={`mode-swatch${currentAppearance === id ? ' selected' : ''}`}
+                            onClick={() => appearance.set(id)}
+                          >
+                            {id === 'system' ? (
+                              <>
+                                <ModeMock tone="light" />
+                                <ModeMock tone="dark" half />
+                              </>
+                            ) : (
+                              <ModeMock tone={id} />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </SettingRow>
                   <SettingRow title="UI zoom" detail={`${currentZoom}%`}>
                     <div className="num-control">
                       <button className="num-btn" onClick={() => uiZoom.set(Math.max(50, currentZoom - 10))}>−</button>

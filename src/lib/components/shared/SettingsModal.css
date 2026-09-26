@@ -894,131 +894,13 @@ details.settings-github-note pre {
   padding: 18px;
 }
 
-/* ── Appearance Mode Cards ── */
-.appearance-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  padding: 18px 22px 14px;
-}
-
-.appearance-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  min-height: 156px;
-  padding: 12px;
-  background: var(--bg-primary);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: color var(--dur-base) var(--ease-out),
-    background var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
-}
-
-.appearance-card:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-focus);
-  color: var(--text-primary);
-}
-
-.appearance-card.selected {
-  border-color: var(--accent);
-  background: var(--accent-light);
-  color: var(--text-primary);
-}
-
-.appearance-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color var(--dur-fast) var(--ease-out), transform var(--dur-base) var(--ease-out);
-}
-
-.appearance-card:hover .appearance-icon {
-  transform: translateY(-2px);
-}
-
-.appearance-card.selected .appearance-icon {
-  color: var(--accent);
-}
-
-/* CSS previews keep the built-in modes image-free while making their surface
-   treatment easy to distinguish at a glance. */
-.appearance-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  height: 62px;
-  padding: 8px;
-  border: 1px solid currentColor;
-  border-radius: 7px;
-  overflow: hidden;
-  opacity: 0.95;
-}
-
-.appearance-preview-light { color: #000; background: #fff; }
-.appearance-preview-dark { color: #fff; background: #000; }
-.appearance-preview-system {
-  color: #000;
-  background: linear-gradient(90deg, #fff 0 50%, #000 50% 100%);
-}
-
-.appearance-preview-top {
-  display: block;
-  width: 42%;
-  height: 5px;
-  border-radius: 99px;
-  background: currentColor;
-  opacity: 0.75;
-}
-
-.appearance-preview-body {
-  display: flex;
-  flex: 1;
-  align-items: flex-end;
-  gap: 4px;
-}
-
-.appearance-preview-body span {
-  display: block;
-  width: 18%;
-  height: 35%;
-  border-radius: 2px;
-  background: currentColor;
-  opacity: 0.55;
-}
-
-.appearance-preview-body span:nth-child(2) { height: 62%; opacity: 0.8; }
-.appearance-preview-body span:nth-child(3) { height: 48%; opacity: 0.65; }
-
-.appearance-preview-system .appearance-preview-top,
-.appearance-preview-system .appearance-preview-body {
-  color: #666;
-  mix-blend-mode: difference;
-}
-
-.appearance-label {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.appearance-detail {
-  color: var(--text-muted);
-  font-size: 10.5px;
-  line-height: 1.25;
-}
-
 /* ── Accent picker ── */
 .accent-picker {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  /* Right-aligned like every other settings control. */
+  justify-content: flex-end;
   gap: 10px;
   width: 100%;
 }
@@ -2531,7 +2413,6 @@ button.settings-control-copy.skill-open-btn {
   .sselect-trigger,
   .dd-trigger,
   .num-btn,
-  .appearance-card,
   .option-card,
   .theme-card,
   .shell-card,
@@ -2545,7 +2426,6 @@ button.settings-control-copy.skill-open-btn {
   .sselect-trigger,
   .dd-trigger,
   .num-btn,
-  .appearance-card,
   .option-card,
   .theme-card,
   .shell-card,
@@ -2567,7 +2447,7 @@ button.settings-control-copy.skill-open-btn {
 
 /* Selected cards keep their accent fill; the accent outline replaces the
    accent border the global rules erase. */
-.settings-modal :is(.appearance-card.selected, .option-card.selected, .theme-card.active, .shell-card.selected) {
+.settings-modal :is(.option-card.selected, .theme-card.active, .shell-card.selected) {
   background: var(--accent-light) !important;
   box-shadow: inset 0 0 0 1px var(--accent) !important;
 }
@@ -2584,4 +2464,130 @@ button.settings-control-copy.skill-open-btn {
 .settings-control :is(.dropdown, .dd-trigger) {
   width: auto;
   max-width: 100%;
+}
+
+
+
+/* ── Mode picker (Appearance → Visual style → Mode) ──
+   Three thumbnail windows at the right of the row; the active one carries an
+   accent outline. The mocks use fixed light/dark colours on purpose: they
+   depict each mode, not the current theme. */
+.mode-picker {
+  display: flex;
+  gap: 12px;
+}
+
+.settings-modal .mode-swatch {
+  position: relative;
+  display: block;
+  width: 98px;
+  height: 66px;
+  padding: 3px;
+  border: none;
+  border-radius: 10px;
+  background: transparent !important;
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+  cursor: pointer;
+  transition: box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-modal .mode-swatch:hover {
+  box-shadow: inset 0 0 0 1px var(--border-focus, var(--text-muted)) !important;
+}
+
+.settings-modal .mode-swatch.selected {
+  box-shadow: inset 0 0 0 2px var(--accent) !important;
+}
+
+.settings-modal .mode-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mode-mock {
+  position: absolute;
+  inset: 3px;
+  display: flex;
+  gap: 5px;
+  padding: 5px;
+  border-radius: 7px;
+  overflow: hidden;
+  --mm-bg: #f4f4f5;
+  --mm-side: #e6e6e9;
+  --mm-line: #c7c7cd;
+  --mm-input: #ffffff;
+  --mm-accent: #3b82f6;
+  background: var(--mm-bg);
+}
+
+.mode-mock-dark {
+  --mm-bg: #0e0e10;
+  --mm-side: #1c1c20;
+  --mm-line: #4a4a52;
+  --mm-input: #17171a;
+}
+
+/* System: the dark mock's right half laid over the light one. */
+.mode-mock-half {
+  clip-path: inset(0 0 0 50%);
+}
+
+.mode-mock-side {
+  flex: 0 0 18%;
+  border-radius: 4px;
+  background: var(--mm-side);
+  padding: 4px;
+}
+
+.mode-mock-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mm-line);
+}
+
+.mode-mock-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mode-mock-line {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--mm-line);
+}
+
+.mode-mock-line:nth-child(2),
+.mode-mock-line:nth-child(3) {
+  align-self: flex-start;
+}
+
+.mode-mock-line.accent {
+  background: var(--mm-accent);
+}
+
+.mode-mock-input {
+  position: relative;
+  align-self: stretch;
+  margin-top: auto;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--mm-input);
+  box-shadow: inset 0 0 0 1px var(--mm-line);
+}
+
+.mode-mock-send {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mm-accent);
 }
