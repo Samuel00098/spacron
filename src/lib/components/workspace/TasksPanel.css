@@ -577,10 +577,8 @@
   font-family: inherit;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 70%),
-    rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.5);
-  border: 1px solid var(--border);
+  background: var(--input-bg, var(--bg-primary));
+  border: 1px solid var(--input-border, var(--border));
   border-radius: 8px;
   color: var(--text-primary);
   font-size: 11.5px;
