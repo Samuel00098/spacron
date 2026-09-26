@@ -166,18 +166,18 @@ type SettingsModalProps = {
   onclose: () => void;
 };
 
-const tabs: { id: Tab; label: string; kicker: string }[] = [
-  { id: 'general', label: 'General', kicker: 'Editor and app' },
-  { id: 'appearance', label: 'Appearance', kicker: 'Window and media' },
-  { id: 'models', label: 'AI Connections', kicker: 'Providers and keys' },
-  { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
-  { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
-  { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
-  { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning' },
-  { id: 'mcp', label: 'MCP', kicker: 'Tool servers' },
-  { id: 'stats', label: 'Usage', kicker: 'Model usage and cost' },
-  { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map' },
-  { id: 'about', label: 'About', kicker: 'Version and reset' },
+const tabs: { id: Tab; label: string; kicker: string; description: string }[] = [
+  { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
+  { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Theme, window style and background media.' },
+  { id: 'models', label: 'AI Connections', kicker: 'Providers and keys', description: 'Connect AI providers and manage their keys.' },
+  { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
+  { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
+  { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools', description: 'The coding CLI tools Spacron can launch.' },
+  { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning', description: 'Orchestrator skills and what it learns.' },
+  { id: 'mcp', label: 'MCP', kicker: 'Tool servers', description: 'Tool servers available to your agents.' },
+  { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
+  { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
+  { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
 ];
 
 type SettingsSearchEntry = {
@@ -2412,6 +2412,14 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
           </nav>
 
           <main className="settings-panel" ref={panelRef}>
+            {/* Page header in the Usage tab's style: title and one line of context
+                above the tab's cards. Usage renders its own, with a picker. */}
+            {activeTab !== 'stats' && (
+              <div className="settings-page-head">
+                <h3 className="settings-page-title">{tabs.find((t) => t.id === activeTab)?.label}</h3>
+                <p className="settings-page-sub">{tabs.find((t) => t.id === activeTab)?.description}</p>
+              </div>
+            )}
             {activeTab === 'general' && (
               <>
                 <Section title="Editor">

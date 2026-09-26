@@ -1812,9 +1812,7 @@ input[type='range']::-webkit-slider-thumb:active {
   .context-menu,
   .dd-menu,
   .dropdown-menu,
-  .stats-panel,
-  .stats-tile,
-  .stats-provider-card
+  .stats-panel
 ) {
   box-shadow: var(--edge-bevel-lift) !important;
 }
