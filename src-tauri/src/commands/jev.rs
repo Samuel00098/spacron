@@ -63,26 +63,100 @@ pub async fn jev_classify(
     Ok(decide(&provider, &state, &question, &labels).await?.map(|d| d.answer))
 }
 
+/// The `/systemone` endpoint and model id for a Jev source, or `None` when the
+/// provider does not serve Jev.
+fn source_endpoint(provider: &str) -> Option<(String, &'static str)> {
+    if let Some((url, model)) = builtin_source(provider) {
+        return Some((url.to_string(), model));
+    }
+    if !super::custom_providers::is_custom_provider(provider) || known_without_systemone(provider) {
+        return None;
+    }
+    super::custom_providers::base_url(provider).map(|base| (format!("{base}/systemone"), "jev-latest"))
+}
+
+/// One `/systemone` request with any set of questions; the whole response
+/// body back. `None` = this source does not serve Jev or has no key.
+async fn call_source(provider: &str, state: &str, questions: Value, timeout_ms: u64) -> Result<Option<Value>, String> {
+    let Some((url, model)) = source_endpoint(provider) else { return Ok(None) };
+    match systemone(&url, model, provider, state, questions, timeout_ms).await {
+        Err(error) if builtin_source(provider).is_none() && (error.contains("HTTP 404") || error.contains("HTTP 405")) => {
+            remember_no_systemone(provider);
+            Ok(None)
+        }
+        other => other,
+    }
+}
+
+/// One Choice decision about one piece of state.
 async fn decide(
     provider: &str,
     state: &str,
     question: &str,
     labels: &HashMap<String, String>,
 ) -> Result<Option<Decision>, String> {
-    if let Some((url, model)) = builtin_source(provider) {
-        return classify(url, model, provider, state, question, labels).await;
+    let questions = json!({ "classification": { "type": "choice", "instructions": question, "criteria": labels } });
+    // TypeSafe answers in 70-500 ms; a router in front of it adds a hop.
+    let timeout = if provider == TYPESAFE { 2_000 } else { 4_000 };
+    let Some(body) = call_source(provider, state, questions, timeout).await? else { return Ok(None) };
+    let answer = body
+        .get("answers")
+        .and_then(|answers| answers.get("classification"))
+        .ok_or_else(|| "Jev response omitted the classification".to_string())?
+        .clone();
+    Ok(Some(Decision { answer, input_tokens: input_tokens(&body), cost_usd: reported_cost(&body) }))
+}
+
+/// Answers for a batch of items, by item index, plus what the request cost.
+struct BatchDecision {
+    answers: HashMap<usize, Value>,
+    input_tokens: u64,
+    cost_usd: Option<f64>,
+}
+
+/// The shared state for a batch: every item, numbered. Jev answers each
+/// question against the same state (Vercel's evaluation docs: "Several
+/// questions can be answered in parallel within a single request, against the
+/// same state"), so each question names the one item it is about.
+fn batch_state(items: &[(usize, String)]) -> String {
+    items
+        .iter()
+        .map(|(i, text)| format!("<item id=\"{}\">\n{}\n</item>", i + 1, text))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn batch_questions(items: &[(usize, String)], question: &str, labels: &HashMap<String, String>) -> Value {
+    let mut questions = Map::new();
+    for (i, _) in items {
+        questions.insert(
+            format!("item_{}", i + 1),
+            json!({
+                "type": "choice",
+                "instructions": format!("{question}\nJudge ONLY the item with id=\"{}\"; ignore the other items.", i + 1),
+                "criteria": labels,
+            }),
+        );
     }
-    if !super::custom_providers::is_custom_provider(provider) || known_without_systemone(provider) {
-        return Ok(None);
-    }
-    let Some(base) = super::custom_providers::base_url(provider) else { return Ok(None) };
-    match classify(&format!("{base}/systemone"), "jev-latest", provider, state, question, labels).await {
-        Err(error) if error.contains("HTTP 404") || error.contains("HTTP 405") => {
-            remember_no_systemone(provider);
-            Ok(None)
+    Value::Object(questions)
+}
+
+/// Several items in one request: one question per item.
+async fn decide_batch(
+    provider: &str,
+    items: &[(usize, String)],
+    question: &str,
+    labels: &HashMap<String, String>,
+) -> Result<Option<BatchDecision>, String> {
+    let questions = batch_questions(items, question, labels);
+    let Some(body) = call_source(provider, &batch_state(items), questions, 20_000).await? else { return Ok(None) };
+    let mut answers = HashMap::new();
+    for (i, _) in items {
+        if let Some(answer) = body["answers"].get(format!("item_{}", i + 1)) {
+            answers.insert(*i, answer.clone());
         }
-        other => other,
     }
+    Ok(Some(BatchDecision { answers, input_tokens: input_tokens(&body), cost_usd: reported_cost(&body) }))
 }
 
 /// Whether `provider` can be offered as a Jev source: the three built-in ones
@@ -112,48 +186,31 @@ pub async fn jev_source_supported(provider: String) -> bool {
     served
 }
 
-/// Ask the real Jev at `url`, authenticated with `key_provider`'s saved key.
-async fn classify(
+/// POST to a `/systemone` endpoint, authenticated with `key_provider`'s saved
+/// key. `None` when no key is saved: Jev is simply off.
+async fn systemone(
     url: &str,
     model: &str,
     key_provider: &str,
     state: &str,
-    question: &str,
-    labels: &HashMap<String, String>,
-) -> Result<Option<Decision>, String> {
+    questions: Value,
+    timeout_ms: u64,
+) -> Result<Option<Value>, String> {
     let Some(api_key) = super::secrets::provider_api_key_get(key_provider.to_string())? else {
         return Ok(None);
     };
-    // TypeSafe answers in 70-500 ms; a router in front of it adds a hop.
-    let timeout = if key_provider == TYPESAFE { 2_000 } else { 4_000 };
-    let client = super::secrets::shared_http_client(Duration::from_millis(timeout))?;
+    let client = super::secrets::shared_http_client(Duration::from_millis(timeout_ms))?;
     let response = client
         .post(url)
         .bearer_auth(api_key)
-        .json(&json!({
-            "state": state,
-            "model": model,
-            "questions": {
-                "classification": {
-                    "type": "choice",
-                    "instructions": question,
-                    "criteria": labels,
-                }
-            }
-        }))
+        .json(&json!({ "state": state, "model": model, "questions": questions }))
         .send()
         .await
         .map_err(|err| format!("Jev request failed: {err}"))?;
     if !response.status().is_success() {
         return Err(format!("Jev returned HTTP {}", response.status()));
     }
-    let body: Value = response.json().await.map_err(|err| format!("Invalid Jev response: {err}"))?;
-    let answer = body
-        .get("answers")
-        .and_then(|answers| answers.get("classification"))
-        .ok_or_else(|| "Jev response omitted the classification".to_string())?
-        .clone();
-    Ok(Some(Decision { answer, input_tokens: input_tokens(&body), cost_usd: reported_cost(&body) }))
+    response.json::<Value>().await.map(Some).map_err(|err| format!("Invalid Jev response: {err}"))
 }
 
 fn input_tokens(body: &Value) -> u64 {
@@ -199,7 +256,12 @@ const MAX_INLINE_ITEMS: usize = 200;
 const MAX_ITEM_CHARS: usize = 4_000;
 const MAX_LABELS: usize = 32;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const CONCURRENCY: usize = 8;
+/// Items per `/systemone` request, and the most text one request carries. No
+/// limit is published; these stay well inside what one request should hold.
+const BATCH_SIZE: usize = 25;
+const BATCH_CHARS: usize = 20_000;
+/// Requests in flight at once, for batches and for the per-item fallback.
+const BATCH_CONCURRENCY: usize = 4;
 /// Past this many items only the uncertain ones are itemized.
 const ITEMIZE_ALL_UP_TO: usize = 100;
 const CONFIDENT: f64 = 0.75;
@@ -333,49 +395,143 @@ pub async fn run_agent_tool(args: Option<&Map<String, Value>>, project_root: Opt
     let items = collect_items(&args, root.as_deref())?;
 
     use futures_util::stream::{self, StreamExt};
-    // Owned per item: the server runs this on a spawned task, which cannot
-    // hold borrows of `items` across the awaits.
-    let results: Vec<(usize, Result<Option<Decision>, String>)> = stream::iter(items.clone().into_iter().enumerate())
-        .map(|(i, item)| {
+    // Owned chunks: the server runs this on a spawned task, which cannot hold
+    // borrows of `items` across the awaits.
+    let outcomes: Vec<ChunkOutcome> = stream::iter(chunk_items(&items))
+        .map(|chunk| {
             let source = source.clone();
             let question = args.question.clone();
             let labels = args.labels.clone();
-            async move { (i, decide(&source, &item, &question, &labels).await) }
+            async move { run_chunk(&source, chunk, &question, &labels).await }
         })
-        .buffer_unordered(CONCURRENCY)
+        .buffer_unordered(BATCH_CONCURRENCY)
         .collect()
         .await;
 
-    let mut rows: Vec<(usize, Option<(String, f64)>)> = Vec::with_capacity(results.len());
+    let mut rows: Vec<(usize, Option<(String, f64)>)> = Vec::with_capacity(items.len());
     let mut failed = 0usize;
     let mut first_error: Option<String> = None;
     let mut tokens = 0u64;
     let mut cost = 0.0f64;
     let mut priced = false;
-    for (i, result) in results {
-        match result {
-            Ok(Some(decision)) => {
-                tokens += decision.input_tokens;
-                if let Some(c) = decision.cost_usd {
-                    cost += c;
-                    priced = true;
+    let mut requests = 0usize;
+    for outcome in outcomes {
+        if outcome.not_configured {
+            return Err("Jev is not set up: the chosen Jev source has no saved key in Spacron.".to_string());
+        }
+        tokens += outcome.input_tokens;
+        requests += outcome.requests;
+        if let Some(c) = outcome.cost_usd {
+            cost += c;
+            priced = true;
+        }
+        for (i, result) in outcome.results {
+            match result {
+                Ok(answer) => rows.push((i, top_choice(&answer))),
+                Err(error) => {
+                    failed += 1;
+                    first_error.get_or_insert(error);
+                    rows.push((i, None));
                 }
-                rows.push((i, top_choice(&decision.answer)));
-            }
-            Ok(None) => {
-                return Err("Jev is not set up: the chosen Jev source has no saved key in Spacron.".to_string());
-            }
-            Err(error) => {
-                failed += 1;
-                first_error.get_or_insert(error);
-                rows.push((i, None));
             }
         }
     }
     rows.sort_by_key(|(i, _)| *i);
     record_usage(rows.len() - failed, tokens, priced.then_some(cost));
 
-    Ok(render_report(&items, &rows, &args.labels, failed, first_error.as_deref(), tokens, priced.then_some(cost)))
+    let spend = Spend { tokens, cost: priced.then_some(cost), requests };
+    Ok(render_report(&items, &rows, &args.labels, failed, first_error.as_deref(), &spend))
+}
+
+/// Cut items into request-sized batches: at most `BATCH_SIZE` items and about
+/// `BATCH_CHARS` of text each (a single item is never split).
+fn chunk_items(items: &[String]) -> Vec<Vec<(usize, String)>> {
+    let mut chunks: Vec<Vec<(usize, String)>> = Vec::new();
+    let mut current: Vec<(usize, String)> = Vec::new();
+    let mut chars = 0usize;
+    for (i, item) in items.iter().enumerate() {
+        let len = item.chars().count();
+        if !current.is_empty() && (current.len() >= BATCH_SIZE || chars + len > BATCH_CHARS) {
+            chunks.push(std::mem::take(&mut current));
+            chars = 0;
+        }
+        chars += len;
+        current.push((i, item.clone()));
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// What one batch produced: an answer or an error per item.
+#[derive(Default)]
+struct ChunkOutcome {
+    results: Vec<(usize, Result<Value, String>)>,
+    input_tokens: u64,
+    cost_usd: Option<f64>,
+    requests: usize,
+    not_configured: bool,
+}
+
+fn add_cost(total: &mut Option<f64>, cost: Option<f64>) {
+    if let Some(c) = cost {
+        *total = Some(total.unwrap_or(0.0) + c);
+    }
+}
+
+/// Batch errors that mean "this request's shape or size", not "the service is
+/// down": the items are retried one per request.
+fn batch_rejected(error: &str) -> bool {
+    ["HTTP 400", "HTTP 413", "HTTP 422"].iter().any(|code| error.contains(code))
+}
+
+async fn run_chunk(source: &str, chunk: Vec<(usize, String)>, question: &str, labels: &HashMap<String, String>) -> ChunkOutcome {
+    let mut outcome = ChunkOutcome { requests: 1, ..Default::default() };
+    match decide_batch(source, &chunk, question, labels).await {
+        Ok(Some(batch)) => {
+            outcome.input_tokens = batch.input_tokens;
+            outcome.cost_usd = batch.cost_usd;
+            for (i, _) in &chunk {
+                let result = batch.answers.get(i).cloned().ok_or_else(|| "Jev gave no answer for this item".to_string());
+                outcome.results.push((*i, result));
+            }
+        }
+        Ok(None) => outcome.not_configured = true,
+        Err(error) if chunk.len() > 1 && batch_rejected(&error) => {
+            use futures_util::stream::{self, StreamExt};
+            let singles: Vec<(usize, Result<Option<Decision>, String>)> = stream::iter(chunk)
+                .map(|(i, item)| async move { (i, decide(source, &item, question, labels).await) })
+                .buffer_unordered(BATCH_CONCURRENCY)
+                .collect()
+                .await;
+            for (i, result) in singles {
+                outcome.requests += 1;
+                match result {
+                    Ok(Some(decision)) => {
+                        outcome.input_tokens += decision.input_tokens;
+                        add_cost(&mut outcome.cost_usd, decision.cost_usd);
+                        outcome.results.push((i, Ok(decision.answer)));
+                    }
+                    Ok(None) => outcome.not_configured = true,
+                    Err(e) => outcome.results.push((i, Err(e))),
+                }
+            }
+        }
+        Err(error) => {
+            for (i, _) in &chunk {
+                outcome.results.push((*i, Err(error.clone())));
+            }
+        }
+    }
+    outcome
+}
+
+/// What a tool call spent, for the last line of its report.
+struct Spend {
+    tokens: u64,
+    cost: Option<f64>,
+    requests: usize,
 }
 
 fn render_report(
@@ -384,8 +540,7 @@ fn render_report(
     labels: &HashMap<String, String>,
     failed: usize,
     first_error: Option<&str>,
-    tokens: u64,
-    cost: Option<f64>,
+    spend: &Spend,
 ) -> String {
     let mut counts: Vec<(String, usize)> = labels.keys().map(|l| (l.clone(), 0)).collect();
     counts.sort();
@@ -430,8 +585,11 @@ fn render_report(
         out.push_str(&format!("\n{uncertain} of {} items were uncertain.\n", rows.len() - failed));
     }
     out.push_str(&format!(
-        "\nJev read {tokens} input tokens{}.",
-        cost.map(|c| format!(", cost ${c:.5}")).unwrap_or_default()
+        "\nJev read {} input tokens in {} request{}{}.",
+        spend.tokens,
+        spend.requests,
+        if spend.requests == 1 { "" } else { "s" },
+        spend.cost.map(|c| format!(", cost ${c:.5}")).unwrap_or_default()
     ));
     out
 }
@@ -539,10 +697,41 @@ mod tests {
     fn report_counts_and_lists_items() {
         let items = vec!["timeout in test_a".to_string(), "assert failed".to_string()];
         let rows = vec![(0, Some(("flaky".to_string(), 0.9))), (1, Some(("real".to_string(), 0.6)))];
-        let report = render_report(&items, &rows, &labels(), 0, None, 42, Some(0.00001));
+        let report = render_report(&items, &rows, &labels(), 0, None, &Spend { tokens: 42, cost: Some(0.00001), requests: 1 });
         assert!(report.contains("- flaky: 1"));
         assert!(report.contains("- real: 1"));
         assert!(report.contains("1\tflaky\t0.90\ttimeout in test_a"));
-        assert!(report.contains("42 input tokens, cost $0.00001"));
+        assert!(report.contains("42 input tokens in 1 request, cost $0.00001"));
+    }
+
+    #[test]
+    fn items_are_batched_by_count_and_size() {
+        let small: Vec<String> = (0..60).map(|i| format!("item {i}")).collect();
+        let chunks = chunk_items(&small);
+        assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![25, 25, 10]);
+        assert_eq!(chunks[1][0].0, 25, "indexes stay global across batches");
+
+        let big: Vec<String> = (0..10).map(|_| "x".repeat(4_000)).collect();
+        assert!(chunk_items(&big).iter().all(|c| c.iter().map(|(_, t)| t.len()).sum::<usize>() <= BATCH_CHARS));
+    }
+
+    #[test]
+    fn a_batch_asks_one_question_per_item_against_shared_state() {
+        let chunk = vec![(0, "timeout".to_string()), (7, "assert".to_string())];
+        let state = batch_state(&chunk);
+        assert!(state.contains("<item id=\"1\">\ntimeout\n</item>"));
+        assert!(state.contains("<item id=\"8\">\nassert\n</item>"));
+        let questions = batch_questions(&chunk, "Flaky?", &labels());
+        assert_eq!(questions.as_object().unwrap().len(), 2);
+        assert!(questions["item_8"]["instructions"].as_str().unwrap().contains("id=\"8\""));
+        assert_eq!(questions["item_1"]["type"], "choice");
+    }
+
+    #[test]
+    fn only_shape_or_size_errors_fall_back_to_single_requests() {
+        assert!(batch_rejected("Jev returned HTTP 400 Bad Request"));
+        assert!(batch_rejected("Jev returned HTTP 413 Payload Too Large"));
+        assert!(!batch_rejected("Jev returned HTTP 401 Unauthorized"));
+        assert!(!batch_rejected("Jev request failed: timed out"));
     }
 }
