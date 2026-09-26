@@ -2,6 +2,26 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.1.2] - 2026-09-26
+
+Spacron 5.1.2 is about not leaving you guessing. Errors now say what went wrong in plain words and what to do next, with the raw output kept one click away. Notifications now reach Windows whenever Spacron is out of focus, and in development builds too, where Windows had been silently dropping every one. The usage panel and the inbox drop their gradients for the app's own plain surface colours.
+
+### Added
+
+- **Errors that tell you what to do** — every error and warning toast, and every failed agent-CLI update in the inbox, now goes through one shared explainer. It recognises the common failures: a file locked by a running program, access denied, a full disk, a missing program, being offline, timeouts, refused connections, a port already in use, rejected sign-ins or API keys, rate and usage limits, provider outages, git refusals (not a repository, a rejected push, conflicts, uncommitted changes, a stale `index.lock`) and Docker not running. For each, it leads with a one-sentence summary and a next step, and keeps npm's or git's raw output behind **Show details**. The failed Codex update that prompted this now reads "Codex CLI couldn't be updated because it's still running. Close every terminal or pane running Codex CLI, then click Try again." instead of six lines of `npm error` about `EBUSY` and `copyfile`. A message that is already a plain sentence keeps its wording and only gains the next step, so the app's existing copy is not rewritten. Opening the details stops the toast from auto-dismissing while you read.
+
+### Changed
+
+- **Every notification reaches the OS while you are away** — only 15 of the app's 341 toasts ever asked for a system notification, so most of them, errors included, vanished unseen while another app had focus. Whenever Spacron is hidden or out of focus, every toast is now mirrored to the OS, including its next step. While you are looking at Spacron nothing changes. Agent mailbox cards (questions and handoffs addressed to you) now raise a system notification too, across every project and once per card; before, only completions did. Agent status reports lost their own separate OS call so they do not notify twice.
+- **Usage panel in the app's colours** — the usage meters, the Stats page breakdown bars, the panel's accent wash, its header tile and its account cards drop their gradients for solid accent fills and the shared `--bg-secondary` / `--bg-tertiary` surfaces. The header's speedometer icon is replaced by two small capacity bars that echo the meters below it.
+- **Inbox in the app's colours** — the inbox panel, its header icon and its unread and opened cards drop their white sheen gradients and hard-coded white overlays for the same frosted surface, border and hover tokens as the command palette and dropdowns, which also makes them follow light themes properly.
+
+### Fixed
+
+- **Windows notifications in development builds** — toasts were always raised under the app's installed AppUserModelID, which only the installer registers. Windows silently drops a toast for an unregistered ID (the call still reports success), so a build run from `target\` (`npm run dev:app`, a local release build) never showed a single system notification. Those builds now borrow PowerShell's registered ID, the same rule tauri-plugin-notification applies; installed builds are unchanged. macOS and Linux already went through the plugin and were not affected.
+- **CI** — Rust tests that failed on macOS because its temp directory is a symlink now compare canonical paths; a clippy `empty-line-after-doc-comment` in usage stats and an `embeddedCommand` test that failed on Node 20 are fixed.
+- **Website** — the download page offers the Windows ARM64 installer, and the website's dev-server logs are no longer tracked.
+
 ## [v5.1.1] - 2026-09-25
 
 Spacron 5.1.1 gives the chat hands and eyes, makes agents easier to trust at a glance, and brings Spacron to Windows on ARM. The chat can now read and, with your permission, operate other apps' windows, drive its own browser, see images when its model can, and call tools on your own MCP servers. Each of those is behind a per-window or per-tool permission, and anything they bring back is treated as untrusted. The Agent Fleet now reports whether each agent is idle or working from real turn events instead of guessing, and the false "needs your input" alarms are gone. Agent CLIs can be updated with one click. Vercel AI Gateway joins as a single key for chat, dictation, media and voice. Under the hood, a security pass tightened the local preview server, the remote-workspace server and document saving, and the release pipeline now builds a native Windows ARM64 installer.
