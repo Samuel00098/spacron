@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from 'react';
 import { useStore } from '$lib/react/useStore';
-import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
@@ -50,20 +49,15 @@ export default function UsageCounter() {
   const { providers, loading } = useStore(usageState);
   const panelOpen = useStore(isUsagePanelOpen);
 
-  const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const showDock = Boolean(workspaceId);
-
-  // One owner for the schedule. Idempotent, so mounting twice is harmless, and
-  // gated on the dock being live so a workspace-less window doesn't spend the
-  // user's quota checking on their quota.
+  // One owner for the schedule. Idempotent, so mounting twice is harmless.
+  // Not gated on a workspace: usage belongs to the signed-in agent accounts,
+  // not to a project, and it is worth seeing before one is open.
   useEffect(() => {
-    if (showDock) startUsagePolling();
-  }, [showDock]);
+    startUsagePolling();
+  }, []);
 
   const headlines = useMemo(() => providerHeadlines(providers), [providers]);
   const peak = useMemo(() => peakWindow(providers), [providers]);
-
-  if (!showDock) return null;
 
   const severity = peak ? severityOf(peak.window.usedPercent) : 'none';
   const shown = headlines.slice(0, MAX_AGENTS);
