@@ -1987,6 +1987,22 @@
   flex: 0 1 152px;
   min-width: 132px;
 }
+.app-shell .chat-mode-reasoning-dropdown .reasoning-slider-trigger {
+  border-color: var(--input-border, var(--border));
+  color: var(--text-secondary);
+}
+.app-shell .chat-mode-reasoning-dropdown .reasoning-slider-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+  color: var(--text-primary);
+}
+.app-shell .chat-mode-reasoning-dropdown .reasoning-slider-popover {
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+}
+:root.light-theme .app-shell .chat-mode-reasoning-dropdown .reasoning-slider-popover {
+  background: var(--major-panel-surface);
+}
 .app-shell .chat-mode-work-dropdown { flex: 0 1 100px; min-width: 85px; }
 .app-shell .chat-mode-file-mentions {
   position: absolute;
@@ -2118,9 +2134,9 @@
   display: grid;
   grid-template-columns: minmax(128px, 0.78fr) minmax(180px, 1.45fr);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 13px;
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.98);
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
   color: var(--text-primary);
   box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(18px);
@@ -2130,6 +2146,9 @@
   animation: chat-agent-model-pop 0.13s ease;
   mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
+}
+:root.light-theme .chat-agent-model-menu {
+  background: var(--major-panel-surface);
 }
 .chat-agent-model-menu.drop-up {
   transform-origin: bottom;
@@ -2235,8 +2254,11 @@
   text-align: left;
   cursor: pointer;
 }
-.chat-agent-model-menu button:hover,
-.chat-agent-model-menu button.active { background: var(--bg-hover); color: var(--text-primary); }
+.chat-agent-model-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.chat-agent-model-menu button.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-primary));
+  color: var(--text-primary);
+}
 .chat-agent-model-menu button > span:not(.chat-agent-model-mark) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-agent-model-menu button > svg { width: 12px; height: 12px; flex: 0 0 12px; fill: none; stroke: currentColor; stroke-width: 2.4; opacity: 0.65; }
 .chat-agent-model-menu .chat-agent-model-mark { display: inline-flex; width: 17px; height: 17px; flex: 0 0 17px; }
