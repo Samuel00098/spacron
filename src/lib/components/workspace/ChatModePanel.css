@@ -2140,6 +2140,9 @@
 .chat-agent-model-models-pane {
   min-height: 0;
   overflow-y: auto;
+  /* The provider and model lists never bounce past their ends: `none` (not
+     `contain`) also stops the webview's elastic overscroll. */
+  overscroll-behavior: none;
   padding: 6px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;

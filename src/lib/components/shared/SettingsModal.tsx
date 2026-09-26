@@ -365,26 +365,33 @@ function StyledSelect<T extends string>({
     const rect = trigger.getBoundingClientRect();
     
     const relativeTop = rect.bottom - modalRect.top;
-    const relativeLeft = rect.left - modalRect.left;
-    
+    // The trigger sizes to its value and sits at the right of its row, so the
+    // panel hangs from the trigger's right edge and may grow leftwards to fit
+    // its longest option — never narrower than the trigger, never past the modal.
+    const relativeRight = modalRect.right - rect.right;
+    const horizontal = {
+      right: relativeRight,
+      width: 'max-content',
+      minWidth: rect.width,
+      maxWidth: Math.min(420, rect.right - modalRect.left - 12),
+    } as const;
+
     const spaceBelow = modalRect.bottom - rect.bottom;
     const spaceAbove = rect.top - modalRect.top;
     const openDown = spaceBelow >= 200 || spaceBelow >= spaceAbove;
-    
+
     if (openDown) {
       setPanelStyle({
         position: 'absolute',
         top: relativeTop + 6,
-        left: relativeLeft,
-        width: rect.width,
+        ...horizontal,
         maxHeight: Math.min(240, spaceBelow - 12),
       });
     } else {
       setPanelStyle({
         position: 'absolute',
         bottom: modalRect.height - (rect.top - modalRect.top) + 6,
-        left: relativeLeft,
-        width: rect.width,
+        ...horizontal,
         maxHeight: Math.min(240, spaceAbove - 12),
       });
     }
