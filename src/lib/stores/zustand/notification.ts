@@ -25,7 +25,8 @@ interface NotificationState {
     type?: Toast['type'],
     duration?: number,
     notifySystem?: boolean,
-    action?: { label: string; onClick: () => void }
+    action?: { label: string; onClick: () => void },
+    explained?: { hint?: string; details?: string }
   ) => void;
   dismissToast: (id: string) => void;
   /** Stop a toast from auto-dismissing, e.g. while its details are open. */
@@ -144,14 +145,17 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
     type: Toast['type'] = 'info',
     duration?: number,
     notifySystem = false,
-    action?: { label: string; onClick: () => void }
+    action?: { label: string; onClick: () => void },
+    explained?: { hint?: string; details?: string }
   ) => {
     // Errors and warnings are often raw output (npm, git, OS codes). Every one
     // goes through the explainer so the toast leads with what happened and
     // what to do, and the raw text waits behind "Show details".
-    let hint: string | undefined;
-    let details: string | undefined;
-    if (type === 'error' || type === 'warning') {
+    // A caller that already wrote the summary and next step passes them in
+    // `explained`; anything else is run through the explainer.
+    let hint = explained?.hint;
+    let details = explained?.details;
+    if (!explained && (type === 'error' || type === 'warning')) {
       const explained = explainError(message);
       message = explained.summary;
       hint = explained.nextStep;

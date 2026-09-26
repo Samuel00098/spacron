@@ -16,9 +16,10 @@ export function showToast(
   type: Toast['type'] = 'info',
   duration?: number,
   notifySystem = false,
-  action?: { label: string; onClick: () => void }
+  action?: { label: string; onClick: () => void },
+  explained?: { hint?: string; details?: string }
 ) {
-  useNotificationStore.getState().showToast(message, type, duration, notifySystem, action);
+  useNotificationStore.getState().showToast(message, type, duration, notifySystem, action, explained);
 }
 
 export function dismissToast(id: string) {

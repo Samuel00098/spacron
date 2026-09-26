@@ -396,6 +396,73 @@ pub(crate) fn account_changed() {
     reset_warm();
 }
 
+/// The Codex CLI is about to be replaced. The warm app server runs the
+/// installed `codex.exe`, and on Windows a running exe keeps its files locked,
+/// so npm would fail with EBUSY. Dropping it kills it; the next brain request
+/// starts a fresh one on the new version.
+pub(crate) fn release_for_update() {
+    reset_warm();
+}
+
+const DAEMON_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Bring Codex's managed app-server daemon up to `target` after the CLI was
+/// updated. The daemon is a second copy of Codex under
+/// `~/.codex/packages/app-server-daemon`, installed and updated by Codex
+/// itself, not by npm, so an npm update leaves it on the old version and every
+/// session keeps running that one. Returns what changed, `None` when there is
+/// no daemon or it already matches, and an actionable error when it could not
+/// be brought up to date.
+pub(crate) async fn sync_daemon(target: &str) -> Result<Option<String>, String> {
+    let Some(home) = codex_home() else { return Ok(None) };
+    if !home.join("packages").join("app-server-daemon").join("current").exists() {
+        return Ok(None);
+    }
+    let before = daemon_version().await;
+    if before.as_deref() == Some(target) {
+        return Ok(None);
+    }
+
+    let mut update = codex_command(&["app-server", "daemon", "update"])?;
+    update.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let output = tokio::time::timeout(DAEMON_TIMEOUT, update.output()).await;
+    let after = daemon_version().await;
+    if after.as_deref() == Some(target) {
+        return Ok(Some(format!("Codex's background daemon was updated to {target} as well.")));
+    }
+
+    let said = match output {
+        Ok(Ok(out)) => {
+            let text = format!("{}\n{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
+            text.lines().map(str::trim).filter(|l| !l.is_empty()).take(4).collect::<Vec<_>>().join("\n")
+        }
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => "the daemon update took longer than 10 minutes".to_string(),
+    };
+    let still = after.or(before).unwrap_or_else(|| "an older version".to_string());
+    // Three parts, one per line: what happened, what to do, Codex's own words.
+    Err(format!(
+        "Codex CLI is on {target}, but its background daemon is still on {still}.\n\
+         Close every Codex session, then run `codex app-server daemon update` in a terminal.\n{said}"
+    ))
+}
+
+/// The version the managed daemon would run, from
+/// `codex app-server daemon version` (JSON; `managedCodexVersion`).
+async fn daemon_version() -> Option<String> {
+    let mut cmd = codex_command(&["app-server", "daemon", "version"]).ok()?;
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(30), cmd.output()).await.ok()?.ok()?;
+    parse_daemon_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_daemon_version(text: &str) -> Option<String> {
+    text.lines().rev().find_map(|line| {
+        let value: Value = serde_json::from_str(line.trim()).ok()?;
+        value.get("managedCodexVersion")?.as_str().map(str::to_string)
+    })
+}
+
 /// Streams the reply's visible text as Codex produces it.
 pub type OnDelta<'a> = Option<&'a (dyn Fn(&str) + Send + Sync)>;
 
@@ -841,6 +908,13 @@ mod tests {
         let again = complete(DEFAULT_MODEL, "Reply with JSON only: {\"reply\": string}.", "What is 3+3?", &[], None, None).await.expect("warm completion");
         println!("warm reply in {:?}: {again}", started.elapsed());
         assert!(again.contains('6'));
+    }
+
+    #[test]
+    fn daemon_version_reads_codex_json() {
+        let running = r#"{"status":"running","backend":"pid","managedCodexVersion":"0.157.0","cliVersion":"0.157.1","appServerVersion":"0.157.0"}"#;
+        assert_eq!(parse_daemon_version(running).as_deref(), Some("0.157.0"));
+        assert_eq!(parse_daemon_version("Error: failed to connect"), None);
     }
 
     #[test]

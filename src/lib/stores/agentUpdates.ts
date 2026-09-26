@@ -238,8 +238,18 @@ export async function installAgentUpdate(command: string): Promise<void> {
 
   agentUpdates.update((s) => ({ ...s, updating: [...s.updating, command] }));
   try {
-    const result = await invoke<{ package: string; from: string; to: string }>('agent_update_install', { command });
-    showToast(`${name} updated to ${result.to}.`, 'success', 5000, true);
+    const result = await invoke<{ package: string; from: string; to: string; warning?: string }>(
+      'agent_update_install',
+      { command },
+    );
+    if (result.warning) {
+      // The CLI moved but a companion (Codex's daemon) did not: say so, and
+      // keep the toast up until it is read, since sessions still run the old one.
+      const [summary, hint, ...raw] = result.warning.split('\n');
+      showToast(summary, 'warning', 0, true, undefined, { hint, details: raw.join('\n') || undefined });
+    } else {
+      showToast(`${name} updated to ${result.to}.`, 'success', 5000, true);
+    }
     agentUpdateNotices.update((n) => ({
       ...n,
       failures: n.failures.filter((f) => f.command !== command),

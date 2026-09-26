@@ -447,6 +447,10 @@ pub struct AgentUpdateResult {
     pub package: String,
     pub from: String,
     pub to: String,
+    /// Something the user should know about a successful update, such as a
+    /// companion process that could not be brought along.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 struct InFlightGuard(String);
@@ -551,6 +555,7 @@ async fn install_native(native: NativeInstall, target: String) -> Result<AgentUp
             package: native.updater.package.to_string(),
             from: native.version,
             to: now.unwrap_or(target),
+            warning: None,
         });
     }
     let said = format!(
@@ -567,10 +572,104 @@ async fn install_native(native: NativeInstall, target: String) -> Result<AgentUp
     Err(message)
 }
 
+/// A CLI that runs a long-lived daemon of its own. The daemon is the same
+/// installed binary, so while it runs it keeps serving the old version and, on
+/// Windows, keeps the files locked, which fails `npm install` with EBUSY.
+/// Stopped before the update and started again after it.
+///
+/// Codex is not here: its daemon is a separate, self-managed copy with its own
+/// updater, handled by `chatgpt::sync_daemon`.
+struct CompanionDaemon {
+    command: &'static str,
+    status: &'static [&'static str],
+    /// Printed by `status` when no daemon is running.
+    not_running: &'static str,
+    stop: &'static [&'static str],
+    start: &'static [&'static str],
+}
+
+/// Checked 2026-09-26 with kilo 7.7.9: `daemon start` detaches and returns,
+/// `daemon status` prints `version: <v>` while running and
+/// `kilo daemon not running` otherwise.
+const COMPANION_DAEMONS: &[CompanionDaemon] = &[CompanionDaemon {
+    command: "kilo",
+    status: &["daemon", "status"],
+    not_running: "not running",
+    stop: &["daemon", "stop"],
+    start: &["daemon", "start"],
+}];
+
+const DAEMON_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The npm shim for `command` under `prefix`, as a runnable command: on
+/// Windows the `.cmd` must go through `cmd.exe` (see windows-pathext-shims).
+fn npm_shim_command(prefix: &Path, command: &str, args: &[&str]) -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        let shim = prefix.join(format!("{command}.cmd"));
+        let mut cmd = hidden_command(Path::new("cmd.exe"));
+        // Every argument is compile-time fixed; `/S` plus one outer pair of
+        // quotes keeps a prefix with spaces intact.
+        cmd.raw_arg(format!("/D /S /C \"\"{}\" {}\"", shim.display(), args.join(" ")));
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = hidden_command(&prefix.join("bin").join(command));
+        cmd.args(args);
+        cmd
+    }
+}
+
+async fn run_daemon_call(prefix: &Path, command: &str, args: &[&str]) -> Option<String> {
+    let mut cmd = npm_shim_command(prefix, command, args);
+    let out = tokio::time::timeout(DAEMON_CALL_TIMEOUT, cmd.output()).await.ok()?.ok()?;
+    Some(format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+/// Stop the CLI's daemon if one is running. True when it was running, so the
+/// caller starts it again after the update.
+async fn stop_companion_daemon(prefix: &Path, command: &str) -> bool {
+    let Some(daemon) = COMPANION_DAEMONS.iter().find(|d| d.command == command) else { return false };
+    let Some(status) = run_daemon_call(prefix, command, daemon.status).await else { return false };
+    if status.contains(daemon.not_running) {
+        return false;
+    }
+    run_daemon_call(prefix, command, daemon.stop).await;
+    true
+}
+
+/// Start the daemon again and confirm it came back on `target`. A warning for
+/// the user when it did not.
+async fn restart_companion_daemon(prefix: &Path, command: &str, target: &str) -> Option<String> {
+    let daemon = COMPANION_DAEMONS.iter().find(|d| d.command == command)?;
+    run_daemon_call(prefix, command, daemon.start).await;
+    let status = run_daemon_call(prefix, command, daemon.status).await.unwrap_or_default();
+    let fix = format!("Run `{command} {}` in a terminal.", daemon.start.join(" "));
+    if status.contains(daemon.not_running) || status.trim().is_empty() {
+        return Some(format!("{command} was updated to {target}, but its background daemon did not start again.\n{fix}"));
+    }
+    let running = status.lines().find_map(|l| l.trim().strip_prefix("version:").map(|v| v.trim().to_string()));
+    match running {
+        Some(v) if v != target => Some(format!(
+            "{command} was updated to {target}, but its background daemon is still on {v}.\nRun `{command} {}` then `{command} {}` in a terminal.",
+            daemon.stop.join(" "),
+            daemon.start.join(" ")
+        )),
+        _ => None,
+    }
+}
+
 async fn install_npm(command: &str, install: NpmInstall, target: String) -> Result<AgentUpdateResult, String> {
     if command == "dsh" {
         crate::commands::deepseek_harness::shutdown_all();
     }
+    // Spacron's own ChatGPT brain runs this codex.exe and would hold it locked.
+    if command == "codex" {
+        crate::commands::chatgpt::release_for_update();
+    }
+
+    let restart_daemon = stop_companion_daemon(&install.prefix, command).await;
 
     let (program, lead) = npm_invocation()?;
     let mut cmd = hidden_command(&program);
@@ -581,6 +680,10 @@ async fn install_npm(command: &str, install: NpmInstall, target: String) -> Resu
     let output = run_hidden(cmd, "npm").await?;
 
     if !output.status.success() {
+        // Put the daemon back as it was: a failed update must not leave it off.
+        if restart_daemon {
+            restart_companion_daemon(&install.prefix, command, &install.version).await;
+        }
         return Err(npm_failure(&output.stderr, &output.stdout));
     }
 
@@ -593,15 +696,24 @@ async fn install_npm(command: &str, install: NpmInstall, target: String) -> Resu
         .flatten()
         .map(|i| i.version);
     match now {
-        Some(version) if version == target => Ok(AgentUpdateResult {
-            package: install.package,
-            from: install.version,
-            to: target,
-        }),
-        Some(version) => Err(format!(
-            "npm finished, but {} is still at {version} instead of {target}.",
-            install.package
-        )),
+        Some(version) if version == target => {
+            // Codex keeps a second, self-managed copy of itself running as a
+            // daemon that npm does not touch; bring it along.
+            let warning = if command == "codex" {
+                crate::commands::chatgpt::sync_daemon(&target).await.err()
+            } else if restart_daemon {
+                restart_companion_daemon(&install.prefix, command, &target).await
+            } else {
+                None
+            };
+            Ok(AgentUpdateResult { package: install.package, from: install.version, to: target, warning })
+        }
+        Some(version) => {
+            if restart_daemon {
+                restart_companion_daemon(&install.prefix, command, &version).await;
+            }
+            Err(format!("npm finished, but {} is still at {version} instead of {target}.", install.package))
+        }
         None => Err(format!("npm finished, but {} is no longer found on PATH.", install.package)),
     }
 }
