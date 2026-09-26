@@ -39,7 +39,7 @@ import {
 } from '$lib/stores/chatThreads';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
-import { layoutSnapshot, requestRoomControl, type RoomOp } from '$lib/stores/layoutControl';
+import { hoveredStageRoom, layoutSnapshot, requestRoomControl, type RoomOp } from '$lib/stores/layoutControl';
 import { isFullscreenRoom } from '$lib/components/layout/fullscreenRooms';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
@@ -327,6 +327,7 @@ export default function ProjectHUD() {
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
   const currentLayout = useStore(layoutSnapshot);
+  const hoveredRoom = useStore(hoveredStageRoom);
   const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allChatThreads = useStore(chatThreadState);
   const currentInteractionMode = useStore(interactionMode);
@@ -783,11 +784,11 @@ export default function ProjectHUD() {
     ) => {
       const roomState = projectId === activeProjId ? currentLayout.rooms.find((item) => item.id === room) : null;
       const minimized = roomState?.minimized ?? false;
-      const focused = roomState?.focused ?? false;
+      const hovered = projectId === activeProjId && hoveredRoom === room;
       const expanded = projectId === activeProjId && currentLayout.expandedRoom === room;
       const minimizeOp: RoomOp = minimized ? 'restore' : 'minimize';
       return (
-        <div key={key} className={`project-process-entry${focused ? ' is-focused-room' : ''}`}>
+        <div key={key} className={`project-process-entry${hovered ? ' is-hovered-room' : ''}`}>
           <button
             type="button"
             className="project-process-row"

@@ -65,6 +65,8 @@ export interface LayoutSnapshot {
 
 export const layoutControlCommand = writable<LayoutCommand | null>(null);
 export const layoutSnapshot = writable<LayoutSnapshot>({ ambient: 'focus', rooms: [], splitSlots: [] });
+// Pointer location is transient UI state, separate from the saved room arrangement.
+export const hoveredStageRoom = writable<string | null>(null);
 
 /** The room the shell currently treats as active, or null when there isn't one. */
 export function focusedRoomOf(snapshot: LayoutSnapshot): string | null {

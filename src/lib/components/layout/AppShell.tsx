@@ -125,7 +125,7 @@ import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
 import type { TerminalSessionInfo } from '$lib/stores/terminal';
 import type { RightDrawerTool } from '$lib/stores/layout';
-import { layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
+import { hoveredStageRoom, layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 // openDailyNote removed
@@ -610,6 +610,10 @@ export default function AppShell() {
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
+  useEffect(() => {
+    hoveredStageRoom.set(null);
+    return () => hoveredStageRoom.set(null);
+  }, [activeProjectIdValue]);
   const shellProjectStates = useStore(projectTerminalStates);
   const devShellProjectStates = useStore(devProjectTerminalStates);
   // Every project that gets a (possibly parked) terminal panel: the open ones,
@@ -3068,6 +3072,8 @@ export default function AppShell() {
         // `.spacron/memory/terminal-pane-lifetime.md`.
         onMouseDownCapture={() => { lastInteractedRoomRef.current = id; }}
         onFocusCapture={() => { lastInteractedRoomRef.current = id; }}
+        onPointerEnter={() => hoveredStageRoom.set(id)}
+        onPointerLeave={() => hoveredStageRoom.update((current) => current === id ? null : current)}
       >
         <header
           className="room-header"
