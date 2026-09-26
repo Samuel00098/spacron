@@ -120,7 +120,7 @@
 .settings-search-wrap {
   position: relative;
   flex: 1 1 320px;
-  max-width: 420px;
+  max-width: 560px;
   margin-left: auto;
 }
 
@@ -270,7 +270,7 @@
 /* ── Body layout ── */
 .settings-body {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -339,7 +339,7 @@
 .settings-panel {
   min-width: 0;
   min-height: 0;
-  padding: 28px;
+  padding: 32px 40px;
   overflow-y: auto;
   overscroll-behavior: none;
   /* Transparent so the modal's frosted-glass surface reads across the content. */
@@ -365,7 +365,7 @@
 
 /* ── Section Cards ── */
 .settings-card {
-  max-width: 760px;
+  max-width: none;
   margin: 0 0 24px;
   /* No drawn edge — the card is defined by its 3D rim instead. */
   border: 1px solid transparent;
@@ -402,11 +402,11 @@
 /* ── Control rows ── */
 .settings-control-row {
   display: grid;
-  grid-template-columns: minmax(180px, 270px) minmax(240px, 1fr);
-  gap: 28px;
+  grid-template-columns: minmax(220px, 2fr) minmax(280px, 3fr);
+  gap: 40px;
   align-items: center;
   min-height: 70px;
-  padding: 18px 22px;
+  padding: 20px 28px;
   border-bottom: 1px solid var(--hairline);
   transition: background-color var(--dur-fast) var(--ease-out);
 }
@@ -531,7 +531,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  max-width: 760px;
+  max-width: none;
   padding: 14px 18px 18px;
 }
 
@@ -780,7 +780,7 @@ details.settings-github-note pre {
 
 .shortcut-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(128px, 154px);
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 200px);
   gap: 12px;
   align-items: center;
 }
@@ -807,7 +807,7 @@ details.settings-github-note pre {
 /* ── About Tab ── */
 .settings-about-grid {
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 160px 1fr;
   gap: 10px 20px;
   padding: 18px;
 }

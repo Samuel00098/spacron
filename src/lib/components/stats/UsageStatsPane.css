@@ -2,7 +2,7 @@
    Composes with the global settings classes (.settings-card, .shell-hint…). */
 
 .usage-stats {
-  max-width: 760px;
+  max-width: none;
 }
 
 /* ── Toolbar ── */
