@@ -1008,11 +1008,25 @@
   opacity: 1;
 }
 
+.project-process-entry {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 5px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.project-process-entry:hover,
+.project-process-entry:focus-within {
+  background: var(--bg-hover);
+}
+
 .project-process-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 1 1 auto;
+  width: 0;
   padding: 3px 5px;
   border: none;
   border-radius: 5px;
@@ -1026,14 +1040,47 @@
 }
 
 .project-process-row:hover {
+  color: var(--text-primary);
+}
+
+.project-process-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding-right: 3px;
+}
+
+.project-process-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.project-process-action:hover,
+.project-process-action:focus-visible {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.project-process-action.danger:hover,
+.project-process-action.danger:focus-visible {
+  color: var(--error, #ef4444);
 }
 
 .project-process-name {
   font-weight: 600;
   white-space: nowrap;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* The row leads with WHAT is running — an agent's own CLI logo, or the glyph the

@@ -39,7 +39,7 @@ import {
 } from '$lib/stores/chatThreads';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
-import { requestRoomControl } from '$lib/stores/layoutControl';
+import { layoutSnapshot, requestRoomControl, type RoomOp } from '$lib/stores/layoutControl';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
@@ -325,6 +325,7 @@ export default function ProjectHUD() {
   const crossProjectSessions = useStore(allProjectSessions);
   const liveOrchestratorTasks = useStore(orchestratorTasks);
   const openRoomsByProject = useStore(projectOpenRooms);
+  const currentLayout = useStore(layoutSnapshot);
   const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allChatThreads = useStore(chatThreadState);
   const currentInteractionMode = useStore(interactionMode);
@@ -612,7 +613,7 @@ export default function ProjectHUD() {
   // Room jump
   const pendingFocusRef = useRef<(() => void) | null>(null);
 
-  function focusRoomAfterSwitch(room: string) {
+  function controlRoomAfterSwitch(room: string, op: RoomOp, projectId: string) {
     pendingFocusRef.current?.();
 
     let settled = false;
@@ -631,7 +632,8 @@ export default function ProjectHUD() {
       if (settled) return;
       settled = true;
       cancel();
-      requestRoomControl('focus', room);
+      if (useWorkspaceStore.getState().activeProjectId !== projectId) return;
+      requestRoomControl(op, room);
     }
 
     pendingFocusRef.current = cancel;
@@ -646,14 +648,20 @@ export default function ProjectHUD() {
 
   useEffect(() => () => pendingFocusRef.current?.(), []);
 
-  async function openRoom(wsId: string, path: string, room: string) {
+  async function openRoom(wsId: string, path: string, room: string, op: RoomOp = 'focus') {
     const projectId = projectIdByPath.get(path);
-    if (projectId && activeProjId === projectId) {
-      requestRoomControl('focus', room);
+    if (!projectId) return;
+    if (activeProjId === projectId) {
+      requestRoomControl(op, room);
       return;
     }
-    focusRoomAfterSwitch(room);
-    await handleOpen(wsId, path);
+    controlRoomAfterSwitch(room, op, projectId);
+    try {
+      await handleOpen(wsId, path);
+    } catch (error) {
+      pendingFocusRef.current?.();
+      throw error;
+    }
   }
 
   async function openChatThread(
@@ -762,6 +770,53 @@ export default function ProjectHUD() {
 
     const projectMenuKey = `proj-menu:${p.workspaceId}:${p.path}`;
     const showOptionsMenu = activeMenuKey === projectMenuKey;
+
+    const renderOpenRoomRow = (
+      room: string,
+      label: string,
+      icon: ReactNode,
+      detail?: string | null,
+      hover = `${label}: open`,
+      key = room,
+      busy = false,
+    ) => {
+      const minimized = projectId === activeProjId && currentLayout.rooms.some((item) => item.id === room && item.minimized);
+      const minimizeOp: RoomOp = minimized ? 'restore' : 'minimize';
+      return (
+        <div key={key} className="project-process-entry">
+          <button
+            type="button"
+            className="project-process-row"
+            onClick={() => openRoom(p.workspaceId, p.path, room).catch(console.error)}
+            title={hover}
+          >
+            <span className={`project-process-icon${busy ? ' busy' : ''}`} aria-hidden="true">{icon}</span>
+            <span className="project-process-name">{label}</span>
+            {detail && <span className="project-process-detail">{detail}</span>}
+          </button>
+          <div className="project-process-actions">
+            <button
+              type="button"
+              className="project-process-action"
+              onClick={() => openRoom(p.workspaceId, p.path, room, minimizeOp).catch(console.error)}
+              title={`${minimized ? 'Restore' : 'Minimize'} ${label}`}
+              aria-label={`${minimized ? 'Restore' : 'Minimize'} ${label}`}
+            >
+              <Glyph>{minimized ? <path d="M5 8h14M5 16h14" /> : <path d="M5 12h14" />}</Glyph>
+            </button>
+            <button
+              type="button"
+              className="project-process-action danger"
+              onClick={() => openRoom(p.workspaceId, p.path, room, 'close').catch(console.error)}
+              title={`Close ${label}`}
+              aria-label={`Close ${label}`}
+            >
+              <Glyph><path d="M5 5l14 14M19 5L5 19" /></Glyph>
+            </button>
+          </div>
+        </div>
+      );
+    };
 
     return (
       <div key={`${p.workspaceId}-${p.path}`} className="project-sidebar-entry">
@@ -1137,70 +1192,25 @@ export default function ProjectHUD() {
                 {/* Covers both senses: a panel that is open, and a process
                     that is actually running inside one. */}
                 <div className="project-contents-label">Active</div>
-                {previewIsRunning && (
-                  <button
-                    type="button"
-                    className="project-process-row"
-                    onClick={() => openRoom(p.workspaceId, p.path, 'preview').catch(console.error)}
-                    title="Preview: running"
-                  >
-                    <span className="project-process-icon" aria-hidden="true">
-                      {ROOM_GLYPHS.preview}
-                    </span>
-                    <span className="project-process-name">Preview</span>
-                    <span className="project-process-detail">active</span>
-                  </button>
-                )}
-                {editorIsRunning && (
-                  <button
-                    type="button"
-                    className="project-process-row"
-                    onClick={() => openRoom(p.workspaceId, p.path, 'editor').catch(console.error)}
-                    title="Editor: open"
-                  >
-                    <span className="project-process-icon" aria-hidden="true">
-                      {ROOM_GLYPHS.editor}
-                    </span>
-                    <span className="project-process-name">Editor</span>
-                  </button>
-                )}
+                {previewIsRunning && renderOpenRoomRow('preview', 'Preview', ROOM_GLYPHS.preview, 'active', 'Preview: running')}
+                {editorIsRunning && renderOpenRoomRow('editor', 'Editor', ROOM_GLYPHS.editor)}
                 {deepSeekIsRunning && p.path && (() => {
                   // Listed like an agent: its assistant name, the product beside it.
                   const dsRoot = deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path);
                   const isolated = dsRoot !== p.path;
                   const name = deepSeekAgentName(dsRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
-                  return (
-                    <button
-                      type="button"
-                      className="project-process-row"
-                      onClick={() => openRoom(p.workspaceId, p.path, 'deepseek').catch(console.error)}
-                      title={`${name}: DeepSeek Harness, running`}
-                    >
-                      <span className="project-process-icon" aria-hidden="true">
-                        <AgentBrandMark command="dsh" name="DeepSeek Harness" />
-                      </span>
-                      <span className="project-process-name">{name}</span>
-                      <span className="project-process-detail">{isolated ? 'DeepSeek Harness · worktree' : 'DeepSeek Harness'}</span>
-                    </button>
+                  return renderOpenRoomRow(
+                    'deepseek', name, <AgentBrandMark command="dsh" name="DeepSeek Harness" />,
+                    isolated ? 'DeepSeek Harness · worktree' : 'DeepSeek Harness',
+                    `${name}: DeepSeek Harness, running`,
                   );
                 })()}
                 {/* Every other open room. The list is the project's one answer to
                     "what is open here?" now that the Rooms chips are gone. */}
                 {projectRooms
                   .filter((room) => !coveredRooms.has(room))
-                  .map((room) => (
-                    <button
-                      key={room}
-                      type="button"
-                      className="project-process-row"
-                      onClick={() => openRoom(p.workspaceId, p.path, room).catch(console.error)}
-                      title={`${TOOL_ROW_LABELS[room] ?? room}: open`}
-                    >
-                      <span className="project-process-icon" aria-hidden="true">
-                        {ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH}
-                      </span>
-                      <span className="project-process-name">{TOOL_ROW_LABELS[room] ?? room}</span>
-                    </button>
+                  .map((room) => renderOpenRoomRow(
+                    room, TOOL_ROW_LABELS[room] ?? room, ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH,
                   ))}
                 {projectSessions.map((session) => {
                   const isAgent = isAgentSession(session);
@@ -1214,28 +1224,10 @@ export default function ProjectHUD() {
                   const hover = [name, agentType, task && task !== name ? task : null, state]
                     .filter(Boolean)
                     .join(': ');
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className="project-process-row"
-                      onClick={() =>
-                        openRoom(p.workspaceId, p.path, isAgent ? `agent:${session.id}` : 'terminal').catch(
-                          console.error
-                        )
-                      }
-                      title={hover}
-                    >
-                      <span className={`project-process-icon${session.isExecuting ? ' busy' : ''}`} aria-hidden="true">
-                        {isAgent ? (
-                          <AgentBrandMark command={session.agentPreset} name={name} />
-                        ) : (
-                          ROOM_GLYPHS.terminal
-                        )}
-                      </span>
-                      <span className="project-process-name">{name}</span>
-                      {detail && detail !== name && <span className="project-process-detail">{detail}</span>}
-                    </button>
+                  return renderOpenRoomRow(
+                    isAgent ? `agent:${session.id}` : 'terminal', name,
+                    isAgent ? <AgentBrandMark command={session.agentPreset} name={name} /> : ROOM_GLYPHS.terminal,
+                    detail !== name ? detail : null, hover, String(session.id), session.isExecuting,
                   );
                 })}
               </div>
