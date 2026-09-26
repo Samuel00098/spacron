@@ -48,10 +48,11 @@
   color: var(--text-primary);
 }
 
+/* The active tab takes the app's surface tint (the same as hover and the
+   settings cards), not the editor's black; the accent underline marks it. */
 .editor-tabs .editor-tab.active {
-  background: rgba(var(--editor-bg-rgb, 24, 24, 30), var(--frost-surface, 0.72));
+  background: var(--bg-hover);
   color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .editor-tabs .editor-tab.active::after {
