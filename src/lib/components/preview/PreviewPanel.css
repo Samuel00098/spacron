@@ -1657,3 +1657,29 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
+
+/* ── Dark, not black ──
+   The browser's chrome (tabs, address bar, console and device controls) takes
+   the panel's own dark colour; fields get the flat Settings outline. The page
+   being previewed is untouched. */
+.preview-panel :is(.preview-tab, .preview-address-row),
+.preview-panel[data-preview-theme-source='dark'] .browser-bar {
+  background: transparent;
+}
+.preview-panel .preview-tab.active {
+  background: var(--bg-hover);
+}
+.preview-panel :is(.address-bar, .port-input, .console-search, .console-actions button, .console-row-copy, .device-size-input, .device-bar-exit) {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.preview-panel :is(.console-actions button, .console-row-copy, .device-bar-exit):hover {
+  background: var(--bg-hover);
+}
+.preview-panel .action-btn.web-btn {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.preview-panel .action-btn.web-btn:hover {
+  background: var(--bg-hover);
+}

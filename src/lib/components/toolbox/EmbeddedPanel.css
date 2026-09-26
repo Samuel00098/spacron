@@ -444,3 +444,29 @@
     padding: 2px 6px;
   }
 }
+
+/* ── Dark, not black ──
+   Mode tabs, fields and command rows are the panel's own dark colour with the
+   flat outline (--surface-* tokens in global.css); the primary and warning
+   rows keep only their tint, laid over the panel instead of over black. */
+.embedded-panel :is(.mode-tabs, .field-grid input, .command-item) {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.embedded-panel .field-grid input:focus {
+  box-shadow: var(--surface-outline-active) !important;
+}
+.embedded-panel .command-item.primary {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.embedded-panel .command-item.warning,
+.embedded-panel .embedded-setup {
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+.embedded-panel :is(.icon-btn, .run-btn) {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.embedded-panel :is(.icon-btn, .run-btn):hover:not(:disabled) {
+  background: var(--bg-hover);
+}

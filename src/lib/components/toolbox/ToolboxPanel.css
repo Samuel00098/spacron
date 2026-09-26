@@ -497,3 +497,21 @@
     flex: none;
   }
 }
+
+/* ── Spacing & colour ──
+   The tabs snap to the strip's edge (scroll-snap-align: start), which ignores
+   padding unless scroll-padding says otherwise — so the first tab sat flush
+   against the edge. The extra bottom padding keeps the scrollbar off the tabs.
+   Inputs and output boxes are the panel's dark colour with the flat outline
+   (--surface-* tokens in global.css), not black wells. */
+.toolbox .toolbox-tabs {
+  scroll-padding-inline: 14px;
+  padding-bottom: 14px;
+}
+.toolbox :is(.textbox, .regex-regex-input, .convert-row .input-box, .epoch-results-raw) {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.toolbox :is(.textbox, .regex-regex-input, .convert-row .input-box):focus {
+  box-shadow: var(--surface-outline-active) !important;
+}
