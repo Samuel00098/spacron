@@ -249,6 +249,8 @@ export function toGatewayEvent(
 
 export async function startRealtimeVoiceSession(options: {
   provider?: RealtimeVoiceProvider;
+  /** A custom provider id to run an `'openai'` call through, instead of OpenAI. */
+  connection?: string;
   model: string;
   voice: string;
   instructions: string;
@@ -654,7 +656,7 @@ export async function startRealtimeVoiceSession(options: {
       const answerSdp = await invoke<string>(
         provider === 'openai' ? 'openai_realtime_connect' : 'openai_live_connect',
         provider === 'openai'
-          ? { offerSdp: localSdp, model, voice, instructions, tools: [ORCHESTRATOR_TOOL] }
+          ? { offerSdp: localSdp, model, voice, instructions, tools: [ORCHESTRATOR_TOOL], provider: options.connection ?? null }
           : { offerSdp: localSdp, model, voice, instructions },
       );
       if (ended) throw new Error('Voice session was cancelled.');

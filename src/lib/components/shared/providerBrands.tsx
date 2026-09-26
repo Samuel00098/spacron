@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react';
+import { get } from '$lib/stores/storeCompat';
+import { useStore } from '$lib/react/useStore';
+import { customProviders, customProviderIcons, knownProviderForUrl } from '$lib/stores/customProviders';
 import {
   fallbackAgentBrand,
   lookupAgentBrand,
@@ -83,9 +86,35 @@ function localMark(): AgentBrand {
   };
 }
 
+function imageMark(src: string): ReactNode {
+  return (
+    <img
+      className="provider-brand-image"
+      src={src}
+      alt=""
+      draggable={false}
+      style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain', borderRadius: '3px' }}
+    />
+  );
+}
+
+/**
+ * A custom provider's mark: the bundled logo of the service its address
+ * points at, else the site's own icon (fetched by the backend), else a letter.
+ */
+function customBrand(id: string, label: string): AgentBrand {
+  const provider = get(customProviders).find((p) => p.id === id);
+  const known = provider ? knownProviderForUrl(provider.baseUrl) : null;
+  if (known) return getProviderBrand(known, label);
+  const icon = get(customProviderIcons)[id];
+  if (icon) return { color: 'mono', mark: imageMark(icon) };
+  return fallbackAgentBrand(id, provider?.name ?? label);
+}
+
 /** Resolve a provider-specific mark without falling back to a lookalike. */
 export function getProviderBrand(id: string, label: string): AgentBrand {
   const key = id.trim().toLowerCase();
+  if (key.startsWith('custom-')) return customBrand(key, label);
   const asset = PROVIDER_ASSETS[key];
   if (asset) return { color: asset.color, mark: assetMark(asset.file, asset.color) };
   if (key === 'local') return localMark();
@@ -111,6 +140,9 @@ export function ProviderBrandMark({
   label: string | null | undefined;
   className?: string;
 }) {
+  // Subscribed so a custom provider's icon appears as soon as it arrives.
+  useStore(customProviders);
+  useStore(customProviderIcons);
   const brand = getProviderBrand(id ?? '', label ?? '');
   const color = brand.color === 'mono' ? 'var(--text-primary, #e8e8e8)' : brand.color;
   return (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { customProviders } from '$lib/stores/customProviders';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { marked } from 'marked';
@@ -758,7 +759,9 @@ export default function ChatModePanel() {
         : boundTask?.status === 'failed' || thread?.status === 'failed'
           ? 'failed'
           : 'idle';
-  const orchestratorProviders = useMemo(() => aiProviders.filter((entry) => entry.id !== 'local'), []);
+  // Custom providers join `aiProviders` when they load, so the list follows them.
+  const customList = useStore(customProviders);
+  const orchestratorProviders = useMemo(() => aiProviders.filter((entry) => entry.id !== 'local'), [customList]);
   const providerIds = useMemo(() => new Set(orchestratorProviders.map((entry) => entry.id)), [orchestratorProviders]);
   const selectedProvider = thread?.provider && providerIds.has(thread.provider as AiProviderId)
     ? thread.provider as AiProviderId
@@ -1388,6 +1391,7 @@ export default function ChatModePanel() {
     try {
       const session = await startRealtimeVoiceSession({
         provider,
+        connection: engineConfig.connection,
         model: get(engineConfig.model),
         voice: get(engineConfig.voice),
         instructions: REALTIME_VOICE_INSTRUCTIONS,

@@ -8,9 +8,11 @@
  * moves one provider to the front, and the model map overrides defaults.
  */
 import { invoke } from '@tauri-apps/api/core';
+// Type-only: `stores/settings.ts` imports this module, so a value import back would be a cycle.
+import type { CustomProviderId } from '$lib/stores/settings';
 
 export type MediaKind = 'image' | 'video';
-export type MediaProviderId = 'chatgpt' | 'openai' | 'google' | 'openrouter' | 'vercel' | 'fal' | 'replicate';
+export type MediaProviderId = 'chatgpt' | 'openai' | 'google' | 'openrouter' | 'vercel' | 'fal' | 'replicate' | CustomProviderId;
 
 export interface MediaGenerationSettings {
   imageProvider: 'auto' | MediaProviderId;
@@ -60,8 +62,15 @@ export interface GeneratedMedia {
   skipped: string[];
 }
 
+/** Custom provider names, handed over by `stores/customProviders.ts`. */
+let customLabels: Record<string, string> = {};
+
+export function setCustomMediaLabels(labels: Record<string, string>): void {
+  customLabels = labels;
+}
+
 export function mediaProviderLabel(id: string): string {
-  return MEDIA_PROVIDERS.find((p) => p.id === id)?.label ?? id;
+  return MEDIA_PROVIDERS.find((p) => p.id === id)?.label ?? customLabels[id] ?? id;
 }
 
 export async function generateMedia(options: {

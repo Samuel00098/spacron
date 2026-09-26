@@ -251,9 +251,17 @@ export type AiProviderId =
   | 'chatgpt'
   | 'ollama'
   | 'lmstudio'
-  | 'local';
+  | 'local'
+  | CustomProviderId;
 
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local';
+/** A user-added OpenAI-compatible provider (`stores/customProviders.ts`). */
+export type CustomProviderId = `custom-${string}`;
+
+export function isCustomProviderId(id: string | null | undefined): id is CustomProviderId {
+  return typeof id === 'string' && id.startsWith('custom-');
+}
+
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local' | CustomProviderId;
 
 export interface AiModelOption {
   id: string;
@@ -293,6 +301,11 @@ export interface AiProviderDef {
    * `/chat/completions` and `/models`), e.g. `http://localhost:11434/v1`.
    */
   defaultBaseUrl?: string;
+  /**
+   * A user-added OpenAI-compatible provider. Its base URL is kept by the
+   * backend with its key and resolved there, so requests never carry it.
+   */
+  custom?: { baseUrl: string };
 }
 
 /** Default model used by the signed-in ChatGPT subscription composer route. */
@@ -650,6 +663,31 @@ export function getProviderDef(id: AiProviderId): AiProviderDef {
 }
 
 /**
+ * Put the user's custom providers into `aiProviders`, in place, after the
+ * built-in ones. Every picker reads that one array, so a custom provider shows
+ * up wherever a built-in one does. Called by `stores/customProviders.ts`.
+ */
+export function syncCustomProviderDefs(list: { id: string; name: string; baseUrl: string }[]): void {
+  for (let i = aiProviders.length - 1; i >= 0; i--) {
+    if (aiProviders[i].custom) aiProviders.splice(i, 1);
+  }
+  for (const provider of list) {
+    if (!isCustomProviderId(provider.id)) continue;
+    aiProviders.push({
+      id: provider.id,
+      label: provider.name,
+      keyLabel: `${provider.name} API key`,
+      keyPlaceholder: 'sk-...',
+      keyUrl: '',
+      // No guess: the live list from the key is the only source of models.
+      defaultModel: '',
+      models: [],
+      custom: { baseUrl: provider.baseUrl },
+    });
+  }
+}
+
+/**
  * What to tell someone whose selected provider is not connected yet, in one
  * sentence. Every "not connected" message uses this so the advice matches the
  * provider: a free Kilo account, a ChatGPT sign-in, a server URL or a key.
@@ -754,7 +792,9 @@ export function getDefaultVoiceInputModel(provider: VoiceInputProviderId): strin
     case 'local':
       return 'parakeet-tdt-v3';
     default:
-      return '';
+      // OpenAI's own transcription model id, which OpenAI-compatible APIs
+      // commonly serve under the same name; the live list offers the rest.
+      return isCustomProviderId(provider) ? 'whisper-1' : '';
   }
 }
 
@@ -808,6 +848,11 @@ export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime' | 'open
 export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'openai-realtime');
 export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
 export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
+/**
+ * Where a GPT Realtime call goes: `'openai'`, or the id of a custom provider
+ * that serves OpenAI's realtime API at its own address.
+ */
+export const openaiRealtimeConnection = persistentWritable<string>('openaiRealtimeConnection', 'openai');
 
 export const openaiRealtimeModelOptions: VoiceModelOption[] = [
   { id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 Mini', description: 'Fast and ~3× cheaper (~$10/$20 per 1M audio tokens). Good default for conversation.' },
@@ -894,13 +939,20 @@ export function getVercelRealtimeVoiceOptions(model: string): VoiceOption[] {
 export function getRealtimeEngineConfig(engine: VoiceConversationEngine) {
   switch (engine) {
     case 'xai-realtime':
-      return { provider: 'xai' as const, label: 'Grok Realtime', keyProvider: 'xai' as const, keyName: 'an xAI', model: xaiRealtimeModel, voice: xaiRealtimeVoice };
+      return { provider: 'xai' as const, label: 'Grok Realtime', keyProvider: 'xai' as AiProviderId, keyName: 'an xAI', model: xaiRealtimeModel, voice: xaiRealtimeVoice, connection: undefined as string | undefined };
     case 'openai-live':
-      return { provider: 'openai-live' as const, label: 'GPT Live', keyProvider: 'openai' as const, keyName: 'an OpenAI', model: openaiLiveModel, voice: openaiLiveVoice };
+      return { provider: 'openai-live' as const, label: 'GPT Live', keyProvider: 'openai' as AiProviderId, keyName: 'an OpenAI', model: openaiLiveModel, voice: openaiLiveVoice, connection: undefined as string | undefined };
     case 'vercel-realtime':
-      return { provider: 'vercel' as const, label: 'Vercel AI Gateway voice', keyProvider: 'vercel' as const, keyName: 'a Vercel AI Gateway', model: vercelRealtimeModel, voice: vercelRealtimeVoice };
-    default:
-      return { provider: 'openai' as const, label: 'GPT Realtime', keyProvider: 'openai' as const, keyName: 'an OpenAI', model: openaiRealtimeModel, voice: openaiRealtimeVoice };
+      return { provider: 'vercel' as const, label: 'Vercel AI Gateway voice', keyProvider: 'vercel' as AiProviderId, keyName: 'a Vercel AI Gateway', model: vercelRealtimeModel, voice: vercelRealtimeVoice, connection: undefined as string | undefined };
+    default: {
+      // GPT Realtime can run through a custom provider that serves the same API.
+      const via = get(openaiRealtimeConnection);
+      const custom = isCustomProviderId(via) ? aiProviders.find((p) => p.id === via) : undefined;
+      if (custom) {
+        return { provider: 'openai' as const, label: `${custom.label} realtime`, keyProvider: custom.id, keyName: `a ${custom.label}`, model: openaiRealtimeModel, voice: openaiRealtimeVoice, connection: custom.id as string | undefined };
+      }
+      return { provider: 'openai' as const, label: 'GPT Realtime', keyProvider: 'openai' as AiProviderId, keyName: 'an OpenAI', model: openaiRealtimeModel, voice: openaiRealtimeVoice, connection: undefined as string | undefined };
+    }
   }
 }
 
@@ -936,7 +988,7 @@ export function setVoiceInputModel(provider: Exclude<VoiceInputProviderId, 'webs
 }
 
 export function voiceInputUsesModelTranscription(provider: VoiceInputProviderId): boolean {
-  return provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'vercel' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
+  return isCustomProviderId(provider) || provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'vercel' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
 }
 
 export const currentVoiceAiModel = derived(
@@ -1317,6 +1369,7 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
     case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
+    case 'openaiRealtimeConnection': openaiRealtimeConnection.set(value as string); break;
     case 'openaiLiveModel': openaiLiveModel.set(value as string); break;
     case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
     case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
@@ -1371,6 +1424,7 @@ export function resetSettingsToDefault() {
   voiceConversationEngine.set('openai-realtime');
   openaiRealtimeModel.set('gpt-realtime-2.1-mini');
   openaiRealtimeVoice.set('marin');
+  openaiRealtimeConnection.set('openai');
   openaiLiveModel.set('gpt-live-1');
   openaiLiveVoice.set('marin');
   xaiRealtimeModel.set('grok-voice-latest');

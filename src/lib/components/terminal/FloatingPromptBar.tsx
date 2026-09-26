@@ -537,6 +537,7 @@ export default function FloatingPromptBar({
         try {
           const session = await startRealtimeVoiceSession({
             provider,
+            connection: engineConfig.connection,
             model,
             voice: get(engineConfig.voice),
             instructions: REALTIME_VOICE_INSTRUCTIONS,

@@ -2367,3 +2367,76 @@ button.settings-control-copy.skill-open-btn {
 .mcp-server-problem {
   color: var(--error);
 }
+
+/* ── Custom providers (AI Connections) ───────────────────────────────────── */
+.custom-provider-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.custom-provider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.custom-provider-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.custom-provider-mark .agent-brand-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.custom-provider-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-provider-url {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-provider-status {
+  font-size: 11.5px;
+  color: var(--success);
+}
+
+.custom-provider-status.bad,
+.custom-provider-error {
+  color: var(--error);
+}
+
+.custom-provider-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.custom-provider-actions button {
+  width: auto;
+  padding: 5px 10px;
+  font-size: 12px;
+}

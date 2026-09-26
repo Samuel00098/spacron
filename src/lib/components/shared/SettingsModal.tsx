@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import packageJson from '../../../../package.json';
 import { invoke } from '@tauri-apps/api/core';
+import { customProviders, saveCustomProvider, deleteCustomProvider, type CustomProvider } from '$lib/stores/customProviders';
+import { explainError, type ExplainedError } from '$lib/utils/explainError';
 import { listen } from '@tauri-apps/api/event';
 import {
   aiBaseUrlByProvider,
@@ -70,6 +72,7 @@ import {
   announceAgentCompletions,
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
+  openaiRealtimeConnection,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
   openaiRealtimeVoice,
@@ -108,7 +111,7 @@ import { activeProjectId, resetAllApplicationState } from '$lib/stores/workspace
 import { BRAIN_SKILLS, MAX_CUSTOM_SKILL_CHARS, sanitizeCustomSkills, type CustomSkill } from '$lib/services/orchestrator/skills';
 import { FIRM_RULE_USES, clearLearnedProfile, globalOrchestratorProfile, orchestratorProfile, removeProfileEntry } from '$lib/services/orchestrator/evolve';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
-import { MEDIA_PROVIDERS, type MediaGenerationSettings, type MediaKind } from '$lib/services/media-generation';
+import { MEDIA_PROVIDERS, type MediaGenerationSettings, type MediaKind, type MediaProviderInfo } from '$lib/services/media-generation';
 import { requestNotificationPermission, showToast } from '$lib/stores/notification';
 import { ChatGptSignIn } from './ChatGptSignIn';
 import { checkForUpdate, installUpdate, pendingUpdate, updateChecking, updateDownloading, updateProgress } from '$lib/stores/updater';
@@ -628,6 +631,149 @@ function JevConnectionSection() {
   );
 }
 
+/**
+ * Settings > AI Connections > Custom providers. Any OpenAI-compatible API: a
+ * name, its address and a key. Once saved it joins every provider picker
+ * (chat, completion, dictation, image and video, realtime voice), and its
+ * models are always the live list its key returns.
+ */
+function CustomProvidersSection() {
+  const list = useStore(customProviders) as CustomProvider[];
+  const [editing, setEditing] = useState<CustomProvider | 'new' | null>(null);
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<ExplainedError | null>(null);
+  const [models, setModels] = useState<Record<string, { count?: number; error?: ExplainedError; loading?: boolean }>>({});
+
+  const refresh = useCallback(async (id: string) => {
+    setModels((m) => ({ ...m, [id]: { ...m[id], loading: true } }));
+    try {
+      const found = await listProviderModels(id as AiProviderId);
+      setModels((m) => ({ ...m, [id]: { count: found.length } }));
+    } catch (error) {
+      setModels((m) => ({ ...m, [id]: { error: explainError(error) } }));
+    }
+  }, []);
+
+  // Live on open: every provider's list is fetched fresh, so a model the
+  // provider added since last time is there without any manual step.
+  useEffect(() => {
+    for (const provider of list) void refresh(provider.id);
+  }, [list, refresh]);
+
+  const open = (target: CustomProvider | 'new') => {
+    setEditing(target);
+    setName(target === 'new' ? '' : target.name);
+    setBaseUrl(target === 'new' ? '' : target.baseUrl);
+    setApiKey('');
+    setFormError(null);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setFormError(null);
+    try {
+      const saved = await saveCustomProvider({
+        id: editing && editing !== 'new' ? editing.id : undefined,
+        name,
+        baseUrl,
+        apiKey,
+      });
+      setEditing(null);
+      void refresh(saved.id);
+    } catch (error) {
+      setFormError(explainError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (provider: CustomProvider) => {
+    try {
+      await deleteCustomProvider(provider.id);
+    } catch (error) {
+      setFormError(explainError(error));
+    }
+  };
+
+  return (
+    <Section title="Custom providers">
+      <p className="shell-hint">
+        Add any OpenAI-compatible API with its address and key. It then appears in every provider picker, for chat,
+        inline completion, dictation, images, videos and voice mode, with its models loaded live from your key. The key is
+        kept in your OS keychain.
+      </p>
+      {list.length > 0 && (
+        <ul className="custom-provider-list">
+          {list.map((provider) => {
+            const state = models[provider.id];
+            return (
+              <li key={provider.id} className="custom-provider-row">
+                <span className="custom-provider-mark">
+                  <ProviderBrandMark id={provider.id} label={provider.name} />
+                </span>
+                <span className="custom-provider-text">
+                  <strong>{provider.name}</strong>
+                  <span className="custom-provider-url">{provider.baseUrl}</span>
+                  <span className={`custom-provider-status${state?.error ? ' bad' : ''}`}>
+                    {state?.loading
+                      ? 'Checking models…'
+                      : state?.error
+                        ? `${state.error.summary}${state.error.nextStep ? ` ${state.error.nextStep}` : ''}`
+                        : state?.count !== undefined
+                          ? `${state.count} model${state.count === 1 ? '' : 's'} available`
+                          : ''}
+                  </span>
+                </span>
+                <span className="custom-provider-actions">
+                  <button className="settings-secondary" onClick={() => void refresh(provider.id)} disabled={state?.loading}>Refresh</button>
+                  <button className="settings-secondary" onClick={() => open(provider)}>Edit</button>
+                  <button className="settings-danger" onClick={() => void remove(provider)}>Remove</button>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {editing ? (
+        <>
+          <SettingRow title="Name">
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. My Proxy" />
+          </SettingRow>
+          <SettingRow title="API address" detail="The address that ends before /chat/completions, usually ending in /v1.">
+            <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
+          </SettingRow>
+          <SettingRow title="API key" detail={editing === 'new' ? undefined : 'Leave blank to keep the saved key.'}>
+            <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={editing === 'new' ? 'sk-...' : 'Key saved in OS keychain'} />
+          </SettingRow>
+          {formError && (
+            <p className="shell-hint custom-provider-error">
+              {formError.summary}
+              {formError.nextStep ? ` ${formError.nextStep}` : ''}
+            </p>
+          )}
+          <div className="settings-action-row">
+            <button
+              className="settings-primary"
+              onClick={() => void save()}
+              disabled={busy || !name.trim() || !baseUrl.trim() || (editing === 'new' && !apiKey.trim())}
+            >
+              {busy ? 'Saving…' : editing === 'new' ? 'Add provider' : 'Save changes'}
+            </button>
+            <button className="settings-secondary" onClick={() => setEditing(null)} disabled={busy}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="settings-action-row">
+          <button className="settings-primary" onClick={() => open('new')}>Add custom provider</button>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function MediaGenerationSection() {
   const settings = useStore(mediaGeneration) as MediaGenerationSettings;
   const [keys, setKeys] = useState<Record<string, boolean>>({});
@@ -645,6 +791,18 @@ function MediaGenerationSection() {
 
   const update = (patch: Partial<MediaGenerationSettings>) => mediaGeneration.set({ ...settings, ...patch });
 
+  // Live model ids for a picked custom provider, offered as suggestions.
+  const [liveMediaModels, setLiveMediaModels] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    for (const id of [settings.imageProvider, settings.videoProvider]) {
+      if (!id.startsWith('custom-') || liveMediaModels[id]) continue;
+      void listProviderModels(id as AiProviderId)
+        .then((found) => setLiveMediaModels((current) => ({ ...current, [id]: found.map((m) => m.id) })))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.imageProvider, settings.videoProvider]);
+
   const saveKey = async (provider: string, value: string) => {
     setKeyError('');
     try {
@@ -660,11 +818,16 @@ function MediaGenerationSection() {
     const field = kind === 'video' ? 'videoProvider' : 'imageProvider';
     const modelsField = kind === 'video' ? 'videoModels' : 'imageModels';
     const chosen = settings[field];
+    const custom = aiProviders.filter((p) => p.custom);
     const options = [
       { id: 'auto', label: kind === 'image' ? 'Auto (ChatGPT plan first)' : 'Auto (first with a key)' },
       ...MEDIA_PROVIDERS.filter((p) => (kind === 'video' ? p.video : p.image)).map((p) => ({ id: p.id, label: p.label })),
+      // A custom provider is used only when picked here, and needs a model.
+      ...custom.map((p) => ({ id: p.id, label: p.label })),
     ];
-    const info = MEDIA_PROVIDERS.find((p) => p.id === chosen);
+    const customDef = custom.find((p) => p.id === chosen);
+    const info = MEDIA_PROVIDERS.find((p) => p.id === chosen)
+      ?? (customDef ? { id: customDef.id, label: customDef.label, image: true, video: true } as MediaProviderInfo : undefined);
     const fallback = kind === 'video' ? info?.videoDefault : info?.imageDefault;
     return (
       <>
@@ -672,13 +835,22 @@ function MediaGenerationSection() {
           <SelectField value={chosen} options={options} onChange={(value) => update({ [field]: value } as Partial<MediaGenerationSettings>)} ariaLabel={`${kind} provider`} />
         </SettingRow>
         {info && info.id !== 'chatgpt' && (
-          <SettingRow title={kind === 'video' ? 'Video model' : 'Image model'} detail="Leave blank for the default.">
+          <SettingRow
+            title={kind === 'video' ? 'Video model' : 'Image model'}
+            detail={customDef ? `Required: the ${kind} model id on ${customDef.label}. Suggestions come from its live list.` : 'Leave blank for the default.'}
+          >
             <input
               type="text"
+              list={customDef ? `media-models-${customDef.id}` : undefined}
               value={settings[modelsField][info.id] ?? ''}
-              placeholder={fallback}
+              placeholder={fallback ?? (kind === 'video' ? 'e.g. sora-2' : 'e.g. gpt-image-1')}
               onChange={(event) => update({ [modelsField]: { ...settings[modelsField], [info.id]: event.target.value } } as Partial<MediaGenerationSettings>)}
             />
+            {customDef && (
+              <datalist id={`media-models-${customDef.id}`}>
+                {(liveMediaModels[customDef.id] ?? []).map((id) => <option key={id} value={id} />)}
+              </datalist>
+            )}
           </SettingRow>
         )}
       </>
@@ -1242,6 +1414,9 @@ function ShortcutEditor({
 }
 
 export default function SettingsModal({ onclose }: SettingsModalProps) {
+  // Re-render when custom providers load or change: every provider picker
+  // here reads `aiProviders`, which they are merged into.
+  useStore(customProviders);
   // Seeded from the store so a caller can deep-link a section — the palette's
   // "Customize Theme…" opens straight onto Appearance instead of General.
   const [activeTab, setActiveTab] = useState<Tab>(
@@ -1580,6 +1755,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const refinementModel = useStore(currentVoiceAiModel);
   const conversationEngine = useStore(voiceConversationEngine);
   const realtimeModel = useStore(openaiRealtimeModel);
+  const realtimeConnection = useStore(openaiRealtimeConnection) as string;
+  // The provider GPT Realtime runs through: OpenAI, or a custom provider.
+  const realtimeVia = (realtimeConnection.startsWith('custom-') && aiProviders.some((p) => p.id === realtimeConnection)
+    ? realtimeConnection
+    : 'openai') as AiProviderId;
   const realtimeVoice = useStore(openaiRealtimeVoice);
   const liveModel = useStore(openaiLiveModel);
   const liveVoice = useStore(openaiLiveVoice);
@@ -1626,11 +1806,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   // fetch hasn't landed yet (no key, offline, or request still in flight) —
   // curated descriptions/pricing notes win when a live id matches one we know.
   const openaiRealtimeModelsMerged = useMemo(() => {
-    const live = providerRealtimeModels['openai'];
+    const live = providerRealtimeModels[realtimeVia];
+    if (realtimeVia !== 'openai') {
+      // A custom provider's list is its own; keep the current pick visible until it loads.
+      return live && live.length ? live : [{ id: realtimeModel, label: realtimeModel, description: '' }];
+    }
     if (!live || live.length === 0) return openaiRealtimeModelOptions;
     const curated = new Map(openaiRealtimeModelOptions.map((m) => [m.id, m]));
     return live.map((m) => curated.get(m.id) ?? m);
-  }, [providerRealtimeModels]);
+  }, [providerRealtimeModels, realtimeVia, realtimeModel]);
 
   const openaiLiveModelsMerged = useMemo(() => {
     const live = providerRealtimeModels['openai'];
@@ -1792,7 +1976,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }, [providerSttModels]);
 
-  const loadRealtimeModels = useCallback(async (prov: 'openai' | 'xai' | 'vercel', force = false) => {
+  const loadRealtimeModels = useCallback(async (prov: AiProviderId, force = false) => {
     if (!isTauriRuntime()) return;
 
     const hasKey = await providerApiKeyExists(prov).catch(() => false);
@@ -1897,7 +2081,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     void loadRealtimeModels('openai');
     void loadRealtimeModels('xai');
     void loadRealtimeModels('vercel');
-  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels]);
+    if (realtimeVia !== 'openai') void loadRealtimeModels(realtimeVia);
+  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels, realtimeVia]);
 
   useEffect(() => {
     setLocalUrlInput(getProviderBaseUrl(provider, baseUrls) || '');
@@ -2499,14 +2684,18 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <div className="settings-action-row">
                         <button className="settings-primary" onClick={() => void saveKey()} disabled={!apiKeyInput.trim()}>Save key</button>
                         <button className="settings-secondary" onClick={() => void clearKey()} disabled={!keyExists}>Clear key</button>
-                        <button className="settings-link-button" onClick={() => openExternalUrl(providerDef.keyUrl)}>
-                          {provider === 'kilocode' ? 'Create a free Kilo account' : 'Open provider'}
-                        </button>
+                        {providerDef.keyUrl && (
+                          <button className="settings-link-button" onClick={() => openExternalUrl(providerDef.keyUrl)}>
+                            {provider === 'kilocode' ? 'Create a free Kilo account' : 'Open provider'}
+                          </button>
+                        )}
                       </div>
                     </>
                   )}
 
                 </Section>
+
+                <CustomProvidersSection />
 
                 <Section title="Inline completion">
                   <SettingRow title="Ghost text">
@@ -2618,7 +2807,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               <>
                 <Section title="Voice input">
                   <SettingRow title="Provider">
-                    <SelectField value={voiceInput} options={voiceInputProviders} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" renderIcon={providerIcon} />
+                    <SelectField value={voiceInput} options={[...voiceInputProviders, ...aiProviders.filter((item) => item.custom).map((item) => ({ id: item.id as VoiceInputProviderId, label: item.label }))]} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" renderIcon={providerIcon} />
                   </SettingRow>
                   {voiceInputUsesModelTranscription(voiceInput) && (
                     <>
@@ -2716,21 +2905,35 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   {conversationEngine === 'openai-realtime' && (
                     <>
+                      {aiProviders.some((p) => p.custom) && (
+                        <SettingRow title="Connect through" detail="OpenAI, or a custom provider that serves OpenAI's realtime voice API.">
+                          <SelectField
+                            value={realtimeVia}
+                            options={[
+                              { id: 'openai', label: 'OpenAI' },
+                              ...aiProviders.filter((p) => p.custom).map((p) => ({ id: p.id, label: p.label })),
+                            ]}
+                            onChange={openaiRealtimeConnection.set}
+                            ariaLabel="Realtime connection"
+                            renderIcon={providerIcon}
+                          />
+                        </SettingRow>
+                      )}
                       <SettingRow title="Realtime model">
                         <ModelSelect
                           value={realtimeModel}
                           models={openaiRealtimeModelsMerged}
                           onChange={openaiRealtimeModel.set}
                           label="Realtime model"
-                          renderIcon={() => providerIcon('openai')}
+                          renderIcon={() => providerIcon(realtimeVia)}
                         />
                       </SettingRow>
-                      {openaiKeyExists && (
+                      {(openaiKeyExists || realtimeVia !== 'openai') && (
                         <div className="settings-action-row">
                           <button
                             type="button"
                             className="settings-secondary"
-                            onClick={() => void loadRealtimeModels('openai', true)}
+                            onClick={() => void loadRealtimeModels(realtimeVia, true)}
                             disabled={realtimeModelLoading}
                           >
                             {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
@@ -2745,7 +2948,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           ariaLabel="Realtime voice"
                         />
                       </SettingRow>
-                      {!openaiKeyExists && (
+                      {!openaiKeyExists && realtimeVia === 'openai' && (
                         <SettingRow title="OpenAI API key" detail="GPT Realtime needs an OpenAI API key.">
                           <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
                             <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>

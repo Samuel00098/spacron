@@ -164,7 +164,25 @@ const KNOWN_PROVIDERS: &[&str] = &[
 const LOCAL_PROVIDERS: &[&str] = &["ollama", "lmstudio"];
 
 fn is_known_provider(provider: &str) -> bool {
-    KNOWN_PROVIDERS.contains(&provider)
+    KNOWN_PROVIDERS.contains(&provider) || is_custom_provider(provider)
+}
+
+/// A user-added OpenAI-compatible provider (`commands::custom_providers`).
+/// Requests go to its stored base URL with a Bearer key, through the same
+/// OpenAI-compatible paths the local servers use.
+pub(crate) fn is_custom_provider(provider: &str) -> bool {
+    super::custom_providers::is_custom_provider(provider)
+}
+
+/// Local servers and custom providers both speak OpenAI's routes at a base URL.
+fn uses_base_url(provider: &str) -> bool {
+    is_local_provider(provider) || is_custom_provider(provider)
+}
+
+/// How errors name a base-URL provider: the custom provider's own name, or
+/// "Local" for a local server.
+fn base_url_provider_label(provider: &str) -> String {
+    super::custom_providers::display_name(provider).unwrap_or_else(|| "Local".to_string())
 }
 
 // Keys that only image/video generation uses (`commands::media`). They are
@@ -233,7 +251,7 @@ fn completion_endpoint(provider: &str, base_url: Option<&str>, model: Option<&st
         "opencode-go" => OPENCODE_GO_URL.to_string(),
         "kilocode" => KILOCODE_URL.to_string(),
         "vercel" => VERCEL_URL.to_string(),
-        p if is_local_provider(p) => {
+        p if uses_base_url(p) => {
             local_endpoint(base_url.unwrap_or_default(), "chat/completions")
         }
         _ => OPENROUTER_URL.to_string(),
@@ -263,7 +281,7 @@ fn model_catalogue_endpoint(provider: &str, base_url: Option<&str>) -> String {
         "opencode-go" => OPENCODE_GO_MODELS_URL.to_string(),
         "kilocode" => KILOCODE_MODELS_URL.to_string(),
         "vercel" => VERCEL_MODELS_URL.to_string(),
-        p if is_local_provider(p) => {
+        p if uses_base_url(p) => {
             local_endpoint(base_url.unwrap_or_default(), "models")
         }
         _ => OPENROUTER_MODELS_URL.to_string(),
@@ -314,6 +332,13 @@ fn local_endpoint(base_url: &str, path: &str) -> String {
 /// safe, non-empty http(s) URL; non-local providers don't use one (returns
 /// `None`). Centralises the checks shared by every command.
 fn resolve_base_url(provider: &str, base_url: &Option<String>) -> Result<Option<String>, String> {
+    // A custom provider's URL comes from its stored record, never from the
+    // caller: the request carries its key (see `custom_providers`).
+    if is_custom_provider(provider) {
+        return super::custom_providers::base_url(provider)
+            .map(Some)
+            .ok_or_else(|| "That custom provider no longer exists.".to_string());
+    }
     if !is_local_provider(provider) {
         return Ok(None);
     }
@@ -1694,7 +1719,7 @@ pub async fn ai_transcribe_audio(
         && provider != "openai"
         && provider != "openrouter"
         && provider != "vercel"
-        && !is_local_provider(&provider)
+        && !uses_base_url(&provider)
     {
         return Err("Selected provider does not support transcription yet.".to_string());
     }
@@ -1789,6 +1814,7 @@ pub async fn ai_transcribe_audio(
         "openai" => {
             let response = client
                 .post(OPENAI_STT_URL)
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header(reqwest::header::CONTENT_TYPE, "multipart/form-data; boundary=spacron-openai-stt")
                 .body(build_audio_transcription_multipart_body(
                     "spacron-openai-stt",
@@ -1896,13 +1922,17 @@ pub async fn ai_transcribe_audio(
                 .unwrap_or("")
                 .to_string())
         }
-        p if is_local_provider(p) => {
+        p if uses_base_url(p) => {
             let Some(base) = base_url.as_deref() else {
                 return Err("Server URL is not set.".to_string());
             };
             let boundary = "spacron-audio-transcription-boundary";
-            let response = client
-                .post(local_endpoint(base, "/audio/transcriptions"))
+            let mut request = client.post(local_endpoint(base, "/audio/transcriptions"));
+            // Local servers take no key; a custom provider always has one.
+            if !api_key.is_empty() {
+                request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
+            }
+            let response = request
                 .header(
                     reqwest::header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={boundary}"),
@@ -1918,14 +1948,14 @@ pub async fn ai_transcribe_audio(
                 .send()
                 .await
                 .map_err(|err| {
-                    safe_request_error("Failed to contact local transcription provider", err)
+                    safe_request_error(&format!("Failed to contact {} transcription", base_url_provider_label(p)), err)
                 })?;
 
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 let preview = redact_secrets(&body.chars().take(200).collect::<String>());
-                return Err(format!("Local transcription failed ({status}): {preview}"));
+                return Err(format!("{} transcription failed ({status}): {preview}", base_url_provider_label(p)));
             }
 
             let payload: serde_json::Value = response.json().await.map_err(|err| {
@@ -2340,8 +2370,8 @@ pub async fn list_provider_models(
                             continue;
                         }
                     }
-                    p if is_local_provider(p) => {
-                        // Local providers — no structured metadata, return all
+                    p if uses_base_url(p) => {
+                        // Local and custom providers — no structured metadata, return all
                     }
                     _ => {
                         if !openrouter_model_matches_purpose(&item, &id, purpose) {
@@ -2487,11 +2517,25 @@ pub async fn openai_realtime_connect(
     voice: String,
     instructions: String,
     tools: Option<serde_json::Value>,
+    provider: Option<String>,
 ) -> Result<String, String> {
-    let api_key = resolve_api_key("openai", "")?;
+    // `None` is OpenAI itself; a custom provider takes the same WebRTC call at
+    // its own base URL (resolved backend-side) with its own key.
+    let provider = provider.filter(|p| !p.is_empty()).unwrap_or_else(|| "openai".to_string());
+    let custom = is_custom_provider(&provider);
+    if provider != "openai" && !custom {
+        return Err("That provider does not offer realtime voice.".to_string());
+    }
+    let api_key = resolve_api_key(&provider, "")?;
+    let calls_url = match resolve_base_url(&provider, &None)? {
+        Some(base) => local_endpoint(&base, "realtime/calls"),
+        None => "https://api.openai.com/v1/realtime/calls".to_string(),
+    };
+    let who = if custom { base_url_provider_label(&provider) } else { "OpenAI".to_string() };
 
     let model = model.trim().to_string();
-    if !model_id_is_safe(&model) || !model.contains("realtime") {
+    // OpenAI's realtime ids all say so; a custom provider names its own.
+    if !model_id_is_safe(&model) || (!custom && !model.contains("realtime")) {
         return Err("Invalid realtime model id".to_string());
     }
     let voice = voice.trim().to_lowercase();
@@ -2530,7 +2574,7 @@ pub async fn openai_realtime_connect(
 
     let client = shared_http_client(Duration::from_secs(30))?;
     let response = client
-        .post("https://api.openai.com/v1/realtime/calls")
+        .post(calls_url)
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
         // Plain text fields with no per-part content type, exactly like the
         // `FormData.set("sdp", …)` example in OpenAI's WebRTC guide.
@@ -2541,13 +2585,18 @@ pub async fn openai_realtime_connect(
         )
         .send()
         .await
-        .map_err(|err| safe_request_error("Failed to contact OpenAI Realtime", err))?;
+        .map_err(|err| safe_request_error(&format!("Failed to contact {who} Realtime"), err))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         let preview = redact_secrets(&body.chars().take(300).collect::<String>());
-        return Err(format!("OpenAI Realtime call failed ({status}): {preview}"));
+        if custom && (status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::METHOD_NOT_ALLOWED) {
+            return Err(format!(
+                "unsupported: {who} does not offer OpenAI's realtime voice API (/realtime/calls returned {status}). Pick another voice engine in Settings > Voice."
+            ));
+        }
+        return Err(format!("{who} Realtime call failed ({status}): {preview}"));
     }
 
     let answer_sdp = response
@@ -2555,7 +2604,7 @@ pub async fn openai_realtime_connect(
         .await
         .map_err(|err| format!("Failed to read Realtime SDP answer: {err}"))?;
     if !answer_sdp.trim_start().starts_with("v=") {
-        return Err("OpenAI Realtime returned an invalid SDP answer.".to_string());
+        return Err(format!("{who} Realtime returned an invalid SDP answer."));
     }
     Ok(answer_sdp)
 }

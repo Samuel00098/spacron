@@ -33,6 +33,7 @@ import {
 import { loadThemes } from '$lib/stores/theme';
 import { initDefaultCommands } from '$lib/stores/commandpalette';
 import { requestNotificationPermission } from '$lib/stores/notification';
+import { loadCustomProviders } from '$lib/stores/customProviders';
 import { maybeAutoReconnectRemote, hydrateRemoteTokens } from '$lib/stores/remoteWorkspace';
 import {
   uiZoom,
@@ -129,6 +130,8 @@ export default function App() {
     initDefaultCommands();
     if (isTauriRuntime()) {
       requestNotificationPermission();
+      // User-added OpenAI-compatible providers join every picker once loaded.
+      void loadCustomProviders();
       // A restarted Windows dev window can occasionally be restored at a
       // tiny native size (visible to the OS, but effectively hidden). Recover
       // only that invalid geometry and leave normal user sizing untouched.

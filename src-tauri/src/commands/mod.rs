@@ -10,6 +10,7 @@ pub mod background;
 pub mod browser_shim;
 pub mod browser_tools;
 pub mod chatgpt;
+pub mod custom_providers;
 pub mod deepseek_harness;
 pub mod db;
 pub mod deps;

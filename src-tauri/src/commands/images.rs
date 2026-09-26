@@ -144,15 +144,19 @@ pub fn allow_generations_dir(app: AppHandle, project_root: String) -> Result<(),
 
 /// The order providers are tried in. ChatGPT (the user's plan) comes first
 /// for images; a provider the user picked in Settings goes to the front.
-fn provider_order(kind: Kind, preferred: Option<&str>) -> Vec<&'static str> {
-    let mut order: Vec<&'static str> = media::PROVIDERS
+fn provider_order(kind: Kind, preferred: Option<&str>) -> Vec<String> {
+    let mut order: Vec<String> = media::PROVIDERS
         .iter()
         .copied()
         .filter(|p| media::default_model(p, kind).is_some() || (*p == "chatgpt" && kind == Kind::Image))
+        .map(str::to_string)
         .collect();
-    if let Some(pos) = preferred.and_then(|want| order.iter().position(|p| *p == want)) {
+    if let Some(pos) = preferred.and_then(|want| order.iter().position(|p| p == want)) {
         let chosen = order.remove(pos);
         order.insert(0, chosen);
+    } else if let Some(custom) = preferred.filter(|p| crate::commands::custom_providers::is_custom_provider(p)) {
+        // A custom provider is only ever tried when it was picked.
+        order.insert(0, custom.to_string());
     }
     order
 }
@@ -165,7 +169,10 @@ fn should_fall_back(error: &str) -> bool {
         .any(|prefix| error.starts_with(prefix))
 }
 
-fn provider_name(provider: &str) -> &'static str {
+fn provider_name(provider: &str) -> String {
+    if let Some(name) = crate::commands::custom_providers::display_name(provider) {
+        return name;
+    }
     match provider {
         "chatgpt" => "ChatGPT plan",
         "openai" => "OpenAI",
@@ -176,6 +183,7 @@ fn provider_name(provider: &str) -> &'static str {
         "replicate" => "Replicate",
         _ => "provider",
     }
+    .to_string()
 }
 
 /// The error without its `kind:` prefix, short enough for a report line.
@@ -247,15 +255,15 @@ pub async fn generate_media(
         let mut skipped: Vec<String> = Vec::new();
         let mut quota_hit = false;
         for provider in provider_order(kind, preferred) {
-            let model = models.get(provider).map(String::as_str).unwrap_or("");
-            match generate_on(provider, kind, model, &prompt, &references).await {
+            let model = models.get(&provider).map(String::as_str).unwrap_or("");
+            match generate_on(&provider, kind, model, &prompt, &references).await {
                 Ok(made) => return Ok((provider, made, skipped)),
                 Err(error) if should_fall_back(&error) => {
                     quota_hit |= error.starts_with("quota:");
                     let reason = if error.starts_with("not_configured:") { "no API key saved".to_string() }
                         else if error.starts_with("not_signed_in:") { "not signed in".to_string() }
                         else { short_reason(&error) };
-                    skipped.push(format!("{}: {reason}", provider_name(provider)));
+                    skipped.push(format!("{}: {reason}", provider_name(&provider)));
                 }
                 Err(error) => return Err(error),
             }
@@ -365,8 +373,8 @@ mod tests {
     #[test]
     fn chatgpt_goes_first_for_images_and_a_pick_jumps_the_queue() {
         assert_eq!(provider_order(Kind::Image, None)[0], "chatgpt");
-        assert!(!provider_order(Kind::Video, None).contains(&"chatgpt"));
-        assert!(!provider_order(Kind::Video, None).contains(&"openrouter"));
+        assert!(!provider_order(Kind::Video, None).contains(&"chatgpt".to_string()));
+        assert!(!provider_order(Kind::Video, None).contains(&"openrouter".to_string()));
         assert_eq!(&provider_order(Kind::Image, Some("fal"))[..2], &["fal", "chatgpt"]);
         assert!(should_fall_back("quota: ChatGPT: limit"));
         assert!(!should_fall_back("provider_error: blocked by safety"));

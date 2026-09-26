@@ -59,7 +59,7 @@ pub fn default_model(provider: &str, kind: Kind) -> Option<&'static str> {
     })
 }
 
-fn provider_label(provider: &str) -> &'static str {
+fn provider_label(provider: &str) -> String {
     match provider {
         "openai" => "OpenAI",
         "google" => "Google",
@@ -67,9 +67,15 @@ fn provider_label(provider: &str) -> &'static str {
         "vercel" => "Vercel AI Gateway",
         "fal" => "fal",
         "replicate" => "Replicate",
-        _ => "The provider",
+        custom => {
+            return crate::commands::custom_providers::display_name(custom)
+                .unwrap_or_else(|| "The provider".to_string())
+        }
     }
+    .to_string()
 }
+
+const OPENAI_BASE: &str = "https://api.openai.com/v1";
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -212,7 +218,16 @@ pub async fn generate(
     references: &[PathBuf],
     api_key: &str,
 ) -> Result<Media, String> {
+    let custom_base = crate::commands::custom_providers::base_url(provider);
     let model = if model.trim().is_empty() {
+        if custom_base.is_some() {
+            // A custom provider has no model we could safely guess.
+            return Err(format!(
+                "not_configured: pick {} model for {} in Settings > AI Connections",
+                if kind == Kind::Video { "a video" } else { "an image" },
+                provider_label(provider)
+            ));
+        }
         default_model(provider, kind).ok_or_else(|| unsupported(provider, kind))?.to_string()
     } else {
         model.trim().to_string()
@@ -221,8 +236,15 @@ pub async fn generate(
     let deadline = if kind == Kind::Video { VIDEO_DEADLINE } else { IMAGE_DEADLINE };
     let work = async {
         match (provider, kind) {
-            ("openai", Kind::Image) => openai_image(api_key, &model, prompt, &refs).await,
-            ("openai", Kind::Video) => openai_video(api_key, &model, prompt, &refs).await,
+            // A custom provider speaks OpenAI's image and video routes at its own base URL.
+            (p, Kind::Image) if custom_base.is_some() => {
+                openai_image(custom_base.as_deref().unwrap_or_default(), p, api_key, &model, prompt, &refs).await
+            }
+            (p, Kind::Video) if custom_base.is_some() => {
+                openai_video(custom_base.as_deref().unwrap_or_default(), p, api_key, &model, prompt, &refs).await
+            }
+            ("openai", Kind::Image) => openai_image(OPENAI_BASE, "openai", api_key, &model, prompt, &refs).await,
+            ("openai", Kind::Video) => openai_video(OPENAI_BASE, "openai", api_key, &model, prompt, &refs).await,
             ("google", Kind::Image) => google_image(api_key, &model, prompt, &refs).await,
             ("google", Kind::Video) => google_video(api_key, &model, prompt, &refs).await,
             ("openrouter", Kind::Image) => openrouter_image(api_key, &model, prompt, &refs).await,
@@ -249,11 +271,11 @@ fn unsupported(provider: &str, kind: Kind) -> String {
 // OpenAI: gpt-image for images, Sora for video.
 // ---------------------------------------------------------------------------
 
-async fn openai_image(key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
+async fn openai_image(base: &str, who: &str, key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
     let http = client()?;
     let reply = if refs.is_empty() {
-        send_json("openai", http
-            .post("https://api.openai.com/v1/images/generations")
+        send_json(who, http
+            .post(format!("{base}/images/generations"))
             .bearer_auth(key)
             .json(&json!({"model": model, "prompt": prompt, "n": 1}))).await?
     } else {
@@ -267,20 +289,20 @@ async fn openai_image(key: &str, model: &str, prompt: &str, refs: &[Reference]) 
                 .map_err(|e| e.to_string())?;
             form = form.part("image[]", part);
         }
-        send_json("openai", http.post("https://api.openai.com/v1/images/edits").bearer_auth(key).multipart(form)).await?
+        send_json(who, http.post(format!("{base}/images/edits")).bearer_auth(key).multipart(form)).await?
     };
     let item = &reply["data"][0];
     let bytes = if let Some(b64) = item["b64_json"].as_str() {
-        decode_b64("openai", b64)?
+        decode_b64(who, b64)?
     } else if let Some(url) = item["url"].as_str() {
-        download("openai", http.get(url)).await?
+        download(who, http.get(url)).await?
     } else {
-        return Err("provider_error: OpenAI returned no image".into());
+        return Err(format!("provider_error: {} returned no image", provider_label(who)));
     };
     Ok(Media { bytes, extension: "png".into(), revised_prompt: item["revised_prompt"].as_str().map(str::to_string) })
 }
 
-async fn openai_video(key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
+async fn openai_video(base: &str, who: &str, key: &str, model: &str, prompt: &str, refs: &[Reference]) -> Result<Media, String> {
     let http = client()?;
     let mut form = reqwest::multipart::Form::new()
         .text("model", model.to_string())
@@ -292,20 +314,27 @@ async fn openai_video(key: &str, model: &str, prompt: &str, refs: &[Reference]) 
             .map_err(|e| e.to_string())?;
         form = form.part("input_reference", part);
     }
-    let job = send_json("openai", http.post("https://api.openai.com/v1/videos").bearer_auth(key).multipart(form)).await?;
-    let id = job["id"].as_str().ok_or("protocol: OpenAI returned no video id")?.to_string();
+    let job = send_json(who, http.post(format!("{base}/videos")).bearer_auth(key).multipart(form)).await?;
+    let id = job["id"]
+        .as_str()
+        .ok_or_else(|| format!("protocol: {} returned no video id", provider_label(who)))?
+        .to_string();
+    // The id goes into a URL path, so only a plain token is accepted.
+    if id.len() > 128 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!("protocol: {} returned an unexpected video id", provider_label(who)));
+    }
     loop {
-        let status = send_json("openai", http.get(format!("https://api.openai.com/v1/videos/{id}")).bearer_auth(key)).await?;
+        let status = send_json(who, http.get(format!("{base}/videos/{id}")).bearer_auth(key)).await?;
         match status["status"].as_str().unwrap_or("") {
             "completed" => break,
             "failed" | "cancelled" => {
                 let message = status["error"]["message"].as_str().unwrap_or("the video failed");
-                return Err(format!("provider_error: OpenAI: {message}"));
+                return Err(format!("provider_error: {}: {message}", provider_label(who)));
             }
             _ => tokio::time::sleep(POLL_EVERY).await,
         }
     }
-    let bytes = download("openai", http.get(format!("https://api.openai.com/v1/videos/{id}/content")).bearer_auth(key)).await?;
+    let bytes = download(who, http.get(format!("{base}/videos/{id}/content")).bearer_auth(key)).await?;
     Ok(Media { bytes, extension: "mp4".into(), revised_prompt: None })
 }
 
