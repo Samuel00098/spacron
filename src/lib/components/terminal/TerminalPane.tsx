@@ -454,7 +454,7 @@ function TerminalPane({
   // A CLI reads this once at launch, so an agent started before a theme switch
   // keeps its old shade until it is restarted.
   function terminalBackground() {
-    const fallback = isLightTheme ? '0, 0, 0' : '32, 32, 36';
+    const fallback = isLightTheme ? '0, 0, 0' : '16, 16, 16';
     const rgb = typeof document === 'undefined'
       ? fallback
       : getComputedStyle(document.documentElement).getPropertyValue('--terminal-surface-rgb').trim() || fallback;

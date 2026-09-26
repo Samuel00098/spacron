@@ -447,8 +447,9 @@ html.bg-palette-light:not(.has-bg-media) {
   --frost-surface:     0.55;
 
   /* ── Terminal surface ───────────────────── */
-  --terminal-surface:     #202024;
-  --terminal-surface-rgb: 32, 32, 36;
+  /* Dark mode: the same --app-surface as the rooms around it. */
+  --terminal-surface:     var(--app-surface);
+  --terminal-surface-rgb: var(--app-surface-rgb);
 
   /* ── TitleBar ───────────────────────────── */
   --titlebar-bg:     #141416;
