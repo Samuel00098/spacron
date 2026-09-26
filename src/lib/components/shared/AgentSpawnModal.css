@@ -794,9 +794,10 @@
   color: #000000;
 }
 
-/* Same rule as the agent tiles: the chosen placement is a fill, not a ring. */
+/* Keep the selected placement on the modal's surface, with a subtle accent tint. */
 .asm-placement-card.selected {
-  background: color-mix(in srgb, var(--accent, #ffffff) 12%, #000000);
+  background: color-mix(in srgb, var(--accent) 10%, #1b1b21);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
   color: var(--text-primary, #ffffff);
 }
 

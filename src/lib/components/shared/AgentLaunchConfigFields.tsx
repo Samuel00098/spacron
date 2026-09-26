@@ -129,6 +129,7 @@ export default function AgentLaunchConfigFields({
           ariaLabel={`${capabilities.label} local model`}
           boundarySelector={boundarySelector}
           menuMaxHeight={220}
+          menuClassName="agent-launch-model-menu"
           disabled={!hasModelChoice}
         />
         {!hasModelChoice && (

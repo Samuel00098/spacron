@@ -338,13 +338,41 @@
 }
 
 .agent-launch-config-field .dd-trigger {
-  height: 30px;
-  border-color: var(--input-border, var(--border));
-  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 1);
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-md, 8px);
+  border-color: var(--border);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
 }
 
 .agent-launch-config-field .dd-trigger:hover:not(:disabled) {
-  border-color: var(--border-focus, var(--accent));
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+.agent-launch-config-field .dd-trigger.open {
+  background: transparent;
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 2px var(--accent-glow);
+}
+
+.agent-launch-model-menu.dd-menu {
+  border-color: var(--border);
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.7)), inset 0 1px 0 var(--border);
+}
+
+.agent-launch-model-menu .dd-item {
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+
+.agent-launch-model-menu .dd-item.active {
+  background: var(--accent-light);
+  font-weight: 600;
 }
 
 .agent-launch-config-field select:disabled { opacity: 0.6; }
