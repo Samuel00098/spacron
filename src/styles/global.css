@@ -21,9 +21,9 @@
   /* Application chrome base size. Editor and terminal components set their own
      typography and are intentionally not driven by this value. */
   --ui-font-size: 14px;
-  /* Body weight for application UI. A touch above regular (400): system-ui is
-     Segoe UI Variable on Windows 11, which renders the in-between weight; a
-     static face falls back to the nearest one it has. */
+  /* Body weight for application UI: medium (500) rather than regular (400) so
+     14px text reads solidly. Headings and bold use 500 too (see the
+     hierarchy rule below), so they no longer stand apart by weight. */
   --ui-font-weight: 500;
 }
 
