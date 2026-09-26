@@ -781,11 +781,13 @@ export default function ProjectHUD() {
       key = room,
       busy = false,
     ) => {
-      const minimized = projectId === activeProjId && currentLayout.rooms.some((item) => item.id === room && item.minimized);
+      const roomState = projectId === activeProjId ? currentLayout.rooms.find((item) => item.id === room) : null;
+      const minimized = roomState?.minimized ?? false;
+      const focused = roomState?.focused ?? false;
       const expanded = projectId === activeProjId && currentLayout.expandedRoom === room;
       const minimizeOp: RoomOp = minimized ? 'restore' : 'minimize';
       return (
-        <div key={key} className="project-process-entry">
+        <div key={key} className={`project-process-entry${focused ? ' is-focused-room' : ''}`}>
           <button
             type="button"
             className="project-process-row"

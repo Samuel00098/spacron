@@ -1054,7 +1054,8 @@
 }
 
 .project-process-entry:hover .project-process-actions,
-.project-process-entry:focus-within .project-process-actions {
+.project-process-entry:focus-within .project-process-actions,
+.project-process-entry.is-focused-room .project-process-actions {
   opacity: 1;
   pointer-events: auto;
 }
