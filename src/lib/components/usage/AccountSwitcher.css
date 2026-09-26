@@ -51,7 +51,10 @@
   max-width: calc(100vw - 32px);
   max-height: min(240px, 50vh);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* A menu never bounces past its ends or scrolls sideways: `none` (not
+     `contain`) also stops the elastic overscroll that showed empty space. */
+  overscroll-behavior: none;
+  overflow-x: hidden;
   padding: 4px;
   display: flex;
   flex-direction: column;

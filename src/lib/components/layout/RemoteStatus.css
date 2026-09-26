@@ -120,6 +120,10 @@
   width: 300px;
   max-height: 60vh;
   overflow-y: auto;
+  /* A menu never bounces past its ends or scrolls sideways: `none` (not
+     `contain`) also stops the elastic overscroll that showed empty space. */
+  overscroll-behavior: none;
+  overflow-x: hidden;
   padding: 6px;
   /* Fully opaque surface (raw RGB at alpha 1) so the menu never shows the window
      content through it under vibrancy/transparency themes. */

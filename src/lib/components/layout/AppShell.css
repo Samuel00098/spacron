@@ -3303,13 +3303,16 @@ html.is-webkitgtk .app-shell .composer-strip {
 
 /* The Spacron wordmark — bolded system font (weight 900) at 28px. */
 .app-shell .left-sidebar-app-name {
-  font-family: 'Inter', var(--font-sans) !important;
+  /* The wordmark: Manrope, and no shadow of any kind. It opts out of the
+     wallpaper text outline too (inherited from body), which read as fog on a
+     22px bold word. */
+  font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
   font-size: 22px !important;
   font-weight: 800 !important;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
   line-height: 1;
   color: var(--text-primary);
-  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.08);
+  text-shadow: none !important;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -3674,12 +3677,13 @@ html.is-webkitgtk .app-shell .composer-strip {
       subpixel antialiasing and washes the glyphs out. Solid fill keeps it
       sharp and high-contrast in every theme. */
 .app-shell .left-sidebar-app-name {
-  font-family: 'Inter', var(--font-sans) !important;
+  font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
   font-size: 22px !important;
   font-weight: 800 !important;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
   line-height: 1;
   color: var(--text-primary);
+  text-shadow: none !important;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

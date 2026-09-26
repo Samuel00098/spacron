@@ -1994,6 +1994,10 @@
   bottom: calc(100% + 5px);
   max-height: 220px;
   overflow-y: auto;
+  /* A menu never bounces past its ends or scrolls sideways: `none` (not
+     `contain`) also stops the elastic overscroll that showed empty space. */
+  overscroll-behavior: none;
+  overflow-x: hidden;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 9px;

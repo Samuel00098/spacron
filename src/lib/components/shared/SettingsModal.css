@@ -1512,7 +1512,10 @@ details.settings-github-note pre {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* A menu never bounces past its ends or scrolls sideways: `none` (not
+     `contain`) also stops the elastic overscroll that showed empty space. */
+  overscroll-behavior: none;
+  overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
   mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black calc(100% - 12px), transparent 100%);
