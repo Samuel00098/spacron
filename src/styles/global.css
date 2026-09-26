@@ -1933,3 +1933,51 @@ input[type='range']::-webkit-slider-thumb:active {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
+
+/* ── Right sidebar: no black ────────────────────────────────────────────────
+   Tool surfaces in the right sidebar that painted a near-black fill take the
+   sidebar's own colour instead; text fields get the flat Settings outline.
+   Hover and primary buttons keep their own treatment. */
+.right-utility-panel :is(
+  .branch-bar,
+  .sc-commit-section,
+  .sc-section-head-row,
+  .sc-section-header,
+  .diff-mode-toggle,
+  .containers-panel,
+  .project-strip,
+  .status-pill,
+  .search-input-wrap
+) {
+  background: transparent !important;
+}
+
+.right-utility-panel :is(
+  .sc-commit-input,
+  .search-include,
+  .search-input,
+  .env-input
+) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: var(--surface-outline) !important;
+}
+
+.right-utility-panel :is(.sc-commit-input, .search-include, .search-input, .env-input):focus {
+  box-shadow: var(--surface-outline-active) !important;
+}
+
+.right-utility-panel :is(.ai-gen-btn, .sc-stage-all, .toolbar-btn, .ghost-btn):not(:hover):not(.primary) {
+  background: transparent !important;
+}
+
+/* Containers: the action cards and command snippets are outlined boxes in the
+   sidebar colour, not black tiles. */
+.right-utility-panel .containers-panel :is(.action-grid > button, .command-row code) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: var(--surface-outline) !important;
+}
+.right-utility-panel .containers-panel .action-grid > button:hover:not(:disabled) {
+  background: var(--bg-hover) !important;
+}

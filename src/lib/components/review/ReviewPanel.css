@@ -246,6 +246,7 @@
   overscroll-behavior: contain;
   border-right: 1px solid var(--border);
   background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.25);
+  overscroll-behavior-y: none;
 }
 
 .review-panel .rp-files-empty {

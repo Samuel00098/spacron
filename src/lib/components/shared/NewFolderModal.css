@@ -343,3 +343,24 @@
   .nf-modal { animation: none; }
   .nf-btn.primary:hover:not(:disabled) { transform: none; }
 }
+
+/* ── Flat app look ── (same as the Clone dialog, CloneRepoModal.css)
+   The Settings surface with no gradients; the icon tile, name field and
+   location picker take that colour with the flat 1px outline. */
+.nf-modal {
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+}
+.nf-icon,
+.nf-input,
+.nf-location {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.nf-input:focus {
+  background: transparent;
+  box-shadow: var(--surface-outline-active) !important;
+}
+.nf-location:hover {
+  background: var(--bg-hover);
+}

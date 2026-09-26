@@ -180,6 +180,8 @@
 .source-control .branch-list {
   max-height: 180px;
   overflow-y: auto;
+  /* Never bounces past its ends (the webview's elastic overscroll). */
+  overscroll-behavior-y: none;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -483,7 +485,8 @@
   overflow-y: auto;
   overflow-x: hidden;
   touch-action: pan-y;
-  overscroll-behavior: contain;
+  /* `none`, not `contain`: contain still let the list bounce past its ends. */
+  overscroll-behavior: none;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -775,6 +778,8 @@
   background: var(--bg-primary);
   max-height: 340px;
   overflow-y: auto;
+  /* Never bounces past its ends (the webview's elastic overscroll). */
+  overscroll-behavior-y: none;
 }
 
 .source-control .sc-file-diff-side + .sc-file-diff-side {
