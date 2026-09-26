@@ -273,16 +273,15 @@
   gap: 6px;
   padding: 7px 8px 8px;
   border-radius: 9px;
-  background: var(--bg-secondary);
+  /* The sidebar's own colour with the flat Settings outline — not a black
+     card (--surface-* tokens in global.css). */
+  background: transparent;
+  box-shadow: var(--surface-outline);
   transition: background var(--dur-fast, 0.12s) var(--ease-out, ease);
 }
 
-.usage-row[data-reporting='true'] {
-  background: var(--bg-secondary);
-}
-
 .usage-row:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-hover);
 }
 
 /* Wrap, rather than shrink. Without this the name is the only flexible item on

@@ -75,8 +75,6 @@ export default function Dropdown({
   const updatePlacement = useCallback(() => {
     if (!rootEl.current) return;
     const r = rootEl.current.getBoundingClientRect();
-    const composer = rootEl.current?.closest('.chat-mode-composer');
-    const composerRect = composer?.getBoundingClientRect();
 
     // Determine the bounding rect that constrains the menu.
     const edge = 16;
@@ -92,9 +90,11 @@ export default function Dropdown({
       }
     }
 
-    const topBase = composerRect ? composerRect.bottom + 6 : r.bottom + 6;
+    // Anchored to the selector itself, above or below it — including in the
+    // chat composer, where a menu opens right at the picker that was clicked.
+    const topBase = r.bottom + 6;
     const below = boundBottom - topBase;
-    const topAnchor = composerRect ? composerRect.top : r.top;
+    const topAnchor = r.top;
     const above = topAnchor - boundTop;
     const boundedMenuMaxHeight = Math.max(60, Math.min(MENU_MAX, menuMaxHeight));
     const willDropUp = direction === 'up'

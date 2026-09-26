@@ -2395,6 +2395,9 @@
   box-shadow: var(--surface-outline-active) !important;
 }
 .chat-agent-model-menu {
+  /* No edge fade on the frame itself: it faded the outline and corners. */
+  mask-image: none;
+  -webkit-mask-image: none;
   border-color: transparent;
   background: var(--surface-menu);
   box-shadow: var(--surface-menu-shadow) !important;

@@ -184,6 +184,9 @@
   box-shadow: var(--surface-outline-active) !important;
 }
 .dd-menu {
+  /* No edge fade on the frame itself: it faded the outline and corners. */
+  mask-image: none;
+  -webkit-mask-image: none;
   background: var(--surface-menu);
   box-shadow: var(--surface-menu-shadow) !important;
 }

@@ -78,8 +78,6 @@ export default function ChatAgentModelPicker({
       ? document.querySelector(boundarySelector)
       : (rootRef.current?.closest('.chat-mode-panel') ?? null);
     const boundRect = boundary ? boundary.getBoundingClientRect() : null;
-    const composer = rootRef.current?.closest('.chat-mode-composer');
-    const composerRect = composer?.getBoundingClientRect();
 
     const edge = 16;
     const bottomEdge = 32;
@@ -88,9 +86,10 @@ export default function ChatAgentModelPicker({
     const boundLeft = boundRect ? Math.max(edge, boundRect.left + edge) : edge;
     const boundRight = boundRect ? Math.min(window.innerWidth - edge, boundRect.right - edge) : window.innerWidth - edge;
 
-    const topBase = composerRect ? composerRect.bottom + 6 : anchor.bottom + 6;
+    // Anchored to the picker itself, above or below it, not to the composer's edges.
+    const topBase = anchor.bottom + 6;
     const availableBelow = boundBottom - topBase;
-    const topAnchor = composerRect ? composerRect.top : anchor.top;
+    const topAnchor = anchor.top;
     const availableAbove = topAnchor - boundTop;
 
     const nextDropUp = direction === 'up'
