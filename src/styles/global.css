@@ -21,6 +21,10 @@
   /* Application chrome base size. Editor and terminal components set their own
      typography and are intentionally not driven by this value. */
   --ui-font-size: 14px;
+  /* Body weight for application UI. A touch above regular (400): system-ui is
+     Segoe UI Variable on Windows 11, which renders the in-between weight; a
+     static face falls back to the nearest one it has. */
+  --ui-font-weight: 450;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
@@ -219,7 +223,7 @@ html.bg-palette-light:not(.has-bg-media) {
 .statusbar {
   font-family: var(--font-sans);
   font-size: var(--ui-font-size, 14px);
-  font-weight: 400;
+  font-weight: var(--ui-font-weight);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -232,7 +236,7 @@ html.bg-palette-light:not(.has-bg-media) {
 .titlebar button,
 .utility-drawer button {
   font-family: inherit;
-  font-weight: 400;
+  font-weight: var(--ui-font-weight);
 }
 
 /* Keep the conversational surface and both workspace sidebars on the same
@@ -247,7 +251,7 @@ html.bg-palette-light:not(.has-bg-media) {
 .app-shell .source-control {
   font-family: var(--font-sans);
   font-size: var(--ui-font-size, 14px);
-  font-weight: 400;
+  font-weight: var(--ui-font-weight);
   font-synthesis: none;
 }
 
@@ -265,7 +269,7 @@ html.bg-palette-light:not(.has-bg-media) {
    request a heavier weight. */
 .app-shell .left-utility-panel *,
 .app-shell .right-utility-panel * {
-  font-weight: 400;
+  font-weight: var(--ui-font-weight);
 }
 
 /* Ensure titlebar buttons are transparent by default in transparency mode */
@@ -684,7 +688,7 @@ body {
   font-size: var(--ui-font-size, 14px);
   /* Keep the application baseline calm; intentional labels and headings may
      still opt into a heavier weight locally. */
-  font-weight: 400;
+  font-weight: var(--ui-font-weight);
   color: var(--text-primary);
   background-color: transparent;
   position: relative;
@@ -702,7 +706,7 @@ body {
 :is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--font-sans) !important;
   font-size: inherit !important;
-  font-weight: 400 !important;
+  font-weight: var(--ui-font-weight) !important;
   font-synthesis: none;
   text-transform: none !important;
 }
