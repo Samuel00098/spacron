@@ -194,9 +194,13 @@ pub fn terminal_list(state: State<AppState>) -> Result<Vec<u32>, String> {
 pub fn terminal_get_windows_build() -> Result<u32, String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
+        // No console window: a GUI parent's console child would flash one up.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let output = Command::new("cmd")
             .args(&["/c", "ver"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| e.to_string())?;
         

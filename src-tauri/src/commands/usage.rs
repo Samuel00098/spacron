@@ -1311,6 +1311,10 @@ async fn spawn_probe(
     path: &std::path::Path,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
+    // CREATE_NO_WINDOW on both paths: Spacron is a GUI process with no console,
+    // so a console child (`cmd`, or the CLI itself) would otherwise get a new
+    // visible console window — a terminal flashing up on every usage probe.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let lower = path.to_string_lossy().to_lowercase();
     if lower.ends_with(".cmd") || lower.ends_with(".bat") {
         return tokio::process::Command::new("cmd")
@@ -1318,6 +1322,7 @@ async fn spawn_probe(
             .arg(path)
             .args(args)
             .stdin(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .kill_on_drop(true)
             .output()
             .await;
@@ -1325,6 +1330,7 @@ async fn spawn_probe(
     tokio::process::Command::new(path)
         .args(args)
         .stdin(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .kill_on_drop(true)
         .output()
         .await
