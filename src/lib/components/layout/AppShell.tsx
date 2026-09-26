@@ -3565,7 +3565,9 @@ export default function AppShell() {
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
-                '--overlay-clear': `${overlaysHeight + 12}px`,
+                // Room left above the floating bar: its measured row plus a
+                // small gap (10px between the panels and the bar).
+                '--overlay-clear': `${overlaysHeight + 4}px`,
                 '--left-nav-space': `${leftDrawerOpen ? leftPanelWidthFit + 20 : 0}px`,
                 '--right-drawer-space': `${
                   rightSidebarOpen ? rightDrawerWidthFit + 20 : 0
