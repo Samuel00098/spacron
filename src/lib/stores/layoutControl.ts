@@ -7,7 +7,7 @@ import { writable } from '$lib/stores/storeCompat';
 // read-only snapshot back so the orchestrator brain can see the current layout.
 
 export type AmbientLayout = 'focus' | 'development' | 'gallery' | 'vibe' | 'preview';
-export type RoomOp = 'focus' | 'minimize' | 'restore' | 'close';
+export type RoomOp = 'focus' | 'expand' | 'collapse' | 'minimize' | 'restore' | 'close';
 
 export type LayoutCommand =
   // `nonce` lets an identical command (e.g. "focus terminal" twice) re-fire.

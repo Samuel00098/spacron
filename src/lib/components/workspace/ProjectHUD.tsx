@@ -40,6 +40,7 @@ import {
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
 import { layoutSnapshot, requestRoomControl, type RoomOp } from '$lib/stores/layoutControl';
+import { isFullscreenRoom } from '$lib/components/layout/fullscreenRooms';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
@@ -781,6 +782,7 @@ export default function ProjectHUD() {
       busy = false,
     ) => {
       const minimized = projectId === activeProjId && currentLayout.rooms.some((item) => item.id === room && item.minimized);
+      const expanded = projectId === activeProjId && currentLayout.expandedRoom === room;
       const minimizeOp: RoomOp = minimized ? 'restore' : 'minimize';
       return (
         <div key={key} className="project-process-entry">
@@ -795,6 +797,29 @@ export default function ProjectHUD() {
             {detail && <span className="project-process-detail">{detail}</span>}
           </button>
           <div className="project-process-actions">
+            {!isFullscreenRoom(room) && (
+              <button
+                type="button"
+                className="project-process-action"
+                onClick={() => openRoom(p.workspaceId, p.path, room, expanded ? 'collapse' : 'expand').catch(console.error)}
+                title={expanded ? `Restore ${label} to the split grid` : `Expand ${label} to the full stage`}
+                aria-label={expanded ? `Restore ${label} to the split grid` : `Expand ${label} to the full stage`}
+              >
+                <Glyph>
+                  {expanded ? (
+                    <>
+                      <path d="M4 14h6v6M20 10h-6V4" />
+                      <path d="m10 14-7 7m11-11 7-7" />
+                    </>
+                  ) : (
+                    <>
+                      <path d="M15 3h6v6M9 21H3v-6" />
+                      <path d="m21 3-7 7M3 21l7-7" />
+                    </>
+                  )}
+                </Glyph>
+              </button>
+            )}
             <button
               type="button"
               className="project-process-action"

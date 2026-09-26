@@ -1150,6 +1150,18 @@ export default function AppShell() {
         }
         focusRoom(room);
         break;
+      case 'expand':
+        setMinimizedRooms((current) => {
+          if (!current.has(room)) return current;
+          const next = new Set(current);
+          next.delete(room);
+          return next;
+        });
+        focusRoomMode(room);
+        break;
+      case 'collapse':
+        if (zoomedRoom === room) setStageExpansion(null);
+        break;
       case 'minimize': minimizeRoom(room); break;
       case 'restore': restoreRoom(room); break;
       case 'close': closeRoom(room); break;

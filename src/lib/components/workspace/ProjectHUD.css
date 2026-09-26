@@ -1048,6 +1048,22 @@
   align-items: center;
   flex: 0 0 auto;
   padding-right: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.project-process-entry:hover .project-process-actions,
+.project-process-entry:focus-within .project-process-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .project-process-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .project-process-action {
