@@ -802,7 +802,7 @@ export default function ProjectHUD() {
               title={`${minimized ? 'Restore' : 'Minimize'} ${label}`}
               aria-label={`${minimized ? 'Restore' : 'Minimize'} ${label}`}
             >
-              <Glyph>{minimized ? <path d="M5 8h14M5 16h14" /> : <path d="M5 12h14" />}</Glyph>
+              <Glyph>{minimized ? <rect x="5" y="5" width="14" height="14" rx="2" /> : <path d="M5 12h14" />}</Glyph>
             </button>
             <button
               type="button"
