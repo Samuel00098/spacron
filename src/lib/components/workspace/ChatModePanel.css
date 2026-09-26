@@ -1919,16 +1919,17 @@
   flex-shrink: 1;
 }
 
+/* The composer's selectors hug their values (see Dropdown.css). */
 .app-shell .chat-mode-composer-footer .chat-agent-model-picker {
   min-width: 0;
   max-width: 220px;
-  flex: 1 1 160px;
+  flex: 0 1 auto;
 }
 .app-shell .chat-agent-model-trigger {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  width: fit-content;
   max-width: 220px;
   height: 30px;
   padding: 0 8px;
@@ -1979,13 +1980,12 @@
 .app-shell .chat-agent-model-mark { display: inline-flex; width: 15px; height: 15px; flex: 0 0 15px; }
 
 .app-shell .chat-mode-access-dropdown {
-  min-width: 110px;
-  max-width: 135px;
+  min-width: 0;
   flex-shrink: 0;
 }
 .app-shell .chat-mode-composer-settings .chat-mode-reasoning-dropdown {
-  flex: 0 1 152px;
-  min-width: 132px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .app-shell .chat-mode-reasoning-dropdown .reasoning-slider-trigger {
   border-color: var(--input-border, var(--border));
@@ -2003,7 +2003,7 @@
 :root.light-theme .app-shell .chat-mode-reasoning-dropdown .reasoning-slider-popover {
   background: var(--major-panel-surface);
 }
-.app-shell .chat-mode-work-dropdown { flex: 0 1 100px; min-width: 85px; }
+.app-shell .chat-mode-work-dropdown { flex: 0 1 auto; min-width: 0; }
 .app-shell .chat-mode-file-mentions {
   position: absolute;
   z-index: 20;
@@ -2057,8 +2057,8 @@
   background: color-mix(in srgb, var(--warning, #fbbf24) 20%, transparent);
 }
 .app-shell .chat-mode-composer-settings .chat-mode-access-dropdown {
-  flex: 0 1 135px;
-  min-width: 100px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .app-shell .chat-mode-composer-settings .chat-mode-provider-warning {
   max-width: 132px;

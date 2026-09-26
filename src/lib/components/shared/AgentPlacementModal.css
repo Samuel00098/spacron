@@ -333,8 +333,9 @@
   border-color: var(--accent, #3b82f6);
 }
 
+/* Hugs its value (see Dropdown.css) rather than filling the field. */
 .agent-launch-config-field .dropdown {
-  width: 100%;
+  max-width: 100%;
 }
 
 .agent-launch-config-field .dd-trigger {

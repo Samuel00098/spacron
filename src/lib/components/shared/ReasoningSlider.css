@@ -103,3 +103,10 @@
   background: transparent;
   box-shadow: var(--surface-outline);
 }
+
+/* The dropdown trigger hugs its label like the other selectors. */
+.reasoning-slider-dropdown,
+.reasoning-slider-trigger {
+  width: fit-content;
+  max-width: 100%;
+}

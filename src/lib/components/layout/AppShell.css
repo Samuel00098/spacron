@@ -762,7 +762,7 @@
 
 .app-shell .split-expanded-room-picker .dropdown,
 .app-shell .split-expanded-room-picker .dd-trigger {
-  width: 100%;
+  max-width: 100%;
 }
 
 .app-shell .split-expanded-room-picker .dd-trigger {

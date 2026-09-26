@@ -196,3 +196,18 @@
 .dd-item.active {
   background: var(--surface-selected);
 }
+
+/* Selectors hug the chosen value, like the Settings selects, everywhere in the
+   app; a long value ellipsises at the space it has. (`fit-content`, not
+   `auto`: the trigger is a block-level flex box, which `auto` stretches.) */
+.dropdown,
+.dd-trigger {
+  width: fit-content;
+  max-width: 100%;
+}
+
+/* Settings → Usage keeps its fixed-width pickers exactly as they are. */
+.stats-control-group :is(.dropdown, .dd-trigger),
+.stats-tab-select :is(.dropdown, .dd-trigger) {
+  width: 100%;
+}
