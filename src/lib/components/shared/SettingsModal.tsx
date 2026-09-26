@@ -73,7 +73,6 @@ import {
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
   jevProvider,
-  jevModel,
   openaiRealtimeConnection,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
@@ -170,7 +169,6 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media' },
   { id: 'models', label: 'AI Connections', kicker: 'Providers and keys' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
-  { id: 'jev', label: 'Jev', kicker: 'Fast decisions' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
   { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning' },
@@ -212,7 +210,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ai-api-key', tab: 'models', section: 'Provider connections', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
   { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
   { id: 'media-generation', tab: 'models', section: 'Image & video generation', label: 'Image & video generation', keywords: 'image video picture generate fal replicate veo sora dalle', target: 'section' },
-  { id: 'jev', tab: 'jev', section: 'Jev decisions', label: 'Jev decisions', keywords: 'jev typesafe openrouter decisions classifier system one fast routing', target: 'section' },
+  { id: 'jev', tab: 'models', section: 'Jev decisions', label: 'Jev decisions', keywords: 'jev typesafe openrouter vercel gateway decisions classifier system one fast routing', target: 'section' },
   { id: 'custom-providers', tab: 'models', section: 'Custom providers', label: 'Custom providers', keywords: 'custom openai compatible provider api key base url proxy litellm', target: 'section' },
   { id: 'local-speech-models', tab: 'models', section: 'Local Speech-to-Text (STT)', label: 'Local Speech-to-Text', keywords: 'offline private voice dictation', target: 'section' },
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
@@ -591,65 +589,50 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /**
- * Settings > Jev. Who answers Jev's quick decisions (agent status, routing,
- * file-overlap checks), and which saved key pays for it. TypeSafe and
- * OpenRouter serve the real Jev; a custom provider does when it exposes
- * `/systemone` (e.g. a LiteLLM proxy); any other provider is a chat model
- * asked to answer in Jev's shape.
+ * Settings > AI Connections > Jev decisions. Where the real Jev is reached
+ * and which saved key pays for it: TypeSafe, OpenRouter, Vercel AI Gateway, or
+ * a custom provider that serves `/systemone` (e.g. a LiteLLM proxy). Only
+ * sources that run Jev are listed; custom ones are probed first.
  */
-function JevSettingsPane({ onOpenConnections }: { onOpenConnections: () => void }) {
+function JevConnectionSection() {
   const [typesafeKeyInput, setTypesafeKeyInput] = useState('');
   const [keyError, setKeyError] = useState('');
   const [sourceKeyExists, setSourceKeyExists] = useState<boolean | null>(null);
   const via = (useStore(jevProvider) as string) || 'typesafe';
-  const model = useStore(jevModel) as string;
-  useStore(customProviders);
-  const [liveModels, setLiveModels] = useState<AiModelOption[]>([]);
-  const [modelsError, setModelsError] = useState('');
+  const customList = useStore(customProviders) as CustomProvider[];
+  const [jevCustom, setJevCustom] = useState<{ id: string; label: string }[]>([]);
 
-  const nativeJev = via === 'typesafe' || via === 'openrouter';
-  const customDef = aiProviders.find((p) => p.id === via && p.custom);
-  const needsModel = !nativeJev;
-  const sourceLabel = via === 'typesafe' ? 'TypeSafe' : aiProviders.find((p) => p.id === via)?.label ?? via;
+  // Custom providers are offered only once their /systemone route answers.
+  useEffect(() => {
+    let active = true;
+    void Promise.all(
+      customList.map(async (p): Promise<{ id: string; label: string } | null> => (
+        (await invoke<boolean>('jev_source_supported', { provider: p.id }).catch(() => false)) ? { id: p.id, label: p.name } : null
+      )),
+    ).then((found) => {
+      if (active) setJevCustom(found.filter((p): p is { id: string; label: string } => p !== null));
+    });
+    return () => { active = false; };
+  }, [customList]);
 
-  // Any chat provider can stand in. ChatGPT is left out: each call would start
-  // a Codex process, far too slow for a quick decision.
   const jevOptions = [
-    { id: 'typesafe', label: 'TypeSafe · real Jev' },
-    { id: 'openrouter', label: 'OpenRouter · real Jev' },
-    ...aiProviders.filter((p) => p.custom).map((p) => ({ id: p.id, label: `${p.label} · real Jev if served, else chat model` })),
-    ...aiProviders
-      .filter((p) => !p.custom && !['local', 'chatgpt', 'openrouter'].includes(p.id))
-      .map((p) => ({ id: p.id, label: `${p.label} · chat model` })),
+    { id: 'typesafe', label: 'TypeSafe' },
+    { id: 'openrouter', label: 'OpenRouter' },
+    { id: 'vercel', label: 'Vercel AI Gateway' },
+    ...jevCustom,
   ];
+  const sourceLabel = jevOptions.find((o) => o.id === via)?.label
+    ?? aiProviders.find((p) => p.id === via)?.label
+    ?? via;
 
   useEffect(() => {
     let active = true;
     setSourceKeyExists(null);
-    if (aiProviders.find((p) => p.id === via)?.local) {
-      setSourceKeyExists(true);
-      return () => { active = false; };
-    }
     void invoke<boolean>('provider_api_key_exists', { provider: via })
       .then((exists) => { if (active) setSourceKeyExists(exists); })
       .catch(() => { if (active) setSourceKeyExists(false); });
     return () => { active = false; };
   }, [via]);
-
-  useEffect(() => {
-    setLiveModels([]);
-    setModelsError('');
-    if (!needsModel) return;
-    let active = true;
-    void listProviderModels(via as AiProviderId)
-      .then((found) => {
-        if (active) setLiveModels(found.map((m) => ({ id: m.id, label: m.label ?? m.id, description: m.description ?? '' })));
-      })
-      .catch((error) => {
-        if (active) setModelsError(explainError(error).summary);
-      });
-    return () => { active = false; };
-  }, [via, needsModel]);
 
   const saveTypesafeKey = async (value: string) => {
     setKeyError('');
@@ -666,41 +649,33 @@ function JevSettingsPane({ onOpenConnections }: { onOpenConnections: () => void 
   const status = sourceKeyExists === null
     ? 'Checking…'
     : sourceKeyExists
-      ? needsModel && !model
-        ? `Using your ${sourceLabel} key. Pick a model below to turn Jev on.`
-        : `On · using your ${sourceLabel} key${needsModel ? ` with ${model}` : ''}.`
-      : `Off · no ${sourceLabel} key is saved yet.`;
+      ? `On · using your ${sourceLabel} key.`
+      : `Off · no ${sourceLabel} key is saved yet${via === 'typesafe' ? '' : '. Add it under Provider connections above'}.`;
 
   return (
     <Section title="Jev decisions">
       <p className="shell-hint">
         Jev makes quick, structured decisions for Spacron: what a quiet agent is doing, how to route a request, and
-        whether new work overlaps a running agent. It is optional; when it is off, Spacron uses its built-in rules.
+        whether new work overlaps a running agent. It answers in well under a second and costs a fraction of a chat
+        model. It is optional; when it is off, Spacron uses its built-in rules.
       </p>
-      <SettingRow
-        title="Answered by"
-        detail="TypeSafe and OpenRouter run the real Jev model (70-500 ms, output tokens free). Other providers use a chat model asked to answer the same way; pick a fast one, since some decisions run before a reply."
-      >
+      <SettingRow title="Answered by" detail="Services that run the Jev model. Each uses its own saved key.">
         <SelectField
           value={via}
           options={jevOptions}
-          onChange={(value) => { jevProvider.set(value); jevModel.set(''); }}
+          onChange={jevProvider.set}
           ariaLabel="Jev provider"
           renderIcon={(id) => (id === 'typesafe' ? null : providerIcon(id))}
         />
       </SettingRow>
       <SettingRow title="Key in use" detail={status}>
-        {via === 'typesafe' ? (
+        {via === 'typesafe' && (
           <input
             type="password"
             value={typesafeKeyInput}
             onChange={(event) => setTypesafeKeyInput(event.target.value)}
             placeholder={sourceKeyExists ? 'TypeSafe key saved in OS keychain' : 'Paste your TypeSafe key'}
           />
-        ) : (
-          <button type="button" className="settings-secondary" onClick={onOpenConnections}>
-            {sourceKeyExists ? `Manage ${sourceLabel} key` : `Add a ${sourceLabel} key`}
-          </button>
         )}
       </SettingRow>
       {via === 'typesafe' && (
@@ -709,22 +684,6 @@ function JevSettingsPane({ onOpenConnections }: { onOpenConnections: () => void 
           <button className="settings-secondary" onClick={() => void saveTypesafeKey('')} disabled={!sourceKeyExists}>Clear key</button>
           <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
         </div>
-      )}
-      {needsModel && (
-        <SettingRow
-          title="Model"
-          detail={modelsError || (customDef
-            ? `Used only if ${customDef.label} does not serve Jev itself.`
-            : model ? undefined : 'Pick a model. Until then Jev stays off.')}
-        >
-          <ModelSelect
-            value={model}
-            models={liveModels.length ? liveModels : model ? [{ id: model, label: model, description: '' }] : []}
-            onChange={jevModel.set}
-            label="Jev model"
-            renderIcon={() => providerIcon(via)}
-          />
-        </SettingRow>
       )}
       {keyError && <p className="shell-hint">{keyError}</p>}
     </Section>
@@ -2801,6 +2760,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <CustomProvidersSection />
 
+                <JevConnectionSection />
+
                 <Section title="Inline completion">
                   <SettingRow title="Ghost text">
                     <Toggle label="Toggle ghost text" checked={completionEnabled} onChange={aiGhostTextEnabled.set} />
@@ -3594,7 +3555,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
             )}
 
             {activeTab === 'orchestrator' && <OrchestratorSettingsPane />}
-            {activeTab === 'jev' && <JevSettingsPane onOpenConnections={() => setActiveTab('models')} />}
             {activeTab === 'mcp' && <McpSettingsPane />}
             {activeTab === 'stats' && <UsageStatsPane />}
 

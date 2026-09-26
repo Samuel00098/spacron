@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
-import { getProviderBaseUrl, getProviderDef, jevModel, jevProvider, type AiProviderId } from '$lib/stores/settings';
+import { jevProvider } from '$lib/stores/settings';
 import { stripTerminalOutput } from './orchestrator/activity-log';
 
 export type JevLabels = Record<string, string>;
@@ -50,18 +50,10 @@ export async function classifyDecision(
   }
 }
 
-/** Who answers: TypeSafe (no extras) or a chat provider with its model. */
-function jevRoute(): { provider?: string; model?: string; baseUrl?: string } {
+/** Where the real Jev is reached (Settings > AI Connections > Jev decisions). */
+function jevRoute(): { provider?: string } {
   const provider = get(jevProvider);
-  if (!provider || provider === 'typesafe') return {};
-  const local = getProviderDef(provider as AiProviderId).local;
-  return {
-    provider,
-    model: get(jevModel),
-    // Local servers are addressed by the renderer; every other provider's
-    // address (a custom one's included) is resolved by the backend.
-    baseUrl: local ? getProviderBaseUrl(provider as AiProviderId) : undefined,
-  };
+  return provider && provider !== 'typesafe' ? { provider } : {};
 }
 
 export function confidentChoice<T extends string>(

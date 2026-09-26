@@ -14,7 +14,6 @@ export type SettingsTab =
   | 'appearance'
   | 'models'
   | 'voice'
-  | 'jev'
   | 'terminal'
   | 'agents'
   | 'orchestrator'
