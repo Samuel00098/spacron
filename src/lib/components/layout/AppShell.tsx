@@ -1723,7 +1723,10 @@ export default function AppShell() {
         />
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
-            <span className="left-sidebar-app-name">Spacron</span>
+            <span className="left-sidebar-app-name" aria-label="Spacron">
+              <span className="left-sidebar-app-logo" aria-hidden="true" />
+              pacron
+            </span>
           </div>
           <button
             className="left-sidebar-collapse-btn"

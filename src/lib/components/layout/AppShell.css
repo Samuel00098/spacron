@@ -3647,6 +3647,8 @@ html.is-webkitgtk .app-shell .composer-strip {
 
 /* Keep the larger wordmark sharp and high-contrast in every theme. */
 .app-shell .left-sidebar-app-name {
+  display: inline-flex;
+  align-items: center;
   font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
   font-size: 26px !important;
   font-weight: 800 !important;
@@ -3657,6 +3659,17 @@ html.is-webkitgtk .app-shell .composer-strip {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.app-shell .left-sidebar-app-logo {
+  display: block;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin-right: -1px;
+  background: var(--text-primary);
+  -webkit-mask: url('/icon.png') center / contain no-repeat;
+  mask: url('/icon.png') center / contain no-repeat;
 }
 
 .app-shell .left-sidebar-quick-actions {
