@@ -2375,3 +2375,48 @@
     grid-column: auto;
   }
 }
+
+/* ── Flat Settings look for the composer's pickers and menus ──
+   The provider/model trigger, its menu, the reasoning popover and the @-mention
+   list match the Settings selects (see Dropdown.css): panel colour, flat 1px
+   outline, accent ring while open, soft accent fill when selected. */
+.app-shell .chat-agent-model-trigger,
+.app-shell .chat-agent-model-trigger.open {
+  background: transparent;
+  border-color: transparent;
+}
+.app-shell .chat-agent-model-trigger {
+  box-shadow: var(--surface-outline) !important;
+}
+.app-shell .chat-agent-model-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.app-shell .chat-agent-model-trigger.open {
+  box-shadow: var(--surface-outline-active) !important;
+}
+.chat-agent-model-menu {
+  border-color: transparent;
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow) !important;
+  backdrop-filter: none;
+}
+.chat-agent-model-search {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.chat-agent-model-menu button {
+  box-shadow: none !important;
+}
+.chat-agent-model-menu button.active {
+  background: var(--surface-selected);
+}
+.app-shell .chat-mode-reasoning-dropdown .reasoning-slider-popover,
+:root.light-theme .app-shell .chat-mode-reasoning-dropdown .reasoning-slider-popover {
+  border-color: transparent;
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow);
+}
+.app-shell .chat-mode-file-mentions {
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow) !important;
+}

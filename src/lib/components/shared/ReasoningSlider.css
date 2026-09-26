@@ -82,3 +82,24 @@
 .reasoning-slider-popover.up { bottom: calc(100% + 7px); }
 
 :root.light-theme .reasoning-slider-popover { box-shadow: 0 10px 28px rgba(28, 35, 50, 0.14); }
+
+/* ── Flat Settings look ── (see Dropdown.css) */
+.reasoning-slider-trigger {
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.reasoning-slider-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.reasoning-slider-trigger[aria-expanded='true'] {
+  box-shadow: var(--surface-outline-active) !important;
+}
+.reasoning-slider-popover {
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow);
+}
+/* The inline slider (spawn dialog) is a flat outlined box in the panel colour. */
+.reasoning-slider {
+  background: transparent;
+  box-shadow: var(--surface-outline);
+}

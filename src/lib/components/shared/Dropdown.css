@@ -165,3 +165,31 @@
   color: var(--accent);
   flex-shrink: 0;
 }
+
+/* ── Flat Settings look ──
+   Same as the Settings selects: a transparent trigger with a flat 1px outline,
+   an accent ring while open, the menu in the panel colour (opaque) with the
+   same outline, and a soft accent fill on the chosen item. `!important` on the
+   shadows outranks the global edge-bevel rules on buttons and -menus. */
+.dd-trigger {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.dd-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.dd-trigger.open {
+  background: transparent;
+  box-shadow: var(--surface-outline-active) !important;
+}
+.dd-menu {
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow) !important;
+}
+.dd-item {
+  box-shadow: none !important;
+}
+.dd-item.active {
+  background: var(--surface-selected);
+}

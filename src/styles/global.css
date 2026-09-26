@@ -25,6 +25,15 @@
      14px text reads solidly. Headings and bold use 500 too (see the
      hierarchy rule below), so they no longer stand apart by weight. */
   --ui-font-weight: 500;
+  /* The flat Settings look, shared by every control and menu that should match
+     it: a 1px outline drawn as a ring (the edge rules below clear border
+     colours on inputs, buttons, -menu and -card), menus in the panel colour but
+     opaque, and a soft accent fill for the selected item. */
+  --surface-outline: inset 0 0 0 1px var(--border);
+  --surface-outline-active: inset 0 0 0 1px var(--accent), 0 0 0 2px var(--accent-glow);
+  --surface-menu: linear-gradient(var(--bg-hover), var(--bg-hover)), rgb(var(--bg-secondary-rgb, 18, 18, 22));
+  --surface-menu-shadow: inset 0 0 0 1px var(--border), 0 16px 40px -12px rgba(0, 0, 0, 0.45);
+  --surface-selected: var(--accent-light);
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
@@ -703,7 +712,7 @@ body {
    actual editor/terminal output and authored document content keep their own
    typography controls. The exclusions are descendants as well as roots so a
    nested span cannot accidentally pick the application size back up. */
-:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
+:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading, .settings-header h2):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--font-sans) !important;
   font-size: inherit !important;
   font-weight: var(--ui-font-weight) !important;
@@ -713,7 +722,7 @@ body {
 
 /* Retain a small amount of hierarchy without returning to the heavy 600-800
    weights that made labels look wide and crowded. */
-:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-heading) {
+:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-heading):not(.settings-header h2) {
   font-weight: 500 !important;
 }
 

@@ -1126,3 +1126,35 @@
   transform: scale(0.99) !important;
   filter: none !important;
 }
+
+/* ── Flat Settings look ──
+   Agent tabs and placement cards take the panel colour with a flat 1px
+   outline instead of a black fill; the selected one gets the soft accent fill
+   and an accent outline, in both themes — as the Settings cards do. */
+.asm-agent-tab,
+:root.light-theme .asm-agent-tab,
+.asm-placement-card,
+:root.light-theme .asm-placement-card,
+.asm-placement-card:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.asm-agent-tab:hover,
+:root.light-theme .asm-agent-tab:hover,
+.asm-placement-card:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.asm-agent-tab.active,
+:root.light-theme .asm-agent-tab.active,
+.asm-placement-card.selected,
+:root.light-theme .asm-placement-card.selected {
+  background: var(--surface-selected);
+  border-color: transparent;
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent) !important;
+}
+/* The configure band sits on the modal's own colour, not a darker strip. */
+.asm-config-section {
+  background: transparent;
+}
