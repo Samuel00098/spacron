@@ -29,6 +29,7 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Workspace shell, rooms & visuals
 
+- [global-css-overrides](global-css-overrides.md) — which global.css rules override component CSS (type, borders, shadows), and the overscroll trap
 - [image-attach-delivery](image-attach-delivery.md) — how pasted/dropped images reach TUI agents and composers, and why preview URLs stay ephemeral
 - [image-generation](image-generation.md) — image/video generation: provider fallback order, what was verified live and what was not, where results live, and the scope/persistence traps
 
