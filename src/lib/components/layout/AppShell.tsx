@@ -54,6 +54,7 @@ import {
   RIGHT_DRAWER_MAX_WIDTH,
   LEFT_PANEL_MIN_WIDTH,
   LEFT_PANEL_MAX_WIDTH,
+  fitDrawerWidths,
 } from '$lib/stores/zustand/layout';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import {
@@ -1581,7 +1582,7 @@ export default function AppShell() {
   function startLeftPanelResize(event: React.MouseEvent) {
     event.preventDefault();
     setLeftPanelResizing(true);
-    leftPanelResizeRef.current = { startX: event.clientX, startWidth: layoutState.leftPanelWidth };
+    leftPanelResizeRef.current = { startX: event.clientX, startWidth: leftPanelWidthFit };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   }
@@ -1601,7 +1602,7 @@ export default function AppShell() {
     setRightDrawerResizing(true);
     rightDrawerResizeRef.current = {
       startX: event.clientX,
-      startWidth: layoutState.rightDrawerWidth,
+      startWidth: rightDrawerWidthFit,
       active: true,
     };
     document.body.style.cursor = 'col-resize';
@@ -1650,6 +1651,18 @@ export default function AppShell() {
     (tool) => tool !== 'snapshots' || showSnapshotsTab,
   );
   const rightSidebarOpen = useStore(rightSidebarVisible);
+
+  // Drawer widths as rendered: the saved widths, squeezed only when the window
+  // is too narrow to also give the stage a usable width. Gutters are the 20px
+  // outer margin beside each open drawer plus the stage's 8px on each side.
+  const { left: leftPanelWidthFit, right: rightDrawerWidthFit } = fitDrawerWidths({
+    available:
+      windowWidth / (zoom / 100) - 16 - (leftDrawerOpen ? 20 : 0) - (rightSidebarOpen ? 20 : 0),
+    left: layoutState.leftPanelWidth,
+    right: layoutState.rightDrawerWidth,
+    leftOpen: leftDrawerOpen,
+    rightOpen: rightSidebarOpen,
+  });
 
   useEffect(() => {
     if (!showSnapshotsTab && rightNavigatorTool === 'snapshots') {
@@ -1709,9 +1722,11 @@ export default function AppShell() {
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
+        // Below 240px the rail compacts its contents (see AppShell.css).
+        data-narrow={leftPanelWidthFit < 240 ? '' : undefined}
         style={{
           width: 'var(--left-sidebar-width)',
-          '--left-sidebar-width': `${layoutState.leftPanelWidth}px`,
+          '--left-sidebar-width': `${leftPanelWidthFit}px`,
         } as React.CSSProperties}
         aria-label="Projects"
       >
@@ -1868,7 +1883,7 @@ export default function AppShell() {
     return (
       <aside
         className="right-utility-panel right-sidebar bento-card"
-        style={{ width: layoutState.rightDrawerWidth }}
+        style={{ width: rightDrawerWidthFit }}
         aria-label="Project tools"
       >
         <div
@@ -3551,9 +3566,9 @@ export default function AppShell() {
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
                 '--overlay-clear': `${overlaysHeight + 12}px`,
-                '--left-nav-space': `${leftDrawerOpen ? layoutState.leftPanelWidth + 20 : 0}px`,
+                '--left-nav-space': `${leftDrawerOpen ? leftPanelWidthFit + 20 : 0}px`,
                 '--right-drawer-space': `${
-                  rightSidebarOpen ? layoutState.rightDrawerWidth + 20 : 0
+                  rightSidebarOpen ? rightDrawerWidthFit + 20 : 0
                 }px`,
               } as React.CSSProperties}
             >

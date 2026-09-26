@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
 import { layoutControlCommand } from '$lib/stores/layoutControl';
-import { useLayoutStore } from './layout';
+import {
+  useLayoutStore,
+  fitDrawerWidths,
+  STAGE_MIN_WIDTH,
+  LEFT_PANEL_MIN_WIDTH,
+  RIGHT_DRAWER_MIN_WIDTH,
+} from './layout';
 
 // The editor is a room, not just a visibility flag. Flipping `editorVisible`
 // leaves it wherever it was — off stage, or minimized — so revealing the editor
@@ -56,5 +62,35 @@ describe('sidebarTab projects persistence and sanitisation', () => {
     // Toggling while active collapses it
     useLayoutStore.getState().toggleSidebarTab('projects');
     expect(useLayoutStore.getState().sidebarVisible).toBe(false);
+  });
+});
+
+// Drawers give way so the stage stays usable in small windows, without ever
+// rewriting the saved widths (that is the caller's business, and it doesn't).
+describe('fitDrawerWidths', () => {
+  const both = { left: 340, right: 380, leftOpen: true, rightOpen: true };
+
+  it('keeps the saved widths when everything fits', () => {
+    expect(fitDrawerWidths({ ...both, available: 1224 })).toEqual({ left: 340, right: 380 });
+  });
+
+  it('squeezes both drawers so the stage keeps its minimum at the 960px window', () => {
+    const fit = fitDrawerWidths({ ...both, available: 904 });
+    expect(904 - fit.left - fit.right).toBeGreaterThanOrEqual(STAGE_MIN_WIDTH);
+    expect(fit.left).toBeGreaterThanOrEqual(LEFT_PANEL_MIN_WIDTH);
+    expect(fit.right).toBeGreaterThanOrEqual(RIGHT_DRAWER_MIN_WIDTH);
+  });
+
+  it('never goes below either minimum, even when the stage cannot be saved', () => {
+    expect(fitDrawerWidths({ ...both, available: 500 })).toEqual({
+      left: LEFT_PANEL_MIN_WIDTH,
+      right: RIGHT_DRAWER_MIN_WIDTH,
+    });
+  });
+
+  it('only squeezes the drawer that is open', () => {
+    const fit = fitDrawerWidths({ ...both, rightOpen: false, available: 700 });
+    expect(fit.left).toBe(700 - STAGE_MIN_WIDTH);
+    expect(fit.right).toBe(380);
   });
 });

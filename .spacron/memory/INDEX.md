@@ -94,6 +94,7 @@ short enough that it says what the note is *about*, never what it says.
 
 ## Build, release & repo hygiene
 
+- [drive-the-real-app-at-any-size](drive-the-real-app-at-any-size.md) — how to screenshot the desktop app with a project open at a chosen size, and why viewport breakpoints under 960px are dead
 - [release-flow](release-flow.md) — cutting a release, including the `cargo metadata` step everybody forgets
 - [npm-audit-fix-edgesout-bug](npm-audit-fix-edgesout-bug.md) — npm 10.9.7 aborts every dependency bump; the legacy-peer-deps workaround and how to check it
 - [sidecar-externalbin-deadlock](sidecar-externalbin-deadlock.md) — why `build.rs` stamps a placeholder sidecar; never revert it

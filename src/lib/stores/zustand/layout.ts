@@ -55,6 +55,39 @@ export function clampRightDrawerWidth(v: unknown): number {
   return Math.max(RIGHT_DRAWER_MIN_WIDTH, Math.min(RIGHT_DRAWER_MAX_WIDTH, n));
 }
 
+/** The stage (the rooms between the two drawers) keeps at least this much width
+ *  while either drawer still has room to give. At the 960px window minimum with
+ *  both drawers at their minimums the stage lands just above it. */
+export const STAGE_MIN_WIDTH = 440;
+
+/** Fit the saved drawer widths to the window for rendering. The saved widths are
+ *  the user's preference and are never rewritten here: when both drawers plus a
+ *  usable stage do not fit, each open drawer gives up width in proportion to how
+ *  far it sits above its own minimum, and the preference comes back as soon as
+ *  the window grows again. `available` is the width the drawers and stage share
+ *  once gutters are taken off. */
+export function fitDrawerWidths(opts: {
+  available: number;
+  left: number;
+  right: number;
+  leftOpen: boolean;
+  rightOpen: boolean;
+}): { left: number; right: number } {
+  const { available, leftOpen, rightOpen } = opts;
+  let { left, right } = opts;
+  const used = (leftOpen ? left : 0) + (rightOpen ? right : 0);
+  const excess = used + STAGE_MIN_WIDTH - available;
+  if (excess <= 0) return { left, right };
+  const leftSlack = leftOpen ? Math.max(0, left - LEFT_PANEL_MIN_WIDTH) : 0;
+  const rightSlack = rightOpen ? Math.max(0, right - RIGHT_DRAWER_MIN_WIDTH) : 0;
+  const slack = leftSlack + rightSlack;
+  if (slack <= 0) return { left, right };
+  const take = Math.min(excess, slack);
+  if (leftOpen) left -= Math.round(take * (leftSlack / slack));
+  if (rightOpen) right -= Math.round(take * (rightSlack / slack));
+  return { left, right };
+}
+
 const defaultLayout: LayoutState = {
   sidebarVisible: true,
   sidebarWidth: 310,

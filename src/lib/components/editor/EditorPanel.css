@@ -73,6 +73,10 @@
   justify-content: center;
   flex: 1;
   gap: 8px;
+  /* Narrow panels wrap the hint; keep every line centred and off the edges. */
+  padding: 0 20px;
+  text-align: center;
+  text-wrap: balance;
   color: var(--text-muted);
 }
 

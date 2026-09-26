@@ -3732,6 +3732,22 @@ html.is-webkitgtk .app-shell .composer-strip {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
+/* Narrow rail (`data-narrow`, set below 240px — the rail gives way to keep the
+   stage usable in small windows, or the user dragged it there). The project
+   name gets priority over the Active badge (the card's highlight already says
+   which is active), and the wordmark shrinks so it clears the collapse button. */
+.app-shell .left-sidebar[data-narrow] .project-active-badge {
+  display: none;
+}
+
+.app-shell .left-sidebar[data-narrow] .left-sidebar-heading {
+  inset: 0 36px;
+}
+
+.app-shell .left-sidebar[data-narrow] .left-sidebar-app-name {
+  font-size: 19px !important;
+}
+
 /* Keep every right-sidebar tool in one horizontally scrollable strip. */
 .app-shell .right-sidebar-header {
   align-items: center;
