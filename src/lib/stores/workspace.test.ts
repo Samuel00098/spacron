@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 
 import {
   __sanitisePersistedProjectState as sanitise,
   __rebaseProjectPathValues as rebaseProjectPathValues,
   __setProjectIn as setProjectIn,
   moveProjectBetweenCollections,
+  openWorkspace,
+  recentWorkspaces,
+  isProjectSwitching,
 } from './workspace';
 import type { Workspace } from '$lib/types/workspace';
 
@@ -398,5 +402,32 @@ describe('project root rename path migration', () => {
     expect([...migrated.expandedPaths]).toEqual(['C:\\work\\after\\src']);
     expect([...migrated.cache.keys()]).toEqual(['C:\\work\\after\\README.md']);
     expect([...migrated.cache.values()][0]?.path).toBe('D:\\other\\file.ts');
+  });
+});
+
+/**
+ * Opening a workspace clears every store and then re-opens its projects one
+ * backend round-trip at a time. The shell veils the stage only while
+ * `isProjectSwitching` is set, so it has to go up before that half-built stage
+ * and come back down even when no project restore takes over.
+ */
+describe('openWorkspace switching flag', () => {
+  it('holds the flag while projects load and drops it when nothing restores', async () => {
+    let fail!: (err: Error) => void;
+    const pending = new Promise<never>((_, reject) => { fail = reject; });
+    const invoke = vi.fn(() => pending);
+    vi.doMock('@tauri-apps/api/core', () => ({ invoke }));
+
+    recentWorkspaces.set([
+      { id: 'ws-veil', name: 'ws', project_paths: ['/missing'], active_project_path: '/missing', last_opened: '0' },
+    ]);
+    const opening = openWorkspace('ws-veil');
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect(get(isProjectSwitching)).toBe(true);
+
+    fail(new Error('gone'));
+    await opening;
+    expect(get(isProjectSwitching)).toBe(false);
+    vi.doUnmock('@tauri-apps/api/core');
   });
 });

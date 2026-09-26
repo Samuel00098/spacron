@@ -918,6 +918,58 @@
   animation: none;
 }
 
+/* ── Project switch veil ─────────────────────────────────────────────────
+   A project switch lands as several partial states over a few backend
+   round-trips (see `projectVeil` in AppShell.tsx). The panels are held at
+   opacity 0 for all of them and fade in once the new stage is fitted.
+
+   Same rules as the entrance above: opacity on `.room-panel` only, never on
+   `.stage-pane` or an ancestor (that would strip the glass), and never
+   `visibility` or `display` — the panes must stay laid out at full size so
+   their terminals keep measuring while hidden. `!important` because a
+   `.layout-switching` entrance started by the arrangement restore is an
+   animation, and animations beat ordinary declarations. `transition: none`
+   because `.room-panel` transitions its opacity: without it the veil fades
+   out over --dur-base and every frame of that fade shows the half-cleared
+   stage it exists to hide. */
+.app-shell .rooms-table.project-veiled .focused-room .room-panel,
+.app-shell .rooms-table.project-veiled .stage-empty-cta {
+  opacity: 0 !important;
+  animation: none !important;
+  transition: none !important;
+}
+.app-shell .rooms-table.project-veiled {
+  pointer-events: none;
+}
+.app-shell .rooms-table.project-revealing .focused-room .room-panel,
+.app-shell .rooms-table.project-revealing .stage-empty-cta {
+  animation: project-stage-in 200ms var(--ease-out) both !important;
+}
+/* Only a slow (cold) restore ever shows this: the delay outlasts a warm switch,
+   so a quick hop between projects never flashes a loading line. */
+.app-shell .stage-layers > .project-switch-status {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  pointer-events: none;
+  animation: project-stage-in 200ms var(--ease-out) 450ms both;
+}
+@keyframes project-stage-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell .rooms-table.project-revealing .focused-room .room-panel,
+  .app-shell .rooms-table.project-revealing .stage-empty-cta {
+    animation: none !important;
+  }
+}
+
 /* Stage that layers every persistent terminal/agent pane on top of each other,
    all kept at full size (so their xterm stays fitted) with only the active one
    visible. Switching agents flips `.stage-hidden` — no unmount, no reload. */

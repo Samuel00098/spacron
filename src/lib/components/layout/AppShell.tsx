@@ -212,6 +212,12 @@ const SPLIT_MAX_PANES = 12;
 // different jobs — working in a few panes, versus watching many.
 const SPLIT_FIT_PANES = 6;
 
+// Project switch veil. SETTLE covers the double-rAF refit, the 80 ms atlas
+// repaint and a full-screen TUI answering its SIGWINCH, so the stage is final
+// before it shows. REVEAL must match `project-stage-in` in AppShell.css.
+const PROJECT_SETTLE_MS = 150;
+const PROJECT_REVEAL_MS = 200;
+
 function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
 }
@@ -608,6 +614,7 @@ export default function AppShell() {
     const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const currentAppearance = useStore(appearance);
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
+  const switchingPhase = useWorkspaceStore((s) => s.switchingPhase);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
   useEffect(() => {
@@ -873,7 +880,15 @@ export default function AppShell() {
   // Auto-focus a freshly spawned agent so it opens in the focus screen. The
   // first run only records the current agents, so restored/pre-existing agents
   // on app startup don't steal focus from the default room.
+  //
+  // `agentRoomIds` follows the ACTIVE project, so switching projects swaps the
+  // whole list and every agent of the project you land on looks "added". Those
+  // are not spawns: focusing one overrode the arrangement the project is being
+  // restored to and, in Focus, ran a view transition mid-switch — a bitmap of
+  // the previous project cross-faded over the new one. Agents that appear while
+  // a restore is in flight (a cold start relaunching them) are the same case.
   const prevAgentRoomIdsRef = useRef<AgentRoomId[]>([]);
+  const agentFocusProjectRef = useRef(activeProjectIdValue);
   const agentFocusInitRef = useRef(false);
   useEffect(() => {
     if (!agentFocusInitRef.current) {
@@ -883,6 +898,9 @@ export default function AppShell() {
     }
     const prev = prevAgentRoomIdsRef.current;
     prevAgentRoomIdsRef.current = agentRoomIds;
+    const projectChanged = agentFocusProjectRef.current !== activeProjectIdValue;
+    agentFocusProjectRef.current = activeProjectIdValue;
+    if (projectChanged || projectSwitching) return;
     const added = agentRoomIds.filter((id) => !prev.includes(id));
     if (added.length === 0) return;
     focusRoom(added[added.length - 1]);
@@ -895,13 +913,36 @@ export default function AppShell() {
   // on its own. A canvas/WebGL glyph atlas can go stale while a pane sits
   // hidden, so kick the same refit+repaint pass a layout switch uses once the
   // switch settles.
+  //
+  // A switch is also not one state change but several, spread across backend
+  // round-trips: the new project's agents appear under the old arrangement, then
+  // every store is cleared, then the saved layout lands, then the panes refit.
+  // Painting each of those is the flicker, the half-drawn panes and the "No open
+  // panes" flash. So the stage is veiled for the whole restore (see
+  // `.project-veiled` in AppShell.css), held a beat after it ends so the refit
+  // and each TUI's SIGWINCH redraw land while still hidden, and then faded in —
+  // the user only ever sees the finished stage.
+  const [projectVeil, setProjectVeil] = useState<'none' | 'hold' | 'reveal'>('none');
   const prevProjectSwitchingRef = useRef(projectSwitching);
   useEffect(() => {
     const wasSwitching = prevProjectSwitchingRef.current;
     prevProjectSwitchingRef.current = projectSwitching;
-    if (wasSwitching && !projectSwitching) notifyPanesResized(true);
+    if (projectSwitching) {
+      setProjectVeil('hold');
+      return;
+    }
+    if (!wasSwitching) return;
+    notifyPanesResized(true);
+    let revealTimer = window.setTimeout(() => {
+      setProjectVeil('reveal');
+      revealTimer = window.setTimeout(() => setProjectVeil('none'), PROJECT_REVEAL_MS);
+    }, PROJECT_SETTLE_MS);
+    return () => window.clearTimeout(revealTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectSwitching]);
+  // Read straight off the store as well as the state, so the veil is up on the
+  // very render the switch starts rather than one commit later.
+  const projectVeiled = projectSwitching || projectVeil === 'hold';
 
   const openRooms = useMemo<RoomId[]>(
     () => {
@@ -3516,6 +3557,11 @@ export default function AppShell() {
           style={!isExpanded && isSplit ? stagePresetStyle : undefined}
           aria-label={emptyStageMessage ?? undefined}
         >
+          {projectVeiled && (
+            <div className="project-switch-status" role="status">
+              {switchingPhase ?? 'Opening project…'}
+            </div>
+          )}
           {stageIsVacant && (
             <div className="stage-empty-cta">
               <strong className="stage-empty-title">{project ? 'Start with agents' : 'Spacron'}</strong>
@@ -3597,7 +3643,7 @@ export default function AppShell() {
               <div className="rooms-content-horizontal">
                 {renderLeftUtilityPanel()}
 
-                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}${
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${projectVeiled ? ' project-veiled' : projectVeil === 'reveal' ? ' project-revealing' : ''}${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}${
                   (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
                   (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                     ? ` ${ambientLayout}-solo`

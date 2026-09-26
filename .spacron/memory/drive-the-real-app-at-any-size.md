@@ -17,3 +17,10 @@ workspace (rooms, drawers, terminals) cannot be checked there. What works:
 Trap: the window minimum is 960x640 (`tauri.conf.json`), so viewport
 `@media (max-width: <960px)` rules never fire in the app. Size inner layouts by
 container or by the element's own width instead.
+
+Trap: after any HMR update the app imports its store modules as
+`/src/lib/stores/x.ts?t=<stamp>`. A `Runtime.evaluate` that does
+`import('/src/lib/stores/x.ts')` gets a SECOND, separate copy of the store, so
+sessions it creates never reach the UI and state it reads is not the app's. Take
+the exact URL from `performance.getEntriesByType('resource')` first. Clicking
+DOM elements is unaffected.

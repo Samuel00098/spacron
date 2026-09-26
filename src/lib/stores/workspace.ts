@@ -1450,59 +1450,73 @@ export async function openWorkspace(workspaceId: string) {
 
   homeScreenOpen.set(false);
 
-  // Clear current project stores
-  clearAllStores();
-  projects.set(new Map());
-  openProjectIds.set([]);
-  activeProjectId.set(null);
-  setActiveTerminalProject(null);
+  // Raise the switch flag BEFORE clearing: everything from here until
+  // `restoreProjectState` takes over is a half-built stage (no project, then
+  // projects arriving one backend round-trip at a time), and the shell veils the
+  // stage only while this is set. The restore clears it; if no restore starts,
+  // the `finally` below does.
+  isProjectSwitching.set(true);
+  let restoreStarted = false;
+  try {
+    // Clear current project stores
+    clearAllStores();
+    projects.set(new Map());
+    openProjectIds.set([]);
+    activeProjectId.set(null);
+    setActiveTerminalProject(null);
 
-  // Load all projects in the workspace
-  if (targetWs.project_paths.length > 0) {
-    for (const path of targetWs.project_paths) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const project = await invoke<Project>('workspace_open_project', { path });
-        projects.update((p) => setProjectIn(p, project.id, project));
-        openProjectIds.update((ids) => {
-          if (!ids.includes(project.id)) return [...ids, project.id];
-          return ids;
-        });
-      } catch (err) {
-        console.error(`Failed to open project ${path} in workspace:`, err);
+    // Load all projects in the workspace
+    if (targetWs.project_paths.length > 0) {
+      for (const path of targetWs.project_paths) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const project = await invoke<Project>('workspace_open_project', { path });
+          projects.update((p) => setProjectIn(p, project.id, project));
+          openProjectIds.update((ids) => {
+            if (!ids.includes(project.id)) return [...ids, project.id];
+            return ids;
+          });
+        } catch (err) {
+          console.error(`Failed to open project ${path} in workspace:`, err);
+        }
       }
-    }
 
-    // Restore active project
-    if (targetWs.active_project_path) {
-      const allProjects = get(projects);
-      const activeProj = Array.from(allProjects.values()).find((p) => p.root_path === targetWs.active_project_path);
-      if (activeProj) {
-        activeProjectId.set(activeProj.id);
-        setActiveTerminalProject(activeProj.id);
-        restoreProjectState(activeProj.id, activeProj.root_path).catch((e) => console.error('restoreProjectState failed:', e));
+      // Restore active project
+      if (targetWs.active_project_path) {
+        const allProjects = get(projects);
+        const activeProj = Array.from(allProjects.values()).find((p) => p.root_path === targetWs.active_project_path);
+        if (activeProj) {
+          activeProjectId.set(activeProj.id);
+          setActiveTerminalProject(activeProj.id);
+          restoreStarted = true;
+          restoreProjectState(activeProj.id, activeProj.root_path).catch((e) => console.error('restoreProjectState failed:', e));
+        } else {
+          const firstProjId = get(openProjectIds)[0];
+          if (firstProjId) {
+            const firstProj = allProjects.get(firstProjId);
+            if (firstProj) {
+              activeProjectId.set(firstProjId);
+              setActiveTerminalProject(firstProjId);
+              restoreStarted = true;
+              restoreProjectState(firstProjId, firstProj.root_path).catch((e) => console.error('restoreProjectState failed:', e));
+            }
+          }
+        }
       } else {
         const firstProjId = get(openProjectIds)[0];
         if (firstProjId) {
-          const firstProj = allProjects.get(firstProjId);
+          const firstProj = get(projects).get(firstProjId);
           if (firstProj) {
             activeProjectId.set(firstProjId);
             setActiveTerminalProject(firstProjId);
+            restoreStarted = true;
             restoreProjectState(firstProjId, firstProj.root_path).catch((e) => console.error('restoreProjectState failed:', e));
           }
         }
       }
-    } else {
-      const firstProjId = get(openProjectIds)[0];
-      if (firstProjId) {
-        const firstProj = get(projects).get(firstProjId);
-        if (firstProj) {
-          activeProjectId.set(firstProjId);
-          setActiveTerminalProject(firstProjId);
-          restoreProjectState(firstProjId, firstProj.root_path).catch((e) => console.error('restoreProjectState failed:', e));
-        }
-      }
     }
+  } finally {
+    if (!restoreStarted) isProjectSwitching.set(false);
   }
 }
 
