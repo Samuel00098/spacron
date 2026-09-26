@@ -101,6 +101,7 @@ pub(super) fn remember_metadata(provider: &str, base: Option<&str>, payload: &Va
         let context = item["context_length"].as_u64().or_else(|| item["inputTokenLimit"].as_u64()).or_else(|| item["context_window"].as_u64());
         let output = item["top_provider"]["max_completion_tokens"].as_u64().or_else(|| item["outputTokenLimit"].as_u64()).or_else(|| item["max_output_tokens"].as_u64());
         let tools = capabilities::catalogue_tools(item);
+        if let Some(calls) = tools { capabilities::learn_tools(id, calls); }
         let images = vision::catalogue_accepts_images(item);
         if let Some(accepts) = images { vision::learn(id, accepts); }
         let reasoning = capabilities::catalogue_reasoning(item);
@@ -158,7 +159,9 @@ fn answer_models(provider: &str, models: Vec<String>, base_url: Option<&str>) ->
                 // says about the same model (icon only, see capabilities.rs).
                 "reasoning": known.and_then(|k| k["reasoning"].as_bool()).or_else(|| capabilities::reasoning_from_catalogues(&m)),
                 "reasoningEffort": known.and_then(|k| k["reasoningEffort"].as_bool()),
-                "tools": known.and_then(|k| k["nativeTools"].as_bool()),
+                // Same fallback as reasoning: another catalogue's answer for the
+                // same model name (icon only; the chat reads `nativeTools`).
+                "tools": known.and_then(|k| k["nativeTools"].as_bool()).or_else(|| capabilities::tools_from_catalogues(&m)),
             });
             (m, caps)
         })

@@ -107,6 +107,33 @@ pub(super) fn reasoning_from_catalogues(model: &str) -> Option<bool> {
     reasoning_names().lock().unwrap_or_else(|e| e.into_inner()).get(&bare(model)).copied()
 }
 
+// --- tool calling by model name, across catalogues --------------------------------
+
+/// Bare model name → can call tools, from every list that says so. Same idea
+/// as `reasoning_names`: lets the picker's tool-calls icon show for a model a
+/// provider lists without saying, when another catalogue describes it under the
+/// same name. Icon only — the chat's own `nativeTools` still comes from the
+/// provider's list, so this never changes how a turn is sent.
+fn tool_names() -> &'static Mutex<HashMap<String, bool>> {
+    static MAP: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(super) fn learn_tools(model: &str, calls_tools: bool) {
+    let name = bare(model);
+    if name.is_empty() {
+        return;
+    }
+    let mut map = tool_names().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = map.entry(name).or_insert(calls_tools);
+    *entry = *entry || calls_tools;
+}
+
+/// What any catalogue says about this model's tool calling, by exact bare name.
+pub(super) fn tools_from_catalogues(model: &str) -> Option<bool> {
+    tool_names().lock().unwrap_or_else(|e| e.into_inner()).get(&bare(model)).copied()
+}
+
 // --- remembered on disk -------------------------------------------------------------
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -119,6 +146,9 @@ struct Stored {
     /// Bare model name → reasons (see `learn_reasoning`).
     #[serde(default)]
     reasoning_names: HashMap<String, bool>,
+    /// Bare model name → calls tools (see `learn_tools`).
+    #[serde(default)]
+    tool_names: HashMap<String, bool>,
     /// Provider → when its list was last fetched (ms since epoch).
     refreshed: HashMap<String, u64>,
 }
@@ -148,6 +178,9 @@ pub(super) fn load() -> HashMap<String, Value> {
     for (name, reasons) in &stored.reasoning_names {
         learn_reasoning(name, *reasons);
     }
+    for (name, calls_tools) in &stored.tool_names {
+        learn_tools(name, *calls_tools);
+    }
     *refreshed().lock().unwrap_or_else(|e| e.into_inner()) = stored.refreshed;
     stored.models
 }
@@ -166,6 +199,7 @@ pub(super) fn save(models: &HashMap<String, Value>) {
         models: models.clone(),
         names: super::vision::known_names(),
         reasoning_names: reasoning_names().lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        tool_names: tool_names().lock().unwrap_or_else(|e| e.into_inner()).clone(),
         refreshed: refreshed().lock().unwrap_or_else(|e| e.into_inner()).clone(),
     };
     let Ok(text) = serde_json::to_string(&stored) else { return };
@@ -312,5 +346,13 @@ mod tests {
         assert_eq!(catalogue_tools(&json!({"supported_parameters":["tools"]})), Some(true));
         assert_eq!(catalogue_tools(&json!({"capabilities":{"function_calling":false}})), Some(false));
         assert_eq!(catalogue_tools(&json!({"id":"x"})), None);
+    }
+
+    #[test]
+    fn tools_carry_across_catalogues_by_model_name() {
+        learn_tools("qwen/qwen9-tool-tester", true);
+        assert_eq!(tools_from_catalogues("qwen9-tool-tester"), Some(true));
+        assert_eq!(tools_from_catalogues("QWEN9-TOOL-TESTER:free"), Some(true));
+        assert_eq!(tools_from_catalogues("never-listed-tool-model"), None);
     }
 }

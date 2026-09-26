@@ -4,8 +4,8 @@ import { modelCapabilities } from './ModelCapabilityBadges';
 
 describe('model capability badges', () => {
   it('always shows text, and reasoning exactly when the reasoning picker has levels', () => {
-    expect(modelCapabilities('anthropic', 'claude-sonnet-4-5', true)).toEqual({ text: true, vision: true, reasoning: true });
-    expect(modelCapabilities('deepseek', 'deepseek-chat', false)).toEqual({ text: true, vision: false, reasoning: false });
+    expect(modelCapabilities('anthropic', 'claude-sonnet-4-5', true)).toEqual({ text: true, vision: true, reasoning: true, tools: null });
+    expect(modelCapabilities('deepseek', 'deepseek-chat', false)).toEqual({ text: true, vision: false, reasoning: false, tools: null });
     expect(modelCapabilities('openai', 'gpt-4o', true).reasoning).toBe(false);
     expect(modelCapabilities('openai', 'o3', true).reasoning).toBe(true);
   });
@@ -20,5 +20,13 @@ describe('listed reasoning', () => {
     expect(modelCapabilities('openrouter', 'some/plain-model', true, false).reasoning).toBe(false);
     expect(modelCapabilities('together', 'new/thinker', false, true).reasoning).toBe(true);
     expect(modelCapabilities('openai', 'o3', true, null).reasoning).toBe(true);
+  });
+});
+
+describe('tool calls', () => {
+  it('carries what the lists say, and stays unknown when none do', () => {
+    expect(modelCapabilities('openrouter', 'x/tooly', true, null, true).tools).toBe(true);
+    expect(modelCapabilities('ollama', 'tiny', false, null, false).tools).toBe(false);
+    expect(modelCapabilities('openai', 'gpt-4o', true).tools).toBeNull();
   });
 });

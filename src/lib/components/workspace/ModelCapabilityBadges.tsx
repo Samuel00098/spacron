@@ -17,7 +17,10 @@ import './ModelCapabilityBadges.css';
  *   else published catalogues for the same model, else the model's name,
  *   minus models that refused an image earlier this session;
  * - reasoning: the provider's list when it says; else `reasoningLevelsFor`,
- *   which also drives the reasoning picker.
+ *   which also drives the reasoning picker;
+ * - tool calls: the provider's list (`nativeTools`, which the chat itself uses
+ *   to decide whether to send native tool calls), else another catalogue's
+ *   answer for the same model name; null when nobody says.
  * Both arrive through services/model-capabilities.ts, which Rust keeps fresh in
  * the background (startup, and whenever an API key is saved).
  */
@@ -25,14 +28,16 @@ export interface ModelCapabilities {
   text: true;
   vision: boolean | null;
   reasoning: boolean;
+  /** Native tool (function) calling; null = no list says. */
+  tools: boolean | null;
 }
 
 /**
  * Reasoning: what the provider's own list says when it says it; otherwise
  * whether the reasoning menu has levels for the model.
  */
-export function modelCapabilities(provider: string, model: string, vision: boolean | null, listedReasoning: boolean | null = null): ModelCapabilities {
-  return { text: true, vision, reasoning: listedReasoning ?? reasoningLevelsFor(provider, model).length > 0 };
+export function modelCapabilities(provider: string, model: string, vision: boolean | null, listedReasoning: boolean | null = null, tools: boolean | null = null): ModelCapabilities {
+  return { text: true, vision, reasoning: listedReasoning ?? reasoningLevelsFor(provider, model).length > 0, tools };
 }
 
 // --- answers from the shared capability store --------------------------------
@@ -91,11 +96,20 @@ function ReasoningIcon() {
   );
 }
 
+function ToolsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />
+    </svg>
+  );
+}
+
 function badgesFor(caps: ModelCapabilities) {
   return [
     {
       key: 'text',
       on: true,
+      known: true,
       icon: <TextIcon />,
       label: 'Text',
       tip: 'Text: reads and writes text. Every model supports this.',
@@ -103,6 +117,7 @@ function badgesFor(caps: ModelCapabilities) {
     {
       key: 'vision',
       on: caps.vision === true,
+      known: caps.vision !== null,
       icon: <VisionIcon />,
       label: 'Vision',
       tip:
@@ -115,11 +130,25 @@ function badgesFor(caps: ModelCapabilities) {
     {
       key: 'reasoning',
       on: caps.reasoning,
+      known: true,
       icon: <ReasoningIcon />,
       label: 'Reasoning',
       tip: caps.reasoning
         ? 'Reasoning: thinks before answering. Pick how much with the reasoning menu.'
         : 'No reasoning control: this model has no reasoning level to choose.',
+    },
+    {
+      key: 'tools',
+      on: caps.tools === true,
+      known: caps.tools !== null,
+      icon: <ToolsIcon />,
+      label: 'Tool calls',
+      tip:
+        caps.tools === true
+          ? 'Tool calls: can call tools directly — run commands, edit files, use the browser and MCP servers.'
+          : caps.tools === false
+            ? 'No tool calls: this model cannot call tools natively, so Spacron drives it with text instructions instead.'
+            : 'Tool calls: its provider does not say whether this model can call tools. Spacron tries native tool calls and falls back to text.',
     },
   ];
 }
@@ -132,7 +161,7 @@ function badgesFor(caps: ModelCapabilities) {
  */
 export function ModelCapabilityIcons({ provider, model, siblings }: { provider: string; model: string; siblings?: string[] }) {
   const caps = useCaps(provider, model, siblings);
-  const supported = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null)).filter((b) => b.on);
+  const supported = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null, caps?.tools ?? null)).filter((b) => b.on);
   return (
     <span className="chat-model-caps-inline" aria-label={`Supports ${supported.map((b) => b.label.toLowerCase()).join(', ')}`}>
       {supported.map((b) => (
@@ -146,12 +175,12 @@ export function ModelCapabilityIcons({ provider, model, siblings }: { provider: 
 
 /**
  * The selected model's capabilities, in the composer beside the reasoning
- * picker: all three icons, the unsupported ones dimmed, so "no vision" is as
+ * picker: every icon, the unsupported ones dimmed, so "no vision" is as
  * visible as "vision".
  */
 export default function ModelCapabilityBadges({ provider, model }: { provider: string; model: string }) {
   const caps = useCaps(provider, model);
-  const badges = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null));
+  const badges = badgesFor(modelCapabilities(provider, model, caps?.vision ?? null, caps?.reasoning ?? null, caps?.tools ?? null));
   return (
     <div className="chat-model-caps" role="list" aria-label={`What ${model || 'this model'} supports`}>
       {badges.map((b) => (
@@ -160,7 +189,7 @@ export default function ModelCapabilityBadges({ provider, model }: { provider: s
           role="listitem"
           className={`chat-model-cap${b.on ? ' is-on' : ''}`}
           title={b.tip}
-          aria-label={`${b.label}: ${b.on ? 'supported' : 'not supported'}`}
+          aria-label={`${b.label}: ${b.on ? 'supported' : b.known ? 'not supported' : 'unknown'}`}
         >
           {b.icon}
         </span>
