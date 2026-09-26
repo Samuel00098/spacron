@@ -359,80 +359,97 @@ export default function VoiceHistoryPanel() {
         </div>
       </div>
 
-      <section className="settings-card">
-        <div className="vh-toolbar">
-          <div className="vh-control">
-            <span className="vh-control-label">Period</span>
-            <Dropdown
-              options={rangePresets.map((p) => ({ value: p.id, label: p.label }))}
-              value={preset}
-              onChange={selectPreset}
-              ariaLabel="Time period"
-              boundarySelector={SETTINGS_BOUNDARY}
-            />
+      {/* The same card as every other Settings section: a header strip, then
+          label-and-control rows, then the list. */}
+      <section className="settings-card voice-history-card">
+        <h3>{showingTranscriptions ? 'Transcriptions' : 'Conversations'}</h3>
+        <div className="settings-card-body">
+          <div className="settings-control-row">
+            <div className="settings-control-copy">
+              <span>Period</span>
+              <small>Which days to show.</small>
+            </div>
+            <div className="settings-control">
+              <Dropdown
+                options={rangePresets.map((p) => ({ value: p.id, label: p.label }))}
+                value={preset}
+                onChange={selectPreset}
+                ariaLabel="Time period"
+                boundarySelector={SETTINGS_BOUNDARY}
+              />
+            </div>
           </div>
           {preset === 'custom' && (
-            <div className="vh-control vh-dates">
-              <span className="vh-control-label">From / to</span>
-              <div className="vh-date-inputs">
-                <input
-                  type="date"
-                  value={customFrom}
-                  max={customTo || undefined}
-                  onChange={(event) => setCustomFrom(event.target.value)}
-                  aria-label="From date"
-                />
-                <span className="vh-date-dash">to</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  min={customFrom || undefined}
-                  onChange={(event) => setCustomTo(event.target.value)}
-                  aria-label="To date"
-                />
+            <div className="settings-control-row">
+              <div className="settings-control-copy">
+                <span>From / to</span>
+              </div>
+              <div className="settings-control">
+                <div className="vh-date-inputs">
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={(event) => setCustomFrom(event.target.value)}
+                    aria-label="From date"
+                  />
+                  <span className="vh-date-dash">to</span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={(event) => setCustomTo(event.target.value)}
+                    aria-label="To date"
+                  />
+                </div>
               </div>
             </div>
           )}
-          <div className="vh-control vh-search">
-            <span className="vh-control-label">Search</span>
-            <input
-              type="search"
-              value={query}
-              placeholder={showingTranscriptions ? 'Find a dictation…' : 'Find something that was said…'}
-              onChange={(event) => setQuery(event.target.value)}
-              spellCheck={false}
-              aria-label="Search history"
-            />
+          <div className="settings-control-row">
+            <div className="settings-control-copy">
+              <span>Search</span>
+              <small>{showingTranscriptions ? 'Words from your dictations.' : 'Words from either side of a call.'}</small>
+            </div>
+            <div className="settings-control">
+              <input
+                type="search"
+                value={query}
+                placeholder={showingTranscriptions ? 'Find a dictation…' : 'Find something that was said…'}
+                onChange={(event) => setQuery(event.target.value)}
+                spellCheck={false}
+                aria-label="Search history"
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="vh-list">
-          {shown === 0 ? (
-            <p className="vh-empty">{emptyMessage}</p>
-          ) : (
-            groups.map((group) => (
-              <div className="vh-group" key={group.label}>
-                <div className="vh-group-label">
-                  {group.label}
-                  <span>{group.entries.length}</span>
+          <div className="vh-list">
+            {shown === 0 ? (
+              <p className="vh-empty">{emptyMessage}</p>
+            ) : (
+              groups.map((group) => (
+                <div className="vh-group" key={group.label}>
+                  <div className="vh-group-label">
+                    {group.label}
+                    <span>{group.entries.length}</span>
+                  </div>
+                  {showingTranscriptions
+                    ? (group.entries as TranscriptionEntry[]).map((entry) => (
+                        <TranscriptionRow key={entry.id} entry={entry} />
+                      ))
+                    : (group.entries as ConversationEntry[]).map((entry) => (
+                        <ConversationRow key={entry.id} entry={entry} />
+                      ))}
                 </div>
-                {showingTranscriptions
-                  ? (group.entries as TranscriptionEntry[]).map((entry) => (
-                      <TranscriptionRow key={entry.id} entry={entry} />
-                    ))
-                  : (group.entries as ConversationEntry[]).map((entry) => (
-                      <ConversationRow key={entry.id} entry={entry} />
-                    ))}
-              </div>
-            ))
+              ))
+            )}
+          </div>
+
+          {shown > 0 && shown !== total && (
+            <p className="vh-count-note">
+              Showing {shown} of {total} saved {showingTranscriptions ? 'dictations' : 'conversations'}.
+            </p>
           )}
         </div>
-
-        {shown > 0 && shown !== total && (
-          <p className="vh-count-note">
-            Showing {shown} of {total} saved {showingTranscriptions ? 'dictations' : 'conversations'}.
-          </p>
-        )}
       </section>
 
       <section className="settings-card">

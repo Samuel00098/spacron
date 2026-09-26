@@ -79,60 +79,6 @@
   text-align: center;
 }
 
-/* ── Toolbar ── */
-.vh-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 14px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-}
-
-.vh-control {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.vh-control-label {
-  color: var(--text-muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-/* The picker is the shared portaled <Dropdown>; it brings its own chrome and
-   only needs a width to sit in. */
-.vh-control .dropdown {
-  min-width: 168px;
-}
-
-.vh-search {
-  flex: 1 1 200px;
-}
-
-.vh-search input,
-.vh-date-inputs input {
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color var(--dur-fast, 120ms) var(--ease-out, ease);
-}
-
-.vh-search input:focus,
-.vh-date-inputs input:focus {
-  border-color: var(--accent);
-}
-
 .vh-date-inputs {
   display: flex;
   align-items: center;
