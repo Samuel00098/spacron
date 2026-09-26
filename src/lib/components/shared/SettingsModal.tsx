@@ -72,6 +72,8 @@ import {
   announceAgentCompletions,
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
+  jevProvider,
+  jevModel,
   openaiRealtimeConnection,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
@@ -594,6 +596,33 @@ function JevConnectionSection() {
   const [keyExists, setKeyExists] = useState(false);
   const [keyInput, setKeyInput] = useState('');
   const [keyError, setKeyError] = useState('');
+  const via = useStore(jevProvider) as string;
+  const model = useStore(jevModel) as string;
+  useStore(customProviders);
+  const [liveModels, setLiveModels] = useState<AiModelOption[]>([]);
+  const [modelsError, setModelsError] = useState('');
+  const onTypeSafe = !via || via === 'typesafe';
+  // Any chat provider can answer Jev's questions. ChatGPT is left out: each
+  // call would start a Codex process, far too slow for a quick decision.
+  const jevOptions = [
+    { id: 'typesafe', label: 'TypeSafe Jev (recommended)' },
+    ...aiProviders.filter((p) => p.id !== 'local' && p.id !== 'chatgpt').map((p) => ({ id: p.id, label: p.label })),
+  ];
+
+  useEffect(() => {
+    setLiveModels([]);
+    setModelsError('');
+    if (onTypeSafe) return;
+    let active = true;
+    void listProviderModels(via as AiProviderId)
+      .then((found) => {
+        if (active) setLiveModels(found.map((m) => ({ id: m.id, label: m.label ?? m.id, description: m.description ?? '' })));
+      })
+      .catch((error) => {
+        if (active) setModelsError(explainError(error).summary);
+      });
+    return () => { active = false; };
+  }, [via, onTypeSafe]);
 
   useEffect(() => {
     let active = true;
@@ -617,15 +646,38 @@ function JevConnectionSection() {
 
   return (
     <Section title="Jev decisions">
-      <p className="shell-hint">Jev can help classify agent status and route work. It is optional; without a key, Spacron uses its existing behavior.</p>
-      <SettingRow title="TypeSafe API key" detail={keyExists ? 'Saved in OS keychain' : 'Not saved'}>
-        <input type="password" value={keyInput} onChange={(event) => setKeyInput(event.target.value)} placeholder={keyExists ? 'Key saved in OS keychain' : 'Paste key'} />
+      <p className="shell-hint">Jev can help classify agent status and route work. It is optional; without it, Spacron uses its existing behavior.</p>
+      <SettingRow title="Answered by" detail="TypeSafe's Jev is built for this. Any other provider is asked to answer the same way; pick a fast model, since some decisions run before a reply.">
+        <SelectField
+          value={onTypeSafe ? 'typesafe' : via}
+          options={jevOptions}
+          onChange={(value) => { jevProvider.set(value); jevModel.set(''); }}
+          ariaLabel="Jev provider"
+          renderIcon={(id) => (id === 'typesafe' ? null : providerIcon(id))}
+        />
       </SettingRow>
-      <div className="settings-action-row">
-        <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
-        <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
-        <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
-      </div>
+      {onTypeSafe ? (
+        <>
+          <SettingRow title="TypeSafe API key" detail={keyExists ? 'Saved in OS keychain' : 'Not saved'}>
+            <input type="password" value={keyInput} onChange={(event) => setKeyInput(event.target.value)} placeholder={keyExists ? 'Key saved in OS keychain' : 'Paste key'} />
+          </SettingRow>
+          <div className="settings-action-row">
+            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
+            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
+            <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
+          </div>
+        </>
+      ) : (
+        <SettingRow title="Model" detail={modelsError || (model ? undefined : 'Pick a model. Until then Jev stays off.')}>
+          <ModelSelect
+            value={model}
+            models={liveModels.length ? liveModels : model ? [{ id: model, label: model, description: '' }] : []}
+            onChange={jevModel.set}
+            label="Jev model"
+            renderIcon={() => providerIcon(via)}
+          />
+        </SettingRow>
+      )}
       {keyError && <p className="shell-hint">{keyError}</p>}
     </Section>
   );

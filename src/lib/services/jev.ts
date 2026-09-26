@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { get } from '$lib/stores/storeCompat';
+import { getProviderBaseUrl, getProviderDef, jevModel, jevProvider, type AiProviderId } from '$lib/stores/settings';
 import { stripTerminalOutput } from './orchestrator/activity-log';
 
 export type JevLabels = Record<string, string>;
@@ -29,7 +31,7 @@ export async function classifyDecision(
       type?: unknown;
       probabilities?: unknown;
       confidence?: unknown;
-    } | null>('jev_classify', { state, question, labels });
+    } | null>('jev_classify', { state, question, labels, ...jevRoute() });
     if (!answer || answer.type !== 'choice' || !answer.probabilities || typeof answer.probabilities !== 'object'
       || typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence)
       || answer.confidence < 0 || answer.confidence > 1) return null;
@@ -46,6 +48,20 @@ export async function classifyDecision(
   } catch {
     return null;
   }
+}
+
+/** Who answers: TypeSafe (no extras) or a chat provider with its model. */
+function jevRoute(): { provider?: string; model?: string; baseUrl?: string } {
+  const provider = get(jevProvider);
+  if (!provider || provider === 'typesafe') return {};
+  const local = getProviderDef(provider as AiProviderId).local;
+  return {
+    provider,
+    model: get(jevModel),
+    // Local servers are addressed by the renderer; every other provider's
+    // address (a custom one's included) is resolved by the backend.
+    baseUrl: local ? getProviderBaseUrl(provider as AiProviderId) : undefined,
+  };
 }
 
 export function confidentChoice<T extends string>(

@@ -853,6 +853,12 @@ export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoi
  * that serves OpenAI's realtime API at its own address.
  */
 export const openaiRealtimeConnection = persistentWritable<string>('openaiRealtimeConnection', 'openai');
+/**
+ * Who answers Jev decisions: `'typesafe'` (Jev itself, with the TypeSafe key)
+ * or any chat provider id, asked to answer in Jev's shape with `jevModel`.
+ */
+export const jevProvider = persistentWritable<string>('jevProvider', 'typesafe');
+export const jevModel = persistentWritable<string>('jevModel', '');
 
 export const openaiRealtimeModelOptions: VoiceModelOption[] = [
   { id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 Mini', description: 'Fast and ~3× cheaper (~$10/$20 per 1M audio tokens). Good default for conversation.' },
@@ -1370,6 +1376,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
     case 'openaiRealtimeConnection': openaiRealtimeConnection.set(value as string); break;
+    case 'jevProvider': jevProvider.set(value as string); break;
+    case 'jevModel': jevModel.set(value as string); break;
     case 'openaiLiveModel': openaiLiveModel.set(value as string); break;
     case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
     case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
@@ -1425,6 +1433,8 @@ export function resetSettingsToDefault() {
   openaiRealtimeModel.set('gpt-realtime-2.1-mini');
   openaiRealtimeVoice.set('marin');
   openaiRealtimeConnection.set('openai');
+  jevProvider.set('typesafe');
+  jevModel.set('');
   openaiLiveModel.set('gpt-live-1');
   openaiLiveVoice.set('marin');
   xaiRealtimeModel.set('grok-voice-latest');
