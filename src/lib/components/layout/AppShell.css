@@ -3762,6 +3762,7 @@ html.is-webkitgtk .app-shell .composer-strip {
   flex: 1 1 auto;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: none;
   padding-top: 0;
 }
 
