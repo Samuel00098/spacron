@@ -170,6 +170,7 @@ const tabs: { id: Tab; label: string; kicker: string }[] = [
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media' },
   { id: 'models', label: 'AI Connections', kicker: 'Providers and keys' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation' },
+  { id: 'jev', label: 'Jev', kicker: 'Fast decisions' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools' },
   { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning' },
@@ -211,6 +212,8 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ai-api-key', tab: 'models', section: 'Provider connections', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
   { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
   { id: 'media-generation', tab: 'models', section: 'Image & video generation', label: 'Image & video generation', keywords: 'image video picture generate fal replicate veo sora dalle', target: 'section' },
+  { id: 'jev', tab: 'jev', section: 'Jev decisions', label: 'Jev decisions', keywords: 'jev typesafe openrouter decisions classifier system one fast routing', target: 'section' },
+  { id: 'custom-providers', tab: 'models', section: 'Custom providers', label: 'Custom providers', keywords: 'custom openai compatible provider api key base url proxy litellm', target: 'section' },
   { id: 'local-speech-models', tab: 'models', section: 'Local Speech-to-Text (STT)', label: 'Local Speech-to-Text', keywords: 'offline private voice dictation', target: 'section' },
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
   { id: 'smart-voice-detection', tab: 'voice', section: 'Voice input', label: 'Smart voice detection', keywords: 'vad speaking silence' },
@@ -588,31 +591,55 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /**
- * Settings > AI Connections > Image & video generation. Generation tries the
- * ChatGPT plan first for images, then every provider with a key; this picks
- * which one goes first, per-provider models, and the two media-only keys.
+ * Settings > Jev. Who answers Jev's quick decisions (agent status, routing,
+ * file-overlap checks), and which saved key pays for it. TypeSafe and
+ * OpenRouter serve the real Jev; a custom provider does when it exposes
+ * `/systemone` (e.g. a LiteLLM proxy); any other provider is a chat model
+ * asked to answer in Jev's shape.
  */
-function JevConnectionSection() {
-  const [keyExists, setKeyExists] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
+function JevSettingsPane({ onOpenConnections }: { onOpenConnections: () => void }) {
+  const [typesafeKeyInput, setTypesafeKeyInput] = useState('');
   const [keyError, setKeyError] = useState('');
-  const via = useStore(jevProvider) as string;
+  const [sourceKeyExists, setSourceKeyExists] = useState<boolean | null>(null);
+  const via = (useStore(jevProvider) as string) || 'typesafe';
   const model = useStore(jevModel) as string;
   useStore(customProviders);
   const [liveModels, setLiveModels] = useState<AiModelOption[]>([]);
   const [modelsError, setModelsError] = useState('');
-  const onTypeSafe = !via || via === 'typesafe';
-  // Any chat provider can answer Jev's questions. ChatGPT is left out: each
-  // call would start a Codex process, far too slow for a quick decision.
+
+  const nativeJev = via === 'typesafe' || via === 'openrouter';
+  const customDef = aiProviders.find((p) => p.id === via && p.custom);
+  const needsModel = !nativeJev;
+  const sourceLabel = via === 'typesafe' ? 'TypeSafe' : aiProviders.find((p) => p.id === via)?.label ?? via;
+
+  // Any chat provider can stand in. ChatGPT is left out: each call would start
+  // a Codex process, far too slow for a quick decision.
   const jevOptions = [
-    { id: 'typesafe', label: 'TypeSafe Jev (recommended)' },
-    ...aiProviders.filter((p) => p.id !== 'local' && p.id !== 'chatgpt').map((p) => ({ id: p.id, label: p.label })),
+    { id: 'typesafe', label: 'TypeSafe · real Jev' },
+    { id: 'openrouter', label: 'OpenRouter · real Jev' },
+    ...aiProviders.filter((p) => p.custom).map((p) => ({ id: p.id, label: `${p.label} · real Jev if served, else chat model` })),
+    ...aiProviders
+      .filter((p) => !p.custom && !['local', 'chatgpt', 'openrouter'].includes(p.id))
+      .map((p) => ({ id: p.id, label: `${p.label} · chat model` })),
   ];
+
+  useEffect(() => {
+    let active = true;
+    setSourceKeyExists(null);
+    if (aiProviders.find((p) => p.id === via)?.local) {
+      setSourceKeyExists(true);
+      return () => { active = false; };
+    }
+    void invoke<boolean>('provider_api_key_exists', { provider: via })
+      .then((exists) => { if (active) setSourceKeyExists(exists); })
+      .catch(() => { if (active) setSourceKeyExists(false); });
+    return () => { active = false; };
+  }, [via]);
 
   useEffect(() => {
     setLiveModels([]);
     setModelsError('');
-    if (onTypeSafe) return;
+    if (!needsModel) return;
     let active = true;
     void listProviderModels(via as AiProviderId)
       .then((found) => {
@@ -622,53 +649,74 @@ function JevConnectionSection() {
         if (active) setModelsError(explainError(error).summary);
       });
     return () => { active = false; };
-  }, [via, onTypeSafe]);
+  }, [via, needsModel]);
 
-  useEffect(() => {
-    let active = true;
-    void invoke<boolean>('provider_api_key_exists', { provider: 'typesafe' })
-      .then((exists) => { if (active) setKeyExists(exists); })
-      .catch(() => { if (active) setKeyExists(false); });
-    return () => { active = false; };
-  }, []);
-
-  const saveKey = async (value: string) => {
+  const saveTypesafeKey = async (value: string) => {
     setKeyError('');
     try {
       await invoke(value.trim() ? 'provider_api_key_set' : 'provider_api_key_delete',
         value.trim() ? { provider: 'typesafe', apiKey: value.trim() } : { provider: 'typesafe' });
-      setKeyExists(Boolean(value.trim()));
-      setKeyInput('');
+      setSourceKeyExists(Boolean(value.trim()));
+      setTypesafeKeyInput('');
     } catch (error) {
-      setKeyError(String(error ?? 'Could not save the key'));
+      setKeyError(explainError(error).summary);
     }
   };
 
+  const status = sourceKeyExists === null
+    ? 'Checking…'
+    : sourceKeyExists
+      ? needsModel && !model
+        ? `Using your ${sourceLabel} key. Pick a model below to turn Jev on.`
+        : `On · using your ${sourceLabel} key${needsModel ? ` with ${model}` : ''}.`
+      : `Off · no ${sourceLabel} key is saved yet.`;
+
   return (
     <Section title="Jev decisions">
-      <p className="shell-hint">Jev can help classify agent status and route work. It is optional; without it, Spacron uses its existing behavior.</p>
-      <SettingRow title="Answered by" detail="TypeSafe's Jev is built for this. Any other provider is asked to answer the same way; pick a fast model, since some decisions run before a reply.">
+      <p className="shell-hint">
+        Jev makes quick, structured decisions for Spacron: what a quiet agent is doing, how to route a request, and
+        whether new work overlaps a running agent. It is optional; when it is off, Spacron uses its built-in rules.
+      </p>
+      <SettingRow
+        title="Answered by"
+        detail="TypeSafe and OpenRouter run the real Jev model (70-500 ms, output tokens free). Other providers use a chat model asked to answer the same way; pick a fast one, since some decisions run before a reply."
+      >
         <SelectField
-          value={onTypeSafe ? 'typesafe' : via}
+          value={via}
           options={jevOptions}
           onChange={(value) => { jevProvider.set(value); jevModel.set(''); }}
           ariaLabel="Jev provider"
           renderIcon={(id) => (id === 'typesafe' ? null : providerIcon(id))}
         />
       </SettingRow>
-      {onTypeSafe ? (
-        <>
-          <SettingRow title="TypeSafe API key" detail={keyExists ? 'Saved in OS keychain' : 'Not saved'}>
-            <input type="password" value={keyInput} onChange={(event) => setKeyInput(event.target.value)} placeholder={keyExists ? 'Key saved in OS keychain' : 'Paste key'} />
-          </SettingRow>
-          <div className="settings-action-row">
-            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
-            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
-            <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
-          </div>
-        </>
-      ) : (
-        <SettingRow title="Model" detail={modelsError || (model ? undefined : 'Pick a model. Until then Jev stays off.')}>
+      <SettingRow title="Key in use" detail={status}>
+        {via === 'typesafe' ? (
+          <input
+            type="password"
+            value={typesafeKeyInput}
+            onChange={(event) => setTypesafeKeyInput(event.target.value)}
+            placeholder={sourceKeyExists ? 'TypeSafe key saved in OS keychain' : 'Paste your TypeSafe key'}
+          />
+        ) : (
+          <button type="button" className="settings-secondary" onClick={onOpenConnections}>
+            {sourceKeyExists ? `Manage ${sourceLabel} key` : `Add a ${sourceLabel} key`}
+          </button>
+        )}
+      </SettingRow>
+      {via === 'typesafe' && (
+        <div className="settings-action-row">
+          <button className="settings-primary" onClick={() => void saveTypesafeKey(typesafeKeyInput)} disabled={!typesafeKeyInput.trim()}>Save key</button>
+          <button className="settings-secondary" onClick={() => void saveTypesafeKey('')} disabled={!sourceKeyExists}>Clear key</button>
+          <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
+        </div>
+      )}
+      {needsModel && (
+        <SettingRow
+          title="Model"
+          detail={modelsError || (customDef
+            ? `Used only if ${customDef.label} does not serve Jev itself.`
+            : model ? undefined : 'Pick a model. Until then Jev stays off.')}
+        >
           <ModelSelect
             value={model}
             models={liveModels.length ? liveModels : model ? [{ id: model, label: model, description: '' }] : []}
@@ -826,6 +874,11 @@ function CustomProvidersSection() {
   );
 }
 
+/**
+ * Settings > AI Connections > Image & video generation. Generation tries the
+ * ChatGPT plan first for images, then every provider with a key; this picks
+ * which one goes first, per-provider models, and the two media-only keys.
+ */
 function MediaGenerationSection() {
   const settings = useStore(mediaGeneration) as MediaGenerationSettings;
   const [keys, setKeys] = useState<Record<string, boolean>>({});
@@ -2694,7 +2747,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'models' && (
               <>
-                <JevConnectionSection />
                 <Section title="Provider connections">
                   <SettingRow title="Provider" detail="Choose a connection to configure. Pick the orchestrator provider and model in each Chat composer.">
                     <SelectField value={provider} options={aiProviders.filter((item) => item.id !== 'local').map((item) => ({ id: item.id, label: item.label }))} onChange={(value) => setProvider(value as AiProviderId)} ariaLabel="AI provider connection" renderIcon={providerIcon} />
@@ -3542,6 +3594,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
             )}
 
             {activeTab === 'orchestrator' && <OrchestratorSettingsPane />}
+            {activeTab === 'jev' && <JevSettingsPane onOpenConnections={() => setActiveTab('models')} />}
             {activeTab === 'mcp' && <McpSettingsPane />}
             {activeTab === 'stats' && <UsageStatsPane />}
 

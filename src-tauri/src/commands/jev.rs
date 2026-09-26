@@ -3,9 +3,19 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-/// Jev's own service. The default, and the only one that is a real
-/// probability model; any other provider is prompted to answer in its shape.
+/// Jev's own service, and the default.
 const TYPESAFE: &str = "typesafe";
+const TYPESAFE_SYSTEMONE_URL: &str = "https://api.typesafe.ai/v1/systemone";
+/// OpenRouter serves the real Jev on TypeSafe's own request shape, billed to
+/// the OpenRouter key (checked 2026-09-26: `/api/v1/systemone`, 401 without a
+/// key; `jev-latest` is routed to OpenRouter's newest-Jev alias).
+const OPENROUTER_SYSTEMONE_URL: &str = "https://openrouter.ai/api/v1/systemone";
+const JEV_MODEL: &str = "jev-latest";
+
+/// Custom providers found NOT to serve `/systemone` (a LiteLLM proxy may; most
+/// OpenAI-compatible APIs do not). Remembered so each decision does not pay a
+/// failed probe first.
+static NO_SYSTEMONE: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
 
 /// A chat model is slower than TypeSafe's classifier, and some Jev calls run
 /// before a reply. Past this the decision is dropped and the caller uses its
@@ -30,8 +40,21 @@ pub async fn jev_classify(
         return Err("Jev needs state, a question, and 2–255 labels".to_string());
     }
     let provider = provider.filter(|p| !p.trim().is_empty()).unwrap_or_else(|| TYPESAFE.to_string());
-    if provider == TYPESAFE {
-        return classify_with_typesafe(&state, &question, &labels).await;
+    // The real Jev, wherever it is served.
+    match provider.as_str() {
+        TYPESAFE => return classify_native(TYPESAFE_SYSTEMONE_URL, TYPESAFE, &state, &question, &labels).await,
+        "openrouter" => return classify_native(OPENROUTER_SYSTEMONE_URL, "openrouter", &state, &question, &labels).await,
+        custom if super::custom_providers::is_custom_provider(custom) && !known_without_systemone(custom) => {
+            if let Some(base) = super::custom_providers::base_url(custom) {
+                match classify_native(&format!("{base}/systemone"), custom, &state, &question, &labels).await {
+                    Err(error) if error.contains("HTTP 404") || error.contains("HTTP 405") => {
+                        NO_SYSTEMONE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(custom.to_string());
+                    }
+                    other => return other,
+                }
+            }
+        }
+        _ => {}
     }
     let model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
     let Some(model) = model else {
@@ -41,21 +64,31 @@ pub async fn jev_classify(
     classify_with_chat(&provider, &model, base_url, &state, &question, &labels).await
 }
 
-async fn classify_with_typesafe(
+fn known_without_systemone(provider: &str) -> bool {
+    NO_SYSTEMONE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|set| set.contains(provider))
+}
+
+/// Ask the real Jev at `url`, authenticated with `key_provider`'s saved key.
+/// No key saved means Jev is simply off (`None`), not an error.
+async fn classify_native(
+    url: &str,
+    key_provider: &str,
     state: &str,
     question: &str,
     labels: &HashMap<String, String>,
 ) -> Result<Option<Value>, String> {
-    let Some(api_key) = super::secrets::provider_api_key_get(TYPESAFE.to_string())? else {
+    let Some(api_key) = super::secrets::provider_api_key_get(key_provider.to_string())? else {
         return Ok(None);
     };
-    let client = super::secrets::shared_http_client(Duration::from_millis(2_000))?;
+    // TypeSafe answers in 70-500 ms; a router in front of it adds a hop.
+    let timeout = if key_provider == TYPESAFE { 2_000 } else { 4_000 };
+    let client = super::secrets::shared_http_client(Duration::from_millis(timeout))?;
     let response = client
-        .post("https://api.typesafe.ai/v1/systemone")
+        .post(url)
         .bearer_auth(api_key)
         .json(&json!({
             "state": state,
-            "model": "jev-latest",
+            "model": JEV_MODEL,
             "questions": {
                 "classification": {
                     "type": "choice",
