@@ -1056,9 +1056,16 @@ details.settings-github-note pre {
 }
 
 /* Always-present resets (the colour sliders) sit disabled at the default
-   instead of appearing and vanishing as the value crosses it. */
+   instead of appearing and vanishing as the value crosses it. They carry the
+   flat Settings ring (global.css erases button borders) so a disabled one is
+   still plainly there, just quieter. */
+.settings-modal .grading-control .num-btn-reset {
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+}
+
 .num-btn-reset:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
   cursor: default;
   pointer-events: none;
 }
