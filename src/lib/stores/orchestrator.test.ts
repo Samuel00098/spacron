@@ -2442,7 +2442,9 @@ it('keeps the assistant offer in the next turn context', async () => {
 
   it('shows a CLI question, sends its exact answer to the same session, and watches the next question and completion', async () => {
     const seed = createOrchestratorTask('project-1', 'Build storage', 'claude', 'Backend');
-    const thread = createChatThread('project-1', { provider: 'deepseek', taskId: seed.id, sessionId: 42 });
+    // The thread IS this agent's chat (its provider is the CLI), so what the
+    // user types goes to the agent verbatim.
+    const thread = createChatThread('project-1', { provider: 'claude', taskId: seed.id, sessionId: 42 });
     orchestratorTasks.set([{ ...seed, status: 'in-progress', assignedSessionId: 42 }]);
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
     await sendChatMessage('project-1', '/repo', 'Check the storage setup', { threadId: thread.id, chatMode: true });
@@ -2474,7 +2476,7 @@ it('keeps the assistant offer in the next turn context', async () => {
 
   it('retains an unanswered CLI request if delivery fails', async () => {
     const seed = createOrchestratorTask('project-1', 'Build storage', 'claude', 'Backend');
-    const thread = createChatThread('project-1', { provider: 'deepseek', taskId: seed.id, sessionId: 42 });
+    const thread = createChatThread('project-1', { provider: 'claude', taskId: seed.id, sessionId: 42 });
     orchestratorTasks.set([{ ...seed, status: 'blocked', assignedSessionId: 42, blockedReason: 'Which database?' }]);
     appendLegacyChatMessage('project-1', { id: 'input', role: 'assistant', text: '', ts: 1, inlineRequest: { id: 'request', type: 'text', prompt: 'Which database?', taskId: seed.id, sessionId: 42 } }, thread.id);
     getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
@@ -2766,12 +2768,30 @@ it('keeps the assistant offer in the next turn context', async () => {
     expect(get(orchestratorTasks)[0]).toMatchObject({ status: 'blocked', assignedSessionId: 42 });
 
     sendAgentPromptDirect.mockClear();
-    await sendChatMessage('project-1', '/repo', 'PostgreSQL', { threadId: thread.id });
+    // Answered through Backend's card: explicit, so it goes to Backend verbatim.
+    await sendChatMessage('project-1', '/repo', 'PostgreSQL', { threadId: thread.id, answerTaskId: seed.id });
 
     expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, 'PostgreSQL');
     expect(spawnAgentPreset).not.toHaveBeenCalled();
     expect(get(chatThreadState).messagesByThread[thread.id].find((m) => m.id === question?.id)?.inlineRequest?.answer).toBe('PostgreSQL');
     expect(get(orchestratorTasks)[0].status).toBe('in-progress');
+  });
+
+  it("sends free text in an orchestrator thread to the orchestrator, leaving an agent's question open", async () => {
+    resetChatThreadsForTests();
+    const seed = createOrchestratorTask('project-1', 'Original goal', 'claude', 'Backend');
+    // An orchestrator thread (API provider) that last synced to Backend.
+    const thread = createChatThread('project-1', { provider: 'deepseek', taskId: seed.id, sessionId: 42 });
+    orchestratorTasks.set([{ ...seed, status: 'blocked', assignedSessionId: 42, blockedReason: 'Which database?' }]);
+    appendLegacyChatMessage('project-1', { id: 'input', role: 'assistant', text: '', ts: 1, inlineRequest: { id: 'request', type: 'text', prompt: 'Which database?', taskId: seed.id, sessionId: 42 } }, thread.id);
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: seed.id }] });
+    routeOrchestratorRequest.mockResolvedValue({ reply: 'On it.', actions: [], viaLLM: true });
+
+    await sendChatMessage('project-1', '/repo', 'tell them to check out the project', { threadId: thread.id, chatMode: true, conversationalMode: true });
+
+    expect(routeOrchestratorRequest).toHaveBeenCalled();
+    expect(sendAgentPromptDirect).not.toHaveBeenCalled();
+    expect(get(chatThreadState).messagesByThread[thread.id].find((m) => m.id === 'input')?.inlineRequest?.answeredAt).toBeFalsy();
   });
 
   it('reports a messaged agent finishing back into the thread that sent it', async () => {

@@ -19,6 +19,11 @@ to the last readable *prose* line before the generic sentence.
 Rules for anything else that surfaces agent output in the UI:
 
 - Never put a slice of the PTY buffer on screen. `stripTerminalOutput` first.
+- For anything longer than a phrase (a chat reply, a report, live output),
+  stripping is not enough: a full-screen TUI (Codex, Claude Code) repaints rows
+  in place, so the stripped stream is every frame glued together. Read the
+  rendered pane with `readAgentScreen` (`services/terminal-screen.ts`) and fall
+  back to the stripped stream only when no pane is mounted.
 - Match on the stripped text too. Escape sequences sitting inside a phrase are
   exactly what stops it matching — stripping can only widen the match.
 - OSC title strings (`ESC ]0;…BEL`) carry status text like

@@ -61,6 +61,7 @@ import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/run
 import { attentionReason, containsAttentionRequest } from '$lib/services/orchestrator/agent-signals';
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
+import { registerTerminalScreen } from '$lib/services/terminal-screen';
 import './TerminalPane.css';
 
 const ROLE_PRESETS = [
@@ -1234,6 +1235,9 @@ function TerminalPane({
       theme: buildTerminalTheme(),
     });
     termRef.current = term;
+    // Lets the chat and the agent cards read what this pane SHOWS rather than
+    // the raw byte stream a full-screen TUI repaints (see terminal-screen.ts).
+    const unregisterScreen = registerTerminalScreen(sessionId, term);
 
     // Don't answer OSC 10/11/12 color *queries* on a local Windows PTY. Codex
     // re-asks for the default colors every time its pane regains focus, and
@@ -1734,6 +1738,7 @@ function TerminalPane({
       if (htmlDropHandler) container.removeEventListener('drop', htmlDropHandler);
       unregisterDataCallback(sessionId);
       unregisterExitCallback(sessionId);
+      unregisterScreen();
       // Dispose the WebGL addon before the terminal so its GPU context is
       // released cleanly rather than leaked.
       webglAddonRef.current?.dispose();

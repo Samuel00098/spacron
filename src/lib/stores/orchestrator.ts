@@ -96,6 +96,7 @@ import {
   type ActivityKind,
   type ActivityEvent,
 } from '$lib/services/orchestrator/activity-log';
+import { markTerminalScreen, readAgentScreen, type ScreenMark } from '$lib/services/terminal-screen';
 import {
   describeTurnEnd,
   type AgentTurnOutcome,
@@ -1697,7 +1698,7 @@ function sendGoalToLeasedTask(
       const task = get(orchestratorTasks).find((t) => t.id === id);
       const message = buildLeasedAgentMessage(goal, agentCommand, task?.name ?? null, task?.projectId, task?.role ?? null);
       const responseStart = getSessionOutputLength(sessionId);
-      if (chatThreadId) watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart);
+      if (chatThreadId) watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart, { mark: markTerminalScreen(sessionId), prompt: message });
       const sent = await sendOrchestratorGoalWhenReady(sessionId, message, {
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
@@ -2868,7 +2869,14 @@ function buildAttachmentPrompt(text: string, attachments: ChatAttachment[]): str
 // still the source of truth; Chat is a projection of that live session.
 const chatTurnWatchers = new Map<number, Promise<void>>();
 
-function chatResponseText(sessionId: number, outputStart: number): string {
+/**
+ * What the agent said this turn. The pane's rendered screen after the prompt's
+ * echo when the pane is mounted; the raw stream is only a fallback, because a
+ * full-screen TUI's raw stream is every repainted frame glued together.
+ */
+function chatResponseText(sessionId: number, outputStart: number, from?: ScreenMark | null, prompt?: string | null): string {
+  const screen = readAgentScreen(sessionId, { from, prompt });
+  if (screen != null) return captureTranscript(screen, MAX_TRANSCRIPT_CHARS);
   return captureTranscript(getSessionOutputSince(sessionId, outputStart), MAX_TRANSCRIPT_CHARS);
 }
 
@@ -2883,8 +2891,11 @@ function watchChatAgentResponse(
   threadId: string,
   agentCommand: string,
   outputStart: number,
+  /** Where this turn starts on the pane, and the prompt whose echo opens it. */
+  screenFrom: { mark: ScreenMark | null; prompt: string | null } = { mark: null, prompt: null },
 ): void {
   const responseId = msgId();
+  const responseText = () => chatResponseText(sessionId, outputStart, screenFrom.mark, screenFrom.prompt);
   const task = get(orchestratorTasks).find((entry) => entry.id === taskId);
   const projectId = getChatThread(threadId)?.projectId ?? task?.projectId;
   if (!projectId) return;
@@ -2896,7 +2907,7 @@ function watchChatAgentResponse(
 
   const watch = (async () => {
     const publish = (pending: boolean) => {
-      const text = chatResponseText(sessionId, outputStart);
+      const text = responseText();
       if (text) patchChat(projectId, responseId, { text, pending });
     };
     const timer = setInterval(() => publish(true), 500);
@@ -2914,7 +2925,7 @@ function watchChatAgentResponse(
         // arm a fresh watcher; otherwise this loop can keep the task looking
         // "still in progress" forever when the CLI never emits a report.
         if (outcome.kind === 'finished' && outcome.via === 'inferred' && leasedSessionLive(taskId, sessionId)) {
-          const settledText = chatResponseText(sessionId, outputStart).trim();
+          const settledText = responseText().trim();
           if (settledText) {
             publish(false);
             logTaskActivity(taskId, 'finished', 'Chat turn went quiet; the session remains ready for follow-up.');
@@ -2938,7 +2949,7 @@ function watchChatAgentResponse(
         return;
       }
       if (outcome.kind === 'blocked') {
-        const finalText = chatResponseText(sessionId, outputStart);
+        const finalText = responseText();
         const inlineRequest = agentInputRequest(`chat-request-${responseId}`, outcome.reason, taskId, sessionId, outcome.via === 'inferred');
         patchTask(taskId, (current) => ({ ...current, status: 'blocked', blockedReason: inlineRequest.prompt }));
         logTaskActivity(taskId, 'blocked', inlineRequest.prompt);
@@ -2952,12 +2963,12 @@ function watchChatAgentResponse(
         return;
       }
       if (outcome.kind === 'failed') {
-        patchChat(projectId, responseId, { type: 'failure', text: chatResponseText(sessionId, outputStart) || outcome.reason, pending: false });
+        patchChat(projectId, responseId, { type: 'failure', text: responseText() || outcome.reason, pending: false });
         await completeLeasedTask(taskId, sessionId, outcome);
         return;
       }
       publish(false);
-      const finalText = chatResponseText(sessionId, outputStart);
+      const finalText = responseText();
       if (!finalText) {
         patchChat(projectId, responseId, {
           text: 'The agent returned no readable chat text. Check its terminal.',
@@ -3120,6 +3131,12 @@ function watchDispatchedAgentTurn(
   });
 }
 
+/** True while the agent behind an inline request is still blocked on it. */
+function agentStillWaiting(taskId: string | null | undefined): boolean {
+  if (!taskId) return false;
+  return get(orchestratorTasks).some((task) => task.id === taskId && task.status === 'blocked');
+}
+
 async function sendThreadFollowUp(
   projectId: string,
   rootPath: string,
@@ -3144,7 +3161,7 @@ async function sendThreadFollowUp(
       // Adopted sessions already have a permanent watcher. Starting the
       // agent-Chat watcher as well would report the same turn twice and would
       // release the adopted session when its first reply finishes.
-      if (chatMode && task.agentPreset && !task.adopted) watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, getSessionOutputLength(sessionId));
+      if (chatMode && task.agentPreset && !task.adopted) watchChatAgentResponse(task.id, sessionId, threadId, task.agentPreset, getSessionOutputLength(sessionId), { mark: markTerminalScreen(sessionId), prompt: deliveryText });
     }, request?.inputMode === 'line');
     const latestTask = get(orchestratorTasks).find((entry) => entry.id === task.id) ?? task;
     syncChatThreadTask(latestTask, threadId);
@@ -4322,6 +4339,13 @@ type SendChatOpts = {
   reasoningEffort?: ChatReasoningEffort;
   /** Keep the selected agent session alive and project its replies into Chat. */
   chatMode?: boolean;
+  /**
+   * The user is answering THIS agent — its card's reply box or its pending
+   * question. Only an explicit answer (or a thread whose provider is the agent
+   * CLI itself) goes to an agent verbatim; anything else typed in a thread the
+   * orchestrator runs goes to the orchestrator, which can address every agent.
+   */
+  answerTaskId?: string;
   attachments?: ChatAttachment[];
   /**
    * Resend anchor: when set, the message with this id (a user bubble being
@@ -5243,22 +5267,29 @@ export async function sendChatMessage(
     || opts?.conversationalMode === true
     || Boolean(chatThread?.provider && isChatAgentProvider(chatThread.provider));
 
+  // A thread stores ONE taskId, overwritten by whichever agent synced last, so
+  // it cannot say who a free-typed message is for once the orchestrator runs
+  // two agents. Only a thread that IS an agent CLI chat, or an explicit
+  // answer, may bypass the orchestrator.
+  const directAgentThread = Boolean(chatThread?.provider && isChatAgentProvider(chatThread.provider));
+  const explicitAnswerTaskId = opts?.answerTaskId ?? null;
   const threadTask = chatThreadId
     ? (() => {
     const thread = getChatThread(chatThreadId);
-        const taskId = pendingInput?.inlineRequest?.taskId ?? thread?.taskId;
+        const taskId = explicitAnswerTaskId ?? pendingInput?.inlineRequest?.taskId ?? thread?.taskId;
         return taskId
           ? get(orchestratorTasks).find((task) => task.id === taskId && task.projectId === projectId) ?? null
           : null;
       })()
     : null;
-  const answeringAgentRequest = Boolean(pendingInput?.inlineRequest?.taskId);
+  const answeringAgentRequest = Boolean(explicitAnswerTaskId)
+    || Boolean(directAgentThread && pendingInput?.inlineRequest?.taskId);
   if (
     (opts?.workMode ?? chatThread?.workMode) !== 'plan' &&
-    (chatMode || answeringAgentRequest) &&
+    (directAgentThread || answeringAgentRequest) &&
     chatThreadId &&
     threadTask &&
-    (!pendingInput || Boolean(pendingInput.inlineRequest?.taskId)) &&
+    (explicitAnswerTaskId || !pendingInput || Boolean(pendingInput.inlineRequest?.taskId)) &&
     ((threadTask.status === 'in-progress' && threadTask.assignedSessionId != null) || threadTask.status === 'blocked')
   ) {
     // The stale tail (if any) goes first so the follow-up's own appends land
@@ -5271,7 +5302,9 @@ export async function sendChatMessage(
       .find((message) =>
         (message.type === 'approval' || message.type === 'input')
         && message.inlineRequest
-        && !message.inlineRequest.answeredAt,
+        && !message.inlineRequest.answeredAt
+        // Answering one agent must not close another agent's question.
+        && (!explicitAnswerTaskId || message.inlineRequest.taskId === explicitAnswerTaskId),
       );
     if (answeringChatRequests.has(chatThreadId)) return;
     answeringChatRequests.add(chatThreadId);
@@ -5292,7 +5325,10 @@ export async function sendChatMessage(
     .find((message) =>
       (message.type === 'approval' || message.type === 'input')
       && message.inlineRequest
-      && !message.inlineRequest.answeredAt,
+      && !message.inlineRequest.answeredAt
+      // An agent that is still waiting keeps its question open: this message
+      // is going to the orchestrator, not to that agent.
+      && !agentStillWaiting(message.inlineRequest.taskId),
     );
   if (unheldPendingInput?.inlineRequest) {
     markInlineRequestAnswered(projectId, unheldPendingInput.id, trimmed);

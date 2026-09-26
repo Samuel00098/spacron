@@ -8,6 +8,7 @@ import {
   type AgentReadiness,
 } from '$lib/stores/terminal';
 import { captureTranscript } from '$lib/services/orchestrator/activity-log';
+import { readAgentScreen } from '$lib/services/terminal-screen';
 import {
   watchLeasedAgentTurn,
   type AgentTurnOutcome,
@@ -59,6 +60,12 @@ export class AgentAdapter {
   // ── Receive / output ─────────────────────────────────────────────────────────
 
   readOutput(tailChars?: number): string {
+    // The rendered pane when one is mounted: a full-screen TUI's raw stream is
+    // every repainted frame glued together (see terminal-screen.ts).
+    // 1,500 rows covers every transcript cap downstream without copying a
+    // 10k-line scrollback on each read.
+    const screen = readAgentScreen(this.sessionId, { maxLines: 1500 });
+    if (screen) return captureTranscript(screen, tailChars);
     return captureTranscript(getSessionOutputBuffer(this.sessionId), tailChars);
   }
 

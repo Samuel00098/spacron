@@ -83,6 +83,8 @@ import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { TURN_TIMING_PREFIX } from '$lib/services/orchestrator/turn-timing';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import ChatAgentRuns from './ChatAgentRuns';
+import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 import './ChatModePanel.css';
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -735,6 +737,22 @@ export default function ChatModePanel() {
     };
   }, [pendingRequestMessage, boundTask]);
   const pendingRequest = pendingRequestMessage?.inlineRequest ?? derivedTaskRequest ?? null;
+  // Agents the orchestrator dispatched, each shown once as a card under the
+  // LAST message that dispatched it (a later "send" to the same agent moves
+  // its card down rather than duplicating it).
+  const agentRunsByMessage = useMemo(() => {
+    const lastDispatch = new Map<string, string>();
+    for (const message of messages) {
+      for (const ref of message.dispatched ?? []) lastDispatch.set(ref.taskId, message.id);
+    }
+    const byMessage = new Map<string, OrchestratorTask[]>();
+    for (const [taskId, messageId] of lastDispatch) {
+      const task = allTasks.find((entry) => entry.id === taskId);
+      if (!task) continue;
+      byMessage.set(messageId, [...(byMessage.get(messageId) ?? []), task]);
+    }
+    return byMessage;
+  }, [messages, allTasks]);
   const taskStalled = useMemo(() => {
     if (!boundTask || boundTask.status !== 'in-progress') return false;
     const signalAt = Math.max(
@@ -1131,12 +1149,30 @@ export default function ChatModePanel() {
       workMode,
       chatMode: true,
       conversationalMode: true,
+      // The banner/card answers the agent that asked, not the orchestrator.
+      answerTaskId: pendingRequest?.taskId ?? undefined,
       });
       setRequestDraft('');
     } finally {
       answeringRequestRef.current = false;
       setAnsweringRequest(false);
     }
+  }
+
+  /** An agent card's reply box: goes to that one agent, verbatim. */
+  async function answerAgent(taskId: string, text: string) {
+    if (!project || !thread) return;
+    await sendChatMessage(project.id, project.root_path, text, {
+      projectName: project.name,
+      threadId: thread.id,
+      orchestratorProvider: selectedProvider,
+      orchestratorModel: selectedModel,
+      accessMode,
+      workMode,
+      chatMode: true,
+      conversationalMode: true,
+      answerTaskId: taskId,
+    });
   }
 
   async function handleFiles(files: FileList | null) {
@@ -1814,6 +1850,13 @@ export default function ChatModePanel() {
                     message={message}
                     onOption={message.id === pendingRequestMessage?.id ? (option) => void answerPendingRequest(option) : undefined}
                   />
+                  {agentRunsByMessage.has(message.id) && (
+                    <ChatAgentRuns
+                      tasks={agentRunsByMessage.get(message.id)!}
+                      messages={messages}
+                      onAnswer={answerAgent}
+                    />
+                  )}
                   {message.attachments?.length ? (
                     <div className="chat-mode-message-attachments">
                       {message.attachments.map((attachment) => {
