@@ -3665,7 +3665,7 @@ describe('recordUnwatchedAgentReport', () => {
 
     const filedUnder = recordUnwatchedAgentReport(7, { kind: 'finished', detail: 'Tests pass.' }, 'Agent');
 
-    expect(filedUnder).toBe('project-1');
+    expect(filedUnder).toEqual({ kind: 'filed', projectId: 'project-1' });
     const card = get(chatMessages)['project-1']?.at(-1)?.completion;
     expect(card).toMatchObject({
       status: 'done',
@@ -3713,12 +3713,22 @@ describe('recordUnwatchedAgentReport', () => {
       'An agent',
     );
 
-    expect(filedUnder).toBe('project-9');
+    expect(filedUnder).toEqual({ kind: 'filed', projectId: 'project-9' });
     expect(get(chatMessages)['project-9']?.at(-1)?.completion).toMatchObject({
       status: 'blocked',
       agentName: 'An agent',
       reason: 'Which database?',
     });
+  });
+
+  it('does not file the same unattributed report twice in the retry window', () => {
+    getActiveTerminalProjectId.mockReturnValue('project-9');
+
+    expect(recordUnwatchedAgentReport(null, { kind: 'finished', detail: 'Tests pass.' }, 'An agent'))
+      .toEqual({ kind: 'filed', projectId: 'project-9' });
+    expect(recordUnwatchedAgentReport(null, { kind: 'finished', detail: 'Tests pass.' }, 'An agent'))
+      .toEqual({ kind: 'duplicate' });
+    expect(get(chatMessages)['project-9']).toHaveLength(1);
   });
 
   it('uses the session to find the project when no task owns it', async () => {
@@ -3727,7 +3737,7 @@ describe('recordUnwatchedAgentReport', () => {
 
     const filedUnder = recordUnwatchedAgentReport(12, { kind: 'failed', reason: 'Build broke.' }, 'Agent');
 
-    expect(filedUnder).toBe('project-3');
+    expect(filedUnder).toEqual({ kind: 'filed', projectId: 'project-3' });
     expect(get(chatMessages)['project-3']?.at(-1)?.completion).toMatchObject({
       status: 'failed',
       agentName: 'Vale',

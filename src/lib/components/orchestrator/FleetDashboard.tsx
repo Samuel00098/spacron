@@ -60,7 +60,8 @@ import {
 } from '$lib/services/orchestrator/worktree-manager';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 import { agentTurnStates, type AgentTurnPhase } from '$lib/stores/agentTurnState';
-import { layout } from '$lib/stores/layout';
+import { layout, showTerminal } from '$lib/stores/layout';
+import { requestStageExpansion } from '$lib/stores/layoutControl';
 import {
   DEEPSEEK_HARNESS_COMMAND,
   deepSeekAgentName,
@@ -175,13 +176,25 @@ export function statusFor(
   task: OrchestratorTask | null,
   live: boolean,
   turn: AgentTurnPhase | undefined,
+  turnSince?: number,
 ): FleetStatus {
+  // Task completion is authoritative even when its terminal stays open for
+  // another prompt. A stale per-session turn flag must not keep it Working.
+  if (task?.status === 'complete') return 'finished';
+  if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
   if (!live) {
-    if (task?.status === 'complete') return 'finished';
-    if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
     return 'exited';
   }
   if (task?.status === 'blocked' || turn === 'blocked') return 'awaiting';
+  // A finished activity may settle a task while its session remains reusable.
+  // Ignore an older Working flag, but preserve a newer prompt sent afterward.
+  const lastActivity = task?.activity?.at(-1);
+  if (
+    turn === 'working' &&
+    lastActivity?.kind === 'finished' &&
+    turnSince !== undefined &&
+    turnSince <= lastActivity.ts
+  ) return 'finished';
   if (turn === 'working') return 'working';
   if (turn === 'finished') return 'finished';
   if (turn === 'failed') return 'failed';
@@ -490,7 +503,7 @@ export default function FleetDashboard() {
     () =>
       rows.map((row) => {
         const turn = row.sessionId !== null ? turnStates[row.sessionId] : undefined;
-        const status = row.deepseekPanel ? 'open' : statusFor(row.task, row.live, turn?.phase);
+        const status = row.deepseekPanel ? 'open' : statusFor(row.task, row.live, turn?.phase, turn?.since);
         return {
           ...row,
           status,
@@ -1030,8 +1043,13 @@ export default function FleetDashboard() {
                 {row.sessionId !== null && (
                   <button
                     className="fc-btn quiet"
-                    onClick={() => setActiveSession(row.sessionId!)}
-                    title="Focus this agent's terminal"
+                    onClick={() => {
+                      const sessionId = row.sessionId!;
+                      setActiveSession(sessionId);
+                      showTerminal();
+                      requestStageExpansion(`agent:${sessionId}`);
+                    }}
+                    title="Expand this agent's terminal"
                   >
                     Terminal
                   </button>

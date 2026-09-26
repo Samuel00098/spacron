@@ -210,7 +210,11 @@ import {
   dismissMailboxCard,
   type MailboxCard,
 } from '$lib/services/orchestrator/mailbox';
-import { acknowledge, loadProjectInbox } from '$lib/services/orchestrator/inbox';
+import {
+  acknowledge,
+  loadProjectInbox,
+  ANONYMOUS_STATUS_REPORT_DEDUPE_MS,
+} from '$lib/services/orchestrator/inbox';
 import {
   getKnowledgeLines,
   loadKnowledgeGraph,
@@ -3507,16 +3511,21 @@ function appendAgentTurnCard(
  * `endedBy: 'declared'` because the agent reported this itself. Only a declared
  * end may interrupt — see `notifyAdoptedTurnEnd` for the other half of that rule.
  *
- * Returns the project the card was filed under, or null when there is no
- * project to file it under; the caller falls back to a toast rather than
- * dropping the report.
+ * Returns the filed project, a duplicate marker, or null when there is no
+ * project to file it under; the caller only falls back to a toast for the last
+ * case, never for a duplicate.
  */
+export type UnwatchedAgentReportResult =
+  | { kind: 'filed'; projectId: string }
+  | { kind: 'duplicate' }
+  | null;
+
 export function recordUnwatchedAgentReport(
   sessionId: number | null,
   signal: HookSignal,
   /** The agent's display name, resolved by the caller from its session. */
   fallbackName: string,
-): string | null {
+): UnwatchedAgentReportResult {
   // Reuse the watcher's own mapping so a report cannot be worded one way here
   // and another way when a watcher happens to be armed for it.
   const told = describeTurnEnd({ ...signal, via: 'declared' } as AgentTurnOutcome);
@@ -3557,6 +3566,33 @@ export function recordUnwatchedAgentReport(
       ? getAgentDisplayName(session.agentPreset) ?? session.agentPreset
       : null;
 
+  const taskTitle =
+    (sessionId != null ? getSessionHeaderSummary(sessionId) : null)
+    || task?.title
+    || session?.taskSummary?.trim()
+    || session?.paneTitle?.trim()
+    || 'Status report';
+  const reportTs = Date.now();
+  if (sessionId === null && name === 'An agent' && taskTitle === 'Status report') {
+    const repeated = (get(chatMessages)[projectId] ?? []).some((message) => {
+      const prior = message.completion;
+      const age = reportTs - message.ts;
+      return Boolean(
+        prior &&
+        age >= 0 &&
+        age <= ANONYMOUS_STATUS_REPORT_DEDUPE_MS &&
+        prior.agentName === name &&
+        prior.agentType == null &&
+        prior.taskTitle === taskTitle &&
+        prior.taskId == null &&
+        prior.status === told.status &&
+        (prior.reason ?? null) === (told.reason ?? null) &&
+        (prior.endedBy ?? 'declared') === told.endedBy
+      );
+    });
+    if (repeated) return { kind: 'duplicate' };
+  }
+
   if (task) {
     logTaskActivity(
       task.id,
@@ -3569,19 +3605,14 @@ export function recordUnwatchedAgentReport(
     id: msgId(),
     role: 'assistant',
     text: '',
-    ts: Date.now(),
+    ts: reportTs,
     completion: {
       status: told.status,
       agentName: name,
       agentType,
       // The card's second line. A report outside a task has no title to show,
       // and a blank line there reads as a rendering bug rather than as absence.
-      taskTitle:
-        (sessionId != null ? getSessionHeaderSummary(sessionId) : null)
-        || task?.title
-        || session?.taskSummary?.trim()
-        || session?.paneTitle?.trim()
-        || 'Status report',
+      taskTitle,
       elapsedSec: null,
       reason: told.reason,
       summary: null,
@@ -3602,7 +3633,7 @@ export function recordUnwatchedAgentReport(
     }
   }
 
-  return projectId;
+  return { kind: 'filed', projectId };
 }
 
 function matchesLiveAgentTarget(session: LiveTerminalSession, wanted: string): boolean {

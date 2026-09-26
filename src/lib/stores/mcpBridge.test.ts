@@ -11,9 +11,9 @@ const listenMock = vi.hoisted(() =>
 );
 const deliverTurnSignalMock = vi.hoisted(() => vi.fn((_id: number, _s: unknown) => false));
 const showToastMock = vi.hoisted(() => vi.fn());
-/** Returns the project the report was filed under, or null when there is none. */
+/** Mirrors the report-filing result used by the bridge. */
 const recordReportMock = vi.hoisted(() =>
-  vi.fn((_id: number | null, _s: unknown, _name: string): string | null => null),
+  vi.fn((_id: number | null, _s: unknown, _name: string): { kind: 'filed'; projectId: string } | { kind: 'duplicate' } | null => null),
 );
 // Spread the real modules: `terminal.ts` imports both of these too, and a
 // partial mock would leave its other imports undefined at module init.
@@ -1001,7 +1001,7 @@ describe('handleAgentReport', () => {
     // reads the active project from.
     const { setActiveTerminalProject } = await import('./terminal');
     setActiveTerminalProject('proj-1');
-    recordReportMock.mockReturnValue('proj-1');
+    recordReportMock.mockReturnValue({ kind: 'filed', projectId: 'proj-1' });
 
     await handleAgentReport({ sessionId: 4, state: 'done', detail: 'Shipped.' });
 
@@ -1011,13 +1011,22 @@ describe('handleAgentReport', () => {
 
   it('still toasts a report filed under a project the user is not looking at', async () => {
     const { handleAgentReport } = await mockModule();
-    recordReportMock.mockReturnValue('some-other-project');
+    recordReportMock.mockReturnValue({ kind: 'filed', projectId: 'some-other-project' });
 
     await handleAgentReport({ sessionId: 4, state: 'needs_input', detail: 'Need a key.' });
 
     // A missed "needs input" strands the user waiting on an agent that is
     // waiting on them, so a card they cannot see is not enough on its own.
     expect(showToastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not toast an anonymous report already filed as a duplicate', async () => {
+    const { handleAgentReport } = await mockModule();
+    recordReportMock.mockReturnValue({ kind: 'duplicate' });
+
+    await handleAgentReport({ sessionId: null, state: 'done', detail: 'Tests pass.' });
+
+    expect(showToastMock).not.toHaveBeenCalled();
   });
 });
 

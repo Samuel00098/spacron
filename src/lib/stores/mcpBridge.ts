@@ -147,7 +147,9 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   // Imported lazily because `stores/orchestrator` imports `stores/terminal`,
   // which imports this module: a static import would close that cycle.
   const { recordUnwatchedAgentReport } = await import('./orchestrator');
-  const filedUnder = recordUnwatchedAgentReport(report.sessionId, signal, who);
+  const result = recordUnwatchedAgentReport(report.sessionId, signal, who);
+  if (result?.kind === 'duplicate') return;
+  const filedUnder = result?.projectId ?? null;
 
   // The card is the notification whenever the user is looking at the project it
   // was filed under — raising a toast as well is the double-notification the

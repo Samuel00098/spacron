@@ -23,6 +23,27 @@ describe('fleet card status', () => {
     expect(statusFor(null, true, 'working')).toBe('working');
   });
 
+  it('shows Finished when the task ended but the reusable terminal stays open', () => {
+    const finishedTask = {
+      status: 'in-progress',
+      activity: [{ kind: 'finished', ts: 200 }],
+    } as unknown as OrchestratorTask;
+    expect(statusFor(finishedTask, true, 'working', 100)).toBe('finished');
+  });
+
+  it('keeps a newer prompt Working after the previous task activity finished', () => {
+    const finishedTask = {
+      status: 'in-progress',
+      activity: [{ kind: 'finished', ts: 200 }],
+    } as unknown as OrchestratorTask;
+    expect(statusFor(finishedTask, true, 'working', 201)).toBe('working');
+  });
+
+  it('keeps terminal task outcomes above a stale live Working phase', () => {
+    expect(statusFor(task('complete'), true, 'working')).toBe('finished');
+    expect(statusFor(task('failed'), true, 'working')).toBe('failed');
+  });
+
   it('reports how the last turn ended, like the notification did', () => {
     expect(statusFor(null, true, 'finished')).toBe('finished');
     expect(statusFor(null, true, 'blocked')).toBe('awaiting');
