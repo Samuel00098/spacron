@@ -31,10 +31,26 @@
      opaque, and a soft accent fill for the selected item. */
   --surface-outline: inset 0 0 0 1px var(--border);
   --surface-outline-active: inset 0 0 0 1px var(--accent), 0 0 0 2px var(--accent-glow);
-  --surface-menu: linear-gradient(var(--bg-hover), var(--bg-hover)), rgb(var(--bg-secondary-rgb, 18, 18, 22));
+  --surface-menu: var(--app-surface);
   /* Menus are flat: a 1px outline, no drop shadow or highlight (no 3D lift). */
   --surface-menu-shadow: inset 0 0 0 1px var(--border);
   --surface-selected: var(--accent-light);
+}
+
+/* ── App surface: the one colour for every panel, room, modal and menu ──────
+   Change these two lines to recolour the whole app. Dark is #101010; light is
+   its mirror (#efefef, the same distance from white). The -rgb twin is for
+   rgba(var(--app-surface-rgb), a) where a surface needs alpha. Consumers:
+   --major-panel-surface (rooms, side panels, prompt bar), --surface-menu
+   (every dropdown/popover), and the modal list near the end of this file. */
+:root {
+  --app-surface: #101010;
+  --app-surface-rgb: 16, 16, 16;
+}
+
+:root.light-theme {
+  --app-surface: #efefef;
+  --app-surface-rgb: 239, 239, 239;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
@@ -1855,13 +1871,13 @@ input[type='range']::-webkit-slider-thumb:active {
    workspace. Light mode is a neutral off-white, deliberately not cream and
    not pure white. */
 :root {
-  --major-panel-surface: #202024;
+  --major-panel-surface: var(--app-surface);
   --major-panel-rim: transparent;
   --major-panel-shadow: 0 0 0 0 transparent;
 }
 
 :root.light-theme {
-  --major-panel-surface: #f6f6f4;
+  --major-panel-surface: var(--app-surface);
   /* Tiles and cards sitting ON a panel: a hair lighter, still off-white. */
   --major-panel-raised: #fbfbfa;
   --terminal-surface: #000000;
@@ -1882,17 +1898,28 @@ input[type='range']::-webkit-slider-thumb:active {
   box-shadow: var(--major-panel-shadow) !important;
 }
 
-/* Light mode: every floating panel takes the same off-white as the rooms. */
-:root.light-theme :is(
+/* Every floating panel and modal takes the same --app-surface as the rooms,
+   in both themes. `background` (not just -color) so the gradients and frosted
+   rgba fills these carried are replaced, not layered over. */
+:root :is(
   .inbox-panel,
   .project-hud,
   .settings-modal,
+  .floating-search,
+  .command-palette,
+  .env-modal,
+  .confirm-modal,
+  .cr-modal,
+  .nf-modal,
+  .apm-card,
+  .asm-card,
   .context-menu,
   .dd-menu,
-  .dropdown-menu,
-  .apm-card
+  .dropdown-menu
 ) {
-  background: var(--major-panel-surface) !important;
+  background: var(--app-surface) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Agent terminals share the grey panel field in dark mode. Light mode keeps
