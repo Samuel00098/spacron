@@ -24,7 +24,7 @@
   /* Body weight for application UI. A touch above regular (400): system-ui is
      Segoe UI Variable on Windows 11, which renders the in-between weight; a
      static face falls back to the nearest one it has. */
-  --ui-font-weight: 450;
+  --ui-font-weight: 500;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a
