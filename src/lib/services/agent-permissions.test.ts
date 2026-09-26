@@ -265,8 +265,8 @@ describe('agent-permissions', () => {
 // pops a console window; Spacron keeps Codex's app server inside the PTY.
 describe('platformLaunchFlags', () => {
   it('turns off the Codex daemon on Windows', () => {
-    expect(platformLaunchFlags('codex', 'Win32')).toBe(' --disable daemon_auto_start');
-    expect(platformLaunchFlags('npx codex --resume', 'Win32')).toBe(' --disable daemon_auto_start');
+    expect(platformLaunchFlags('codex', 'Win32')).toBe(' --no-daemon');
+    expect(platformLaunchFlags('npx codex --resume', 'Win32')).toBe(' --no-daemon');
   });
 
   it('adds nothing elsewhere or for other CLIs', () => {

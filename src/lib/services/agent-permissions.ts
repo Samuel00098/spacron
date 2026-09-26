@@ -203,13 +203,11 @@ export function resolveAgentLaunchEnv(
  * Flags a CLI needs on this platform regardless of permission mode, as a
  * suffix with a leading space (like `mcpLaunchFlags`), or '' when none.
  *
- * Codex on Windows: `--disable daemon_auto_start`. Otherwise the TUI hands its
- * tool commands to Codex's shared app-server daemon, which runs detached with
- * no console — so every PowerShell/git/node it starts opens a new console
- * (Windows Terminal) window, and a working agent flickers windows on screen.
- * With auto-start off the TUI runs its own app server inside the Spacron PTY
- * and every command shares that hidden console. Verified with codex-cli
- * 0.157.1 by tracing process parents with and without the flag.
+ * Codex on Windows: `--no-daemon`. Its shared app-server daemon runs detached
+ * without a console, so commands it starts can open visible console windows.
+ * `--disable daemon_auto_start` only prevents starting a new daemon; Codex can
+ * still attach to one already running. `--no-daemon` keeps this TUI's server
+ * inside the Spacron PTY even when the shared daemon exists.
  */
 export function platformLaunchFlags(
   command: string | null | undefined,
@@ -217,7 +215,7 @@ export function platformLaunchFlags(
 ): string {
   if (!command) return '';
   if (agentExecutable(command) === 'codex' && /^win/i.test(platform)) {
-    return ' --disable daemon_auto_start';
+    return ' --no-daemon';
   }
   return '';
 }
