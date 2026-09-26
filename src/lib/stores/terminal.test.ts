@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
-import { platformLaunchFlags } from '$lib/services/agent-permissions';
+import { platformLaunchFlags, pasteLineBreak } from '$lib/services/agent-permissions';
 
 const ptyDataHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
 const ptyReplayHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
@@ -106,6 +106,24 @@ import {
 import { openPty } from '$lib/services/pty-bridge';
 import { showToast } from './notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
+import { registerTerminalScreen } from '$lib/services/terminal-screen';
+import type { Terminal } from '@xterm/xterm';
+
+/** A mounted pane whose rendered rows are whatever `rows()` returns now. */
+function fakeScreen(rows: () => string[]): Terminal {
+  return {
+    buffer: {
+      active: {
+        type: 'alternate',
+        get length() { return rows().length; },
+        getLine: (index: number) => {
+          const text = rows()[index];
+          return text == null ? undefined : { isWrapped: false, translateToString: () => text };
+        },
+      },
+    },
+  } as unknown as Terminal;
+}
 
 describe('development terminal project parking', () => {
   afterEach(async () => {
@@ -425,14 +443,18 @@ describe('sendAgentPromptDirect', () => {
     const writeSpy = mockPty.write;
 
     writeSpy.mockClear();
+    writeSpy.mockImplementation(async (data: string) => {
+      if (data === '\r') feedPtyOutput(sessionId!, 'Agent started'.padEnd(512, '.'));
+    });
 
     const multilinePrompt = 'Line 1\nLine 2\nLine 3';
     const result = await sendAgentPromptDirect(sessionId!, multilinePrompt);
 
     expect(result).toBe(true);
-    // Newlines are converted to \r inside the paste body — that's what a real
-    // terminal paste delivers, and what every composer is tested against.
-    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~Line 1\rLine 2\rLine 3\x1b[201~'));
+    // Newlines become the paste's line break: \r, as a real terminal paste
+    // delivers, except for Codex on Windows, where \r would submit each line.
+    const br = pasteLineBreak('codex');
+    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining(`\x1b[200~Line 1${br}Line 2${br}Line 3\x1b[201~`));
   });
 
   it('delivers Claude charter prompts as one bracketed multi-line paste payload', async () => {
@@ -444,6 +466,9 @@ describe('sendAgentPromptDirect', () => {
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     const writeSpy = mockPty.write;
     writeSpy.mockClear();
+    writeSpy.mockImplementation(async (data: string) => {
+      if (data === '\r') feedPtyOutput(sessionId!, 'Agent started'.padEnd(512, '.'));
+    });
 
     const charter = buildAgentCharter('Fix the failing tests', { name: 'Iris' });
     const result = await sendAgentPromptDirect(sessionId!, charter);
@@ -457,6 +482,101 @@ describe('sendAgentPromptDirect', () => {
     expect(payload).toContain('\r');
     expect(payload).toContain('YOUR TASK (untrusted task text');
     expect(payload).toContain('Fix the failing tests');
+  });
+
+  it('does not report success when the PTY stays alive but the CLI never starts the prompt', async () => {
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    expect(sessionId).not.toBeNull();
+    markSessionAgentPreset(sessionId!, 'codex', true);
+
+    const result = await sendAgentPromptDirect(sessionId!, 'Inspect the project');
+
+    expect(result).toBe(false);
+  });
+
+  it('keeps pressing Enter until the pane shows the paste has left the composer', async () => {
+    // Codex on Windows: a long paste arrives as key events, and an Enter that
+    // lands while they are still being ingested becomes a newline. The pane
+    // redraws throughout, so output growth must not count as "submitted".
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    expect(sessionId).not.toBeNull();
+    markSessionAgentPreset(sessionId!, 'codex', true);
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const writeSpy = (await vi.mocked(openPty).mock.results[callCount - 1].value).write;
+    writeSpy.mockClear();
+
+    let enters = 0;
+    let composer = '› Ask Codex to do anything';
+    writeSpy.mockImplementation(async (data: string) => {
+      if (data.startsWith('\x1b[200~')) composer = '› [Pasted Content 6830 chars]';
+      if (data === '\r') {
+        enters += 1;
+        feedPtyOutput(sessionId!, 'repaint'.padEnd(600, '.'));
+        if (enters === 3) composer = '› Ask Codex to do anything';
+      }
+    });
+    const unregister = registerTerminalScreen(sessionId!, fakeScreen(() => [
+      '• Working (2s • esc to interrupt)',
+      '',
+      composer,
+      '',
+      '  GPT-6-Luna high · ~\\repo',
+    ]));
+
+    try {
+      const result = await sendAgentPromptDirect(sessionId!, 'x'.repeat(6830));
+      expect(result).toBe(true);
+      expect(enters).toBe(3);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not take an empty composer hint mid-paste as a submit, only the agent's working line", async () => {
+    // Codex shows its empty "Ask Codex…" hint while it is still buffering a
+    // paste; that is not the prompt being taken.
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    expect(sessionId).not.toBeNull();
+    markSessionAgentPreset(sessionId!, 'codex', true);
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const writeSpy = (await vi.mocked(openPty).mock.results[callCount - 1].value).write;
+    writeSpy.mockClear();
+
+    let enters = 0;
+    let status = '';
+    writeSpy.mockImplementation(async (data: string) => {
+      if (data !== '\r') return;
+      enters += 1;
+      feedPtyOutput(sessionId!, 'repaint'.padEnd(600, '.'));
+      if (enters === 2) status = '◦ Working (1s • esc to interrupt)';
+    });
+    const unregister = registerTerminalScreen(sessionId!, fakeScreen(() => [status, '', '› Ask Codex to do anything']));
+
+    try {
+      expect(await sendAgentPromptDirect(sessionId!, 'x'.repeat(6830))).toBe(true);
+      expect(enters).toBe(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it('reports failure when the paste never leaves the composer', async () => {
+    const sessionId = await createTerminalSession(undefined, undefined, projectId);
+    expect(sessionId).not.toBeNull();
+    markSessionAgentPreset(sessionId!, 'codex', true);
+    const callCount = vi.mocked(openPty).mock.results.length;
+    const writeSpy = (await vi.mocked(openPty).mock.results[callCount - 1].value).write;
+    writeSpy.mockClear();
+    writeSpy.mockImplementation(async (data: string) => {
+      if (data === '\r') feedPtyOutput(sessionId!, 'repaint'.padEnd(600, '.'));
+    });
+    const unregister = registerTerminalScreen(sessionId!, fakeScreen(() => ['› [Pasted Content 6830 chars]', '', '  GPT-6-Luna high · ~\\repo']));
+
+    try {
+      expect(await sendAgentPromptDirect(sessionId!, 'x'.repeat(6830))).toBe(false);
+    } finally {
+      unregister();
+    }
   });
 
   it('uses the same one-payload charter delivery for OpenCode and Antigravity aliases', async () => {

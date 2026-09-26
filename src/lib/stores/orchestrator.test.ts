@@ -444,6 +444,26 @@ describe('orchestrator terminal leasing', () => {
     expect(showToast).toHaveBeenCalledWith('Sent goal to claude', 'info', 3000);
   });
 
+  it('keeps the first dispatched agent session when its initial turn needs input', async () => {
+    const task = createOrchestratorTask('project-1', 'Configure the storage backend', 'claude', 'Backend');
+    getSessionOutputBuffer.mockReturnValueOnce('').mockReturnValue('booted output................................');
+    getTerminalProjectState.mockReturnValue({ sessions: [{ id: 42, isRunning: true, ownerTaskId: task.id }] });
+
+    await launchOrchestratorTask(task.id, 'claude', '/repo', true);
+    await vi.advanceTimersByTimeAsync(1600);
+
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, buildAgentTaskMessage(task.goal, { name: 'Backend' }));
+    expect(deliverTurnSignal(42, { kind: 'blocked', reason: 'Which database should I use?' })).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(get(orchestratorTasks)[0]).toMatchObject({
+      status: 'blocked',
+      assignedSessionId: 42,
+      blockedReason: 'Which database should I use?',
+    });
+    expect(setSessionOwnerTask).toHaveBeenCalledWith(42, task.id);
+  });
+
   it('pastes the full charter for agents that do NOT read a rules file', async () => {
     // `traecli` reads no rules file at all (verified 2026-08-12 — the open-source
     // trae-agent CLI has no AGENTS.md/CLAUDE.md/.trae-rules loader), so the only
@@ -2775,6 +2795,42 @@ it('keeps the assistant offer in the next turn context', async () => {
     expect(spawnAgentPreset).not.toHaveBeenCalled();
     expect(get(chatThreadState).messagesByThread[thread.id].find((m) => m.id === question?.id)?.inlineRequest?.answer).toBe('PostgreSQL');
     expect(get(orchestratorTasks)[0].status).toBe('in-progress');
+  });
+
+  it('routes answers for multiple agents to the session named by each question card', async () => {
+    resetChatThreadsForTests();
+    const backend = createOrchestratorTask('project-1', 'Set up the backend', 'claude', 'Backend');
+    const frontend = createOrchestratorTask('project-1', 'Build the frontend', 'claude', 'Frontend');
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    orchestratorTasks.set([
+      { ...backend, status: 'blocked', assignedSessionId: 42, blockedReason: 'Which database?' },
+      { ...frontend, status: 'blocked', assignedSessionId: 43, blockedReason: 'Which framework?' },
+    ]);
+    appendLegacyChatMessage('project-1', {
+      id: 'backend-question', role: 'assistant', type: 'input', text: '', ts: 1,
+      inlineRequest: { id: 'backend-request', type: 'text', prompt: 'Which database?', taskId: backend.id, sessionId: 42 },
+    }, thread.id);
+    appendLegacyChatMessage('project-1', {
+      id: 'frontend-question', role: 'assistant', type: 'input', text: '', ts: 2,
+      inlineRequest: { id: 'frontend-request', type: 'text', prompt: 'Which framework?', taskId: frontend.id, sessionId: 43 },
+    }, thread.id);
+    getTerminalProjectState.mockReturnValue({ sessions: [
+      { id: 42, isRunning: true, ownerTaskId: backend.id },
+      { id: 43, isRunning: true, ownerTaskId: frontend.id },
+    ] });
+
+    await sendChatMessage('project-1', '/repo', 'PostgreSQL', {
+      threadId: thread.id, chatMode: true, answerTaskId: backend.id,
+    });
+    await sendChatMessage('project-1', '/repo', 'React', {
+      threadId: thread.id, chatMode: true, answerTaskId: frontend.id,
+    });
+
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(42, 'PostgreSQL');
+    expect(sendAgentPromptDirect).toHaveBeenCalledWith(43, 'React');
+    const messages = get(chatThreadState).messagesByThread[thread.id];
+    expect(messages.find((message) => message.id === 'backend-question')?.inlineRequest?.answer).toBe('PostgreSQL');
+    expect(messages.find((message) => message.id === 'frontend-question')?.inlineRequest?.answer).toBe('React');
   });
 
   it("sends free text in an orchestrator thread to the orchestrator, leaving an agent's question open", async () => {

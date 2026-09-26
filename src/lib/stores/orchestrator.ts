@@ -63,7 +63,7 @@ import {
   type SpawnPlacement,
 } from '$lib/services/orchestrator-brain';
 import { detectAgentAccess, getAgentAccessBlockedMessage } from '$lib/services/agent-access';
-import { reconnoiter, buildProjectTree, readProjectFilesForContext } from '$lib/services/orchestrator/recon';
+import { reconnoiterMany, buildProjectTree, readProjectFilesForContext } from '$lib/services/orchestrator/recon';
 import { agentInputRequest, isPromiseOnlyReply, isDeferredCompletionReply, cleanOrchestratorReply, formatTurnSummary, composeTurnReply, parseTodoList, mergeTodoItems, advanceTodoItems, findOmittedPlanItems, todoMarkerStatus, todoIsDone, todoProgress, closeOutTodoItems, splitCarriedOverTodos, formatTodoListMarkdown, formatDocumentsIndexBlock, MAX_PLAN_ITEMS, type ChatTurnTodoItem, type DocumentsIndexEntry } from '$lib/services/orchestrator/chat-turn';
 import { chatMcpServers, findMcpServer, listMcpTools, callMcpTool, describeMcpTool, unknownServerMessage, type McpToolInfo } from '$lib/services/orchestrator/mcp-client';
 import { toolArgStr, toolArgNum, toolArgBool, toolArgStrArr, normalizeEmulatorArgs, isDesktopTool, isBrowserTool, brainToolProfile, BRAIN_TOOL_OUTPUT_CAP, BRAIN_REVIEW_OUTPUT_CAP, BRAIN_REVIEW_MAX_OUTPUT_CAP, type BrainMode, type BrainToolCall, type BrainToolResult } from '$lib/services/orchestrator/brain-tools';
@@ -702,7 +702,10 @@ async function resolveConversationLlmConfig(
   return config;
 }
 
-const SUMMARY_TRANSCRIPT_CHARS = 3000;
+// The summary reads the agent's whole rendered output, not the 12k tail the
+// task record keeps, so a long answer is summarised from all of it.
+const SUMMARY_TRANSCRIPT_CHARS = 100000;
+const SUMMARY_MAX_TOKENS = 12000;
 
 async function generateTranscriptSummary(
   transcript: string,
@@ -717,8 +720,13 @@ async function generateTranscriptSummary(
     status === 'blocked' ? 'The agent stopped and needs human input to continue.' :
     'The agent completed the task.';
   const systemPrompt =
-    `Summarize what a coding agent just did based on its terminal output. ${outcome}\n` +
-    `Write 1–2 concise sentences. Name specific files created or modified, commands run, and what was accomplished. Be factual and direct.`;
+    `Write a report of what the coding agent said and did, based on its terminal output. ${outcome}\n` +
+    'Write it as flowing prose in well-formed paragraphs: no bullet points, no numbered lists, no headings, no tables. ' +
+    'Make it detailed and readable, as a colleague would explain it: carry every substantive finding, conclusion, file, command and result the agent reported, and explain how they connect. ' +
+    'Scale the length to the material: when the output is rich, go long, up to about 24,000 characters; when it is short, write less, and never pad or repeat yourself to reach a length. ' +
+    'For project reconnaissance, cover what the project is for, the evidenced stack, its entry points and main workflows, and notable risks or unknowns. ' +
+    'For implementation work, cover which files changed and why, what the changes do, and the verification the agent ran and its results. ' +
+    'Separate what the repository shows from what the agent inferred, mention unfinished work, ignore startup banners, prompts and repeated progress lines, and do not invent details.';
   if (!isLlmConfigAvailable(llmConfig)) return '';
   return await invoke<string>('ai_complete', {
     systemPrompt,
@@ -728,7 +736,14 @@ async function generateTranscriptSummary(
     apiKey: '',
     baseUrl: llmConfig.baseUrl || undefined,
     sessionId: llmConfig.sessionId,
+    maxTokens: SUMMARY_MAX_TOKENS,
   });
+}
+
+/** The fullest record of this turn: the rendered pane when it holds more than the task's transcript. */
+function summarySource(transcript: string, sessionId: number | null): string {
+  const screen = sessionId != null ? readAgentScreen(sessionId, { maxLines: 5000 }) : null;
+  return screen && screen.length > transcript.length ? screen : transcript;
 }
 
 /**
@@ -1551,7 +1566,7 @@ async function completeLeasedTask(
 
   if (willSummarize && updated.transcript && summaryLlmConfig) {
     const projectId = task.projectId;
-    void generateTranscriptSummary(updated.transcript, completionStatus, summaryLlmConfig)
+    void generateTranscriptSummary(summarySource(updated.transcript, sessionId), completionStatus, summaryLlmConfig)
       .then((raw) => raw.trim() || null)
       .catch(() => null)
       .then((summary) => {
@@ -1698,12 +1713,16 @@ function sendGoalToLeasedTask(
       const task = get(orchestratorTasks).find((t) => t.id === id);
       const message = buildLeasedAgentMessage(goal, agentCommand, task?.name ?? null, task?.projectId, task?.role ?? null);
       const responseStart = getSessionOutputLength(sessionId);
-      if (chatThreadId) watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart, { mark: markTerminalScreen(sessionId), prompt: message });
+      // The dispatch card in Chat shows this agent; no separate transcript message.
+      if (chatThreadId) watchChatAgentResponse(id, sessionId, chatThreadId, agentCommand, responseStart, { mark: markTerminalScreen(sessionId), prompt: message }, false);
       const sent = await sendOrchestratorGoalWhenReady(sessionId, message, {
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
       if (!sent) {
-        if (chatThreadId) patchTask(id, (current) => ({ ...current, status: 'failed', failureReason: 'Could not deliver the goal.' }));
+        patchTask(id, (current) => current.status === 'in-progress'
+          ? { ...current, status: 'failed', failureReason: 'Could not confirm that the agent accepted the goal.' }
+          : current
+        );
         return;
       }
       // Chat owns one watcher, armed before delivery so an immediate report cannot be lost.
@@ -1718,7 +1737,11 @@ function sendGoalToLeasedTask(
         agentCommand,
         meterSaysSpent: () => meterSaysTaskIsSpent(id),
       });
-      if (outcome.kind !== 'aborted') completeLeasedTask(id, sessionId, outcome);
+      if (outcome.kind === 'blocked') {
+        reportAgentNeedsInput(id, sessionId, outcome.reason, outcome.via === 'inferred', chatThreadId);
+      } else if (outcome.kind !== 'aborted') {
+        completeLeasedTask(id, sessionId, outcome);
+      }
     } catch (err) {
       console.error('Failed to auto-send orchestrator goal:', err);
       showToast('Failed to send goal to agent', 'error');
@@ -2893,24 +2916,38 @@ function watchChatAgentResponse(
   outputStart: number,
   /** Where this turn starts on the pane, and the prompt whose echo opens it. */
   screenFrom: { mark: ScreenMark | null; prompt: string | null } = { mark: null, prompt: null },
+  /**
+   * Stream the pane into its own chat message. Only for a thread that IS this
+   * agent's conversation: an agent the orchestrator dispatched already has a
+   * card (ChatAgentRuns) showing its state and output, and a second streamed
+   * message under the cards just repeats the pane — composer and footer too.
+   */
+  transcript = true,
 ): void {
   const responseId = msgId();
   const responseText = () => chatResponseText(sessionId, outputStart, screenFrom.mark, screenFrom.prompt);
   const task = get(orchestratorTasks).find((entry) => entry.id === taskId);
   const projectId = getChatThread(threadId)?.projectId ?? task?.projectId;
   if (!projectId) return;
-  appendChat(
-    projectId,
-    { id: responseId, role: 'assistant', text: '', ts: Date.now(), pending: true },
-    threadId,
-  );
+  if (transcript) {
+    appendChat(
+      projectId,
+      { id: responseId, role: 'assistant', text: '', ts: Date.now(), pending: true },
+      threadId,
+    );
+  }
+  // Without a transcript message there is nothing to patch; the card reads
+  // the task and the pane itself.
+  const patchResponse = (patch: Partial<ChatMessage>) => {
+    if (transcript) patchChat(projectId, responseId, patch);
+  };
 
   const watch = (async () => {
     const publish = (pending: boolean) => {
       const text = responseText();
-      if (text) patchChat(projectId, responseId, { text, pending });
+      if (text) patchResponse({ text, pending });
     };
-    const timer = setInterval(() => publish(true), 500);
+    const timer = transcript ? setInterval(() => publish(true), 500) : null;
     try {
       let outcome: AgentTurnOutcome;
       do {
@@ -2937,15 +2974,20 @@ function watchChatAgentResponse(
       } while (outcome.kind === 'finished' && outcome.via === 'inferred' && leasedSessionLive(taskId, sessionId));
       if (outcome.kind === 'aborted') {
         const current = get(orchestratorTasks).find((entry) => entry.id === taskId);
-        if (current?.status === 'in-progress') {
-          patchChat(projectId, responseId, {
+        if (current?.status === 'failed') {
+          patchResponse({
+            text: current.failureReason ?? 'The agent did not confirm that it accepted the prompt. Check its terminal before retrying.',
+            pending: false,
+          });
+        } else if (current?.status === 'in-progress') {
+          patchResponse({
             text: 'The agent session ended before it returned a chat response. Check its terminal.',
             pending: false,
           });
         }
-        patchChat(projectId, responseId, { pending: false });
+        patchResponse({ pending: false });
         if (current) syncChatThreadTask(current, threadId);
-        if (current?.status === 'in-progress') updateChatThread(threadId, { status: 'failed' });
+        if (current?.status === 'in-progress' || current?.status === 'failed') updateChatThread(threadId, { status: 'failed' });
         return;
       }
       if (outcome.kind === 'blocked') {
@@ -2953,7 +2995,7 @@ function watchChatAgentResponse(
         const inlineRequest = agentInputRequest(`chat-request-${responseId}`, outcome.reason, taskId, sessionId, outcome.via === 'inferred');
         patchTask(taskId, (current) => ({ ...current, status: 'blocked', blockedReason: inlineRequest.prompt }));
         logTaskActivity(taskId, 'blocked', inlineRequest.prompt);
-        patchChat(projectId, responseId, {
+        patchResponse({
           type: 'input',
           text: finalText,
           pending: false,
@@ -2963,24 +3005,25 @@ function watchChatAgentResponse(
         return;
       }
       if (outcome.kind === 'failed') {
-        patchChat(projectId, responseId, { type: 'failure', text: responseText() || outcome.reason, pending: false });
+        patchResponse({ type: 'failure', text: responseText() || outcome.reason, pending: false });
         await completeLeasedTask(taskId, sessionId, outcome);
         return;
       }
       publish(false);
       const finalText = responseText();
       if (!finalText) {
-        patchChat(projectId, responseId, {
+        patchResponse({
           text: 'The agent returned no readable chat text. Check its terminal.',
           pending: false,
         });
       }
       await completeLeasedTask(taskId, sessionId, outcome);
     } catch (error) {
-      patchChat(projectId, responseId, { type: 'failure', text: `Could not monitor the agent: ${String(error)}`, pending: false });
+      if (transcript) patchResponse({ type: 'failure', text: `Could not monitor the agent: ${String(error)}`, pending: false });
+      else console.error('Could not monitor the agent:', error);
       updateChatThread(threadId, { status: 'failed' });
     } finally {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     }
   })();
 
@@ -6540,7 +6583,6 @@ export async function sendChatMessage(
     appendChat(projectId, { id: msgId(), role: 'assistant', type: 'activity', text: timingText, pending: false, ts: Date.now() }, chatThreadId);
     moveThreadMessageToEnd(chatThreadId, assistantId);
   }
-
   // Plan mode is a read-only contract even if routing produced actions.
   if (planningTurn) result = { ...result, actions: [] };
 
@@ -6911,18 +6953,16 @@ async function executeRoutedOrchestratorPlan(args: {
   // terminal spawn loop below. Previously recon ran strictly after every launch
   // had been awaited, so the two latencies stacked; now they run concurrently.
   // Nothing to reconnoitre for if the user just cancelled every spawn.
-  const reconCommand = spawnsAllowed
-    ? result.actions
-        .flatMap((a) =>
-          a.kind === 'spawn' && (a.prompt ?? '').trim().length > 10 ? [a.prompt as string] : []
-        )
-        .join('; ')
-    : '';
-  let reconPromise: ReturnType<typeof reconnoiter> | null = null;
-  if (reconCommand && rootPath) {
+  const reconCommands = spawnsAllowed
+    ? [...new Set(result.actions
+        .flatMap((a) => a.kind === 'spawn' || a.kind === 'send' ? [(a.prompt ?? '').trim()] : [])
+        .filter(Boolean))]
+    : [];
+  let reconPromise: ReturnType<typeof reconnoiterMany> | null = null;
+  if (reconCommands.length && rootPath) {
     patchChat(projectId, assistantId, { text: result.reply + '\n\n🔍 Analyzing codebase…' });
-    reconPromise = reconnoiter(
-      reconCommand,
+    reconPromise = reconnoiterMany(
+      reconCommands,
       rootPath,
       opts.projectName ?? 'project',
       async (sysPrompt, userText) => {
@@ -7094,13 +7134,16 @@ async function executeRoutedOrchestratorPlan(args: {
   // The recon LLM calls were started above and have been running while the
   // terminals spun up. Collect the enriched prompt now, just before dispatch.
   let reconSummary: string | null = null;
-  let enrichedPrompt: string | null = null;
+  const enrichedPrompts = new Map<string, string>();
 
   if (reconPromise) {
     try {
       const recon = await reconPromise;
       reconSummary = recon.summary;
-      enrichedPrompt = recon.enrichedPrompt || null;
+      reconCommands.forEach((command, index) => {
+        const enriched = recon.enrichedPrompts[index]?.trim();
+        if (enriched) enrichedPrompts.set(command, enriched);
+      });
 
       patchChat(projectId, assistantId, {
         text: result.reply,
@@ -7119,7 +7162,7 @@ async function executeRoutedOrchestratorPlan(args: {
 
   for (const { task, sessionId, rawPrompt, agent, persistent, watchTurn, name } of spawnEntries) {
     if (sessionId == null) continue;
-    const goal = enrichedPrompt ?? rawPrompt;
+    const goal = enrichedPrompts.get(rawPrompt.trim()) ?? rawPrompt;
     if (goal !== rawPrompt) {
       patchTask(task.id, (t) => ({ ...t, goal }));
     }
@@ -7143,7 +7186,7 @@ async function executeRoutedOrchestratorPlan(args: {
       const target = resolveRunningTaskByName(projectId, action.target);
       if (target && (await sendFollowUpToAgent(
         target,
-        action.prompt,
+        enrichedPrompts.get(action.prompt.trim()) ?? action.prompt,
         rootPath,
         true,
         false,

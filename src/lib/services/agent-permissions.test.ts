@@ -11,6 +11,7 @@ import {
   setAgentPermissionMode,
   hasCustomizedYoloAgents,
   platformLaunchFlags,
+  pasteLineBreak,
 } from './agent-permissions';
 
 describe('agent-permissions', () => {
@@ -274,5 +275,18 @@ describe('platformLaunchFlags', () => {
     expect(platformLaunchFlags('codex', 'Linux x86_64')).toBe('');
     expect(platformLaunchFlags('claude', 'Win32')).toBe('');
     expect(platformLaunchFlags('', 'Win32')).toBe('');
+  });
+});
+
+describe('pasteLineBreak', () => {
+  it('uses Ctrl+J for Codex on Windows, where each \r in a paste is an Enter', () => {
+    expect(pasteLineBreak('codex', 'Win32')).toBe('\n');
+    expect(pasteLineBreak('npx codex --resume', 'Win32')).toBe('\n');
+  });
+
+  it('keeps the terminal paste line break everywhere else', () => {
+    expect(pasteLineBreak('codex', 'MacIntel')).toBe('\r');
+    expect(pasteLineBreak('claude', 'Win32')).toBe('\r');
+    expect(pasteLineBreak(null, 'Win32')).toBe('\r');
   });
 });

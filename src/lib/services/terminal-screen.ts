@@ -103,10 +103,20 @@ const CHROME_LINES: RegExp[] = [
   /^\s*[⏵⏸]{1,2}\s/,
   /^\s*[✻✽✶✳✢·*]\s*\w+…\s*\(/, // Claude's "✻ Thinking… (12s · esc…)" spinner row
   /^\s*tip:/i,
+  // Codex's footer under the composer: `GPT-6-Luna high · ~\path\to\repo`.
+  /^\s*[^\s·][^·]{0,60}\s·\s+(?:~[\\/]|[A-Za-z]:[\\/]|\/)[^·]*$/,
 ];
+
+/**
+ * A paste the CLI folded into a placeholder: `› [Pasted Content 5236 chars]`
+ * (Codex) or `[Pasted text #1 +40 lines]` (Claude). It is the prompt going
+ * in, never the agent's reply.
+ */
+const PASTE_PLACEHOLDER = /^\s*[›>❯]?\s*\[\s*pasted\s+(?:content|text)\b[^\]]*\]\s*$/i;
 
 function isChrome(line: string): boolean {
   if (!line.trim()) return false;
+  if (PASTE_PLACEHOLDER.test(line)) return true;
   if (FRAME_START.test(line) || ONLY_FRAME.test(line)) return true;
   return CHROME_LINES.some((pattern) => pattern.test(line));
 }
@@ -130,6 +140,11 @@ export function cleanAgentScreen(screen: string, prompt?: string | null): string
   if (wanted.length >= 4) {
     // The LAST echo of the prompt: the composer row above it may repeat it.
     for (let index = lines.length - 1; index >= 0; index -= 1) {
+      // A pasted prompt echoes as its placeholder, not its text.
+      if (PASTE_PLACEHOLDER.test(lines[index])) {
+        lines = lines.slice(index + 1);
+        break;
+      }
       const echo = PROMPT_ROW.exec(lines[index]);
       const shown = echo ? normalize(echo[1]).slice(0, 40) : '';
       if (shown.length < 4 || !wanted.startsWith(shown)) continue;

@@ -16,6 +16,7 @@ import {
 import {
   resolveAgentLaunchArgs,
   platformLaunchFlags,
+  pasteLineBreak,
   resolveAgentLaunchCommand,
   resolveAgentLaunchEnv,
 } from '$lib/services/agent-permissions';
@@ -56,6 +57,7 @@ import {
   BROWSER_TOOL_TIMEOUT_MS,
 } from './mcpBridge';
 import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
+import { readTerminalScreen } from '$lib/services/terminal-screen';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -1501,11 +1503,21 @@ const PASTE_ECHO_NEEDLE_CHARS = 48;
 const PASTE_SUBMIT_SETTLE_MS = isTestEnv ? 2 : 140;
 const PASTE_SUBMIT_MAX_WAIT_MS = isTestEnv ? 15 : 6000;
 const SUBMIT_CONFIRM_POLL_MS = isTestEnv ? 2 : 80;
-const SUBMIT_CONFIRM_WINDOW_MS = isTestEnv ? 15 : 2500;
+const SUBMIT_CONFIRM_WINDOW_MS = isTestEnv ? 15 : 8000;
+// How long a composer may still show the prompt before Enter is pressed again,
+// and how long to keep pressing it. A 6.7k-character paste took Codex on
+// Windows ~18s to ingest; startup can add a few more.
+const PENDING_COMPOSER_RETRY_MS = isTestEnv ? 4 : 3000;
+const SUBMIT_TOTAL_WINDOW_MS = isTestEnv ? 250 : 90000;
+/** An emptied composer must stay empty this long to count as a submit. */
+const SUBMIT_CLEAR_HOLD_MS = isTestEnv ? 3 : 900;
 const SUBMIT_CONFIRM_DELTA = 512;
 const MAX_SUBMIT_ATTEMPTS = isTestEnv ? 1 : 3;
 const PASTE_COMMIT_QUIET_MS = isTestEnv ? 1 : 220;
 const PASTE_COMMIT_QUIET_MAX_MS = isTestEnv ? 4 : 1600;
+const PASTE_INGEST_QUIET_MS = isTestEnv ? 2 : 700;
+const PASTE_INGEST_MS_PER_CHAR = isTestEnv ? 0 : 4;
+const PASTE_INGEST_MAX_MS = isTestEnv ? 20 : 45000;
 const ECHO_ANSI =
   /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][\s\S]*?(?:\x1b\\|\x07)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b[@-Z\\-_=>]/g;
 const ECHO_CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
@@ -1562,26 +1574,113 @@ async function waitForPasteEcho(sessionId: number, base: string, text: string): 
   return landed;
 }
 
-async function confirmAgentStarted(sessionId: number, baseLen: number): Promise<boolean> {
+/** What a mounted pane's composer shows right now, for one prompt delivery. */
+type ComposerState = 'working' | 'pending' | 'clear';
+
+/**
+ * Whether the CLI took the prompt after one Enter.
+ *
+ * With the pane mounted, only the screen counts. `working` (the CLI's own
+ * "esc to interrupt" line) is proof on its own. An empty composer counts only
+ * once this delivery has SEEN the prompt sitting there and the row then stays
+ * empty: while a TUI is still ingesting a long paste the row can show its
+ * empty hint for a moment (Codex does), and output keeps growing the whole
+ * time, which is why growth "confirmed" Enters the CLI had swallowed. Growth
+ * is only the fallback for a pane this code cannot read.
+ */
+async function confirmAgentStarted(
+  sessionId: number,
+  baseLen: number,
+  prompt: string,
+  seen: { pending: boolean },
+): Promise<boolean> {
   const startedAt = Date.now();
+  let clearSince: number | null = null;
   for (;;) {
     if (!ptyInstances.get(sessionId)) return false;
-    if (getSessionOutputLength(sessionId) >= baseLen + SUBMIT_CONFIRM_DELTA) return true;
-    if (Date.now() - startedAt >= SUBMIT_CONFIRM_WINDOW_MS) return false;
+    const state = readComposerState(sessionId, prompt);
+    const now = Date.now();
+    if (state === 'working') return true;
+    if (state === 'pending') seen.pending = true;
+    if (state === 'clear' && seen.pending) {
+      clearSince ??= now;
+      if (now - clearSince >= SUBMIT_CLEAR_HOLD_MS) return true;
+    } else {
+      clearSince = null;
+    }
+    if (state == null && getSessionOutputLength(sessionId) >= baseLen + SUBMIT_CONFIRM_DELTA) return true;
+    const elapsed = now - startedAt;
+    // Still waiting in the box (or not readable yet): press Enter again.
+    if (state !== 'clear' && state != null && elapsed >= PENDING_COMPOSER_RETRY_MS) return false;
+    if (elapsed >= SUBMIT_CONFIRM_WINDOW_MS) return false;
     await sleep(SUBMIT_CONFIRM_POLL_MS);
   }
 }
 
-async function waitForComposerQuiescent(sessionId: number): Promise<void> {
+const PASTE_PLACEHOLDER_ROW = /\[\s*pasted\s+(?:content|text|\d+\s+lines?)[^\]]*\]/i;
+/** A composer row: `› text` (Codex), `> text` / `│ > text │` (Claude), `❯ text`. */
+const COMPOSER_ROW = /^[\s│┃|]*[›>❯]\s?(.*?)[\s│┃|]*$/;
+/** The status line Claude Code, Codex and Gemini show while a turn runs. */
+const WORKING_ROW = /esc to (?:interrupt|cancel)/i;
+const COMPOSER_SCAN_ROWS = 14;
+
+/**
+ * What a mounted pane shows for this prompt: the agent `working` on a turn,
+ * the prompt `pending` in the composer (its paste placeholder or its opening
+ * words), or the composer `clear`. null when there is no pane, or no composer
+ * row this code recognises — callers then fall back to output growth.
+ */
+function readComposerState(sessionId: number, prompt: string): ComposerState | null {
+  const screen = readTerminalScreen(sessionId, { maxLines: COMPOSER_SCAN_ROWS });
+  if (screen == null) return null;
+  const rows = screen.split('\n');
+  let composerIndex = -1;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (COMPOSER_ROW.test(rows[index])) {
+      composerIndex = index;
+      break;
+    }
+  }
+  // A paste placeholder is prompt-in-waiting wherever it sits near the bottom.
+  const fromComposer = composerIndex >= 0 ? rows.slice(composerIndex).join('\n') : rows.slice(-4).join('\n');
+  if (PASTE_PLACEHOLDER_ROW.test(fromComposer)) return 'pending';
+  if (rows.some((row) => WORKING_ROW.test(row))) return 'working';
+  if (composerIndex < 0) return null;
+  const typed = normalizeForEchoMatch(COMPOSER_ROW.exec(rows[composerIndex])?.[1] ?? '');
+  if (!typed) return 'clear';
+  const promptStart = normalizeForEchoMatch(prompt).slice(0, PASTE_ECHO_NEEDLE_CHARS);
+  if (!promptStart) return 'clear';
+  // The row shows the prompt's first line, possibly cut at the pane's width.
+  const probe = typed.slice(0, Math.min(typed.length, promptStart.length));
+  if (probe.length < 4) return null; // too little on the row to tell either way
+  return promptStart.startsWith(probe) ? 'pending' : 'clear';
+}
+
+/**
+ * Wait until the CLI has finished taking the paste in, so the Enter that
+ * follows is a submit and not a newline inside it. On Windows ConPTY hands a
+ * paste over key by key and the TUI repaints for each one: 6.7k characters
+ * took Codex ~18s. Done once the output has been quiet for a moment — with a
+ * readable pane, also once the prompt is visibly in the composer.
+ */
+async function waitForPasteIngested(sessionId: number, prompt: string): Promise<void> {
   const startedAt = Date.now();
+  const maxWait = Math.min(PASTE_INGEST_MAX_MS, PASTE_COMMIT_QUIET_MAX_MS + prompt.length * PASTE_INGEST_MS_PER_CHAR);
   let lastLen = getSessionOutputLength(sessionId);
+  let quietSince = Date.now();
   for (;;) {
     await sleep(PASTE_COMMIT_QUIET_MS);
     if (!ptyInstances.get(sessionId)) return;
     const len = getSessionOutputLength(sessionId);
-    if (len === lastLen) return;
-    lastLen = len;
-    if (Date.now() - startedAt >= PASTE_COMMIT_QUIET_MAX_MS) return;
+    const now = Date.now();
+    if (len !== lastLen) {
+      lastLen = len;
+      quietSince = now;
+    }
+    const state = readComposerState(sessionId, prompt);
+    const quietFor = now - quietSince;
+    if (state == null ? quietFor >= PASTE_COMMIT_QUIET_MS : state === 'pending' && quietFor >= PASTE_INGEST_QUIET_MS) return;
+    if (now - startedAt >= maxWait) return;
   }
 }
 
@@ -1626,23 +1725,42 @@ async function deliverPromptRaw(sessionId: number, text: string): Promise<boolea
 
   const base = getSessionOutputBuffer(sessionId);
   const promptBody = text;
-  const pasteBody = promptBody.replace(/\r?\n/g, '\r');
+  const pasteBody = promptBody.replace(/\r?\n/g, pasteLineBreak(preset));
   const pastePayload = `\x1b[200~${pasteBody}\x1b[201~`;
-  pty.write(pastePayload).catch((err) => console.error('Failed to paste prompt:', err));
+  try {
+    await pty.write(pastePayload);
+  } catch (err) {
+    logAgentSend(sessionId, 'paste-write-failed');
+    console.error('Failed to paste prompt:', err);
+    return false;
+  }
   setSessionExecuting(sessionId, true);
   logAgentSend(sessionId, 'paste-written', { preset, chars: pasteBody.length });
 
   const echoLanded = await waitForPasteEcho(sessionId, base, promptBody);
   logAgentSend(sessionId, echoLanded ? 'echo-confirmed' : 'echo-timeout');
 
-  await waitForComposerQuiescent(sessionId);
-  logAgentSend(sessionId, 'composer-settled');
+  await waitForPasteIngested(sessionId, promptBody);
+  logAgentSend(sessionId, 'composer-settled', { state: readComposerState(sessionId, promptBody) });
 
-  for (let attempt = 0; attempt < MAX_SUBMIT_ATTEMPTS; attempt += 1) {
+  // Press Enter until the pane shows the prompt was taken. An Enter can be
+  // lost two ways, both reproduced with Codex on Windows: it lands while the
+  // CLI is still ingesting a long paste (it becomes a newline inside it), or
+  // while the CLI is still booting. A repeat is safe: Enter on an empty
+  // composer is a no-op. Never paste again — that could send the prompt twice.
+  const submitStartedAt = Date.now();
+  const seen = { pending: readComposerState(sessionId, promptBody) === 'pending' };
+  for (let attempt = 0; ; attempt += 1) {
     if (!ptyInstances.get(sessionId)) return false;
     const lenBeforeEnter = getSessionOutputLength(sessionId);
-    pty.write('\r').catch((err) => console.error('Failed to submit prompt:', err));
-    const confirmed = await confirmAgentStarted(sessionId, lenBeforeEnter);
+    try {
+      await pty.write('\r');
+    } catch (err) {
+      logAgentSend(sessionId, 'enter-write-failed', { attempt: attempt + 1 });
+      console.error('Failed to submit prompt:', err);
+      return false;
+    }
+    const confirmed = await confirmAgentStarted(sessionId, lenBeforeEnter, promptBody, seen);
     logAgentSend(sessionId, 'enter', {
       attempt: attempt + 1,
       confirmed,
@@ -1652,13 +1770,18 @@ async function deliverPromptRaw(sessionId: number, text: string): Promise<boolea
       markSessionBriefed(sessionId, true);
       return true;
     }
+    // Without a readable composer there is nothing to tell a lost Enter from a
+    // slow start, so keep the old bounded retry count.
+    const readable = readComposerState(sessionId, promptBody) != null;
+    if (!readable && attempt + 1 >= MAX_SUBMIT_ATTEMPTS) break;
+    if (Date.now() - submitStartedAt >= SUBMIT_TOTAL_WINDOW_MS) break;
   }
-  const success = ptyInstances.has(sessionId);
-  logAgentSend(sessionId, 'submit-unconfirmed', { sessionAlive: success });
-  if (success) {
-    markSessionBriefed(sessionId, true);
-  }
-  return success;
+  const sessionAlive = ptyInstances.has(sessionId);
+  logAgentSend(sessionId, 'submit-unconfirmed', { sessionAlive });
+  // A live PTY only proves the terminal still exists; it does not prove the
+  // CLI accepted the prompt. Returning true here leaves the orchestrator task
+  // marked as working while the prompt can still be sitting in the composer.
+  return false;
 }
 
 export function setSessionExecuting(id: number, executing: boolean) {
@@ -2030,10 +2153,10 @@ async function autoBriefSession(id: number, preset: string) {
     const brief = buildAgentCharter('', { name });
     // Straight to delivery, not `sendAgentPromptDirect`: the charter is setup,
     // not a task, so it must not mark the agent as working.
-    const success = await deliverPromptRaw(id, brief);
-    if (success) {
-      markSessionBriefed(id, true);
-    }
+    await deliverPromptRaw(id, brief);
+    // Briefed once the charter is in the pane, even when the submit could not
+    // be confirmed: briefing again would paste a second charter on top of it.
+    if (ptyInstances.has(id)) markSessionBriefed(id, true);
   } finally {
     autoBriefInFlight.delete(id);
   }

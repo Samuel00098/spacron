@@ -61,4 +61,36 @@ describe('cleanAgentScreen', () => {
     const screen = '› fix it\n\n• The model directory is now configurable.';
     expect(cleanAgentScreen(screen, 'fix it')).toBe('• The model directory is now configurable.');
   });
+
+  it('reads a Codex pane whose pasted prompt is still in the composer as empty', () => {
+    // What Chat showed as an agent "reply": the unsubmitted paste and the footer.
+    const screen = [
+      '│ permissions: YOLO mode                       │',
+      '╰──────────────────────────────────────────────╯',
+      '',
+      '› [Pasted Content 6830 chars]',
+      '',
+      '  GPT-6-Luna high · ~\\OneDrive\\Documents\\Projects\\Real Projects\\clipforge',
+    ].join('\n');
+    expect(cleanAgentScreen(screen)).toBe('');
+    expect(cleanAgentScreen(screen, 'Inspect the ClipForge project')).toBe('');
+  });
+
+  it("starts after a pasted prompt's placeholder echo", () => {
+    const screen = [
+      '› [Pasted Content 5236 chars]',
+      '',
+      '• ClipForge is a desktop video clipper.',
+      '',
+      '› Ask Codex to do anything',
+      '',
+      '  GPT-6-Luna high · C:\\repo\\clipforge',
+    ].join('\n');
+    expect(cleanAgentScreen(screen, 'GOAL: Perform an independent read-only review')).toBe('• ClipForge is a desktop video clipper.');
+  });
+
+  it('keeps a reply line that uses a middle dot in prose', () => {
+    const screen = '› fix it\n\n• Build · tests · lint all pass.';
+    expect(cleanAgentScreen(screen, 'fix it')).toBe('• Build · tests · lint all pass.');
+  });
 });

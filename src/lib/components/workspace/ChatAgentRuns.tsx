@@ -5,6 +5,7 @@ import { readAgentScreen } from '$lib/services/terminal-screen';
 import { getAgentDisplayName, getSessionOutputProduced, setActiveSession } from '$lib/stores/terminal';
 import { showTerminal } from '$lib/stores/layout';
 import { requestStageExpansion } from '$lib/stores/layoutControl';
+import { setInteractionMode } from '$lib/stores/interactionMode';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 
 /**
@@ -144,6 +145,7 @@ function AgentRunCard({
 
   function openTerminal() {
     if (sessionId == null) return;
+    setInteractionMode('cli');
     setActiveSession(sessionId);
     showTerminal();
     requestStageExpansion(`agent:${sessionId}`);
@@ -170,7 +172,7 @@ function AgentRunCard({
           )}
         </button>
         {sessionId != null && (
-          <button type="button" className="chat-agent-run-action" onClick={openTerminal} title="Open this agent's terminal">
+          <button type="button" className="chat-agent-run-action" onClick={openTerminal} title="Open this agent's terminal in Code mode">
             Terminal
           </button>
         )}

@@ -80,7 +80,6 @@ import VoiceInputIcon from '$lib/components/shared/VoiceInputIcon';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
-import { TURN_TIMING_PREFIX } from '$lib/services/orchestrator/turn-timing';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import ChatAgentRuns from './ChatAgentRuns';
@@ -339,14 +338,6 @@ function liveTaskStatusLabel(status: string, stalled: boolean): string {
 }
 
 function InlineCard({ message, onOption }: { message: ChatMessage; onOption?: (label: string) => void }) {
-  if (message.type === 'orchestrator') {
-    return (
-      <div className="chat-mode-inline-card orchestrator">
-        <span>Activity</span>
-        <MessageBody text={message.text} />
-      </div>
-    );
-  }
   if ((message.type === 'approval' || message.type === 'input') && message.inlineRequest) {
     const request = message.inlineRequest;
     const answered = !!request.answeredAt;
@@ -372,92 +363,6 @@ function InlineCard({ message, onOption }: { message: ChatMessage; onOption?: (l
     );
   }
   return null;
-}
-
-function ActivityDisclosure({ activities: rows }: { activities: ChatMessage[] }) {
-  // The turn's timing row is a summary, not an operation: it labels the
-  // disclosure ("Worked for 2m 14s") and stays out of the count.
-  const timing = rows.find((row) => row.text.startsWith(TURN_TIMING_PREFIX));
-  const activities = timing ? rows.filter((row) => row !== timing) : rows;
-  const pending = activities.some((activity) => activity.pending);
-  const noun = activities.length === 1 ? 'operation' : 'operations';
-
-  return (
-    <div className="chat-mode-tool-work">
-      <details className="chat-mode-activity-details">
-        <summary>
-          <span className={`chat-mode-activity-state${pending ? ' pending' : ''}`}>
-            {pending ? 'Working' : 'Work details'}
-          </span>
-          <span className="chat-mode-activity-summary">
-            {activities.length} {noun}
-            {timing ? ` · ${timing.text.split('\n')[0].slice(TURN_TIMING_PREFIX.length)}` : ''}
-          </span>
-          <svg className="chat-mode-activity-chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m4 6 4 4 4-4" />
-          </svg>
-        </summary>
-        <div className="chat-mode-activity-list">
-          {timing && <pre className="chat-mode-activity-timing">{timing.text.split('\n').filter(Boolean).join('\n')}</pre>}
-          {activities.map((activity) => {
-            const lines = activity.text.split('\n');
-            const title = lines[0] || 'Tool activity';
-            const detail = lines.slice(1).join('\n').trim();
-            return (
-              <div key={activity.id} className={`chat-mode-activity-step${activity.pending ? ' pending' : ''}`}>
-                <div className="chat-mode-activity-step-title">
-                  <span className="chat-mode-activity-step-state">{activity.pending ? 'Working' : 'Done'}</span>
-                  <span>{title}</span>
-                </div>
-                {detail && <pre>{detail}</pre>}
-              </div>
-            );
-          })}
-        </div>
-      </details>
-    </div>
-  );
-}
-
-/** A reply that can carry a Work details disclosure (not a card or a report). */
-function ownsActivity(message: ChatMessage | undefined): boolean {
-  return message?.role === 'assistant'
-    && message.type !== 'activity'
-    && message.type !== 'approval'
-    && message.type !== 'input'
-    && message.type !== 'completion';
-}
-
-/**
- * The index of the reply a run of activity rows belongs to, or -1. A run has
- * ONE owner — the reply right after it, else the reply right before it — so
- * the same operations are never rendered twice (the old rule attached a run to
- * the replies on BOTH sides, duplicating "Work details" around a card).
- */
-function activityRunOwner(messages: ChatMessage[], messageIndex: number): number {
-  let first = messageIndex;
-  while (first > 0 && messages[first - 1]?.type === 'activity') first -= 1;
-  let last = messageIndex;
-  while (last + 1 < messages.length && messages[last + 1]?.type === 'activity') last += 1;
-  if (ownsActivity(messages[last + 1])) return last + 1;
-  if (ownsActivity(messages[first - 1])) return first - 1;
-  return -1;
-}
-
-function adjacentActivities(messages: ChatMessage[], messageIndex: number): ChatMessage[] {
-  if (!ownsActivity(messages[messageIndex])) return [];
-  const before: ChatMessage[] = [];
-  for (let index = messageIndex - 1; index >= 0 && messages[index]?.type === 'activity'; index -= 1) before.unshift(messages[index]);
-  const after: ChatMessage[] = [];
-  for (let index = messageIndex + 1; index < messages.length && messages[index]?.type === 'activity'; index += 1) after.push(messages[index]);
-  return [
-    ...(before.length && activityRunOwner(messages, messageIndex - 1) === messageIndex ? before : []),
-    ...(after.length && activityRunOwner(messages, messageIndex + 1) === messageIndex ? after : []),
-  ];
-}
-
-function activityRunBelongsToAssistant(messages: ChatMessage[], messageIndex: number): boolean {
-  return activityRunOwner(messages, messageIndex) >= 0;
 }
 
 function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
@@ -754,6 +659,10 @@ export default function ChatModePanel() {
     }
     return byMessage;
   }, [messages, allTasks]);
+  const cardTaskIds = useMemo(
+    () => new Set([...agentRunsByMessage.values()].flat().map((task) => task.id)),
+    [agentRunsByMessage],
+  );
   const taskStalled = useMemo(() => {
     if (!boundTask || boundTask.status !== 'in-progress') return false;
     const signalAt = Math.max(
@@ -1135,7 +1044,7 @@ export default function ChatModePanel() {
     setRequestDraft('');
   }
 
-  async function answerPendingRequest(answer: string) {
+  async function answerPendingRequest(answer: string, request = pendingRequest) {
     const text = answer.trim();
     if (!project || !thread || !text || answeringRequestRef.current) return;
     answeringRequestRef.current = true;
@@ -1151,7 +1060,7 @@ export default function ChatModePanel() {
       chatMode: true,
       conversationalMode: true,
       // The banner/card answers the agent that asked, not the orchestrator.
-      answerTaskId: pendingRequest?.taskId ?? undefined,
+      answerTaskId: request?.taskId ?? undefined,
       });
       setRequestDraft('');
     } finally {
@@ -1785,40 +1694,21 @@ export default function ChatModePanel() {
               <div className="chat-mode-empty">
                 <h2 className="chat-mode-empty-heading">{projectName ? `What should we work on in ${projectName}?` : 'What should we work on?'}</h2>
               </div>
-            ) : messages.map((message, messageIndex) => {
-              if (message.type === 'completion') {
-                return (
-                  <div key={message.id} className="chat-mode-inline-card completion">
-                    <span>Completed</span>
-                    <MessageBody text={message.text} />
-                  </div>
-                );
-              }
-              if (message.type === 'activity') {
-                // Tool calls are appended consecutively for one orchestrator
-                // turn. Render that run as one compact disclosure instead of a
-                // full transcript card for every read/search operation. The
-                // disclosure is attached to the adjacent assistant response;
-                // keep this branch only for legacy/orphaned activity records.
-                if (activityRunBelongsToAssistant(messages, messageIndex)) return null;
-                if (messageIndex > 0 && messages[messageIndex - 1]?.type === 'activity') return null;
-                const activities: ChatMessage[] = [];
-                for (let index = messageIndex; index < messages.length; index += 1) {
-                  const activity = messages[index];
-                  if (!activity || activity.type !== 'activity') break;
-                  activities.push(activity);
-                }
-                return <ActivityDisclosure key={`activity-${message.id}`} activities={activities} />;
+            ) : messages.map((message) => {
+              // An agent's turn-end record stays in the thread (its card reads
+              // the report from it, and the inbox files it), but Chat does not
+              // show it as a strip of its own: the agent's card already says
+              // Finished or Failed and shows the report.
+              if (message.type === 'completion') return null;
+              if (message.completion?.taskId && cardTaskIds.has(message.completion.taskId)) return null;
+              if (message.type === 'activity' || message.type === 'orchestrator') {
+                // Tool and timing details stay internal; Chat shows the answer,
+                // agent cards, and explicit questions that need the user's reply.
+                return null;
               }
 
-              const attachedActivities = message.role === 'assistant'
-                ? adjacentActivities(messages, messageIndex)
-                : [];
               return (
                 <article key={message.id} className={`chat-mode-message ${message.role}`}>
-                  {attachedActivities.length > 0 && (
-                    <ActivityDisclosure activities={attachedActivities} />
-                  )}
                   <div className="chat-mode-message-meta">
                     <strong>{messageLabel(message)}</strong>
                     <time>{formatTime(message.ts)}</time>
@@ -1852,7 +1742,9 @@ export default function ChatModePanel() {
                   ) : <ChatMarkdownBody text={message.text} pending={message.pending} />}
                   <InlineCard
                     message={message}
-                    onOption={message.id === pendingRequestMessage?.id ? (option) => void answerPendingRequest(option) : undefined}
+                    onOption={message.inlineRequest && !message.inlineRequest.answeredAt
+                      ? (option) => void answerPendingRequest(option, message.inlineRequest)
+                      : undefined}
                   />
                   {agentRunsByMessage.has(message.id) && (
                     <ChatAgentRuns

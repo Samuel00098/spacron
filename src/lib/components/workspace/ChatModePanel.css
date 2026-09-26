@@ -2487,6 +2487,13 @@
   cursor: pointer;
 }
 
+/* This toggle fills the card header, so the app-wide button hover scale pulls
+   the agent mark toward the card rail. Keep the full-width row stationary. */
+.app-shell .chat-agent-run-toggle:hover {
+  transform: none;
+  filter: none;
+}
+
 .app-shell .chat-agent-run-mark {
   display: inline-flex;
   width: 16px;

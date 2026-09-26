@@ -33,6 +33,13 @@ export interface ReconContext {
   enrichedPrompt: string;
 }
 
+/** Shared project findings with a separately enriched prompt for each task. */
+export interface ReconBatchContext {
+  summary: string;
+  findings: ReconFinding[];
+  enrichedPrompts: string[];
+}
+
 // ─── Reconnaissance logic ───────────────────────────────────────────────────
 
 const MAX_RECON_FILES = 8;
@@ -68,15 +75,31 @@ export async function reconnoiter(
   llmCall: (systemPrompt: string, userText: string) => Promise<string>,
   projectId?: string,
 ): Promise<ReconContext> {
-  const plan = await planRecon(command, rootPath, projectName, llmCall);
+  const batch = await reconnoiterMany([command], rootPath, projectName, llmCall, projectId);
+  return {
+    summary: batch.summary,
+    findings: batch.findings,
+    enrichedPrompt: batch.enrichedPrompts[0] ?? command,
+  };
+}
+
+/**
+ * Gather context once for a coordinated dispatch, then tailor each prompt to
+ * its own task so separate agents do not all receive the same combined brief.
+ */
+export async function reconnoiterMany(
+  commands: string[],
+  rootPath: string,
+  projectName: string,
+  llmCall: (systemPrompt: string, userText: string) => Promise<string>,
+  projectId?: string,
+): Promise<ReconBatchContext> {
+  const tasks = commands.map((command) => command.trim()).filter(Boolean);
+  const plan = await planRecon(tasks.join('\n\n'), rootPath, projectName, llmCall);
   const findings = await executeRecon(plan, rootPath, projectId);
-  const enrichedPrompt = await craftPrompt(
-    command,
-    findings,
-    rootPath,
-    projectName,
-    llmCall,
-  );
+  const enrichedPrompts = await Promise.all(tasks.map((command) =>
+    craftPrompt(command, findings, rootPath, projectName, llmCall),
+  ));
 
   const summaryLines: string[] = [];
   for (const f of findings) {
@@ -87,7 +110,7 @@ export async function reconnoiter(
   return {
     summary: summaryLines.join('\n'),
     findings,
-    enrichedPrompt,
+    enrichedPrompts,
   };
 }
 
@@ -277,7 +300,9 @@ async function craftPrompt(
     'Rules:',
     '- Include ALL relevant context (file contents, git history) inline.',
     '- Be specific about what files to modify, what patterns to follow.',
-    '- If the command is vague, use the context to infer the most likely intent.',
+    '- Replace vague references with the concrete outcome and scope supported by the user command and gathered context.',
+    '- Preserve the user\'s constraints and intent; do not invent requirements from incidental codebase details.',
+    '- If an essential choice cannot be inferred safely, tell the agent to ask one focused question before proceeding.',
     '- Include exact function names, line numbers, error messages where known.',
     '- Do NOT ask the agent to do discovery — it should have everything it needs.',
     '- End with a clear definition of done (how to verify success).',

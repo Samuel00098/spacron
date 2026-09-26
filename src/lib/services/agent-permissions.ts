@@ -220,6 +220,22 @@ export function platformLaunchFlags(
   return '';
 }
 
+/**
+ * The line break to put inside a pasted prompt.
+ *
+ * `\r` is what a real terminal paste carries, and it is right wherever the CLI
+ * honours bracketed paste. Codex on Windows does not: ConPTY hands it the paste
+ * as key events, so every `\r` is an Enter and the prompt went out as a dozen
+ * separate messages (reproduced on Codex 0.157). `\n` arrives as Ctrl+J, which
+ * Codex's composer inserts as a newline, so the prompt stays one message.
+ */
+export function pasteLineBreak(
+  command: string | null | undefined,
+  platform: string = typeof navigator !== 'undefined' ? navigator.platform : '',
+): '\r' | '\n' {
+  return command && agentExecutable(command) === 'codex' && /^win/i.test(platform) ? '\n' : '\r';
+}
+
 /** A user-edited binary path/name replaces the preset's launch command. */
 export function resolveAgentLaunchCommand(
   command: string,
