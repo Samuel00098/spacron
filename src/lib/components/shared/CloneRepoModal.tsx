@@ -2,6 +2,7 @@ import { useModalFocus } from '$lib/react/useModalFocus';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cloneRepoPromptOpen, cloneRepository } from '$lib/stores/workspace';
 import { parseGitHubRepo } from '$lib/services/github-repo-url';
+import { startCloneJob } from '$lib/stores/cloneJobs';
 import {
   deleteGithubToken,
   githubListRepos,
@@ -138,7 +139,11 @@ export default function CloneRepoModal() {
     setBusy(true);
     setError(null);
     try {
-      await cloneRepository(url.trim(), parentDir!);
+      // Wait only until git is actually running: an up-front refusal (folder
+      // already exists, bad URL) stays here to be fixed, while the clone itself
+      // moves to a progress card in the corner and opens the project when done.
+      const label = repo ? `${repo.owner}/${repo.name}` : url.trim();
+      await startCloneJob(url.trim(), parentDir!, label, cloneRepository).started;
       close();
     } catch (e) {
       setError(errorText(e));
@@ -424,7 +429,7 @@ export default function CloneRepoModal() {
             Cancel
           </button>
           <button type="button" className="cr-btn primary" disabled={!canClone} onClick={() => void confirm()}>
-            {busy ? <><span className="cr-spinner" aria-hidden="true" />Cloning…</> : 'Clone repository'}
+            {busy ? <><span className="cr-spinner" aria-hidden="true" />Starting…</> : 'Clone repository'}
           </button>
         </div>
       </div>

@@ -8,6 +8,7 @@ import {
   toggleInbox,
   getReadIds,
   getClearedIds,
+  getClearedBefore,
   mergeInboxEntries,
   countUnread,
 } from '$lib/services/orchestrator/inbox';
@@ -41,7 +42,7 @@ export default function InboxBell() {
     const completions = (allChat[projectId] ?? []).filter((m) => m.completion);
     return countUnread(
       [
-        ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)),
+        ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId), getClearedBefore(projectId)),
         ...agentUpdateInboxEntries(updates, updateNotices),
       ]
         .sort((a, b) => b.ts - a.ts)

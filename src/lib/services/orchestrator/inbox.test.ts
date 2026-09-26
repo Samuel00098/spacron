@@ -269,6 +269,29 @@ describe('mergeInboxEntries', () => {
     const entries = mergeInboxEntries([], [completion({ id: 'b', completion: null })], new Set());
     expect(entries).toEqual([]);
   });
+
+  it('collapses repeated anonymous status reports without hiding later reports', () => {
+    const report = (id: string, ts: number) => completion({
+      id,
+      ts,
+      completion: {
+        status: 'done',
+        agentName: 'An agent',
+        taskTitle: 'Status report',
+        elapsedSec: null,
+        reason: 'Fixed the inbox clear behavior.',
+        endedBy: 'declared',
+      },
+    });
+
+    const entries = mergeInboxEntries([], [
+      report('duplicate-older', 1_000),
+      report('duplicate-newer', 30_000),
+      report('later-report', 200_000),
+    ], new Set());
+
+    expect(entries.map((entry) => entry.id)).toEqual(['later-report', 'duplicate-newer']);
+  });
 });
 
 describe('countUnread', () => {
@@ -368,13 +391,13 @@ describe('loadProjectInbox cold start', () => {
 
 describe('parseInboxState', () => {
   it('returns empty state for null, junk and non-objects', () => {
-    expect(parseInboxState(null)).toEqual({ read: [], dismissed: [], cleared: [] });
-    expect(parseInboxState('not json')).toEqual({ read: [], dismissed: [], cleared: [] });
-    expect(parseInboxState('[1,2]')).toEqual({ read: [], dismissed: [], cleared: [] });
+    expect(parseInboxState(null)).toEqual({ read: [], dismissed: [], cleared: [], clearedBefore: 0 });
+    expect(parseInboxState('not json')).toEqual({ read: [], dismissed: [], cleared: [], clearedBefore: 0 });
+    expect(parseInboxState('[1,2]')).toEqual({ read: [], dismissed: [], cleared: [], clearedBefore: 0 });
   });
 
   it('keeps well-formed arrays and drops malformed ones', () => {
-    expect(parseInboxState('{"read":["a"],"dismissed":[1,2],"cleared":["c"]}')).toEqual({ read: ['a'], dismissed: [], cleared: ['c'] });
+    expect(parseInboxState('{"read":["a"],"dismissed":[1,2],"cleared":["c"]}')).toEqual({ read: ['a'], dismissed: [], cleared: ['c'], clearedBefore: 0 });
   });
 
   it('caps an oversized file on read', () => {

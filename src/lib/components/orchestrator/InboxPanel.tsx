@@ -10,9 +10,11 @@ import {
   closeInbox,
   getReadIds,
   getClearedIds,
+  getClearedBefore,
   markRead,
   markAllRead,
   clearInbox,
+  clearAllInbox,
   mergeInboxEntries,
   countUnread,
   formatAgentIdentity,
@@ -168,7 +170,7 @@ export default function InboxPanel() {
     // Agent update notices are app-wide (an agent CLI is installed once per
     // machine), so they join every project's list with their own read state.
     return [
-      ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId)),
+      ...mergeInboxEntries(cards, completions, getReadIds(projectId), getClearedIds(projectId), getClearedBefore(projectId)),
       ...agentUpdateInboxEntries(updates, updateNotices),
     ]
       .sort((a, b) => b.ts - a.ts)
@@ -238,10 +240,12 @@ export default function InboxPanel() {
   }, [projectId, entries]);
 
   const handleClearAll = useCallback(() => {
-    const ids = entries.map((e) => e.id);
-    clearInbox(projectId, ids);
-    clearAgentUpdateNotices(ids);
-  }, [projectId, entries]);
+    clearAllInbox(projectId, entries.map((e) => e.id));
+    clearAgentUpdateNotices([
+      ...entries.map((e) => e.id),
+      ...agentUpdateInboxEntries(updates, updateNotices).map((e) => e.id),
+    ]);
+  }, [projectId, entries, updates, updateNotices]);
 
   const handleClearEntry = useCallback(
     (e: React.MouseEvent, id: string) => {

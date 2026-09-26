@@ -28,6 +28,8 @@ import {
 import MailboxCardView from './MailboxCard';
 import StatusIcon from './statusIcons';
 import JevNeedsInputTag from './JevNeedsInputTag';
+import CloneProgressCard from './CloneProgressCard';
+import { cloneJobs } from '$lib/stores/cloneJobs';
 import { shouldUseSystemNotification, showSystemNotification } from '$lib/stores/zustand/notification';
 import './AgentNotifications.css';
 
@@ -88,6 +90,9 @@ export default function AgentNotifications() {
   // Dismissal now lives in the persisted inbox rather than component state, so
   // a card cleared here stays cleared across remounts and restarts.
   const inbox = useStore(inboxState);
+  // Background clones ride at the top of the stack, above agent traffic, and
+  // show even with no project open — the first clone usually starts there.
+  const clones = useStore(cloneJobs);
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -268,7 +273,8 @@ export default function AgentNotifications() {
 
   const now = Date.now();
 
-  if (!projectId || items.length === 0) return null;
+  const agentItems = projectId ? items : [];
+  if (agentItems.length === 0 && clones.length === 0) return null;
 
   function startReply(id: string) {
     setReplyingId(id);
@@ -307,7 +313,10 @@ export default function AgentNotifications() {
 
   return (
     <div className="agent-notifs" aria-label="Agent notifications">
-      {items.map((item) =>
+      {clones.map((job) => (
+        <CloneProgressCard key={job.id} job={job} />
+      ))}
+      {agentItems.map((item) =>
         item.kind === 'mail' ? (
           <MailboxCardView
             key={item.key}

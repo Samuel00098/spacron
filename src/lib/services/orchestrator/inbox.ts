@@ -9,10 +9,9 @@
  * **This module deliberately stores no message content.** The mailbox log
  * (`mailbox.ts`) and the chat completion cards (`stores/orchestrator.ts`) are
  * already the persisted sources of truth for *what happened*; duplicating them
- * here would give us two copies to keep in step. All this file owns is the two
- * bits of per-entry state neither of them tracks — has the user *read* it, and
- * has the user *dismissed* it — plus the pure merge that presents both sources
- * as one time-ordered list.
+ * here would give us two copies to keep in step. All this file owns is per-entry
+ * read, dismissed and cleared state plus the bulk-clear timestamp boundary, and
+ * the pure merge that presents both sources as one time-ordered list.
  *
  * Read and dismissed are genuinely different, and conflating them is the bug
  * this feature exists to fix:
@@ -35,6 +34,8 @@ import type { MailboxCard, MailboxKind } from './mailbox';
 
 /** Cap the id lists so a long-lived project can't grow this file without bound. */
 export const MAX_TRACKED_IDS = 500;
+/** Identical reports without a session identity are likely retried delivery. */
+export const ANONYMOUS_STATUS_REPORT_DEDUPE_MS = 2 * 60 * 1000;
 
 export type InboxStatus = 'done' | 'failed' | 'blocked' | 'update' | MailboxKind;
 
@@ -142,10 +143,12 @@ export interface InboxState {
   dismissed: string[];
   /** Entry ids explicitly cleared from the inbox panel view by the user. */
   cleared: string[];
+  /** Timestamp boundary for a bulk clear, including entries beyond the visible page. */
+  clearedBefore: number;
 }
 
 function emptyState(): InboxState {
-  return { read: [], dismissed: [], cleared: [] };
+  return { read: [], dismissed: [], cleared: [], clearedBefore: 0 };
 }
 
 /** In-memory mirror of every project's inbox state, keyed by projectId. */
@@ -286,19 +289,48 @@ export function mergeInboxEntries(
   messages: CompletionLike[],
   read: ReadonlySet<string>,
   cleared: ReadonlySet<string> = new Set(),
+  clearedBefore = 0,
 ): InboxEntry[] {
   const entries: InboxEntry[] = [
     ...cards
-      .filter((card) => !cleared.has(card.id))
+      .filter((card) => !cleared.has(card.id) && card.createdAt > clearedBefore)
       .map((card) => mailEntry(card, read.has(card.id))),
     ...messages
-      .filter((msg) => !cleared.has(msg.id))
+      .filter((msg) => !cleared.has(msg.id) && msg.ts > clearedBefore)
       .map((msg) => completionEntry(msg, read.has(msg.id)))
       .filter((e): e is InboxEntry => e !== null),
   ];
   // Newest first: the inbox is read top-down, unlike the floating stack, which
   // grows toward the corner.
-  return entries.sort((a, b) => b.ts - a.ts);
+  const newestFirst = entries.sort((a, b) => b.ts - a.ts);
+  const merged: InboxEntry[] = [];
+  const anonymousReports = new Map<string, number>();
+  for (const entry of newestFirst) {
+    const isAnonymousStatusReport =
+      entry.kind === 'completion' &&
+      entry.agentName === 'An agent' &&
+      entry.agentType == null &&
+      entry.title === 'Status report' &&
+      entry.detail.taskId == null;
+    if (!isAnonymousStatusReport) {
+      merged.push(entry);
+      continue;
+    }
+
+    const signature = JSON.stringify([entry.status, entry.body]);
+    const priorIndex = anonymousReports.get(signature);
+    if (priorIndex !== undefined) {
+      const prior = merged[priorIndex];
+      if (prior.ts - entry.ts <= ANONYMOUS_STATUS_REPORT_DEDUPE_MS) {
+        // Preserve acknowledgement if any repeated row was already read.
+        if (entry.read && !prior.read) merged[priorIndex] = { ...prior, read: true };
+        continue;
+      }
+    }
+    anonymousReports.set(signature, merged.length);
+    merged.push(entry);
+  }
+  return merged;
 }
 
 /** How many entries still want the user's attention. */
@@ -325,6 +357,11 @@ export function getDismissedIds(projectId: string): Set<string> {
 /** Cleared-state for a project as a set, for filtering cleared entries out of the inbox view. */
 export function getClearedIds(projectId: string): Set<string> {
   return new Set(projectState(get(inboxState), projectId).cleared ?? []);
+}
+
+/** Timestamp cutoff used by the inbox's bulk-clear action. */
+export function getClearedBefore(projectId: string): number {
+  return projectState(get(inboxState), projectId).clearedBefore ?? 0;
 }
 
 function update(projectId: string, fn: (state: InboxState) => InboxState): void {
@@ -355,6 +392,18 @@ export function clearInbox(projectId: string, ids: string[]): void {
     read: addTrackedIds(state.read, ids),
     dismissed: addTrackedIds(state.dismissed, ids),
     cleared: addTrackedIds(state.cleared ?? [], ids),
+  }));
+}
+
+/** Clear the whole current history, including entries hidden beyond the visible limit. */
+export function clearAllInbox(projectId: string, visibleIds: string[] = []): void {
+  if (!projectId) return;
+  update(projectId, (state) => ({
+    ...state,
+    read: addTrackedIds(state.read, visibleIds),
+    dismissed: addTrackedIds(state.dismissed, visibleIds),
+    cleared: addTrackedIds(state.cleared, visibleIds),
+    clearedBefore: Math.max(state.clearedBefore ?? 0, Date.now()),
   }));
 }
 
@@ -397,6 +446,9 @@ export function parseInboxState(raw: string | null): InboxState {
       read: isStringArray(parsed.read) ? parsed.read.slice(-MAX_TRACKED_IDS) : [],
       dismissed: isStringArray(parsed.dismissed) ? parsed.dismissed.slice(-MAX_TRACKED_IDS) : [],
       cleared: isStringArray(parsed.cleared) ? parsed.cleared.slice(-MAX_TRACKED_IDS) : [],
+      clearedBefore: typeof parsed.clearedBefore === 'number' && Number.isFinite(parsed.clearedBefore)
+        ? parsed.clearedBefore
+        : 0,
     };
   } catch {
     return emptyState();

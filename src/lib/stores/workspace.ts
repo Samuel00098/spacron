@@ -1605,10 +1605,11 @@ export async function createProjectFolder(parentDir: string, name: string): Prom
 
 /** Clone a GitHub repo into `parentDir` and open the result as a project. The
  *  clone itself (network, auth, folder naming) is the backend's job — this only
- *  attaches the finished checkout, exactly as `createProjectFolder` does. */
-export async function cloneRepository(url: string, parentDir: string): Promise<Project> {
+ *  attaches the finished checkout, exactly as `createProjectFolder` does. With a
+ *  `cloneId` the backend streams `clone-progress` events for it (see cloneJobs.ts). */
+export async function cloneRepository(url: string, parentDir: string, cloneId?: string): Promise<Project> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const project = await invoke<Project>('workspace_clone_repo', { url, parent: parentDir });
+  const project = await invoke<Project>('workspace_clone_repo', { url, parent: parentDir, cloneId });
   await attachProjectToActiveWorkspace(project, project.root_path);
   return project;
 }

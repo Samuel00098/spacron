@@ -356,3 +356,53 @@
 }
 .agent-notifs .orc-completion:hover > .agent-notif-close,
 .agent-notifs .orc-completion > .agent-notif-close:focus-visible { opacity: 1; }
+
+/* ══ clone progress card ═════════════════════════════════════════════════════
+   A background `git clone` (CloneProgressCard.tsx). Borrows the completion
+   card's shell; the rail and chip take the accent while running. */
+.agent-notifs .clone-card { padding-right: 14px; }
+.agent-notifs .clone-card.orc-completion-failed { padding-right: 38px; }
+.agent-notifs .clone-card.is-running { --cc: var(--accent); }
+
+.agent-notifs .clone-card-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--cc) 25%, transparent);
+  border-top-color: var(--cc);
+  animation: clone-card-spin 0.8s linear infinite;
+}
+@keyframes clone-card-spin { to { transform: rotate(360deg); } }
+
+.agent-notifs .clone-card-bar {
+  position: relative;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--cc) 14%, transparent);
+}
+.agent-notifs .clone-card-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--cc);
+  transition: width 0.3s var(--ease-out);
+}
+/* Before git reports a percentage (connecting, server-side counting). */
+.agent-notifs .clone-card-bar.is-indeterminate > span {
+  width: 30%;
+  animation: clone-card-slide 1.2s ease-in-out infinite;
+}
+@keyframes clone-card-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(340%); }
+}
+
+.agent-notifs .clone-card-actions { display: flex; gap: 6px; margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-notifs .clone-card-spinner,
+  .agent-notifs .clone-card-bar.is-indeterminate > span { animation: none; }
+}

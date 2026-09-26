@@ -4,12 +4,13 @@
 //! through the frontend or written to `.git/config`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use base64::Engine;
 use keyring::{Entry, Error as KeyringError};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::workspace::{classify_push_error, git_base, sanitize_git_error};
 use crate::state::AppState;
@@ -935,6 +936,8 @@ fn parse_repo_ref(input: &str) -> Result<RepoRef, String> {
 pub fn workspace_clone_repo(
     url: String,
     parent: String,
+    clone_id: Option<String>,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<Project, String> {
     let repo = parse_repo_ref(&url)?;
@@ -973,16 +976,73 @@ pub fn workspace_clone_repo(
             .env("GIT_CONFIG_VALUE_0", format!("AUTHORIZATION: basic {cred}"));
     }
 
-    let out = cmd
-        .output()
+    // Validation is done: tell the frontend the clone is really under way, so
+    // it can close the dialog and hand over to the progress card. Errors before
+    // this point stay in the dialog where the user can fix them.
+    let emit = |phase: &str, percent: Option<u8>| {
+        if let Some(id) = &clone_id {
+            let _ = app.emit(
+                "clone-progress",
+                CloneProgress { clone_id: id.clone(), phase: phase.to_string(), percent },
+            );
+        }
+    };
+    emit("Starting", None);
+
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to run git: {e}"))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // git redraws its progress line with `\r`, so split on both line endings.
+    // The full text is kept (capped) for error classification afterwards.
+    let mut stderr_text = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut buf = [0u8; 4096];
+        let mut line: Vec<u8> = Vec::new();
+        let mut last: Option<(String, Option<u8>)> = None;
+        loop {
+            let n = match stderr.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            for &b in &buf[..n] {
+                if b == b'\r' || b == b'\n' {
+                    let text = String::from_utf8_lossy(&line).into_owned();
+                    line.clear();
+                    if let Some((phase, pct)) = parse_clone_progress(&text) {
+                        let overall = Some(overall_clone_percent(&phase, pct));
+                        // Only emit on change — git redraws far more often
+                        // than the percentage moves.
+                        if last.as_ref() != Some(&(phase.clone(), overall)) {
+                            emit(&phase, overall);
+                            last = Some((phase, overall));
+                        }
+                    } else if !text.trim().is_empty() && stderr_text.len() < 16 * 1024 {
+                        stderr_text.push_str(&text);
+                        stderr_text.push('\n');
+                    }
+                } else {
+                    line.push(b);
+                }
+            }
+        }
+        if !line.is_empty() && stderr_text.len() < 16 * 1024 {
+            stderr_text.push_str(&String::from_utf8_lossy(&line));
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !status.success() {
         // git leaves a partial directory behind when a clone dies midway; clear
         // it so a retry doesn't trip the "already exists" check above.
         let _ = std::fs::remove_dir_all(&target);
-        return Err(classify_clone_error(&stderr, token.is_some()));
+        return Err(classify_clone_error(&stderr_text, token.is_some()));
     }
+    emit("Opening project", Some(100));
 
     let root_path = std::fs::canonicalize(&target)
         .map(crate::commands::clean_path_buf)
@@ -992,6 +1052,44 @@ pub fn workspace_clone_repo(
         .workspace_manager
         .open_project(root_path)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloneProgress {
+    clone_id: String,
+    phase: String,
+    percent: Option<u8>,
+}
+
+/// Pull `(phase, percent)` out of one of git's progress lines, e.g.
+/// `remote: Counting objects:  45% (9/20)` or
+/// `Receiving objects:  45% (123/456), 1.20 MiB | 2.00 MiB/s`.
+fn parse_clone_progress(line: &str) -> Option<(String, u8)> {
+    let line = line.trim().strip_prefix("remote:").unwrap_or(line).trim();
+    let (phase, rest) = line.split_once(':')?;
+    let pct: u8 = rest.trim_start().split('%').next()?.trim().parse().ok()?;
+    let phase = phase.trim();
+    if phase.is_empty() || pct > 100 {
+        return None;
+    }
+    Some((phase.to_string(), pct))
+}
+
+/// Fold git's per-phase percentages into one bar that only moves forward.
+/// Receiving the objects is the bulk of a clone's wall time, so it gets most
+/// of the range; the server-side phases before it barely register.
+fn overall_clone_percent(phase: &str, pct: u8) -> u8 {
+    let p = pct as u32;
+    let (start, span) = match phase {
+        "Enumerating objects" | "Counting objects" => (0, 2),
+        "Compressing objects" => (2, 3),
+        "Receiving objects" => (5, 80),
+        "Resolving deltas" => (85, 10),
+        "Updating files" | "Checking out files" => (95, 5),
+        _ => return pct,
+    };
+    (start + span * p / 100).min(100) as u8
 }
 
 /// Turn git's clone failure into something actionable. The "not found" case is
@@ -1041,6 +1139,44 @@ mod tests {
             assert_eq!(r.url, "https://github.com/anthropics/claude-code.git", "{input}");
             assert_eq!(r.name, "claude-code", "{input}");
         }
+    }
+
+    #[test]
+    fn parses_git_progress_lines() {
+        assert_eq!(
+            parse_clone_progress("remote: Counting objects:  45% (9/20)"),
+            Some(("Counting objects".to_string(), 45))
+        );
+        assert_eq!(
+            parse_clone_progress("Receiving objects:  7% (123/1756), 1.20 MiB | 2.00 MiB/s"),
+            Some(("Receiving objects".to_string(), 7))
+        );
+        assert_eq!(
+            parse_clone_progress("Resolving deltas: 100% (40/40), done."),
+            Some(("Resolving deltas".to_string(), 100))
+        );
+        assert_eq!(parse_clone_progress("Cloning into 'repo'..."), None);
+        assert_eq!(parse_clone_progress("fatal: repository not found"), None);
+    }
+
+    #[test]
+    fn overall_percent_only_moves_forward_across_phases() {
+        let seq = [
+            ("Counting objects", 100),
+            ("Compressing objects", 100),
+            ("Receiving objects", 0),
+            ("Receiving objects", 100),
+            ("Resolving deltas", 0),
+            ("Resolving deltas", 100),
+            ("Updating files", 100),
+        ];
+        let mut prev = 0;
+        for (phase, pct) in seq {
+            let o = overall_clone_percent(phase, pct);
+            assert!(o >= prev, "{phase} {pct}% went backwards: {o} < {prev}");
+            prev = o;
+        }
+        assert_eq!(prev, 100);
     }
 
     #[test]
