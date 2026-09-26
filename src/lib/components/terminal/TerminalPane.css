@@ -269,7 +269,7 @@
   mix-blend-mode: screen;
 }
 
-.terminal-pane:not(.active):not(.dead) .xterm-container {
+.terminal-pane:not(.active):not(.dead):not(.agent-pane) .xterm-container {
   opacity: 0.96;
   filter: saturate(0.98);
 }
@@ -504,6 +504,15 @@
 .terminal-pane.agent-pane {
   border-color: transparent;
   box-shadow: none;
+}
+
+/* Make each agent CLI's own colours pop against the grey panel. Most agents
+   paint their UI in truecolor, which the ANSI palette can't reach, so lift
+   saturation on the rendered text layer. The filter sits on `.xterm-screen`
+   only: the pane surface behind it is untouched, and neutral greys/white
+   text are unchanged by saturate(). */
+.terminal-pane.agent-pane .xterm-container .xterm-screen {
+  filter: saturate(1.3);
 }
 
 /* Drag-over highlight when files are dragged into this pane */

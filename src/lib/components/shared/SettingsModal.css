@@ -34,13 +34,12 @@
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
-  /* Frosted-glass casing — opaque base keeps all settings text readable while
-     the diagonal gloss sheen + frost tint + backdrop blur match the media
-     player. Solid theme flattens it via global.css (`:root.solid-theme *` drops
-     the blur and `--frost-surface` resolves to 1). */
+  /* Flat casing — an opaque base plus one even frost tint. No diagonal gloss
+     sheen: the user wants the panel a single flat colour, no gradient. Solid
+     theme flattens it further via global.css (`:root.solid-theme *` drops the
+     blur and `--frost-surface` resolves to 1). */
   background-color: rgb(var(--bg-secondary-rgb, 18, 18, 22));
   background-image:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 25%, transparent 50%),
     linear-gradient(
       color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.55) * 100%), transparent),
       color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.55) * 100%), transparent)
