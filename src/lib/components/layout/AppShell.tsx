@@ -1724,11 +1724,6 @@ export default function AppShell() {
         <header className="left-sidebar-header">
           <div className="left-sidebar-heading">
             <span className="left-sidebar-app-name">Spacron</span>
-            {project && (
-              <span className="left-sidebar-project" title={project?.root_path ?? undefined}>
-                {project.name}
-              </span>
-            )}
           </div>
           <button
             className="left-sidebar-collapse-btn"

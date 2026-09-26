@@ -3301,13 +3301,13 @@ html.is-webkitgtk .app-shell .composer-strip {
   pointer-events: none;
 }
 
-/* The Spacron wordmark — bolded system font (weight 900) at 28px. */
+/* The Spacron wordmark. */
 .app-shell .left-sidebar-app-name {
   /* The wordmark: Manrope, and no shadow of any kind. It opts out of the
      wallpaper text outline too (inherited from body), which read as fog on a
-     22px bold word. */
+     bold word. */
   font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
-  font-size: 22px !important;
+  font-size: 26px !important;
   font-weight: 800 !important;
   letter-spacing: -0.035em;
   line-height: 1;
@@ -3324,17 +3324,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   font-weight: 500;
   letter-spacing: 0.075em;
   text-transform: uppercase;
-}
-
-.app-shell .left-sidebar-project {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .app-shell .left-sidebar-collapse-btn,
@@ -3641,19 +3630,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   isolation: isolate;
 }
 
-/* Keep the soft accent atmosphere local to the restored sidebar wordmark. */
-.app-shell .left-sidebar-header::before {
-  content: '';
-  position: absolute;
-  inset: 4px 32px;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: 18px;
-  background: radial-gradient(ellipse 72% 110% at 50% 50%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 72%);
-  filter: blur(7px);
-  opacity: 0.9;
-}
-
 .app-shell .left-sidebar-heading {
   z-index: 1;
 }
@@ -3669,16 +3645,10 @@ html.is-webkitgtk .app-shell .composer-strip {
   padding: 12px 10px 10px 14px;
 }
 
-/* The Spacron wordmark — a real 800 weight in Inter (which ships
-   inter-800.woff2) at 26px, in a solid fill. Two traps to avoid here:
-   1) var(--font-sans) is the system-ui stack (Segoe UI on Windows), which has
-      no 800 face — weight 800 silently renders as 700, so weight bumps alone
-      never showed. 2) background-clip:text + transparent fill disables
-      subpixel antialiasing and washes the glyphs out. Solid fill keeps it
-      sharp and high-contrast in every theme. */
+/* Keep the larger wordmark sharp and high-contrast in every theme. */
 .app-shell .left-sidebar-app-name {
   font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
-  font-size: 22px !important;
+  font-size: 26px !important;
   font-weight: 800 !important;
   letter-spacing: -0.035em;
   line-height: 1;
