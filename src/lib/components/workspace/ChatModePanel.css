@@ -293,6 +293,7 @@
 .app-shell .chat-mode-activity {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: none;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2688,4 +2689,120 @@
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* ─── Chat with no project open ─────────────────────────────────────────── */
+.app-shell .chat-no-project {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.app-shell .chat-no-project-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 520px);
+  padding: 24px 16px;
+}
+
+.app-shell .chat-no-project-inner .chat-mode-empty-heading {
+  margin: 0;
+  text-align: center;
+}
+
+.app-shell .chat-no-project-copy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.app-shell .chat-no-project-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.app-shell .chat-no-project-label {
+  padding: 8px 12px 4px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.app-shell .chat-no-project-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-shell .chat-no-project-list > .chat-no-project-item:first-child,
+.app-shell .chat-no-project-label + .chat-no-project-item {
+  border-top: none;
+}
+
+.app-shell .chat-no-project-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.app-shell .chat-no-project-name {
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.app-shell .chat-no-project-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .chat-no-project-open {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-shell .chat-no-project-open:hover {
+  border-color: var(--accent);
+}
+
+.app-shell .chat-no-project-open kbd {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
 }

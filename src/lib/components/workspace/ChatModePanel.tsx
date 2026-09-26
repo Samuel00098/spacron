@@ -84,6 +84,7 @@ import { TURN_TIMING_PREFIX } from '$lib/services/orchestrator/turn-timing';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import ChatAgentRuns from './ChatAgentRuns';
+import ChatNoProject from './ChatNoProject';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 import './ChatModePanel.css';
 
@@ -1742,6 +1743,9 @@ export default function ChatModePanel() {
       setPendingSendCount((count) => Math.max(0, count - 1));
     }
   }
+
+  // The chat lives inside a project; with none open, help pick one.
+  if (!project) return <ChatNoProject />;
 
   return (
     <section className={`chat-mode-panel${messages.length === 0 ? ' empty' : ''}`} aria-label="Chat">

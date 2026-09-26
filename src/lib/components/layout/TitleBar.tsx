@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { saveProjectState, openProject } from '$lib/stores/workspace';
+import { saveProjectState } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import {
   closeRightSidebar,
@@ -28,9 +28,6 @@ export default function TitleBar() {
 
   // Reactive store reads — the React equivalent of `$store`.
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
-  const projectsMap = useWorkspaceStore((s) => s.projects);
-  const activeProject = activeProjectId ? projectsMap.get(activeProjectId) : null;
   const currentInteractionMode = useStore(interactionMode);
   const modeShortcut = useSettingsStore((s) => s.userShortcuts.find((shortcut) => shortcut.id === 'toggleInteractionMode')?.keys);
   const showWorkspaceTools = Boolean(workspaceId);
@@ -141,50 +138,32 @@ export default function TitleBar() {
 
       {/* Centre: the Code / Chat switch. It affects the whole window,
           so it sits in the window chrome rather than inside a collapsible
-          sidebar. With no project open there is no mode to pick yet, so the
-          slot falls back to the one action that matters — opening one. */}
+          sidebar. It shows with no project open too; Chat then offers a
+          project to open. */}
       <div
         className="titlebar-center"
         data-tauri-drag-region
       >
-        {activeProject ? (
-          <div className="titlebar-mode-switch" role="group" aria-label="Interaction mode">
-            <button
-              type="button"
-              className={`titlebar-mode-btn${currentInteractionMode === 'cli' ? ' active' : ''}`}
-              onClick={() => setInteractionMode('cli')}
-              aria-pressed={currentInteractionMode === 'cli'}
-              title={`Code mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
-            >
-              <span>Code</span>
-            </button>
-            <button
-              type="button"
-              className={`titlebar-mode-btn${currentInteractionMode === 'chat' ? ' active' : ''}`}
-              onClick={() => setInteractionMode('chat')}
-              aria-pressed={currentInteractionMode === 'chat'}
-              title={`Chat mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
-            >
-              <span>Chat</span>
-            </button>
-          </div>
-        ) : (
+        <div className="titlebar-mode-switch" role="group" aria-label="Interaction mode">
           <button
             type="button"
-            className="titlebar-project-pill empty"
-            onClick={() => void openProject()}
-            title={`Open Project (${formatShortcutLabel('Ctrl+O')})`}
-            aria-label="Open Project"
+            className={`titlebar-mode-btn${currentInteractionMode === 'cli' ? ' active' : ''}`}
+            onClick={() => setInteractionMode('cli')}
+            aria-pressed={currentInteractionMode === 'cli'}
+            title={`Code mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
           >
-            <span className="titlebar-project-icon" aria-hidden="true">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-            </span>
-            <span className="titlebar-project-name">Open Project</span>
-            <kbd className="titlebar-project-kbd">{formatShortcutLabel('Ctrl+O')}</kbd>
+            <span>Code</span>
           </button>
-        )}
+          <button
+            type="button"
+            className={`titlebar-mode-btn${currentInteractionMode === 'chat' ? ' active' : ''}`}
+            onClick={() => setInteractionMode('chat')}
+            aria-pressed={currentInteractionMode === 'chat'}
+            title={`Chat mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
+          >
+            <span>Chat</span>
+          </button>
+        </div>
       </div>
 
       {/* Right side: Mode switcher + Settings + Window controls */}

@@ -1455,7 +1455,6 @@ export default function AppShell() {
       // app action via `action`, so we drive the same switch through that id.
       const actionId = matched.id.startsWith('custom_') ? matched.action : matched.id;
       if (!actionId) return;
-      if (actionId === 'toggleInteractionMode' && !project) return;
 
       event.preventDefault();
 
