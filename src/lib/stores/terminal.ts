@@ -15,6 +15,7 @@ import {
 } from '$lib/stores/settings';
 import {
   resolveAgentLaunchArgs,
+  platformLaunchFlags,
   resolveAgentLaunchCommand,
   resolveAgentLaunchEnv,
 } from '$lib/services/agent-permissions';
@@ -1797,7 +1798,7 @@ export async function relaunchRestoredAgentSession(
   };
   const launchCommand = resolveAgentLaunchCommand(agentPreset, launchOverrides);
   const launchArgs = resolveAgentLaunchArgs(agentPreset, get(agentPermissionMode), launchOverrides);
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${mcpFlags}`;
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${platformLaunchFlags(agentPreset)}${mcpFlags}`;
 
   agentLaunchStartLengths.set(id, getSessionOutputLength(id));
   suppressAgentDetection.add(id);
@@ -2570,7 +2571,7 @@ export async function spawnAgentPreset(
   // `command` (not `launchCommand`) stays the preset key for detection, rules
   // files and display names; only the line written to the PTY carries the
   // resolved command + permission args + MCP flags.
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${mcpFlags}`;
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${platformLaunchFlags(command)}${mcpFlags}`;
 
   if (deepSeek) {
     deepSeek.markDeepSeekWorkerSession(sessionId);

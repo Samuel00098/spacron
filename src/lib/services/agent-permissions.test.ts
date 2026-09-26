@@ -10,6 +10,7 @@ import {
   effectiveAgentMode,
   setAgentPermissionMode,
   hasCustomizedYoloAgents,
+  platformLaunchFlags,
 } from './agent-permissions';
 
 describe('agent-permissions', () => {
@@ -257,5 +258,21 @@ describe('agent-permissions', () => {
       const overrides = { agentDefaultEnv: { goose: { GOOSE_MODE: 'strict' } } };
       expect(hasCustomizedYoloAgents('yolo', overrides)).toBe(true);
     });
+  });
+});
+
+// Codex's app-server daemon has no console on Windows, so every command it runs
+// pops a console window; Spacron keeps Codex's app server inside the PTY.
+describe('platformLaunchFlags', () => {
+  it('turns off the Codex daemon on Windows', () => {
+    expect(platformLaunchFlags('codex', 'Win32')).toBe(' --disable daemon_auto_start');
+    expect(platformLaunchFlags('npx codex --resume', 'Win32')).toBe(' --disable daemon_auto_start');
+  });
+
+  it('adds nothing elsewhere or for other CLIs', () => {
+    expect(platformLaunchFlags('codex', 'MacIntel')).toBe('');
+    expect(platformLaunchFlags('codex', 'Linux x86_64')).toBe('');
+    expect(platformLaunchFlags('claude', 'Win32')).toBe('');
+    expect(platformLaunchFlags('', 'Win32')).toBe('');
   });
 });

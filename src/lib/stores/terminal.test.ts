@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
+import { platformLaunchFlags } from '$lib/services/agent-permissions';
 
 const ptyDataHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
 const ptyReplayHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
@@ -538,7 +539,7 @@ describe('agent launch failure detection', () => {
     const callCount = vi.mocked(openPty).mock.results.length;
     const mockPty = await vi.mocked(openPty).mock.results[callCount - 1].value;
     expect(mockPty.write).toHaveBeenCalledWith(
-      'codex --sandbox read-only --ask-for-approval on-request --model gpt-5.6-sol -c model_reasoning_effort=high\r',
+      `codex --sandbox read-only --ask-for-approval on-request --model gpt-5.6-sol -c model_reasoning_effort=high${platformLaunchFlags('codex')}\r`,
     );
     expect(get(sessions).find((session) => session.id === sessionId)?.agentPreset).toBe('codex');
   });
