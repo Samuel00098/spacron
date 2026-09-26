@@ -26,6 +26,8 @@ import {
   agentFailoverCrossProvider,
   agentFailoverHeadroomPercent,
   backgroundImageBlur,
+  uiVibrancy,
+  uiContrast,
   backgroundImageEnabled,
   backgroundImageOpacity,
   closeBehavior,
@@ -206,6 +208,8 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ui-zoom', tab: 'appearance', section: 'Appearance', label: 'UI zoom', keywords: 'scale size interface' },
   { id: 'ui-font-size', tab: 'appearance', section: 'Appearance', label: 'UI font size', keywords: 'application text size' },
   { id: 'accent-color', tab: 'appearance', section: 'Appearance', label: 'Accent color', keywords: 'colour highlight brand' },
+  { id: 'ui-vibrancy', tab: 'appearance', section: 'Colour', label: 'Vibrancy', keywords: 'saturation color colour vivid pop' },
+  { id: 'ui-contrast', tab: 'appearance', section: 'Colour', label: 'Contrast', keywords: 'color colour sharp readability' },
   { id: 'custom-background', tab: 'appearance', section: 'Background', label: 'Custom background', keywords: 'wallpaper image' },
   { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
   { id: 'ai-provider', tab: 'models', section: 'Provider connections', label: 'Provider', keywords: 'ai model service connection' },
@@ -1834,6 +1838,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAppearance = useStore(appearance);
   const bgEnabled = useStore(backgroundImageEnabled);
   const bgBlur = useStore(backgroundImageBlur);
+  const vibrancy = useStore(uiVibrancy);
+  const contrast = useStore(uiContrast);
   const shortcuts = useStore(userShortcuts);
   const shell = useStore(terminalShell);
   const termFontSize = useStore(terminalFontSize);
@@ -2724,6 +2730,21 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       {currentAccentColor && (
                         <button className="num-btn-reset" onClick={() => accentColor.set('')}>Theme default</button>
                       )}
+                    </div>
+                  </SettingRow>
+                </Section>
+
+                <Section title="Colour">
+                  <SettingRow title="Vibrancy" detail={`${vibrancy}%`}>
+                    <div className="grading-control">
+                      <input type="range" min="50" max="200" step="5" value={vibrancy} onChange={(event) => uiVibrancy.set(Number(event.target.value))} aria-label="Vibrancy" />
+                      {vibrancy !== 100 && <button className="num-btn-reset" onClick={() => uiVibrancy.set(100)}>Reset</button>}
+                    </div>
+                  </SettingRow>
+                  <SettingRow title="Contrast" detail={`${contrast}%`}>
+                    <div className="grading-control">
+                      <input type="range" min="75" max="150" step="5" value={contrast} onChange={(event) => uiContrast.set(Number(event.target.value))} aria-label="Contrast" />
+                      {contrast !== 100 && <button className="num-btn-reset" onClick={() => uiContrast.set(100)}>Reset</button>}
                     </div>
                   </SettingRow>
                 </Section>

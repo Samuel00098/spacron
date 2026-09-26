@@ -1324,6 +1324,26 @@ export const backgroundImageEnabled = persistentWritable<boolean>('backgroundIma
 export const backgroundImageOpacity = persistentWritable<number>('backgroundImageOpacity', 100);
 export const backgroundImageBlur = persistentWritable<number>('backgroundImageBlur', 0);
 
+// Whole-app colour grading, in percent (100 = untouched). Applied as one CSS
+// `filter` on <html> by `applyColorGrading` — see there for why the root.
+export const uiVibrancy = persistentWritable<number>('uiVibrancy', 100);
+export const uiContrast = persistentWritable<number>('uiContrast', 100);
+
+/**
+ * Paint the vibrancy/contrast sliders onto the whole window. The filter goes on
+ * the ROOT element on purpose: a filter on any other ancestor becomes the
+ * containing block for every `position: fixed` descendant (menus, tooltips,
+ * modals would all mis-place), and the root is the one element exempt from
+ * that. At 100/100 the filter is removed outright so the default costs nothing.
+ */
+export function applyColorGrading(vibrancy: number, contrast: number): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.style.filter = vibrancy === 100 && contrast === 100
+    ? ''
+    : `saturate(${vibrancy / 100}) contrast(${contrast / 100})`;
+}
+
 // Terminal
 export const terminalShell = persistentWritable<string>('terminalShell', ''); // empty = auto-detect
 export const terminalCursorStyle = persistentWritable<'bar' | 'block' | 'underline'>('terminalCursorStyle', 'bar');
@@ -1455,6 +1475,8 @@ export function resetSettingsToDefault() {
   backgroundImageEnabled.set(false);
   backgroundImageOpacity.set(100);
   backgroundImageBlur.set(0);
+  uiVibrancy.set(100);
+  uiContrast.set(100);
   terminalShell.set('');
   terminalCursorStyle.set('bar');
   terminalScrollback.set(5000);

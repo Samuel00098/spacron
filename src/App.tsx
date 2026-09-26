@@ -47,6 +47,9 @@ import {
   backgroundImageEnabled,
   interfaceTransparency,
   backgroundImageBlur,
+  uiVibrancy,
+  uiContrast,
+  applyColorGrading,
   closeBehavior,
 } from '$lib/stores/settings';
 import {
@@ -171,6 +174,10 @@ export default function App() {
     };
     const unsubBgBlur = backgroundImageBlur.subscribe(applyAppearanceLive);
 
+    const applyGrading = () => applyColorGrading(get(uiVibrancy), get(uiContrast));
+    const unsubVibrancy = uiVibrancy.subscribe(applyGrading);
+    const unsubContrast = uiContrast.subscribe(applyGrading);
+
     let unlistenClose: (() => void) | undefined;
     if (isTauriRuntime()) {
       const win = getCurrentWindow();
@@ -278,6 +285,8 @@ export default function App() {
       unsubFrost();
       unsubBgEnabled();
       unsubBgBlur();
+      unsubVibrancy();
+      unsubContrast();
     };
   }, []);
 

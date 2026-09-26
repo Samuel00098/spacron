@@ -883,6 +883,14 @@ details.settings-github-note pre {
 }
 
 /* ── Accent picker ── */
+/* Vibrancy / contrast: the slider plus a Reset that only shows off-default. */
+.grading-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .accent-picker {
   display: flex;
   align-items: center;
