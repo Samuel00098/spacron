@@ -30,8 +30,8 @@
    never make it see-through. */
 .settings-modal {
   position: relative;
-  width: min(1280px, 100%);
-  height: min(1000px, 100%);
+  width: min(1120px, 100%);
+  height: min(900px, 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1232,11 +1232,11 @@ details.settings-github-note pre {
   .settings-control-row { min-height: 60px; padding-block: 14px; }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 1000px) {
   .settings-overlay { --settings-gutter: 10px; }
 }
 
-@container settings-modal (max-width: 820px) {
+@container settings-modal (max-width: 960px) {
   .settings-header { flex-wrap: wrap; }
 
   .settings-search-wrap {
@@ -1246,11 +1246,15 @@ details.settings-github-note pre {
     margin-left: 0;
   }
 
-  .settings-body { grid-template-columns: 1fr; }
+  .settings-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
 
   .settings-tabs {
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 12px;
@@ -1278,6 +1282,13 @@ details.settings-github-note pre {
   .settings-card   { margin-bottom: 14px; }
   .shortcut-row    { grid-template-columns: 1fr; }
   .theme-grid      { grid-template-columns: 1fr 1fr; }
+  .settings-control { justify-content: flex-start; }
+  .mode-picker { width: 100%; gap: 8px; }
+  .settings-modal .mode-swatch {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2460,9 +2471,7 @@ button.settings-control-copy.skill-open-btn {
 
 
 /* ── Mode picker (Appearance → Visual style → Mode) ──
-   Three thumbnail windows at the right of the row; the active one carries an
-   accent outline. The mocks use fixed light/dark colours on purpose: they
-   depict each mode, not the current theme. */
+   The previews use each mode's surface colours and the app's current accent. */
 .mode-picker {
   display: flex;
   gap: 12px;
@@ -2507,7 +2516,7 @@ button.settings-control-copy.skill-open-btn {
   --mm-side: #e6e6e9;
   --mm-line: #c7c7cd;
   --mm-input: #ffffff;
-  --mm-accent: #3b82f6;
+  --mm-accent: var(--accent);
   background: var(--mm-bg);
 }
 

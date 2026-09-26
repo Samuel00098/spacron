@@ -118,6 +118,19 @@ export async function loadThemes() {
 
     const savedThemeId = typeof window !== 'undefined' ? localStorage.getItem('forge_active_theme') : null;
 
+    // A saved built-in theme records the last resolved colour scheme. In System
+    // mode it may be stale after the OS preference changes while the app is shut.
+    // Keep separately selected custom themes intact.
+    if (!savedThemeId || isMonochromePresetTheme({ id: savedThemeId })) {
+      const mode = get(appearance);
+      const prefersDark = mode === 'dark' ||
+        (mode === 'system' && typeof window !== 'undefined' &&
+          (window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false));
+      if (isStale()) return;
+      switchPresetTheme(prefersDark ? 'forge-dark' : 'forge-light', false);
+      return;
+    }
+
     if (savedThemeId) {
       const preset = presetThemes.find(t => t.id === savedThemeId);
       if (preset) {
