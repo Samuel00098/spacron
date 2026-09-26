@@ -2738,13 +2738,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow title="Vibrancy" detail={`${vibrancy}%`}>
                     <div className="grading-control">
                       <input type="range" min="50" max="200" step="5" value={vibrancy} onChange={(event) => uiVibrancy.set(Number(event.target.value))} aria-label="Vibrancy" />
-                      {vibrancy !== 100 && <button className="num-btn-reset" onClick={() => uiVibrancy.set(100)}>Reset</button>}
+                      <button className="num-btn-reset" onClick={() => uiVibrancy.set(100)} disabled={vibrancy === 100}>Reset</button>
                     </div>
                   </SettingRow>
                   <SettingRow title="Contrast" detail={`${contrast}%`}>
                     <div className="grading-control">
                       <input type="range" min="75" max="150" step="5" value={contrast} onChange={(event) => uiContrast.set(Number(event.target.value))} aria-label="Contrast" />
-                      {contrast !== 100 && <button className="num-btn-reset" onClick={() => uiContrast.set(100)}>Reset</button>}
+                      <button className="num-btn-reset" onClick={() => uiContrast.set(100)} disabled={contrast === 100}>Reset</button>
                     </div>
                   </SettingRow>
                 </Section>

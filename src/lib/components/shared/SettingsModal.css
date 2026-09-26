@@ -1055,6 +1055,14 @@ details.settings-github-note pre {
   letter-spacing: 0.02em;
 }
 
+/* Always-present resets (the colour sliders) sit disabled at the default
+   instead of appearing and vanishing as the value crosses it. */
+.num-btn-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
 .num-btn-reset:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -2443,7 +2451,7 @@ button.settings-control-copy.skill-open-btn {
 
 .settings-modal :is(
   .settings-search-input,
-  .settings-control input,
+  .settings-control input:not([type='range']),
   .settings-control textarea,
   .shortcut-row input,
   .agent-input
