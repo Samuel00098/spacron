@@ -858,6 +858,8 @@ export const openaiRealtimeConnection = persistentWritable<string>('openaiRealti
  * or a custom provider id that serves `/systemone`. Each uses its own key.
  */
 export const jevProvider = persistentWritable<string>('jevProvider', 'typesafe');
+/** Offer Jev to the CLI agents as the `jev_classify` MCP tool. Off by default. */
+export const jevAgentTool = persistentWritable('jevAgentTool', false);
 
 export const openaiRealtimeModelOptions: VoiceModelOption[] = [
   { id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 Mini', description: 'Fast and ~3× cheaper (~$10/$20 per 1M audio tokens). Good default for conversation.' },
@@ -1376,6 +1378,7 @@ export function updateSetting(key: string, value: unknown) {
     case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
     case 'openaiRealtimeConnection': openaiRealtimeConnection.set(value as string); break;
     case 'jevProvider': jevProvider.set(value as string); break;
+    case 'jevAgentTool': jevAgentTool.set(value as boolean); break;
     case 'openaiLiveModel': openaiLiveModel.set(value as string); break;
     case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
     case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
@@ -1432,6 +1435,7 @@ export function resetSettingsToDefault() {
   openaiRealtimeVoice.set('marin');
   openaiRealtimeConnection.set('openai');
   jevProvider.set('typesafe');
+  jevAgentTool.set(false);
   openaiLiveModel.set('gpt-live-1');
   openaiLiveVoice.set('marin');
   xaiRealtimeModel.set('grok-voice-latest');

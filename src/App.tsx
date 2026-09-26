@@ -34,6 +34,7 @@ import { loadThemes } from '$lib/stores/theme';
 import { initDefaultCommands } from '$lib/stores/commandpalette';
 import { requestNotificationPermission } from '$lib/stores/notification';
 import { loadCustomProviders } from '$lib/stores/customProviders';
+import { initJevAgentTool } from '$lib/stores/jevAgentTool';
 import { maybeAutoReconnectRemote, hydrateRemoteTokens } from '$lib/stores/remoteWorkspace';
 import {
   uiZoom,
@@ -140,6 +141,7 @@ export default function App() {
       // After the bridge: pushes the computer-use switch to the MCP server and
       // listens for the permission requests `DesktopGrantHost` answers.
       initComputerUse();
+      initJevAgentTool();
       // Redraw model capability icons when Rust's background refresh (startup,
       // or a newly saved API key) learns new model lists.
       initModelCapabilities();

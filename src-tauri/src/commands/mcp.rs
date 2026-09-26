@@ -346,6 +346,18 @@ pub fn mcp_set_computer_use(handle: State<'_, McpServer>, enabled: bool) -> Resu
     Ok(())
 }
 
+/// The user's `Let agents use Jev` switch and the Jev source it uses.
+///
+/// Off by default and pushed on startup, like computer use: while off the
+/// `jev_classify` tool is not listed at all, and connected agents are told to
+/// re-read `tools/list` whenever it changes.
+#[tauri::command]
+pub fn mcp_set_jev_tool(handle: State<'_, McpServer>, enabled: bool, provider: String) -> Result<(), String> {
+    crate::commands::jev::set_agent_tool(enabled, provider);
+    handle.get()?.notify_tools_changed();
+    Ok(())
+}
+
 /// The user's answer to a computer-use permission dialog. The agent's tool call
 /// is blocked on this (see `desktop::DesktopState::ensure`).
 #[tauri::command]

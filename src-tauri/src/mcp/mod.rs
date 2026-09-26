@@ -1880,6 +1880,11 @@ async fn dispatch_message(
             if state.desktop.available() {
                 tools.extend(crate::desktop::mcp_tools());
             }
+            // Jev for agents is opt-in: while off, agents carry none of its
+            // schema. Toggling it pings `tools/list_changed` (`mcp_set_jev_tool`).
+            if crate::commands::jev::agent_tool_enabled() {
+                tools.push(crate::commands::jev::mcp_tool_schema());
+            }
             Json(JsonRpcResponse::success(id, serde_json::json!({ "tools": tools })))
         }
 
@@ -2416,6 +2421,14 @@ async fn handle_tool_call(
         // than handed a grant nobody can revoke. Identity is resolved the same
         // way `report_status` does it: connection token first, then the
         // `agent_token` argument.
+        "jev_classify" => {
+            let root = state.project_root.lock().await.clone();
+            match crate::commands::jev::run_agent_tool(tool_args(&params), root).await {
+                Ok(report) => Json(JsonRpcResponse::success(id, text_content(report))),
+                Err(e) => Json(JsonRpcResponse::error(id, -32000, e)),
+            }
+        }
+
         name if crate::desktop::is_desktop_tool(name) => {
             let args = tool_args(&params);
             let session_id = caller.session_id.or_else(|| {

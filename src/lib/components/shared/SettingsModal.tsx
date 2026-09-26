@@ -5,6 +5,7 @@ import packageJson from '../../../../package.json';
 import { invoke } from '@tauri-apps/api/core';
 import { customProviders, saveCustomProvider, deleteCustomProvider, type CustomProvider } from '$lib/stores/customProviders';
 import { explainError, type ExplainedError } from '$lib/utils/explainError';
+import { jevAgentUsage, type JevAgentUsage } from '$lib/stores/jevAgentTool';
 import { listen } from '@tauri-apps/api/event';
 import {
   aiBaseUrlByProvider,
@@ -73,6 +74,7 @@ import {
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
   jevProvider,
+  jevAgentTool,
   openaiRealtimeConnection,
   openaiRealtimeModel,
   openaiRealtimeModelOptions,
@@ -599,6 +601,9 @@ function JevConnectionSection() {
   const [keyError, setKeyError] = useState('');
   const [sourceKeyExists, setSourceKeyExists] = useState<boolean | null>(null);
   const via = (useStore(jevProvider) as string) || 'typesafe';
+  const agentTool = useStore(jevAgentTool) === true;
+  const [agentUsage, setAgentUsage] = useState<JevAgentUsage | null>(null);
+  useEffect(() => { void jevAgentUsage().then(setAgentUsage); }, [agentTool]);
   const customList = useStore(customProviders) as CustomProvider[];
   const [jevCustom, setJevCustom] = useState<{ id: string; label: string }[]>([]);
 
@@ -685,6 +690,14 @@ function JevConnectionSection() {
           <button className="settings-link-button" onClick={() => openExternalUrl('https://console.typesafe.ai/')}>Get a key</button>
         </div>
       )}
+      <SettingRow
+        title="Let agents use Jev"
+        detail={`Adds a jev_classify tool to every coding agent Spacron runs, for bulk sorting (test failures, files, log lines) using the key above. While on, each agent carries about 250 extra tokens for the tool's description.${agentUsage && agentUsage.calls > 0
+          ? ` So far: ${agentUsage.calls} call${agentUsage.calls === 1 ? '' : 's'}, ${agentUsage.items} item${agentUsage.items === 1 ? '' : 's'}, ${agentUsage.inputTokens.toLocaleString()} tokens${agentUsage.reportedCostUsd > 0 ? `, $${agentUsage.reportedCostUsd.toFixed(4)}` : ''}.`
+          : ''}`}
+      >
+        <Toggle label="Let agents use Jev" checked={agentTool} onChange={jevAgentTool.set} />
+      </SettingRow>
       {keyError && <p className="shell-hint">{keyError}</p>}
     </Section>
   );
