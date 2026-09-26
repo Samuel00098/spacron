@@ -188,3 +188,13 @@
   border-color: var(--accent-hover);
   color: var(--on-accent);
 }
+
+/* ── Flat app look ── inputs in the card's colour with the flat outline. */
+.rsw-input {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.rsw-input:focus {
+  box-shadow: var(--surface-outline-active) !important;
+}

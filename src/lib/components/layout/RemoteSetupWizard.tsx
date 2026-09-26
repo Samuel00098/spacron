@@ -285,7 +285,10 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
         </p>
 
         <div className="rsw-grid">
-          <label className="rsw-field rsw-field-wide">
+          {/* A div, not a <label>: a label forwards a click anywhere on its
+              (full-width) row to the picker, so it opened off-target. The
+              picker names itself via ariaLabel. */}
+          <div className="rsw-field rsw-field-wide">
             <span className="rsw-label">Server platform</span>
             <Dropdown
               options={DEPLOY_PLATFORMS.map((p) => ({ value: p, label: platformLabel(p) }))}
@@ -314,7 +317,7 @@ export default function RemoteSetupWizard({ open, onClose }: Props) {
                 Couldn&apos;t auto-detect the server&apos;s OS. Pick it manually.
               </span>
             )}
-          </label>
+          </div>
 
           {/* The server binary for the TARGET OS is the one hard prerequisite
               this flow has, and it used to surface only as a failed deploy.

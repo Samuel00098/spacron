@@ -621,3 +621,27 @@
   .cr-modal { animation: none; }
   .cr-spinner { animation-duration: 2s; }
 }
+
+/* ── Flat app look ──
+   The Settings modal's surface with no gradients; the icon tile, inputs, the
+   repository list and the location picker take that colour with the flat 1px
+   outline (--surface-* tokens in global.css) instead of black wells. */
+.cr-modal {
+  background: rgb(var(--bg-secondary-rgb, 18, 18, 22));
+}
+.cr-icon,
+.cr-input,
+.cr-location,
+.cr-repo-list,
+.cr-device-code {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.cr-input:focus {
+  background: transparent;
+  box-shadow: var(--surface-outline-active) !important;
+}
+.cr-location:hover:not(:disabled) {
+  background: var(--bg-hover);
+}

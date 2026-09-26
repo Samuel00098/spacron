@@ -338,3 +338,15 @@
    state instead of a response to the pointer. */
 .rs-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
 .rs-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Flat app look ── the Add remote form and its inputs take the popover's
+   colour with the flat outline instead of a black box. */
+.rs-form,
+.rs-input {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.rs-input:focus {
+  box-shadow: var(--surface-outline-active) !important;
+}
