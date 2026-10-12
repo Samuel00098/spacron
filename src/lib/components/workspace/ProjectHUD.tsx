@@ -157,7 +157,6 @@ const ROOM_GLYPHS: Record<string, ReactNode> = {
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" />
     </Glyph>
   ),
-};
   library: (
     <Glyph>
       <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -165,6 +164,7 @@ const ROOM_GLYPHS: Record<string, ReactNode> = {
       <path d="m21 15-5-5L5 21" />
     </Glyph>
   ),
+};
 
 // Anything the room list can carry that has no glyph of its own still gets a row
 // (a bare panel) rather than vanishing from the list.
@@ -182,8 +182,8 @@ const TOOL_ROW_LABELS: Record<string, string> = {
   terminal: 'Terminal',
   tasks: 'Tasks',
   sketch: 'Sketch',
-};
   library: 'Library',
+};
 
 interface ProjectItem {
   // Id of the recents entry that stores this project. It is the handle every

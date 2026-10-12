@@ -108,11 +108,11 @@ const defaultLayout: LayoutState = {
   envVisible: false,
   mobileVisible: false,
   sketchVisible: false,
+  libraryVisible: false,
   deepseekVisible: false,
   auxPanelWidth: 550,
   auxEditorHeight: 50,
   leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
-  libraryVisible: false,
   rightDrawerWidth: RIGHT_DRAWER_DEFAULT_WIDTH,
 };
 
@@ -284,6 +284,7 @@ const AUX_VIEW_FLAGS = {
   env: 'envVisible',
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
+  library: 'libraryVisible',
   deepseek: 'deepseekVisible',
 } as const satisfies Partial<Record<ActiveView, keyof LayoutState>>;
 
@@ -309,7 +310,6 @@ function showOnlyAux(l: LayoutState, view: AuxView): LayoutState {
     editorSplitPreview: false,
   };
 }
-  library: 'libraryVisible',
 
 function restoreLastAuxView(l: LayoutState): LayoutState {
   const view = (l.lastAuxView in AUX_VIEW_FLAGS ? l.lastAuxView : 'editor') as AuxView;

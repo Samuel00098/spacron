@@ -146,9 +146,9 @@ type AuxPanelId =
   | 'env'
   | 'mobile'
   | 'sketch'
+  | 'library'
   | 'deepseek';
 
-  | 'library'
 type AgentRoomId = `agent:${number}`;
 
 type RoomId = 'workspace' | 'terminal' | 'dev-terminal' | AuxPanelId | AgentRoomId;
@@ -178,9 +178,9 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   env: 'Environment',
   mobile: 'Mobile',
   sketch: 'Sketch',
+  library: 'Library',
   deepseek: 'DeepSeek Harness',
 };
-  library: 'Library',
 
 function isAgentRoomId(id: RoomId): id is AgentRoomId {
   return id.startsWith('agent:');
@@ -265,9 +265,9 @@ type ShellLayoutKeys =
   | 'envVisible'
   | 'mobileVisible'
   | 'sketchVisible'
+  | 'libraryVisible'
   | 'deepseekVisible'
   | 'agentSpawnOpen'
-  | 'libraryVisible'
   | 'envManagerOpen'
   | 'auxPanelWidth'
   | 'auxEditorHeight'
@@ -292,11 +292,11 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
   env: 'envVisible',
   mobile: 'mobileVisible',
   sketch: 'sketchVisible',
+  library: 'libraryVisible',
   deepseek: 'deepseekVisible',
 };
 
 
-  library: 'libraryVisible',
 
 const EditorPanel = lazy(() => import('$lib/components/editor/EditorPanel.tsx'));
 const FleetDashboard = lazy(() => import('$lib/components/orchestrator/FleetDashboard.tsx'));
@@ -305,11 +305,11 @@ const EnvManager = lazy(() => import('$lib/components/shared/EnvManager.tsx'));
 // should not sit in the shell's initial bundle.
 const SketchPanel = lazy(() => import('$lib/components/sketch/SketchPanel.tsx'));
 const DeepSeekPanel = lazy(() => import('$lib/components/deepseek/DeepSeekPanel.tsx'));
+const LibraryPanel = lazy(() => import('$lib/components/library/LibraryPanel.tsx'));
 
 function Icon({ children }: { children: React.ReactNode }) {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-const LibraryPanel = lazy(() => import('$lib/components/library/LibraryPanel.tsx'));
       {children}
     </svg>
   );
@@ -452,10 +452,6 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
       </Suspense>
     );
   }
-  if (id === 'deepseek') {
-    return (
-      <Suspense fallback={null}>
-        <DeepSeekPanel />
   if (id === 'library') {
     return (
       <Suspense fallback={null}>
@@ -463,6 +459,10 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
       </Suspense>
     );
   }
+  if (id === 'deepseek') {
+    return (
+      <Suspense fallback={null}>
+        <DeepSeekPanel />
       </Suspense>
     );
   }
@@ -607,11 +607,11 @@ export default function AppShell() {
         envVisible: s.envVisible,
         mobileVisible: s.mobileVisible,
         sketchVisible: s.sketchVisible,
+        libraryVisible: s.libraryVisible,
         deepseekVisible: s.deepseekVisible,
         agentSpawnOpen: s.agentSpawnOpen,
         envManagerOpen: s.envManagerOpen,
         auxPanelWidth: s.auxPanelWidth,
-        libraryVisible: s.libraryVisible,
         auxEditorHeight: s.auxEditorHeight,
         leftPanelWidth: s.leftPanelWidth,
         rightDrawerWidth: s.rightDrawerWidth,
@@ -852,6 +852,7 @@ export default function AppShell() {
         { id: 'preview' as const, visible: layoutState.previewVisible },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
         { id: 'sketch' as const, visible: layoutState.sketchVisible },
+        { id: 'library' as const, visible: layoutState.libraryVisible },
         { id: 'deepseek' as const, visible: layoutState.deepseekVisible },
         // Right utility drawer: review/fleet/toolbox/http/db/containers/env/mobile +
         // orchestrator. Left drawer: the nav tabs. None of those are rooms in
@@ -859,7 +860,6 @@ export default function AppShell() {
       ].filter((panel) => panel.visible),
     [layoutState],
   );
-        { id: 'library' as const, visible: layoutState.libraryVisible },
 
   const agentSessions = useMemo(
     () => allTerminalSessions.filter((session) => session.isRunning && isAgentSession(session)),
@@ -2643,6 +2643,16 @@ export default function AppShell() {
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
 
+  // The project's generated images (`<project>/generations`), each one
+  // editable through an image provider, the chat, or a running agent.
+  const libraryItem: ActivityItem = {
+    id: 'library',
+    title: 'Library',
+    active: layoutState.libraryVisible && activeRoom === 'library',
+    onClick: () => togglePanelRoom('library'),
+    icon: <Icon><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></Icon>,
+  };
+
   // Command-palette launchers for the left project rail.
   const leftNavDockItems: ActivityItem[] = leftDrawerTools.map((tool) => ({
     id: tool,
@@ -2731,16 +2741,6 @@ export default function AppShell() {
           }
           focusRoom(next);
         } else if (isExpanded) {
-  // The project's generated images (`<project>/generations`), each one
-  // editable through an image provider, the chat, or a running agent.
-  const libraryItem: ActivityItem = {
-    id: 'library',
-    title: 'Library',
-    active: layoutState.libraryVisible && activeRoom === 'library',
-    onClick: () => togglePanelRoom('library'),
-    icon: <Icon><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></Icon>,
-  };
-
           setStageExpansion(null);
         } else if (!inSplit) {
           switchAmbientLayout('gallery');
@@ -2968,6 +2968,8 @@ export default function AppShell() {
         return <Icon><path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" /><path d="M4 12.5 12 17l8-4.5" /><path d="M4 17.5 12 22l8-4.5" /></Icon>;
       case 'sketch':
         return <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>;
+      case 'library':
+        return <Icon><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></Icon>;
     case 'toolbox':
       return <Icon><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></Icon>;
     case 'fleet':
@@ -3059,8 +3061,6 @@ export default function AppShell() {
       );
     }
     if (id === 'dev-terminal') {
-      case 'library':
-        return <Icon><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></Icon>;
       return (
         <div className="terminal-room-body dev-terminal">
           {terminalHostProjectIds.length > 0 ? (
