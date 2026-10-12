@@ -806,13 +806,200 @@ pub fn plugin_disable_skills(plugin_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// The icon on a plugin's homepage, as a data URL (the webview cannot load
-/// remote images).
-#[tauri::command]
-pub async fn plugin_site_icon(homepage: String) -> Option<String> {
-    let host = url::Url::parse(&homepage).ok()?.host_str()?.to_ascii_lowercase();
+// ---------------------------------------------------------------------------
+// Icons for marketplace listings
+// ---------------------------------------------------------------------------
+
+const ICON_MAX_BYTES: usize = 512 * 1024;
+
+fn image_mime(bytes: &[u8], content_type: &str, url: &str) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG") { return Some("image/png"); }
+    if bytes.starts_with(&[0, 0, 1, 0]) { return Some("image/x-icon"); }
+    if bytes.starts_with(b"\xFF\xD8\xFF") { return Some("image/jpeg"); }
+    if bytes.starts_with(b"GIF8") { return Some("image/gif"); }
+    if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" { return Some("image/webp"); }
+    // An <img> never runs an SVG's scripts, so an SVG is safe to show.
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(600)]).to_ascii_lowercase();
+    let svg_url = url.to_ascii_lowercase().split('?').next().is_some_and(|u| u.ends_with(".svg"));
+    if content_type.contains("svg") || svg_url || head.contains("<svg") {
+        return Some("image/svg+xml");
+    }
+    None
+}
+
+/// Fetch an image as a data URL. Refuses private and metadata hosts: these
+/// URLs come from third-party marketplace files.
+async fn fetch_image(client: &reqwest::Client, url: &str) -> Option<String> {
+    use base64::Engine;
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.scheme() != "https" || crate::commands::http::host_is_blocked(parsed.host_str()?) {
+        return None;
+    }
+    let res = client.get(url).send().await.ok()?;
+    if !res.status().is_success() || res.content_length().is_some_and(|n| n as usize > ICON_MAX_BYTES) {
+        return None;
+    }
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let bytes = res.bytes().await.ok()?;
+    if bytes.len() < 64 || bytes.len() > ICON_MAX_BYTES {
+        return None;
+    }
+    let mime = image_mime(&bytes, &content_type, url)?;
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// One attribute of an HTML tag, quoted either way or bare.
+fn tag_attr(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let key = format!("{name}=");
+    let i = lower.find(&key)? + key.len();
+    let rest = &tag[i..];
+    let quote = rest.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        rest[1..].split(quote).next().map(str::to_string)
+    } else {
+        rest.split([' ', '>', '/']).next().map(str::to_string)
+    }
+}
+
+/// A page's icon links: `apple-touch-icon` first (a square app icon), then
+/// other `rel="icon"` links, largest first. Mask icons are one-colour
+/// silhouettes and are skipped.
+fn icon_links(base: &url::Url, html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut found: Vec<(u32, String)> = Vec::new();
+    let mut at = 0;
+    while let Some(i) = lower[at..].find("<link") {
+        let start = at + i;
+        let end = lower[start..].find('>').map(|e| start + e).unwrap_or(lower.len());
+        let tag = &html[start..end];
+        at = end;
+        let rel = tag_attr(tag, "rel").unwrap_or_default().to_ascii_lowercase();
+        if !rel.contains("icon") || rel.contains("mask-icon") {
+            continue;
+        }
+        let Some(href) = tag_attr(tag, "href") else { continue };
+        let Ok(url) = base.join(&href.replace("&amp;", "&")) else { continue };
+        let size = tag_attr(tag, "sizes")
+            .and_then(|s| s.split('x').next().and_then(|n| n.parse::<u32>().ok()))
+            .unwrap_or(0);
+        let rank = if rel.contains("apple-touch-icon") { 10_000 } else { 0 } + size;
+        found.push((rank, url.to_string()));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().map(|(_, u)| u).collect()
+}
+
+/// The icon a website shows for itself.
+async fn website_icon(client: &reqwest::Client, homepage: &str) -> Option<String> {
+    let page = url::Url::parse(homepage).ok()?;
+    let host = page.host_str()?.to_ascii_lowercase();
+    // A GitHub repo or org link: the owner's avatar is the vendor's logo,
+    // where github.com's own favicon would be the same cat for every plugin.
+    if host == "github.com" || host == "www.github.com" {
+        let owner = page.path_segments()?.next().filter(|o| !o.is_empty())?.to_string();
+        return fetch_image(client, &format!("https://github.com/{owner}.png?size=96")).await;
+    }
+    if page.scheme() != "https" || crate::commands::http::host_is_blocked(&host) {
+        return None;
+    }
+    if let Ok(res) = client.get(page.as_str()).send().await {
+        if res.status().is_success() {
+            let final_url = res.url().clone();
+            if let Ok(html) = res.text().await {
+                for link in icon_links(&final_url, &html).into_iter().take(4) {
+                    if let Some(icon) = fetch_image(client, &link).await {
+                        return Some(icon);
+                    }
+                }
+            }
+        }
+    }
     let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
     crate::commands::custom_providers::fetch_icon(&host).await
+}
+
+type IconCache = std::sync::Mutex<Option<std::collections::HashMap<String, Option<String>>>>;
+static LISTING_ICONS: IconCache = std::sync::Mutex::new(None);
+
+/// The icon for one plugin in a marketplace listing, as a data URL: the
+/// plugin's own icon file (a Codex manifest's `interface.composerIcon` or
+/// `logo`), else its website's icon, else its GitHub owner's avatar when the
+/// plugin lives outside the marketplace's own repo. Cached for the session.
+#[tauri::command]
+pub async fn plugin_listing_icon(source: String, plugin: String, homepage: Option<String>) -> Option<String> {
+    let cache_key = format!("{source}\u{0}{plugin}");
+    let cached = LISTING_ICONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&cache_key).cloned());
+    if let Some(hit) = cached {
+        return hit;
+    }
+    let found = listing_icon(&source, &plugin, homepage).await;
+    LISTING_ICONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .insert(cache_key, found.clone());
+    found
+}
+
+async fn listing_icon(source: &str, plugin: &str, homepage: Option<String>) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (Spacron)")
+        .build()
+        .ok()?;
+    let (market, json) = load_marketplace(source).await.ok()?;
+    let entry = json
+        .get("plugins")?
+        .as_array()?
+        .iter()
+        .find(|e| str_field(e, "name").as_deref() == Some(plugin))?
+        .clone();
+    let location = entry_location(&market, &entry);
+    let mut site = homepage.filter(|h| !h.trim().is_empty());
+    if let Some(location) = &location {
+        for manifest in MANIFESTS {
+            let Some(text) = fetch_text(&client, &raw_url(location, manifest)).await else { continue };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let interface = json.get("interface").cloned().unwrap_or_default();
+            for key in ["composerIcon", "logo"] {
+                let rel = interface
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .and_then(|r| safe_relative(r.trim_start_matches("./")));
+                if let Some(rel) = rel {
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    if let Some(icon) = fetch_image(&client, &raw_url(location, &rel)).await {
+                        return Some(icon);
+                    }
+                }
+            }
+            if site.is_none() {
+                site = str_field(&json, "homepage").or_else(|| str_field(&interface, "websiteURL"));
+            }
+            break;
+        }
+    }
+    if let Some(site) = &site {
+        if let Some(icon) = website_icon(&client, site).await {
+            return Some(icon);
+        }
+    }
+    // Last resort: whoever hosts the plugin. For a plugin in its vendor's own
+    // repo that is the vendor; for one in the marketplace's repo it is the
+    // marketplace owner, who made it (Anthropic's or OpenAI's own plugins).
+    let owner = location.map(|l| l.owner).unwrap_or(market.owner);
+    fetch_image(&client, &format!("https://github.com/{owner}.png?size=96")).await
 }
 
 #[cfg(test)]
@@ -871,6 +1058,16 @@ mod tests {
     }
 
     #[test]
+    fn prefers_apple_touch_icons_and_resolves_relative_links() {
+        let base = url::Url::parse("https://example.com/docs/").unwrap();
+        let html = r#"<link rel="icon" href="/favicon-32.png" sizes="32x32"><link rel="mask-icon" href="/pin.svg"><link rel='apple-touch-icon' href="touch.png">"#;
+        assert_eq!(
+            icon_links(&base, html),
+            vec!["https://example.com/docs/touch.png".to_string(), "https://example.com/favicon-32.png".to_string()]
+        );
+    }
+
+    #[test]
     fn scaffolds_and_reads_a_plugin() {
         let dir = std::env::temp_dir().join(format!("spacron-plugin-test-{}", uuid::Uuid::new_v4().simple()));
         let summary = plugin_create(Some(dir.to_string_lossy().into()), "My Tool".into(), "Does a thing".into()).unwrap();
@@ -905,6 +1102,16 @@ mod live {
             );
             assert!(summary.mcp_servers.as_object().is_some_and(|m| !m.is_empty()));
             plugin_delete_files(summary.path).unwrap();
+        }
+        // Codex's linear ships an icon file; Claude's stripe lives in Stripe's repo.
+        for (market, plugin) in [
+            ("openai/plugins", "linear"),
+            ("anthropics/claude-plugins-official", "stripe"),
+            ("anthropics/claude-plugins-official", "context7"),
+            ("anthropics/claude-plugins-official", "code-review"),
+        ] {
+            let icon = plugin_listing_icon(market.into(), plugin.into(), None).await;
+            println!("  icon {plugin}: {}", icon.as_deref().map(|i| &i[..i.len().min(40)]).unwrap_or("none"));
         }
     }
 }

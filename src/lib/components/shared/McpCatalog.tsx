@@ -269,7 +269,7 @@ export function McpCatalog({
         </button>
         <button className="settings-secondary" onClick={() => setPending(null)}>Cancel</button>
       </div>
-      <button className="mcp-text-link mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.key!.url)}>
+      <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.key!.url)}>
         Get a token
       </button>
     </div>
@@ -346,7 +346,7 @@ export function McpCatalog({
       {tab === 'yours' && (
         <>
           <YourPluginsTab query={query} onReview={review} onNotice={setNotice} />
-          <button className="mcp-text-link mcp-folder-link" onClick={() => void uploadFolder()}>
+          <button className="settings-secondary mcp-small-button mcp-folder-link" onClick={() => void uploadFolder()}>
             Install a plugin from a folder…
           </button>
         </>
@@ -414,14 +414,14 @@ export function McpCatalog({
                       <div className="mcp-catalog-panel">
                         <p className="mcp-catalog-error">{error}</p>
                         {entry.auth === 'oauth' && !installed && (
-                          <button className="mcp-text-link mcp-catalog-panel-link" onClick={() => install(entry)}>
+                          <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => install(entry)}>
                             Add without signing in (each agent signs in itself)
                           </button>
                         )}
                       </div>
                     )}
                     {installed && entry.auth === 'oauth' && signedIn[keyOf(entry)] && (
-                      <button className="mcp-text-link mcp-catalog-signout" onClick={() => void signOut(entry)}>
+                      <button className="settings-secondary mcp-small-button mcp-catalog-signout" onClick={() => void signOut(entry)}>
                         Sign out
                       </button>
                     )}

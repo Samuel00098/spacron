@@ -503,16 +503,6 @@
   font-size: 12px;
 }
 
-.mcp-market-meta-actions {
-  display: flex;
-  gap: 14px;
-}
-
-.mcp-market-meta-actions .settings-link-button {
-  padding: 0;
-  font-size: 12px;
-}
-
 .mcp-market-warning {
   margin: 6px 0 4px;
   font-size: 12px;
@@ -609,30 +599,39 @@
   }
 }
 
-/* ── Text links, group counts, and pop-ups on the app's own black ─────── */
+/* ── Small action buttons, group counts, and pop-ups on the app's black ── */
 
-.mcp-text-link {
+/* Refresh, Remove marketplace, Get a token, Sign out…: real buttons, sized to
+   their label (the earlier zero-padding override squashed them). */
+.mcp-catalog .mcp-small-button {
   display: inline-flex;
   align-items: center;
-  height: auto;
-  min-height: 0;
-  padding: 2px 0;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: 8px;
   font-size: 12px;
-  font-weight: 500;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 3px;
-  cursor: pointer;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.mcp-text-link:hover,
-.mcp-text-link:focus-visible {
-  color: var(--text-primary);
-  text-decoration-color: currentColor;
-  outline: none;
+.mcp-catalog .mcp-catalog-panel-link,
+.mcp-catalog .mcp-folder-link {
+  margin-top: 10px;
+}
+
+.mcp-catalog .mcp-catalog-signout {
+  margin: -6px 0 8px 48px;
+}
+
+.mcp-market-meta-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
 }
 
 .mcp-market-meta {

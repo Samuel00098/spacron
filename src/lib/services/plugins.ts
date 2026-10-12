@@ -286,14 +286,18 @@ export const readPluginFolder = (path: string) => invoke<PluginSummary>('plugin_
 export const createPluginFolder = (parent: string | null, name: string, description: string) =>
   invoke<PluginSummary>('plugin_create', { parent, name, description });
 
-const siteIcons = new Map<string, Promise<string | null>>();
-/** A plugin's homepage icon as a data URL, fetched once per session. */
-export function siteIcon(homepage: string | null | undefined): Promise<string | null> {
-  if (!homepage) return Promise.resolve(null);
-  let hit = siteIcons.get(homepage);
+const listingIcons = new Map<string, Promise<string | null>>();
+/**
+ * A marketplace plugin's icon as a data URL (the webview cannot load remote
+ * images): its own icon file, else its website's, else its GitHub owner's
+ * avatar. Fetched once per session.
+ */
+export function listingIcon(source: string, plugin: string, homepage?: string | null): Promise<string | null> {
+  const key = `${source} ${plugin}`;
+  let hit = listingIcons.get(key);
   if (!hit) {
-    hit = invoke<string | null>('plugin_site_icon', { homepage }).catch(() => null);
-    siteIcons.set(homepage, hit);
+    hit = invoke<string | null>('plugin_listing_icon', { source, plugin, homepage: homepage ?? null }).catch(() => null);
+    listingIcons.set(key, hit);
   }
   return hit;
 }

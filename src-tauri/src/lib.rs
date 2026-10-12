@@ -551,7 +551,7 @@ pub fn run() {
             commands::plugins::plugin_delete_files,
             commands::plugins::plugin_enable_skills,
             commands::plugins::plugin_disable_skills,
-            commands::plugins::plugin_site_icon,
+            commands::plugins::plugin_listing_icon,
             commands::mcp::mcp_deliver_respond,
             commands::mcp::mcp_computer_use_supported,
             commands::mcp::mcp_set_computer_use,

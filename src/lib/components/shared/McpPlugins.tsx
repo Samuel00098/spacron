@@ -18,7 +18,7 @@ import {
   pluginGroup,
   pluginMarketplaces,
   readPluginFolder,
-  siteIcon,
+  listingIcon,
   uninstallPlugin,
   unpackArchive,
   type InstalledPlugin,
@@ -40,22 +40,33 @@ const errorText = (e: unknown) => String(e instanceof Error ? e.message : e).rep
 // ---------------------------------------------------------------------------
 
 /** A plugin's icon: its own (manifest or homepage), else a lettered tile. */
-export function PluginIcon({ title, icon, homepage }: { title: string; icon?: string | null; homepage?: string | null }) {
+export function PluginIcon({
+  title,
+  icon,
+  homepage,
+  listing,
+}: {
+  title: string;
+  icon?: string | null;
+  homepage?: string | null;
+  /** Where the plugin is listed, for looking its icon up. */
+  listing?: { source: string; plugin: string } | null;
+}) {
   const [src, setSrc] = useState<string | null>(icon ?? null);
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
-    if (icon || !homepage || !ref.current) return;
+    if (icon || !listing || !ref.current) return;
     // Fetch the homepage icon only once the row scrolls into view: a
     // marketplace lists hundreds of plugins.
     const el = ref.current;
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
       observer.disconnect();
-      void siteIcon(homepage).then((data) => data && setSrc(data));
+      void listingIcon(listing.source, listing.plugin, homepage).then((data) => data && setSrc(data));
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [icon, homepage]);
+  }, [icon, homepage, listing?.source, listing?.plugin]);
   return src ? (
     <span ref={ref} className="mcp-catalog-icon is-image" aria-hidden="true">
       <img src={src} alt="" draggable={false} />
@@ -172,7 +183,12 @@ export function InstallReview({
   return (
     <div className="mcp-sheet">
       <div className="mcp-sheet-head">
-        <PluginIcon title={summary.title} icon={summary.icon} homepage={summary.homepage} />
+        <PluginIcon
+          title={summary.title}
+          icon={summary.icon}
+          homepage={summary.homepage}
+          listing={origin.kind === 'marketplace' ? { source: origin.source, plugin: summary.name } : null}
+        />
         <div className="mcp-catalog-text">
           <div className="mcp-catalog-name">
             <span className="mcp-catalog-title">{summary.title}</span>
@@ -440,8 +456,8 @@ export function MarketplacesTab({
       <div className="mcp-market-meta">
         <span className="shell-hint">{current.source}</span>
         <span className="mcp-market-meta-actions">
-          <button className="mcp-text-link" onClick={() => setListing((l) => { const n = { ...l }; delete n[current.id]; return n; })}>Refresh</button>
-          {!current.builtin && <button className="mcp-text-link" onClick={() => removeMarket(current)}>Remove marketplace</button>}
+          <button className="settings-secondary mcp-small-button" onClick={() => setListing((l) => { const n = { ...l }; delete n[current.id]; return n; })}>Refresh</button>
+          {!current.builtin && <button className="settings-secondary mcp-small-button" onClick={() => removeMarket(current)}>Remove marketplace</button>}
         </span>
       </div>
       <p className="mcp-market-warning">Only install plugins you trust: a plugin can run programs and reach services on your behalf.</p>
@@ -461,7 +477,7 @@ export function MarketplacesTab({
             return (
               <div className="mcp-catalog-item" key={plugin.name}>
                 <div className="mcp-catalog-row">
-                  <PluginIcon title={plugin.title} homepage={plugin.homepage} />
+                  <PluginIcon title={plugin.title} homepage={plugin.homepage} listing={{ source: current.source, plugin: plugin.name }} />
                   <div className="mcp-catalog-text">
                     <div className="mcp-catalog-name">
                       <span className="mcp-catalog-title">{plugin.title}</span>
@@ -500,6 +516,10 @@ export function MarketplacesTab({
 // ---------------------------------------------------------------------------
 // Your plugins tab
 // ---------------------------------------------------------------------------
+
+/** Where an installed plugin is listed, for its icon. */
+const listingOf = (p: InstalledPlugin) =>
+  p.origin.kind === 'marketplace' ? { source: p.origin.source, plugin: p.name } : null;
 
 const originLabel = (p: InstalledPlugin) =>
   p.origin.kind === 'marketplace' ? 'Marketplace'
@@ -571,7 +591,7 @@ export function YourPluginsTab({
         <div className="mcp-plugin-list">
           {list.map((p) => (
             <div className="mcp-plugin-row" key={p.id}>
-              <PluginIcon title={p.title} icon={p.icon} homepage={p.homepage} />
+              <PluginIcon title={p.title} icon={p.icon} homepage={p.homepage} listing={listingOf(p)} />
               <div className="mcp-catalog-text">
                 <div className="mcp-catalog-name">
                   <span className="mcp-catalog-title">{p.title}</span>
@@ -613,7 +633,7 @@ export function ServerIcon({ server }: { server: McpServer }) {
   const plugin = server.pluginId ? plugins.find((p) => p.id === server.pluginId) : undefined;
   return (
     <span className="mcp-server-icon">
-      <PluginIcon title={plugin?.title ?? server.name ?? '?'} icon={plugin?.icon} homepage={plugin?.homepage} />
+      <PluginIcon title={plugin?.title ?? server.name ?? '?'} icon={plugin?.icon} homepage={plugin?.homepage} listing={plugin ? listingOf(plugin) : null} />
     </span>
   );
 }
