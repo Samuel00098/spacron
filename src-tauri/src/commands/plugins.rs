@@ -767,25 +767,46 @@ pub fn plugin_delete_files(path: String) -> Result<(), String> {
 // Skills into agents
 // ---------------------------------------------------------------------------
 
-/// The user-level skill folders a plugin's skills are copied into, one per
-/// distinct reader so no agent sees a skill twice (checked 2026-10-12):
+/// The user-level skill folders a plugin's skills are copied into (checked
+/// 2026-10-12):
 ///
 /// - `~/.agents/skills`: the shared folder. Codex, Copilot CLI
-///   (`copilot skill --help`), Devin (`devin skills paths`) and Qoder (a probe
-///   skill showed in `qodercli skills list`) all read it.
+///   (`copilot skill --help`), Devin (`devin skills paths`), Qoder (a probe
+///   skill showed in `qodercli skills list`), opencode (`opencode debug skill`
+///   lists Spacron's skills from it), DeepSeek Harness (dsh-skill-filesystem's
+///   README), Amp (ampcode.com/docs/customize/skills) and Cursor (its skills
+///   docs) all read it.
 /// - `~/.claude/skills`: Claude Code.
-/// - `~/.factory/skills` (droid) and `~/.gemini/skills` (Gemini CLI), only
-///   when that agent's folder already exists.
+/// - `~/.kiro/skills`: Kiro (kiro.dev/docs/skills), which reads no shared folder.
+/// - `~/.gemini/config/skills` (Antigravity 2.0 and IDE) and
+///   `~/.gemini/antigravity-cli/skills` (Antigravity CLI), from
+///   antigravity.google/docs/skills.
+/// - `~/.factory/skills` (droid) and `~/.gemini/skills` (Gemini CLI).
 ///
-/// Not `~/.codex/skills`: Codex reads `~/.agents/skills` too, so writing both
-/// would list every skill twice there.
+/// Agent-specific folders are written only when that agent's own folder
+/// exists, so a CLI the user never installed leaves no trace; Spacron re-syncs
+/// installed plugins at startup, which covers an agent installed later.
+///
+/// Not `~/.codex/skills`: Codex reads `~/.agents/skills` too. Agents that read
+/// several of these folders (Cursor, Amp, opencode) see the same skill name
+/// twice and keep one, which is why every copy carries the same `name`.
 fn agent_skill_roots() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else { return Vec::new() };
     let mut roots = vec![home.join(".agents").join("skills"), home.join(".claude").join("skills")];
-    for agent in [".factory", ".gemini"] {
-        if home.join(agent).is_dir() {
-            roots.push(home.join(agent).join("skills"));
-        }
+    let when = |agent: &str, rel: &[&str]| -> Option<PathBuf> {
+        home.join(agent).is_dir().then(|| rel.iter().fold(home.join(agent), |p, part| p.join(part)))
+    };
+    for root in [
+        when(".kiro", &["skills"]),
+        when(".gemini", &["config", "skills"]),
+        when(".gemini", &["antigravity-cli", "skills"]),
+        when(".gemini", &["skills"]),
+        when(".factory", &["skills"]),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        roots.push(root);
     }
     roots
 }
@@ -798,6 +819,9 @@ fn agent_skill_cleanup_roots() -> Vec<PathBuf> {
         roots.push(home.join(".codex").join("skills"));
         roots.push(home.join(".factory").join("skills"));
         roots.push(home.join(".gemini").join("skills"));
+        roots.push(home.join(".gemini").join("config").join("skills"));
+        roots.push(home.join(".gemini").join("antigravity-cli").join("skills"));
+        roots.push(home.join(".kiro").join("skills"));
     }
     roots.sort();
     roots.dedup();
@@ -820,8 +844,50 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Folder name for a plugin's skill in an agent's skill dir.
 fn skill_folder(plugin_id: &str, skill_dir: &Path) -> String {
-    let skill = skill_dir.file_name().and_then(|n| n.to_str()).map(slug).unwrap_or_else(|| "skill".into());
-    format!("{SKILL_PREFIX}{}-{skill}", slug(plugin_id))
+    let skill = skill_dir.file_name().and_then(|n| n.to_str()).unwrap_or("skill");
+    kebab(&format!("{SKILL_PREFIX}{}-{skill}", slug(plugin_id)))
+}
+
+/// Lowercase letters, digits and single hyphens: the Agent Skills name rule
+/// (Cursor and DeepSeek reject anything else).
+fn kebab(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.to_ascii_lowercase().chars() {
+        let c = if c.is_ascii_alphanumeric() { c } else { '-' };
+        if !(c == '-' && out.ends_with('-')) {
+            out.push(c);
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() { "skill".into() } else { out.chars().take(64).collect::<String>().trim_end_matches('-').to_string() }
+}
+
+/// The SKILL.md text with its front-matter `name` set to `name`. The Agent
+/// Skills standard (and Cursor, which enforces it) requires the name to match
+/// the folder, and Spacron's folders are `spacron-<plugin>-<skill>`. A file
+/// with no front matter gets one, its description taken from its first line.
+fn with_skill_name(text: &str, name: &str) -> String {
+    let trimmed = text.trim_start_matches('\u{feff}');
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            let header = &rest[..end];
+            let after = &rest[end..];
+            let mut lines: Vec<String> = header
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("name:"))
+                .map(str::to_string)
+                .collect();
+            let insert_at = usize::from(lines.first().is_some_and(|l| l.trim().is_empty()));
+            lines.insert(insert_at, format!("name: {name}"));
+            return format!("---{}{after}", lines.join("\n"));
+        }
+    }
+    let first = trimmed
+        .lines()
+        .map(|l| l.trim().trim_start_matches('#').trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("A skill from a Spacron plugin.");
+    format!("---\nname: {name}\ndescription: {}\n---\n\n{trimmed}", yaml_string(first))
 }
 
 /// `*.md` files under `dir` (recursively), named the way Claude Code names a
@@ -926,8 +992,12 @@ pub fn plugin_enable_skills(plugin_id: String, path: String) -> Result<Vec<Strin
     let mut written = Vec::new();
     for dir in skill_dirs(&root, &manifest) {
         let folder = skill_folder(&plugin_id, &dir);
+        let skill_md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+        let named = with_skill_name(&skill_md, &folder);
         for base in &roots {
-            copy_dir(&dir, &base.join(&folder)).map_err(|e| format!("could not install skill {folder}: {e}"))?;
+            let target = base.join(&folder);
+            copy_dir(&dir, &target).map_err(|e| format!("could not install skill {folder}: {e}"))?;
+            std::fs::write(target.join("SKILL.md"), &named).map_err(|e| format!("could not install skill {folder}: {e}"))?;
         }
         written.push(folder);
     }
@@ -941,7 +1011,8 @@ pub fn plugin_enable_skills(plugin_id: String, path: String) -> Result<Vec<Strin
                 .map_err(|e| format!("could not install {kind} {name}: {e}"))?;
             // Everyone else: the same instructions as a skill.
             let Some((skill_name, content)) = converted_skill(kind, &plugin, &name, &file) else { continue };
-            let folder = format!("{SKILL_PREFIX}{plugin}-{kind}-{name}");
+            let folder = kebab(&format!("{SKILL_PREFIX}{plugin}-{kind}-{name}"));
+            let content = with_skill_name(&content, &folder);
             for base in roots.iter().filter(|b| Some(*b) != claude_skills.as_ref()) {
                 let target = base.join(&folder);
                 std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
@@ -1234,6 +1305,18 @@ mod tests {
         assert!(agent.contains("Work as the reviewer specialist from the vercel plugin. Reviews code"));
         assert!(agent.trim_end().ends_with("You review code."));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn names_every_skill_after_its_folder() {
+        let named = with_skill_name("---\nname: vercel-firewall\ndescription: x\n---\nbody\n", "spacron-vercel-vercel-firewall");
+        assert_eq!(named, "---\nname: spacron-vercel-vercel-firewall\ndescription: x\n---\nbody\n");
+        let missing = with_skill_name("---\ndescription: y\n---\nb", "spacron-p-s");
+        assert!(missing.starts_with("---\nname: spacron-p-s\ndescription: y\n---"));
+        let bare = with_skill_name("# Do the thing\nsteps", "spacron-p-s");
+        assert!(bare.starts_with("---\nname: spacron-p-s\ndescription: \"Do the thing\"\n---\n\n# Do the thing"));
+        assert_eq!(kebab("spacron-My_Plugin--x"), "spacron-my-plugin-x");
+        assert_eq!(skill_folder("vercel", Path::new("/p/skills/Deploy_Now")), "spacron-vercel-deploy-now");
     }
 
     #[test]

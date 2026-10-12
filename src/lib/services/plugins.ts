@@ -291,7 +291,21 @@ export function isPluginInstalled(name: string, installed: InstalledPlugin[], se
  */
 export async function upgradeLegacyPlugins(): Promise<void> {
   const stale = get(installedPlugins).filter((p) => p.claudeOnly.some((part) => /command|sub-agent/.test(part)));
-  for (const plugin of stale) {
+  await resyncPlugins(stale);
+}
+
+/**
+ * Re-copy every installed plugin's skills, commands and sub-agents into the
+ * agents' skill folders. Run once at startup, so an agent installed since the
+ * plugin was (Kiro, Antigravity, droid, Gemini get their folders only when
+ * present) receives them, and so earlier copies pick up current naming.
+ */
+export async function syncPluginSkills(): Promise<void> {
+  await resyncPlugins(get(installedPlugins));
+}
+
+async function resyncPlugins(plugins: InstalledPlugin[]): Promise<void> {
+  for (const plugin of plugins) {
     try {
       const summary = await readPluginFolder(plugin.path);
       const skillFolders = await invoke<string[]>('plugin_enable_skills', { pluginId: plugin.id, path: plugin.path });

@@ -492,6 +492,13 @@ export function initMcpBridge(): void {
   // The chat uses the same MCP servers the agents get (Settings > MCP).
   mcpServers.subscribe((servers) => syncChatMcpServers(servers ?? []));
 
+  // Plugin skills: re-copied once per launch, so agents installed since a
+  // plugin was (and earlier copies) get the current set. Loaded lazily; it
+  // only matters once the app is up.
+  void import('$lib/services/plugins')
+    .then(({ syncPluginSkills }) => syncPluginSkills())
+    .catch((e) => console.warn('[plugins] Could not sync plugin skills:', e));
+
   // ...and the agents get them without reopening the project. The configs used
   // to be rewritten only on project open and agent launch, so a server added in
   // Settings stayed invisible to every CLI until then. Skips each store's
