@@ -838,6 +838,23 @@
   box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.2);
 }
 
+/* No outline on the commit box, resting or focused: a soft fill marks the
+   field instead. `!important` and the extra `.right-utility-panel` step
+   because global.css draws a ring here with !important. */
+.source-control .sc-commit-input,
+.source-control .sc-commit-input:focus,
+.right-utility-panel .source-control .sc-commit-input,
+.right-utility-panel .source-control .sc-commit-input:focus {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent) !important;
+}
+
+.right-utility-panel .source-control .sc-commit-input:focus {
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent) !important;
+}
+
 .source-control .ai-gen-btn {
   position: absolute;
   bottom: 6px;
