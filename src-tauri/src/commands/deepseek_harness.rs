@@ -579,6 +579,31 @@ struct SupportFiles {
     access_patch: PathBuf,
     /// Only when a key for a non-DeepSeek provider is saved.
     providers_patch: Option<PathBuf>,
+    /// The user's MCP servers, written by the frontend; only when there are any.
+    user_mcp_patch: Option<PathBuf>,
+}
+
+fn user_mcp_patch_path() -> PathBuf {
+    patch_dir().join("spacron-user-mcp.patch.yml")
+}
+
+/// Save the user's MCP servers as a dsh patch (`deepSeekMcpPatch` in
+/// `services/mcp-servers.ts` builds it). Empty content removes the file, so a
+/// launch then adds no patch at all.
+#[tauri::command]
+pub fn deepseek_harness_set_user_mcp(content: String) -> Result<(), String> {
+    let path = user_mcp_patch_path();
+    if content.trim().is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
+    if content.len() > 512 * 1024 {
+        return Err("the server patch is implausibly large".into());
+    }
+    std::fs::create_dir_all(patch_dir()).map_err(|e| e.to_string())?;
+    write_if_changed(&path, &content)
 }
 
 fn write_if_changed(path: &Path, body: &str) -> Result<(), String> {
@@ -631,6 +656,7 @@ async fn write_support_files(keys: &Keys, profile: Profile) -> Result<SupportFil
                 write_if_changed(&path, &body).map(|_| path)
             })
             .transpose()?,
+        user_mcp_patch: Some(user_mcp_patch_path()).filter(|p| p.is_file()),
     };
     write_if_changed(&files.mcp_patch, MCP_PATCH)?;
     write_if_changed(&files.task_patch, HEADLESS_TASK_PATCH)?;
@@ -702,6 +728,7 @@ pub struct DeepSeekWorkerFiles {
     task_patch: String,
     access_patch: String,
     providers_patch: Option<String>,
+    user_mcp_patch: Option<String>,
 }
 
 #[tauri::command]
@@ -716,6 +743,7 @@ pub async fn deepseek_harness_worker_files() -> Result<DeepSeekWorkerFiles, Stri
         task_patch: text(&files.task_patch),
         access_patch: text(&files.access_patch),
         providers_patch: files.providers_patch.as_deref().map(text),
+        user_mcp_patch: files.user_mcp_patch.as_deref().map(text),
     })
 }
 
@@ -881,6 +909,9 @@ async fn start_web(root: &Path, mcp_url: &str) -> Result<WebInstance, String> {
         .arg(&files.access_patch);
     if let Some(providers) = &files.providers_patch {
         command.arg("--patch").arg(providers);
+    }
+    if let Some(servers) = &files.user_mcp_patch {
+        command.arg("--patch").arg(servers);
     }
     command
         .args(["--port", &dsh_port.to_string(), "--no-open"])

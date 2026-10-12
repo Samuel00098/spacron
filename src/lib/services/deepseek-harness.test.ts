@@ -21,6 +21,7 @@ const files = {
   taskPatch: 'C:\\Users\\me\\AppData\\Roaming\\spacron\\deepseek-harness\\headless-task.patch.yml',
   accessPatch: 'C:\\Users\\me\\AppData\\Roaming\\spacron\\deepseek-harness\\spacron-full-access.patch.yml',
   providersPatch: null as string | null,
+  userMcpPatch: null as string | null,
 };
 
 describe('deepseek harness worker launch', () => {
@@ -36,6 +37,12 @@ describe('deepseek harness worker launch', () => {
     const providersPatch = 'C:\\x\\spacron-providers.patch.yml';
     const line = deepSeekLaunchLine({ ...files, providersPatch }, '/t.md');
     expect(line).toContain(`--patch "${files.accessPatch}" --patch "${providersPatch}" spacron-task`);
+  });
+
+  it("adds the user's MCP servers patch last, when there is one", () => {
+    const userMcpPatch = 'C:\\x\\spacron-user-mcp.patch.yml';
+    const line = deepSeekLaunchLine({ ...files, userMcpPatch }, '/t.md');
+    expect(line).toContain(`--patch "${userMcpPatch}" spacron-task`);
   });
 
   it('starts with a bare command, never a quoted path PowerShell would echo', () => {

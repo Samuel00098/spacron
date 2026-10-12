@@ -184,3 +184,33 @@ describe('form text parsing', () => {
       .toEqual(['--config', 'C:/my path/cfg.json']);
   });
 });
+
+describe('deepSeekMcpPatch', () => {
+  it('writes one dsh-mcp-client row per server, proxying signed-in ones through the launch env', async () => {
+    const { deepSeekMcpPatch } = await import('./mcp-servers');
+    const patch = deepSeekMcpPatch([
+      { id: '1', name: 'Linear', transport: 'http', url: 'https://mcp.linear.app/mcp', enabled: true, oauth: true },
+      { id: '2', name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer t' }, enabled: true },
+      { id: '3', name: 'Local', transport: 'stdio', command: 'npx', args: ['-y', 'x'], env: { A: '1' }, enabled: true },
+      { id: '4', name: 'Old', transport: 'sse', url: 'https://old.example/sse', enabled: true },
+    ]);
+    expect(patch).toContain('- insert:');
+    expect(patch).toContain('serverName: "linear"');
+    // The value is a YAML double-quoted string; decoding it must give exactly
+    // the JS expression dsh evaluates.
+    const quoted = patch.match(/url: !!js (".*")/)?.[1];
+    const expr = JSON.parse(quoted!) as string;
+    expect(expr).toBe("process.env.SPACRON_MCP_URL.replace('/mcp?', '/proxy/spacron-linear?')");
+    // And it evaluates to the proxy URL, as dsh's `!!js` would.
+    const evaluate = new Function('process', `return ${expr}`) as (p: unknown) => string;
+    expect(evaluate({ env: { SPACRON_MCP_URL: 'http://127.0.0.1:51379/mcp?token=abc' } })).toBe(
+      'http://127.0.0.1:51379/proxy/spacron-linear?token=abc',
+    );
+    expect(patch).not.toContain('mcp.linear.app');
+    expect(patch).toContain('"Authorization": "Bearer t"');
+    expect(patch).toContain('transport: stdio');
+    expect(patch).toContain('args: ["-y", "x"]');
+    expect(patch).not.toContain('old.example');
+    expect(deepSeekMcpPatch([])).toBe('');
+  });
+});

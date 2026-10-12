@@ -40,6 +40,9 @@ export interface PluginSummary {
   variables: string[];
   skills: PluginSkill[];
   claudeOnly: string[];
+  /** Slash commands and sub-agents: native in Claude Code, skills everywhere else. */
+  commands: string[];
+  agents: string[];
   icon: string | null;
 }
 

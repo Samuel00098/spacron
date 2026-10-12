@@ -160,14 +160,6 @@
   color: var(--text-secondary);
 }
 
-.mcp-catalog-badge.is-ok {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #22c55e 55%, transparent);
-  color: #4ade80;
-}
-
-:root.light-theme .mcp-catalog-badge.is-ok {
-  color: #15803d;
-}
 
 .mcp-catalog-desc {
   overflow: hidden;
@@ -204,11 +196,7 @@
 }
 
 .mcp-catalog-action.is-installed {
-  color: #4ade80;
-}
-
-:root.light-theme .mcp-catalog-action.is-installed {
-  color: #15803d;
+  color: var(--text-primary);
 }
 
 .mcp-catalog-check,
@@ -656,4 +644,16 @@
 .mcp-sheet,
 .mcp-notice {
   background: var(--app-surface);
+}
+
+/* No springy hover inside the plugins panel. The global button rule scales
+   and lifts every button with a spring transition; while scrolling, the
+   pointer sweeps across the white Add button and that animation made it
+   look as if it moved with the scroll and snapped back. */
+.mcp-catalog button,
+.mcp-catalog button:hover:not(:disabled),
+.mcp-catalog button:active:not(:disabled),
+.mcp-catalog button:hover svg {
+  transform: none !important;
+  filter: none !important;
 }

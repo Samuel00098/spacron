@@ -542,6 +542,7 @@ pub fn run() {
             commands::mcp_oauth::mcp_oauth_needs_sign_in,
             commands::mcp_oauth::mcp_oauth_status,
             commands::mcp_oauth::mcp_oauth_sign_out,
+            commands::deepseek_harness::deepseek_harness_set_user_mcp,
             commands::plugins::plugin_marketplace_fetch,
             commands::plugins::plugin_install_from_marketplace,
             commands::plugins::plugin_install_archive,

@@ -353,6 +353,10 @@ pub struct PluginSummary {
     pub skills: Vec<PluginSkill>,
     /// Parts Spacron does not run (commands, agents, hooks, LSP servers).
     pub claude_only: Vec<String>,
+    /// Slash commands (`commands/**/*.md`), shared with every agent as skills.
+    pub commands: Vec<String>,
+    /// Sub-agents (`agents/*.md`), shared with every agent as skills.
+    pub agents: Vec<String>,
     /// The manifest's icon as a data URL, when it ships one.
     pub icon: Option<String>,
 }
@@ -362,6 +366,17 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 }
 
 /// `---\nname: x\ndescription: y\n---` front matter of a SKILL.md.
+/// A YAML scalar without the quotes that wrap it (only when they wrap all of it).
+fn unquote(value: &str) -> String {
+    let v = value.trim();
+    for q in ['"', '\''] {
+        if v.len() >= 2 && v.starts_with(q) && v.ends_with(q) {
+            return v[1..v.len() - 1].replace("\\\"", "\"");
+        }
+    }
+    v.to_string()
+}
+
 fn skill_front_matter(text: &str) -> (Option<String>, Option<String>) {
     let mut name = None;
     let mut description = None;
@@ -375,9 +390,9 @@ fn skill_front_matter(text: &str) -> (Option<String>, Option<String>) {
             break;
         }
         if let Some(v) = line.strip_prefix("name:") {
-            name = Some(v.trim().trim_matches('"').to_string());
+            name = Some(unquote(v));
         } else if let Some(v) = line.strip_prefix("description:") {
-            description = Some(v.trim().trim_matches('"').to_string());
+            description = Some(unquote(v));
         }
     }
     (name, description)
@@ -506,12 +521,15 @@ fn summarize(root: &Path) -> Result<PluginSummary, String> {
         })
         .collect();
 
+    // Commands and sub-agents are markdown instructions, so they are shared
+    // as skills (see `plugin_enable_skills`); hooks run Claude Code's own
+    // lifecycle events and cannot be.
     let mut claude_only = Vec::new();
-    for (dir, label) in [("commands", "slash commands"), ("agents", "sub-agents"), ("hooks", "hooks")] {
-        if root.join(dir).is_dir() || manifest.get(dir).is_some() {
-            claude_only.push(label.to_string());
-        }
+    if root.join("hooks").is_dir() || manifest.get("hooks").is_some() {
+        claude_only.push("hooks".to_string());
     }
+    let commands: Vec<String> = markdown_files(&root.join("commands")).into_iter().map(|(name, _)| name).collect();
+    let agents: Vec<String> = markdown_files(&root.join("agents")).into_iter().map(|(name, _)| name).collect();
     if manifest.get("lspServers").is_some() || root.join(".lsp.json").is_file() {
         claude_only.push("language servers".into());
     }
@@ -527,6 +545,8 @@ fn summarize(root: &Path) -> Result<PluginSummary, String> {
         variables: vars.into_iter().collect(),
         skills,
         claude_only,
+        commands,
+        agents,
         icon: icon_data_url(root, &manifest),
         id,
         name,
@@ -804,20 +824,131 @@ fn skill_folder(plugin_id: &str, skill_dir: &Path) -> String {
     format!("{SKILL_PREFIX}{}-{skill}", slug(plugin_id))
 }
 
-/// Copy a plugin's skills into Claude Code's and Codex's skill folders, under
-/// `spacron-<plugin>-<skill>`. Replaces any earlier copy. Returns the folders written.
+/// `*.md` files under `dir` (recursively), named the way Claude Code names a
+/// nested command: `git/commit.md` is `git-commit`.
+fn markdown_files(dir: &Path) -> Vec<(String, PathBuf)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>, depth: usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && depth < 3 {
+                walk(base, &path, out, depth + 1);
+            } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+                let rel = path.strip_prefix(base).unwrap_or(&path).with_extension("");
+                let name = rel.to_string_lossy().replace(['/', '\\'], "-");
+                if !name.eq_ignore_ascii_case("readme") {
+                    out.push((slug(&name), path));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out, 0);
+    out.sort();
+    out
+}
+
+/// The text after a `---` front matter block, or all of it.
+fn body_after_front_matter(text: &str) -> &str {
+    let trimmed = text.trim_start_matches('\u{feff}');
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            let after = &rest[end + 4..];
+            return after.split_once('\n').map(|(_, b)| b).unwrap_or("");
+        }
+    }
+    trimmed
+}
+
+/// A YAML double-quoted scalar on one line.
+fn yaml_string(text: &str) -> String {
+    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("\"{}\"", one_line.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// A Claude Code command or sub-agent rewritten as a skill, so agents that
+/// read skill folders (but have no slash commands or sub-agents of their own)
+/// can use the same instructions.
+fn converted_skill(kind: &str, plugin: &str, name: &str, source: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(source).ok()?;
+    let (_, description) = skill_front_matter(&text);
+    let body = body_after_front_matter(&text).trim();
+    if body.is_empty() {
+        return None;
+    }
+    let skill_name = slug(&format!("{plugin}-{name}"));
+    let (description, preface) = if kind == "command" {
+        (
+            format!(
+                "{} Use when the user asks for /{name} from the {plugin} plugin, or for this task.",
+                description.unwrap_or_else(|| format!("The /{name} command from the {plugin} plugin."))
+            ),
+            format!(
+                "This is the `/{name}` command from the {plugin} plugin. Where it says $ARGUMENTS (or $1, $2, ...), use what the user asked for."
+            ),
+        )
+    } else {
+        (
+            format!(
+                "Work as the {name} specialist from the {plugin} plugin. {}",
+                description.unwrap_or_default()
+            ),
+            format!("Act as the `{name}` specialist from the {plugin} plugin and follow these instructions."),
+        )
+    };
+    let content = format!("---\nname: {skill_name}\ndescription: {}\n---\n\n{preface}\n\n{body}\n", yaml_string(&description));
+    Some((skill_name, content))
+}
+
+/// Claude Code's own user folders for commands and sub-agents.
+fn claude_native_dirs() -> Option<(PathBuf, PathBuf)> {
+    let home = dirs::home_dir()?;
+    Some((home.join(".claude").join("commands"), home.join(".claude").join("agents")))
+}
+
+/// Install a plugin's skills, commands and sub-agents for every agent:
+///
+/// - skills go to every skill folder (`agent_skill_roots`);
+/// - commands and sub-agents go natively to Claude Code (`~/.claude/commands`,
+///   `~/.claude/agents`), and as converted skills to every other skill folder,
+///   so Codex, Copilot, Devin, Qoder, DeepSeek and the rest can use them too.
+///
+/// Everything is named `spacron-<plugin>-…`, which is what makes removal safe.
+/// Replaces any earlier copy. Returns the skill folders written.
 #[tauri::command]
 pub fn plugin_enable_skills(plugin_id: String, path: String) -> Result<Vec<String>, String> {
     let root = PathBuf::from(&path);
     let manifest = MANIFESTS.iter().find_map(|m| read_json(&root.join(m))).unwrap_or_default();
+    let plugin = slug(&plugin_id);
     plugin_disable_skills(plugin_id.clone())?;
+    let roots = agent_skill_roots();
+    let claude_skills = dirs::home_dir().map(|h| h.join(".claude").join("skills"));
     let mut written = Vec::new();
     for dir in skill_dirs(&root, &manifest) {
         let folder = skill_folder(&plugin_id, &dir);
-        for base in agent_skill_roots() {
+        for base in &roots {
             copy_dir(&dir, &base.join(&folder)).map_err(|e| format!("could not install skill {folder}: {e}"))?;
         }
         written.push(folder);
+    }
+
+    let (commands_dir, agents_dir) = claude_native_dirs().ok_or("no home folder")?;
+    for (kind, source_dir, native_dir) in [("command", root.join("commands"), commands_dir), ("agent", root.join("agents"), agents_dir)] {
+        for (name, file) in markdown_files(&source_dir) {
+            // Claude Code: the original file, natively.
+            std::fs::create_dir_all(&native_dir).map_err(|e| e.to_string())?;
+            std::fs::copy(&file, native_dir.join(format!("{SKILL_PREFIX}{plugin}-{name}.md")))
+                .map_err(|e| format!("could not install {kind} {name}: {e}"))?;
+            // Everyone else: the same instructions as a skill.
+            let Some((skill_name, content)) = converted_skill(kind, &plugin, &name, &file) else { continue };
+            let folder = format!("{SKILL_PREFIX}{plugin}-{kind}-{name}");
+            for base in roots.iter().filter(|b| Some(*b) != claude_skills.as_ref()) {
+                let target = base.join(&folder);
+                std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+                std::fs::write(target.join("SKILL.md"), &content).map_err(|e| format!("could not install {skill_name}: {e}"))?;
+            }
+            written.push(folder);
+        }
     }
     Ok(written)
 }
@@ -826,7 +957,12 @@ pub fn plugin_enable_skills(plugin_id: String, path: String) -> Result<Vec<Strin
 #[tauri::command]
 pub fn plugin_disable_skills(plugin_id: String) -> Result<(), String> {
     let prefix = format!("{SKILL_PREFIX}{}-", slug(&plugin_id));
-    for base in agent_skill_cleanup_roots() {
+    let mut bases = agent_skill_cleanup_roots();
+    if let Some((commands, agents)) = claude_native_dirs() {
+        bases.push(commands);
+        bases.push(agents);
+    }
+    for base in bases {
         let Ok(entries) = std::fs::read_dir(&base) else { continue };
         for entry in entries.flatten() {
             if entry.file_name().to_string_lossy().starts_with(&prefix) {
@@ -1082,6 +1218,25 @@ mod tests {
     }
 
     #[test]
+    fn turns_commands_and_sub_agents_into_skills() {
+        let dir = std::env::temp_dir().join(format!("spacron-cmd-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("commands/git")).unwrap();
+        std::fs::write(dir.join("commands/git/ship.md"), "---\ndescription: Ship \"it\"\n---\nCommit $ARGUMENTS and push.\n").unwrap();
+        std::fs::write(dir.join("reviewer.md"), "---\nname: reviewer\ndescription: Reviews code\n---\nYou review code.\n").unwrap();
+        let names: Vec<String> = markdown_files(&dir.join("commands")).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["git-ship".to_string()]);
+        let (name, text) = converted_skill("command", "vercel", "git-ship", &dir.join("commands/git/ship.md")).unwrap();
+        assert_eq!(name, "vercel-git-ship");
+        assert!(text.starts_with("---\nname: vercel-git-ship\ndescription: \"Ship \\\"it\\\" Use when"));
+        assert!(text.contains("Commit $ARGUMENTS and push."));
+        assert!(!text.contains("description: Ship \"it\"\n---\nCommit"));
+        let (_, agent) = converted_skill("agent", "vercel", "reviewer", &dir.join("reviewer.md")).unwrap();
+        assert!(agent.contains("Work as the reviewer specialist from the vercel plugin. Reviews code"));
+        assert!(agent.trim_end().ends_with("You review code."));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn reads_skill_front_matter() {
         let (n, d) = skill_front_matter("---\nname: pdf\ndescription: \"Fill PDFs\"\n---\nbody");
         assert_eq!((n.as_deref(), d.as_deref()), (Some("pdf"), Some("Fill PDFs")));
@@ -1106,6 +1261,7 @@ mod tests {
         assert_eq!(summary.title, "My Tool");
         assert_eq!(summary.skills.len(), 1);
         assert!(summary.mcp_servers.as_object().unwrap().is_empty());
+        assert!(summary.commands.is_empty() && summary.agents.is_empty() && summary.claude_only.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -216,10 +216,19 @@ export function InstallReview({
         </li>
         <li>
           <strong>{summary.skills.length} skill{summary.skills.length === 1 ? '' : 's'}</strong>
-          {summary.skills.length ? ` for Claude Code and Codex: ${summary.skills.map((s) => s.name).join(', ')}` : ''}
+          {summary.skills.length ? ` for every agent that reads skills: ${summary.skills.map((s) => s.name).join(', ')}` : ''}
         </li>
+        {(summary.commands.length > 0 || summary.agents.length > 0) && (
+          <li>
+            <strong>
+              {summary.commands.length} command{summary.commands.length === 1 ? '' : 's'} and {summary.agents.length} sub-agent
+              {summary.agents.length === 1 ? '' : 's'}
+            </strong>
+            : native in Claude Code, and shared as skills with every other agent
+          </li>
+        )}
         {summary.claudeOnly.length > 0 && (
-          <li className="is-muted">Also has {summary.claudeOnly.join(', ')}, which only Claude Code runs (install it there to use them).</li>
+          <li className="is-muted">Also has {summary.claudeOnly.join(', ')}, which only Claude Code can run.</li>
         )}
       </ul>
       {summary.variables.length > 0 && (
@@ -488,7 +497,7 @@ export function MarketplacesTab({
                     <div className="mcp-catalog-desc" title={plugin.description}>{plugin.description}</div>
                   </div>
                   {isInstalled ? (
-                    <span className="mcp-catalog-badge is-ok">Installed</span>
+                    <span className="agents-row-badge" data-tone="ready">Installed</span>
                   ) : busy === plugin.name ? (
                     <span className="mcp-sheet-status">Downloading…</span>
                   ) : (
@@ -603,6 +612,7 @@ export function YourPluginsTab({
                 <div className="mcp-catalog-desc" title={p.path}>
                   {p.serverIds.length} server{p.serverIds.length === 1 ? '' : 's'} · {p.skillFolders.length} skill{p.skillFolders.length === 1 ? '' : 's'}
                   {p.claudeOnly.length ? ` · ${p.claudeOnly.join(', ')} (Claude Code only)` : ''}
+                  {p.claudeOnly.some((part) => /command|sub-agent/.test(part)) ? ' · Reinstall to share its commands with every agent' : ''}
                 </div>
               </div>
               <button className="settings-secondary mcp-catalog-text-button" disabled={busy === p.id} onClick={() => void reinstall(p)}>

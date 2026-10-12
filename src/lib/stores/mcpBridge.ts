@@ -43,6 +43,7 @@ import { syncChatMcpServers } from '$lib/services/orchestrator/mcp-client';
 import {
   antigravityEntry,
   codexTable,
+  deepSeekMcpPatch,
   devinEntry,
   droidEntry,
   enabledServers,
@@ -1111,6 +1112,7 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
       injectCodexConfig(httpUrl),
       injectDroidConfig(httpUrl),
       injectAntigravityConfig(httpUrl),
+      injectDeepSeekServers(),
     ]);
   } catch (e) {
     console.warn('[mcp] Could not write agent MCP configs on project open:', e);
@@ -1504,6 +1506,19 @@ async function injectDevinConfig(projectRoot: string | undefined, httpUrl: strin
     }),
     'Devin CLI',
   );
+}
+
+/**
+ * DeepSeek Harness: the user's servers as an extra `--patch` file both of its
+ * launches add (`deepseek_harness.rs`). Spacron's own server already reaches
+ * it through `spacron-mcp.patch.yml`.
+ */
+async function injectDeepSeekServers(): Promise<void> {
+  try {
+    await invoke('deepseek_harness_set_user_mcp', { content: deepSeekMcpPatch(get(mcpServers) ?? []) });
+  } catch (e) {
+    console.warn('[mcp] Could not write the DeepSeek Harness server patch:', e);
+  }
 }
 
 /**

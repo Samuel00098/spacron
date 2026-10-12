@@ -278,7 +278,8 @@ export function McpCatalog({
   const status = (entry: McpCatalogEntry, installed: boolean) => {
     if (entry.auth === 'key') return <span className="mcp-catalog-badge">Token</span>;
     if (entry.auth !== 'oauth') return null;
-    if (signedIn[keyOf(entry)]) return <span className="mcp-catalog-badge is-ok">Signed in</span>;
+    // The same pill the Agents tab uses for a signed-in CLI.
+    if (signedIn[keyOf(entry)]) return <span className="agents-row-badge" data-tone="ready">Signed in</span>;
     return <span className="mcp-catalog-badge">{installed ? 'Not signed in' : 'Sign-in'}</span>;
   };
 

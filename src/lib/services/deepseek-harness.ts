@@ -215,6 +215,8 @@ export interface WorkerFiles {
   accessPatch: string;
   /** Registers non-DeepSeek providers; null when only a DeepSeek key is saved. */
   providersPatch: string | null;
+  /** The user's MCP servers (Settings > MCP & plugins); null when there are none. */
+  userMcpPatch: string | null;
 }
 
 export interface WebPanel {
@@ -254,6 +256,7 @@ export function deepSeekLaunchLine(files: WorkerFiles, taskPath: string): string
     `--patch ${quotePath(files.taskPatch)}`,
     `--patch ${quotePath(files.accessPatch)}`,
     ...(files.providersPatch ? [`--patch ${quotePath(files.providersPatch)}`] : []),
+    ...(files.userMcpPatch ? [`--patch ${quotePath(files.userMcpPatch)}`] : []),
     TASK_PLACEHOLDER,
   ].join(' ');
 }

@@ -165,6 +165,46 @@ export function sameServer(candidate: Pick<McpServer, 'name' | 'url' | 'transpor
   return servers.find((s) => (id && s.transport !== 'stdio' && serverIdentity(s.url) === id) || serverKey(s) === serverKey(candidate));
 }
 
+/**
+ * The user's servers as a DeepSeek Harness patch: one `dsh-mcp-client` row
+ * each. That client speaks stdio and streamable HTTP (with headers), per its
+ * README in the installed package; SSE servers are left out because it has no
+ * SSE transport. A server signed in through Spacron goes through the proxy,
+ * whose URL is built from `SPACRON_MCP_URL` in the launch environment so the
+ * token never lands in the patch file. Returns '' when there is nothing to add.
+ */
+export function deepSeekMcpPatch(servers: McpServer[]): string {
+  const q = (value: string) => JSON.stringify(value);
+  const rows: string[] = [];
+  for (const { key, server } of enabledServers(servers)) {
+    const name = key.replace(/^spacron-/, '').replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 32);
+    if (!name || name === 'spacron') continue;
+    const lines = [`    - id: ${q(`spacron-user-${name}`)}`, `      name: '@deepseek-ai/dsh-mcp-client'`, `      config:`, `        serverName: ${q(name)}`];
+    if (server.transport === 'stdio') {
+      if (!server.command?.trim()) continue;
+      lines.push(`        transport: stdio`, `        command: ${q(server.command.trim())}`);
+      lines.push(`        args: [${(server.args ?? []).map(q).join(', ')}]`);
+      const env = Object.entries(server.env ?? {}).filter(([k]) => k.trim());
+      if (env.length) lines.push(`        env:`, ...env.map(([k, v]) => `          ${q(k)}: ${q(v)}`));
+    } else if (server.transport === 'sse') {
+      continue;
+    } else if (server.oauth) {
+      // A plain string replace: Spacron's URL is always `…/mcp?token=…`, and a
+      // regex here would need escaping through TS, JSON and YAML at once.
+      const expr = `process.env.SPACRON_MCP_URL.replace('/mcp?', '/proxy/${key}?')`;
+      lines.push(`        transport: streamable-http`, `        url: !!js ${q(expr)}`);
+    } else {
+      if (!server.url?.trim()) continue;
+      lines.push(`        transport: streamable-http`, `        url: ${q(server.url.trim())}`);
+      const headers = Object.entries(server.headers ?? {}).filter(([k]) => k.trim());
+      if (headers.length) lines.push(`        headers:`, ...headers.map(([k, v]) => `          ${q(k)}: ${q(v)}`));
+    }
+    rows.push(lines.join('\n'));
+  }
+  if (!rows.length) return '';
+  return `# Written by Spacron: the servers from Settings > MCP & plugins.\n- insert:\n${rows.join('\n')}\n`;
+}
+
 /** The servers that should actually be written, keyed and deduplicated. */
 export function enabledServers(servers: McpServer[]): Array<{ key: string; server: McpServer }> {
   const seen = new Set<string>();
